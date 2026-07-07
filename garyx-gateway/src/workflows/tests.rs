@@ -1858,7 +1858,7 @@ async fn structured_child_with_native_provider_fails_before_launch() {
     state
         .ops
         .custom_agents
-        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "native-structured".to_owned(),
             display_name: "Native Structured".to_owned(),
             provider_type: ProviderType::Gpt,

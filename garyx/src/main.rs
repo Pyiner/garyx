@@ -259,7 +259,8 @@ async fn main() -> std::process::ExitCode {
 /// stderr (never a Debug dump), or a machine-readable envelope on stdout when
 /// the invocation asked for `--json`. The exit code encodes the failure class
 /// (see the root `--help` footer): 1 generic, 3 gateway unreachable, 4 not
-/// found. Clap keeps its own exit 2 for usage errors.
+/// found, 5 concurrent-modification conflict. Clap keeps its own exit 2 for
+/// usage errors.
 fn report_cli_failure(error: &(dyn std::error::Error + 'static)) -> std::process::ExitCode {
     let kind = error
         .downcast_ref::<commands::GatewayCliError>()
@@ -267,6 +268,7 @@ fn report_cli_failure(error: &(dyn std::error::Error + 'static)) -> std::process
     let exit_code = match kind {
         Some(commands::GatewayErrorKind::Unreachable) => 3,
         Some(commands::GatewayErrorKind::NotFound) => 4,
+        Some(commands::GatewayErrorKind::Conflict) => 5,
         Some(commands::GatewayErrorKind::Rejected) | None => 1,
     };
     if invocation_wants_json_output() {

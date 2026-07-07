@@ -6,6 +6,8 @@ use garyx_models::AgentTeamProfile;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
+use crate::optimistic_write::{StoreWriteError, WriteExpectation, check_write_expectation};
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpsertAgentTeamRequest {
     pub team_id: String,
@@ -117,7 +119,8 @@ impl AgentTeamStore {
     pub async fn upsert_team(
         &self,
         request: UpsertAgentTeamRequest,
-    ) -> Result<AgentTeamProfile, String> {
+        expectation: WriteExpectation,
+    ) -> Result<AgentTeamProfile, StoreWriteError> {
         let team_id = request.team_id.trim();
         let display_name = request.display_name.trim();
         let leader_agent_id = request.leader_agent_id.trim();
@@ -125,16 +128,22 @@ impl AgentTeamStore {
         let requested_avatar_data_url =
             request.avatar_data_url.map(|value| value.trim().to_owned());
         if team_id.is_empty() {
-            return Err("team_id is required".to_owned());
+            return Err(StoreWriteError::Invalid("team_id is required".to_owned()));
         }
         if display_name.is_empty() {
-            return Err("display_name is required".to_owned());
+            return Err(StoreWriteError::Invalid(
+                "display_name is required".to_owned(),
+            ));
         }
         if leader_agent_id.is_empty() {
-            return Err("leader_agent_id is required".to_owned());
+            return Err(StoreWriteError::Invalid(
+                "leader_agent_id is required".to_owned(),
+            ));
         }
         if workflow_text.is_empty() {
-            return Err("workflow_text is required".to_owned());
+            return Err(StoreWriteError::Invalid(
+                "workflow_text is required".to_owned(),
+            ));
         }
         let mut seen = HashSet::new();
         let member_agent_ids = request
@@ -148,10 +157,17 @@ impl AgentTeamStore {
             .iter()
             .any(|member| member == leader_agent_id)
         {
-            return Err("leader_agent_id must appear in member_agent_ids".to_owned());
+            return Err(StoreWriteError::Invalid(
+                "leader_agent_id must appear in member_agent_ids".to_owned(),
+            ));
         }
         let now = Utc::now().to_rfc3339();
         let mut inner = self.inner.write().await;
+        check_write_expectation(
+            &expectation,
+            inner.get(team_id).map(|team| team.updated_at.as_str()),
+            "agent team",
+        )?;
         let created_at = inner
             .get(team_id)
             .map(|existing| existing.created_at.clone())
@@ -174,8 +190,22 @@ impl AgentTeamStore {
             updated_at: now,
         };
         inner.insert(team_id.to_owned(), team.clone());
-        self.persist_locked(&inner)?;
+        self.persist_locked(&inner)
+            .map_err(StoreWriteError::Persist)?;
         Ok(team)
+    }
+
+    /// Test-only unconditional upsert preserving the pre-#TASK-1761 seeding
+    /// semantics (create-or-replace, `String` errors). Production writes must
+    /// pick an explicit [`WriteExpectation`].
+    #[cfg(test)]
+    pub async fn upsert_team_for_test(
+        &self,
+        request: UpsertAgentTeamRequest,
+    ) -> Result<AgentTeamProfile, String> {
+        self.upsert_team(request, WriteExpectation::Overwrite)
+            .await
+            .map_err(|error| error.message().to_owned())
     }
 
     pub async fn delete_team(&self, team_id: &str) -> Result<(), String> {

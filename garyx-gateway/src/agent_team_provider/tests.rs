@@ -17,7 +17,7 @@ impl ThreadCreator for NoopThreadCreator {
 async fn test_dispatcher() -> GatewaySubAgentDispatcher {
     let custom_agents = Arc::new(CustomAgentStore::new());
     custom_agents
-        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "planner".to_owned(),
             display_name: "Planner".to_owned(),
             provider_type: ProviderType::ClaudeCode,
@@ -37,7 +37,7 @@ async fn test_dispatcher() -> GatewaySubAgentDispatcher {
         .await
         .expect("planner agent");
     custom_agents
-        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::ClaudeCode,

@@ -84,7 +84,7 @@ fn route_task_projection_draft(
 async fn state_with_agent_default_workspace() -> Arc<AppState> {
     let custom_agents = Arc::new(CustomAgentStore::new());
     custom_agents
-        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
@@ -115,7 +115,7 @@ async fn state_with_task_executors() -> Arc<AppState> {
     let custom_agents = Arc::new(CustomAgentStore::new());
     for agent_id in ["reviewer", "planner", "coder"] {
         custom_agents
-            .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+            .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
                 agent_id: agent_id.to_owned(),
                 display_name: agent_id.to_owned(),
                 provider_type: ProviderType::CodexAppServer,
@@ -137,7 +137,7 @@ async fn state_with_task_executors() -> Arc<AppState> {
     }
     let agent_teams = Arc::new(AgentTeamStore::new());
     agent_teams
-        .upsert_team(crate::agent_teams::UpsertAgentTeamRequest {
+        .upsert_team_for_test(crate::agent_teams::UpsertAgentTeamRequest {
             team_id: "product-ship".to_owned(),
             display_name: "Product Ship".to_owned(),
             leader_agent_id: "planner".to_owned(),

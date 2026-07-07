@@ -5,6 +5,8 @@ import { readFileSync } from "node:fs";
 import {
   ThreadStreamGapError,
   createTask,
+  updateCustomAgent,
+  updateTeam,
   fetchThreadHistory,
   getWorkflowRun,
   getTask,
@@ -769,6 +771,59 @@ test("streamThreadEvents ignores non-render per-thread frames", async () => {
     assert.equal(events[0].events[0].message.text, "committed");
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("updateCustomAgent and updateTeam carry the optimistic concurrency token", async () => {
+  const bodies = [];
+  setGatewayFetch(async (url, init) => {
+    bodies.push({ url: String(url), body: JSON.parse(init.body) });
+    return new Response(
+      JSON.stringify({
+        agent_id: "occ-agent",
+        team_id: "occ-team",
+        display_name: "OCC",
+        provider_type: "claude_code",
+        leader_agent_id: "occ-agent",
+        member_agent_ids: ["occ-agent"],
+        workflow_text: "ship",
+        built_in: false,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-02T00:00:00Z",
+      }),
+      { status: 200, statusText: "OK" },
+    );
+  });
+  try {
+    const settings = { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" };
+    await updateCustomAgent(settings, {
+      currentAgentId: "occ-agent",
+      agentId: "occ-agent",
+      displayName: "OCC",
+      providerType: "claude_code",
+      model: "",
+      modelReasoningEffort: "",
+      modelServiceTier: "",
+      defaultWorkspaceDir: "",
+      systemPrompt: "",
+      expectedUpdatedAt: "2026-01-01T00:00:00Z",
+    });
+    await updateTeam(settings, {
+      currentTeamId: "occ-team",
+      teamId: "occ-team",
+      displayName: "OCC Team",
+      leaderAgentId: "occ-agent",
+      memberAgentIds: ["occ-agent"],
+      workflowText: "ship",
+      expectedUpdatedAt: "2026-01-01T00:00:00Z",
+    });
+    // The gateway only applies conditional updates, so both PUT bodies must
+    // carry the token the edit was based on (snake for agents, camel for teams).
+    assert.equal(bodies.length, 2);
+    assert.equal(bodies[0].body.expected_updated_at, "2026-01-01T00:00:00Z");
+    assert.equal(bodies[1].body.expectedUpdatedAt, "2026-01-01T00:00:00Z");
+  } finally {
+    setGatewayFetch(null);
   }
 });
 

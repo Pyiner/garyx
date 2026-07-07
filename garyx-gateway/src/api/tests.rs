@@ -761,6 +761,214 @@ async fn test_create_custom_agent_allows_omitted_system_prompt() {
 }
 
 #[tokio::test]
+async fn test_custom_agent_optimistic_concurrency_contract() {
+    let state = test_state();
+    let router = api_router(state);
+    let create_body = json!({
+        "agent_id": "occ-agent",
+        "display_name": "OCC Agent",
+        "provider_type": "codex_app_server",
+    });
+    let create = |body: Value| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/custom-agents")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let resp = router
+        .clone()
+        .oneshot(create(create_body.clone()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let created = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let created: Value = serde_json::from_slice(&created).unwrap();
+    let token = created["updated_at"]
+        .as_str()
+        .expect("updated_at")
+        .to_owned();
+
+    // POST is strict create: the same id conflicts instead of overwriting.
+    let resp = router.clone().oneshot(create(create_body)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    let put = |body: Value| {
+        Request::builder()
+            .method("PUT")
+            .uri("/api/custom-agents/occ-agent")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+
+    // PUT without the token is a 400 with guidance.
+    let resp = router
+        .clone()
+        .oneshot(put(json!({
+            "agent_id": "occ-agent",
+            "display_name": "Renamed",
+            "provider_type": "codex_app_server",
+        })))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // PUT with the fresh token succeeds and rotates updated_at.
+    let resp = router
+        .clone()
+        .oneshot(put(json!({
+            "agent_id": "occ-agent",
+            "display_name": "Renamed",
+            "provider_type": "codex_app_server",
+            "expected_updated_at": token,
+        })))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let updated = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let updated: Value = serde_json::from_slice(&updated).unwrap();
+    let new_token = updated["updated_at"]
+        .as_str()
+        .expect("updated_at")
+        .to_owned();
+    assert_ne!(new_token, token, "updated_at must rotate on write");
+
+    // Replaying the stale token is a 409 carrying the current updated_at.
+    let resp = router
+        .clone()
+        .oneshot(put(json!({
+            "agent_id": "occ-agent",
+            "display_name": "Stale Writer",
+            "provider_type": "claude_code",
+            "expected_updated_at": token,
+        })))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let conflict = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let conflict: Value = serde_json::from_slice(&conflict).unwrap();
+    assert_eq!(conflict["current_updated_at"], new_token.as_str());
+
+    // Deleting then PUTting with any token is a 404 — no resurrection.
+    let delete = Request::builder()
+        .method("DELETE")
+        .uri("/api/custom-agents/occ-agent")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(delete).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let resp = router
+        .clone()
+        .oneshot(put(json!({
+            "agent_id": "occ-agent",
+            "display_name": "Ghost",
+            "provider_type": "codex_app_server",
+            "expected_updated_at": new_token,
+        })))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_agent_team_optimistic_concurrency_contract() {
+    let state = test_state();
+    let router = api_router(state);
+    let team_body = json!({
+        "team_id": "occ-team",
+        "display_name": "OCC Team",
+        "leader_agent_id": "planner",
+        "member_agent_ids": ["planner"],
+        "workflow_text": "ship",
+    });
+    let create = Request::builder()
+        .method("POST")
+        .uri("/api/teams")
+        .header("content-type", "application/json")
+        .body(Body::from(team_body.to_string()))
+        .unwrap();
+    let resp = router.clone().oneshot(create).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let created = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let created: Value = serde_json::from_slice(&created).unwrap();
+    let token = created["updated_at"]
+        .as_str()
+        .expect("updated_at")
+        .to_owned();
+
+    // Duplicate create conflicts.
+    let create_again = Request::builder()
+        .method("POST")
+        .uri("/api/teams")
+        .header("content-type", "application/json")
+        .body(Body::from(team_body.to_string()))
+        .unwrap();
+    let resp = router.clone().oneshot(create_again).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    let put = |body: Value| {
+        Request::builder()
+            .method("PUT")
+            .uri("/api/teams/occ-team")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+
+    // Missing token: 400.
+    let resp = router
+        .clone()
+        .oneshot(put(json!({
+            "team_id": "occ-team",
+            "display_name": "Renamed Team",
+            "leader_agent_id": "planner",
+            "member_agent_ids": ["planner"],
+            "workflow_text": "ship",
+        })))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Fresh token: 200; stale token afterwards: 409.
+    let resp = router
+        .clone()
+        .oneshot(put(json!({
+            "team_id": "occ-team",
+            "display_name": "Renamed Team",
+            "leader_agent_id": "planner",
+            "member_agent_ids": ["planner"],
+            "workflow_text": "ship",
+            "expected_updated_at": token,
+        })))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = router
+        .clone()
+        .oneshot(put(json!({
+            "team_id": "occ-team",
+            "display_name": "Stale Team Writer",
+            "leader_agent_id": "planner",
+            "member_agent_ids": ["planner"],
+            "workflow_text": "ship",
+            "expected_updated_at": token,
+        })))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn test_update_custom_agent_blank_system_prompt_clears_prompt() {
     let state = test_state();
     let router = api_router(state);
@@ -780,6 +988,11 @@ async fn test_update_custom_agent_blank_system_prompt_clears_prompt() {
         .unwrap();
     let resp = router.clone().oneshot(create).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
+    let created = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let created: Value = serde_json::from_slice(&created).unwrap();
+    let updated_at = created["updated_at"].as_str().expect("updated_at");
 
     let update = Request::builder()
         .method("PUT")
@@ -790,7 +1003,8 @@ async fn test_update_custom_agent_blank_system_prompt_clears_prompt() {
                 "agent_id": "plain-claude",
                 "display_name": "Plain Claude",
                 "provider_type": "claude_code",
-                "system_prompt": "  "
+                "system_prompt": "  ",
+                "expected_updated_at": updated_at
             })
             .to_string(),
         ))
@@ -914,7 +1128,7 @@ async fn test_update_team_prunes_removed_member_group_state() {
     state
         .ops
         .agent_teams
-        .upsert_team(UpsertAgentTeamRequest {
+        .upsert_team_for_test(UpsertAgentTeamRequest {
             team_id: "product-ship".to_owned(),
             display_name: "Product Ship".to_owned(),
             leader_agent_id: "planner".to_owned(),
@@ -928,6 +1142,13 @@ async fn test_update_team_prunes_removed_member_group_state() {
         })
         .await
         .expect("seed team");
+    let seeded_updated_at = state
+        .ops
+        .agent_teams
+        .get_team("product-ship")
+        .await
+        .expect("seeded team")
+        .updated_at;
 
     let thread_id = "thread::team-lifecycle";
     state
@@ -961,7 +1182,8 @@ async fn test_update_team_prunes_removed_member_group_state() {
                 "display_name": "Product Ship",
                 "leader_agent_id": "planner",
                 "member_agent_ids": ["planner", "coder"],
-                "workflow_text": "ship"
+                "workflow_text": "ship",
+                "expected_updated_at": seeded_updated_at
             })
             .to_string(),
         ))
@@ -1001,7 +1223,7 @@ async fn test_delete_team_marks_threads_deleted_and_drops_group_state() {
     state
         .ops
         .agent_teams
-        .upsert_team(UpsertAgentTeamRequest {
+        .upsert_team_for_test(UpsertAgentTeamRequest {
             team_id: "product-ship".to_owned(),
             display_name: "Product Ship".to_owned(),
             leader_agent_id: "planner".to_owned(),
@@ -2970,7 +3192,7 @@ async fn seed_history_team(state: &Arc<AppState>) {
     state
         .ops
         .agent_teams
-        .upsert_team(UpsertAgentTeamRequest {
+        .upsert_team_for_test(UpsertAgentTeamRequest {
             team_id: "product-ship".to_owned(),
             display_name: "Product Ship".to_owned(),
             leader_agent_id: "planner".to_owned(),

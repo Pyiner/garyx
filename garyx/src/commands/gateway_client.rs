@@ -55,6 +55,9 @@ pub(crate) enum GatewayErrorKind {
     Unreachable,
     /// The gateway answered 404 for the addressed resource.
     NotFound,
+    /// The gateway answered 409: the resource changed concurrently (or a
+    /// create hit an existing id). Re-read and retry.
+    Conflict,
     /// The gateway rejected the request with any other non-success status.
     Rejected,
 }
@@ -64,6 +67,7 @@ impl GatewayErrorKind {
         match self {
             GatewayErrorKind::Unreachable => "gateway_unreachable",
             GatewayErrorKind::NotFound => "not_found",
+            GatewayErrorKind::Conflict => "conflict",
             GatewayErrorKind::Rejected => "gateway_rejected",
         }
     }
@@ -130,6 +134,8 @@ fn gateway_status_error(status: reqwest::StatusCode, body: &str) -> GatewayCliEr
         .unwrap_or_else(|| body.trim().to_owned());
     let kind = if status == reqwest::StatusCode::NOT_FOUND {
         GatewayErrorKind::NotFound
+    } else if status == reqwest::StatusCode::CONFLICT {
+        GatewayErrorKind::Conflict
     } else {
         GatewayErrorKind::Rejected
     };

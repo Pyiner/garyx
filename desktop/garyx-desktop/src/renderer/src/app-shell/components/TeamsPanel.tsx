@@ -251,6 +251,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
         const updatePayload: UpdateTeamInput = {
           ...payload,
           currentTeamId: selectedTeam?.teamId || payload.teamId,
+          expectedUpdatedAt: selectedTeam?.updatedAt || '',
         };
         saved = await window.garyxDesktop.updateTeam(updatePayload);
         onToast?.(t('Agent team updated'), 'success');

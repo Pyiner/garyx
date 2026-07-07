@@ -202,6 +202,7 @@ export function AgentFormDialog({
         const updatePayload: UpdateCustomAgentInput = {
           ...payload,
           currentAgentId: selectedAgent?.agentId || payload.agentId,
+          expectedUpdatedAt: selectedAgent?.updatedAt || '',
         };
         await window.garyxDesktop.updateCustomAgent(updatePayload);
         onToast?.(t('Custom agent updated'), 'success');

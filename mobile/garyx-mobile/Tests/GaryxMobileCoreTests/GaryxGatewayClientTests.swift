@@ -174,6 +174,40 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(attachments.first?["path"] as? String, "/workspace/project/note.md")
     }
 
+    func testAgentAndTeamRequestsEncodeExpectedUpdatedAtToken() throws {
+        let agentRequest = GaryxCustomAgentRequest(
+            agentId: "agent-test",
+            displayName: "Agent Test",
+            providerType: "codex_app_server",
+            expectedUpdatedAt: "2026-01-01T00:00:00Z"
+        )
+        let agentObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(agentRequest)) as? [String: Any]
+        XCTAssertEqual(agentObject?["expected_updated_at"] as? String, "2026-01-01T00:00:00Z")
+
+        let teamRequest = GaryxTeamRequest(
+            teamId: "team-test",
+            displayName: "Team Test",
+            leaderAgentId: "leader",
+            memberAgentIds: ["leader"],
+            workflowText: "ship",
+            expectedUpdatedAt: "2026-01-01T00:00:00Z"
+        )
+        let teamObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(teamRequest)) as? [String: Any]
+        XCTAssertEqual(teamObject?["expectedUpdatedAt"] as? String, "2026-01-01T00:00:00Z")
+
+        // Create requests omit the token entirely instead of sending null.
+        let createRequest = GaryxCustomAgentRequest(
+            agentId: "agent-test",
+            displayName: "Agent Test",
+            providerType: "codex_app_server"
+        )
+        let createObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(createRequest)) as? [String: Any]
+        XCTAssertNil(createObject?["expected_updated_at"])
+    }
+
     func testCustomAgentRequestEncodesEmptyModelAsPresentValue() throws {
         let request = GaryxCustomAgentRequest(
             agentId: "agent-test",

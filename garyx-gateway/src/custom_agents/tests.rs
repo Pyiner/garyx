@@ -51,7 +51,7 @@ async fn lists_only_provider_builtin_agents() {
 async fn rejects_builtin_agent_modification() {
     let store = CustomAgentStore::new();
     let error = store
-        .upsert_agent(UpsertCustomAgentRequest {
+        .upsert_agent_for_test(UpsertCustomAgentRequest {
             agent_id: "claude".to_owned(),
             display_name: "Claude Override".to_owned(),
             provider_type: ProviderType::ClaudeCode,
@@ -77,7 +77,7 @@ async fn rejects_builtin_agent_modification() {
 async fn upsert_without_model_fields_preserves_existing_model_settings() {
     let store = CustomAgentStore::new();
     store
-        .upsert_agent(model_contract_request(
+        .upsert_agent_for_test(model_contract_request(
             "reviewer",
             Some("gpt-5"),
             Some("high"),
@@ -87,7 +87,7 @@ async fn upsert_without_model_fields_preserves_existing_model_settings() {
         .expect("create agent");
 
     let updated = store
-        .upsert_agent(model_contract_request("reviewer", None, None, None))
+        .upsert_agent_for_test(model_contract_request("reviewer", None, None, None))
         .await
         .expect("update agent");
 
@@ -100,7 +100,7 @@ async fn upsert_without_model_fields_preserves_existing_model_settings() {
 async fn upsert_with_empty_model_fields_clears_existing_model_settings() {
     let store = CustomAgentStore::new();
     store
-        .upsert_agent(model_contract_request(
+        .upsert_agent_for_test(model_contract_request(
             "reviewer",
             Some("gpt-5"),
             Some("high"),
@@ -110,7 +110,7 @@ async fn upsert_with_empty_model_fields_clears_existing_model_settings() {
         .expect("create agent");
 
     let updated = store
-        .upsert_agent(model_contract_request(
+        .upsert_agent_for_test(model_contract_request(
             "reviewer",
             Some(""),
             Some(""),
@@ -128,7 +128,7 @@ async fn upsert_with_empty_model_fields_clears_existing_model_settings() {
 async fn upsert_with_model_fields_replaces_existing_model_settings() {
     let store = CustomAgentStore::new();
     store
-        .upsert_agent(model_contract_request(
+        .upsert_agent_for_test(model_contract_request(
             "reviewer",
             Some("gpt-5"),
             Some("high"),
@@ -138,7 +138,7 @@ async fn upsert_with_model_fields_replaces_existing_model_settings() {
         .expect("create agent");
 
     let updated = store
-        .upsert_agent(model_contract_request(
+        .upsert_agent_for_test(model_contract_request(
             "reviewer",
             Some(" claude-opus-4-8 "),
             Some(" max "),
@@ -156,7 +156,7 @@ async fn upsert_with_model_fields_replaces_existing_model_settings() {
 async fn upsert_create_without_model_fields_stores_provider_default_settings() {
     let store = CustomAgentStore::new();
     let created = store
-        .upsert_agent(model_contract_request("reviewer", None, None, None))
+        .upsert_agent_for_test(model_contract_request("reviewer", None, None, None))
         .await
         .expect("create agent");
 
@@ -171,7 +171,10 @@ async fn upsert_create_without_system_prompt_stores_unset_prompt() {
     let mut request = model_contract_request("reviewer", None, None, None);
     request.system_prompt = None;
 
-    let created = store.upsert_agent(request).await.expect("create agent");
+    let created = store
+        .upsert_agent_for_test(request)
+        .await
+        .expect("create agent");
 
     assert_eq!(created.system_prompt, "");
 }
@@ -182,7 +185,10 @@ async fn upsert_create_with_blank_system_prompt_stores_unset_prompt() {
     let mut request = model_contract_request("reviewer", None, None, None);
     request.system_prompt = Some("   \n\t ".to_owned());
 
-    let created = store.upsert_agent(request).await.expect("create agent");
+    let created = store
+        .upsert_agent_for_test(request)
+        .await
+        .expect("create agent");
 
     assert_eq!(created.system_prompt, "");
 }
@@ -191,13 +197,16 @@ async fn upsert_create_with_blank_system_prompt_stores_unset_prompt() {
 async fn upsert_without_system_prompt_preserves_existing_prompt() {
     let store = CustomAgentStore::new();
     store
-        .upsert_agent(model_contract_request("reviewer", None, None, None))
+        .upsert_agent_for_test(model_contract_request("reviewer", None, None, None))
         .await
         .expect("create agent");
     let mut request = model_contract_request("reviewer", None, None, None);
     request.system_prompt = None;
 
-    let updated = store.upsert_agent(request).await.expect("update agent");
+    let updated = store
+        .upsert_agent_for_test(request)
+        .await
+        .expect("update agent");
 
     assert_eq!(updated.system_prompt, "Review carefully.");
 }
@@ -206,13 +215,16 @@ async fn upsert_without_system_prompt_preserves_existing_prompt() {
 async fn upsert_with_blank_system_prompt_clears_existing_prompt() {
     let store = CustomAgentStore::new();
     store
-        .upsert_agent(model_contract_request("reviewer", None, None, None))
+        .upsert_agent_for_test(model_contract_request("reviewer", None, None, None))
         .await
         .expect("create agent");
     let mut request = model_contract_request("reviewer", None, None, None);
     request.system_prompt = Some("   ".to_owned());
 
-    let updated = store.upsert_agent(request).await.expect("update agent");
+    let updated = store
+        .upsert_agent_for_test(request)
+        .await
+        .expect("update agent");
 
     assert_eq!(updated.system_prompt, "");
 }
@@ -221,13 +233,16 @@ async fn upsert_with_blank_system_prompt_clears_existing_prompt() {
 async fn upsert_with_system_prompt_replaces_existing_prompt() {
     let store = CustomAgentStore::new();
     store
-        .upsert_agent(model_contract_request("reviewer", None, None, None))
+        .upsert_agent_for_test(model_contract_request("reviewer", None, None, None))
         .await
         .expect("create agent");
     let mut request = model_contract_request("reviewer", None, None, None);
     request.system_prompt = Some("  Review tersely.  ".to_owned());
 
-    let updated = store.upsert_agent(request).await.expect("update agent");
+    let updated = store
+        .upsert_agent_for_test(request)
+        .await
+        .expect("update agent");
 
     assert_eq!(updated.system_prompt, "Review tersely.");
 }
@@ -236,7 +251,7 @@ async fn upsert_with_system_prompt_replaces_existing_prompt() {
 async fn upsert_preserves_and_clears_default_workspace_dir() {
     let store = CustomAgentStore::new();
     let created = store
-        .upsert_agent(UpsertCustomAgentRequest {
+        .upsert_agent_for_test(UpsertCustomAgentRequest {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
@@ -263,7 +278,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
     assert_eq!(created.model_service_tier, "priority");
 
     let updated = store
-        .upsert_agent(UpsertCustomAgentRequest {
+        .upsert_agent_for_test(UpsertCustomAgentRequest {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
@@ -288,7 +303,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
     );
 
     let cleared = store
-        .upsert_agent(UpsertCustomAgentRequest {
+        .upsert_agent_for_test(UpsertCustomAgentRequest {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
@@ -314,7 +329,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
 async fn upsert_preserves_and_clears_avatar_data_url() {
     let store = CustomAgentStore::new();
     let created = store
-        .upsert_agent(UpsertCustomAgentRequest {
+        .upsert_agent_for_test(UpsertCustomAgentRequest {
             agent_id: "designer".to_owned(),
             display_name: "Designer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
@@ -339,7 +354,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
     );
 
     let updated = store
-        .upsert_agent(UpsertCustomAgentRequest {
+        .upsert_agent_for_test(UpsertCustomAgentRequest {
             agent_id: "designer".to_owned(),
             display_name: "Designer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
@@ -364,7 +379,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
     );
 
     let cleared = store
-        .upsert_agent(UpsertCustomAgentRequest {
+        .upsert_agent_for_test(UpsertCustomAgentRequest {
             agent_id: "designer".to_owned(),
             display_name: "Designer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
@@ -390,7 +405,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
 async fn upsert_persists_and_preserves_provider_auth_config() {
     let store = CustomAgentStore::new();
     let created = store
-        .upsert_agent(UpsertCustomAgentRequest {
+        .upsert_agent_for_test(UpsertCustomAgentRequest {
             agent_id: "budget-gpt".to_owned(),
             display_name: "Budget GPT".to_owned(),
             provider_type: ProviderType::Gpt,
@@ -426,7 +441,7 @@ async fn upsert_persists_and_preserves_provider_auth_config() {
     );
 
     let updated = store
-        .upsert_agent(UpsertCustomAgentRequest {
+        .upsert_agent_for_test(UpsertCustomAgentRequest {
             agent_id: "budget-gpt".to_owned(),
             display_name: "Budget GPT".to_owned(),
             provider_type: ProviderType::Gpt,
@@ -474,7 +489,7 @@ async fn concurrent_writers_never_lose_each_others_agents() {
         let store = store.clone();
         handles.push(tokio::spawn(async move {
             store
-                .upsert_agent(model_contract_request(
+                .upsert_agent_for_test(model_contract_request(
                     &format!("agent-{index}"),
                     None,
                     None,

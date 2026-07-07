@@ -11,7 +11,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
     name = "garyx",
     version = VERSION,
     about = "Garyx – AI chat gateway",
-    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, team, provider, channels, commands, automation, workflow, db\n  Work with threads   task, thread, message, bot, usage, tool, dream\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found"
+    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, team, provider, channels, commands, automation, workflow, db\n  Work with threads   task, thread, message, bot, usage, tool, dream\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]

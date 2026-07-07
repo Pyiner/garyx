@@ -728,7 +728,10 @@ extension GaryxMobileModel {
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
             var baseAgent = agent
-            if catalogSnapshotRestored {
+            // Restored rows are display projections; a missing updatedAt also
+            // means the row cannot vouch for the stored state. Both cases must
+            // re-fetch before building a conditional update.
+            if catalogSnapshotRestored || agent.updatedAt == nil {
                 let latestAgents = try await client().listAgents()
                 guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
                 guard let latestAgent = latestAgents.first(where: { $0.id == agent.id }) else {
@@ -777,7 +780,8 @@ extension GaryxMobileModel {
                     requestTimeoutSeconds: baseAgent.requestTimeoutSeconds,
                     defaultWorkspaceDir: nextWorkspace.isEmpty ? nil : nextWorkspace,
                     avatarDataUrl: requestAvatarDataUrl,
-                    systemPrompt: nextSystemPrompt
+                    systemPrompt: nextSystemPrompt,
+                    expectedUpdatedAt: baseAgent.updatedAt
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
@@ -821,6 +825,18 @@ extension GaryxMobileModel {
         guard !nextTeamId.isEmpty, !nextDisplayName.isEmpty, !nextLeader.isEmpty else { return nil }
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
+            var baseTeam = team
+            // Same rule as agents: restored projections (or rows without an
+            // updatedAt) must re-fetch before building a conditional update.
+            if catalogSnapshotRestored || team.updatedAt == nil {
+                let latestTeams = try await client().listTeams()
+                guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
+                guard let latestTeam = latestTeams.first(where: { $0.id == team.id }) else {
+                    lastError = "Team details are still loading. Try again after refresh."
+                    return nil
+                }
+                baseTeam = latestTeam
+            }
             let requestAvatarDataUrl: String?
             if nextAvatarDataUrl.isEmpty {
                 requestAvatarDataUrl = clearsAvatar ? "" : nil
@@ -835,7 +851,8 @@ extension GaryxMobileModel {
                     leaderAgentId: nextLeader,
                     memberAgentIds: nextMembers,
                     workflowText: nextWorkflow,
-                    avatarDataUrl: requestAvatarDataUrl
+                    avatarDataUrl: requestAvatarDataUrl,
+                    expectedUpdatedAt: baseTeam.updatedAt
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }

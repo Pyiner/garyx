@@ -374,6 +374,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
         const updatePayload: UpdateCustomAgentInput = {
           ...payload,
           currentAgentId: selectedAgent?.agentId || payload.agentId,
+          expectedUpdatedAt: selectedAgent?.updatedAt || '',
         };
         saved = await window.garyxDesktop.updateCustomAgent(updatePayload);
         onToast?.(t('Custom agent updated'), 'success');

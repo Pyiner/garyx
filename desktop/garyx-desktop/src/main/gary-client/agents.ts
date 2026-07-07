@@ -264,6 +264,7 @@ export async function updateCustomAgent(
         default_workspace_dir: input.defaultWorkspaceDir,
         avatar_data_url: input.avatarDataUrl ?? null,
         system_prompt: input.systemPrompt,
+        expected_updated_at: input.expectedUpdatedAt,
       }),
     },
   );
@@ -321,6 +322,7 @@ export async function updateTeam(
         memberAgentIds: input.memberAgentIds,
         workflowText: input.workflowText,
         avatarDataUrl: input.avatarDataUrl ?? null,
+        expectedUpdatedAt: input.expectedUpdatedAt,
       }),
     },
   );

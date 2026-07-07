@@ -197,6 +197,25 @@ async fn fetch_existing_agent(
     }
 }
 
+/// Copy the concurrency token out of a freshly fetched profile into the
+/// mutation body: the gateway only applies the write when the stored
+/// `updated_at` still matches, so this GET->PUT pair cannot overwrite a
+/// concurrent edit or resurrect a deleted profile (#TASK-1761).
+fn attach_expected_updated_at(
+    body: &mut Value,
+    existing: &Value,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let updated_at = existing["updated_at"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(
+            "gateway returned a profile without updated_at — cannot build a conditional update",
+        )?;
+    body["expected_updated_at"] = Value::String(updated_at.to_owned());
+    Ok(())
+}
+
 /// An explicitly passed flag must not be blank: blank is neither a valid
 /// value nor "omit" (omit = don't pass the flag). Silently preserving the
 /// stored value would make scripts believe their write took effect.
@@ -417,7 +436,7 @@ pub(crate) async fn cmd_agent_update(
             .as_ref()
             .map(|(name, value)| (*name, value.as_str())),
     )?;
-    let body = build_agent_mutation_body(
+    let mut body = build_agent_mutation_body(
         agent_id.clone(),
         display_name,
         provider,
@@ -431,6 +450,7 @@ pub(crate) async fn cmd_agent_update(
         default_workspace_dir,
         system_prompt,
     )?;
+    attach_expected_updated_at(&mut body, &existing)?;
     let url = format!(
         "/api/custom-agents/{}",
         urlencoding::encode(agent_id.trim())
@@ -474,7 +494,7 @@ pub(crate) async fn cmd_agent_upsert(
             .as_ref()
             .map(|(name, value)| (*name, value.as_str())),
     )?;
-    let body = build_agent_mutation_body(
+    let mut body = build_agent_mutation_body(
         agent_id.clone(),
         display_name,
         provider,
@@ -488,7 +508,8 @@ pub(crate) async fn cmd_agent_upsert(
         default_workspace_dir,
         system_prompt,
     )?;
-    let payload = if existing.is_some() {
+    let payload = if let Some(existing) = existing.as_ref() {
+        attach_expected_updated_at(&mut body, existing)?;
         let url = format!(
             "/api/custom-agents/{}",
             urlencoding::encode(agent_id.trim())
@@ -764,16 +785,18 @@ pub(crate) async fn cmd_agent_team_update(
     if member_agent_ids.is_empty() {
         return Err("member_agent_ids cannot be empty".into());
     }
+    let mut body = json!({
+        "teamId": next_team_id,
+        "displayName": display_name,
+        "leaderAgentId": leader_agent_id,
+        "memberAgentIds": member_agent_ids,
+        "workflowText": workflow_text,
+    });
+    attach_expected_updated_at(&mut body, &existing)?;
     let payload = put_gateway_json(
         &gateway,
         &format!("/api/teams/{}", urlencoding::encode(&team_id)),
-        &json!({
-            "teamId": next_team_id,
-            "displayName": display_name,
-            "leaderAgentId": leader_agent_id,
-            "memberAgentIds": member_agent_ids,
-            "workflowText": workflow_text,
-        }),
+        &body,
     )
     .await?;
     if json {
@@ -884,6 +907,7 @@ mod tests {
                                 "provider_type": "codex_app_server",
                                 "model": "existing-model",
                                 "system_prompt": "Existing prompt.",
+                                "updated_at": "2026-01-01T00:00:00Z",
                                 "built_in": false,
                             })),
                         )
@@ -962,6 +986,7 @@ mod tests {
                             "model": "",
                             "system_prompt": "",
                             "provider_env": env,
+                            "updated_at": "2026-01-01T00:00:00Z",
                             "built_in": false,
                         })),
                     )
@@ -1167,6 +1192,11 @@ mod tests {
         // provider_type to claude_code).
         assert_eq!(records[0].body["display_name"], "Existing Agent");
         assert_eq!(records[0].body["provider_type"], "codex_app_server");
+        // The conditional-update token from the fetched agent rides along.
+        assert_eq!(
+            records[0].body["expected_updated_at"],
+            "2026-01-01T00:00:00Z"
+        );
         assert!(records[0].body.get("model").is_none());
         assert!(records[0].body.get("model_reasoning_effort").is_none());
         assert!(records[0].body.get("model_service_tier").is_none());

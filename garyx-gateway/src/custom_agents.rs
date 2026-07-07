@@ -9,6 +9,8 @@ use garyx_models::{CustomAgentProfile, ProviderType, builtin_provider_agent_prof
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
+use crate::optimistic_write::{StoreWriteError, WriteExpectation, check_write_expectation};
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpsertCustomAgentRequest {
     pub agent_id: String,
@@ -142,7 +144,8 @@ impl CustomAgentStore {
     pub async fn upsert_agent(
         &self,
         request: UpsertCustomAgentRequest,
-    ) -> Result<CustomAgentProfile, String> {
+        expectation: WriteExpectation,
+    ) -> Result<CustomAgentProfile, StoreWriteError> {
         let agent_id = request.agent_id.trim();
         let display_name = request.display_name.trim();
         let requested_model = request.model.map(|value| value.trim().to_owned());
@@ -177,10 +180,12 @@ impl CustomAgentStore {
         let requested_avatar_data_url =
             request.avatar_data_url.map(|value| value.trim().to_owned());
         if agent_id.is_empty() {
-            return Err("agent_id is required".to_owned());
+            return Err(StoreWriteError::Invalid("agent_id is required".to_owned()));
         }
         if display_name.is_empty() {
-            return Err("display_name is required".to_owned());
+            return Err(StoreWriteError::Invalid(
+                "display_name is required".to_owned(),
+            ));
         }
         let now = Utc::now().to_rfc3339();
         let mut inner = self.inner.write().await;
@@ -188,8 +193,17 @@ impl CustomAgentStore {
             .get(agent_id)
             .is_some_and(|existing| existing.built_in)
         {
-            return Err("built-in agents cannot be modified".to_owned());
+            return Err(StoreWriteError::Invalid(
+                "built-in agents cannot be modified".to_owned(),
+            ));
         }
+        check_write_expectation(
+            &expectation,
+            inner
+                .get(agent_id)
+                .map(|profile| profile.updated_at.as_str()),
+            "custom agent",
+        )?;
         let created_at = inner
             .get(agent_id)
             .map(|existing| existing.created_at.clone())
@@ -263,8 +277,22 @@ impl CustomAgentStore {
             updated_at: now,
         };
         inner.insert(agent_id.to_owned(), profile.clone());
-        self.persist_locked(&inner)?;
+        self.persist_locked(&inner)
+            .map_err(StoreWriteError::Persist)?;
         Ok(profile)
+    }
+
+    /// Test-only unconditional upsert preserving the pre-#TASK-1761 seeding
+    /// semantics (create-or-replace, `String` errors). Production writes must
+    /// pick an explicit [`WriteExpectation`].
+    #[cfg(test)]
+    pub async fn upsert_agent_for_test(
+        &self,
+        request: UpsertCustomAgentRequest,
+    ) -> Result<CustomAgentProfile, String> {
+        self.upsert_agent(request, WriteExpectation::Overwrite)
+            .await
+            .map_err(|error| error.message().to_owned())
     }
 
     pub async fn delete_agent(&self, agent_id: &str) -> Result<(), String> {

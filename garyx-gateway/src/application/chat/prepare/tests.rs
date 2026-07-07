@@ -162,7 +162,7 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
     state
         .ops
         .custom_agents
-        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "spec-review".to_owned(),
             display_name: "Spec Review".to_owned(),
             provider_type: ProviderType::CodexAppServer,
@@ -295,7 +295,7 @@ async fn prepare_chat_request_prefers_thread_snapshot_before_agent_runtime_metad
     state
         .ops
         .custom_agents
-        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "snapshot-agent".to_owned(),
             display_name: "Snapshot Agent".to_owned(),
             provider_type: ProviderType::ClaudeCode,

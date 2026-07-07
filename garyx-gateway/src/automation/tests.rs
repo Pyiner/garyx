@@ -505,7 +505,7 @@ async fn resolve_automation_agent_id_preserves_raw_team_id() {
     state
         .ops
         .agent_teams
-        .upsert_team(crate::agent_teams::UpsertAgentTeamRequest {
+        .upsert_team_for_test(crate::agent_teams::UpsertAgentTeamRequest {
             team_id: "product-ship".to_owned(),
             display_name: "Product Ship".to_owned(),
             leader_agent_id: "codex".to_owned(),

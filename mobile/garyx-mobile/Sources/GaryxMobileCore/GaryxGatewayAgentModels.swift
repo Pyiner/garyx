@@ -564,6 +564,9 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
     public var defaultWorkspaceDir: String?
     public var avatarDataUrl: String?
     public var systemPrompt: String?
+    /// Concurrency token for updates: the `updatedAt` of the agent this edit
+    /// was based on. Required by the gateway on PUT; omitted on POST.
+    public var expectedUpdatedAt: String?
 
     public init(
         agentId: String,
@@ -580,7 +583,8 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
         requestTimeoutSeconds: Int? = nil,
         defaultWorkspaceDir: String? = nil,
         avatarDataUrl: String? = nil,
-        systemPrompt: String? = nil
+        systemPrompt: String? = nil,
+        expectedUpdatedAt: String? = nil
     ) {
         self.agentId = agentId
         self.displayName = displayName
@@ -597,6 +601,7 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
         self.defaultWorkspaceDir = defaultWorkspaceDir
         self.avatarDataUrl = avatarDataUrl
         self.systemPrompt = systemPrompt
+        self.expectedUpdatedAt = expectedUpdatedAt
     }
 
     enum CodingKeys: String, CodingKey {
@@ -615,6 +620,7 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
         case defaultWorkspaceDir = "default_workspace_dir"
         case avatarDataUrl = "avatar_data_url"
         case systemPrompt = "system_prompt"
+        case expectedUpdatedAt = "expected_updated_at"
     }
 }
 
@@ -626,6 +632,9 @@ public struct GaryxTeamRequest: Encodable, Equatable, Sendable {
     public var memberAgentIds: [String]
     public var workflowText: String
     public var avatarDataUrl: String?
+    /// Concurrency token for updates: the `updatedAt` of the team this edit
+    /// was based on. Required by the gateway on PUT; omitted on POST.
+    public var expectedUpdatedAt: String?
 
     public init(
         teamId: String,
@@ -633,7 +642,8 @@ public struct GaryxTeamRequest: Encodable, Equatable, Sendable {
         leaderAgentId: String,
         memberAgentIds: [String],
         workflowText: String,
-        avatarDataUrl: String? = nil
+        avatarDataUrl: String? = nil,
+        expectedUpdatedAt: String? = nil
     ) {
         self.teamId = teamId
         self.displayName = displayName
@@ -641,5 +651,6 @@ public struct GaryxTeamRequest: Encodable, Equatable, Sendable {
         self.memberAgentIds = memberAgentIds
         self.workflowText = workflowText
         self.avatarDataUrl = avatarDataUrl
+        self.expectedUpdatedAt = expectedUpdatedAt
     }
 }

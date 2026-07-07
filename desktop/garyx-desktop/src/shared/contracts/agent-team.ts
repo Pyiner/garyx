@@ -57,6 +57,8 @@ export interface CreateCustomAgentInput {
 
 export interface UpdateCustomAgentInput extends CreateCustomAgentInput {
   currentAgentId: string;
+  /** Concurrency token: the `updatedAt` of the agent this edit was based on. */
+  expectedUpdatedAt: string;
 }
 
 export interface DeleteCustomAgentInput {
@@ -86,6 +88,8 @@ export interface CreateTeamInput {
 
 export interface UpdateTeamInput extends CreateTeamInput {
   currentTeamId: string;
+  /** Concurrency token: the `updatedAt` of the team this edit was based on. */
+  expectedUpdatedAt: string;
 }
 
 export interface DeleteTeamInput {

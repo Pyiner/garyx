@@ -261,7 +261,7 @@ mod tests {
     async fn custom_agent_store_with_default_workspace() -> Arc<CustomAgentStore> {
         let store = Arc::new(CustomAgentStore::new());
         store
-            .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+            .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
                 agent_id: "reviewer".to_owned(),
                 display_name: "Reviewer".to_owned(),
                 provider_type: ProviderType::CodexAppServer,

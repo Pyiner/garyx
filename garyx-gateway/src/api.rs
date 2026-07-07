@@ -32,6 +32,7 @@ use serde_json::{Value, json};
 
 use crate::agent_teams::UpsertAgentTeamRequest;
 use crate::custom_agents::UpsertCustomAgentRequest;
+use crate::optimistic_write::{StoreWriteError, WriteExpectation};
 use crate::server::AppState;
 use crate::thread_runtime::{build_thread_runtime_summary, provider_type_from_key};
 use crate::thread_type::thread_summary_type_from_record;
@@ -334,6 +335,10 @@ pub struct CustomAgentUpsertPayload {
     pub avatar_data_url: Option<String>,
     #[serde(default, alias = "systemPrompt")]
     pub system_prompt: Option<String>,
+    /// Concurrency token for updates: the `updated_at` of the profile the
+    /// client based its edit on. Required on PUT; ignored on POST.
+    #[serde(default, alias = "expectedUpdatedAt")]
+    pub expected_updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -352,6 +357,10 @@ pub struct AgentTeamUpsertPayload {
     pub workflow_text: String,
     #[serde(default, alias = "avatar_data_url")]
     pub avatar_data_url: Option<String>,
+    /// Concurrency token for updates: the `updated_at` of the team the client
+    /// based its edit on. Required on PUT; ignored on POST.
+    #[serde(default, alias = "expected_updated_at")]
+    pub expected_updated_at: Option<String>,
 }
 
 /// GET /api/threads/history - thread history with optional filtering.
@@ -2885,6 +2894,58 @@ pub async fn get_custom_agent(
     }
 }
 
+/// Map a classified store write failure onto its HTTP status: 400 invalid,
+/// 404 missing update target, 409 concurrency conflict (with the stored
+/// `updated_at` so clients can re-read), 500 persist failure.
+fn store_write_error_response(error: StoreWriteError) -> axum::response::Response {
+    match error {
+        StoreWriteError::Invalid(message) => {
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
+        }
+        StoreWriteError::NotFound(message) => {
+            (StatusCode::NOT_FOUND, Json(json!({ "error": message }))).into_response()
+        }
+        StoreWriteError::Conflict {
+            message,
+            current_updated_at,
+        } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": message,
+                "current_updated_at": current_updated_at,
+            })),
+        )
+            .into_response(),
+        StoreWriteError::Persist(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": message })),
+        )
+            .into_response(),
+    }
+}
+
+/// The concurrency token every PUT must carry (`expected_updated_at`).
+fn require_expected_updated_at(
+    expected_updated_at: Option<String>,
+    what: &str,
+) -> Result<WriteExpectation, axum::response::Response> {
+    match expected_updated_at
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    {
+        Some(token) => Ok(WriteExpectation::UpdatedAt(token)),
+        None => Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!(
+                    "expected_updated_at is required — send the {what}'s current updated_at from a fresh GET"
+                ),
+            })),
+        )
+            .into_response()),
+    }
+}
+
 pub async fn create_custom_agent(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CustomAgentUpsertPayload>,
@@ -2892,23 +2953,26 @@ pub async fn create_custom_agent(
     match state
         .ops
         .custom_agents
-        .upsert_agent(UpsertCustomAgentRequest {
-            agent_id: payload.agent_id,
-            display_name: payload.display_name,
-            provider_type: payload.provider_type,
-            model: payload.model,
-            model_reasoning_effort: payload.model_reasoning_effort,
-            model_service_tier: payload.model_service_tier,
-            provider_env: payload.provider_env,
-            auth_source: payload.auth_source,
-            base_url: payload.base_url,
-            codex_home: payload.codex_home,
-            max_tool_iterations: payload.max_tool_iterations,
-            request_timeout_seconds: payload.request_timeout_seconds,
-            default_workspace_dir: payload.default_workspace_dir,
-            avatar_data_url: payload.avatar_data_url,
-            system_prompt: payload.system_prompt,
-        })
+        .upsert_agent(
+            UpsertCustomAgentRequest {
+                agent_id: payload.agent_id,
+                display_name: payload.display_name,
+                provider_type: payload.provider_type,
+                model: payload.model,
+                model_reasoning_effort: payload.model_reasoning_effort,
+                model_service_tier: payload.model_service_tier,
+                provider_env: payload.provider_env,
+                auth_source: payload.auth_source,
+                base_url: payload.base_url,
+                codex_home: payload.codex_home,
+                max_tool_iterations: payload.max_tool_iterations,
+                request_timeout_seconds: payload.request_timeout_seconds,
+                default_workspace_dir: payload.default_workspace_dir,
+                avatar_data_url: payload.avatar_data_url,
+                system_prompt: payload.system_prompt,
+            },
+            WriteExpectation::Create,
+        )
         .await
     {
         Ok(agent) => {
@@ -2933,7 +2997,7 @@ pub async fn create_custom_agent(
             }
             (StatusCode::CREATED, Json(custom_agent_response(&agent))).into_response()
         }
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
+        Err(error) => store_write_error_response(error),
     }
 }
 
@@ -2942,26 +3006,34 @@ pub async fn update_custom_agent(
     Path(agent_id): Path<String>,
     Json(payload): Json<CustomAgentUpsertPayload>,
 ) -> impl IntoResponse {
+    let expectation = match require_expected_updated_at(payload.expected_updated_at, "custom agent")
+    {
+        Ok(expectation) => expectation,
+        Err(response) => return response,
+    };
     match state
         .ops
         .custom_agents
-        .upsert_agent(UpsertCustomAgentRequest {
-            agent_id,
-            display_name: payload.display_name,
-            provider_type: payload.provider_type,
-            model: payload.model,
-            model_reasoning_effort: payload.model_reasoning_effort,
-            model_service_tier: payload.model_service_tier,
-            provider_env: payload.provider_env,
-            auth_source: payload.auth_source,
-            base_url: payload.base_url,
-            codex_home: payload.codex_home,
-            max_tool_iterations: payload.max_tool_iterations,
-            request_timeout_seconds: payload.request_timeout_seconds,
-            default_workspace_dir: payload.default_workspace_dir,
-            avatar_data_url: payload.avatar_data_url,
-            system_prompt: payload.system_prompt,
-        })
+        .upsert_agent(
+            UpsertCustomAgentRequest {
+                agent_id,
+                display_name: payload.display_name,
+                provider_type: payload.provider_type,
+                model: payload.model,
+                model_reasoning_effort: payload.model_reasoning_effort,
+                model_service_tier: payload.model_service_tier,
+                provider_env: payload.provider_env,
+                auth_source: payload.auth_source,
+                base_url: payload.base_url,
+                codex_home: payload.codex_home,
+                max_tool_iterations: payload.max_tool_iterations,
+                request_timeout_seconds: payload.request_timeout_seconds,
+                default_workspace_dir: payload.default_workspace_dir,
+                avatar_data_url: payload.avatar_data_url,
+                system_prompt: payload.system_prompt,
+            },
+            expectation,
+        )
         .await
     {
         Ok(agent) => {
@@ -2986,7 +3058,7 @@ pub async fn update_custom_agent(
             }
             (StatusCode::OK, Json(custom_agent_response(&agent))).into_response()
         }
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
+        Err(error) => store_write_error_response(error),
     }
 }
 
@@ -3134,14 +3206,17 @@ pub async fn create_agent_team(
     match state
         .ops
         .agent_teams
-        .upsert_team(UpsertAgentTeamRequest {
-            team_id: payload.team_id,
-            display_name: payload.display_name,
-            leader_agent_id: payload.leader_agent_id,
-            member_agent_ids: payload.member_agent_ids,
-            workflow_text: payload.workflow_text,
-            avatar_data_url: payload.avatar_data_url,
-        })
+        .upsert_team(
+            UpsertAgentTeamRequest {
+                team_id: payload.team_id,
+                display_name: payload.display_name,
+                leader_agent_id: payload.leader_agent_id,
+                member_agent_ids: payload.member_agent_ids,
+                workflow_text: payload.workflow_text,
+                avatar_data_url: payload.avatar_data_url,
+            },
+            WriteExpectation::Create,
+        )
         .await
     {
         Ok(team) => {
@@ -3168,7 +3243,7 @@ pub async fn create_agent_team(
             }
             (StatusCode::CREATED, Json(json!(team))).into_response()
         }
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
+        Err(error) => store_write_error_response(error),
     }
 }
 
@@ -3177,17 +3252,24 @@ pub async fn update_agent_team(
     Path(team_id): Path<String>,
     Json(payload): Json<AgentTeamUpsertPayload>,
 ) -> impl IntoResponse {
+    let expectation = match require_expected_updated_at(payload.expected_updated_at, "agent team") {
+        Ok(expectation) => expectation,
+        Err(response) => return response,
+    };
     match state
         .ops
         .agent_teams
-        .upsert_team(UpsertAgentTeamRequest {
-            team_id,
-            display_name: payload.display_name,
-            leader_agent_id: payload.leader_agent_id,
-            member_agent_ids: payload.member_agent_ids,
-            workflow_text: payload.workflow_text,
-            avatar_data_url: payload.avatar_data_url,
-        })
+        .upsert_team(
+            UpsertAgentTeamRequest {
+                team_id,
+                display_name: payload.display_name,
+                leader_agent_id: payload.leader_agent_id,
+                member_agent_ids: payload.member_agent_ids,
+                workflow_text: payload.workflow_text,
+                avatar_data_url: payload.avatar_data_url,
+            },
+            expectation,
+        )
         .await
     {
         Ok(team) => {
@@ -3214,7 +3296,7 @@ pub async fn update_agent_team(
             }
             (StatusCode::OK, Json(json!(team))).into_response()
         }
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
+        Err(error) => store_write_error_response(error),
     }
 }
 

@@ -3413,7 +3413,7 @@ async fn thread_history_runtime_reports_provider_default_alias() {
 async fn thread_history_runtime_prefers_thread_snapshot_over_current_agent_profile() {
     let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
     custom_agents
-        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "test-agent".to_owned(),
             display_name: "Test Agent".to_owned(),
             provider_type: ProviderType::ClaudeCode,
@@ -5961,7 +5961,7 @@ async fn seed_product_ship_team(state: &Arc<AppState>) {
     state
         .ops
         .agent_teams
-        .upsert_team(UpsertAgentTeamRequest {
+        .upsert_team_for_test(UpsertAgentTeamRequest {
             team_id: "product-ship".to_owned(),
             display_name: "Product Ship".to_owned(),
             leader_agent_id: "planner".to_owned(),
@@ -6536,7 +6536,7 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
     custom_agents
-        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "workspace-reviewer".to_owned(),
             display_name: "Workspace Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
@@ -6857,7 +6857,7 @@ async fn task_assign_queues_dispatch_with_original_body() {
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
     custom_agents
-        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "workspace-reviewer".to_owned(),
             display_name: "Workspace Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
@@ -7096,7 +7096,7 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
     custom_agents
-        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
             agent_id: "late-gemini".to_owned(),
             display_name: "Late Gemini".to_owned(),
             provider_type: ProviderType::GeminiCli,

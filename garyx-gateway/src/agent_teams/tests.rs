@@ -4,7 +4,7 @@ use super::*;
 async fn rejects_team_without_leader_in_members() {
     let store = AgentTeamStore::new();
     let error = store
-        .upsert_team(UpsertAgentTeamRequest {
+        .upsert_team_for_test(UpsertAgentTeamRequest {
             team_id: "team-1".to_owned(),
             display_name: "Team 1".to_owned(),
             leader_agent_id: "planner".to_owned(),
@@ -21,7 +21,7 @@ async fn rejects_team_without_leader_in_members() {
 async fn upsert_preserves_and_clears_avatar_data_url() {
     let store = AgentTeamStore::new();
     let created = store
-        .upsert_team(UpsertAgentTeamRequest {
+        .upsert_team_for_test(UpsertAgentTeamRequest {
             team_id: "team-1".to_owned(),
             display_name: "Team 1".to_owned(),
             leader_agent_id: "planner".to_owned(),
@@ -37,7 +37,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
     );
 
     let updated = store
-        .upsert_team(UpsertAgentTeamRequest {
+        .upsert_team_for_test(UpsertAgentTeamRequest {
             team_id: "team-1".to_owned(),
             display_name: "Team 1".to_owned(),
             leader_agent_id: "planner".to_owned(),
@@ -53,7 +53,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
     );
 
     let cleared = store
-        .upsert_team(UpsertAgentTeamRequest {
+        .upsert_team_for_test(UpsertAgentTeamRequest {
             team_id: "team-1".to_owned(),
             display_name: "Team 1".to_owned(),
             leader_agent_id: "planner".to_owned(),

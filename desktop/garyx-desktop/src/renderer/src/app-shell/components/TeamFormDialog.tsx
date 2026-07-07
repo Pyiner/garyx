@@ -126,6 +126,7 @@ export function TeamFormDialog({
         const updatePayload: UpdateTeamInput = {
           ...payload,
           currentTeamId: selectedTeam?.teamId || payload.teamId,
+          expectedUpdatedAt: selectedTeam?.updatedAt || '',
         };
         await window.garyxDesktop.updateTeam(updatePayload);
         onToast?.(t('Agent team updated'), 'success');

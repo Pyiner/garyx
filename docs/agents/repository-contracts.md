@@ -59,6 +59,20 @@ reinterpreted in feature code.
   retry/reconnect behavior or local business gates defined in
   `docs/agents/conversation-state.md`.
 
+## Agent And Team Write Concurrency
+
+- `POST /api/custom-agents` and `POST /api/teams` are strict creates: an
+  existing id is a 409, never a silent overwrite.
+- `PUT /api/custom-agents/{id}` and `PUT /api/teams/{id}` are strict
+  conditional updates: the request must carry `expected_updated_at` (the
+  `updated_at` of the profile the edit was based on). A missing token is a
+  400, a missing target is a 404 (deleted profiles are not resurrected), and
+  a moved token is a 409 with `current_updated_at` so the client can re-read
+  and retry. There is no unconditional HTTP write path.
+- Every client edit flow (desktop, mobile, CLI) must base its update on a
+  freshly fetched profile and send that profile's `updated_at` back; the CLI's
+  update commands do the GET-merge-PUT internally.
+
 ## Provider And Channel Behavior
 
 - Telegram uses the throttled plugin stream policy: assistant text can stream
