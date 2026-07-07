@@ -133,6 +133,27 @@ impl ThreadCache {
         }
     }
 
+    /// Streaming-build variant of `push_appended`: accepts one parsed record
+    /// at a time and defers `roll_tail` until the tail overshoots the budget
+    /// by 2x, so the front-drain cost amortizes to O(1) per record. Fold
+    /// order is unchanged, so after a final `roll_tail` the checkpoint/tail
+    /// state is identical to a full read followed by one roll.
+    fn push_streamed(&mut self, cached: CachedTranscriptRecord, budget: &TranscriptCacheBudget) {
+        if self.min_seq == 0 {
+            self.min_seq = cached.record.seq;
+            self.base_seq = cached.record.seq.saturating_sub(1);
+        }
+        self.last_seq = cached.record.seq;
+        self.total_records += 1;
+        self.tail_bytes += cached.bytes;
+        self.tail.push(cached);
+        if self.tail.len() > budget.tail_max_records.saturating_mul(2)
+            || self.tail_bytes > budget.tail_max_bytes.saturating_mul(2)
+        {
+            self.roll_tail(budget);
+        }
+    }
+
     fn push_appended(
         &mut self,
         appended: &[ThreadTranscriptRecord],
@@ -851,19 +872,82 @@ impl ThreadTranscriptStore {
         if cache.is_some() {
             return Ok(());
         }
+        *cache = Some(self.build_cache_streaming(thread_id, path).await?);
+        Ok(())
+    }
+
+    /// Build a thread's cache entry by streaming the transcript jsonl once,
+    /// folding rolled-off records into the run-state checkpoint as the scan
+    /// advances. Peak memory stays near the tail budget instead of
+    /// materializing the whole file — large transcripts previously ballooned
+    /// to gigabytes on their first post-restart touch.
+    async fn build_cache_streaming(
+        &self,
+        thread_id: &str,
+        path: &Path,
+    ) -> Result<ThreadCache, ThreadHistoryError> {
         let file_len = tokio::fs::metadata(path)
             .await
             .map(|meta| meta.len())
             .unwrap_or(0);
-        let records = if path.exists() {
-            self.read_records_sized_from_path(thread_id, path).await?
-        } else {
-            Vec::new()
-        };
-        let mut entry = ThreadCache::from_records(records, file_len);
-        entry.roll_tail(&self.cache_budget());
-        *cache = Some(entry);
-        Ok(())
+        let mut entry = ThreadCache::from_records(Vec::new(), file_len);
+        if !path.exists() {
+            return Ok(entry);
+        }
+        let budget = self.cache_budget();
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|error| transcript_io_error(thread_id, error))?;
+        let mut reader = BufReader::new(file);
+        let mut line = String::new();
+        let mut line_no = 0usize;
+        loop {
+            line.clear();
+            let read = reader
+                .read_line(&mut line)
+                .await
+                .map_err(|error| transcript_io_error(thread_id, error))?;
+            if read == 0 {
+                break;
+            }
+            line_no += 1;
+            let stripped = line.strip_suffix('\n').unwrap_or(&line);
+            let stripped = stripped.strip_suffix('\r').unwrap_or(stripped);
+            if stripped.trim().is_empty() {
+                continue;
+            }
+            let parsed = serde_json::from_str::<TranscriptLine>(stripped).map_err(|error| {
+                ThreadHistoryError::InvalidTranscript {
+                    thread_id: thread_id.to_owned(),
+                    message: format!("line {line_no}: {error}"),
+                }
+            })?;
+            let TranscriptLine::Message {
+                seq,
+                thread_id,
+                run_id,
+                timestamp,
+                message,
+            } = parsed
+            else {
+                continue;
+            };
+            entry.push_streamed(
+                CachedTranscriptRecord {
+                    bytes: stripped.len(),
+                    record: ThreadTranscriptRecord {
+                        seq,
+                        thread_id,
+                        run_id,
+                        timestamp,
+                        message,
+                    },
+                },
+                &budget,
+            );
+        }
+        entry.roll_tail(&budget);
+        Ok(entry)
     }
 
     // -----------------------------------------------------------------------
@@ -1746,10 +1830,14 @@ impl ThreadTranscriptStore {
     // Reads
     // -----------------------------------------------------------------------
 
-    /// Serve a read from the thread's cache when it is already built and
-    /// covers the request. Never builds the cache (one-off reads must not pay
-    /// a build or occupy budget); hot paths that build are
-    /// `render_snapshot_in_window`, `run_state`, and the write paths.
+    /// Serve a read from the thread's cache, streaming the cache build first
+    /// when the entry is missing (the post-restart cold case). The build is a
+    /// single bounded-memory pass — roll-off folds into the checkpoint as the
+    /// scan advances — so it is strictly cheaper than the full-file fallback
+    /// read the caller would otherwise do; entries the store-wide budget
+    /// cannot keep are evicted right after serving. Returns `None` when the
+    /// entry cannot cover the request or the build fails (callers fall back
+    /// to explicit reads, which surface the underlying error).
     async fn with_built_cache<T>(
         &self,
         thread_id: &str,
@@ -1759,10 +1847,16 @@ impl ThreadTranscriptStore {
         let mut cache = slot.state.lock().await;
         let path = self.transcript_path(thread_id)?;
         self.verify_cache(&mut cache, &path).await;
-        let served = cache.as_ref().and_then(serve);
-        if served.is_some() {
-            self.sync_slot_accounting(&slot, &cache);
+        if cache.is_none() {
+            match self.build_cache_streaming(thread_id, &path).await {
+                Ok(entry) => *cache = Some(entry),
+                Err(_) => return None,
+            }
         }
+        let served = cache.as_ref().and_then(serve);
+        self.sync_slot_accounting(&slot, &cache);
+        drop(cache);
+        self.evict_over_budget(thread_id);
         served
     }
 
@@ -2548,5 +2642,201 @@ impl From<ThreadTranscriptRecord> for TranscriptLine {
             timestamp: value.timestamp,
             message: value.message,
         }
+    }
+}
+
+#[cfg(test)]
+mod streaming_build_tests {
+    use super::*;
+
+    fn fixture_message(index: usize) -> Value {
+        match index % 4 {
+            0 => serde_json::json!({"role": "user", "content": format!("user message {index}")}),
+            1 => serde_json::json!({
+                "role": "assistant",
+                "content": format!("assistant reply {index} {}", "x".repeat(index * 17 % 300)),
+            }),
+            2 => serde_json::json!({
+                "role": "system",
+                "kind": "control",
+                "internal": true,
+                "control": {
+                    "kind": if index % 8 == 2 { "run_start" } else { "run_complete" },
+                    "run_id": format!("run-{}", index / 4),
+                },
+            }),
+            _ => serde_json::json!({
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": format!("tool-{index}"), "name": "probe"}],
+            }),
+        }
+    }
+
+    async fn assert_streaming_matches_full_read(store: &ThreadTranscriptStore, thread_id: &str) {
+        let path = store.transcript_path(thread_id).unwrap();
+        let full = store
+            .read_records_sized_from_path(thread_id, &path)
+            .await
+            .unwrap();
+        let file_len = tokio::fs::metadata(&path).await.unwrap().len();
+        let mut oracle = ThreadCache::from_records(full, file_len);
+        oracle.roll_tail(&store.cache_budget());
+
+        let streamed = store.build_cache_streaming(thread_id, &path).await.unwrap();
+
+        assert_eq!(streamed.checkpoint, oracle.checkpoint, "checkpoint fold");
+        assert_eq!(streamed.base_seq, oracle.base_seq, "base_seq");
+        assert_eq!(streamed.min_seq, oracle.min_seq, "min_seq");
+        assert_eq!(streamed.last_seq, oracle.last_seq, "last_seq");
+        assert_eq!(
+            streamed.total_records, oracle.total_records,
+            "total_records"
+        );
+        assert_eq!(streamed.file_len, oracle.file_len, "file_len");
+        assert_eq!(streamed.tail_bytes, oracle.tail_bytes, "tail_bytes");
+        let streamed_tail: Vec<(&ThreadTranscriptRecord, usize)> = streamed
+            .tail
+            .iter()
+            .map(|cached| (&cached.record, cached.bytes))
+            .collect();
+        let oracle_tail: Vec<(&ThreadTranscriptRecord, usize)> = oracle
+            .tail
+            .iter()
+            .map(|cached| (&cached.record, cached.bytes))
+            .collect();
+        assert_eq!(streamed_tail, oracle_tail, "tail records");
+    }
+
+    #[tokio::test]
+    async fn streaming_cache_build_matches_full_read_when_tail_rolls() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ThreadTranscriptStore::file_for_tests(dir.path(), 2048, 5, 1 << 20)
+            .await
+            .unwrap();
+        let thread_id = "thread::streaming-rolls";
+        for index in 0..40usize {
+            store
+                .append_committed_messages(
+                    thread_id,
+                    Some(&format!("run-{}", index / 4)),
+                    &[fixture_message(index)],
+                )
+                .await
+                .unwrap();
+        }
+        assert_streaming_matches_full_read(&store, thread_id).await;
+    }
+
+    #[tokio::test]
+    async fn streaming_cache_build_matches_full_read_when_budget_covers_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ThreadTranscriptStore::file_for_tests(dir.path(), 1 << 20, 4096, 1 << 24)
+            .await
+            .unwrap();
+        let thread_id = "thread::streaming-covered";
+        for index in 0..12usize {
+            store
+                .append_committed_messages(thread_id, Some("run-1"), &[fixture_message(index)])
+                .await
+                .unwrap();
+        }
+        assert_streaming_matches_full_read(&store, thread_id).await;
+
+        let path = store.transcript_path(thread_id).unwrap();
+        let streamed = store.build_cache_streaming(thread_id, &path).await.unwrap();
+        assert!(
+            streamed.covers_whole_file(),
+            "small file stays fully cached"
+        );
+    }
+
+    async fn write_bench_fixture(dir: &Path, thread_id: &str) -> u64 {
+        let store = ThreadTranscriptStore::file(dir).await.unwrap();
+        let filler = "x".repeat(40 * 1024);
+        for index in 0..2000usize {
+            let role = if index % 5 == 0 { "user" } else { "assistant" };
+            store
+                .append_committed_messages(
+                    thread_id,
+                    Some("run-bench"),
+                    &[serde_json::json!({"role": role, "content": format!("{index} {filler}")})],
+                )
+                .await
+                .unwrap();
+        }
+        let path = store.transcript_path(thread_id).unwrap();
+        tokio::fs::metadata(&path).await.unwrap().len()
+    }
+
+    /// Manual benchmark halves — run each in its own process and compare
+    /// `maximum resident set size`:
+    /// `/usr/bin/time -l cargo test -p garyx-router bench_cold_start_streaming_build -- --ignored --nocapture`
+    /// `/usr/bin/time -l cargo test -p garyx-router bench_cold_start_full_read_build -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "manual memory/latency benchmark"]
+    async fn bench_cold_start_streaming_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let thread_id = "thread::bench-cold";
+        let file_len = write_bench_fixture(dir.path(), thread_id).await;
+
+        let cold = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+        let path = cold.transcript_path(thread_id).unwrap();
+        let started = std::time::Instant::now();
+        let entry = cold.build_cache_streaming(thread_id, &path).await.unwrap();
+        println!(
+            "streaming cold build: {:?} for {} bytes ({} records total, {} in tail)",
+            started.elapsed(),
+            file_len,
+            entry.total_records,
+            entry.tail.len(),
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "manual memory/latency benchmark"]
+    async fn bench_cold_start_full_read_build() {
+        let dir = tempfile::tempdir().unwrap();
+        let thread_id = "thread::bench-cold";
+        let file_len = write_bench_fixture(dir.path(), thread_id).await;
+
+        let cold = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+        let path = cold.transcript_path(thread_id).unwrap();
+        let started = std::time::Instant::now();
+        let records = cold
+            .read_records_sized_from_path(thread_id, &path)
+            .await
+            .unwrap();
+        let mut entry = ThreadCache::from_records(records, file_len);
+        entry.roll_tail(&cold.cache_budget());
+        println!(
+            "full-read cold build: {:?} for {} bytes ({} records total, {} in tail)",
+            started.elapsed(),
+            file_len,
+            entry.total_records,
+            entry.tail.len(),
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_cache_build_handles_missing_and_empty_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ThreadTranscriptStore::file_for_tests(dir.path(), 2048, 5, 1 << 20)
+            .await
+            .unwrap();
+        let missing = dir.path().join("missing.jsonl");
+        let entry = store
+            .build_cache_streaming("thread::missing", &missing)
+            .await
+            .unwrap();
+        assert_eq!(entry.total_records, 0);
+        assert_eq!(entry.file_len, 0);
+
+        let empty = dir.path().join("empty.jsonl");
+        tokio::fs::write(&empty, b"").await.unwrap();
+        let entry = store
+            .build_cache_streaming("thread::empty", &empty)
+            .await
+            .unwrap();
+        assert_eq!(entry.total_records, 0);
     }
 }

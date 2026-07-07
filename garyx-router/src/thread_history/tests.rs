@@ -1837,6 +1837,98 @@ async fn transcript_cache_cold_restart_matches_previous_instance() {
 }
 
 #[tokio::test]
+async fn cold_start_cache_build_streams_without_full_file_read() {
+    let dir = tempdir().unwrap();
+    let thread_id = "thread::cold-start-stream";
+    {
+        let writer = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+        for index in 0..12usize {
+            writer
+                .append_run_records(
+                    thread_id,
+                    Some("run-cold"),
+                    &[RunTranscriptRecordDraft::from_message(oracle_test_message(
+                        index, index,
+                    ))],
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    // A fresh store instance is the post-restart cold-cache case: the first
+    // touch must stream the cache build instead of materializing the file.
+    let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    let baseline = store.full_file_reads.load(CacheTestOrdering::Relaxed);
+
+    let window = store
+        .cold_open_user_turn_window(thread_id, 3, 100)
+        .await
+        .unwrap();
+    assert!(!window.records.is_empty());
+    let last_seq = window.records.last().unwrap().seq;
+    let snapshot = store
+        .render_snapshot_in_window(thread_id, window.floor_seq.max(1), last_seq)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.based_on_seq, last_seq);
+    assert_eq!(store.message_count(thread_id).await.unwrap(), 12);
+
+    let reads = store.full_file_reads.load(CacheTestOrdering::Relaxed) - baseline;
+    assert_eq!(
+        reads, 0,
+        "cold-start touches must stream the cache build, never full-read the transcript"
+    );
+
+    assert_reads_match_oracle(&store, thread_id, "cold start streaming build").await;
+}
+
+#[tokio::test]
+async fn cold_start_small_tail_budget_serves_tail_window_without_full_read() {
+    // Small tail budget: the streamed cold build keeps only the newest
+    // records (older ones fold into the checkpoint), and a render window
+    // inside that tail is still served with zero full reads.
+    let dir = tempdir().unwrap();
+    let thread_id = "thread::cold-start-small-tail";
+    {
+        let writer = ThreadTranscriptStore::file_for_tests(dir.path(), 512, 3, 1 << 20)
+            .await
+            .unwrap();
+        for index in 0..12usize {
+            writer
+                .append_run_records(
+                    thread_id,
+                    Some("run-cold-small"),
+                    &[RunTranscriptRecordDraft::from_message(oracle_test_message(
+                        index, index,
+                    ))],
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let store = ThreadTranscriptStore::file_for_tests(dir.path(), 512, 3, 1 << 20)
+        .await
+        .unwrap();
+    let baseline = store.full_file_reads.load(CacheTestOrdering::Relaxed);
+
+    let total = store.message_count(thread_id).await.unwrap() as u64;
+    assert_eq!(total, 12);
+    let snapshot = store
+        .render_snapshot_in_window(thread_id, total, total)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.based_on_seq, total);
+
+    let reads = store.full_file_reads.load(CacheTestOrdering::Relaxed) - baseline;
+    assert_eq!(
+        reads, 0,
+        "tail-window render on a cold rolled cache must not full-read the transcript"
+    );
+}
+
+#[tokio::test]
 async fn transcript_cache_detects_out_of_band_file_change() {
     let dir = tempdir().unwrap();
     let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
