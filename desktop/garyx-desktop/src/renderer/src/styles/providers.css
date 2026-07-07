@@ -860,9 +860,16 @@
 }
 
 .sidebar-footer {
-  margin-top: auto;
+  flex: 0 0 auto;
+  margin-top: 0;
   padding: 10px 0 0;
   border-top: none;
+}
+
+.left-rail > .sidebar-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
 }
 
 .sidebar-update-slot {

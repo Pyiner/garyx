@@ -124,8 +124,37 @@
 
 .sidebar-nav {
   display: grid;
+  flex: 0 0 auto;
   gap: 1px;
   padding: 0;
+}
+
+.sidebar-scroll-area {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.sidebar-scroll-area::-webkit-scrollbar {
+  display: none;
+}
+
+.sidebar-scroll-area > .sidebar-thread-block {
+  flex: 0 0 auto;
+}
+
+.sidebar-scroll-area .workspace-list {
+  overflow: visible;
+}
+
+.sidebar-scroll-area .sidebar-bot-list {
+  max-height: none;
 }
 
 .sidebar-action,

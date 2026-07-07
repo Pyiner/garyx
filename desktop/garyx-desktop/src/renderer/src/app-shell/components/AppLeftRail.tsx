@@ -239,34 +239,36 @@ export function AppLeftRail({
             </button>
           </nav>
 
-          <PinnedThreadsSidebar
-            formatThreadTimestamp={formatThreadTimestamp}
-            onArchiveThread={onArchivePinnedThread}
-            onOpenThread={onOpenPinnedThread}
-            onUnpinThread={onUnpinThread}
-            rows={pinnedThreadRows}
-          />
+          <div className="sidebar-scroll-area">
+            <PinnedThreadsSidebar
+              formatThreadTimestamp={formatThreadTimestamp}
+              onArchiveThread={onArchivePinnedThread}
+              onOpenThread={onOpenPinnedThread}
+              onUnpinThread={onUnpinThread}
+              rows={pinnedThreadRows}
+            />
 
-          <BotSidebar
-            activeConversationGroupId={activeBotConversationGroupId}
-            groups={botGroups}
-            onAddBot={onAddBot}
-            onOpenBot={onOpenBot}
-            onToggleConversationGroup={onToggleBotConversationGroup}
-            selectedThreadId={visibleSelectedThreadId}
-          />
+            <BotSidebar
+              activeConversationGroupId={activeBotConversationGroupId}
+              groups={botGroups}
+              onAddBot={onAddBot}
+              onOpenBot={onOpenBot}
+              onToggleConversationGroup={onToggleBotConversationGroup}
+              selectedThreadId={visibleSelectedThreadId}
+            />
 
-          <WorkspaceThreadSidebar
-            activeWorkspacePath={activeWorkspaceThreadGroupPath}
-            onAddWorkspace={onAddWorkspace}
-            onCreateThreadForWorkspace={onCreateThreadForWorkspace}
-            onRequestRemoveWorkspace={onRequestRemoveWorkspace}
-            onToggleWorkspaceThreads={onToggleWorkspaceThreadGroup}
-            setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
-            workspaceMenuOpenPath={workspaceMenuOpenPath}
-            workspaceMutation={workspaceMutation}
-            workspaceThreadGroups={workspaceThreadGroups}
-          />
+            <WorkspaceThreadSidebar
+              activeWorkspacePath={activeWorkspaceThreadGroupPath}
+              onAddWorkspace={onAddWorkspace}
+              onCreateThreadForWorkspace={onCreateThreadForWorkspace}
+              onRequestRemoveWorkspace={onRequestRemoveWorkspace}
+              onToggleWorkspaceThreads={onToggleWorkspaceThreadGroup}
+              setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
+              workspaceMenuOpenPath={workspaceMenuOpenPath}
+              workspaceMutation={workspaceMutation}
+              workspaceThreadGroups={workspaceThreadGroups}
+            />
+          </div>
 
           <div className="sidebar-footer">
             {gatewayIdentitySlot ?? (
