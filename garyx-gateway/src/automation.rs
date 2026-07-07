@@ -481,6 +481,15 @@ fn summarize_text(value: Option<&str>, limit: usize) -> Option<String> {
 }
 
 fn last_thread_message_preview(data: &Value, role: &str) -> Option<String> {
+    // Write-time preview fields are the source (#TASK-1864 batch 1).
+    if let Some(preview) = garyx_models::message_preview::preview_field_for_role(role)
+        .and_then(|field| data.get(field))
+        .and_then(Value::as_str)
+    {
+        return Some(preview.to_owned());
+    }
+    // Legacy fallback for records not yet touched by a post-batch-1 run;
+    // deleted after Batch 2's import backfills the fields.
     let messages = data.get("messages").and_then(Value::as_array)?;
     for message in messages.iter().rev() {
         let Some(obj) = message.as_object() else {

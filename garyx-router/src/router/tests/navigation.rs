@@ -519,6 +519,8 @@ async fn test_rebuild_thread_indexes_preserves_switched_thread_history() {
 
 #[tokio::test]
 async fn test_list_user_threads_uses_message_summary_when_label_missing() {
+    // The fallback label summarizes the committed transcript; the legacy
+    // record `messages` scan is gone (#TASK-1864 batch 1).
     let store = Arc::new(InMemoryThreadStore::new());
     store
         .set(
@@ -529,12 +531,6 @@ async fn test_list_user_threads_uses_message_summary_when_label_missing() {
                 "account_id": "main",
                 "from_id": "alice",
                 "updated_at": "2026-03-16T12:00:00Z",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "帮我检查一下 gateway 重连时为什么会把正在 streaming 的消息直接打成失败"
-                    }
-                ],
                 "channel_bindings": [{
                     "channel": "telegram",
                     "account_id": "main",
@@ -545,8 +541,24 @@ async fn test_list_user_threads_uses_message_summary_when_label_missing() {
             }),
         )
         .await;
+    let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+    transcript_store
+        .append_committed_messages(
+            "thread::summary-demo",
+            Some("run-1"),
+            &[json!({
+                "role": "user",
+                "content": "帮我检查一下 gateway 重连时为什么会把正在 streaming 的消息直接打成失败"
+            })],
+        )
+        .await
+        .expect("append transcript");
 
-    let router = MessageRouter::new(store, GaryxConfig::default());
+    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    router.set_thread_history_repository(Arc::new(ThreadHistoryRepository::new(
+        store,
+        transcript_store,
+    )));
     let listed = router
         .list_user_threads_for_account("telegram", "main", "alice")
         .await;

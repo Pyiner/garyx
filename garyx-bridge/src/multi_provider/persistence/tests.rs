@@ -341,6 +341,59 @@ async fn test_save_thread_messages_preserves_provider_message_order() {
 }
 
 #[tokio::test]
+async fn test_save_thread_messages_maintains_write_time_preview_fields() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let first_run_messages = vec![ProviderMessage::assistant_text("first answer")];
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::previews",
+            user_message: "first question",
+            user_timestamp: Some("2026-03-01T00:00:00Z"),
+            user_images: &[],
+            assistant_response: "first answer",
+            sdk_session_id: None,
+            provider_key: "provider::previews",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &first_run_messages,
+            metadata: &HashMap::new(),
+        },
+    )
+    .await;
+
+    let stored = store.get("thread::previews").await.expect("stored");
+    assert_eq!(stored["last_user_preview"], "first question");
+    assert_eq!(stored["last_assistant_preview"], "first answer");
+
+    // A run with no assistant output refreshes the user preview but keeps
+    // the previous assistant preview: the fields always describe the
+    // thread's newest row per role.
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::previews",
+            user_message: "second question",
+            user_timestamp: Some("2026-03-01T00:01:00Z"),
+            user_images: &[],
+            assistant_response: "",
+            sdk_session_id: None,
+            provider_key: "provider::previews",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &[],
+            metadata: &HashMap::new(),
+        },
+    )
+    .await;
+
+    let stored = store.get("thread::previews").await.expect("stored");
+    assert_eq!(stored["last_user_preview"], "second question");
+    assert_eq!(stored["last_assistant_preview"], "first answer");
+}
+
+#[tokio::test]
 async fn test_save_thread_messages_copies_client_intent_to_user_origin_id() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());

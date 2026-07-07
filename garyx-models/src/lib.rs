@@ -10,6 +10,7 @@ pub mod custom_agent;
 pub mod execution;
 pub mod local_paths;
 pub mod message_lifecycle;
+pub mod message_preview;
 pub mod messages;
 pub mod provider;
 pub mod routing;

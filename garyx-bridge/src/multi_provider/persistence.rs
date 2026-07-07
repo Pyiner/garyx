@@ -1551,6 +1551,21 @@ async fn save_thread_messages_with_session_update(
 
     if let Some(obj) = session_data.as_object_mut() {
         obj.insert("messages".to_owned(), Value::Array(snapshot_messages));
+        // Write-time preview fields (#TASK-1864 batch 1): refresh a role's
+        // preview only when this run produced a newer message for it, so
+        // the fields always describe the thread's newest user/assistant
+        // rows without any read-time scan.
+        for role in ["user", "assistant"] {
+            if let Some(field) = garyx_models::message_preview::preview_field_for_role(role)
+                && let Some(preview) =
+                    garyx_models::message_preview::last_message_preview_for_role(
+                        run_messages.iter(),
+                        role,
+                    )
+            {
+                obj.insert(field.to_owned(), Value::String(preview));
+            }
+        }
         obj.insert("pending_user_inputs".to_owned(), merged_pending_inputs);
         update_provider_sdk_session_id(obj, run.provider_key, &sdk_session_update);
         obj.insert(

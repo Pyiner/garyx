@@ -126,20 +126,8 @@ impl MessageRouter {
             return Some(label);
         }
 
-        if let Some(messages) = thread_data.get("messages").and_then(Value::as_array) {
-            for message in messages.iter().rev() {
-                let content = message
-                    .get("content")
-                    .or_else(|| message.get("text"))
-                    .and_then(Value::as_str);
-                if let Some(summary) =
-                    content.and_then(|value| Self::summarize_thread_list_text(value, 48))
-                {
-                    return Some(summary);
-                }
-            }
-        }
-
+        // The committed transcript is the label fallback source; the legacy
+        // record `messages` scan is gone (#TASK-1864 batch 1).
         if let Some(history) = &self.thread_history
             && let Ok(Some(text)) = history.latest_message_text(thread_id).await
             && let Some(summary) = Self::summarize_thread_list_text(&text, 48)
