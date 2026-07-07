@@ -1484,17 +1484,21 @@ mod tests {
 
         let rendered = format_task_progress(&task_payload, Some(&history_payload));
 
+        // Human-facing timestamps render as local wall-clock time (see
+        // format_local_timestamp); compute expectations through the same
+        // helper so the assertions hold in any machine timezone.
+        let local = |raw: &str| format_local_timestamp(Some(raw));
         assert!(rendered.contains("Task: #TASK-42"));
-        assert!(rendered.contains("[1] User 2026-05-03T00:00:00Z"));
+        assert!(rendered.contains(&format!("[1] User {}", local("2026-05-03T00:00:00Z"))));
         assert!(rendered.contains("original request"));
-        assert!(rendered.contains("[2] User 2026-05-03T00:00:01Z"));
+        assert!(rendered.contains(&format!("[2] User {}", local("2026-05-03T00:00:01Z"))));
         assert!(rendered.contains("please do it"));
         assert!(rendered.contains("final answer after tools"));
         assert!(
             !rendered.contains("first text before tools"),
             "only the last assistant text group after a user turn should render: {rendered}"
         );
-        assert!(rendered.contains("[3] User 2026-05-03T00:00:05Z"));
+        assert!(rendered.contains(&format!("[3] User {}", local("2026-05-03T00:00:05Z"))));
         assert!(rendered.contains("(internal dispatch)"));
         assert!(rendered.contains(
             "Full thread with tool calls: garyx thread history thread::task-42 --limit 200 --json"
