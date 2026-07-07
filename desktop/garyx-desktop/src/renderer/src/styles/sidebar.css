@@ -473,8 +473,12 @@
 }
 
 .pinned-thread-unpin:hover {
-  background: transparent;
-  color: var(--color-token-text-primary);
+  background: color-mix(
+    in oklab,
+    var(--color-token-text-primary) 10%,
+    transparent
+  );
+  color: color-mix(in srgb, var(--color-token-text-primary) 75%, transparent);
 }
 
 /* Right, hover-revealed archive button. Mirrors the BotConversationSidebar
@@ -511,8 +515,12 @@
 }
 
 .pinned-thread-archive:hover {
-  background: transparent;
-  color: var(--color-token-text-primary);
+  background: color-mix(
+    in oklab,
+    var(--color-token-text-primary) 10%,
+    transparent
+  );
+  color: color-mix(in srgb, var(--color-token-text-primary) 75%, transparent);
 }
 
 /* Custom tooltip surface for row action buttons (unpin/archive). Replaces the
