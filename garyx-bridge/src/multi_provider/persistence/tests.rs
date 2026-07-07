@@ -394,6 +394,138 @@ async fn test_save_thread_messages_maintains_write_time_preview_fields() {
 }
 
 #[tokio::test]
+async fn test_preview_fields_follow_same_run_replay_retraction() {
+    // Review #TASK-1882 finding 1: a replayed run removes its previous
+    // rows from the snapshot (message_matches_run); the preview fields
+    // must describe the final snapshot, not the retracted rows.
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let old_run_messages = vec![ProviderMessage::assistant_text("older answer")];
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::replay-previews",
+            user_message: "old question",
+            user_timestamp: Some("2026-03-01T00:00:00Z"),
+            user_images: &[],
+            assistant_response: "older answer",
+            sdk_session_id: None,
+            provider_key: "provider::replay",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &old_run_messages,
+            metadata: &HashMap::new(),
+        },
+    )
+    .await;
+
+    let replay_metadata =
+        HashMap::from([("run_id".to_owned(), Value::String("run-replay".to_owned()))]);
+    let replay_messages = vec![ProviderMessage::assistant_text("first replay answer")];
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::replay-previews",
+            user_message: "replayed question",
+            user_timestamp: Some("2026-03-01T00:01:00Z"),
+            user_images: &[],
+            assistant_response: "first replay answer",
+            sdk_session_id: None,
+            provider_key: "provider::replay",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &replay_messages,
+            metadata: &replay_metadata,
+        },
+    )
+    .await;
+    let stored = store.get("thread::replay-previews").await.expect("stored");
+    assert_eq!(stored["last_assistant_preview"], "first replay answer");
+
+    // The same run id replays with no assistant output: its previous rows
+    // are removed from the snapshot, so the newest assistant row is the
+    // older run's again.
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::replay-previews",
+            user_message: "replayed question",
+            user_timestamp: Some("2026-03-01T00:02:00Z"),
+            user_images: &[],
+            assistant_response: "",
+            sdk_session_id: None,
+            provider_key: "provider::replay",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &[],
+            metadata: &replay_metadata,
+        },
+    )
+    .await;
+
+    let stored = store.get("thread::replay-previews").await.expect("stored");
+    assert_eq!(stored["last_assistant_preview"], "older answer");
+    assert_eq!(stored["last_user_preview"], "replayed question");
+}
+
+#[tokio::test]
+async fn test_preview_fields_are_removed_when_no_row_survives_the_cap() {
+    // A single old assistant row must lose its preview once the 100-row
+    // cap evicts it: the fields always mirror the final bounded snapshot.
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let assistant_run = vec![ProviderMessage::assistant_text("only assistant answer")];
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::cap-previews",
+            user_message: "only question",
+            user_timestamp: Some("2026-03-01T00:00:00Z"),
+            user_images: &[],
+            assistant_response: "only assistant answer",
+            sdk_session_id: None,
+            provider_key: "provider::cap",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &assistant_run,
+            metadata: &HashMap::new(),
+        },
+    )
+    .await;
+    let stored = store.get("thread::cap-previews").await.expect("stored");
+    assert_eq!(stored["last_assistant_preview"], "only assistant answer");
+
+    // One run with >100 user rows evicts every assistant row.
+    let many_users: Vec<ProviderMessage> = (0..120)
+        .map(|index| ProviderMessage::user_text(format!("bulk user {index}")))
+        .collect();
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::cap-previews",
+            user_message: "bulk trigger",
+            user_timestamp: Some("2026-03-01T00:01:00Z"),
+            user_images: &[],
+            assistant_response: "",
+            sdk_session_id: None,
+            provider_key: "provider::cap",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &many_users,
+            metadata: &HashMap::new(),
+        },
+    )
+    .await;
+
+    let stored = store.get("thread::cap-previews").await.expect("stored");
+    assert!(
+        stored.get("last_assistant_preview").is_none(),
+        "assistant preview must be removed once the cap evicts every assistant row"
+    );
+    assert_eq!(stored["last_user_preview"], "bulk user 119");
+}
+
+#[tokio::test]
 async fn test_save_thread_messages_copies_client_intent_to_user_origin_id() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());

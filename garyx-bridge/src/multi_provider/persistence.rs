@@ -1550,22 +1550,30 @@ async fn save_thread_messages_with_session_update(
         record_recent_committed_run_id(&existing_recent_run_ids, current_run_id.as_deref());
 
     if let Some(obj) = session_data.as_object_mut() {
-        obj.insert("messages".to_owned(), Value::Array(snapshot_messages));
-        // Write-time preview fields (#TASK-1864 batch 1): refresh a role's
-        // preview only when this run produced a newer message for it, so
-        // the fields always describe the thread's newest user/assistant
-        // rows without any read-time scan.
+        // Write-time preview fields (#TASK-1864 batch 1): computed from the
+        // final bounded snapshot — after same-run replacement and cap
+        // trimming — so they match exactly what the former read-time scan
+        // of `messages` would have found, and are removed when no
+        // preview-worthy row remains (review #TASK-1882 finding 1: a
+        // replayed run can retract the very rows a previous save previewed).
         for role in ["user", "assistant"] {
-            if let Some(field) = garyx_models::message_preview::preview_field_for_role(role)
-                && let Some(preview) =
-                    garyx_models::message_preview::last_message_preview_for_role(
-                        run_messages.iter(),
-                        role,
-                    )
-            {
-                obj.insert(field.to_owned(), Value::String(preview));
+            let Some(field) = garyx_models::message_preview::preview_field_for_role(role)
+            else {
+                continue;
+            };
+            match garyx_models::message_preview::last_message_preview_for_role(
+                snapshot_messages.iter(),
+                role,
+            ) {
+                Some(preview) => {
+                    obj.insert(field.to_owned(), Value::String(preview));
+                }
+                None => {
+                    obj.remove(field);
+                }
             }
         }
+        obj.insert("messages".to_owned(), Value::Array(snapshot_messages));
         obj.insert("pending_user_inputs".to_owned(), merged_pending_inputs);
         update_provider_sdk_session_id(obj, run.provider_key, &sdk_session_update);
         obj.insert(

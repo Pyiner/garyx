@@ -26,21 +26,18 @@ pub fn preview_field_for_role(role: &str) -> Option<&'static str> {
     }
 }
 
-/// Trimmed, char-limited preview of `value`; `None` when blank.
+/// Trimmed preview of `value`, at most `limit` chars including the
+/// ellipsis appended on truncation; `None` when blank.
 pub fn summarize_preview_text(value: &str, limit: usize) -> Option<String> {
     let text = value.trim();
     if text.is_empty() {
         return None;
     }
-    let mut chars = text.chars();
-    let mut summary = String::new();
-    for _ in 0..limit {
-        let Some(ch) = chars.next() else {
-            return Some(summary);
-        };
-        summary.push(ch);
+    if text.chars().count() <= limit {
+        return Some(text.to_owned());
     }
-    Some(summary + "…")
+    let truncated: String = text.chars().take(limit.saturating_sub(1)).collect();
+    Some(truncated + "…")
 }
 
 /// Newest preview-worthy message for `role` in an ordered message walk:
@@ -84,11 +81,22 @@ mod tests {
             json!({"role": "user", "content": "x".repeat(200)}),
         ];
         let preview = last_message_preview_for_role(messages.iter(), "user").unwrap();
-        assert_eq!(preview.chars().count(), MESSAGE_PREVIEW_CHAR_LIMIT + 1);
+        // The limit bounds the whole preview including the ellipsis.
+        assert_eq!(preview.chars().count(), MESSAGE_PREVIEW_CHAR_LIMIT);
         assert!(preview.ends_with('…'));
         assert_eq!(
             last_message_preview_for_role(messages.iter(), "assistant").as_deref(),
             Some("an answer")
+        );
+    }
+
+    #[test]
+    fn preview_keeps_exact_limit_length_text_untruncated() {
+        let exact = "y".repeat(MESSAGE_PREVIEW_CHAR_LIMIT);
+        let messages = vec![json!({"role": "user", "content": exact.clone()})];
+        assert_eq!(
+            last_message_preview_for_role(messages.iter(), "user").as_deref(),
+            Some(exact.as_str())
         );
     }
 
