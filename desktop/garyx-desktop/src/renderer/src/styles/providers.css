@@ -215,51 +215,6 @@
   gap: 10px;
 }
 
-.provider-quota-hero-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 32px;
-  min-width: 0;
-}
-
-.provider-quota-hero-heading {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.provider-quota-hero-title,
-.provider-quota-hero-note {
-  min-width: 0;
-}
-
-.provider-quota-hero-title {
-  color: var(--color-token-text-primary);
-  font-size: 13px;
-  font-weight: var(--font-weight-semibold);
-  line-height: 1.25;
-}
-
-.provider-quota-hero-note {
-  color: var(--color-token-text-secondary);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.provider-quota-refresh {
-  border-color: var(--color-token-border-light);
-  background: var(--color-token-bg-primary);
-  color: var(--color-token-text-primary);
-  box-shadow: none;
-}
-
-.provider-quota-refresh .is-spinning {
-  animation: provider-refresh-spin 800ms linear infinite;
-}
-
 .provider-quota-card-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -417,12 +372,6 @@
   min-width: 0;
   min-height: 20px;
   gap: 6px;
-}
-
-@keyframes provider-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .provider-usage-models {

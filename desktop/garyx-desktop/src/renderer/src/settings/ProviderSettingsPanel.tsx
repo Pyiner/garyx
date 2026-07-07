@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { RefreshCw } from 'lucide-react';
 
 import type {
   DesktopApiProviderType,
@@ -1051,28 +1050,8 @@ export function ProviderSettingsPanel({
   }
 
   function renderProviderQuotaHero(): ReactNode {
-    const updated = usageUpdatedText();
     return (
       <section className="provider-quota-hero">
-        <div className="provider-quota-hero-header">
-          <div className="provider-quota-hero-heading">
-            <span className="provider-quota-hero-title">{t('Quota')}</span>
-            <span className="provider-quota-hero-note">
-              {updated || t('Claude Code, Codex, and Antigravity quota windows')}
-            </span>
-          </div>
-          <Button
-            className="provider-quota-refresh"
-            disabled={codingUsageLoading}
-            onClick={() => { void refreshCodingUsage(); }}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
-            <RefreshCw aria-hidden className={classNames(codingUsageLoading && 'is-spinning')} />
-            {t('Refresh')}
-          </Button>
-        </div>
         <div className="provider-quota-card-grid">
           {METERED_MODEL_PROVIDER_ROWS.map((row) => renderProviderQuotaCard(row))}
         </div>
