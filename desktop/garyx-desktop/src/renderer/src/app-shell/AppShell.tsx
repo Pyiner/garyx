@@ -5048,9 +5048,6 @@ export function AppShell() {
                     onSaveLocalSettingsNow={(options) => {
                       return handleSaveLocalSettingsNow(options);
                     }}
-                    onSaveLocalSettingsDraft={(nextSettings, options) => {
-                      return handleSaveLocalSettingsDraft(nextSettings, options);
-                    }}
                     onSaveGatewaySettings={(options) => {
                       return handleSaveGatewaySettings(options);
                     }}

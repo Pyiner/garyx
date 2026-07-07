@@ -322,7 +322,6 @@ async fn start_chat_run(
     let metadata = crate::chat_application::build_provider_run_metadata(
         &config,
         prepared.metadata,
-        prepared.provider_metadata,
         &prepared.channel,
         &prepared.account_id,
         &prepared.from_id,

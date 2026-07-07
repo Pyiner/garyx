@@ -133,13 +133,6 @@ type GatewaySettingsPanelProps = {
     requireGatewayConnection?: boolean;
     reloadGatewaySettings?: boolean;
   }) => Promise<boolean>;
-  onSaveLocalSettingsDraft?: (
-    nextSettings: DesktopSettings,
-    options?: {
-      requireGatewayConnection?: boolean;
-      reloadGatewaySettings?: boolean;
-    },
-  ) => Promise<boolean>;
   onSaveGatewaySettings?: (options?: GatewaySettingsSaveOptions) => Promise<boolean>;
   onSaveGatewaySettingsPatch?: (
     patch: GatewayConfigDocument,
@@ -773,7 +766,6 @@ export function GatewaySettingsPanel({
   onToggleMcpServer = noopAsync,
   onLocalSettingsChange = noop,
   onSaveLocalSettingsNow = noopAsyncBoolean,
-  onSaveLocalSettingsDraft = noopAsyncBoolean,
   onSaveGatewaySettings = noopAsyncBoolean,
   onSaveGatewaySettingsPatch = noopAsyncBoolean,
   gatewayProfiles = [],
@@ -1296,11 +1288,9 @@ export function GatewaySettingsPanel({
       tabContent = (
         <ProviderSettingsPanel
           agents={agents}
-          localSettings={localSettings}
           gatewayDraft={gatewayDraft}
           onMutateGatewayDraft={onMutateGatewayDraft}
           onSaveGatewaySettings={onSaveGatewaySettings}
-          onSaveLocalSettingsDraft={onSaveLocalSettingsDraft}
           onRefreshAgentTargets={onRefreshAgentTargets}
         />
       );

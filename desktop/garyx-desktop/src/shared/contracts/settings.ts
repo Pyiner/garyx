@@ -9,10 +9,6 @@ export interface DesktopSettings {
   accountId: string;
   fromId: string;
   timeoutSeconds: number;
-  providerClaudeEnv: string;
-  providerCodexAuthMode: "cli" | "api_key";
-  providerCodexApiKey: string;
-  providerGeminiEnv: string;
   threadLogsPanelWidth: number;
   languagePreference: DesktopLanguagePreference;
   followUpBehavior: DesktopFollowUpBehavior;
@@ -79,10 +75,6 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   accountId: "main",
   fromId: "mac-desktop",
   timeoutSeconds: 120,
-  providerClaudeEnv: "",
-  providerCodexAuthMode: "cli",
-  providerCodexApiKey: "",
-  providerGeminiEnv: "",
   threadLogsPanelWidth: 360,
   languagePreference: "system",
   followUpBehavior: "queue",

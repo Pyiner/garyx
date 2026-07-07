@@ -25,8 +25,8 @@ fn build_provider_run_metadata_injects_managed_mcp_servers() {
             ..Default::default()
         },
     );
-    let mut provider_metadata = HashMap::new();
-    provider_metadata.insert(
+    let mut request_metadata = HashMap::new();
+    request_metadata.insert(
         "remote_mcp_servers".to_owned(),
         json!({
             "runtime-proof": {
@@ -39,8 +39,7 @@ fn build_provider_run_metadata_injects_managed_mcp_servers() {
 
     let metadata = build_provider_run_metadata(
         &config,
-        HashMap::new(),
-        provider_metadata,
+        request_metadata,
         "api",
         "main",
         "api-user",
@@ -62,7 +61,6 @@ fn build_provider_run_metadata_injects_managed_mcp_servers() {
 fn build_provider_run_metadata_uses_supplied_channel_context() {
     let metadata = build_provider_run_metadata(
         &GaryxConfig::default(),
-        HashMap::new(),
         HashMap::new(),
         "telegram",
         "codex_bot",
@@ -235,7 +233,6 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
             workspace_path: None,
             provider_type: Some(ProviderType::ClaudeCode),
             metadata: HashMap::new(),
-            provider_metadata: HashMap::new(),
         },
     )
     .await
@@ -352,7 +349,6 @@ async fn prepare_chat_request_prefers_thread_snapshot_before_agent_runtime_metad
             workspace_path: None,
             provider_type: None,
             metadata: HashMap::new(),
-            provider_metadata: HashMap::new(),
         },
     )
     .await

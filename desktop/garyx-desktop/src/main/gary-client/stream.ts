@@ -15,11 +15,7 @@ import {
   decideStreamSeq,
   isControlTranscriptMessage,
 } from "../../shared/transcript-sync.ts";
-import { applyGatewayAuthHeader, applyGatewayCustomHeaders, asBoolean, asFiniteNumber, asString, buildUrl, gatewayFetch, isLocalGatewayUrl, parseRecord, requestJson, tryParseJson } from "./http.ts";
-
-const PROVIDER_ENV_METADATA_KEY = "provider_env";
-
-const CODEX_API_KEY_ENV = "OPENAI_API_KEY";
+import { applyGatewayAuthHeader, applyGatewayCustomHeaders, asBoolean, asFiniteNumber, asString, buildUrl, gatewayFetch, parseRecord, requestJson, tryParseJson } from "./http.ts";
 
 type SerializedMessageAttachments = {
   attachments: Array<{
@@ -447,77 +443,6 @@ export async function streamThreadEvents(
   }
 }
 
-function stripMatchingQuotes(value: string): string {
-  if (value.length >= 2) {
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      return value.slice(1, -1);
-    }
-  }
-  return value;
-}
-
-function parseProviderEnvBlock(raw: string): Record<string, string> {
-  const env: Record<string, string> = {};
-
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
-    }
-
-    const normalized = trimmed.startsWith("export ")
-      ? trimmed.slice("export ".length).trim()
-      : trimmed;
-    const separator = normalized.indexOf("=");
-    if (separator <= 0) {
-      continue;
-    }
-
-    const key = normalized.slice(0, separator).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-      continue;
-    }
-
-    const value = stripMatchingQuotes(normalized.slice(separator + 1).trim());
-    env[key] = value;
-  }
-
-  return env;
-}
-
-function buildProviderMetadata(
-  settings: DesktopSettings,
-): Record<string, unknown> | undefined {
-  if (!isLocalGatewayUrl(settings.gatewayUrl)) {
-    return undefined;
-  }
-
-  const metadata: Record<string, unknown> = {};
-  const providerEnv = parseProviderEnvBlock(settings.providerClaudeEnv);
-  const oauthToken = asString(process.env.CLAUDE_CODE_OAUTH_TOKEN);
-  if (
-    oauthToken &&
-    !Object.prototype.hasOwnProperty.call(providerEnv, "CLAUDE_CODE_OAUTH_TOKEN")
-  ) {
-    providerEnv.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
-  }
-
-  Object.assign(providerEnv, parseProviderEnvBlock(settings.providerGeminiEnv));
-  providerEnv[CODEX_API_KEY_ENV] =
-    settings.providerCodexAuthMode === "api_key"
-      ? settings.providerCodexApiKey.trim()
-      : "";
-
-  if (Object.keys(providerEnv).length > 0) {
-    metadata[PROVIDER_ENV_METADATA_KEY] = providerEnv;
-  }
-
-  return Object.keys(metadata).length > 0 ? metadata : undefined;
-}
-
 export async function openChatStream(
   settings: DesktopSettings,
   input: SendMessageInput,
@@ -530,7 +455,6 @@ export async function openChatStream(
   status: OpenChatStreamResult["status"];
 }> {
   const threadId = resolveInputThreadId(input);
-  const providerMetadata = buildProviderMetadata(settings);
   const serializedAttachments = serializeMessageAttachments(
     input.images,
     input.files,
@@ -559,7 +483,6 @@ export async function openChatStream(
         client_timestamp_local: formatLocalChatTimestamp(),
         client_intent_id: input.clientIntentId,
       },
-      providerMetadata,
     }),
     signal: AbortSignal.timeout(8000),
   });

@@ -247,8 +247,6 @@ async function prepareIsolatedHome(gatewayUrl) {
           fromId: 'catalog-smoke',
           agentId: 'claude',
           timeoutSeconds: 60,
-          providerClaudeEnv: '',
-          providerCodexEnv: '',
         },
         workspaces: [{ name: 'Catalog', path: home }],
         selectedWorkspacePath: home,

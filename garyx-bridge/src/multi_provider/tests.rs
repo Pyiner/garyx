@@ -5016,3 +5016,96 @@ async fn test_backfill_runtime_metadata_legacy_override_wins_over_cell() {
         "legacy model_override data must keep winning over the cell until migrated"
     );
 }
+
+/// Provider-env contract (bridge side, guard): the thread's agent runtime
+/// snapshot `provider_env` is the only client-independent env source for a
+/// run. `backfill_bound_agent_runtime_metadata` must inject it into run
+/// metadata for every dispatch path (`/api/chat/start`, `/api/chat/ws`,
+/// internal dispatch all funnel through this backfill), so proxy routing
+/// like `ANTHROPIC_BASE_URL` works without any client cooperation.
+#[tokio::test]
+async fn test_backfill_runtime_metadata_injects_thread_provider_env_snapshot() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    let thread_id = "thread::provider-env-snapshot";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "provider_type": "claude_code",
+                "metadata": {
+                    "provider_env": {
+                        "ANTHROPIC_BASE_URL": "http://127.0.0.1:15721",
+                        "ANTHROPIC_MODEL": "claude-opus-4-8",
+                    },
+                },
+            }),
+        )
+        .await;
+
+    let mut metadata: HashMap<String, Value> = HashMap::new();
+    bridge
+        .backfill_bound_agent_runtime_metadata(thread_id, &mut metadata)
+        .await;
+
+    let provider_env = metadata
+        .get("provider_env")
+        .and_then(Value::as_object)
+        .expect("thread snapshot provider_env must reach run metadata");
+    assert_eq!(
+        provider_env.get("ANTHROPIC_BASE_URL").and_then(Value::as_str),
+        Some("http://127.0.0.1:15721"),
+        "proxy base URL from the thread snapshot must drive the run"
+    );
+    assert_eq!(
+        provider_env.get("ANTHROPIC_MODEL").and_then(Value::as_str),
+        Some("claude-opus-4-8"),
+    );
+}
+
+/// Provider-env contract (bridge side, guard): backfill is existing-wins —
+/// a run that already carries an explicit `provider_env` (e.g. internal
+/// dispatch with a per-run override) must not have it replaced by the
+/// thread snapshot.
+#[tokio::test]
+async fn test_backfill_runtime_metadata_keeps_explicit_provider_env() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    let thread_id = "thread::provider-env-explicit";
+    store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "provider_type": "claude_code",
+                "metadata": {
+                    "provider_env": {
+                        "ANTHROPIC_BASE_URL": "http://127.0.0.1:15721",
+                    },
+                },
+            }),
+        )
+        .await;
+
+    let mut metadata: HashMap<String, Value> = HashMap::new();
+    metadata.insert(
+        "provider_env".to_owned(),
+        json!({ "ANTHROPIC_BASE_URL": "http://127.0.0.1:19999" }),
+    );
+    bridge
+        .backfill_bound_agent_runtime_metadata(thread_id, &mut metadata)
+        .await;
+
+    assert_eq!(
+        metadata
+            .get("provider_env")
+            .and_then(Value::as_object)
+            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+            .and_then(Value::as_str),
+        Some("http://127.0.0.1:19999"),
+        "explicit run provider_env must win over the thread snapshot"
+    );
+}

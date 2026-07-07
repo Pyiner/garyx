@@ -36,8 +36,6 @@ pub struct ChatRequest {
     pub provider_type: Option<ProviderType>,
     #[serde(default)]
     pub metadata: HashMap<String, Value>,
-    #[serde(default)]
-    pub provider_metadata: HashMap<String, Value>,
 }
 
 fn default_from_id() -> String {

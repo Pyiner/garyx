@@ -246,11 +246,6 @@ function normalizeSdkSessionProviderHintInput(
 }
 
 function normalizeSettings(value?: Partial<DesktopSettings>): DesktopSettings {
-  const normalizeMultiline = (input: unknown): string => {
-    return typeof input === 'string'
-      ? input.replace(/\r\n?/g, '\n').trim()
-      : '';
-  };
   const normalizeThreadLogsPanelWidth = (input: unknown): number => {
     const numeric = Number(input);
     if (!Number.isFinite(numeric)) {
@@ -283,14 +278,6 @@ function normalizeSettings(value?: Partial<DesktopSettings>): DesktopSettings {
       10,
       Math.min(600, Math.round(value?.timeoutSeconds ?? DEFAULT_DESKTOP_SETTINGS.timeoutSeconds)),
     ),
-    providerClaudeEnv: normalizeMultiline(value?.providerClaudeEnv),
-    providerCodexAuthMode:
-      value?.providerCodexAuthMode === 'api_key' ? 'api_key' : DEFAULT_DESKTOP_SETTINGS.providerCodexAuthMode,
-    providerCodexApiKey:
-      typeof value?.providerCodexApiKey === 'string'
-        ? value.providerCodexApiKey.trim()
-        : DEFAULT_DESKTOP_SETTINGS.providerCodexApiKey,
-    providerGeminiEnv: normalizeMultiline(value?.providerGeminiEnv),
     threadLogsPanelWidth: normalizeThreadLogsPanelWidth(value?.threadLogsPanelWidth),
     languagePreference: normalizeLanguagePreference(value?.languagePreference),
     followUpBehavior: normalizeFollowUpBehavior(value?.followUpBehavior),

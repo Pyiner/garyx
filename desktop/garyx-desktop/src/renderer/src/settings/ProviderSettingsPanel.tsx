@@ -8,7 +8,6 @@ import type {
   DesktopProviderModelOption,
   DesktopProviderModels,
   DesktopProviderUsage,
-  DesktopSettings,
   DesktopModelUsage,
   DesktopUsageWindow,
 } from '@shared/contracts';
@@ -40,7 +39,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Textarea } from '@/components/ui/textarea';
 import { ProviderAgentIcon } from '../app-shell/components/ProviderAgentIcon';
 import { useI18n, type Translate } from '../i18n';
 import { shouldRequestProviderModelCatalog } from '../provider-model-catalog';
@@ -54,13 +52,6 @@ import {
 } from '../provider-usage';
 import { classNames, noopAsync } from './shared';
 import { SettingsControlRow } from './shared-components';
-
-function countNonEmptyLines(value: string): number {
-  return value
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith('#')).length;
-}
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
 type GatewaySettingsSaveOptions = {
@@ -93,10 +84,6 @@ type ModelProviderConfigDraft = {
   key: FixedModelProviderKey;
   claudeCliMode: 'cctty' | 'native';
   claudeCliPath: string;
-  claudeEnv: string;
-  codexAuthMode: DesktopSettings['providerCodexAuthMode'];
-  codexApiKey: string;
-  geminiEnv: string;
   model: string;
   modelReasoningEffort: string;
   modelServiceTier: string;
@@ -420,10 +407,6 @@ function emptyModelProviderConfigDraft(key: FixedModelProviderKey = 'claude_code
     key,
     claudeCliMode: 'native',
     claudeCliPath: '',
-    claudeEnv: '',
-    codexAuthMode: 'cli',
-    codexApiKey: '',
-    geminiEnv: '',
     model: row.defaultModel.startsWith('(') ? '' : row.defaultModel,
     modelReasoningEffort: '',
     modelServiceTier: '',
@@ -435,7 +418,6 @@ function emptyModelProviderConfigDraft(key: FixedModelProviderKey = 'claude_code
 
 function modelProviderDraftFromState(
   key: FixedModelProviderKey,
-  localSettings: DesktopSettings,
   agents: DesktopCustomAgent[],
   gatewayDraft: any,
 ): ModelProviderConfigDraft {
@@ -449,10 +431,6 @@ function modelProviderDraftFromState(
     key,
     claudeCliMode: normalizeClaudeCliMode(providerConfig.claude_cli_mode),
     claudeCliPath: String(providerConfig.claude_cli_path || ''),
-    claudeEnv: localSettings.providerClaudeEnv,
-    codexAuthMode: localSettings.providerCodexAuthMode,
-    codexApiKey: localSettings.providerCodexApiKey,
-    geminiEnv: localSettings.providerGeminiEnv,
     model: row.group === 'native'
       ? configModel || agent?.model || ''
       : configModel,
@@ -539,32 +517,20 @@ function AgentProviderFields({
 
 type ProviderSettingsPanelProps = {
   agents?: DesktopCustomAgent[];
-  localSettings: DesktopSettings;
   gatewayDraft?: any;
   onMutateGatewayDraft?: DraftMutator;
   onSaveGatewaySettings?: (options?: GatewaySettingsSaveOptions) => Promise<boolean>;
-  onSaveLocalSettingsDraft?: (
-    nextSettings: DesktopSettings,
-    options?: {
-      requireGatewayConnection?: boolean;
-      reloadGatewaySettings?: boolean;
-    },
-  ) => Promise<boolean>;
   onRefreshAgentTargets?: () => Promise<void>;
 };
 
 export function ProviderSettingsPanel({
   agents = [],
-  localSettings,
   gatewayDraft,
   onMutateGatewayDraft = () => {},
   onSaveGatewaySettings = async () => true,
-  onSaveLocalSettingsDraft = async () => true,
   onRefreshAgentTargets = noopAsync,
 }: ProviderSettingsPanelProps) {
   const { t } = useI18n();
-  const claudeEnvLineCount = countNonEmptyLines(localSettings.providerClaudeEnv);
-  const geminiEnvLineCount = countNonEmptyLines(localSettings.providerGeminiEnv);
   const [providerConfigKey, setProviderConfigKey] = useState<FixedModelProviderKey | null>(null);
   const [providerConfigDraft, setProviderConfigDraft] = useState<ModelProviderConfigDraft>(() =>
     emptyModelProviderConfigDraft(),
@@ -722,9 +688,7 @@ export function ProviderSettingsPanel({
       const mode = normalizeClaudeCliMode(claudeAgentConfig(gatewayDraft).claude_cli_mode);
       return finalize({
         status: t('Default'),
-        auth: claudeEnvLineCount
-          ? `${claudeCliModeLabel(mode, t)} · ${t('{count} env vars', { count: claudeEnvLineCount })}`
-          : claudeCliModeLabel(mode, t),
+        auth: claudeCliModeLabel(mode, t),
         authState: 'ready',
         model: configuredDefaultModel || row.defaultModel,
         reasoning: configuredReasoning,
@@ -732,14 +696,10 @@ export function ProviderSettingsPanel({
       });
     }
     if (row.key === 'codex_app_server') {
-      const codexApiKeyMissing = localSettings.providerCodexAuthMode === 'api_key'
-        && !localSettings.providerCodexApiKey.trim();
       return finalize({
         status: t('Default'),
-        auth: localSettings.providerCodexAuthMode === 'api_key'
-          ? codexApiKeyMissing ? t('Missing key') : t('API Key')
-          : t('CLI'),
-        authState: codexApiKeyMissing ? 'empty' : 'ready',
+        auth: t('CLI'),
+        authState: 'ready',
         model: configuredDefaultModel || row.defaultModel,
         reasoning: configuredReasoning,
         serviceTier: configuredServiceTier,
@@ -769,9 +729,7 @@ export function ProviderSettingsPanel({
     if (row.key === 'gemini_cli') {
       return finalize({
         status: t('Default'),
-        auth: geminiEnvLineCount
-          ? t('{count} env vars', { count: geminiEnvLineCount })
-          : t('CLI / env'),
+        auth: t('CLI'),
         authState: 'ready',
         model: configuredDefaultModel || row.defaultModel,
         reasoning: configuredReasoning,
@@ -1143,7 +1101,7 @@ export function ProviderSettingsPanel({
 
   function openProviderConfigDialog(key: FixedModelProviderKey) {
     const row = fixedModelProviderRow(key);
-    const draft = modelProviderDraftFromState(key, localSettings, agents, gatewayDraft);
+    const draft = modelProviderDraftFromState(key, agents, gatewayDraft);
     ensureProviderModels(row.providerType, { retry: true });
     setProviderConfigDraft(applyProviderCatalogDefaults(draft, row, providerModelsByType[row.providerType]));
     setProviderConfigKey(key);
@@ -1220,14 +1178,6 @@ export function ProviderSettingsPanel({
     setProviderConfigSaving(true);
     try {
       if (providerConfigRow.key === 'claude_code') {
-        const nextSettings = {
-          ...localSettings,
-          providerClaudeEnv: providerConfigDraft.claudeEnv,
-        };
-        const savedLocal = await onSaveLocalSettingsDraft(nextSettings, { reloadGatewaySettings: false });
-        if (!savedLocal) {
-          return;
-        }
         onMutateGatewayDraft((next) => {
           next.agents = next.agents || {};
           const current = next.agents.claude && typeof next.agents.claude === 'object'
@@ -1252,47 +1202,9 @@ export function ProviderSettingsPanel({
         }
         return;
       }
-      if (providerConfigRow.key === 'codex_app_server') {
-        const nextSettings = {
-          ...localSettings,
-          providerCodexAuthMode: providerConfigDraft.codexAuthMode,
-          providerCodexApiKey: providerConfigDraft.codexApiKey,
-        };
-        const savedLocal = await onSaveLocalSettingsDraft(nextSettings, { reloadGatewaySettings: false });
-        if (!savedLocal) {
-          return;
-        }
-        mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
-        if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
-          closeProviderConfigDialog();
-        }
-        return;
-      }
-      if (providerConfigRow.key === 'gemini_cli') {
-        const nextSettings = {
-          ...localSettings,
-          providerGeminiEnv: providerConfigDraft.geminiEnv,
-        };
-        const savedLocal = await onSaveLocalSettingsDraft(nextSettings, { reloadGatewaySettings: false });
-        if (!savedLocal) {
-          return;
-        }
-        mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
-        if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
-          closeProviderConfigDialog();
-        }
-        return;
-      }
-      if (providerConfigRow.key === 'traex') {
-        // TRAE CLI has no desktop-managed auth/env; persist model defaults only.
-        mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
-        if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
-          closeProviderConfigDialog();
-        }
-        return;
-      }
-      if (providerConfigRow.key === 'antigravity') {
-        // Antigravity is a CLI provider like TRAE: persist model defaults only.
+      if (providerConfigRow.group === 'default') {
+        // CLI providers (Codex, Gemini, TRAE, Antigravity) authenticate through
+        // their own CLI login or agent/provider env; persist model defaults only.
         mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
         if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
           closeProviderConfigDialog();
@@ -1514,104 +1426,7 @@ export function ProviderSettingsPanel({
                     }}
                   />
                 </div>
-                <div className="commands-field">
-                  <div className="commands-field-header">
-                    <Label className="commands-field-label" htmlFor="provider-claude-env">{t('Environment')}</Label>
-                    <span className="commands-field-hint">{t('One variable per line.')}</span>
-                  </div>
-                  <Textarea
-                    className="provider-env-editor"
-                    id="provider-claude-env"
-                    placeholder={[
-                      'ANTHROPIC_API_KEY=sk-ant-...',
-                      'CLAUDE_CODE_USE_BEDROCK=1',
-                      'AWS_REGION=us-east-1',
-                      'AWS_PROFILE=default',
-                    ].join('\n')}
-                    spellCheck={false}
-                    value={providerConfigDraft.claudeEnv}
-                    onChange={(event) => {
-                      setProviderConfigDraft((current) => ({
-                        ...current,
-                        claudeEnv: event.target.value,
-                      }));
-                    }}
-                  />
-                </div>
               </>
-            ) : null}
-
-            {providerConfigRow?.key === 'codex_app_server' ? (
-              <>
-                <div className="commands-field">
-                  <Label className="commands-field-label">{t('Auth')}</Label>
-                  <Select
-                    value={providerConfigDraft.codexAuthMode}
-                    onValueChange={(value) => {
-                      setProviderConfigDraft((current) => ({
-                        ...current,
-                        codexAuthMode: value === 'api_key' ? 'api_key' : 'cli',
-                      }));
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="cli">{t('CLI')}</SelectItem>
-                        <SelectItem value="api_key">{t('API Key')}</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </div>
-                {providerConfigDraft.codexAuthMode === 'api_key' ? (
-                  <div className="commands-field">
-                    <Label className="commands-field-label" htmlFor="provider-codex-api-key">{t('API Key')}</Label>
-                    <Input
-                      autoCapitalize="off"
-                      autoComplete="off"
-                      id="provider-codex-api-key"
-                      placeholder="OPENAI_API_KEY"
-                      spellCheck={false}
-                      type="password"
-                      value={providerConfigDraft.codexApiKey}
-                      onChange={(event) => {
-                        setProviderConfigDraft((current) => ({
-                          ...current,
-                          codexApiKey: event.target.value,
-                        }));
-                      }}
-                    />
-                  </div>
-                ) : null}
-              </>
-            ) : null}
-
-            {providerConfigRow?.key === 'gemini_cli' ? (
-              <div className="commands-field">
-                <div className="commands-field-header">
-                  <Label className="commands-field-label" htmlFor="provider-gemini-env">{t('Environment')}</Label>
-                  <span className="commands-field-hint">{t('One variable per line.')}</span>
-                </div>
-                <Textarea
-                  className="provider-env-editor"
-                  id="provider-gemini-env"
-                  placeholder={[
-                    'GEMINI_API_KEY=...',
-                    'GOOGLE_API_KEY=...',
-                    'GEMINI_CLI_HOME=~/.gemini',
-                  ].join('\n')}
-                  spellCheck={false}
-                  value={providerConfigDraft.geminiEnv}
-                  onChange={(event) => {
-                    setProviderConfigDraft((current) => ({
-                      ...current,
-                      geminiEnv: event.target.value,
-                    }));
-                  }}
-                />
-              </div>
             ) : null}
 
             {providerConfigRow ? (

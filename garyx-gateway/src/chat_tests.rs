@@ -743,7 +743,6 @@ fn test_chat_request_defaults() {
     assert!(req.bot.is_none());
     assert!(req.workspace_path.is_none());
     assert!(req.images.is_empty());
-    assert!(req.provider_metadata.is_empty());
 }
 
 #[test]
@@ -778,10 +777,9 @@ fn test_chat_request_custom_fields() {
     assert_eq!(req.images.len(), 1);
     assert_eq!(req.images[0].media_type, "image/png");
     assert_eq!(req.images[0].data, "abc123==");
-    assert_eq!(
-        req.provider_metadata["provider_env"]["CLAUDE_CODE_OAUTH_TOKEN"],
-        "token-123"
-    );
+    // `providerMetadata` is no longer a request field: legacy payloads still
+    // deserialize, but client env can never enter run metadata. Provider env
+    // resolution is server-side only (agent/thread snapshot via the bridge).
 }
 
 #[test]

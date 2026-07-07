@@ -43,7 +43,6 @@ pub(crate) struct PreparedChatRequest {
     pub(crate) provider_type: Option<ProviderType>,
     pub(crate) images: Vec<ImagePayload>,
     pub(crate) metadata: HashMap<String, Value>,
-    pub(crate) provider_metadata: HashMap<String, Value>,
 }
 
 #[derive(Debug)]
@@ -241,21 +240,18 @@ pub(crate) async fn prepare_chat_request(
         provider_type: req.provider_type,
         images: req.images,
         metadata: req.metadata,
-        provider_metadata: req.provider_metadata,
     })
 }
 
 pub(crate) fn build_provider_run_metadata(
     config: &garyx_models::config::GaryxConfig,
     metadata: HashMap<String, Value>,
-    provider_metadata: HashMap<String, Value>,
     channel: &str,
     account_id: &str,
     from_id: &str,
     run_id: &str,
 ) -> HashMap<String, Value> {
     let mut run_metadata = build_chat_metadata(metadata, channel, account_id, from_id, run_id);
-    run_metadata.extend(provider_metadata);
     let gateway_auth_token = config.gateway.auth_token.trim();
     if !gateway_auth_token.is_empty() {
         run_metadata.insert(
