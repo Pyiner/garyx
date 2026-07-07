@@ -205,6 +205,45 @@ pub(crate) async fn backfill_task_projection_if_incomplete(
             return 0;
         }
     }
+    let count = rebuild_task_projection_snapshot_locked(thread_store, garyx_db).await;
+    drop(guard);
+    let reconciled = reconcile_task_projection(thread_store, garyx_db).await;
+    debug!(
+        task_projection_backfill_count = count,
+        task_projection_reconcile_count = reconciled,
+        "task projection backfill completed"
+    );
+    count
+}
+
+/// Forced projection rebuild for repair callers — e.g. a restart wake whose
+/// task target exists on disk but is missing from the projection (the
+/// needs-backfill gate treats any non-empty current-version projection as
+/// complete, so a lost row is invisible to `_if_incomplete`). Serialized by
+/// the same backfill lock; this is the contract's sanctioned
+/// repair/migration walk, never a steady-state path.
+pub(crate) async fn force_task_projection_backfill(
+    thread_store: &Arc<dyn ThreadStore>,
+    garyx_db: &GaryxDbService,
+) -> usize {
+    let guard = garyx_db.lock_task_projection_backfill().await;
+    let count = rebuild_task_projection_snapshot_locked(thread_store, garyx_db).await;
+    drop(guard);
+    let reconciled = reconcile_task_projection(thread_store, garyx_db).await;
+    debug!(
+        task_projection_backfill_count = count,
+        task_projection_reconcile_count = reconciled,
+        "forced task projection backfill completed"
+    );
+    count
+}
+
+/// Rebuild the whole projection snapshot from the thread store. Caller must
+/// hold the backfill lock.
+async fn rebuild_task_projection_snapshot_locked(
+    thread_store: &Arc<dyn ThreadStore>,
+    garyx_db: &GaryxDbService,
+) -> usize {
     let active_backfill = match garyx_db.mark_task_projection_backfill_active() {
         Ok(active) => active,
         Err(error) => {
@@ -237,13 +276,6 @@ pub(crate) async fn backfill_task_projection_if_incomplete(
         return 0;
     }
     drop(active_backfill);
-    drop(guard);
-    let reconciled = reconcile_task_projection(thread_store, garyx_db).await;
-    debug!(
-        task_projection_backfill_count = count,
-        task_projection_reconcile_count = reconciled,
-        "task projection backfill completed"
-    );
     count
 }
 

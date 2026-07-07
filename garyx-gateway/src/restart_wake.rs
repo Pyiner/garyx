@@ -631,6 +631,24 @@ async fn resolve_task_thread_id(
     };
     match service.get_task(task_id).await {
         Ok((thread_id, _record, _task)) => Ok(thread_id),
+        Err(garyx_router::tasks::TaskServiceError::NotFound(_)) => {
+            // The projection can be marked current yet miss a row that
+            // exists on disk (validation-driven removals, partial loss). A
+            // restart wake is a legitimate repair moment: force one
+            // projection rebuild — the contract's sanctioned repair walk,
+            // living in the projection module, not here — and retry once.
+            crate::task_projection::force_task_projection_backfill(
+                &state.threads.thread_store,
+                &state.ops.garyx_db,
+            )
+            .await;
+            match service.get_task(task_id).await {
+                Ok((thread_id, _record, _task)) => Ok(thread_id),
+                Err(error) => Err(format!(
+                    "restart wake task target not found after projection repair: {task_id} ({error})"
+                )),
+            }
+        }
         Err(error) => Err(format!(
             "restart wake task target not found: {task_id} ({error})"
         )),
@@ -1033,5 +1051,63 @@ mod tests {
 
         assert!(processing.exists());
         assert!(!temp.path().join("wake-race.failed.json").exists());
+    }
+
+    async fn seed_task_thread(state: &Arc<AppState>, title: &str) -> (String, u64) {
+        let counter_dir = tempfile::tempdir().unwrap();
+        let service = garyx_router::tasks::TaskService::new(
+            state.threads.thread_store.clone(),
+            Arc::new(garyx_router::FileTaskCounterStore::new(
+                counter_dir.path(),
+            )),
+        );
+        let input: garyx_router::tasks::CreateTaskInput =
+            serde_json::from_value(json!({ "title": title })).unwrap();
+        let (thread_id, task) = service.create_task(input).await.expect("task creates");
+        (thread_id, task.number)
+    }
+
+    #[tokio::test]
+    async fn wake_task_target_resolves_through_projection() {
+        let (state, _provider) = test_state(1, false).await;
+        let (thread_id, number) = seed_task_thread(&state, "Wake target").await;
+        crate::task_projection::force_task_projection_backfill(
+            &state.threads.thread_store,
+            &state.ops.garyx_db,
+        )
+        .await;
+
+        let resolved = resolve_task_thread_id(&state, &format!("#TASK-{number}"))
+            .await
+            .expect("task target resolves");
+        assert_eq!(resolved, thread_id);
+    }
+
+    #[tokio::test]
+    async fn wake_task_target_survives_a_projection_row_loss() {
+        // The projection can be marked current yet miss a row that exists on
+        // disk (validation-driven removals, partial loss). The wake path must
+        // repair the projection and still resolve — without reintroducing a
+        // full-store body scan into restart_wake itself.
+        let (state, _provider) = test_state(1, false).await;
+        let (thread_id, number) = seed_task_thread(&state, "Lost row").await;
+        crate::task_projection::force_task_projection_backfill(
+            &state.threads.thread_store,
+            &state.ops.garyx_db,
+        )
+        .await;
+        assert!(
+            state
+                .ops
+                .garyx_db
+                .remove_task_projection(&thread_id)
+                .expect("row removes"),
+            "projection row should exist before the simulated loss"
+        );
+
+        let resolved = resolve_task_thread_id(&state, &format!("#TASK-{number}"))
+            .await
+            .expect("task target resolves after projection repair");
+        assert_eq!(resolved, thread_id);
     }
 }
