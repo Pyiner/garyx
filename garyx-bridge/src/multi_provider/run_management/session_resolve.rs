@@ -162,8 +162,40 @@ pub(super) fn persisted_provider_messages_from_thread(
     messages
 }
 
-pub(super) fn attach_native_session_messages(
+/// Newest committed provider-session messages read from the transcript
+/// (control records skipped), parsed through the same
+/// `ProviderMessage::from_value` path the legacy snapshot reader used.
+async fn provider_session_messages_from_transcript(
+    history: Option<&Arc<ThreadHistoryRepository>>,
+    thread_id: &str,
+) -> Vec<ProviderMessage> {
+    let Some(history) = history else {
+        return Vec::new();
+    };
+    let values = match history
+        .provider_session_tail(thread_id, MAX_SESSION_MESSAGES)
+        .await
+    {
+        Ok(values) => values,
+        Err(error) => {
+            tracing::warn!(
+                thread_id = %thread_id,
+                error = %error,
+                "failed to read provider session tail from transcript"
+            );
+            return Vec::new();
+        }
+    };
+    values
+        .iter()
+        .filter_map(ProviderMessage::from_value)
+        .collect()
+}
+
+pub(super) async fn attach_native_session_messages(
     options: &mut ProviderRunOptions,
+    history: Option<&Arc<ThreadHistoryRepository>>,
+    thread_id: &str,
     session_data: &Value,
     provider_type: &ProviderType,
 ) {
@@ -173,7 +205,13 @@ pub(super) fn attach_native_session_messages(
     ) {
         return;
     }
-    let messages = persisted_provider_messages_from_thread(session_data);
+    let mut messages = provider_session_messages_from_transcript(history, thread_id).await;
+    if messages.is_empty() {
+        // Legacy fallback (#TASK-1864 batch 1): pre-transcript threads only
+        // have the thread-record `messages` snapshot. Batch 2's import
+        // backfills their transcripts; this branch is deleted afterwards.
+        messages = persisted_provider_messages_from_thread(session_data);
+    }
     if messages.is_empty() {
         return;
     }

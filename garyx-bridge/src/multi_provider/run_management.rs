@@ -29,10 +29,10 @@ use crate::run_graph::{RunGraphState, execute_agent_run};
 
 use super::MultiProviderBridge;
 use super::persistence::{
-    PendingUserInput, PendingUserInputStatus, PersistedRun, RunControlRecord, StreamingRunSnapshot,
-    TerminalRunControl, ThreadPersistenceCommand, capsule_attached_control_record,
-    save_failed_thread_messages_with_terminal_control, save_streaming_partial,
-    save_thread_messages_with_terminal_control,
+    MAX_SESSION_MESSAGES, PendingUserInput, PendingUserInputStatus, PersistedRun,
+    RunControlRecord, StreamingRunSnapshot, TerminalRunControl, ThreadPersistenceCommand,
+    capsule_attached_control_record, save_failed_thread_messages_with_terminal_control,
+    save_streaming_partial, save_thread_messages_with_terminal_control,
 };
 use super::state::{self, ActiveThreadPersistence};
 use crate::garyx_native_provider::SESSION_MESSAGES_METADATA_KEY;
@@ -654,7 +654,15 @@ impl MultiProviderBridge {
             && let Some(session_data) = store.get(&thread_id).await
         {
             let resolved_provider_type = provider.provider_type();
-            attach_native_session_messages(&mut options, &session_data, &resolved_provider_type);
+            let history = self.inner.thread_history.read().await.clone();
+            attach_native_session_messages(
+                &mut options,
+                history.as_ref(),
+                &thread_id,
+                &session_data,
+                &resolved_provider_type,
+            )
+            .await;
             attach_provider_sdk_session_metadata(
                 &mut options,
                 &session_data,
@@ -1338,7 +1346,15 @@ impl MultiProviderBridge {
             && let Some(session_data) = store.get(thread_id).await
         {
             let resolved_provider_type = provider.provider_type();
-            attach_native_session_messages(&mut options, &session_data, &resolved_provider_type);
+            let history = self.inner.thread_history.read().await.clone();
+            attach_native_session_messages(
+                &mut options,
+                history.as_ref(),
+                thread_id,
+                &session_data,
+                &resolved_provider_type,
+            )
+            .await;
             attach_provider_sdk_session_metadata(
                 &mut options,
                 &session_data,

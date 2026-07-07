@@ -49,6 +49,40 @@ struct CachedTranscriptRecord {
     bytes: usize,
 }
 
+/// A transcript record message that belongs to the provider session
+/// content: run content rows (user/assistant/tool traffic), excluding run
+/// control records. The legacy thread-record `messages` snapshot only ever
+/// contained content rows, so this is the equivalence filter for its
+/// transcript-backed replacement (#TASK-1864). Internal dispatch user
+/// messages carry a top-level `internal: true` but are session content
+/// (the legacy snapshot kept them) — only `kind == "control"` marks a
+/// control record.
+fn is_provider_session_message(message: &Value) -> bool {
+    let Some(object) = message.as_object() else {
+        return false;
+    };
+    if object.get("kind").and_then(Value::as_str) == Some("control") {
+        return false;
+    }
+    object.get("role").and_then(Value::as_str).is_some()
+}
+
+/// Newest `limit` provider-session messages from an ordered record walk,
+/// returned in transcript order.
+fn provider_session_tail_from_messages<'a>(
+    messages: impl DoubleEndedIterator<Item = &'a Value>,
+    limit: usize,
+) -> Vec<Value> {
+    let mut tail: Vec<Value> = messages
+        .rev()
+        .filter(|message| is_provider_session_message(message))
+        .take(limit)
+        .cloned()
+        .collect();
+    tail.reverse();
+    tail
+}
+
 /// Parsed tail + run-state checkpoint for one thread's transcript.
 /// Invariants (maintained under the slot lock; seqs are monotonic + gapless,
 /// which `records_after_seq`'s tail scan and the persistence layer's
@@ -269,6 +303,21 @@ impl ThreadCache {
                 .map(|c| c.record.message.clone())
                 .collect(),
         )
+    }
+
+    /// Newest `limit` provider-session (non-control) messages, or `None`
+    /// when the cached tail cannot prove completeness: the filtered tail
+    /// came up short of `limit` while older uncached records might still
+    /// hold more content rows.
+    fn provider_session_tail_messages(&self, limit: usize) -> Option<Vec<Value>> {
+        let filtered = provider_session_tail_from_messages(
+            self.tail.iter().map(|c| &c.record.message),
+            limit,
+        );
+        if filtered.len() >= limit || self.covers_whole_file() {
+            return Some(filtered);
+        }
+        None
     }
 
     /// Serve `cold_open_user_turn_window` when the whole window provably lies
@@ -1955,6 +2004,31 @@ impl ThreadTranscriptStore {
             .collect())
     }
 
+    /// Tail of the thread's provider-session content: the newest `limit`
+    /// content records' messages in transcript order, with run control
+    /// records skipped. This is the transcript-backed replacement for the
+    /// legacy thread-record `messages` snapshot, which only ever contained
+    /// run content rows (#TASK-1864 batch 1).
+    pub async fn provider_session_tail(
+        &self,
+        thread_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Value>, ThreadHistoryError> {
+        if let Some(messages) = self
+            .with_built_cache(thread_id, |entry| {
+                entry.provider_session_tail_messages(limit)
+            })
+            .await
+        {
+            return Ok(messages);
+        }
+        let records = self.read_records(thread_id).await?;
+        Ok(provider_session_tail_from_messages(
+            records.iter().map(|record| &record.message),
+            limit,
+        ))
+    }
+
     pub async fn page_before_index(
         &self,
         thread_id: &str,
@@ -2848,6 +2922,115 @@ mod streaming_build_tests {
                 "content": [{"type": "tool_use", "id": format!("tool-{index}"), "name": "probe"}],
             }),
         }
+    }
+
+    fn filtered_session_oracle(all: &[Value], limit: usize) -> Vec<Value> {
+        let filtered: Vec<Value> = all
+            .iter()
+            .filter(|message| {
+                message.get("kind").and_then(Value::as_str) != Some("control")
+            })
+            .cloned()
+            .collect();
+        filtered[filtered.len().saturating_sub(limit)..].to_vec()
+    }
+
+    #[tokio::test]
+    async fn provider_session_tail_skips_control_records_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+        let thread_id = "thread::provider-session";
+        for index in 0..24usize {
+            store
+                .append_committed_messages(
+                    thread_id,
+                    Some(&format!("run-{}", index / 4)),
+                    &[fixture_message(index)],
+                )
+                .await
+                .unwrap();
+        }
+
+        let all = store.tail(thread_id, 24).await.unwrap();
+        // fixture_message writes a control row at every index % 4 == 2.
+        let full = store.provider_session_tail(thread_id, 100).await.unwrap();
+        assert_eq!(full, filtered_session_oracle(&all, 100));
+        assert_eq!(full.len(), 18, "24 records minus 6 control rows");
+        assert!(
+            full.iter()
+                .all(|m| m.get("kind").and_then(Value::as_str) != Some("control"))
+        );
+
+        let limited = store.provider_session_tail(thread_id, 5).await.unwrap();
+        assert_eq!(limited, filtered_session_oracle(&all, 5));
+    }
+
+    #[tokio::test]
+    async fn provider_session_tail_falls_back_to_full_read_when_cache_is_short() {
+        let dir = tempfile::tempdir().unwrap();
+        // Tiny tail budget: the cache holds at most 5 records, far fewer
+        // than the requested content window, forcing the full-read path.
+        let store = ThreadTranscriptStore::file_for_tests(dir.path(), 2048, 5, 1 << 20)
+            .await
+            .unwrap();
+        let thread_id = "thread::provider-session-short";
+        for index in 0..40usize {
+            store
+                .append_committed_messages(
+                    thread_id,
+                    Some(&format!("run-{}", index / 4)),
+                    &[fixture_message(index)],
+                )
+                .await
+                .unwrap();
+        }
+
+        let all = store.tail(thread_id, 40).await.unwrap();
+        let tail = store.provider_session_tail(thread_id, 20).await.unwrap();
+        assert_eq!(tail, filtered_session_oracle(&all, 20));
+        assert_eq!(tail.len(), 20);
+    }
+
+    #[tokio::test]
+    async fn provider_session_tail_keeps_internal_dispatch_user_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+        let thread_id = "thread::provider-session-internal";
+        store
+            .append_committed_messages(
+                thread_id,
+                Some("run-1"),
+                &[
+                    // Internal dispatch user rows carry a top-level
+                    // `internal: true` but are provider-session content —
+                    // the legacy `messages` snapshot always kept them.
+                    serde_json::json!({
+                        "role": "user",
+                        "content": "task dispatch body",
+                        "internal": true,
+                        "internal_kind": "dispatch",
+                    }),
+                    serde_json::json!({
+                        "role": "system",
+                        "kind": "control",
+                        "internal": true,
+                        "internal_kind": "control",
+                        "control": {"kind": "run_complete", "run_id": "run-1"},
+                    }),
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": "task reply",
+                    }),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let tail = store.provider_session_tail(thread_id, 100).await.unwrap();
+        assert_eq!(tail.len(), 2);
+        assert_eq!(tail[0]["content"], "task dispatch body");
+        assert_eq!(tail[0]["internal"], true);
+        assert_eq!(tail[1]["content"], "task reply");
     }
 
     async fn assert_streaming_matches_full_read(store: &ThreadTranscriptStore, thread_id: &str) {

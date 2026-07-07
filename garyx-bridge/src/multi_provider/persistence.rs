@@ -15,7 +15,7 @@ use serde_json::Value;
 use tracing::warn;
 
 /// Maximum number of messages to keep per session (matches Python's limit).
-const MAX_SESSION_MESSAGES: usize = 100;
+pub(super) const MAX_SESSION_MESSAGES: usize = 100;
 const PROVIDER_SDK_SESSION_IDS_KEY: &str = "provider_sdk_session_ids";
 
 fn metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<String> {

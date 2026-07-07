@@ -157,6 +157,24 @@ impl ThreadHistoryRepository {
         })
     }
 
+    /// Newest `limit` provider-session content messages from the committed
+    /// transcript, in transcript order (control records skipped). Returns
+    /// an empty vector when the thread has no transcript yet — callers
+    /// holding a legacy thread-record `messages` snapshot fall back to it
+    /// until Batch 2's import backfills those transcripts (#TASK-1864).
+    pub async fn provider_session_tail(
+        &self,
+        thread_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Value>, ThreadHistoryError> {
+        if !self.transcript_store.exists(thread_id).await {
+            return Ok(Vec::new());
+        }
+        self.transcript_store
+            .provider_session_tail(thread_id, limit)
+            .await
+    }
+
     pub async fn find_latest_for_run(
         &self,
         thread_id: &str,
