@@ -40,6 +40,12 @@ Non-goals for this plan:
   double-quote escaping as the binary path. Note: a crash-looping agent is a
   third cause of CLI `gateway not reachable` besides restart windows and
   saturation — see Batch 1.
+- Related desktop-side fallout, tracked separately as #TASK-1840 (not a
+  batch here — client-side scope): the crash loop leaked zombie SSE
+  connections in the Mac app until all 6 Chromium per-host slots were held,
+  so every request queued into its AbortSignal timeout even after the
+  gateway recovered; app restart clears it. Fix direction: abort the old
+  stream on reconnect, flush pending requests on gateway-state flips.
 
 ## Verified Evidence Base
 
