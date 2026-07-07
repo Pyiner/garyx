@@ -1508,6 +1508,7 @@ fn garyx_db_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {
         GaryxDbError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BadRequest"),
         GaryxDbError::LockPoisoned
         | GaryxDbError::Join(_)
+        | GaryxDbError::Configuration(_)
         | GaryxDbError::Io(_)
         | GaryxDbError::Sqlite(_) => (StatusCode::INTERNAL_SERVER_ERROR, "InternalError"),
     };

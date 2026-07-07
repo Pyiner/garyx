@@ -27,6 +27,8 @@ pub enum GaryxDbError {
     LockPoisoned,
     #[error("blocking database task failed: {0}")]
     Join(String),
+    #[error("database configuration failed: {0}")]
+    Configuration(String),
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -505,7 +507,7 @@ fn configure_file_connection(conn: &Connection) -> GaryxDbResult<()> {
     conn.busy_timeout(BUSY_TIMEOUT)?;
     let journal_mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
     if !journal_mode.eq_ignore_ascii_case("wal") {
-        return Err(GaryxDbError::BadRequest(format!(
+        return Err(GaryxDbError::Configuration(format!(
             "failed to enable WAL journal mode: got {journal_mode}"
         )));
     }
@@ -4283,6 +4285,29 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .expect("journal_mode");
         assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+    }
+
+    #[test]
+    fn open_succeeds_while_another_connection_holds_a_write_lock() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        // First open creates the schema and flips the database to WAL.
+        let _first = GaryxDbService::open(&path).expect("first open");
+
+        // A separate connection holds a write transaction while a second
+        // service runs the full pragma/init order — the cross-process
+        // contention case busy_timeout exists for (WAL keeps schema reads
+        // from blocking on the writer).
+        let blocker = Connection::open(&path).expect("blocker connection");
+        blocker
+            .execute_batch("BEGIN IMMEDIATE;")
+            .expect("hold write lock");
+        let second = GaryxDbService::open(&path).expect("second open under held write lock");
+        blocker.execute_batch("COMMIT;").expect("release write lock");
+
+        second
+            .pin_thread("thread::contended-open")
+            .expect("write after release");
     }
 
     #[test]

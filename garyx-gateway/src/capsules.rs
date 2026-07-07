@@ -86,6 +86,7 @@ impl From<GaryxDbError> for CapsuleError {
             GaryxDbError::BadRequest(message) => CapsuleError::bad_request(message),
             GaryxDbError::LockPoisoned
             | GaryxDbError::Join(_)
+            | GaryxDbError::Configuration(_)
             | GaryxDbError::Io(_)
             | GaryxDbError::Sqlite(_) => CapsuleError::internal(error.to_string()),
         }
