@@ -2404,8 +2404,6 @@ async fn recent_threads_route_removes_hidden_threads_from_projection() {
             }),
         )
         .await;
-    state.invalidate_thread_list_cache().await;
-
     let request = authed_request()
         .uri("/api/recent-threads?limit=10")
         .body(Body::empty())
@@ -5312,52 +5310,6 @@ async fn cached_channel_endpoints_reuses_snapshot_until_invalidated() {
     state.invalidate_channel_endpoint_cache().await;
     let refreshed = state.cached_channel_endpoints().await;
     assert_eq!(refreshed[0].display_label, "Updated Chat");
-}
-
-#[tokio::test]
-async fn cached_thread_list_entries_reuses_snapshot_until_invalidated() {
-    let log_dir = tempdir().unwrap();
-    let logger = Arc::new(ThreadFileLogger::new(log_dir.path()));
-    let state = AppStateBuilder::new(test_config())
-        .with_thread_log_sink(logger)
-        .build();
-
-    state
-        .threads
-        .thread_store
-        .set(
-            "thread::cached-list",
-            serde_json::json!({
-                "thread_id": "thread::cached-list",
-                "label": "Initial Thread",
-                "updated_at": "2026-03-16T01:00:00Z"
-            }),
-        )
-        .await;
-
-    let initial = state.cached_thread_list_entries().await;
-    assert_eq!(initial.len(), 1);
-    assert_eq!(initial[0].data["label"], "Initial Thread");
-
-    state
-        .threads
-        .thread_store
-        .set(
-            "thread::cached-list",
-            serde_json::json!({
-                "thread_id": "thread::cached-list",
-                "label": "Updated Thread",
-                "updated_at": "2026-03-16T01:00:01Z"
-            }),
-        )
-        .await;
-
-    let cached = state.cached_thread_list_entries().await;
-    assert_eq!(cached[0].data["label"], "Initial Thread");
-
-    state.invalidate_thread_list_cache().await;
-    let refreshed = state.cached_thread_list_entries().await;
-    assert_eq!(refreshed[0].data["label"], "Updated Thread");
 }
 
 #[tokio::test]

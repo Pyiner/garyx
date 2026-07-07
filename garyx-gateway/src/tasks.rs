@@ -819,7 +819,7 @@ pub async fn set_task_title(
     }
 }
 
-fn task_service(state: &Arc<AppState>) -> Option<TaskService> {
+pub(crate) fn task_service(state: &Arc<AppState>) -> Option<TaskService> {
     let config = state.config_snapshot();
     if !config.tasks.enabled {
         return None;

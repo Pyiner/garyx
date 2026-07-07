@@ -10,7 +10,6 @@ use garyx_router::{
     KnownChannelEndpoint, MessageLedgerStore, MessageRouter, ThreadHistoryRepository, ThreadStore,
     is_thread_key,
 };
-use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -82,22 +81,10 @@ pub struct OpsState {
     pub workflow_scheduler: Arc<WorkflowScheduler>,
     pub provider_auth_sessions: Arc<ClaudeAuthSessionStore>,
     pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
-    pub thread_list_snapshot: Mutex<Option<ThreadListSnapshotCache>>,
 }
 
 pub struct ChannelEndpointSnapshotCache {
     endpoints: Vec<KnownChannelEndpoint>,
-    expires_at: Instant,
-}
-
-#[derive(Clone)]
-pub struct ThreadListEntrySnapshot {
-    pub key: String,
-    pub data: Value,
-}
-
-pub struct ThreadListSnapshotCache {
-    entries: Vec<ThreadListEntrySnapshot>,
     expires_at: Instant,
 }
 
@@ -196,58 +183,19 @@ impl AppState {
         self.integration.channel_plugin_manager.clone()
     }
 
-    pub async fn cached_thread_list_entries(&self) -> Vec<ThreadListEntrySnapshot> {
-        let now = Instant::now();
-        let mut cache = self.ops.thread_list_snapshot.lock().await;
-        if let Some(snapshot) = cache.as_ref()
-            && snapshot.expires_at > now
-        {
-            debug!(
-                thread_count = snapshot.entries.len(),
-                "thread list snapshot cache hit"
-            );
-            return snapshot.entries.clone();
-        }
-
-        let started = Instant::now();
-        let keys = self.threads.thread_store.list_keys(None).await;
-        let mut entries = Vec::new();
-        for key in keys {
-            if !is_thread_key(&key) {
-                continue;
-            }
-            let Some(data) = self.threads.thread_store.get(&key).await else {
-                continue;
-            };
-            entries.push(ThreadListEntrySnapshot { key, data });
-        }
-        entries.sort_by(|left, right| {
-            let right_updated = right
-                .data
-                .get("updated_at")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let left_updated = left
-                .data
-                .get("updated_at")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            right_updated
-                .cmp(left_updated)
-                .then_with(|| left.key.as_str().cmp(right.key.as_str()))
-        });
-
-        let elapsed_ms = started.elapsed().as_millis() as u64;
-        debug!(
-            elapsed_ms,
-            thread_count = entries.len(),
-            "thread list snapshot refreshed"
-        );
-        *cache = Some(ThreadListSnapshotCache {
-            entries: entries.clone(),
-            expires_at: Instant::now() + GATEWAY_SYNC_SNAPSHOT_TTL,
-        });
-        entries
+    /// Count thread records by listing storage keys only. This deliberately
+    /// never reads record bodies: thread files carry their full legacy
+    /// `messages` history (multi-MB for busy threads), and the previous
+    /// "list snapshot" here materialized every record just to report a
+    /// count — the single biggest allocation spike on the startup path.
+    pub async fn thread_record_count(&self) -> usize {
+        self.threads
+            .thread_store
+            .list_keys(None)
+            .await
+            .iter()
+            .filter(|key| is_thread_key(key))
+            .count()
     }
 
     pub async fn cached_channel_endpoints(&self) -> Vec<KnownChannelEndpoint> {
@@ -284,13 +232,6 @@ impl AppState {
         endpoints
     }
 
-    pub async fn invalidate_thread_list_cache(&self) {
-        let mut cache = self.ops.thread_list_snapshot.lock().await;
-        if cache.take().is_some() {
-            debug!("thread list snapshot cache invalidated");
-        }
-    }
-
     pub async fn invalidate_channel_endpoint_cache(&self) {
         let mut cache = self.ops.channel_endpoint_snapshot.lock().await;
         if cache.take().is_some() {
@@ -299,7 +240,6 @@ impl AppState {
     }
 
     pub async fn invalidate_gateway_sync_caches(&self) {
-        self.invalidate_thread_list_cache().await;
         self.invalidate_channel_endpoint_cache().await;
     }
 
@@ -356,7 +296,7 @@ impl AppState {
                 &workflow_reconcile_cutoff,
             )
             .await;
-            let threads = state.cached_thread_list_entries().await.len();
+            let threads = state.thread_record_count().await;
             let endpoints = state.cached_channel_endpoints().await.len();
             debug!(
                 elapsed_ms = started.elapsed().as_millis() as u64,
@@ -512,7 +452,6 @@ impl AppState {
                 workflow_scheduler: self.ops.workflow_scheduler.clone(),
                 provider_auth_sessions: self.ops.provider_auth_sessions.clone(),
                 channel_endpoint_snapshot: Mutex::new(None),
-                thread_list_snapshot: Mutex::new(None),
             },
             integration: IntegrationState {
                 bridge: self.integration.bridge.clone(),

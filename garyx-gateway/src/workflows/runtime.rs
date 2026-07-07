@@ -1006,7 +1006,6 @@ impl WorkflowRuntime {
         let (thread_id, _) = create_thread_record(&self.state.threads.thread_store, options)
             .await
             .map_err(WorkflowError::BadRequest)?;
-        self.state.invalidate_thread_list_cache().await;
         Ok(thread_id)
     }
 

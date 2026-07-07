@@ -517,7 +517,6 @@ impl AppStateBuilder {
                 workflow_scheduler: Arc::new(WorkflowScheduler::default()),
                 provider_auth_sessions: Arc::new(ClaudeAuthSessionStore::default()),
                 channel_endpoint_snapshot: Mutex::new(None),
-                thread_list_snapshot: Mutex::new(None),
             },
             integration: IntegrationState {
                 bridge: self.bridge,

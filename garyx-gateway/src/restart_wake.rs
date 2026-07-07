@@ -6,8 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Utc;
 use garyx_models::local_paths::{default_garyx_database_path, default_session_data_dir};
-use garyx_router::tasks::{canonical_task_id, task_from_record};
-use garyx_router::{ThreadStore, is_thread_key};
+use garyx_router::is_thread_key;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -612,31 +611,30 @@ async fn resolve_wake_thread_id(
                 ))
             }
         }
-        "task" => resolve_task_thread_id(state.threads.thread_store.clone(), &wake.target).await,
+        "task" => resolve_task_thread_id(state, &wake.target).await,
         "bot" => resolve_bot_thread_id(state, &wake.target).await,
         other => Err(format!("unknown restart wake kind: {other}")),
     }
 }
 
 async fn resolve_task_thread_id(
-    store: Arc<dyn ThreadStore>,
+    state: &Arc<AppState>,
     task_id: &str,
 ) -> Result<String, String> {
-    for key in store.list_keys(None).await {
-        if !is_thread_key(&key) {
-            continue;
-        }
-        let Some(record) = store.get(&key).await else {
-            continue;
-        };
-        let Ok(Some(task)) = task_from_record(&record) else {
-            continue;
-        };
-        if canonical_task_id(&task) == task_id {
-            return Ok(key);
-        }
+    // Resolve through the task projection (indexed by task number) instead
+    // of enumerating every thread record: the old full scan read multi-MB
+    // thread files for the whole store right on the restart path.
+    let Some(service) = crate::tasks::task_service(state) else {
+        return Err(format!(
+            "restart wake task target requires tasks to be enabled: {task_id}"
+        ));
+    };
+    match service.get_task(task_id).await {
+        Ok((thread_id, _record, _task)) => Ok(thread_id),
+        Err(error) => Err(format!(
+            "restart wake task target not found: {task_id} ({error})"
+        )),
     }
-    Err(format!("restart wake task target not found: {task_id}"))
 }
 
 async fn resolve_bot_thread_id(state: &Arc<AppState>, bot: &str) -> Result<String, String> {
