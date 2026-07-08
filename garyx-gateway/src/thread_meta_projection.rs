@@ -261,19 +261,3 @@ fn last_message_preview_for_role(data: &Value, role: &str) -> Option<String> {
     }
     None
 }
-
-fn summarize_text(value: &str, limit: usize) -> Option<String> {
-    let text = value.trim();
-    if text.is_empty() {
-        return None;
-    }
-    let mut chars = text.chars();
-    let mut summary = String::new();
-    for _ in 0..limit {
-        let Some(ch) = chars.next() else {
-            return Some(summary);
-        };
-        summary.push(ch);
-    }
-    Some(summary + "…")
-}
