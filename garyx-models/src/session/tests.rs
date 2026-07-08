@@ -98,7 +98,7 @@ fn test_session_entry_exposes_decomposition_views() {
 
 #[test]
 fn test_session_entry_exposes_thread_record_view() {
-    let mut entry = SessionEntry {
+    let entry = SessionEntry {
         thread_id: "thread::abc".to_owned(),
         agent_id: "main".to_owned(),
         label: Some("Inbox".to_owned()),
@@ -112,7 +112,7 @@ fn test_session_entry_exposes_thread_record_view() {
 
 #[test]
 fn test_session_entry_converts_to_owned_thread_record() {
-    let mut entry = SessionEntry {
+    let entry = SessionEntry {
         thread_id: "thread::owned".to_owned(),
         agent_id: "main".to_owned(),
         label: Some("Owned".to_owned()),
