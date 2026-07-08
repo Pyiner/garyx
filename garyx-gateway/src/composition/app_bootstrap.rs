@@ -349,12 +349,26 @@ impl AppStateBuilder {
             .active_run_probe
             .clone()
             .unwrap_or_else(|| Arc::new(BridgeActiveRunProbe::new(Arc::downgrade(&self.bridge))));
-        let thread_store: Arc<dyn ThreadStore> = Arc::new(RecentThreadProjectingStore::new(
-            self.thread_store.clone(),
-            self.garyx_db.clone(),
-            self.thread_history.transcript_store(),
-            active_run_probe,
-        ));
+        let thread_store: Arc<dyn ThreadStore> =
+            match crate::sqlite_thread_store::resolve_thread_store_backend(&self.config) {
+                crate::sqlite_thread_store::ThreadStoreBackend::File => {
+                    Arc::new(RecentThreadProjectingStore::new(
+                        self.thread_store.clone(),
+                        self.garyx_db.clone(),
+                        self.thread_history.transcript_store(),
+                        active_run_probe,
+                    ))
+                }
+                // SQLite backends arrive pre-assembled (#TASK-1864 batch 2):
+                // SqliteThreadStore derives projections inside its own write
+                // transaction, so wrapping it in the projecting store would
+                // double-write projections in a second transaction and
+                // reintroduce the drift window the design retires.
+                crate::sqlite_thread_store::ThreadStoreBackend::Sqlite
+                | crate::sqlite_thread_store::ThreadStoreBackend::SqliteOnly => {
+                    self.thread_store.clone()
+                }
+            };
         register_gateway_task_projection_reader(&thread_store, &self.garyx_db);
         let thread_history = ThreadHistoryRepository::new(
             thread_store.clone(),

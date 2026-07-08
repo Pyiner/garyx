@@ -39,7 +39,7 @@ impl RuntimeAssembler {
             .data_dir
             .clone()
             .unwrap_or_else(|| default_session_data_dir().to_string_lossy().to_string());
-        let thread_store: Arc<dyn ThreadStore> = match FileThreadStore::new(&session_data_dir).await
+        let file_store: Arc<dyn ThreadStore> = match FileThreadStore::new(&session_data_dir).await
         {
             Ok(store) => {
                 tracing::info!(data_dir = %session_data_dir, "FileThreadStore initialized");
@@ -61,12 +61,44 @@ impl RuntimeAssembler {
             )))
             .await?,
         );
+
+        let bridge = Arc::new(MultiProviderBridge::new());
+
+        // Thread-record backend selection (#TASK-1864 batch 2, D8). SQLite
+        // backends run their one-shot boot import before serving requests;
+        // `sqlite` keeps a best-effort file mirror for hot rollback.
+        let backend = garyx_gateway::resolve_thread_store_backend(&self.config);
+        let thread_store: Arc<dyn ThreadStore> = match backend {
+            garyx_gateway::ThreadStoreBackend::File => file_store.clone(),
+            garyx_gateway::ThreadStoreBackend::Sqlite
+            | garyx_gateway::ThreadStoreBackend::SqliteOnly => {
+                let garyx_db = Arc::new(garyx_gateway::garyx_db::GaryxDbService::open(
+                    garyx_models::local_paths::default_garyx_database_path(),
+                )?);
+                let mirror = match backend {
+                    garyx_gateway::ThreadStoreBackend::Sqlite => {
+                        tracing::info!("thread store backend: sqlite (dual-write file mirror)");
+                        Some(file_store.clone())
+                    }
+                    _ => {
+                        tracing::info!("thread store backend: sqlite-only");
+                        None
+                    }
+                };
+                garyx_gateway::assemble_sqlite_thread_store(
+                    garyx_db,
+                    transcript_store.clone(),
+                    &bridge,
+                    file_store.clone(),
+                    mirror,
+                )
+                .await
+            }
+        };
         let thread_history = Arc::new(ThreadHistoryRepository::new(
             thread_store.clone(),
             transcript_store,
         ));
-
-        let bridge = Arc::new(MultiProviderBridge::new());
 
         let (event_tx, _) = tokio::sync::broadcast::channel(128);
 
