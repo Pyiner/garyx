@@ -1500,13 +1500,20 @@ impl GaryxDbService {
         let mut keys = Vec::new();
         match prefix.map(str::trim).filter(|value| !value.is_empty()) {
             Some(prefix) => {
+                // LIKE narrows the scan but is ASCII case-insensitive in
+                // SQLite; the starts_with post-filter restores the exact
+                // case-sensitive prefix semantics of the File/InMemory
+                // stores (review #TASK-1896).
                 let pattern = format!("{}%", escape_like_pattern(prefix));
                 let mut stmt = conn.prepare(
                     "SELECT key FROM thread_records WHERE key LIKE ?1 ESCAPE '\\' ORDER BY key",
                 )?;
                 let rows = stmt.query_map(params![pattern], |row| row.get::<_, String>(0))?;
                 for row in rows {
-                    keys.push(row?);
+                    let key: String = row?;
+                    if key.starts_with(prefix) {
+                        keys.push(key);
+                    }
                 }
             }
             None => {
@@ -4594,6 +4601,30 @@ mod tests {
                 .get_thread_record_body("thread::alpha")
                 .expect("get after delete"),
             None
+        );
+    }
+
+    #[test]
+    fn thread_record_key_prefix_listing_is_case_sensitive() {
+        // SQLite LIKE is ASCII case-insensitive; the store contract
+        // (File/InMemory starts_with) is case-sensitive (#TASK-1896).
+        let service = GaryxDbService::memory().expect("memory db");
+        for key in ["thread::lower", "Thread::upper"] {
+            service
+                .write_thread_record_with_projections(key, "{}", None, None)
+                .expect("write");
+        }
+        assert_eq!(
+            service
+                .list_thread_record_keys(Some("thread::"))
+                .expect("list"),
+            vec!["thread::lower".to_owned()]
+        );
+        assert_eq!(
+            service
+                .list_thread_record_keys(Some("Thread::"))
+                .expect("list upper"),
+            vec!["Thread::upper".to_owned()]
         );
     }
 
