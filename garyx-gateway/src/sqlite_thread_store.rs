@@ -582,6 +582,22 @@ pub(crate) async fn import_thread_records_if_needed(
         }
     }
 
+    // Safety interlock: an empty archive with a populated truth table
+    // means the archive was retired (moved to backups) — importing it
+    // would wipe nothing but recording state over live data is wrong
+    // either way. Never "import" emptiness over an existing truth table.
+    if source_keys.is_empty() {
+        match garyx_db.list_thread_record_keys(None) {
+            Ok(existing) if !existing.is_empty() => {
+                warn!(
+                    existing = existing.len(),
+                    "skipping thread-record import: source archive is empty but the truth table is populated"
+                );
+                return ThreadRecordImportSummary::default();
+            }
+            _ => {}
+        }
+    }
     let mut summary = ThreadRecordImportSummary {
         source_keys: source_keys.len(),
         ..Default::default()
