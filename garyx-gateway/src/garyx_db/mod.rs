@@ -492,6 +492,10 @@ struct DreamOverlapCandidate {
 
 pub struct GaryxDbService {
     conn: Mutex<Connection>,
+    /// Independent read connection (WAL snapshot reads) so point reads never
+    /// queue behind the writer. `None` for in-memory databases, which
+    /// degrade to the single connection (#TASK-1864 batch 2, D4).
+    reader: Option<Mutex<Connection>>,
     task_projection_tombstones: Mutex<BTreeSet<String>>,
     task_projection_backfill_lock: tokio::sync::Mutex<()>,
     task_projection_backfill_active: Mutex<bool>,
@@ -524,8 +528,14 @@ impl GaryxDbService {
         let conn = Connection::open(path)?;
         configure_file_connection(&conn)?;
         initialize_connection(&conn)?;
+        // Second connection for reads: under WAL it sees consistent
+        // snapshots and never blocks on (or blocks) the writer.
+        let reader = Connection::open(path)?;
+        reader.busy_timeout(BUSY_TIMEOUT)?;
+        reader.pragma_update(None, "query_only", "ON")?;
         Ok(Self {
             conn: Mutex::new(conn),
+            reader: Some(Mutex::new(reader)),
             task_projection_tombstones: Mutex::new(BTreeSet::new()),
             task_projection_backfill_lock: tokio::sync::Mutex::new(()),
             task_projection_backfill_active: Mutex::new(false),
@@ -538,6 +548,7 @@ impl GaryxDbService {
         initialize_connection(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            reader: None,
             task_projection_tombstones: Mutex::new(BTreeSet::new()),
             task_projection_backfill_lock: tokio::sync::Mutex::new(()),
             task_projection_backfill_active: Mutex::new(false),
@@ -546,6 +557,15 @@ impl GaryxDbService {
 
     fn conn(&self) -> GaryxDbResult<MutexGuard<'_, Connection>> {
         self.conn.lock().map_err(|_| GaryxDbError::LockPoisoned)
+    }
+
+    /// Lock the read connection when one exists (file databases), or fall
+    /// back to the writer connection (in-memory databases).
+    fn read_conn(&self) -> GaryxDbResult<MutexGuard<'_, Connection>> {
+        match &self.reader {
+            Some(reader) => reader.lock().map_err(|_| GaryxDbError::LockPoisoned),
+            None => self.conn(),
+        }
     }
 
     /// Run `f` against this service on the blocking thread pool.
@@ -1102,76 +1122,9 @@ impl GaryxDbService {
         &self,
         draft: RecentThreadDraft,
     ) -> GaryxDbResult<RecentThreadRecord> {
-        let thread_id = normalize_thread_id(&draft.thread_id)?;
-        let thread_type = normalize_required("thread_type", &draft.thread_type)?;
-        let run_state = normalize_required("run_state", &draft.run_state)?;
-        let last_active_at = normalize_required("last_active_at", &draft.last_active_at)?;
-        let title = draft.title.trim().to_owned();
-        let workspace_dir = normalize_optional(draft.workspace_dir.as_deref());
-        let provider_type = normalize_optional(draft.provider_type.as_deref());
-        let agent_id = normalize_optional(draft.agent_id.as_deref());
-        let last_message_preview = draft.last_message_preview.trim().to_owned();
-        let recent_run_id = normalize_optional(draft.recent_run_id.as_deref());
-        let active_run_id = normalize_optional(draft.active_run_id.as_deref());
-        let updated_at = normalize_optional(draft.updated_at.as_deref());
         let recorded_at = now_string();
-
         let conn = self.conn()?;
-        conn.execute(
-            "INSERT INTO recent_threads (
-                thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
-                message_count, last_message_preview, recent_run_id, active_run_id, run_state,
-                updated_at, last_active_at, recorded_at
-             )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-             ON CONFLICT(thread_id) DO UPDATE SET
-                title = excluded.title,
-                workspace_dir = excluded.workspace_dir,
-                thread_type = excluded.thread_type,
-                provider_type = excluded.provider_type,
-                agent_id = excluded.agent_id,
-                message_count = excluded.message_count,
-                last_message_preview = excluded.last_message_preview,
-                recent_run_id = excluded.recent_run_id,
-                active_run_id = excluded.active_run_id,
-                run_state = excluded.run_state,
-                updated_at = excluded.updated_at,
-                last_active_at = excluded.last_active_at,
-                recorded_at = excluded.recorded_at",
-            params![
-                thread_id,
-                title,
-                workspace_dir,
-                thread_type,
-                provider_type,
-                agent_id,
-                draft.message_count,
-                last_message_preview,
-                recent_run_id,
-                active_run_id,
-                run_state,
-                updated_at,
-                last_active_at,
-                recorded_at,
-            ],
-        )?;
-
-        Ok(RecentThreadRecord {
-            thread_id,
-            title,
-            workspace_dir,
-            thread_type,
-            provider_type,
-            agent_id,
-            message_count: draft.message_count,
-            last_message_preview,
-            recent_run_id,
-            active_run_id,
-            run_state,
-            updated_at,
-            last_active_at,
-            recorded_at,
-        })
+        upsert_recent_thread_tx(&conn, draft, &recorded_at)
     }
 
     pub fn remove_recent_thread(&self, thread_id: &str) -> GaryxDbResult<bool> {
@@ -1432,24 +1385,139 @@ impl GaryxDbService {
         &self,
         draft: ThreadMetaProjectionDraft,
     ) -> GaryxDbResult<()> {
-        let thread_id = normalize_thread_id(&draft.thread_id)?;
         let recorded_at = now_string();
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        remove_thread_meta_projection_tx(&tx, &thread_id)?;
-        let mut thread_meta = draft.thread_meta;
-        thread_meta.thread_id = thread_id.clone();
-        upsert_thread_meta(&tx, &thread_meta, &recorded_at)?;
-        for mut endpoint in draft.channel_endpoints {
-            endpoint.thread_id = Some(thread_id.clone());
-            upsert_thread_channel_endpoint(&tx, &endpoint, &recorded_at)?;
-        }
-        for mut route in draft.message_routes {
-            route.thread_id = thread_id.clone();
-            upsert_thread_message_route(&tx, &route, &recorded_at)?;
-        }
+        replace_thread_meta_projection_tx(&tx, draft, &recorded_at)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Single-transaction write of a thread record plus its derived
+    /// projections (#TASK-1864 batch 2, D2): the record and the five
+    /// projection tables commit or roll back together, so projection drift
+    /// is structurally impossible. `projections: None` writes the record
+    /// only (non-thread keys such as `meta::`/`cron::`/`tool::`).
+    pub fn write_thread_record_with_projections(
+        &self,
+        key: &str,
+        body: &str,
+        updated_at: Option<&str>,
+        projections: Option<ThreadRecordProjections>,
+    ) -> GaryxDbResult<()> {
+        let key = normalize_required("key", key)?;
+        let recorded_at = now_string();
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO thread_records (key, body, updated_at, recorded_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(key) DO UPDATE SET
+                body = excluded.body,
+                updated_at = excluded.updated_at,
+                recorded_at = excluded.recorded_at",
+            params![key, body, updated_at, recorded_at],
+        )?;
+        let mut task_projection_removed = false;
+        if let Some(projections) = projections {
+            match projections.thread_meta {
+                Some(draft) => replace_thread_meta_projection_tx(&tx, draft, &recorded_at)?,
+                None => {
+                    remove_thread_meta_projection_tx(&tx, &key)?;
+                }
+            }
+            match projections.task {
+                Some(mut draft) => {
+                    draft.thread_id = normalize_thread_id(&draft.thread_id)?;
+                    task_forest::upsert_task_projection(&tx, &draft, &recorded_at)?;
+                }
+                None => {
+                    remove_task_projection_tx(&tx, &key)?;
+                    task_projection_removed = true;
+                }
+            }
+            match projections.recent {
+                Some(draft) => {
+                    upsert_recent_thread_tx(&tx, draft, &recorded_at)?;
+                }
+                None => {
+                    remove_recent_thread_tx(&tx, &key)?;
+                }
+            }
+        }
+        tx.commit()?;
+        if task_projection_removed {
+            // In-memory bookkeeping happens after the commit: a rolled-back
+            // transaction must not leave a tombstone behind.
+            self.note_task_projection_tombstone(&key)?;
+        }
+        Ok(())
+    }
+
+    /// Single-transaction delete of a thread record and all its projection
+    /// rows. Returns whether the record existed.
+    pub fn delete_thread_record_with_projections(&self, key: &str) -> GaryxDbResult<bool> {
+        let key = normalize_required("key", key)?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let removed =
+            tx.execute("DELETE FROM thread_records WHERE key = ?1", params![key])? > 0;
+        remove_thread_meta_projection_tx(&tx, &key)?;
+        remove_task_projection_tx(&tx, &key)?;
+        remove_recent_thread_tx(&tx, &key)?;
+        tx.commit()?;
+        self.note_task_projection_tombstone(&key)?;
+        Ok(removed)
+    }
+
+    /// Point read of a record body from the reader connection (WAL snapshot
+    /// read — never queued behind the writer).
+    pub fn get_thread_record_body(&self, key: &str) -> GaryxDbResult<Option<String>> {
+        let conn = self.read_conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT body FROM thread_records WHERE key = ?1",
+                params![key.trim()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    pub fn thread_record_exists(&self, key: &str) -> GaryxDbResult<bool> {
+        let conn = self.read_conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT 1 FROM thread_records WHERE key = ?1",
+                params![key.trim()],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    pub fn list_thread_record_keys(&self, prefix: Option<&str>) -> GaryxDbResult<Vec<String>> {
+        let conn = self.read_conn()?;
+        let mut keys = Vec::new();
+        match prefix.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(prefix) => {
+                let pattern = format!("{}%", escape_like_pattern(prefix));
+                let mut stmt = conn.prepare(
+                    "SELECT key FROM thread_records WHERE key LIKE ?1 ESCAPE '\\' ORDER BY key",
+                )?;
+                let rows = stmt.query_map(params![pattern], |row| row.get::<_, String>(0))?;
+                for row in rows {
+                    keys.push(row?);
+                }
+            }
+            None => {
+                let mut stmt = conn.prepare("SELECT key FROM thread_records ORDER BY key")?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                for row in rows {
+                    keys.push(row?);
+                }
+            }
+        }
+        Ok(keys)
     }
 
     pub fn remove_thread_meta_projection(&self, thread_id: &str) -> GaryxDbResult<bool> {
@@ -3045,6 +3113,17 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             pinned_at TEXT NOT NULL
         ) STRICT;
 
+        -- Thread-record truth source (#TASK-1864 batch 2): canonical record
+        -- bodies for thread::*/meta::*/cron::*/tool::* keys. Bodies never
+        -- contain the retired `messages` snapshot; projections derive from
+        -- this table inside the same write transaction.
+        CREATE TABLE IF NOT EXISTS thread_records (
+            key         TEXT PRIMARY KEY,
+            body        TEXT NOT NULL,
+            updated_at  TEXT,
+            recorded_at TEXT NOT NULL
+        ) STRICT;
+
         CREATE TABLE IF NOT EXISTS archived_threads (
             thread_id TEXT PRIMARY KEY,
             archived_at TEXT NOT NULL
@@ -3487,6 +3566,137 @@ fn thread_meta_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Thre
         projection_version: row.get(23)?,
         projected_at: row.get(24)?,
     })
+}
+
+/// Projection writes derived from one thread record, applied inside the
+/// same transaction as the record upsert (#TASK-1864 batch 2, D2). Each
+/// `Some` upserts that projection; `None` removes it.
+pub struct ThreadRecordProjections {
+    pub thread_meta: Option<ThreadMetaProjectionDraft>,
+    pub task: Option<TaskProjectionDraft>,
+    pub recent: Option<RecentThreadDraft>,
+}
+
+/// Escape `%`/`_`/`\` so a caller-supplied prefix matches literally in a
+/// LIKE pattern (used with `ESCAPE '\'`).
+fn escape_like_pattern(prefix: &str) -> String {
+    prefix
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+fn upsert_recent_thread_tx(
+    conn: &Connection,
+    draft: RecentThreadDraft,
+    recorded_at: &str,
+) -> GaryxDbResult<RecentThreadRecord> {
+    let thread_id = normalize_thread_id(&draft.thread_id)?;
+    let thread_type = normalize_required("thread_type", &draft.thread_type)?;
+    let run_state = normalize_required("run_state", &draft.run_state)?;
+    let last_active_at = normalize_required("last_active_at", &draft.last_active_at)?;
+    let title = draft.title.trim().to_owned();
+    let workspace_dir = normalize_optional(draft.workspace_dir.as_deref());
+    let provider_type = normalize_optional(draft.provider_type.as_deref());
+    let agent_id = normalize_optional(draft.agent_id.as_deref());
+    let last_message_preview = draft.last_message_preview.trim().to_owned();
+    let recent_run_id = normalize_optional(draft.recent_run_id.as_deref());
+    let active_run_id = normalize_optional(draft.active_run_id.as_deref());
+    let updated_at = normalize_optional(draft.updated_at.as_deref());
+    let recorded_at = recorded_at.to_owned();
+
+    conn.execute(
+        "INSERT INTO recent_threads (
+            thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+            message_count, last_message_preview, recent_run_id, active_run_id, run_state,
+            updated_at, last_active_at, recorded_at
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+         ON CONFLICT(thread_id) DO UPDATE SET
+            title = excluded.title,
+            workspace_dir = excluded.workspace_dir,
+            thread_type = excluded.thread_type,
+            provider_type = excluded.provider_type,
+            agent_id = excluded.agent_id,
+            message_count = excluded.message_count,
+            last_message_preview = excluded.last_message_preview,
+            recent_run_id = excluded.recent_run_id,
+            active_run_id = excluded.active_run_id,
+            run_state = excluded.run_state,
+            updated_at = excluded.updated_at,
+            last_active_at = excluded.last_active_at,
+            recorded_at = excluded.recorded_at",
+        params![
+            thread_id,
+            title,
+            workspace_dir,
+            thread_type,
+            provider_type,
+            agent_id,
+            draft.message_count,
+            last_message_preview,
+            recent_run_id,
+            active_run_id,
+            run_state,
+            updated_at,
+            last_active_at,
+            recorded_at,
+        ],
+    )?;
+
+    Ok(RecentThreadRecord {
+        thread_id,
+        title,
+        workspace_dir,
+        thread_type,
+        provider_type,
+        agent_id,
+        message_count: draft.message_count,
+        last_message_preview,
+        recent_run_id,
+        active_run_id,
+        run_state,
+        updated_at,
+        last_active_at,
+        recorded_at,
+    })
+}
+
+fn remove_recent_thread_tx(conn: &Connection, thread_id: &str) -> GaryxDbResult<bool> {
+    let removed = conn.execute(
+        "DELETE FROM recent_threads WHERE thread_id = ?1",
+        params![thread_id],
+    )?;
+    Ok(removed > 0)
+}
+
+fn remove_task_projection_tx(conn: &Connection, thread_id: &str) -> GaryxDbResult<bool> {
+    let removed = conn.execute(
+        "DELETE FROM task_projection WHERE thread_id = ?1",
+        params![thread_id],
+    )?;
+    Ok(removed > 0)
+}
+
+fn replace_thread_meta_projection_tx(
+    tx: &Transaction<'_>,
+    draft: ThreadMetaProjectionDraft,
+    recorded_at: &str,
+) -> GaryxDbResult<()> {
+    let thread_id = normalize_thread_id(&draft.thread_id)?;
+    remove_thread_meta_projection_tx(tx, &thread_id)?;
+    let mut thread_meta = draft.thread_meta;
+    thread_meta.thread_id = thread_id.clone();
+    upsert_thread_meta(tx, &thread_meta, recorded_at)?;
+    for mut endpoint in draft.channel_endpoints {
+        endpoint.thread_id = Some(thread_id.clone());
+        upsert_thread_channel_endpoint(tx, &endpoint, recorded_at)?;
+    }
+    for mut route in draft.message_routes {
+        route.thread_id = thread_id.clone();
+        upsert_thread_message_route(tx, &route, recorded_at)?;
+    }
+    Ok(())
 }
 
 fn remove_thread_meta_projection_tx(conn: &Connection, thread_id: &str) -> GaryxDbResult<usize> {
@@ -4285,6 +4495,207 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .expect("journal_mode");
         assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+    }
+
+    fn sample_recent_draft(thread_id: &str) -> RecentThreadDraft {
+        RecentThreadDraft {
+            thread_id: thread_id.to_owned(),
+            title: "Sample".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 1,
+            last_message_preview: "hello".to_owned(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: None,
+            last_active_at: "2026-07-08T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn thread_record_write_read_list_delete_round_trip() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service =
+            GaryxDbService::open(dir.path().join("garyx-db.sqlite3")).expect("db opens");
+
+        service
+            .write_thread_record_with_projections(
+                "thread::alpha",
+                r#"{"thread_id":"thread::alpha"}"#,
+                Some("2026-07-08T00:00:00Z"),
+                None,
+            )
+            .expect("write record");
+        service
+            .write_thread_record_with_projections(
+                "meta::known_channel_endpoints",
+                r#"{"endpoints":[]}"#,
+                None,
+                None,
+            )
+            .expect("write meta record");
+
+        // Reads go through the dedicated reader connection.
+        assert_eq!(
+            service
+                .get_thread_record_body("thread::alpha")
+                .expect("get"),
+            Some(r#"{"thread_id":"thread::alpha"}"#.to_owned())
+        );
+        assert!(service.thread_record_exists("thread::alpha").expect("exists"));
+        assert!(
+            !service
+                .thread_record_exists("thread::missing")
+                .expect("exists missing")
+        );
+        assert_eq!(
+            service
+                .list_thread_record_keys(Some("thread::"))
+                .expect("list"),
+            vec!["thread::alpha".to_owned()]
+        );
+        assert_eq!(
+            service.list_thread_record_keys(None).expect("list all").len(),
+            2
+        );
+
+        // Overwrite replaces the body.
+        service
+            .write_thread_record_with_projections(
+                "thread::alpha",
+                r#"{"thread_id":"thread::alpha","label":"v2"}"#,
+                None,
+                None,
+            )
+            .expect("overwrite");
+        assert!(
+            service
+                .get_thread_record_body("thread::alpha")
+                .expect("get v2")
+                .expect("body")
+                .contains("v2")
+        );
+
+        assert!(
+            service
+                .delete_thread_record_with_projections("thread::alpha")
+                .expect("delete")
+        );
+        assert!(
+            !service
+                .delete_thread_record_with_projections("thread::alpha")
+                .expect("delete again")
+        );
+        assert_eq!(
+            service
+                .get_thread_record_body("thread::alpha")
+                .expect("get after delete"),
+            None
+        );
+    }
+
+    #[test]
+    fn thread_record_write_derives_projections_in_the_same_transaction() {
+        let service = GaryxDbService::memory().expect("memory db");
+        let thread_id = "thread::projected";
+
+        service
+            .write_thread_record_with_projections(
+                thread_id,
+                r#"{"thread_id":"thread::projected"}"#,
+                None,
+                Some(ThreadRecordProjections {
+                    thread_meta: None,
+                    task: None,
+                    recent: Some(sample_recent_draft(thread_id)),
+                }),
+            )
+            .expect("write with recent projection");
+        let recent = service
+            .list_recent_threads(10, 0)
+            .expect("list recent")
+            .into_iter()
+            .find(|row| row.thread_id == thread_id);
+        assert!(recent.is_some(), "recent projection row must exist");
+
+        // A rewrite with `recent: None` removes the projection row in the
+        // same transaction as the record update.
+        service
+            .write_thread_record_with_projections(
+                thread_id,
+                r#"{"thread_id":"thread::projected","hidden":true}"#,
+                None,
+                Some(ThreadRecordProjections {
+                    thread_meta: None,
+                    task: None,
+                    recent: None,
+                }),
+            )
+            .expect("write removing recent projection");
+        let recent = service
+            .list_recent_threads(10, 0)
+            .expect("list recent")
+            .into_iter()
+            .find(|row| row.thread_id == thread_id);
+        assert!(recent.is_none(), "recent projection row must be removed");
+        assert!(
+            service.thread_record_exists(thread_id).expect("exists"),
+            "record itself survives projection removal"
+        );
+
+        // Deleting the record clears every projection row with it.
+        service
+            .write_thread_record_with_projections(
+                thread_id,
+                r#"{"thread_id":"thread::projected"}"#,
+                None,
+                Some(ThreadRecordProjections {
+                    thread_meta: None,
+                    task: None,
+                    recent: Some(sample_recent_draft(thread_id)),
+                }),
+            )
+            .expect("write again");
+        service
+            .delete_thread_record_with_projections(thread_id)
+            .expect("delete");
+        assert!(
+            !service
+                .list_recent_threads(10, 0)
+                .expect("list recent")
+                .iter()
+                .any(|row| row.thread_id == thread_id),
+            "projection rows must not survive record deletion"
+        );
+    }
+
+    #[test]
+    fn thread_record_write_rolls_back_atomically_on_projection_failure() {
+        let service = GaryxDbService::memory().expect("memory db");
+        let thread_id = "thread::atomic";
+
+        // An invalid projection draft (blank run_state) fails inside the
+        // transaction; the record write must roll back with it.
+        let mut bad_recent = sample_recent_draft(thread_id);
+        bad_recent.run_state = "  ".to_owned();
+        let result = service.write_thread_record_with_projections(
+            thread_id,
+            r#"{"thread_id":"thread::atomic"}"#,
+            None,
+            Some(ThreadRecordProjections {
+                thread_meta: None,
+                task: None,
+                recent: Some(bad_recent),
+            }),
+        );
+        assert!(result.is_err(), "invalid projection draft must error");
+        assert!(
+            !service.thread_record_exists(thread_id).expect("exists"),
+            "record write must roll back when a projection write fails"
+        );
     }
 
     #[test]

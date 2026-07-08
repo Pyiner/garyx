@@ -272,6 +272,15 @@ impl GaryxDbService {
             "DELETE FROM task_projection WHERE thread_id = ?1",
             params![thread_id],
         )?;
+        self.note_task_projection_tombstone(&thread_id)?;
+        Ok(removed > 0)
+    }
+
+    /// While a task-projection backfill is running, record removals as
+    /// tombstones so the backfill cannot resurrect a concurrently deleted
+    /// row. Shared by the direct removal path and the composite
+    /// record-write transaction (#TASK-1864 batch 2).
+    pub(super) fn note_task_projection_tombstone(&self, thread_id: &str) -> GaryxDbResult<()> {
         let backfill_active = *self
             .task_projection_backfill_active
             .lock()
@@ -281,9 +290,9 @@ impl GaryxDbService {
                 .task_projection_tombstones
                 .lock()
                 .map_err(|_| GaryxDbError::LockPoisoned)?;
-            tombstones.insert(thread_id.clone());
+            tombstones.insert(thread_id.to_owned());
         }
-        Ok(removed > 0)
+        Ok(())
     }
 
     pub fn sync_task_projection_snapshot(
@@ -1029,7 +1038,7 @@ impl GaryxDbService {
     }
 }
 
-fn upsert_task_projection(
+pub(super) fn upsert_task_projection(
     tx: &Transaction<'_>,
     draft: &TaskProjectionDraft,
     projected_at: &str,
