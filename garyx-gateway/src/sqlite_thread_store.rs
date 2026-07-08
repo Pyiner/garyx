@@ -334,6 +334,11 @@ pub(crate) struct MirroredThreadStore {
     /// (review #TASK-1901: SQL v1→v2 with the mirror finishing v2→v1 would
     /// exceed the D8 "one write behind" rollback window).
     key_locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    stats: Arc<MirrorCompareStats>,
+}
+
+#[derive(Default)]
+struct MirrorCompareStats {
     reads: std::sync::atomic::AtomicU64,
     comparisons: std::sync::atomic::AtomicU64,
     divergences: std::sync::atomic::AtomicU64,
@@ -347,9 +352,7 @@ impl MirroredThreadStore {
             primary,
             mirror,
             key_locks: StdMutex::new(HashMap::new()),
-            reads: std::sync::atomic::AtomicU64::new(0),
-            comparisons: std::sync::atomic::AtomicU64::new(0),
-            divergences: std::sync::atomic::AtomicU64::new(0),
+            stats: Arc::new(MirrorCompareStats::default()),
         }
     }
 
@@ -378,32 +381,44 @@ impl MirroredThreadStore {
         value
     }
 
-    async fn sample_compare(&self, thread_id: &str, primary_value: &Value) {
+    /// Fire-and-forget sampled comparison: reads must never wait on the
+    /// file mirror (#TASK-1903 — synchronous mirror reads on the get path
+    /// stretched request latency under load).
+    fn sample_compare_in_background(&self, thread_id: &str, primary_value: &Value) {
         let read_index = self
+            .stats
             .reads
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if !read_index.is_multiple_of(MIRROR_COMPARE_SAMPLE_EVERY) {
             return;
         }
-        let Some(mirror_value) = self.mirror.get(thread_id).await else {
-            // Absent mirror rows are expected until the first rewrite of a
-            // record that predates the mirror; not a divergence signal.
-            return;
-        };
-        self.comparisons
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if Self::comparable(primary_value.clone()) != Self::comparable(mirror_value) {
-            let divergences = self
-                .divergences
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                + 1;
-            tracing::debug!(
-                thread_id,
-                divergences,
-                comparisons = self.comparisons.load(std::sync::atomic::Ordering::Relaxed),
-                "thread record mirror divergence detected"
-            );
-        }
+        let mirror = Arc::clone(&self.mirror);
+        let stats = Arc::clone(&self.stats);
+        let thread_id = thread_id.to_owned();
+        let primary_value = primary_value.clone();
+        tokio::spawn(async move {
+            let Some(mirror_value) = mirror.get(&thread_id).await else {
+                // Absent mirror rows are expected until the first rewrite
+                // of a record that predates the mirror; not a divergence
+                // signal.
+                return;
+            };
+            stats
+                .comparisons
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if Self::comparable(primary_value) != Self::comparable(mirror_value) {
+                let divergences = stats
+                    .divergences
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1;
+                tracing::debug!(
+                    thread_id = %thread_id,
+                    divergences,
+                    comparisons = stats.comparisons.load(std::sync::atomic::Ordering::Relaxed),
+                    "thread record mirror divergence detected"
+                );
+            }
+        });
     }
 }
 
@@ -411,7 +426,7 @@ impl MirroredThreadStore {
 impl ThreadStore for MirroredThreadStore {
     async fn get(&self, thread_id: &str) -> Option<Value> {
         let value = self.primary.get(thread_id).await?;
-        self.sample_compare(thread_id, &value).await;
+        self.sample_compare_in_background(thread_id, &value);
         Some(value)
     }
 

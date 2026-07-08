@@ -586,7 +586,7 @@ impl GaryxDbService {
     }
 
     pub fn list_pinned_threads(&self) -> GaryxDbResult<Vec<PinnedThreadRecord>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT thread_id, pinned_at FROM thread_pins ORDER BY pinned_at DESC, thread_id ASC",
         )?;
@@ -644,7 +644,7 @@ impl GaryxDbService {
 
     pub fn is_thread_archived(&self, thread_id: &str) -> GaryxDbResult<bool> {
         let thread_id = normalize_thread_id(thread_id)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let archived: Option<String> = conn
             .query_row(
                 "SELECT archived_at FROM archived_threads WHERE thread_id = ?1",
@@ -656,7 +656,7 @@ impl GaryxDbService {
     }
 
     pub fn list_workspaces(&self) -> GaryxDbResult<Vec<WorkspaceRecord>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT name, path, created_at, updated_at
              FROM workspaces
@@ -672,7 +672,7 @@ impl GaryxDbService {
     }
 
     pub fn count_workspace_rows(&self) -> GaryxDbResult<usize> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM workspaces", [], |row| row.get(0))?;
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
     }
@@ -826,12 +826,12 @@ impl GaryxDbService {
 
     pub fn get_capsule(&self, id: &str) -> GaryxDbResult<Option<CapsuleRecord>> {
         let id = normalize_capsule_id(id)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         capsule_by_id(&conn, &id)
     }
 
     pub fn list_capsules(&self) -> GaryxDbResult<Vec<CapsuleRecord>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, title, description, thread_id, run_id, agent_id, provider_type,
                     html_sha256, byte_size, revision, created_at, updated_at
@@ -848,7 +848,7 @@ impl GaryxDbService {
 
     pub fn list_capsules_for_thread(&self, thread_id: &str) -> GaryxDbResult<Vec<CapsuleRecord>> {
         let thread_id = normalize_thread_id(thread_id)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, title, description, thread_id, run_id, agent_id, provider_type,
                     html_sha256, byte_size, revision, created_at, updated_at
@@ -876,7 +876,7 @@ impl GaryxDbService {
         limit: usize,
         offset: usize,
     ) -> GaryxDbResult<Vec<RecentThreadRecord>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let offset = i64::try_from(offset).unwrap_or(i64::MAX);
         let mut stmt = conn.prepare(
@@ -913,7 +913,7 @@ impl GaryxDbService {
     }
 
     pub fn count_recent_threads(&self) -> GaryxDbResult<usize> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let count: i64 =
             conn.query_row("SELECT COUNT(*) FROM recent_threads", [], |row| row.get(0))?;
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
@@ -927,7 +927,7 @@ impl GaryxDbService {
     ) -> GaryxDbResult<bool> {
         let projection_name = normalize_required("projection_name", projection_name)?;
         let source_row_count = i64::try_from(source_row_count).unwrap_or(i64::MAX);
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let row = conn
             .query_row(
                 "SELECT projection_version, source_row_count
@@ -1152,7 +1152,7 @@ impl GaryxDbService {
     }
 
     pub fn count_thread_meta_projection_rows(&self) -> GaryxDbResult<usize> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let count: i64 = conn.query_row(
             "SELECT
                 (SELECT COUNT(*) FROM thread_meta) +
@@ -1165,14 +1165,14 @@ impl GaryxDbService {
     }
 
     pub fn count_thread_meta_rows(&self) -> GaryxDbResult<usize> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let count: i64 =
             conn.query_row("SELECT COUNT(*) FROM thread_meta", [], |row| row.get(0))?;
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
     }
 
     pub fn thread_meta_projection_needs_backfill(&self) -> GaryxDbResult<bool> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let (total, current): (i64, i64) = conn.query_row(
             "SELECT COUNT(*),
                     SUM(CASE WHEN projection_version = ?1 THEN 1 ELSE 0 END)
@@ -1184,7 +1184,7 @@ impl GaryxDbService {
     }
 
     pub fn count_thread_channel_endpoints(&self) -> GaryxDbResult<usize> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let count: i64 =
             conn.query_row("SELECT COUNT(*) FROM thread_channel_endpoints", [], |row| {
                 row.get(0)
@@ -1193,7 +1193,7 @@ impl GaryxDbService {
     }
 
     pub fn list_thread_channel_endpoints(&self) -> GaryxDbResult<Vec<KnownChannelEndpoint>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT endpoint_key, channel, account_id, binding_key, chat_id,
                     delivery_target_type, delivery_target_id, display_label,
@@ -1228,7 +1228,7 @@ impl GaryxDbService {
     }
 
     pub fn list_thread_message_routes(&self) -> GaryxDbResult<Vec<ThreadMessageRouteRecord>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT thread_id, channel, account_id, chat_id, thread_binding_key,
                     message_id, projected_at
@@ -1259,7 +1259,7 @@ impl GaryxDbService {
         include_hidden: bool,
         prefix: Option<&str>,
     ) -> GaryxDbResult<usize> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let count: i64 = match prefix.map(str::trim).filter(|value| !value.is_empty()) {
             Some(prefix) if include_hidden => conn.query_row(
                 "SELECT COUNT(*)
@@ -1295,7 +1295,7 @@ impl GaryxDbService {
         include_hidden: bool,
         prefix: Option<&str>,
     ) -> GaryxDbResult<Vec<ThreadMetaRecord>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let offset = i64::try_from(offset).unwrap_or(i64::MAX);
         let sql = "SELECT thread_id, workspace_dir, thread_type, thread_label, agent_id,
@@ -1352,7 +1352,7 @@ impl GaryxDbService {
     }
 
     pub fn list_thread_meta(&self) -> GaryxDbResult<Vec<ThreadMetaRecord>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT thread_id, workspace_dir, thread_type, thread_label, agent_id,
                     provider_type, created_at, updated_at, message_count,
@@ -1634,7 +1634,7 @@ impl GaryxDbService {
         let mode = mode.map(normalize_automation_thread_run_mode).transpose()?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let offset = i64::try_from(offset).unwrap_or(i64::MAX);
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let sql = if mode.is_some() {
             "SELECT automation_id, run_id, thread_id, workspace_dir, agent_id,
                     automation_label_snapshot, mode, status, started_at, finished_at, recorded_at
@@ -1679,7 +1679,7 @@ impl GaryxDbService {
     ) -> GaryxDbResult<usize> {
         let automation_id = normalize_required("automation_id", automation_id)?;
         let mode = mode.map(normalize_automation_thread_run_mode).transpose()?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let count: i64 = if let Some(mode) = mode {
             conn.query_row(
                 "SELECT COUNT(*) FROM automation_thread_runs WHERE automation_id = ?1 AND mode = ?2",
@@ -1761,7 +1761,7 @@ impl GaryxDbService {
         workflow_run_id: &str,
     ) -> GaryxDbResult<Option<WorkflowRunRecord>> {
         let workflow_run_id = normalize_required("workflowRunId", workflow_run_id)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         workflow_run_by_id(&conn, &workflow_run_id)
     }
 
@@ -1806,7 +1806,7 @@ impl GaryxDbService {
         let parent_thread_id = parent_thread_id.map(normalize_thread_id).transpose()?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let offset = i64::try_from(offset).unwrap_or(i64::MAX);
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let sql = if parent_thread_id.is_some() {
             "SELECT workflow_id, task_id, task_thread_id, workflow_definition_id,
                     workflow_definition_version, workflow_definition_snapshot_json, input_json,
@@ -2168,7 +2168,7 @@ impl GaryxDbService {
         let workflow_id = normalize_required("workflow_id", workflow_id)?;
         let workflow_child_run_id =
             normalize_required("workflow_child_run_id", workflow_child_run_id)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         workflow_child_run_by_id(&conn, &workflow_id, &workflow_child_run_id)
     }
 
@@ -2177,7 +2177,7 @@ impl GaryxDbService {
         workflow_id: &str,
     ) -> GaryxDbResult<Vec<WorkflowChildRunRecord>> {
         let workflow_id = normalize_required("workflow_id", workflow_id)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         workflow_child_runs_for_workflow(&conn, &workflow_id)
     }
 
@@ -2236,7 +2236,7 @@ impl GaryxDbService {
         let workflow_id = normalize_required("workflow_id", workflow_id)?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let after_event_seq = i64::try_from(after_event_seq).unwrap_or(i64::MAX);
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         workflow_events_after_for_workflow(&conn, &workflow_id, after_event_seq, limit)
     }
 
@@ -2246,7 +2246,7 @@ impl GaryxDbService {
     ) -> GaryxDbResult<Vec<InterruptedWorkflowTaskReference>> {
         let created_before_or_at =
             normalize_required("created_before_or_at", created_before_or_at)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT workflow_id, task_thread_id
              FROM workflow_runs
@@ -2797,7 +2797,7 @@ impl GaryxDbService {
         let limit = limit.clamp(1, 500) as i64;
         let from = normalize_optional(from);
         let to = normalize_optional(to);
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT dream_id, title, summary, first_message_at, last_message_at,
                     updated_at, source, confidence, message_count, span_count
@@ -2832,7 +2832,7 @@ impl GaryxDbService {
 
     pub fn get_dream_topic(&self, dream_id: &str) -> GaryxDbResult<Option<DreamTopicRecord>> {
         let dream_id = normalize_required("dream_id", dream_id)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut topic = conn
             .query_row(
                 "SELECT dream_id, title, summary, first_message_at, last_message_at,
@@ -2903,7 +2903,7 @@ impl GaryxDbService {
         if let Some(from) = from {
             bind_values.push(from);
         }
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(bind_values.iter()), |row| {
             Ok(DreamTopicRecord {

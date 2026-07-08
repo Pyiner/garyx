@@ -221,14 +221,14 @@ impl GaryxDbService {
     }
 
     pub fn count_task_projection(&self) -> GaryxDbResult<usize> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let count: i64 =
             conn.query_row("SELECT COUNT(*) FROM task_projection", [], |row| row.get(0))?;
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
     }
 
     pub fn task_projection_needs_backfill(&self) -> GaryxDbResult<bool> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let state = conn
             .query_row(
                 "SELECT projection_version, source_row_count
@@ -330,7 +330,7 @@ impl GaryxDbService {
     }
 
     pub fn task_index_rows(&self) -> GaryxDbResult<Vec<(u64, String)>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "WITH ranked AS (
                 SELECT number, thread_id,
@@ -359,7 +359,7 @@ impl GaryxDbService {
 
     pub fn thread_id_for_number(&self, number: u64) -> GaryxDbResult<Option<String>> {
         let number = i64::try_from(number).unwrap_or(i64::MAX);
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         conn.query_row(
             "SELECT thread_id
              FROM task_projection
@@ -375,7 +375,7 @@ impl GaryxDbService {
 
     pub fn has_running_subtask_targeting(&self, thread_id: &str) -> GaryxDbResult<bool> {
         let thread_id = normalize_thread_id(thread_id)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let found: Option<i64> = conn
             .query_row(
                 "SELECT 1
@@ -393,7 +393,7 @@ impl GaryxDbService {
     }
 
     pub fn max_task_projection_number(&self) -> GaryxDbResult<Option<u64>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let value: Option<i64> = conn.query_row(
             "SELECT MAX(number)
              FROM task_projection
@@ -405,7 +405,7 @@ impl GaryxDbService {
     }
 
     pub fn list_task_projection_thread_ids(&self) -> GaryxDbResult<Vec<String>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt =
             conn.prepare("SELECT thread_id FROM task_projection ORDER BY thread_id ASC")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
@@ -469,7 +469,7 @@ impl GaryxDbService {
              LIMIT ? OFFSET ?"
         );
 
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let duplicate_count: i64 = conn.query_row(
             &duplicate_count_sql,
             params_from_iter(bind_values.iter()),
@@ -583,7 +583,7 @@ impl GaryxDbService {
              ORDER BY updated_at DESC, thread_id ASC"
         );
 
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let total: i64 =
             conn.query_row(&count_sql, params_from_iter(bind_values.iter()), |row| {
                 row.get(0)
@@ -607,7 +607,7 @@ impl GaryxDbService {
         _filter: &TaskListFilter,
     ) -> GaryxDbResult<TaskForestPage> {
         let anchor_thread_id = normalize_thread_id(anchor_thread_id)?;
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let anchor_is_task = conn.query_row(
             "SELECT EXISTS(
                 SELECT 1
@@ -838,7 +838,7 @@ impl GaryxDbService {
              ORDER BY reached.root_rank ASC, reached.depth ASC, deduped.number ASC, deduped.thread_id ASC"
         );
 
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut skipped_pinned_thread_ids = Vec::new();
         let mut skipped_stmt = conn.prepare(skipped_sql)?;
         let skipped_rows = skipped_stmt
@@ -1024,7 +1024,7 @@ impl GaryxDbService {
         sql: &str,
         thread_id: &str,
     ) -> GaryxDbResult<Vec<TaskSummary>> {
-        let conn = self.conn()?;
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(sql)?;
         let rows = stmt.query_map(
             params![thread_id, CURRENT_TASK_PROJECTION_VERSION],
