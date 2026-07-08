@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -11,21 +10,17 @@ use garyx_router::tasks::{
 use garyx_router::{ThreadStore, is_thread_key};
 use serde::Serialize;
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::warn;
 
-use crate::garyx_db::{GaryxDbService, TASK_PROJECTION_NAME, TaskProjectionDraft};
+use crate::garyx_db::{GaryxDbService, TaskProjectionDraft};
 
 pub(crate) struct SqlTaskProjectionReader {
-    thread_store: Arc<dyn ThreadStore>,
     garyx_db: Arc<GaryxDbService>,
 }
 
 impl SqlTaskProjectionReader {
-    pub(crate) fn new(thread_store: Arc<dyn ThreadStore>, garyx_db: Arc<GaryxDbService>) -> Self {
-        Self {
-            thread_store,
-            garyx_db,
-        }
+    pub(crate) fn new(garyx_db: Arc<GaryxDbService>) -> Self {
+        Self { garyx_db }
     }
 }
 
@@ -33,10 +28,8 @@ pub(crate) fn register_gateway_task_projection_reader(
     thread_store: &Arc<dyn ThreadStore>,
     garyx_db: &Arc<GaryxDbService>,
 ) -> Arc<dyn TaskProjectionReader> {
-    let reader: Arc<dyn TaskProjectionReader> = Arc::new(SqlTaskProjectionReader::new(
-        thread_store.clone(),
-        garyx_db.clone(),
-    ));
+    let reader: Arc<dyn TaskProjectionReader> =
+        Arc::new(SqlTaskProjectionReader::new(garyx_db.clone()));
     register_task_projection_reader(thread_store, reader.clone());
     reader
 }
@@ -44,21 +37,13 @@ pub(crate) fn register_gateway_task_projection_reader(
 #[async_trait]
 impl TaskProjectionReader for SqlTaskProjectionReader {
     async fn is_current(&self) -> bool {
-        match self.garyx_db.task_projection_is_current() {
-            Ok(current) => current,
-            Err(error) => {
-                warn!(error = %error, "failed to check task projection current state");
-                false
-            }
-        }
+        // Projections derive in the same transaction as every record write
+        // (#TASK-1864): the table is structurally current by construction.
+        true
     }
 
     async fn ensure_current(&self) -> bool {
-        if self.is_current().await {
-            return true;
-        }
-        backfill_task_projection_if_incomplete(&self.thread_store, &self.garyx_db).await;
-        self.is_current().await
+        true
     }
 
     async fn task_index_rows(&self) -> Vec<(u64, String)> {
@@ -181,159 +166,6 @@ fn task_projection_draft_from_task(
         source_updated_at: task.updated_at.to_rfc3339_opts(SecondsFormat::Millis, true),
         source_events_len: task.events.len(),
     })
-}
-
-pub(crate) async fn backfill_task_projection_if_incomplete(
-    thread_store: &Arc<dyn ThreadStore>,
-    garyx_db: &GaryxDbService,
-) -> usize {
-    match garyx_db.task_projection_needs_backfill() {
-        Ok(false) => return 0,
-        Ok(true) => {}
-        Err(error) => {
-            warn!(error = %error, "failed to check task projection before backfill");
-            return 0;
-        }
-    }
-
-    let guard = garyx_db.lock_task_projection_backfill().await;
-    match garyx_db.task_projection_needs_backfill() {
-        Ok(false) => return 0,
-        Ok(true) => {}
-        Err(error) => {
-            warn!(error = %error, "failed to recheck task projection before backfill");
-            return 0;
-        }
-    }
-    let count = rebuild_task_projection_snapshot_locked(thread_store, garyx_db).await;
-    drop(guard);
-    let reconciled = reconcile_task_projection(thread_store, garyx_db).await;
-    debug!(
-        task_projection_backfill_count = count,
-        task_projection_reconcile_count = reconciled,
-        "task projection backfill completed"
-    );
-    count
-}
-
-/// Forced projection rebuild for repair callers — e.g. a restart wake whose
-/// task target exists on disk but is missing from the projection (the
-/// needs-backfill gate treats any non-empty current-version projection as
-/// complete, so a lost row is invisible to `_if_incomplete`). Serialized by
-/// the same backfill lock; this is the contract's sanctioned
-/// repair/migration walk, never a steady-state path.
-pub(crate) async fn force_task_projection_backfill(
-    thread_store: &Arc<dyn ThreadStore>,
-    garyx_db: &GaryxDbService,
-) -> usize {
-    let guard = garyx_db.lock_task_projection_backfill().await;
-    let count = rebuild_task_projection_snapshot_locked(thread_store, garyx_db).await;
-    drop(guard);
-    let reconciled = reconcile_task_projection(thread_store, garyx_db).await;
-    debug!(
-        task_projection_backfill_count = count,
-        task_projection_reconcile_count = reconciled,
-        "forced task projection backfill completed"
-    );
-    count
-}
-
-/// Rebuild the whole projection snapshot from the thread store. Caller must
-/// hold the backfill lock.
-async fn rebuild_task_projection_snapshot_locked(
-    thread_store: &Arc<dyn ThreadStore>,
-    garyx_db: &GaryxDbService,
-) -> usize {
-    let active_backfill = match garyx_db.mark_task_projection_backfill_active() {
-        Ok(active) => active,
-        Err(error) => {
-            warn!(error = %error, "failed to mark task projection backfill active");
-            return 0;
-        }
-    };
-
-    let thread_ids = thread_store.list_keys(Some("thread::")).await;
-    let mut drafts = Vec::new();
-    for thread_id in thread_ids {
-        let Some(data) = thread_store.get(&thread_id).await else {
-            continue;
-        };
-        if let Some(draft) = task_projection_draft_from_thread_data(&thread_id, &data) {
-            drafts.push(draft);
-        }
-    }
-    let count = drafts.len();
-    if let Err(error) = garyx_db.sync_task_projection_snapshot(drafts) {
-        warn!(error = %error, "failed to sync task projection snapshot");
-        return 0;
-    }
-    if let Err(error) = garyx_db.record_projection_state(
-        TASK_PROJECTION_NAME,
-        crate::garyx_db::CURRENT_TASK_PROJECTION_VERSION,
-        count,
-    ) {
-        warn!(error = %error, "failed to record task projection state");
-        return 0;
-    }
-    drop(active_backfill);
-    count
-}
-
-pub(crate) async fn reconcile_task_projection(
-    thread_store: &Arc<dyn ThreadStore>,
-    garyx_db: &GaryxDbService,
-) -> usize {
-    let existing_thread_ids = match garyx_db.list_task_projection_thread_ids() {
-        Ok(thread_ids) => thread_ids,
-        Err(error) => {
-            warn!(error = %error, "failed to list task projection rows before reconcile");
-            return 0;
-        }
-    };
-
-    let mut candidate_thread_ids = existing_thread_ids.into_iter().collect::<BTreeSet<_>>();
-    match garyx_db.list_recent_threads(usize::MAX, 0) {
-        Ok(records) => {
-            for record in records {
-                let projection_is_active = record
-                    .active_run_id
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|value| !value.is_empty())
-                    || record.run_state == "running";
-                if projection_is_active {
-                    candidate_thread_ids.insert(record.thread_id);
-                }
-            }
-        }
-        Err(error) => {
-            warn!(error = %error, "failed to list recent thread projection rows before task projection reconcile");
-        }
-    }
-
-    let mut reconciled = 0usize;
-    for thread_id in candidate_thread_ids {
-        let draft = thread_store
-            .get(&thread_id)
-            .await
-            .and_then(|data| task_projection_draft_from_thread_data(&thread_id, &data));
-        if let Some(draft) = draft {
-            if let Err(error) = garyx_db.replace_task_projection(draft) {
-                warn!(thread_id, error = %error, "failed to reconcile task projection row");
-            } else {
-                reconciled += 1;
-            }
-            continue;
-        }
-        match garyx_db.remove_task_projection(&thread_id) {
-            Ok(true) => reconciled += 1,
-            Ok(false) => {}
-            Err(error) => {
-                warn!(thread_id, error = %error, "failed to prune stale task projection row during reconcile");
-            }
-        }
-    }
-    reconciled
 }
 
 fn optional_canonical_json<T: Serialize>(value: Option<&T>) -> Option<Option<String>> {
@@ -477,37 +309,5 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn task_projection_reconcile_uses_sql_candidates_without_listing_all_threads() {
-        let store = Arc::new(CountingThreadStore::new());
-        let thread_store: Arc<dyn ThreadStore> = store.clone();
-        let db = GaryxDbService::memory().expect("db opens");
 
-        let active_thread = "thread::active-task";
-        store
-            .insert_task(
-                active_thread,
-                test_task(12, TaskStatus::InProgress, "2026-01-01T00:00:01.000Z"),
-            )
-            .await;
-        db.upsert_recent_thread(active_recent_thread(active_thread))
-            .expect("seed active recent row");
-
-        let stale_task = test_task(13, TaskStatus::Todo, "2026-01-01T00:00:01.000Z");
-        db.replace_task_projection(
-            task_projection_draft_from_task("thread::stale-task", &stale_task)
-                .expect("stale projection draft"),
-        )
-        .expect("seed stale task projection");
-
-        let reconciled = reconcile_task_projection(&thread_store, &db).await;
-
-        assert_eq!(reconciled, 2);
-        assert_eq!(store.list_keys_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(
-            db.thread_id_for_number(12).expect("active lookup"),
-            Some(active_thread.to_owned())
-        );
-        assert_eq!(db.thread_id_for_number(13).expect("stale lookup"), None);
-    }
 }

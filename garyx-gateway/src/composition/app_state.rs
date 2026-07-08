@@ -30,16 +30,9 @@ use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::provider_auth::ClaudeAuthSessionStore;
-use crate::recent_thread_projection::{
-    BridgeActiveRunProbe, backfill_recent_thread_projection_if_incomplete,
-    prune_excluded_recent_thread_projection, reconcile_active_recent_thread_projection,
-};
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
-use crate::task_projection::{backfill_task_projection_if_incomplete, reconcile_task_projection};
-use crate::thread_meta_projection::{
-    backfill_thread_meta_projection_if_incomplete, list_channel_endpoints_with_projection_backfill,
-};
+
 use crate::wikis::WikiStore;
 use crate::workflows::WorkflowScheduler;
 
@@ -212,10 +205,8 @@ impl AppState {
         }
 
         let started = Instant::now();
-        let transcript_store = self.threads.history.transcript_store();
-        let endpoints = list_channel_endpoints_with_projection_backfill(
+        let endpoints = crate::thread_meta_projection::list_channel_endpoints_with_registry(
             &self.threads.thread_store,
-            &transcript_store,
             &self.ops.garyx_db,
         )
         .await;
@@ -248,49 +239,26 @@ impl AppState {
         let workflow_reconcile_cutoff = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         tokio::spawn(async move {
             let started = Instant::now();
-            // Startup reconciliation owns the full thread-index rebuild (it
-            // stats every known thread on disk). Request paths only do
-            // incremental purges; this pass repairs any historically stale
-            // index entries once per gateway start.
+            // The router's endpoint routing map still needs its in-memory
+            // rebuild; the former projection backfill/prune/reconcile chain
+            // is retired (#TASK-1864 closing batch) — projections are
+            // derived inside the same transaction as every record write,
+            // so a repair pass has nothing left to repair.
             let thread_index_stats = {
                 let mut router = state.threads.router.lock().await;
                 router.rebuild_thread_indexes().await
             };
-            let transcript_store = state.threads.history.transcript_store();
-            let active_run_probe =
-                BridgeActiveRunProbe::new(Arc::downgrade(&state.integration.bridge));
-            let recent_threads = backfill_recent_thread_projection_if_incomplete(
-                &state.threads.thread_store,
-                &transcript_store,
-                &state.ops.garyx_db,
-                &active_run_probe,
-            )
-            .await;
-            let pruned_recent_threads = prune_excluded_recent_thread_projection(
-                &state.threads.thread_store,
-                &state.ops.garyx_db,
-            )
-            .await;
-            let reconciled_recent_threads = reconcile_active_recent_thread_projection(
-                &state.threads.thread_store,
-                &transcript_store,
-                &state.ops.garyx_db,
-                &active_run_probe,
-            )
-            .await;
-            let thread_meta_projection = backfill_thread_meta_projection_if_incomplete(
-                &state.threads.thread_store,
-                &transcript_store,
-                &state.ops.garyx_db,
-            )
-            .await;
-            let task_projection = backfill_task_projection_if_incomplete(
-                &state.threads.thread_store,
-                &state.ops.garyx_db,
-            )
-            .await;
-            let reconciled_task_projection =
-                reconcile_task_projection(&state.threads.thread_store, &state.ops.garyx_db).await;
+            // Crash recovery: settle orphaned running rows left by the
+            // previous process in one SQL pass (the bridge run index is
+            // empty at boot, so every projected active run is stale).
+            let cleared_orphan_runs = state
+                .ops
+                .garyx_db
+                .clear_stale_active_runs()
+                .unwrap_or_else(|error| {
+                    warn!(error = %error, "failed to clear stale active runs at startup");
+                    0
+                });
             let reconciled_workflows = crate::workflows::reconcile_interrupted_workflows(
                 &state,
                 &workflow_reconcile_cutoff,
@@ -303,16 +271,7 @@ impl AppState {
                 thread_count = threads,
                 endpoint_count = endpoints,
                 thread_index_endpoint_bindings = thread_index_stats.endpoint_bindings,
-                recent_thread_backfill_count = recent_threads,
-                recent_thread_prune_count = pruned_recent_threads,
-                recent_thread_active_reconcile_count = reconciled_recent_threads,
-                thread_meta_projection_threads = thread_meta_projection.threads_scanned,
-                thread_meta_projection_endpoints = thread_meta_projection.channel_endpoints,
-                thread_meta_projection_message_routes = thread_meta_projection.message_routes,
-                thread_meta_projection_delivery_contexts =
-                    thread_meta_projection.last_delivery_contexts,
-                task_projection_backfill_count = task_projection,
-                task_projection_reconcile_count = reconciled_task_projection,
+                cleared_orphan_runs,
                 workflow_reconcile_count = reconciled_workflows,
                 "gateway sync snapshots warmed"
             );

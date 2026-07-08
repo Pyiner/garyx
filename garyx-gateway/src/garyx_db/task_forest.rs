@@ -193,33 +193,7 @@ impl PinnedTaskForestRow {
     }
 }
 
-pub(crate) struct TaskProjectionBackfillActivity<'a> {
-    db: &'a GaryxDbService,
-}
-
-impl Drop for TaskProjectionBackfillActivity<'_> {
-    fn drop(&mut self) {
-        if let Ok(mut active) = self.db.task_projection_backfill_active.lock() {
-            *active = false;
-        }
-    }
-}
 impl GaryxDbService {
-    pub(crate) async fn lock_task_projection_backfill(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.task_projection_backfill_lock.lock().await
-    }
-
-    pub(crate) fn mark_task_projection_backfill_active(
-        &self,
-    ) -> GaryxDbResult<TaskProjectionBackfillActivity<'_>> {
-        let mut active = self
-            .task_projection_backfill_active
-            .lock()
-            .map_err(|_| GaryxDbError::LockPoisoned)?;
-        *active = true;
-        Ok(TaskProjectionBackfillActivity { db: self })
-    }
-
     pub fn count_task_projection(&self) -> GaryxDbResult<usize> {
         let conn = self.read_conn()?;
         let count: i64 =
@@ -272,62 +246,10 @@ impl GaryxDbService {
             "DELETE FROM task_projection WHERE thread_id = ?1",
             params![thread_id],
         )?;
-        self.note_task_projection_tombstone(&thread_id)?;
         Ok(removed > 0)
     }
 
-    /// While a task-projection backfill is running, record removals as
-    /// tombstones so the backfill cannot resurrect a concurrently deleted
-    /// row. Shared by the direct removal path and the composite
-    /// record-write transaction (#TASK-1864 batch 2).
-    pub(super) fn note_task_projection_tombstone(&self, thread_id: &str) -> GaryxDbResult<()> {
-        let backfill_active = *self
-            .task_projection_backfill_active
-            .lock()
-            .map_err(|_| GaryxDbError::LockPoisoned)?;
-        if backfill_active {
-            let mut tombstones = self
-                .task_projection_tombstones
-                .lock()
-                .map_err(|_| GaryxDbError::LockPoisoned)?;
-            tombstones.insert(thread_id.to_owned());
-        }
-        Ok(())
-    }
 
-    pub fn sync_task_projection_snapshot(
-        &self,
-        drafts: Vec<TaskProjectionDraft>,
-    ) -> GaryxDbResult<()> {
-        let projected_at = now_string();
-        let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
-        for mut draft in drafts {
-            draft.thread_id = normalize_thread_id(&draft.thread_id)?;
-            upsert_task_projection(&tx, &draft, &projected_at)?;
-        }
-        tx.execute(
-            "DELETE FROM task_projection WHERE projection_version <> ?1",
-            params![CURRENT_TASK_PROJECTION_VERSION],
-        )?;
-        let tombstones = {
-            let mut tombstones = self
-                .task_projection_tombstones
-                .lock()
-                .map_err(|_| GaryxDbError::LockPoisoned)?;
-            let values = tombstones.iter().cloned().collect::<Vec<_>>();
-            tombstones.clear();
-            values
-        };
-        for thread_id in tombstones {
-            tx.execute(
-                "DELETE FROM task_projection WHERE thread_id = ?1",
-                params![thread_id],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
 
     pub fn task_index_rows(&self) -> GaryxDbResult<Vec<(u64, String)>> {
         let conn = self.read_conn()?;

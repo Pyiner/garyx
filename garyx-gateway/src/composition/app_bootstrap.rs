@@ -42,9 +42,7 @@ use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::provider_auth::ClaudeAuthSessionStore;
-use crate::recent_thread_projection::{
-    ActiveRunProbe, BridgeActiveRunProbe, RecentThreadProjectingStore,
-};
+use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe};
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 use crate::task_projection::register_gateway_task_projection_reader;
@@ -83,7 +81,7 @@ fn load_store_or_warn<T>(
 /// Builder that owns gateway dependency injection and emits a fully wired [`AppState`].
 pub struct AppStateBuilder {
     config: GaryxConfig,
-    thread_store: Arc<dyn ThreadStore>,
+    thread_store: Option<Arc<dyn ThreadStore>>,
     thread_history: Arc<ThreadHistoryRepository>,
     message_ledger: Arc<MessageLedgerStore>,
     bridge: Arc<MultiProviderBridge>,
@@ -125,9 +123,19 @@ impl AppStateBuilder {
         // it after running discovery. Tests using `AppStateBuilder`
         // directly keep the empty default.
         let channel_plugin_manager = Arc::new(Mutex::new(ChannelPluginManager::new()));
-        let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let garyx_db_default = Arc::new(
+            GaryxDbService::memory()
+                .unwrap_or_else(|error| panic!("failed to open garyx database: {error}")),
+        );
+        // The default store is built in `build()` — the real
+        // SqliteThreadStore over the in-memory garyx database, wired to
+        // the resolved active-run probe (#TASK-1864 closing batch): tests
+        // run on the same truth-table + same-transaction-projection
+        // semantics as production, and `with_active_run_probe` still
+        // applies. This history handle is a placeholder carrying the
+        // transcript store; `build()` rebuilds it over the final store.
         let thread_history = Arc::new(ThreadHistoryRepository::new(
-            thread_store.clone(),
+            Arc::new(InMemoryThreadStore::new()),
             Arc::new(ThreadTranscriptStore::memory()),
         ));
         let skills = Arc::new(SkillsService::new(
@@ -136,7 +144,7 @@ impl AppStateBuilder {
         ));
         Self {
             config,
-            thread_store,
+            thread_store: None,
             thread_history,
             message_ledger: Arc::new(MessageLedgerStore::memory()),
             bridge: Arc::new(MultiProviderBridge::new()),
@@ -156,10 +164,7 @@ impl AppStateBuilder {
                 AppDbService::memory()
                     .unwrap_or_else(|error| panic!("failed to open app database: {error}")),
             ),
-            garyx_db: Arc::new(
-                GaryxDbService::memory()
-                    .unwrap_or_else(|error| panic!("failed to open garyx database: {error}")),
-            ),
+            garyx_db: garyx_db_default,
             active_run_probe: None,
             provider_runtime_ready: true,
         }
@@ -212,11 +217,11 @@ impl AppStateBuilder {
     }
 
     pub fn with_thread_store(mut self, thread_store: Arc<dyn ThreadStore>) -> Self {
-        self.thread_store = thread_store;
         self.thread_history = Arc::new(ThreadHistoryRepository::new(
-            self.thread_store.clone(),
+            thread_store.clone(),
             self.thread_history.transcript_store(),
         ));
+        self.thread_store = Some(thread_store);
         self
     }
 
@@ -349,37 +354,18 @@ impl AppStateBuilder {
             .active_run_probe
             .clone()
             .unwrap_or_else(|| Arc::new(BridgeActiveRunProbe::new(Arc::downgrade(&self.bridge))));
-        let thread_store: Arc<dyn ThreadStore> =
-            match crate::sqlite_thread_store::resolve_thread_store_backend(&self.config) {
-                crate::sqlite_thread_store::ThreadStoreBackend::File => {
-                    // While the file archive is the live truth, any prior
-                    // sqlite import snapshot is stale: invalidate the
-                    // migration state so the next switch to sqlite
-                    // re-imports (review #TASK-1901 — a rollback write
-                    // under an unchanged key count must not be skipped).
-                    if let Err(error) = self
-                        .garyx_db
-                        .clear_projection_state(crate::sqlite_thread_store::THREAD_RECORDS_IMPORT_NAME)
-                    {
-                        warn!(error = %error, "failed to invalidate sqlite thread-record import state");
-                    }
-                    Arc::new(RecentThreadProjectingStore::new(
-                        self.thread_store.clone(),
-                        self.garyx_db.clone(),
-                        self.thread_history.transcript_store(),
-                        active_run_probe,
-                    ))
-                }
-                // SQLite backends arrive pre-assembled (#TASK-1864 batch 2):
-                // SqliteThreadStore derives projections inside its own write
-                // transaction, so wrapping it in the projecting store would
-                // double-write projections in a second transaction and
-                // reintroduce the drift window the design retires.
-                crate::sqlite_thread_store::ThreadStoreBackend::Sqlite
-                | crate::sqlite_thread_store::ThreadStoreBackend::SqliteOnly => {
-                    self.thread_store.clone()
-                }
-            };
+        // The store arrives final (#TASK-1864 closing batch): SQLite
+        // backends derive projections inside their own write transaction,
+        // so there is nothing left for a wrapper to do. The file archive is
+        // no longer a primary backend; the former projecting wrapper and
+        // its startup reconciliation are retired with it.
+        let thread_store: Arc<dyn ThreadStore> = self.thread_store.clone().unwrap_or_else(|| {
+            Arc::new(crate::sqlite_thread_store::SqliteThreadStore::new(
+                self.garyx_db.clone(),
+                self.thread_history.transcript_store(),
+                active_run_probe,
+            ))
+        });
         register_gateway_task_projection_reader(&thread_store, &self.garyx_db);
         let thread_history = ThreadHistoryRepository::new(
             thread_store.clone(),

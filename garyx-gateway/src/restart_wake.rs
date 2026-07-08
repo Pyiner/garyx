@@ -632,22 +632,10 @@ async fn resolve_task_thread_id(
     match service.get_task(task_id).await {
         Ok((thread_id, _record, _task)) => Ok(thread_id),
         Err(garyx_router::tasks::TaskServiceError::NotFound(_)) => {
-            // The projection can be marked current yet miss a row that
-            // exists on disk (validation-driven removals, partial loss). A
-            // restart wake is a legitimate repair moment: force one
-            // projection rebuild — the contract's sanctioned repair walk,
-            // living in the projection module, not here — and retry once.
-            crate::task_projection::force_task_projection_backfill(
-                &state.threads.thread_store,
-                &state.ops.garyx_db,
-            )
-            .await;
-            match service.get_task(task_id).await {
-                Ok((thread_id, _record, _task)) => Ok(thread_id),
-                Err(error) => Err(format!(
-                    "restart wake task target not found after projection repair: {task_id} ({error})"
-                )),
-            }
+            // Projections derive in the same transaction as every record
+            // write (#TASK-1864): a missing row means the task genuinely
+            // does not exist — the former forced repair walk is retired.
+            Err(format!("restart wake task target not found: {task_id}"))
         }
         Err(error) => Err(format!(
             "restart wake task target not found: {task_id} ({error})"
@@ -1089,12 +1077,9 @@ mod tests {
     async fn wake_task_target_resolves_through_projection() {
         let (state, _provider) = test_state(1, false).await;
         let number = 61u64;
+        // Writing the record derives the task projection in the same
+        // transaction (#TASK-1864): no backfill step exists any more.
         let thread_id = seed_cold_task_thread(&state, number, "Wake target").await;
-        crate::task_projection::force_task_projection_backfill(
-            &state.threads.thread_store,
-            &state.ops.garyx_db,
-        )
-        .await;
 
         let resolved = resolve_task_thread_id(&state, &format!("#TASK-{number}"))
             .await
@@ -1103,27 +1088,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wake_task_target_survives_a_projection_row_loss() {
-        // The projection can be marked current yet miss a row that exists on
-        // disk (validation-driven removals, partial loss). The wake path must
-        // repair the projection and still resolve — without reintroducing a
-        // full-store body scan into restart_wake itself.
-        //
-        // Two tasks matter: with a single row removed the projection would be
-        // EMPTY, the ordinary needs-backfill gate would open, and the regular
-        // ensure_current path would repair it before the wake-side NotFound
-        // branch is ever exercised. Keeping a survivor row pins the exact
-        // incident shape: projection non-empty, marked current, missing the
-        // target.
+    async fn wake_task_target_missing_projection_row_is_a_hard_not_found() {
+        // Projections derive in the same transaction as every record write
+        // (#TASK-1864): a missing row means the task genuinely does not
+        // exist, and the former wake-side forced repair walk is retired.
         let (state, _provider) = test_state(1, false).await;
-        let _survivor_thread_id = seed_cold_task_thread(&state, 71, "Survivor row").await;
         let number = 72u64;
         let thread_id = seed_cold_task_thread(&state, number, "Lost row").await;
-        crate::task_projection::force_task_projection_backfill(
-            &state.threads.thread_store,
-            &state.ops.garyx_db,
-        )
-        .await;
         assert!(
             state
                 .ops
@@ -1132,19 +1103,11 @@ mod tests {
                 .expect("row removes"),
             "projection row should exist before the simulated loss"
         );
-        assert!(
-            !state
-                .ops
-                .garyx_db
-                .task_projection_needs_backfill()
-                .expect("backfill check succeeds"),
-            "the ordinary backfill gate must stay closed (non-empty, current \
-             version) so only the wake-side repair branch can resolve this"
-        );
 
-        let resolved = resolve_task_thread_id(&state, &format!("#TASK-{number}"))
+        let error = resolve_task_thread_id(&state, &format!("#TASK-{number}"))
             .await
-            .expect("task target resolves after projection repair");
-        assert_eq!(resolved, thread_id);
+            .expect_err("a missing projection row resolves to not-found");
+        assert!(error.contains("not found"), "unexpected error: {error}");
     }
+
 }

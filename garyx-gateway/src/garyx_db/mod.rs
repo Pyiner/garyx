@@ -496,9 +496,6 @@ pub struct GaryxDbService {
     /// queue behind the writer. `None` for in-memory databases, which
     /// degrade to the single connection (#TASK-1864 batch 2, D4).
     reader: Option<Mutex<Connection>>,
-    task_projection_tombstones: Mutex<BTreeSet<String>>,
-    task_projection_backfill_lock: tokio::sync::Mutex<()>,
-    task_projection_backfill_active: Mutex<bool>,
 }
 
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5_000);
@@ -536,9 +533,6 @@ impl GaryxDbService {
         Ok(Self {
             conn: Mutex::new(conn),
             reader: Some(Mutex::new(reader)),
-            task_projection_tombstones: Mutex::new(BTreeSet::new()),
-            task_projection_backfill_lock: tokio::sync::Mutex::new(()),
-            task_projection_backfill_active: Mutex::new(false),
         })
     }
 
@@ -549,9 +543,6 @@ impl GaryxDbService {
         Ok(Self {
             conn: Mutex::new(conn),
             reader: None,
-            task_projection_tombstones: Mutex::new(BTreeSet::new()),
-            task_projection_backfill_lock: tokio::sync::Mutex::new(()),
-            task_projection_backfill_active: Mutex::new(false),
         })
     }
 
@@ -910,6 +901,26 @@ impl GaryxDbService {
             records.push(row?);
         }
         Ok(records)
+    }
+
+    /// Startup crash recovery: the bridge run index is rebuilt empty on
+    /// boot, so any projected `active_run_id`/`running` row is a dangling
+    /// orphan from the previous process. One SQL pass settles both
+    /// projection tables — no store scan, no file reads (#TASK-1864
+    /// closing batch; replaces the retired reconcile walk).
+    pub fn clear_stale_active_runs(&self) -> GaryxDbResult<usize> {
+        let conn = self.conn()?;
+        let recent = conn.execute(
+            "UPDATE recent_threads
+                SET active_run_id = NULL, run_state = 'completed'
+              WHERE active_run_id IS NOT NULL OR run_state = 'running'",
+            [],
+        )?;
+        let meta = conn.execute(
+            "UPDATE thread_meta SET active_run_id = NULL WHERE active_run_id IS NOT NULL",
+            [],
+        )?;
+        Ok(recent + meta)
     }
 
     pub fn count_recent_threads(&self) -> GaryxDbResult<usize> {
@@ -1480,12 +1491,8 @@ impl GaryxDbService {
                 }
             }
         }
+        let _ = task_projection_removed;
         tx.commit()?;
-        if task_projection_removed {
-            // In-memory bookkeeping happens after the commit: a rolled-back
-            // transaction must not leave a tombstone behind.
-            self.note_task_projection_tombstone(&key)?;
-        }
         Ok(())
     }
 
@@ -1501,7 +1508,6 @@ impl GaryxDbService {
         remove_task_projection_tx(&tx, &key)?;
         remove_recent_thread_tx(&tx, &key)?;
         tx.commit()?;
-        self.note_task_projection_tombstone(&key)?;
         Ok(removed)
     }
 

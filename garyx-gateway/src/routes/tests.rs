@@ -2124,12 +2124,7 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
                 "workspace_dir": "/work/test-older",
                 "provider_type": "claude",
                 "agent_id": "agent::test",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "older user preview"
-                    }
-                ],
+                "last_user_preview": "older user preview",
                 "history": {
                     "message_count": 3,
                     "recent_committed_run_ids": ["run::older"]
@@ -2151,12 +2146,9 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
                 "workspace_dir": "/work/test-running",
                 "provider_type": "codex",
                 "agent_id": "agent::running",
-                "messages": [
-                    {
-                        "role": "assistant",
-                        "content": "running assistant preview"
-                    }
-                ],
+                // Write-time preview field (#TASK-1864): the retired
+                // record `messages` snapshot no longer exists.
+                "last_assistant_preview": "running assistant preview",
                 "history": {
                     "message_count": 4
                 }
@@ -2594,7 +2586,13 @@ async fn delete_thread_cleans_stale_projected_workflow_thread() {
 
 #[tokio::test]
 async fn threads_route_reads_full_thread_meta_projection_not_recent_subset() {
-    let state = AppStateBuilder::new(test_config()).build();
+    // The dangling run_start below must project as live (#TASK-1864: the
+    // probe applies at write time in the store itself).
+    let state = AppStateBuilder::new(test_config())
+        .with_active_run_probe(Arc::new(
+            crate::recent_thread_projection::AlwaysActiveRunProbe,
+        ))
+        .build();
     let thread_id = "thread::workspace-projection-only";
     append_dangling_run_start(&state, thread_id, "run::active-projection").await;
     state
@@ -2612,26 +2610,19 @@ async fn threads_route_reads_full_thread_meta_projection_not_recent_subset() {
                 "history": {
                     "recent_committed_run_ids": ["run::workspace-projection"]
                 },
-                "messages": [
-                    {"role": "user", "content": "hello projection"},
-                    {"role": "assistant", "content": "active answer"}
-                ],
+                // Write-time preview fields (#TASK-1864): the retired
+                // record `messages` snapshot no longer exists.
+                "last_user_preview": "hello projection",
+                "last_assistant_preview": "active answer",
                 "worktree": {
                     "path": "/Users/test/project/.garyx/worktree"
                 }
             }),
         )
         .await;
-    state
-        .ops
-        .garyx_db
-        .remove_recent_thread(thread_id)
-        .expect("remove from recent projection");
-    state
-        .ops
-        .garyx_db
-        .remove_thread_meta_projection(thread_id)
-        .expect("remove from thread meta projection");
+    // Projections derive in the same transaction as the write above
+    // (#TASK-1864): the full-meta row is present without any read-time
+    // repair, which is retired.
     let router = build_router(state);
 
     let request = authed_request()

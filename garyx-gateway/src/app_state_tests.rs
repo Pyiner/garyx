@@ -431,14 +431,11 @@ async fn startup_warmup_clears_dangling_orphan_run() {
             }),
         )
         .await;
-    state
-        .ops
-        .garyx_db
-        .remove_recent_thread("thread::cold-running")
-        .expect("remove eager projection before warmup");
-
     state.spawn_gateway_sync_cache_warmup();
 
+    // Startup settles orphaned running rows with one SQL pass: the bridge
+    // run index is empty at boot, so the projected active run left by the
+    // previous process must resolve to completed (#TASK-1864).
     let record = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             let records = state
@@ -447,16 +444,17 @@ async fn startup_warmup_clears_dangling_orphan_run() {
                 .list_recent_threads(10, 0)
                 .expect("list recent threads");
             if let Some(record) = records
-                .into_iter()
+                .iter()
                 .find(|record| record.thread_id == "thread::cold-running")
+                && record.active_run_id.is_none()
             {
-                break record;
+                break record.clone();
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("warmup should project dangling committed run as an orphan");
+    .expect("warmup should settle the dangling run as an orphan");
 
     assert_eq!(record.active_run_id, None);
     assert_eq!(record.run_state, "completed");

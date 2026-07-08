@@ -35,35 +35,44 @@ pub(crate) fn strip_retired_record_fields(data: &mut Value) {
     }
 }
 
-/// Thread-record storage backend (#TASK-1864 batch 2, D8).
+/// Thread-record storage backend (#TASK-1864, D8). The file archive is
+/// no longer a primary backend; it survives as the import source and the
+/// dual-write mirror.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadStoreBackend {
-    /// JSON archive is the truth (default; current production shape).
-    File,
-    /// SQLite truth with a best-effort file mirror for hot rollback.
+    /// SQLite truth with a best-effort live file mirror (emergency mode).
     Sqlite,
-    /// SQLite truth, no mirror.
+    /// SQLite truth, no mirror (default).
     SqliteOnly,
 }
 
 /// Resolve the configured backend; `GARYX_THREAD_STORE` overrides config
-/// so a rollback never requires editing the config file. Unknown values
-/// fall back to `File` with a warning.
+/// so an emergency switch never requires editing the config file.
+/// The file archive is no longer a primary backend (#TASK-1864 closing
+/// batch): the default is `sqlite-only`, a configured `file` runs the
+/// dual-write `sqlite` mode instead (keeping a live archive copy is the
+/// closest surviving semantics), and unknown values fall back to the
+/// default with a warning.
 pub fn resolve_thread_store_backend(config: &garyx_models::config::GaryxConfig) -> ThreadStoreBackend {
     let raw = std::env::var("GARYX_THREAD_STORE")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| config.sessions.thread_store.clone());
     match raw.as_deref().map(str::trim) {
-        None | Some("") | Some("file") => ThreadStoreBackend::File,
+        None | Some("") | Some("sqlite-only") => ThreadStoreBackend::SqliteOnly,
         Some("sqlite") => ThreadStoreBackend::Sqlite,
-        Some("sqlite-only") => ThreadStoreBackend::SqliteOnly,
+        Some("file") => {
+            warn!(
+                "sessions.thread_store=file is retired; running the sqlite dual-write mode (SQL truth + live file mirror)"
+            );
+            ThreadStoreBackend::Sqlite
+        }
         Some(other) => {
             warn!(
                 value = other,
-                "unknown sessions.thread_store backend; falling back to file"
+                "unknown sessions.thread_store backend; falling back to sqlite-only"
             );
-            ThreadStoreBackend::File
+            ThreadStoreBackend::SqliteOnly
         }
     }
 }

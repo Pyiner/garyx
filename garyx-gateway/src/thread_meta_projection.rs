@@ -1,83 +1,43 @@
-use std::sync::Arc;
 
 use garyx_models::routing::{
     DeliveryContext, infer_delivery_target_id, infer_delivery_target_type,
 };
+use std::sync::Arc;
+
 use garyx_router::{
-    KnownChannelEndpoint, ThreadStore, ThreadTranscriptStore, agent_id_from_value,
-    bindings_from_value, history_message_count, is_default_thread_list_hidden, is_thread_key,
-    label_from_value, list_registry_channel_endpoints, workspace_dir_from_value,
+    KnownChannelEndpoint, ThreadStore, agent_id_from_value, bindings_from_value,
+    history_message_count, is_default_thread_list_hidden, is_thread_key, label_from_value,
+    list_registry_channel_endpoints, workspace_dir_from_value,
 };
 use serde_json::Value;
 use tracing::warn;
 
 use crate::garyx_db::{
     GaryxDbService, ThreadMessageRouteDraft, ThreadMetaDraft, ThreadMetaProjectionDraft,
-    ThreadMetaProjectionSnapshot,
 };
 use crate::thread_runtime::selected_model_cells_from_thread_value;
 use crate::thread_type::thread_summary_type_from_record;
-use crate::transcript_run_projection::active_run_id_from_transcript_store;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct ThreadMetaProjectionBackfillStats {
-    pub threads_scanned: usize,
-    pub channel_endpoints: usize,
-    pub message_routes: usize,
-    pub last_delivery_contexts: usize,
-}
 
-pub(crate) async fn backfill_thread_meta_projection_if_incomplete(
+
+/// Channel endpoints for gateway sync: the projection rows (bound
+/// endpoints, derived in the same transaction as every record write)
+/// merged with the known-endpoint registry (channels the gateway has
+/// seen, kept even when unbound). The former read-time backfill gate is
+/// retired (#TASK-1864 closing batch).
+pub(crate) async fn list_channel_endpoints_with_registry(
     thread_store: &Arc<dyn ThreadStore>,
-    transcript_store: &Arc<ThreadTranscriptStore>,
-    garyx_db: &GaryxDbService,
-) -> ThreadMetaProjectionBackfillStats {
-    match garyx_db.thread_meta_projection_needs_backfill() {
-        Ok(false) => {
-            return ThreadMetaProjectionBackfillStats::default();
-        }
-        Ok(true) => {}
-        Err(error) => {
-            warn!(error = %error, "failed to check thread meta projection before backfill");
-            return ThreadMetaProjectionBackfillStats::default();
-        }
-    }
-
-    let thread_ids = thread_store.list_keys(Some("thread::")).await;
-    backfill_thread_meta_projection(thread_ids, thread_store, transcript_store, garyx_db).await
-}
-
-pub(crate) async fn list_channel_endpoints_with_projection_backfill(
-    thread_store: &Arc<dyn ThreadStore>,
-    transcript_store: &Arc<ThreadTranscriptStore>,
     garyx_db: &GaryxDbService,
 ) -> Vec<KnownChannelEndpoint> {
-    let should_backfill = match garyx_db.thread_meta_projection_needs_backfill() {
-        Ok(needs_backfill) => needs_backfill,
-        Err(error) => {
-            warn!(error = %error, "failed to check thread meta projection before listing channel endpoints");
-            false
-        }
-    };
-    if should_backfill {
-        let thread_ids = thread_store.list_keys(Some("thread::")).await;
-        let _ =
-            backfill_thread_meta_projection(thread_ids, thread_store, transcript_store, garyx_db)
-                .await;
-    }
-    // Thread-bound endpoints come from the write-time projection; the registry
-    // only contributes endpoints that have no thread yet. Scanning the full
-    // thread store here stalled every snapshot rebuild for seconds.
-    match garyx_db.list_thread_channel_endpoints() {
-        Ok(endpoints) => merge_projected_and_known_channel_endpoints(
-            endpoints,
-            list_registry_channel_endpoints(thread_store).await,
-        ),
+    let projected = match garyx_db.list_thread_channel_endpoints() {
+        Ok(rows) => rows,
         Err(error) => {
             warn!(error = %error, "failed to list channel endpoint projection");
-            list_registry_channel_endpoints(thread_store).await
+            Vec::new()
         }
-    }
+    };
+    let known = list_registry_channel_endpoints(thread_store).await;
+    merge_projected_and_known_channel_endpoints(projected, known)
 }
 
 fn merge_projected_and_known_channel_endpoints(
@@ -98,45 +58,6 @@ fn merge_projected_and_known_channel_endpoints(
     }
     projected.sort_by(|left, right| left.endpoint_key.cmp(&right.endpoint_key));
     projected
-}
-
-async fn backfill_thread_meta_projection(
-    thread_ids: Vec<String>,
-    thread_store: &Arc<dyn ThreadStore>,
-    transcript_store: &Arc<ThreadTranscriptStore>,
-    garyx_db: &GaryxDbService,
-) -> ThreadMetaProjectionBackfillStats {
-    let mut snapshot = ThreadMetaProjectionSnapshot::default();
-    let mut stats = ThreadMetaProjectionBackfillStats::default();
-
-    for thread_id in thread_ids {
-        let Some(data) = thread_store.get(&thread_id).await else {
-            continue;
-        };
-        let active_run_id = active_run_id_from_transcript_store(transcript_store, &thread_id).await;
-        let Some(draft) = thread_meta_projection_from_thread_data_with_active_run(
-            &thread_id,
-            &data,
-            active_run_id,
-        ) else {
-            continue;
-        };
-        stats.threads_scanned += 1;
-        stats.channel_endpoints += draft.channel_endpoints.len();
-        stats.message_routes += draft.message_routes.len();
-        if draft.thread_meta.last_delivery_context_json.is_some() {
-            stats.last_delivery_contexts += 1;
-        }
-        snapshot.thread_meta.push(draft.thread_meta);
-        snapshot.channel_endpoints.extend(draft.channel_endpoints);
-        snapshot.message_routes.extend(draft.message_routes);
-    }
-
-    if let Err(error) = garyx_db.sync_thread_meta_projection_snapshot(snapshot) {
-        warn!(error = %error, "failed to backfill thread meta projection");
-        return ThreadMetaProjectionBackfillStats::default();
-    }
-    stats
 }
 
 pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(

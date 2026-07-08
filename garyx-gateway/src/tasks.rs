@@ -29,7 +29,6 @@ use crate::agent_identity::{
 use crate::garyx_db::{GaryxDbError, TaskForestScope};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
-use crate::task_projection::backfill_task_projection_if_incomplete;
 use crate::workflows::{
     WorkflowError, get_workflow_definition_package, spawn_workflow_task_entrypoint,
 };
@@ -567,18 +566,9 @@ pub async fn list_task_forest(
         Ok(filter) => filter,
         Err(error) => return task_error_response(error),
     };
-    let projection_current_before = match state.ops.garyx_db.task_projection_is_current() {
-        Ok(current) => current,
-        Err(error) => return task_projection_error_response(error),
-    };
-    if !projection_current_before {
-        backfill_task_projection_if_incomplete(&state.threads.thread_store, &state.ops.garyx_db)
-            .await;
-    }
-    let projection_current = match state.ops.garyx_db.task_projection_is_current() {
-        Ok(current) => current,
-        Err(error) => return task_projection_error_response(error),
-    };
+    // Projections derive in the same transaction as every record write
+    // (#TASK-1864): the read-time backfill gate is retired.
+    let projection_current = true;
     let forest_result = match anchor_thread_id {
         Some(anchor) => state
             .ops
