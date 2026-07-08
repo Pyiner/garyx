@@ -475,7 +475,13 @@ async fn resolve_chat_target(
                 })),
             ));
         }
-        match state.ops.garyx_db.is_thread_archived(trimmed) {
+        let archived_thread_id = trimmed.to_owned();
+        match state
+            .ops
+            .garyx_db
+            .run_blocking(move |db| db.is_thread_archived(&archived_thread_id))
+            .await
+        {
             Ok(true) => {
                 return Err(ChatPreparationError::InvalidRequest(
                     StatusCode::GONE,

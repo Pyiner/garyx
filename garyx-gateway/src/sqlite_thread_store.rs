@@ -111,33 +111,42 @@ impl SqliteThreadStore {
     }
 
     /// Archived threads reject writes and clear their projections — same
-    /// semantics as the former wrapper.
+    /// semantics as the former wrapper. One blocking hop covers the
+    /// tombstone check and the projection cleanup.
     async fn reject_archived_thread_write(&self, thread_id: &str) -> bool {
         if !is_thread_key(thread_id) {
             return false;
         }
-        match self.garyx_db.is_thread_archived(thread_id) {
-            Ok(true) => {
-                if let Err(error) = self.garyx_db.unpin_thread(thread_id) {
-                    warn!(thread_id, error = %error, "failed to unpin archived thread");
+        let owned_thread_id = thread_id.to_owned();
+        let rejected = self
+            .garyx_db
+            .run_blocking(move |db| {
+                let thread_id = owned_thread_id.as_str();
+                match db.is_thread_archived(thread_id) {
+                    Ok(true) => {
+                        if let Err(error) = db.unpin_thread(thread_id) {
+                            warn!(thread_id, error = %error, "failed to unpin archived thread");
+                        }
+                        if let Err(error) = db.remove_recent_thread(thread_id) {
+                            warn!(thread_id, error = %error, "failed to remove archived thread from recent projection");
+                        }
+                        if let Err(error) = db.remove_thread_meta_projection(thread_id) {
+                            warn!(thread_id, error = %error, "failed to remove archived thread meta projection");
+                        }
+                        if let Err(error) = db.remove_task_projection(thread_id) {
+                            warn!(thread_id, error = %error, "failed to remove archived task projection");
+                        }
+                        Ok(true)
+                    }
+                    Ok(false) => Ok(false),
+                    Err(error) => {
+                        warn!(thread_id, error = %error, "failed to check archived thread tombstone before write");
+                        Ok(false)
+                    }
                 }
-                if let Err(error) = self.garyx_db.remove_recent_thread(thread_id) {
-                    warn!(thread_id, error = %error, "failed to remove archived thread from recent projection");
-                }
-                if let Err(error) = self.garyx_db.remove_thread_meta_projection(thread_id) {
-                    warn!(thread_id, error = %error, "failed to remove archived thread meta projection");
-                }
-                if let Err(error) = self.garyx_db.remove_task_projection(thread_id) {
-                    warn!(thread_id, error = %error, "failed to remove archived task projection");
-                }
-                true
-            }
-            Ok(false) => false,
-            Err(error) => {
-                warn!(thread_id, error = %error, "failed to check archived thread tombstone before write");
-                false
-            }
-        }
+            })
+            .await;
+        rejected.unwrap_or(false)
     }
 
     /// Derive the projection set for one thread record. Non-thread keys get

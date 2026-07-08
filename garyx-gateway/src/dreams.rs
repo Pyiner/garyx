@@ -180,13 +180,19 @@ pub async fn list_dreams(
         .limit
         .unwrap_or(DEFAULT_TOPIC_LIMIT)
         .clamp(1, MAX_TOPIC_LIMIT);
-    match state.ops.garyx_db.list_dream_topics(
-        Some(&format_timestamp(window.from)),
-        Some(&format_timestamp(window.to)),
-        limit,
-    ) {
-        Ok(dreams) => {
-            let latest_scan = state.ops.garyx_db.latest_dream_scan().ok().flatten();
+    let from = format_timestamp(window.from);
+    let to = format_timestamp(window.to);
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| {
+            let dreams = db.list_dream_topics(Some(&from), Some(&to), limit)?;
+            let latest_scan = db.latest_dream_scan().ok().flatten();
+            Ok((dreams, latest_scan))
+        })
+        .await
+    {
+        Ok((dreams, latest_scan)) => {
             (
                 StatusCode::OK,
                 Json(json!({
@@ -208,7 +214,12 @@ pub async fn get_dream(
     State(state): State<Arc<AppState>>,
     AxumPath(dream_id): AxumPath<String>,
 ) -> impl IntoResponse {
-    match state.ops.garyx_db.get_dream_topic(&dream_id) {
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| db.get_dream_topic(&dream_id))
+        .await
+    {
         Ok(Some(dream)) => (StatusCode::OK, Json(json!({ "dream": dream }))).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -245,11 +256,16 @@ pub async fn scan_dreams(
         Ok(summary) => summary,
         Err(message) => return internal_error(message).into_response(),
     };
-    let dreams = match state.ops.garyx_db.list_dream_topics(
-        Some(&summary.from),
-        Some(&summary.to),
-        DEFAULT_TOPIC_LIMIT,
-    ) {
+    let scan_from = summary.from.clone();
+    let scan_to = summary.to.clone();
+    let dreams = match state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| {
+            db.list_dream_topics(Some(&scan_from), Some(&scan_to), DEFAULT_TOPIC_LIMIT)
+        })
+        .await
+    {
         Ok(dreams) => dreams,
         Err(error) => return garyx_db_error_response(error).into_response(),
     };

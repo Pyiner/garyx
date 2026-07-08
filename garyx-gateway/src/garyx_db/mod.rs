@@ -492,13 +492,22 @@ struct DreamOverlapCandidate {
 
 pub struct GaryxDbService {
     conn: Mutex<Connection>,
-    /// Independent read connection (WAL snapshot reads) so point reads never
-    /// queue behind the writer. `None` for in-memory databases, which
+    /// Independent read connections (WAL snapshot reads) so point reads
+    /// never queue behind the writer — or behind each other: WAL supports
+    /// arbitrary concurrent readers, and a single shared read connection
+    /// measurably serialized concurrent list queries (4 parallel reads took
+    /// 4× one read's wall time). Empty for in-memory databases, which
     /// degrade to the single connection (#TASK-1864 batch 2, D4).
-    reader: Option<Mutex<Connection>>,
+    readers: Vec<Mutex<Connection>>,
+    /// Round-robin cursor into `readers`.
+    next_reader: std::sync::atomic::AtomicUsize,
 }
 
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5_000);
+/// Read-pool size: enough to keep the common concurrent readers (desktop,
+/// mobile, a handful of agents) off each other's locks without holding a
+/// meaningful number of file handles.
+const READ_POOL_SIZE: usize = 4;
 
 /// Durability/concurrency settings for the on-disk database: WAL journal
 /// (persistent, readers never block the single writer), NORMAL fsync
@@ -525,14 +534,20 @@ impl GaryxDbService {
         let conn = Connection::open(path)?;
         configure_file_connection(&conn)?;
         initialize_connection(&conn)?;
-        // Second connection for reads: under WAL it sees consistent
-        // snapshots and never blocks on (or blocks) the writer.
-        let reader = Connection::open(path)?;
-        reader.busy_timeout(BUSY_TIMEOUT)?;
-        reader.pragma_update(None, "query_only", "ON")?;
+        // Dedicated read connections: under WAL they see consistent
+        // snapshots, never block on (or block) the writer, and run
+        // concurrently with each other.
+        let mut readers = Vec::with_capacity(READ_POOL_SIZE);
+        for _ in 0..READ_POOL_SIZE {
+            let reader = Connection::open(path)?;
+            reader.busy_timeout(BUSY_TIMEOUT)?;
+            reader.pragma_update(None, "query_only", "ON")?;
+            readers.push(Mutex::new(reader));
+        }
         Ok(Self {
             conn: Mutex::new(conn),
-            reader: Some(Mutex::new(reader)),
+            readers,
+            next_reader: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -542,7 +557,8 @@ impl GaryxDbService {
         initialize_connection(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
-            reader: None,
+            readers: Vec::new(),
+            next_reader: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -550,13 +566,31 @@ impl GaryxDbService {
         self.conn.lock().map_err(|_| GaryxDbError::LockPoisoned)
     }
 
-    /// Lock the read connection when one exists (file databases), or fall
-    /// back to the writer connection (in-memory databases).
+    /// Lock a read connection (file databases), or fall back to the writer
+    /// connection (in-memory databases). Prefers an idle pool slot — one
+    /// long read must not queue short reads behind it — and blocks on the
+    /// round-robin slot only when every connection is busy.
     fn read_conn(&self) -> GaryxDbResult<MutexGuard<'_, Connection>> {
-        match &self.reader {
-            Some(reader) => reader.lock().map_err(|_| GaryxDbError::LockPoisoned),
-            None => self.conn(),
+        if self.readers.is_empty() {
+            return self.conn();
         }
+        let start = self
+            .next_reader
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            % self.readers.len();
+        for offset in 0..self.readers.len() {
+            let index = (start + offset) % self.readers.len();
+            match self.readers[index].try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(std::sync::TryLockError::WouldBlock) => continue,
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(GaryxDbError::LockPoisoned);
+                }
+            }
+        }
+        self.readers[start]
+            .lock()
+            .map_err(|_| GaryxDbError::LockPoisoned)
     }
 
     /// Run `f` against this service on the blocking thread pool.
@@ -4516,6 +4550,97 @@ fn attach_dream_spans(conn: &Connection, topics: &mut [DreamTopicRecord]) -> Gar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A read query slow enough (tens of ms) to make lock serialization
+    /// visible to the wall clock.
+    fn run_slow_read(conn: &Connection) -> u128 {
+        let started = std::time::Instant::now();
+        let _: i64 = conn
+            .query_row(
+                "WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM cnt WHERE x < 3000000) SELECT count(*) FROM cnt",
+                [],
+                |row| row.get(0),
+            )
+            .expect("slow read");
+        started.elapsed().as_millis()
+    }
+
+    #[test]
+    fn concurrent_reads_run_in_parallel_across_the_pool() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service = std::sync::Arc::new(
+            GaryxDbService::open(dir.path().join("garyx-db.sqlite3")).expect("db opens"),
+        );
+
+        // Calibrate a single read on this machine.
+        let single_ms = {
+            let conn = service.read_conn().expect("read conn");
+            run_slow_read(&conn).max(1)
+        };
+
+        let readers = 4u128;
+        let started = std::time::Instant::now();
+        let handles: Vec<_> = (0..readers)
+            .map(|_| {
+                let service = std::sync::Arc::clone(&service);
+                std::thread::spawn(move || {
+                    let conn = service.read_conn().expect("read conn");
+                    run_slow_read(&conn);
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("reader thread");
+        }
+        let wall_ms = started.elapsed().as_millis().max(1);
+
+        // One shared read connection serializes the four reads
+        // (wall ≈ 4× single); a pool must let them overlap. The 3× bound
+        // leaves headroom for scheduling noise while still failing hard on
+        // full serialization.
+        assert!(
+            wall_ms < single_ms * readers * 3 / 4,
+            "concurrent reads serialized behind one connection: wall={wall_ms}ms single={single_ms}ms readers={readers}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn blocking_entry_keeps_the_runtime_responsive() {
+        // One runtime worker: if database work runs ON the worker (the old
+        // direct-call shape), the heartbeat below cannot tick until the DB
+        // call finishes. Through `run_blocking` the worker stays free.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let service = std::sync::Arc::new(
+            GaryxDbService::open(dir.path().join("garyx-db.sqlite3")).expect("db opens"),
+        );
+
+        let ticks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let heartbeat = {
+            let ticks = std::sync::Arc::clone(&ticks);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                    ticks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            })
+        };
+
+        service
+            .run_blocking(|db| {
+                let conn = db.read_conn()?;
+                run_slow_read(&conn);
+                Ok(())
+            })
+            .await
+            .expect("blocking read");
+
+        heartbeat.abort();
+        let observed = ticks.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            observed >= 3,
+            "runtime worker was starved during database work: {observed} heartbeat ticks"
+        );
+    }
 
     #[test]
     fn open_configures_wal_normal_synchronous_and_busy_timeout() {

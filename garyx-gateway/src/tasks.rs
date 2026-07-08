@@ -569,13 +569,14 @@ pub async fn list_task_forest(
     // Projections derive in the same transaction as every record write
     // (#TASK-1864): the read-time backfill gate is retired.
     let projection_current = true;
-    let forest_result = match anchor_thread_id {
-        Some(anchor) => state
-            .ops
-            .garyx_db
-            .list_task_forest_anchored(&anchor, &filter),
-        None => state.ops.garyx_db.list_task_forest(&filter, scope),
-    };
+    let forest_result = state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| match anchor_thread_id {
+            Some(anchor) => db.list_task_forest_anchored(&anchor, &filter),
+            None => db.list_task_forest(&filter, scope),
+        })
+        .await;
     match forest_result {
         Ok(page) => {
             let mut body = json!({

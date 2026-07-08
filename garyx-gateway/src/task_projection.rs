@@ -47,7 +47,11 @@ impl TaskProjectionReader for SqlTaskProjectionReader {
     }
 
     async fn task_index_rows(&self) -> Vec<(u64, String)> {
-        match self.garyx_db.task_index_rows() {
+        match self
+            .garyx_db
+            .run_blocking(|db| db.task_index_rows())
+            .await
+        {
             Ok(rows) => rows,
             Err(error) => {
                 warn!(error = %error, "failed to read task projection index rows");
@@ -57,7 +61,11 @@ impl TaskProjectionReader for SqlTaskProjectionReader {
     }
 
     async fn thread_id_for_number(&self, number: u64) -> Option<String> {
-        match self.garyx_db.thread_id_for_number(number) {
+        match self
+            .garyx_db
+            .run_blocking(move |db| db.thread_id_for_number(number))
+            .await
+        {
             Ok(thread_id) => thread_id,
             Err(error) => {
                 warn!(number, error = %error, "failed to read task projection number lookup");
@@ -67,7 +75,12 @@ impl TaskProjectionReader for SqlTaskProjectionReader {
     }
 
     async fn has_running_subtask_targeting(&self, thread_id: &str) -> bool {
-        match self.garyx_db.has_running_subtask_targeting(thread_id) {
+        let owned_thread_id = thread_id.to_owned();
+        match self
+            .garyx_db
+            .run_blocking(move |db| db.has_running_subtask_targeting(&owned_thread_id))
+            .await
+        {
             Ok(found) => found,
             Err(error) => {
                 warn!(thread_id, error = %error, "failed to read task projection running-subtask gate");
@@ -80,7 +93,12 @@ impl TaskProjectionReader for SqlTaskProjectionReader {
         &self,
         filter: &TaskListFilter,
     ) -> Option<(Vec<TaskSummary>, usize, bool)> {
-        match self.garyx_db.list_task_summaries(filter) {
+        let filter = filter.clone();
+        match self
+            .garyx_db
+            .run_blocking(move |db| db.list_task_summaries(&filter))
+            .await
+        {
             Ok(page) => Some(page),
             Err(error) => {
                 warn!(error = %error, "failed to list task projection summaries");
@@ -90,7 +108,11 @@ impl TaskProjectionReader for SqlTaskProjectionReader {
     }
 
     async fn max_number(&self) -> Option<u64> {
-        match self.garyx_db.max_task_projection_number() {
+        match self
+            .garyx_db
+            .run_blocking(|db| db.max_task_projection_number())
+            .await
+        {
             Ok(number) => number,
             Err(error) => {
                 warn!(error = %error, "failed to read task projection max number");
@@ -100,7 +122,12 @@ impl TaskProjectionReader for SqlTaskProjectionReader {
     }
 
     async fn remove_thread(&self, thread_id: &str) {
-        if let Err(error) = self.garyx_db.remove_task_projection(thread_id) {
+        let owned_thread_id = thread_id.to_owned();
+        if let Err(error) = self
+            .garyx_db
+            .run_blocking(move |db| db.remove_task_projection(&owned_thread_id).map(|_| ()))
+            .await
+        {
             warn!(thread_id, error = %error, "failed to remove stale task projection row");
         }
     }

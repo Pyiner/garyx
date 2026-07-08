@@ -1102,21 +1102,32 @@ async fn purge_thread_from_indexes(state: &Arc<AppState>, thread_id: &str) {
     router.purge_thread_from_indexes(thread_id);
 }
 
-fn remove_deleted_thread_projection_records(state: &Arc<AppState>, thread_id: &str) -> bool {
-    let mut removed = false;
-    if let Ok(value) = state.ops.garyx_db.unpin_thread(thread_id) {
-        removed |= value;
-    }
-    if let Ok(value) = state.ops.garyx_db.remove_recent_thread(thread_id) {
-        removed |= value;
-    }
-    if let Ok(value) = state.ops.garyx_db.remove_thread_meta_projection(thread_id) {
-        removed |= value;
-    }
-    if let Ok(value) = state.ops.garyx_db.remove_task_projection(thread_id) {
-        removed |= value;
-    }
-    removed
+async fn remove_deleted_thread_projection_records(
+    state: &Arc<AppState>,
+    thread_id: &str,
+) -> bool {
+    let thread_id = thread_id.to_owned();
+    state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| {
+            let mut removed = false;
+            if let Ok(value) = db.unpin_thread(&thread_id) {
+                removed |= value;
+            }
+            if let Ok(value) = db.remove_recent_thread(&thread_id) {
+                removed |= value;
+            }
+            if let Ok(value) = db.remove_thread_meta_projection(&thread_id) {
+                removed |= value;
+            }
+            if let Ok(value) = db.remove_task_projection(&thread_id) {
+                removed |= value;
+            }
+            Ok(removed)
+        })
+        .await
+        .unwrap_or(false)
 }
 
 async fn hard_delete_thread_record(
@@ -1143,7 +1154,7 @@ async fn hard_delete_thread_record(
     }
 
     clear_deleted_thread_runtime_state(state, thread_id, provider_key.as_deref()).await;
-    remove_deleted_thread_projection_records(state, thread_id);
+    remove_deleted_thread_projection_records(state, thread_id).await;
     purge_thread_from_indexes(state, thread_id).await;
     state.invalidate_gateway_sync_caches().await;
     Ok(())
@@ -1591,38 +1602,37 @@ pub async fn list_threads(
     Query(params): Query<ListThreadsParams>,
 ) -> impl IntoResponse {
     let limit = params.limit.min(MAX_THREAD_LIMIT);
-    let total = match state
+    let include_hidden = params.include_hidden;
+    let prefix = params.prefix.clone();
+    let requested_offset = params.offset;
+    // Count + page in one blocking hop: SQLite work must not hold a runtime
+    // worker (#TASK-1829 batch 3).
+    let paged = state
         .ops
         .garyx_db
-        .count_thread_meta_list(params.include_hidden, params.prefix.as_deref())
-    {
-        Ok(total) => total,
+        .run_blocking(move |db| {
+            let total = db.count_thread_meta_list(include_hidden, prefix.as_deref())?;
+            let offset = requested_offset.min(total);
+            let records = db.list_thread_meta_page(limit, offset, include_hidden, prefix.as_deref())?;
+            Ok((total, offset, records))
+        })
+        .await;
+    let (total, offset, records) = match paged {
+        Ok(paged) => paged,
         Err(error) => return garyx_db_error_response(error).into_response(),
     };
-    let offset = params.offset.min(total);
-    let page = match state.ops.garyx_db.list_thread_meta_page(
-        limit,
-        offset,
-        params.include_hidden,
-        params.prefix.as_deref(),
-    ) {
-        Ok(records) => {
-            let catalog = AgentCatalogSnapshot::load(&state).await;
-            let mut page = Vec::with_capacity(records.len());
-            for record in &records {
-                let mut summary = thread_summary_from_meta(record);
-                if let Some(obj) = summary.as_object_mut() {
-                    obj.insert(
-                        "thread_runtime".to_owned(),
-                        build_thread_runtime_summary_from_meta(&state, record, &catalog),
-                    );
-                }
-                page.push(summary);
-            }
-            page
+    let catalog = AgentCatalogSnapshot::load(&state).await;
+    let mut page = Vec::with_capacity(records.len());
+    for record in &records {
+        let mut summary = thread_summary_from_meta(record);
+        if let Some(obj) = summary.as_object_mut() {
+            obj.insert(
+                "thread_runtime".to_owned(),
+                build_thread_runtime_summary_from_meta(&state, record, &catalog),
+            );
         }
-        Err(error) => return garyx_db_error_response(error).into_response(),
-    };
+        page.push(summary);
+    }
     let count = page.len();
 
     (
@@ -1644,13 +1654,19 @@ pub async fn list_recent_threads(
     Query(params): Query<ListRecentThreadsParams>,
 ) -> impl IntoResponse {
     let limit = params.limit.min(MAX_RECENT_THREAD_LIMIT);
-    let total = match state.ops.garyx_db.count_recent_threads() {
-        Ok(total) => total,
-        Err(error) => return garyx_db_error_response(error).into_response(),
-    };
-    let offset = params.offset.min(total);
-    match state.ops.garyx_db.list_recent_threads(limit, offset) {
-        Ok(records) => (
+    let requested_offset = params.offset;
+    let paged = state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| {
+            let total = db.count_recent_threads()?;
+            let offset = requested_offset.min(total);
+            let records = db.list_recent_threads(limit, offset)?;
+            Ok((total, offset, records))
+        })
+        .await;
+    match paged {
+        Ok((total, offset, records)) => (
             StatusCode::OK,
             Json(recent_threads_payload(&state, &records, limit, offset, total).await),
         )
@@ -1684,7 +1700,12 @@ pub async fn get_thread(
 
 /// GET /api/thread-pins - list pinned thread ids in display order.
 pub async fn list_thread_pins(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.ops.garyx_db.list_pinned_threads() {
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(|db| db.list_pinned_threads())
+        .await
+    {
         Ok(records) => (StatusCode::OK, Json(thread_pins_payload(&records))).into_response(),
         Err(error) => garyx_db_error_response(error).into_response(),
     }
@@ -1702,20 +1723,27 @@ pub async fn pin_thread(
         )
             .into_response();
     };
-    match state.ops.garyx_db.pin_thread(&thread_id) {
-        Ok(record) => match state.ops.garyx_db.list_pinned_threads() {
-            Ok(records) => (
-                StatusCode::OK,
-                Json(json!({
-                    "pinned": true,
-                    "pin": record,
-                    "thread_ids": thread_pin_ids(&records),
-                    "pins": records,
-                })),
-            )
-                .into_response(),
-            Err(error) => garyx_db_error_response(error).into_response(),
-        },
+    let pin_thread_id = thread_id.clone();
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| {
+            let record = db.pin_thread(&pin_thread_id)?;
+            let records = db.list_pinned_threads()?;
+            Ok((record, records))
+        })
+        .await
+    {
+        Ok((record, records)) => (
+            StatusCode::OK,
+            Json(json!({
+                "pinned": true,
+                "pin": record,
+                "thread_ids": thread_pin_ids(&records),
+                "pins": records,
+            })),
+        )
+            .into_response(),
         Err(error) => garyx_db_error_response(error).into_response(),
     }
 }
@@ -1728,21 +1756,28 @@ pub async fn unpin_thread(
     let thread_id = ensure_existing_thread_id(&state, &key)
         .await
         .unwrap_or_else(|| key.trim().to_owned());
-    match state.ops.garyx_db.unpin_thread(&thread_id) {
-        Ok(removed) => match state.ops.garyx_db.list_pinned_threads() {
-            Ok(records) => (
-                StatusCode::OK,
-                Json(json!({
-                    "pinned": false,
-                    "removed": removed,
-                    "thread_id": thread_id,
-                    "thread_ids": thread_pin_ids(&records),
-                    "pins": records,
-                })),
-            )
-                .into_response(),
-            Err(error) => garyx_db_error_response(error).into_response(),
-        },
+    let unpin_thread_id = thread_id.clone();
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| {
+            let removed = db.unpin_thread(&unpin_thread_id)?;
+            let records = db.list_pinned_threads()?;
+            Ok((removed, records))
+        })
+        .await
+    {
+        Ok((removed, records)) => (
+            StatusCode::OK,
+            Json(json!({
+                "pinned": false,
+                "removed": removed,
+                "thread_id": thread_id,
+                "thread_ids": thread_pin_ids(&records),
+                "pins": records,
+            })),
+        )
+            .into_response(),
         Err(error) => garyx_db_error_response(error).into_response(),
     }
 }
@@ -2853,7 +2888,7 @@ pub async fn archive_thread(
         if let Err(error) = state.ops.garyx_db.mark_thread_archived(trimmed) {
             return archive_internal_error(error);
         }
-        let stale_projection = remove_deleted_thread_projection_records(&state, trimmed);
+        let stale_projection = remove_deleted_thread_projection_records(&state, trimmed).await;
         clear_deleted_thread_runtime_state(&state, trimmed, None).await;
         purge_thread_from_indexes(&state, trimmed).await;
         state.invalidate_gateway_sync_caches().await;
@@ -2926,7 +2961,7 @@ pub async fn delete_thread(
         let trimmed = key.trim();
         if !trimmed.is_empty()
             && is_thread_key(trimmed)
-            && remove_deleted_thread_projection_records(&state, trimmed)
+            && remove_deleted_thread_projection_records(&state, trimmed).await
         {
             clear_deleted_thread_runtime_state(&state, trimmed, None).await;
             purge_thread_from_indexes(&state, trimmed).await;

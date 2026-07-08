@@ -27,9 +27,12 @@ use crate::thread_type::thread_summary_type_from_record;
 /// retired (#TASK-1864 closing batch).
 pub(crate) async fn list_channel_endpoints_with_registry(
     thread_store: &Arc<dyn ThreadStore>,
-    garyx_db: &GaryxDbService,
+    garyx_db: &Arc<GaryxDbService>,
 ) -> Vec<KnownChannelEndpoint> {
-    let projected = match garyx_db.list_thread_channel_endpoints() {
+    let projected = match garyx_db
+        .run_blocking(|db| db.list_thread_channel_endpoints())
+        .await
+    {
         Ok(rows) => rows,
         Err(error) => {
             warn!(error = %error, "failed to list channel endpoint projection");

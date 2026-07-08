@@ -122,7 +122,13 @@ fn configured_workspace_drafts(state: &Arc<AppState>) -> BTreeMap<String, Worksp
 async fn seed_workspaces_from_configuration_if_empty(
     state: &Arc<AppState>,
 ) -> Result<(), GaryxDbError> {
-    if state.ops.garyx_db.count_workspace_rows()? > 0 {
+    if state
+        .ops
+        .garyx_db
+        .run_blocking(|db| db.count_workspace_rows())
+        .await?
+        > 0
+    {
         return Ok(());
     }
 
@@ -191,12 +197,17 @@ async fn workspace_list_response(state: &Arc<AppState>) -> (StatusCode, Json<ser
     if let Err(error) = seed_workspaces_from_configuration_if_empty(state).await {
         return workspace_error_response(error);
     }
-    let workspace_state_initialized = match state.ops.garyx_db.count_workspace_rows() {
-        Ok(count) => count > 0,
-        Err(error) => return workspace_error_response(error),
-    };
-    let workspaces = match state.ops.garyx_db.list_workspaces() {
-        Ok(workspaces) => workspaces,
+    let listed = state
+        .ops
+        .garyx_db
+        .run_blocking(|db| {
+            let count = db.count_workspace_rows()?;
+            let workspaces = db.list_workspaces()?;
+            Ok((count, workspaces))
+        })
+        .await;
+    let (workspace_state_initialized, workspaces) = match listed {
+        Ok((count, workspaces)) => (count > 0, workspaces),
         Err(error) => return workspace_error_response(error),
     };
     (

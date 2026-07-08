@@ -324,7 +324,12 @@ fn capsule_list_response(records: Vec<CapsuleRecord>) -> serde_json::Value {
 }
 
 pub async fn list_capsules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.ops.garyx_db.list_capsules() {
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(|db| db.list_capsules())
+        .await
+    {
         Ok(records) => (StatusCode::OK, Json(capsule_list_response(records))).into_response(),
         Err(error) => CapsuleError::from(error).into_response(),
     }
@@ -338,7 +343,12 @@ pub async fn get_capsule(
         Ok(id) => id,
         Err(error) => return error.into_response(),
     };
-    match state.ops.garyx_db.get_capsule(&id) {
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| db.get_capsule(&id))
+        .await
+    {
         Ok(Some(record)) => (
             StatusCode::OK,
             Json(json!({ "capsule": capsule_response(record) })),
@@ -357,7 +367,13 @@ pub async fn serve_capsule(
         Ok(id) => id,
         Err(error) => return error.into_response(),
     };
-    match state.ops.garyx_db.get_capsule(&id) {
+    let lookup_id = id.clone();
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| db.get_capsule(&lookup_id))
+        .await
+    {
         Ok(Some(_)) => {}
         Ok(None) => return CapsuleError::not_found("capsule not found").into_response(),
         Err(error) => return CapsuleError::from(error).into_response(),
@@ -410,7 +426,12 @@ pub async fn delete_capsule(
         Ok(path) => path,
         Err(error) => return error.into_response(),
     };
-    match state.ops.garyx_db.delete_capsule(&id) {
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| db.delete_capsule(&id))
+        .await
+    {
         Ok(true) => {
             let _ = fs::remove_file(path).await;
             (StatusCode::OK, Json(json!({ "deleted": true }))).into_response()

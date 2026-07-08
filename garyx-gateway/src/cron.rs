@@ -1081,7 +1081,7 @@ impl CronService {
             )
             .await;
         }
-        Self::finish_recorded_automation_thread_run(garyx_db.as_deref(), &record);
+        Self::finish_recorded_automation_thread_run(garyx_db.as_ref(), &record).await;
         if should_delete {
             let _ = delete_job_file(&self.data_dir, id).await;
         }
@@ -1283,8 +1283,8 @@ impl CronService {
         .await
         .map_err(|error| format!("failed to create automation thread: {error}"))?;
 
-        if let Some(garyx_db) = garyx_db
-            && let Err(error) = garyx_db.upsert_automation_thread_run(AutomationThreadRunDraft {
+        if let Some(garyx_db) = garyx_db.as_ref() {
+            let draft = AutomationThreadRunDraft {
                 automation_id: current.id.clone(),
                 run_id: run_id.to_owned(),
                 thread_id: thread_id.clone(),
@@ -1295,12 +1295,16 @@ impl CronService {
                 status: "running".to_owned(),
                 started_at: Utc::now().to_rfc3339(),
                 finished_at: None,
-            })
-        {
-            let _ = delete_thread_record(&runtime.thread_store, &thread_id).await;
-            return Err(format!(
-                "failed to record automation thread association: {error}"
-            ));
+            };
+            if let Err(error) = garyx_db
+                .run_blocking(move |db| db.upsert_automation_thread_run(draft))
+                .await
+            {
+                let _ = delete_thread_record(&runtime.thread_store, &thread_id).await;
+                return Err(format!(
+                    "failed to record automation thread association: {error}"
+                ));
+            }
         }
 
         let mut updated = current;
@@ -1326,8 +1330,8 @@ impl CronService {
         }
     }
 
-    fn finish_recorded_automation_thread_run(
-        garyx_db: Option<&GaryxDbService>,
+    async fn finish_recorded_automation_thread_run(
+        garyx_db: Option<&Arc<GaryxDbService>>,
         record: &RunRecord,
     ) {
         let Some(garyx_db) = garyx_db else {
@@ -1337,12 +1341,15 @@ impl CronService {
             return;
         };
         let status = Self::automation_thread_run_status(&record.status);
-        if let Err(error) = garyx_db.finish_automation_thread_run(
-            &record.job_id,
-            &record.run_id,
-            status,
-            &finished_at.to_rfc3339(),
-        ) {
+        let job_id = record.job_id.clone();
+        let run_id = record.run_id.clone();
+        let finished_at = finished_at.to_rfc3339();
+        if let Err(error) = garyx_db
+            .run_blocking(move |db| {
+                db.finish_automation_thread_run(&job_id, &run_id, status, &finished_at)
+            })
+            .await
+        {
             tracing::warn!(
                 job_id = %record.job_id,
                 run_id = %record.run_id,
@@ -1476,7 +1483,7 @@ impl CronService {
                 )
                 .await;
             }
-            Self::finish_recorded_automation_thread_run(garyx_db_handle.as_deref(), &record);
+            Self::finish_recorded_automation_thread_run(garyx_db_handle.as_ref(), &record).await;
             if should_delete {
                 let _ = delete_job_file(data_dir, &id).await;
             }
