@@ -377,6 +377,13 @@ impl MirroredThreadStore {
             object.remove("updated_at");
             object.remove(garyx_models::message_preview::LAST_USER_PREVIEW_FIELD);
             object.remove(garyx_models::message_preview::LAST_ASSISTANT_PREVIEW_FIELD);
+            // task.body is also import-seeded (the legacy task-body
+            // fallback): drop it from the view for the same reason as the
+            // preview fields — unrewritten mirrors read as permanent noise
+            // (on-device: 15/3795 threads differ only by this key).
+            if let Some(task) = object.get_mut("task").and_then(Value::as_object_mut) {
+                task.remove("body");
+            }
         }
         value
     }
@@ -406,7 +413,20 @@ impl MirroredThreadStore {
             stats
                 .comparisons
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if Self::comparable(primary_value) != Self::comparable(mirror_value) {
+            if Self::comparable(primary_value) != Self::comparable(mirror_value.clone()) {
+                // Debounce: an active thread can legitimately take another
+                // write between the primary read and the mirror read
+                // (observed on-device on the two busiest threads). Re-read
+                // the mirror once before declaring a divergence.
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                let recheck = mirror.get(&thread_id).await;
+                if recheck.map(Self::comparable) == Some(Self::comparable(mirror_value)) {
+                    // Mirror unchanged across the window — treat the first
+                    // comparison as authoritative and fall through to warn.
+                } else {
+                    // The mirror moved: it was a mid-write race, not drift.
+                    return;
+                }
                 let divergences = stats
                     .divergences
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
