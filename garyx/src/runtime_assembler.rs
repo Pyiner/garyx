@@ -68,6 +68,7 @@ impl RuntimeAssembler {
         // backends run their one-shot boot import before serving requests;
         // `sqlite` keeps a best-effort file mirror for hot rollback.
         let backend = garyx_gateway::resolve_thread_store_backend(&self.config);
+        let mut assembled_garyx_db = None;
         let thread_store: Arc<dyn ThreadStore> = match backend {
             garyx_gateway::ThreadStoreBackend::File => file_store.clone(),
             garyx_gateway::ThreadStoreBackend::Sqlite
@@ -75,6 +76,7 @@ impl RuntimeAssembler {
                 let garyx_db = Arc::new(garyx_gateway::garyx_db::GaryxDbService::open(
                     garyx_models::local_paths::default_garyx_database_path(),
                 )?);
+                assembled_garyx_db = Some(garyx_db.clone());
                 let mirror = match backend {
                     garyx_gateway::ThreadStoreBackend::Sqlite => {
                         tracing::info!("thread store backend: sqlite (dual-write file mirror)");
@@ -127,8 +129,14 @@ impl RuntimeAssembler {
         }
         let thread_logs = Arc::new(ThreadFileLogger::new(default_thread_log_dir()));
 
-        let state = AppStateBuilder::new(self.config.clone())
-            .with_persistent_local_stores()
+        let mut builder = AppStateBuilder::new(self.config.clone()).with_persistent_local_stores();
+        if let Some(garyx_db) = assembled_garyx_db {
+            // The sqlite thread-store backend already opened the garyx
+            // database; share that instance instead of letting the builder
+            // open a second one (single-writer discipline, D4).
+            builder = builder.with_garyx_db(garyx_db);
+        }
+        let state = builder
             .with_thread_store(thread_store.clone())
             .with_thread_history(thread_history.clone())
             .with_message_ledger(message_ledger)
