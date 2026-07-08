@@ -352,6 +352,17 @@ impl AppStateBuilder {
         let thread_store: Arc<dyn ThreadStore> =
             match crate::sqlite_thread_store::resolve_thread_store_backend(&self.config) {
                 crate::sqlite_thread_store::ThreadStoreBackend::File => {
+                    // While the file archive is the live truth, any prior
+                    // sqlite import snapshot is stale: invalidate the
+                    // migration state so the next switch to sqlite
+                    // re-imports (review #TASK-1901 — a rollback write
+                    // under an unchanged key count must not be skipped).
+                    if let Err(error) = self
+                        .garyx_db
+                        .clear_projection_state(crate::sqlite_thread_store::THREAD_RECORDS_IMPORT_NAME)
+                    {
+                        warn!(error = %error, "failed to invalidate sqlite thread-record import state");
+                    }
                     Arc::new(RecentThreadProjectingStore::new(
                         self.thread_store.clone(),
                         self.garyx_db.clone(),

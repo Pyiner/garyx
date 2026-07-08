@@ -942,6 +942,20 @@ impl GaryxDbService {
         }))
     }
 
+    /// Drop a projection/migration state row so its one-shot job runs
+    /// again on the next eligible boot. Used by the file thread-store
+    /// backend to invalidate the sqlite import whenever the archive is
+    /// the live truth (review #TASK-1901: a same-key-count rollback write
+    /// must not be skipped by the next import).
+    pub fn clear_projection_state(&self, name: &str) -> GaryxDbResult<bool> {
+        let conn = self.conn()?;
+        let removed = conn.execute(
+            "DELETE FROM projection_states WHERE projection_name = ?1",
+            params![name],
+        )?;
+        Ok(removed > 0)
+    }
+
     pub fn record_projection_state(
         &self,
         projection_name: &str,

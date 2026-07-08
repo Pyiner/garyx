@@ -286,10 +286,23 @@ impl ThreadStore for SqliteThreadStore {
     }
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+        self.update_accepted(thread_id, updates).await.map(|_| ())
+    }
+}
+
+impl SqliteThreadStore {
+    /// Trait `update` with an acceptance signal: `Ok(false)` means the
+    /// write was rejected (archived thread) — the mirror layer must not
+    /// write either (review #TASK-1901).
+    pub(crate) async fn update_accepted(
+        &self,
+        thread_id: &str,
+        updates: Value,
+    ) -> Result<bool, ThreadStoreError> {
         let lock = self.key_lock(thread_id);
         let _guard = lock.lock().await;
         if self.reject_archived_thread_write(thread_id).await {
-            return Ok(());
+            return Ok(false);
         }
         // Read-merge-write under the per-key lock: equivalent to an atomic
         // top-level merge because no other writer for this key can
@@ -304,7 +317,7 @@ impl ThreadStore for SqliteThreadStore {
             }
         }
         self.write_record(thread_id, data).await;
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -316,6 +329,11 @@ impl ThreadStore for SqliteThreadStore {
 pub(crate) struct MirroredThreadStore {
     primary: Arc<SqliteThreadStore>,
     mirror: Arc<dyn ThreadStore>,
+    /// Per-key locks spanning the SQL commit *and* the mirror write, so
+    /// concurrent same-key writes cannot land on the mirror out of order
+    /// (review #TASK-1901: SQL v1→v2 with the mirror finishing v2→v1 would
+    /// exceed the D8 "one write behind" rollback window).
+    key_locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     reads: std::sync::atomic::AtomicU64,
     comparisons: std::sync::atomic::AtomicU64,
     divergences: std::sync::atomic::AtomicU64,
@@ -328,10 +346,20 @@ impl MirroredThreadStore {
         Self {
             primary,
             mirror,
+            key_locks: StdMutex::new(HashMap::new()),
             reads: std::sync::atomic::AtomicU64::new(0),
             comparisons: std::sync::atomic::AtomicU64::new(0),
             divergences: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    fn key_lock(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.key_locks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(key.to_owned())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     /// Comparable view of a record: the retired snapshot (still present in
@@ -388,6 +416,8 @@ impl ThreadStore for MirroredThreadStore {
     }
 
     async fn set(&self, thread_id: &str, mut data: Value) {
+        let lock = self.key_lock(thread_id);
+        let _guard = lock.lock().await;
         // Strip up-front so both sides persist the same shape; the mirror
         // rewrite is what strips legacy `messages` out of archive files.
         strip_retired_record_fields(&mut data);
@@ -397,6 +427,8 @@ impl ThreadStore for MirroredThreadStore {
     }
 
     async fn delete(&self, thread_id: &str) -> bool {
+        let lock = self.key_lock(thread_id);
+        let _guard = lock.lock().await;
         let removed = self.primary.delete(thread_id).await;
         self.mirror.delete(thread_id).await;
         removed
@@ -411,7 +443,13 @@ impl ThreadStore for MirroredThreadStore {
     }
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-        self.primary.update(thread_id, updates).await?;
+        let lock = self.key_lock(thread_id);
+        let _guard = lock.lock().await;
+        // A rejected update (archived thread) must not touch the mirror
+        // either (review #TASK-1901).
+        if !self.primary.update_accepted(thread_id, updates).await? {
+            return Ok(());
+        }
         // Mirror the post-merge truth snapshot rather than re-running the
         // merge against a possibly stale archive copy.
         if let Some(merged) = self.primary.get(thread_id).await {
@@ -452,7 +490,7 @@ pub async fn assemble_sqlite_thread_store(
     }
 }
 
-const THREAD_RECORDS_IMPORT_NAME: &str = "thread_records_import";
+pub(crate) const THREAD_RECORDS_IMPORT_NAME: &str = "thread_records_import";
 const THREAD_RECORDS_IMPORT_VERSION: i64 = 1;
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -763,6 +801,164 @@ mod contract_tests {
         // delete removes both sides.
         assert!(store.delete(thread_id).await);
         assert_eq!(mirror.get(thread_id).await, None);
+    }
+
+    /// Mirror whose first write stalls until released — reproduces the
+    /// #TASK-1901 ordering race: without the mirror-spanning key lock,
+    /// SQL committing v1→v2 could still leave the mirror at v1.
+    struct StallingMirror {
+        inner: InMemoryThreadStore,
+        gate: tokio::sync::Semaphore,
+        stalled_once: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait]
+    impl ThreadStore for StallingMirror {
+        async fn get(&self, thread_id: &str) -> Option<Value> {
+            self.inner.get(thread_id).await
+        }
+        async fn set(&self, thread_id: &str, data: Value) {
+            if !self
+                .stalled_once
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                let _permit = self.gate.acquire().await.expect("gate");
+            }
+            self.inner.set(thread_id, data).await;
+        }
+        async fn delete(&self, thread_id: &str) -> bool {
+            self.inner.delete(thread_id).await
+        }
+        async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
+            self.inner.list_keys(prefix).await
+        }
+        async fn exists(&self, thread_id: &str) -> bool {
+            self.inner.exists(thread_id).await
+        }
+        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+            self.inner.update(thread_id, updates).await
+        }
+    }
+
+    #[tokio::test]
+    async fn mirrored_store_preserves_same_key_write_order_under_concurrency() {
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let mirror = Arc::new(StallingMirror {
+            inner: InMemoryThreadStore::new(),
+            gate: tokio::sync::Semaphore::new(0),
+            stalled_once: std::sync::atomic::AtomicBool::new(false),
+        });
+        let store = Arc::new(MirroredThreadStore::new(
+            Arc::new(sqlite_store(Arc::clone(&garyx_db))),
+            Arc::clone(&mirror) as Arc<dyn ThreadStore>,
+        ));
+        let thread_id = "thread::write-order";
+
+        // First writer's mirror write stalls at the gate; the second writer
+        // must not be able to slip its mirror write in front of it.
+        let first = {
+            let store = Arc::clone(&store);
+            tokio::spawn(async move {
+                store
+                    .set(thread_id, json!({"thread_id": thread_id, "generation": 1}))
+                    .await;
+            })
+        };
+        // Give the first writer time to reach the stalled mirror write.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let second = {
+            let store = Arc::clone(&store);
+            tokio::spawn(async move {
+                store
+                    .set(thread_id, json!({"thread_id": thread_id, "generation": 2}))
+                    .await;
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        mirror.gate.add_permits(1);
+        first.await.expect("first write");
+        second.await.expect("second write");
+
+        assert_eq!(
+            mirror.get(thread_id).await.expect("mirror value")["generation"],
+            2,
+            "the mirror must end at the newest committed value"
+        );
+        assert_eq!(
+            store.get(thread_id).await.expect("primary value")["generation"],
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn mirrored_store_rejected_update_does_not_touch_the_mirror() {
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let mirror: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let store = MirroredThreadStore::new(
+            Arc::new(sqlite_store(Arc::clone(&garyx_db))),
+            Arc::clone(&mirror),
+        );
+        let thread_id = "thread::archived-update";
+
+        store
+            .set(thread_id, json!({"thread_id": thread_id, "label": "live"}))
+            .await;
+        // Simulate a mirror that is one write behind (the allowed window).
+        mirror
+            .set(thread_id, json!({"thread_id": thread_id, "label": "stale"}))
+            .await;
+
+        garyx_db.mark_thread_archived(thread_id).expect("archive");
+        store
+            .update(thread_id, json!({"label": "after-archive"}))
+            .await
+            .expect("rejected update reports Ok");
+
+        assert_eq!(
+            mirror.get(thread_id).await.expect("mirror unchanged")["label"],
+            "stale",
+            "a rejected update must not rewrite the mirror (#TASK-1901)"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleared_import_state_forces_a_reimport() {
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+        let sqlite = SqliteThreadStore::new(
+            Arc::clone(&garyx_db),
+            Arc::clone(&transcript_store),
+            Arc::new(AlwaysActiveRunProbe),
+        );
+        let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        source
+            .set("thread::rollback", json!({"thread_id": "thread::rollback", "label": "v1"}))
+            .await;
+
+        let summary =
+            import_thread_records_if_needed(&garyx_db, &source, &sqlite, &transcript_store).await;
+        assert_eq!(summary.imported, 1);
+
+        // A file-mode rollback rewrites the record under the same key count…
+        source
+            .set("thread::rollback", json!({"thread_id": "thread::rollback", "label": "v2"}))
+            .await;
+        // …and the file-mode boot invalidates the import state
+        // (#TASK-1901: same key count must not skip the re-import).
+        assert!(
+            garyx_db
+                .clear_projection_state(THREAD_RECORDS_IMPORT_NAME)
+                .expect("clear state")
+        );
+
+        let summary =
+            import_thread_records_if_needed(&garyx_db, &source, &sqlite, &transcript_store).await;
+        assert_eq!(summary.imported, 1, "cleared state must force a re-import");
+        assert_eq!(
+            sqlite.get("thread::rollback").await.expect("record")["label"],
+            "v2",
+            "the re-import must pick up the rollback write"
+        );
     }
 
     #[test]
