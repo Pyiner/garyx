@@ -104,16 +104,10 @@ fn test_session_entry_exposes_thread_record_view() {
         label: Some("Inbox".to_owned()),
         ..Default::default()
     };
-    entry.messages.push(HashMap::from([(
-        "role".to_owned(),
-        Value::String("user".to_owned()),
-    )]));
-
     let view = entry.thread_record_view();
     assert_eq!(view.thread_id, "thread::abc");
     assert_eq!(view.agent_id, "main");
     assert_eq!(view.label, Some("Inbox"));
-    assert_eq!(view.messages.len(), 1);
 }
 
 #[test]
@@ -124,16 +118,10 @@ fn test_session_entry_converts_to_owned_thread_record() {
         label: Some("Owned".to_owned()),
         ..Default::default()
     };
-    entry.messages.push(HashMap::from([(
-        "role".to_owned(),
-        Value::String("assistant".to_owned()),
-    )]));
-
     let record = entry.to_thread_record();
     assert_eq!(record.thread_id, "thread::owned");
     assert_eq!(record.agent_id, "main");
     assert_eq!(record.label.as_deref(), Some("Owned"));
-    assert_eq!(record.messages.len(), 1);
 }
 
 #[test]
@@ -142,10 +130,6 @@ fn test_session_entry_builds_from_owned_thread_record() {
         thread_id: "thread::writeback".to_owned(),
         agent_id: "main".to_owned(),
         label: Some("Writeback".to_owned()),
-        messages: vec![HashMap::from([(
-            "role".to_owned(),
-            Value::String("assistant".to_owned()),
-        )])],
         queue: crate::thread_record::ThreadQueueState {
             system_sent: true,
             ..Default::default()
@@ -158,7 +142,6 @@ fn test_session_entry_builds_from_owned_thread_record() {
     assert_eq!(entry.agent_id, "main");
     assert_eq!(entry.label.as_deref(), Some("Writeback"));
     assert!(entry.system_sent);
-    assert_eq!(entry.messages.len(), 1);
 }
 
 #[test]

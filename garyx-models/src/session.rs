@@ -137,10 +137,6 @@ pub struct SessionEntry {
     #[serde(default)]
     pub compaction_count: i64,
 
-    // === Message history ===
-    #[serde(default)]
-    pub messages: Vec<HashMap<String, Value>>,
-
     // === Custom metadata ===
     #[serde(default)]
     pub metadata: HashMap<String, Value>,
@@ -196,7 +192,6 @@ impl Default for SessionEntry {
             aborted_last_run: false,
             token_usage: SessionTokenUsage::default(),
             compaction_count: 0,
-            messages: Vec::new(),
             metadata: HashMap::new(),
         }
     }
@@ -226,7 +221,6 @@ impl SessionEntry {
             label: self.label.as_deref(),
             display_name: self.display_name.as_deref(),
             subject: self.subject.as_deref(),
-            messages: &self.messages,
             metadata: &self.metadata,
             provider_runtime: self.provider_runtime_state(),
             routing: self.thread_routing_state(),
@@ -339,7 +333,6 @@ impl From<&SessionEntry> for crate::thread_record::ThreadRecord {
             updated_at: value.updated_at,
             chat_type: value.chat_type.clone(),
             origin: value.origin.clone(),
-            messages: value.messages.clone(),
             metadata: value.metadata.clone(),
             provider_runtime: value.provider_runtime_state(),
             routing: value.thread_routing_state(),
@@ -397,7 +390,6 @@ impl From<crate::thread_record::ThreadRecord> for SessionEntry {
             aborted_last_run: value.queue.aborted_last_run,
             token_usage: value.usage.token_usage,
             compaction_count: value.usage.compaction_count,
-            messages: value.messages,
             metadata: value.metadata,
         }
     }
