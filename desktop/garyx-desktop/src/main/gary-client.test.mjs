@@ -14,6 +14,7 @@ import {
   listProviderModels,
   requestJson,
   setGatewayFetch,
+  setGatewayStreamFetch,
   streamThreadEvents,
 } from "./gary-client.ts";
 
@@ -482,6 +483,52 @@ function sseResponse(...frames) {
     { status: 200, statusText: "OK" },
   );
 }
+
+test("streamThreadEvents rides the stream transport, control requests the default transport (#TASK-1840)", async () => {
+  // Live SSE connections hold their socket for as long as they run; on the
+  // shared Chromium pool six of them starve every control request into its
+  // AbortSignal timeout. The stream seam is what keeps them on a separate
+  // pool, so a regression that lands streams back on the control transport
+  // must fail here.
+  const controlUrls = [];
+  const streamUrls = [];
+  setGatewayFetch(async (url) => {
+    controlUrls.push(String(url));
+    return new Response(JSON.stringify({ ok: true, messages: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+  setGatewayStreamFetch(async (url) => {
+    streamUrls.push(String(url));
+    const payload = renderFramePayload(
+      "thread::transport",
+      [committedEvent("thread::transport", 1, "hi")],
+      1,
+    );
+    return sseResponse(`id: 1\ndata: ${payload}\n\n`);
+  });
+
+  try {
+    await streamThreadEvents(
+      { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+      "thread::transport",
+      () => {},
+    );
+    await requestJson(
+      { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
+      "/api/threads/history?thread_id=thread%3A%3Atransport",
+    );
+
+    assert.equal(streamUrls.length, 1);
+    assert.match(streamUrls[0], /\/api\/threads\/thread%3A%3Atransport\/stream/);
+    assert.equal(controlUrls.length, 1);
+    assert.match(controlUrls[0], /\/api\/threads\/history/);
+  } finally {
+    setGatewayFetch(null);
+    setGatewayStreamFetch(null);
+  }
+});
 
 test("streamThreadEvents connects to per-thread stream with resume cursor", async () => {
   const urls = [];

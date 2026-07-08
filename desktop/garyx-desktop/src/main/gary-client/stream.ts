@@ -15,7 +15,7 @@ import {
   decideStreamSeq,
   isControlTranscriptMessage,
 } from "../../shared/transcript-sync.ts";
-import { applyGatewayAuthHeader, applyGatewayCustomHeaders, asBoolean, asFiniteNumber, asString, buildUrl, gatewayFetch, parseRecord, requestJson, tryParseJson } from "./http.ts";
+import { applyGatewayAuthHeader, applyGatewayCustomHeaders, asBoolean, asFiniteNumber, asString, buildUrl, gatewayStreamFetch, parseRecord, requestJson, tryParseJson } from "./http.ts";
 
 type SerializedMessageAttachments = {
   attachments: Array<{
@@ -410,7 +410,10 @@ export async function streamThreadEvents(
     armWatchdog("headers", headerTimeoutMs);
     let response: Response;
     try {
-      response = await gatewayFetch(
+      // Streams ride their own socket pool (gatewayStreamFetch): a live SSE
+      // connection holds its socket for as long as it runs, and six of them
+      // on the shared pool starve every control request (#TASK-1840).
+      response = await gatewayStreamFetch(
         buildUrl(
           settings,
           `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&windowed_resume=1${renderFloorParam}`,
