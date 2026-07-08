@@ -666,9 +666,6 @@ impl MessageRouter {
                 Value::Number(serde_json::Number::from(0)),
             );
         }
-        if !obj.contains_key("messages") {
-            obj.insert("messages".to_owned(), Value::Array(Vec::new()));
-        }
         if !obj.contains_key("history") {
             obj.insert("history".to_owned(), default_thread_history_state_value());
         }

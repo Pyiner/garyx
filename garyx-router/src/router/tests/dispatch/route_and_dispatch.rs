@@ -1373,62 +1373,6 @@ async fn test_route_and_dispatch_last_delivery_prefers_chat_id_metadata() {
 }
 
 #[tokio::test]
-async fn test_route_and_dispatch_applies_thread_history_limit() {
-    let store = Arc::new(InMemoryThreadStore::new());
-    seed_bound_dm_thread(
-        &store,
-        "thread::history-user42",
-        "bot1",
-        "user42",
-        json!({
-            "messages": [
-                {"role": "user", "content": "m1"},
-                {"role": "assistant", "content": "m2"},
-                {"role": "user", "content": "m3"},
-                {"role": "assistant", "content": "m4"},
-                {"role": "user", "content": "m5"}
-            ]
-        }),
-    )
-    .await;
-
-    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
-    router.rebuild_thread_indexes().await;
-    let dispatcher = MockDispatcher::new();
-
-    let mut extra = HashMap::new();
-    extra.insert(
-        "thread_history_limit".to_owned(),
-        Value::Number(serde_json::Number::from(3)),
-    );
-
-    let request = InboundRequest {
-        channel: "telegram".to_owned(),
-        account_id: "bot1".to_owned(),
-        from_id: "user42".to_owned(),
-        is_group: false,
-        thread_binding_key: "user42".to_owned(),
-        message: "new input".to_owned(),
-        run_id: "run-history".to_owned(),
-        reply_to_message_id: None,
-        images: vec![],
-        extra_metadata: extra,
-        file_paths: vec![],
-    };
-
-    router
-        .route_and_dispatch(request, &dispatcher, None)
-        .await
-        .unwrap();
-
-    let thread_state = store.get("thread::history-user42").await.unwrap();
-    let messages = thread_state["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 3);
-    assert_eq!(messages[0]["content"], "m3");
-    assert_eq!(messages[2]["content"], "m5");
-}
-
-#[tokio::test]
 async fn test_route_and_dispatch_auto_recovery() {
     let store = Arc::new(InMemoryThreadStore::new());
     seed_bound_dm_thread(

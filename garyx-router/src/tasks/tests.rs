@@ -249,9 +249,11 @@ async fn task_create_stores_task_overlay_without_task_messages() {
     assert!(task.number > 0);
     let record = service.thread_store.get(&thread_id).await.unwrap();
     assert!(record.get("task").is_some());
-    let messages = record.get("messages").and_then(Value::as_array).unwrap();
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0]["role"], Value::String("user".to_owned()));
+    // The body is no longer seeded into a record messages copy
+    // (#TASK-1864 batch 1c): task.body is the canonical source and the
+    // dispatch run writes it to the transcript.
+    assert!(record.get("messages").is_none());
+    assert_eq!(record["task"]["body"], "Look at launchctl");
 }
 
 #[tokio::test]

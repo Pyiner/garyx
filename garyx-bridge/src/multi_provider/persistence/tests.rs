@@ -9,6 +9,23 @@ fn make_history(store: Arc<dyn ThreadStore>) -> Arc<ThreadHistoryRepository> {
     ))
 }
 
+/// Terminal persistence only reconciles the transcript for an identified
+/// run (empty run ids skip the tail reconcile), matching production where
+/// every bridge run carries one.
+fn run_metadata(run_id: &str) -> HashMap<String, Value> {
+    HashMap::from([("run_id".to_owned(), Value::String(run_id.to_owned()))])
+}
+
+/// Committed provider-session content rows (control records skipped) —
+/// the transcript view that replaced the retired record `messages`
+/// snapshot (#TASK-1864 batch 1c).
+async fn committed_content(history: &ThreadHistoryRepository, thread_id: &str) -> Vec<Value> {
+    history
+        .provider_session_tail(thread_id, 1000)
+        .await
+        .expect("provider session tail")
+}
+
 fn fixture_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -309,7 +326,7 @@ async fn test_save_thread_messages_preserves_provider_message_order() {
             provider_key: "provider::ordered",
             provider_type: ProviderType::ClaudeCode,
             session_messages: &session_messages,
-            metadata: &HashMap::new(),
+            metadata: &run_metadata("run-ordered"),
         },
     )
     .await;
@@ -323,9 +340,11 @@ async fn test_save_thread_messages_preserves_provider_message_order() {
         stored["provider_sdk_session_ids"]["provider::ordered"],
         "sdk-1"
     );
-    let messages = stored["messages"]
-        .as_array()
-        .expect("messages should be an array");
+    assert!(
+        stored.get("messages").is_none(),
+        "record messages snapshot is retired (#TASK-1864 batch 1c)"
+    );
+    let messages = committed_content(&history, "thread::ordered").await;
     let roles: Vec<&str> = messages
         .iter()
         .filter_map(|entry| entry.get("role").and_then(Value::as_str))
@@ -358,7 +377,7 @@ async fn test_save_thread_messages_maintains_write_time_preview_fields() {
             provider_key: "provider::previews",
             provider_type: ProviderType::ClaudeCode,
             session_messages: &first_run_messages,
-            metadata: &HashMap::new(),
+            metadata: &run_metadata("run-prev-1"),
         },
     )
     .await;
@@ -383,7 +402,7 @@ async fn test_save_thread_messages_maintains_write_time_preview_fields() {
             provider_key: "provider::previews",
             provider_type: ProviderType::ClaudeCode,
             session_messages: &[],
-            metadata: &HashMap::new(),
+            metadata: &run_metadata("run-prev-2"),
         },
     )
     .await;
@@ -395,9 +414,10 @@ async fn test_save_thread_messages_maintains_write_time_preview_fields() {
 
 #[tokio::test]
 async fn test_preview_fields_follow_same_run_replay_retraction() {
-    // Review #TASK-1882 finding 1: a replayed run removes its previous
-    // rows from the snapshot (message_matches_run); the preview fields
-    // must describe the final snapshot, not the retracted rows.
+    // Review #TASK-1882 finding 1: a replayed run retracts its previous
+    // rows (reconcile_run_records_tail rewrites the run's transcript
+    // tail); the preview fields must describe the final committed
+    // content, not the retracted rows.
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());
     let old_run_messages = vec![ProviderMessage::assistant_text("older answer")];
@@ -414,7 +434,7 @@ async fn test_preview_fields_follow_same_run_replay_retraction() {
             provider_key: "provider::replay",
             provider_type: ProviderType::ClaudeCode,
             session_messages: &old_run_messages,
-            metadata: &HashMap::new(),
+            metadata: &run_metadata("run-old"),
         },
     )
     .await;
@@ -488,7 +508,7 @@ async fn test_preview_fields_are_removed_when_no_row_survives_the_cap() {
             provider_key: "provider::cap",
             provider_type: ProviderType::ClaudeCode,
             session_messages: &assistant_run,
-            metadata: &HashMap::new(),
+            metadata: &run_metadata("run-cap-1"),
         },
     )
     .await;
@@ -512,7 +532,7 @@ async fn test_preview_fields_are_removed_when_no_row_survives_the_cap() {
             provider_key: "provider::cap",
             provider_type: ProviderType::ClaudeCode,
             session_messages: &many_users,
-            metadata: &HashMap::new(),
+            metadata: &run_metadata("run-cap-2"),
         },
     )
     .await;
@@ -529,10 +549,13 @@ async fn test_preview_fields_are_removed_when_no_row_survives_the_cap() {
 async fn test_save_thread_messages_copies_client_intent_to_user_origin_id() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());
-    let metadata = HashMap::from([(
-        "client_intent_id".to_owned(),
-        json!("00000000-0000-0000-0000-000000000001"),
-    )]);
+    let metadata = HashMap::from([
+        (
+            "client_intent_id".to_owned(),
+            json!("00000000-0000-0000-0000-000000000001"),
+        ),
+        ("run_id".to_owned(), json!("run-origin")),
+    ]);
 
     save_thread_messages(
         &store,
@@ -552,13 +575,11 @@ async fn test_save_thread_messages_copies_client_intent_to_user_origin_id() {
     )
     .await;
 
-    let stored = store
+    store
         .get("thread::origin")
         .await
         .expect("stored session should exist");
-    let messages = stored["messages"]
-        .as_array()
-        .expect("messages should be an array");
+    let messages = committed_content(&history, "thread::origin").await;
     assert_eq!(
         messages[0]["metadata"]["origin_id"],
         "00000000-0000-0000-0000-000000000001"
@@ -588,7 +609,7 @@ async fn test_save_thread_messages_persists_user_images_as_blocks() {
             provider_key: "provider::image",
             provider_type: ProviderType::ClaudeCode,
             session_messages: &[],
-            metadata: &HashMap::new(),
+            metadata: &run_metadata("run-images"),
         },
     )
     .await;
@@ -598,9 +619,7 @@ async fn test_save_thread_messages_persists_user_images_as_blocks() {
         .await
         .expect("stored session should exist");
     assert_eq!(stored["provider_key"], "provider::image");
-    let messages = stored["messages"]
-        .as_array()
-        .expect("messages should be an array");
+    let messages = committed_content(&history, "thread::image").await;
     let user = messages[0].as_object().expect("user message object");
     let content = user
         .get("content")
@@ -620,7 +639,7 @@ async fn test_save_thread_messages_overrides_stale_metadata_sdk_session_id() {
     let session_messages = vec![ProviderMessage::assistant_text("new session answer")];
     let mut metadata = HashMap::new();
     metadata.insert("sdk_session_id".to_owned(), json!("old-session"));
-    metadata.insert("client_run_id".to_owned(), json!("run-1"));
+    metadata.insert("client_run_id".to_owned(), json!("run-stale-sdk"));
 
     save_thread_messages(
         &store,
@@ -644,9 +663,7 @@ async fn test_save_thread_messages_overrides_stale_metadata_sdk_session_id() {
         .get("thread::sdk-session-message")
         .await
         .expect("stored session should exist");
-    let messages = stored["messages"]
-        .as_array()
-        .expect("messages should be an array");
+    let messages = committed_content(&history, "thread::sdk-session-message").await;
     assert_eq!(messages[0]["metadata"]["sdk_session_id"], "new-session");
     assert_eq!(messages[1]["sdk_session_id"], "new-session");
     assert_eq!(stored["sdk_session_id"], "new-session");
@@ -1559,7 +1576,7 @@ async fn test_save_thread_messages_synthesizes_message_tool_delivery_as_assistan
             provider_key: "provider::delivery",
             provider_type: ProviderType::ClaudeCode,
             session_messages: &session_messages,
-            metadata: &HashMap::new(),
+            metadata: &run_metadata("run-synth"),
         },
     )
     .await;
@@ -1569,9 +1586,7 @@ async fn test_save_thread_messages_synthesizes_message_tool_delivery_as_assistan
         .await
         .expect("stored session should exist");
     assert_eq!(stored["provider_key"], "provider::delivery");
-    let messages = stored["messages"]
-        .as_array()
-        .expect("messages should be an array");
+    let messages = committed_content(&history, "thread::delivery-mirror").await;
     let roles: Vec<&str> = messages
         .iter()
         .filter_map(|entry| entry.get("role").and_then(Value::as_str))
@@ -1626,7 +1641,7 @@ async fn test_save_thread_messages_does_not_synthesize_delivery_when_assistant_e
             provider_key: "provider::explicit-assistant",
             provider_type: ProviderType::ClaudeCode,
             session_messages: &session_messages,
-            metadata: &HashMap::new(),
+            metadata: &run_metadata("run-nosynth"),
         },
     )
     .await;
@@ -1636,9 +1651,7 @@ async fn test_save_thread_messages_does_not_synthesize_delivery_when_assistant_e
         .await
         .expect("stored session should exist");
     assert_eq!(stored["provider_key"], "provider::explicit-assistant");
-    let messages = stored["messages"]
-        .as_array()
-        .expect("messages should be an array");
+    let messages = committed_content(&history, "thread::explicit-assistant").await;
     let assistant_messages: Vec<&Value> = messages
         .iter()
         .filter(|entry| entry.get("role").and_then(Value::as_str) == Some("assistant"))
@@ -1662,6 +1675,7 @@ async fn test_save_thread_messages_marks_loop_continuation_as_internal() {
             "loop_origin".to_owned(),
             Value::String("auto_continue".to_owned()),
         ),
+        ("run_id".to_owned(), Value::String("run-loop".to_owned())),
     ]);
 
     save_thread_messages(
@@ -1682,13 +1696,11 @@ async fn test_save_thread_messages_marks_loop_continuation_as_internal() {
     )
     .await;
 
-    let stored = store
+    store
         .get("thread::loop-internal")
         .await
         .expect("stored thread should exist");
-    let messages = stored["messages"]
-        .as_array()
-        .expect("messages should be an array");
+    let messages = committed_content(&history, "thread::loop-internal").await;
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0]["internal"], true);
     assert_eq!(messages[0]["internal_kind"], "loop_continuation");

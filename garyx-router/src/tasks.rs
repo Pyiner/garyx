@@ -8,7 +8,7 @@ use garyx_models::{
     TaskNotificationTarget, TaskSource, TaskStatus, ThreadTask,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{TaskCounterError, TaskCounterStore};
@@ -308,23 +308,10 @@ impl TaskService {
             }
         })?;
 
+        // The task body is no longer seeded into a record `messages` copy
+        // (#TASK-1864 batch 1c): `task.body` is the canonical source and the
+        // dispatch run writes the body to the transcript as its user turn.
         let body = normalized_limited(input.body, 8_000)?;
-        if let Some(body) = body.as_deref() {
-            let message = json!({
-                "role": "user",
-                "content": body,
-                "timestamp": Utc::now().to_rfc3339(),
-            });
-            let obj = record.as_object_mut().ok_or_else(|| {
-                TaskServiceError::Store("thread record is not an object".to_owned())
-            })?;
-            obj.entry("messages".to_owned())
-                .or_insert_with(|| Value::Array(Vec::new()))
-                .as_array_mut()
-                .ok_or_else(|| TaskServiceError::Store("messages is not an array".to_owned()))?
-                .push(message);
-            obj.insert("message_count".to_owned(), Value::Number(1.into()));
-        }
 
         let title = derive_title(input.title.as_deref(), body.as_deref());
         let task = self

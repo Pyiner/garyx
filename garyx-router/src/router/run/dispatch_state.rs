@@ -19,31 +19,6 @@ impl MessageRouter {
             .filter(|value| !value.is_empty())
     }
 
-    pub(super) async fn trim_thread_history(&self, thread_id: &str, limit: usize) -> usize {
-        if limit == 0 {
-            return 0;
-        }
-
-        let Some(mut thread_data) = self.threads.get(thread_id).await else {
-            return 0;
-        };
-        let Some(obj) = thread_data.as_object_mut() else {
-            return 0;
-        };
-        let Some(messages) = obj.get_mut("messages").and_then(|v| v.as_array_mut()) else {
-            return 0;
-        };
-
-        if messages.len() <= limit {
-            return 0;
-        }
-
-        let trimmed = messages.len() - limit;
-        messages.drain(..trimmed);
-        self.threads.set(thread_id, thread_data).await;
-        trimmed
-    }
-
     pub(super) async fn backfill_thread_context_if_missing(
         &self,
         thread_id: &str,

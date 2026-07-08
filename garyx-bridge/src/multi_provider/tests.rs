@@ -2477,7 +2477,8 @@ async fn test_thread_persistence_after_run() {
     let store: Arc<dyn garyx_router::ThreadStore> =
         Arc::new(garyx_router::InMemoryThreadStore::new());
     bridge.set_thread_store(store.clone()).await;
-    bridge.set_thread_history(make_history(store.clone()));
+    let history = make_history(store.clone());
+    bridge.set_thread_history(history.clone());
 
     bridge
         .start_agent_run(
@@ -2493,24 +2494,26 @@ async fn test_thread_persistence_after_run() {
         .await
         .unwrap();
 
-    let data = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+    let messages = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            if let Some(data) = store.get("sess::tg::persist").await {
-                let message_count = data["messages"]
-                    .as_array()
-                    .map(|messages| messages.len())
-                    .unwrap_or(0);
-                if message_count >= 2 {
-                    break data;
-                }
+            let messages = combined_thread_messages(&history, "sess::tg::persist").await;
+            if messages.len() >= 2 {
+                break messages;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
     .expect("session data should be persisted");
+    let data = store
+        .get("sess::tg::persist")
+        .await
+        .expect("thread record should exist");
     assert_eq!(data["provider_key"], "p1");
-    let messages = data["messages"].as_array().unwrap();
+    assert!(
+        data.get("messages").is_none(),
+        "record messages snapshot is retired (#TASK-1864 batch 1c)"
+    );
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0]["role"], "user");
     assert_eq!(messages[0]["content"], "hello bot");
@@ -2734,9 +2737,7 @@ async fn test_thread_persistence_checkpoints_streaming_metadata_before_run_compl
         .get("sess::tg::checkpoint")
         .await
         .expect("final thread data should exist");
-    let final_messages = final_data["messages"]
-        .as_array()
-        .expect("messages should be an array");
+    let final_messages = combined_thread_messages(&history, "sess::tg::checkpoint").await;
     assert_eq!(final_messages.len(), 2);
     assert_eq!(final_messages[1]["content"], "partial reply");
     assert_eq!(final_data["sdk_session_id"], "sdk-sess::tg::checkpoint");
@@ -2791,7 +2792,8 @@ async fn test_failed_run_commits_terminal_control_and_preserves_partial_messages
         )
         .await;
     bridge.set_thread_store(store.clone()).await;
-    bridge.set_thread_history(make_history(store.clone()));
+    let history = make_history(store.clone());
+    bridge.set_thread_history(history.clone());
 
     bridge
         .start_agent_run(
@@ -2827,9 +2829,8 @@ async fn test_failed_run_commits_terminal_control_and_preserves_partial_messages
     assert_eq!(final_data["provider_sdk_session_ids"]["p1"], "sdk-existing");
     assert_eq!(final_data["task"]["status"], "in_progress");
 
-    let final_messages = final_data["messages"]
-        .as_array()
-        .expect("messages should be an array");
+    let final_messages =
+        combined_thread_messages(&history, "sess::tg::failed-checkpoint").await;
     assert_eq!(final_messages[0]["role"], "user");
     assert_eq!(final_messages[0]["content"], "keep this failure");
     assert!(
@@ -2960,7 +2961,8 @@ async fn test_unsuccessful_task_run_with_partial_response_does_not_move_to_revie
         )
         .await;
     bridge.set_thread_store(store.clone()).await;
-    bridge.set_thread_history(make_history(store.clone()));
+    let history = make_history(store.clone());
+    bridge.set_thread_history(history.clone());
 
     bridge
         .start_agent_run(
@@ -2989,9 +2991,8 @@ async fn test_unsuccessful_task_run_with_partial_response_does_not_move_to_revie
         .await
         .expect("thread data should exist");
     assert_eq!(final_data["task"]["status"], "in_progress");
-    let final_messages = final_data["messages"]
-        .as_array()
-        .expect("messages should be persisted");
+    let final_messages =
+        combined_thread_messages(&history, "sess::tg::failed-result-task").await;
     assert!(
         final_messages
             .iter()

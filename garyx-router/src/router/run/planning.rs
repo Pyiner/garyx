@@ -5,7 +5,6 @@ use garyx_models::messages::MessageMetadata;
 use garyx_models::thread_logs::{ThreadLogEvent, is_canonical_thread_id};
 use garyx_models::{MessageLedgerEvent, MessageLifecycleStatus};
 use serde_json::{Value, json};
-use tracing::debug;
 
 use super::super::*;
 use crate::bindings_from_value;
@@ -361,8 +360,6 @@ impl MessageRouter {
         })
         .await;
 
-        self.apply_history_limit_if_needed(&thread_id, &context.extra_metadata)
-            .await;
         self.backfill_thread_context_if_missing(
             &thread_id,
             &context.channel,
@@ -445,29 +442,6 @@ impl MessageRouter {
             .await
     }
 
-    async fn apply_history_limit_if_needed(
-        &self,
-        thread_id: &str,
-        extra_metadata: &HashMap<String, Value>,
-    ) {
-        if let Some(limit) = extra_metadata
-            .get("thread_history_limit")
-            .or_else(|| extra_metadata.get("history_limit"))
-            .and_then(|v| v.as_i64())
-            .filter(|v| *v > 0)
-            .map(|v| v as usize)
-        {
-            let trimmed = self.trim_thread_history(thread_id, limit).await;
-            if trimmed > 0 {
-                debug!(
-                    thread_id = %thread_id,
-                    thread_history_limit = limit,
-                    trimmed,
-                    "trimmed thread history before dispatch"
-                );
-            }
-        }
-    }
 }
 
 fn native_message_id(extra_metadata: &HashMap<String, Value>) -> Option<String> {

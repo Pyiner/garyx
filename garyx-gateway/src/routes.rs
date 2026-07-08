@@ -762,8 +762,6 @@ fn fork_source_sdk_session_id(thread_data: &Value, provider_type: &ProviderType)
     None
 }
 
-const IMPORTED_SESSION_SNAPSHOT_LIMIT: usize = 100;
-
 async fn seed_imported_thread_history(
     state: &Arc<AppState>,
     thread_id: &str,
@@ -786,13 +784,19 @@ async fn seed_imported_thread_history(
         return Err(format!("thread payload is not an object: {thread_id}"));
     };
 
-    let snapshot_start = messages
-        .len()
-        .saturating_sub(IMPORTED_SESSION_SNAPSHOT_LIMIT);
-    object.insert(
-        "messages".to_owned(),
-        Value::Array(messages[snapshot_start..].to_vec()),
-    );
+    // The transcript is the only imported-content copy (#TASK-1864
+    // batch 1c): no record `messages` snapshot is seeded. The write-time
+    // preview fields are derived from the imported content directly.
+    for role in ["user", "assistant"] {
+        if let Some(field) = garyx_models::message_preview::preview_field_for_role(role)
+            && let Some(preview) = garyx_models::message_preview::last_message_preview_for_role(
+                messages.iter(),
+                role,
+            )
+        {
+            object.insert(field.to_owned(), Value::String(preview));
+        }
+    }
     object.insert(
         "message_count".to_owned(),
         Value::Number(serde_json::Number::from(

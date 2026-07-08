@@ -3642,10 +3642,12 @@ async fn seed_imported_thread_history_persists_transcript_and_thread_state() {
         .expect("stored thread");
     assert_eq!(stored["history"]["message_count"], 2);
     assert_eq!(stored["message_count"], 2);
-    assert_eq!(
-        stored["messages"].as_array().expect("messages array").len(),
-        2
-    );
+    // No record messages snapshot is seeded (#TASK-1864 batch 1c); the
+    // transcript is the only imported-content copy and the write-time
+    // preview fields are derived from the imported messages.
+    assert!(stored.get("messages").is_none());
+    assert_eq!(stored["last_user_preview"], "hello");
+    assert_eq!(stored["last_assistant_preview"], "world");
 
     let snapshot = state
         .threads

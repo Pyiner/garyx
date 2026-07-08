@@ -440,9 +440,6 @@ pub fn upsert_thread_fields(value: &mut Value, thread_id: &str, options: &Thread
         obj.insert("is_group".to_owned(), Value::Bool(is_group));
     }
 
-    if !obj.contains_key("messages") {
-        obj.insert("messages".to_owned(), Value::Array(Vec::new()));
-    }
     if obj.get("message_count").and_then(Value::as_i64).is_none() {
         obj.insert(
             "message_count".to_owned(),

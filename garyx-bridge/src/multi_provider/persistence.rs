@@ -67,29 +67,6 @@ fn primary_run_identifier(metadata: &HashMap<String, Value>) -> Option<String> {
     run_identifiers(metadata).into_iter().next()
 }
 
-fn message_matches_run(message: &Value, run_identifiers: &[String]) -> bool {
-    let Some(object) = message.as_object() else {
-        return false;
-    };
-    let metadata = object.get("metadata").and_then(Value::as_object);
-
-    ["bridge_run_id", "run_id", "client_run_id"]
-        .into_iter()
-        .filter_map(|key| {
-            object
-                .get(key)
-                .and_then(Value::as_str)
-                .or_else(|| {
-                    metadata
-                        .and_then(|fields| fields.get(key))
-                        .and_then(Value::as_str)
-                })
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        })
-        .any(|candidate| run_identifiers.iter().any(|run_id| run_id == candidate))
-}
-
 fn is_internal_dispatch(metadata: &HashMap<String, Value>) -> bool {
     metadata
         .get("internal_dispatch")
@@ -1277,9 +1254,6 @@ pub(super) async fn save_streaming_partial(
     );
 
     if let Some(obj) = session_data.as_object_mut() {
-        if !obj.contains_key("messages") {
-            obj.insert("messages".to_owned(), Value::Array(Vec::new()));
-        }
         obj.insert("pending_user_inputs".to_owned(), merged_pending_inputs);
         let sdk_session_update = match run.sdk_session_id {
             Some(sid) => SdkSessionUpdate::Set(sid),
@@ -1421,26 +1395,15 @@ async fn save_thread_messages_with_session_update(
         .await
         .unwrap_or_else(|| serde_json::json!({}));
     let run_messages = build_run_messages(&run);
-    let run_ids = run_identifiers(run.metadata);
     let current_run_id = primary_run_identifier(run.metadata);
     let existing_recent_run_ids = recent_committed_run_ids_from_value(&session_data);
 
-    let mut snapshot_messages: Vec<Value> = session_data
-        .get("messages")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if !run_ids.is_empty() {
-        snapshot_messages.retain(|message| !message_matches_run(message, &run_ids));
-    }
-    snapshot_messages.extend(run_messages.clone());
-    if snapshot_messages.len() > MAX_SESSION_MESSAGES {
-        let start = snapshot_messages.len() - MAX_SESSION_MESSAGES;
-        snapshot_messages = snapshot_messages[start..].to_vec();
-    }
-
-    let mut message_count = history_message_count(&session_data).max(snapshot_messages.len());
-    let mut last_message_at = snapshot_messages
+    // The `messages` snapshot is no longer rebuilt or written: the committed
+    // transcript is the only provider-session content source (#TASK-1864
+    // batch 1c). Existing snapshots on legacy records are left untouched
+    // until Batch 2's import strips them.
+    let mut message_count = history_message_count(&session_data);
+    let mut last_message_at = run_messages
         .last()
         .and_then(|message| message.get("timestamp"))
         .and_then(Value::as_str)
@@ -1549,31 +1512,46 @@ async fn save_thread_messages_with_session_update(
     let recent_run_ids =
         record_recent_committed_run_id(&existing_recent_run_ids, current_run_id.as_deref());
 
+    // Write-time preview fields mirror the committed transcript tail — the
+    // same bounded content window the retired `messages` snapshot held
+    // (reconcile above has already made this run's rows, including replay
+    // retractions, authoritative). Missing roles clear their field
+    // (#TASK-1864 batch 1, review #TASK-1882 finding 1).
+    let preview_source = match history
+        .provider_session_tail(run.thread_id, MAX_SESSION_MESSAGES)
+        .await
+    {
+        Ok(messages) => messages,
+        Err(error) => {
+            warn!(
+                thread_id = %run.thread_id,
+                error = %error,
+                "failed to read transcript tail for preview fields; keeping previous values"
+            );
+            Vec::new()
+        }
+    };
+
     if let Some(obj) = session_data.as_object_mut() {
-        // Write-time preview fields (#TASK-1864 batch 1): computed from the
-        // final bounded snapshot — after same-run replacement and cap
-        // trimming — so they match exactly what the former read-time scan
-        // of `messages` would have found, and are removed when no
-        // preview-worthy row remains (review #TASK-1882 finding 1: a
-        // replayed run can retract the very rows a previous save previewed).
-        for role in ["user", "assistant"] {
-            let Some(field) = garyx_models::message_preview::preview_field_for_role(role)
-            else {
-                continue;
-            };
-            match garyx_models::message_preview::last_message_preview_for_role(
-                snapshot_messages.iter(),
-                role,
-            ) {
-                Some(preview) => {
-                    obj.insert(field.to_owned(), Value::String(preview));
-                }
-                None => {
-                    obj.remove(field);
+        if !preview_source.is_empty() {
+            for role in ["user", "assistant"] {
+                let Some(field) = garyx_models::message_preview::preview_field_for_role(role)
+                else {
+                    continue;
+                };
+                match garyx_models::message_preview::last_message_preview_for_role(
+                    preview_source.iter(),
+                    role,
+                ) {
+                    Some(preview) => {
+                        obj.insert(field.to_owned(), Value::String(preview));
+                    }
+                    None => {
+                        obj.remove(field);
+                    }
                 }
             }
         }
-        obj.insert("messages".to_owned(), Value::Array(snapshot_messages));
         obj.insert("pending_user_inputs".to_owned(), merged_pending_inputs);
         update_provider_sdk_session_id(obj, run.provider_key, &sdk_session_update);
         obj.insert(

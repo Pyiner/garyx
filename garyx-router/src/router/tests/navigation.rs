@@ -738,7 +738,10 @@ async fn test_ensure_thread_entry_creates_with_label() {
     assert_eq!(saved["label"], "session-1");
     assert!(saved["created_at"].is_string());
     assert!(saved["updated_at"].is_string());
-    assert!(saved["messages"].is_array());
+    assert!(
+        saved.get("messages").is_none(),
+        "new records carry no messages snapshot (#TASK-1864 batch 1c)"
+    );
     assert!(saved["context"].is_object());
 }
 
