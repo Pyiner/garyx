@@ -68,8 +68,12 @@ impl RuntimeAssembler {
         // backends run their one-shot boot import before serving requests;
         // `sqlite` keeps a best-effort file mirror for hot rollback.
         let backend = garyx_gateway::resolve_thread_store_backend(&self.config);
+        // The truth database lives inside the configured data dir, matching
+        // the archive/transcripts it replaces (review #TASK-1927).
         let garyx_db = Arc::new(garyx_gateway::garyx_db::GaryxDbService::open(
-            garyx_models::local_paths::default_garyx_database_path(),
+            garyx_models::local_paths::garyx_database_path_for_data_dir(Path::new(
+                &session_data_dir,
+            )),
         )?);
         let assembled_garyx_db = Some(garyx_db.clone());
         let mirror = match backend {

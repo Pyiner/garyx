@@ -912,7 +912,11 @@ impl GaryxDbService {
         let conn = self.conn()?;
         let recent = conn.execute(
             "UPDATE recent_threads
-                SET active_run_id = NULL, run_state = 'completed'
+                SET active_run_id = NULL,
+                    run_state = CASE
+                        WHEN recent_run_id IS NULL OR recent_run_id = '' THEN 'idle'
+                        ELSE 'completed'
+                    END
               WHERE active_run_id IS NOT NULL OR run_state = 'running'",
             [],
         )?;
@@ -4767,6 +4771,54 @@ mod tests {
         assert!(
             !service.thread_record_exists(thread_id).expect("exists"),
             "record write must roll back when a projection write fails"
+        );
+    }
+
+    #[test]
+    fn clear_stale_active_runs_settles_by_recent_run_presence() {
+        // Review #TASK-1927: an orphan with no committed run must settle to
+        // idle (matching the retired reconcile's derivation), while one
+        // with history settles to completed.
+        let service = GaryxDbService::memory().expect("memory db");
+        for (thread_id, recent) in [
+            ("thread::orphan-no-history", None),
+            ("thread::orphan-with-history", Some("run::done")),
+        ] {
+            service
+                .upsert_recent_thread(RecentThreadDraft {
+                    thread_id: thread_id.to_owned(),
+                    title: "Orphan".to_owned(),
+                    workspace_dir: None,
+                    thread_type: "chat".to_owned(),
+                    provider_type: None,
+                    agent_id: None,
+                    message_count: 1,
+                    last_message_preview: String::new(),
+                    recent_run_id: recent.map(str::to_owned),
+                    active_run_id: Some("run::stale".to_owned()),
+                    run_state: "running".to_owned(),
+                    updated_at: None,
+                    last_active_at: "2026-07-08T00:00:00Z".to_owned(),
+                })
+                .expect("seed row");
+        }
+
+        service.clear_stale_active_runs().expect("clear orphans");
+
+        let rows = service.list_recent_threads(10, 0).expect("list");
+        let state_of = |id: &str| {
+            rows.iter()
+                .find(|row| row.thread_id == id)
+                .map(|row| (row.active_run_id.clone(), row.run_state.clone()))
+                .expect("row")
+        };
+        assert_eq!(
+            state_of("thread::orphan-no-history"),
+            (None, "idle".to_owned())
+        );
+        assert_eq!(
+            state_of("thread::orphan-with-history"),
+            (None, "completed".to_owned())
         );
     }
 
