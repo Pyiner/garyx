@@ -281,7 +281,11 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
         .expect("runtime context");
     assert_eq!(runtime_context["thread_id"], "thread::agent-bound");
     assert_eq!(runtime_context["bot_id"], "api:main");
-    assert_eq!(runtime_context["thread"]["bound_bots"][0], "telegram:bot1");
+    let bound_bots = runtime_context["thread"]["bound_bots"]
+        .as_array()
+        .expect("bound bots");
+    assert!(bound_bots.contains(&json!("api:main")));
+    assert!(bound_bots.contains(&json!("telegram:bot1")));
     assert_eq!(runtime_context["task"]["task_id"], "#TASK-4");
     assert_eq!(runtime_context["task"]["status"], "todo");
 }
@@ -449,6 +453,77 @@ async fn prepare_chat_request_strips_reserved_provider_env_from_request_metadata
         Some("kept"),
         "non-reserved client metadata must pass through"
     );
+}
+
+#[tokio::test]
+async fn prepare_chat_request_binds_explicit_api_thread_to_from_id() {
+    let state = test_state();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::api-explicit",
+            json!({
+                "thread_id": "thread::api-explicit",
+                "label": "Existing API thread",
+                "channel": "api",
+                "account_id": "main",
+                "from_id": "old-api-user",
+                "messages": [],
+                "workspace_dir": "/repo",
+                "channel_bindings": [],
+            }),
+        )
+        .await;
+
+    let prepared = prepare_chat_request(
+        &state,
+        ChatRequest {
+            thread_id: Some("thread::api-explicit".to_owned()),
+            message: "Continue this thread".to_owned(),
+            attachments: Vec::new(),
+            images: Vec::new(),
+            files: Vec::new(),
+            client_intent_id: None,
+            from_id: "mobile-client".to_owned(),
+            account_id: "main".to_owned(),
+            bot: None,
+            wait_for_response: true,
+            workspace_path: None,
+            provider_type: None,
+            metadata: HashMap::new(),
+        },
+    )
+    .await
+    .expect("prepare chat request");
+
+    assert_eq!(prepared.thread_id, "thread::api-explicit");
+    let updated = state
+        .threads
+        .thread_store
+        .get("thread::api-explicit")
+        .await
+        .expect("thread exists");
+    let binding = garyx_router::bindings_from_value(&updated)
+        .into_iter()
+        .find(|binding| binding.endpoint_key() == "api::main::mobile-client")
+        .expect("api binding persisted");
+    assert_eq!(binding.chat_id, "mobile-client");
+    assert_eq!(binding.delivery_target_type, "chat_id");
+    assert_eq!(binding.delivery_target_id, "mobile-client");
+    assert_eq!(binding.display_label, "api/main/mobile-client");
+    assert!(binding.last_inbound_at.is_some());
+
+    let endpoint = state
+        .ops
+        .garyx_db
+        .list_thread_channel_endpoints()
+        .expect("endpoint projection")
+        .into_iter()
+        .find(|endpoint| endpoint.endpoint_key == "api::main::mobile-client")
+        .expect("api endpoint projected");
+    assert_eq!(endpoint.thread_id.as_deref(), Some("thread::api-explicit"));
+    assert_eq!(endpoint.workspace_dir.as_deref(), Some("/repo"));
 }
 
 #[test]

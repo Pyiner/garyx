@@ -12,7 +12,6 @@ import {
   clipboard,
   ipcMain,
   Menu,
-  net,
   Tray,
   nativeImage,
   shell,
@@ -186,8 +185,8 @@ import {
   unassignTask,
   updateTaskTitle,
   updateRemoteThread,
-  setGatewayFetch,
 } from "./gary-client";
+import { wireGatewayTransport } from "./gateway-transport";
 import { createThreadStreamHub } from "./thread-stream-hub";
 import {
   clearThreadTranscriptCache,
@@ -277,14 +276,10 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 
-// Route gateway HTTP through Chromium's network stack (Electron `net`) so
-// requests honor the OS system proxy. Node's global `fetch` (undici) ignores the
-// system proxy and resolves DNS locally, which makes a remote gateway whose
-// hostname resolves to a private/off-LAN address (split-horizon DNS pointing at
-// a home-LAN IP that is only reachable through a proxy/VPN tunnel) unreachable
-// directly. Localhost gateways still connect directly (the system proxy bypasses
-// loopback).
-setGatewayFetch((input, init) => net.fetch(input, init));
+// Chromium transport for all gateway HTTP; per-thread SSE streams ride a
+// dedicated session so they cannot starve the control plane's socket pool.
+// Rationale lives with the wiring in gateway-transport.ts.
+wireGatewayTransport();
 const deepLinkSubscribers = new Set<Electron.WebContents>();
 const pendingDeepLinks: DesktopDeepLinkEvent[] = [];
 

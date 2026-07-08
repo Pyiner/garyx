@@ -8,6 +8,7 @@ import {
 import { Archive, PanelLeftClose } from 'lucide-react';
 
 import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './components/ui/tooltip';
 import { useI18n } from './i18n';
 import type { ThreadAvatarIdentity } from './thread-avatar';
 
@@ -87,6 +88,7 @@ export function ThreadConversationSidebar({
   }, [confirmKey]);
 
   return (
+    <TooltipProvider>
     <aside aria-label={ariaLabel} className={`bot-conversation-rail ${className ?? ''}`.trim()}>
       <div className="bot-conversation-header">
         <div className="bot-conversation-heading">
@@ -183,19 +185,23 @@ export function ThreadConversationSidebar({
                       {t('Confirm')}
                     </button>
                   ) : (
-                    <button
-                      aria-label={t('Archive {name}', { name: row.title })}
-                      className="thread-delete-button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setConfirmKey(row.key);
-                      }}
-                      tabIndex={-1}
-                      title={t('Archive thread')}
-                      type="button"
-                    >
-                      <Archive aria-hidden />
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          aria-label={t('Archive {name}', { name: row.title })}
+                          className="thread-delete-button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setConfirmKey(row.key);
+                          }}
+                          tabIndex={-1}
+                          type="button"
+                        >
+                          <Archive aria-hidden />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t('Archive thread')}</TooltipContent>
+                    </Tooltip>
                   )
                 ) : null}
               </div>
@@ -214,5 +220,6 @@ export function ThreadConversationSidebar({
         </div>
       ) : null}
     </aside>
+    </TooltipProvider>
   );
 }

@@ -20,6 +20,7 @@ export {
   requestJson,
   requestText,
   setGatewayFetch,
+  setGatewayStreamFetch,
 } from "./gary-client/http.ts";
 export type { GatewayFetch } from "./gary-client/http.ts";
 export {

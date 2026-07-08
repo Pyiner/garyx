@@ -92,6 +92,7 @@ export type GatewayFetch = (
 ) => Promise<Response>;
 
 let gatewayFetchImpl: GatewayFetch | null = null;
+let gatewayStreamFetchImpl: GatewayFetch | null = null;
 
 export function setGatewayFetch(fetchImpl: GatewayFetch | null): void {
   gatewayFetchImpl = fetchImpl;
@@ -102,6 +103,30 @@ export function gatewayFetch(input: string, init?: RequestInit): Promise<Respons
     return gatewayFetchImpl(input, init);
   }
   return globalThis.fetch(input, init);
+}
+
+/**
+ * Transport for long-lived SSE streams, kept on its own socket pool.
+ *
+ * Chromium's HTTP/1.1 pool allows 6 concurrent connections per host, shared
+ * by every request on the same session. Live per-thread streams occupy their
+ * connection for as long as they run, so enough of them starve every
+ * control-plane request into its AbortSignal timeout (#TASK-1840). Streams
+ * therefore go through a dedicated session injected here; without an
+ * injection they share {@link gatewayFetch} (unit tests, non-Electron).
+ */
+export function setGatewayStreamFetch(fetchImpl: GatewayFetch | null): void {
+  gatewayStreamFetchImpl = fetchImpl;
+}
+
+export function gatewayStreamFetch(
+  input: string,
+  init?: RequestInit,
+): Promise<Response> {
+  if (gatewayStreamFetchImpl) {
+    return gatewayStreamFetchImpl(input, init);
+  }
+  return gatewayFetch(input, init);
 }
 
 function messageFromPlainTextBody(body: string): string | undefined {
