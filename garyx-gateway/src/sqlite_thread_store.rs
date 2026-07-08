@@ -411,7 +411,10 @@ impl MirroredThreadStore {
                     .divergences
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     + 1;
-                tracing::debug!(
+                // warn-level: a divergence is the dual-write health signal
+                // the soak gate watches — debug would be invisible at the
+                // production log level.
+                tracing::warn!(
                     thread_id = %thread_id,
                     divergences,
                     comparisons = stats.comparisons.load(std::sync::atomic::Ordering::Relaxed),
