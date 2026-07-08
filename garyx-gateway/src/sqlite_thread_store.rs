@@ -530,11 +530,14 @@ pub(crate) async fn import_thread_records_if_needed(
     transcript_store: &Arc<ThreadTranscriptStore>,
 ) -> ThreadRecordImportSummary {
     let source_keys = source.list_keys(None).await;
-    match garyx_db.projection_state_matches(
-        THREAD_RECORDS_IMPORT_NAME,
-        THREAD_RECORDS_IMPORT_VERSION,
-        source_keys.len(),
-    ) {
+    // Gate on state-row existence, not the key count: in steady state new
+    // threads change the count, and a count-sensitive gate would re-import
+    // on every boot, flowing the possibly one-write-behind file mirror
+    // back over the SQL truth. A rollback to the file backend clears this
+    // row at boot, which is the only event that must force a re-import.
+    match garyx_db
+        .projection_state_exists(THREAD_RECORDS_IMPORT_NAME, THREAD_RECORDS_IMPORT_VERSION)
+    {
         Ok(true) => {
             return ThreadRecordImportSummary {
                 source_keys: source_keys.len(),

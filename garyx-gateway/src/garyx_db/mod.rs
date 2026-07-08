@@ -942,6 +942,27 @@ impl GaryxDbService {
         }))
     }
 
+    /// Whether a projection/migration state row exists at the given
+    /// version, regardless of its recorded source count. The sqlite
+    /// thread-record import gates on existence alone: in steady state new
+    /// threads change the key count, and a count-sensitive gate would
+    /// re-import on every boot — flowing the (possibly one-write-behind)
+    /// file mirror back over the SQL truth (#TASK-1864 batch 2 on-device
+    /// finding). The file-mode boot invalidation is what forces re-imports
+    /// after a rollback.
+    pub fn projection_state_exists(&self, name: &str, version: i64) -> GaryxDbResult<bool> {
+        let conn = self.read_conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT 1 FROM projection_states
+                  WHERE projection_name = ?1 AND projection_version = ?2",
+                params![name, version],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     /// Drop a projection/migration state row so its one-shot job runs
     /// again on the next eligible boot. Used by the file thread-store
     /// backend to invalidate the sqlite import whenever the archive is
