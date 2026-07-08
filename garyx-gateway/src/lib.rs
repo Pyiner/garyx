@@ -39,6 +39,7 @@ pub mod routes;
 mod runtime_diagnostics;
 pub mod server;
 pub mod skills;
+mod sqlite_thread_store;
 mod task_notifications;
 mod task_projection;
 mod task_tree;

@@ -436,7 +436,7 @@ impl ThreadStore for RecentThreadProjectingStore {
     }
 }
 
-fn recent_thread_draft_from_thread_data_with_active_run(
+pub(crate) fn recent_thread_draft_from_thread_data_with_active_run(
     thread_id: &str,
     data: &Value,
     active_run_id: Option<String>,
