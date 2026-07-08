@@ -335,12 +335,17 @@ impl MirroredThreadStore {
     }
 
     /// Comparable view of a record: the retired snapshot (still present in
-    /// unrewritten archive files) and volatile bookkeeping timestamps are
-    /// ignored.
+    /// unrewritten archive files), volatile bookkeeping timestamps, and the
+    /// derived preview fields (seeded into the truth table by the boot
+    /// import — mirror files only pick them up on their next rewrite, so
+    /// they would read as permanent noise for low-traffic threads) are
+    /// ignored. A genuine dual-write fault diverges on real fields too.
     fn comparable(mut value: Value) -> Value {
         if let Some(object) = value.as_object_mut() {
             object.remove("messages");
             object.remove("updated_at");
+            object.remove(garyx_models::message_preview::LAST_USER_PREVIEW_FIELD);
+            object.remove(garyx_models::message_preview::LAST_ASSISTANT_PREVIEW_FIELD);
         }
         value
     }
@@ -762,7 +767,14 @@ mod contract_tests {
 
     #[test]
     fn mirror_comparison_ignores_retired_and_volatile_fields() {
-        let primary = json!({"thread_id": "t", "label": "same", "updated_at": "2026-07-08T01:00:00Z"});
+        let primary = json!({
+            "thread_id": "t",
+            "label": "same",
+            "updated_at": "2026-07-08T01:00:00Z",
+            // Seeded by the boot import; absent from unrewritten mirrors.
+            "last_user_preview": "seeded",
+            "last_assistant_preview": "seeded",
+        });
         let mirror = json!({
             "thread_id": "t",
             "label": "same",
