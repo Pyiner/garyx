@@ -4,10 +4,9 @@
 //! carries a `group_transcript_snapshot`: a compact `[{agent_id, text, at}]`
 //! view of the recent conversation. This module is the single
 //! implementation (#TASK-1864 batch 1 deduplicated the former
-//! router/gateway copies) and reads from the committed transcript tail;
-//! the legacy thread-record `messages` snapshot remains only as the
-//! fallback for pre-transcript threads until Batch 2's import backfills
-//! their transcripts.
+//! router/gateway copies) and reads from the committed transcript tail —
+//! the only session source since Batch 2's import backfilled every
+//! pre-transcript thread.
 
 use serde_json::{Value, json};
 use tracing::warn;
@@ -103,28 +102,23 @@ pub fn build_group_transcript_snapshot(thread_data: &Value) -> Value {
 }
 
 /// Group snapshot from the committed transcript tail (control records
-/// skipped), falling back to the legacy record snapshot when the thread
-/// has no transcript content.
+/// skipped) — the only session source (#TASK-1864 closing batch).
 pub async fn build_group_transcript_snapshot_from_history(
     history: &ThreadHistoryRepository,
     thread_id: &str,
-    thread_data: &Value,
 ) -> Value {
     match history
         .provider_session_tail(thread_id, GROUP_TRANSCRIPT_SNAPSHOT_LIMIT)
         .await
     {
-        Ok(messages) if !messages.is_empty() => {
-            group_transcript_snapshot_from_messages(messages.iter())
-        }
-        Ok(_) => build_group_transcript_snapshot(thread_data),
+        Ok(messages) => group_transcript_snapshot_from_messages(messages.iter()),
         Err(error) => {
             warn!(
                 thread_id = %thread_id,
                 error = %error,
-                "failed to read transcript tail for group snapshot; using legacy record snapshot"
+                "failed to read transcript tail for group snapshot"
             );
-            build_group_transcript_snapshot(thread_data)
+            Value::Array(Vec::new())
         }
     }
 }
@@ -211,33 +205,9 @@ mod tests {
             .await
             .expect("append transcript");
 
-        let stale_record = json!({
-            "messages": [
-                {"role": "user", "text": "stale snapshot entry", "timestamp": "t9"}
-            ]
-        });
-        let snapshot = build_group_transcript_snapshot_from_history(
-            &history,
-            thread_id,
-            &stale_record,
-        )
-        .await;
+        let snapshot =
+            build_group_transcript_snapshot_from_history(&history, thread_id).await;
         assert_eq!(snapshot, expected_snapshot());
     }
 
-    #[tokio::test]
-    async fn history_snapshot_falls_back_to_legacy_record_without_transcript() {
-        let history = ThreadHistoryRepository::new(
-            Arc::new(InMemoryThreadStore::new()),
-            Arc::new(ThreadTranscriptStore::memory()),
-        );
-        let thread_data = json!({ "messages": fixture_thread_messages() });
-        let snapshot = build_group_transcript_snapshot_from_history(
-            &history,
-            "thread::no-transcript",
-            &thread_data,
-        )
-        .await;
-        assert_eq!(snapshot, expected_snapshot());
-    }
 }

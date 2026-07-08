@@ -129,7 +129,6 @@ impl MessageRouter {
                         crate::group_transcript::build_group_transcript_snapshot_from_history(
                             history,
                             &thread_id,
-                            thread_record,
                         )
                         .await
                     }

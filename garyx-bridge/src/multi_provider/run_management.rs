@@ -659,7 +659,6 @@ impl MultiProviderBridge {
                 &mut options,
                 history.as_ref(),
                 &thread_id,
-                &session_data,
                 &resolved_provider_type,
             )
             .await;
@@ -1351,7 +1350,6 @@ impl MultiProviderBridge {
                 &mut options,
                 history.as_ref(),
                 thread_id,
-                &session_data,
                 &resolved_provider_type,
             )
             .await;

@@ -259,38 +259,7 @@ fn last_message_preview_for_role(data: &Value, role: &str) -> Option<String> {
     {
         return Some(preview.to_owned());
     }
-    // Legacy fallback for records not yet touched by a post-batch-1 run;
-    // deleted after Batch 2's import backfills the fields.
-    let messages = data.get("messages").and_then(Value::as_array)?;
-    last_message_preview_in_messages(messages.iter(), role)
-}
-
-fn last_message_preview_in_messages<'a>(
-    messages: impl DoubleEndedIterator<Item = &'a Value>,
-    role: &str,
-) -> Option<String> {
-    for message in messages.rev() {
-        let Some(obj) = message.as_object() else {
-            continue;
-        };
-        if obj.get("role").and_then(Value::as_str) != Some(role) {
-            continue;
-        }
-        if let Some(summary) = summarize_message_content(obj.get("content")) {
-            return Some(summary);
-        }
-        if let Some(summary) = summarize_message_content(obj.get("text")) {
-            return Some(summary);
-        }
-    }
     None
-}
-
-fn summarize_message_content(value: Option<&Value>) -> Option<String> {
-    match value? {
-        Value::String(text) => summarize_text(text, 160),
-        _ => None,
-    }
 }
 
 fn summarize_text(value: &str, limit: usize) -> Option<String> {

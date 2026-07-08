@@ -1077,12 +1077,12 @@ pub struct SessionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<String>,
 
-    /// Thread-record storage backend (#TASK-1864 batch 2):
-    /// `file` (default) keeps the JSON archive as the truth source;
-    /// `sqlite` makes the garyx-db thread_records table the truth with a
-    /// best-effort file mirror for rollback; `sqlite-only` drops the
-    /// mirror. The `GARYX_THREAD_STORE` environment variable overrides
-    /// this value (emergency rollback without editing config).
+    /// Thread-record storage backend (#TASK-1864): `sqlite-only`
+    /// (default) — the garyx-db thread_records table is the truth;
+    /// `sqlite` adds a best-effort live file mirror (emergency mode);
+    /// `file` is retired and degrades to `sqlite` with a warning. The
+    /// `GARYX_THREAD_STORE` environment variable overrides this value
+    /// (emergency switch without editing config).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_store: Option<String>,
 }

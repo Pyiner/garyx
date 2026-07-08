@@ -62,18 +62,6 @@ pub(crate) async fn resolve_active_run_id(
     }
 }
 
-/// Probe that reports no run as active. Used where no bridge exists yet
-/// (the AppStateBuilder default store): cold-start semantics — every
-/// transcript-open run resolves as a crash orphan, i.e. idle.
-pub(crate) struct IdleActiveRunProbe;
-
-#[async_trait]
-impl ActiveRunProbe for IdleActiveRunProbe {
-    async fn is_run_active(&self, _run_id: &str) -> bool {
-        false
-    }
-}
-
 /// Test probe that reports every run as active, so route/projection tests can
 /// seed a busy transcript and have it project as `running` without standing up
 /// a real bridge run. Crash-orphan behavior is covered by tests that use a
@@ -237,54 +225,7 @@ fn last_message_preview_for_role(data: &Value, role: &str) -> Option<String> {
     {
         return Some(preview.to_owned());
     }
-    // Legacy fallback for records not yet touched by a post-batch-1 run;
-    // deleted after Batch 2's import backfills the fields.
-    let messages = data.get("messages").and_then(Value::as_array)?;
-    last_message_preview_in_messages(messages.iter(), role)
-}
-
-fn last_message_preview_in_messages<'a>(
-    messages: impl DoubleEndedIterator<Item = &'a Value>,
-    role: &str,
-) -> Option<String> {
-    for message in messages.rev() {
-        let Some(obj) = message.as_object() else {
-            continue;
-        };
-        if obj.get("role").and_then(Value::as_str) != Some(role) {
-            continue;
-        }
-        if let Some(summary) = summarize_message_content(obj.get("content")) {
-            return Some(summary);
-        }
-        if let Some(summary) = summarize_message_content(obj.get("text")) {
-            return Some(summary);
-        }
-    }
     None
-}
-
-fn summarize_message_content(value: Option<&Value>) -> Option<String> {
-    match value? {
-        Value::String(text) => summarize_text(text, 160),
-        _ => None,
-    }
-}
-
-fn summarize_text(value: &str, limit: usize) -> Option<String> {
-    let text = value.trim();
-    if text.is_empty() {
-        return None;
-    }
-    let mut chars = text.chars();
-    let mut summary = String::new();
-    for _ in 0..limit {
-        let Some(ch) = chars.next() else {
-            return Some(summary);
-        };
-        summary.push(ch);
-    }
-    Some(summary + "…")
 }
 
 #[cfg(test)]

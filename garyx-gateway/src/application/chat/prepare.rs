@@ -179,10 +179,10 @@ pub(crate) async fn prepare_chat_request(
             && let Some(thread_data) = thread_data.as_ref()
             && !req.metadata.contains_key("group_transcript_snapshot")
         {
+            let _ = thread_data;
             let snapshot = garyx_router::build_group_transcript_snapshot_from_history(
                 state.threads.history.as_ref(),
                 &thread_id,
-                thread_data,
             )
             .await;
             req.metadata

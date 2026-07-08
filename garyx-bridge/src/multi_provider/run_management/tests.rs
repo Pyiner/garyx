@@ -149,47 +149,6 @@ fn history_without_transcript() -> Arc<ThreadHistoryRepository> {
 }
 
 #[tokio::test]
-async fn native_session_messages_fall_back_to_legacy_snapshot_without_transcript() {
-    // A pre-transcript thread: the record still carries a `messages`
-    // snapshot but no transcript exists (#TASK-1864 batch 1 fallback).
-    let session_data = json!({
-        "messages": [
-            ProviderMessage::user_text("previous question").to_json_value(),
-            ProviderMessage::assistant_text("previous answer").to_json_value()
-        ]
-    });
-    let history = history_without_transcript();
-    let mut options = ProviderRunOptions {
-        thread_id: "thread::native".to_owned(),
-        message: "next".to_owned(),
-        workspace_dir: None,
-        images: None,
-        metadata: HashMap::new(),
-    };
-
-    attach_native_session_messages(
-        &mut options,
-        Some(&history),
-        "thread::native",
-        &session_data,
-        &ProviderType::ClaudeLlm,
-    )
-    .await;
-
-    let messages: Vec<ProviderMessage> = serde_json::from_value(
-        options
-            .metadata
-            .get(SESSION_MESSAGES_METADATA_KEY)
-            .cloned()
-            .expect("session messages metadata"),
-    )
-    .unwrap();
-    assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0].text.as_deref(), Some("previous question"));
-    assert_eq!(messages[1].text.as_deref(), Some("previous answer"));
-}
-
-#[tokio::test]
 async fn native_session_messages_prefer_transcript_over_legacy_snapshot() {
     let history = history_without_transcript();
     let thread_id = "thread::native-transcript";
@@ -212,10 +171,6 @@ async fn native_session_messages_prefer_transcript_over_legacy_snapshot() {
         )
         .await
         .expect("append transcript");
-    // A stale legacy snapshot must lose to the committed transcript.
-    let session_data = json!({
-        "messages": [ProviderMessage::user_text("stale snapshot").to_json_value()]
-    });
     let mut options = ProviderRunOptions {
         thread_id: thread_id.to_owned(),
         message: "next".to_owned(),
@@ -228,7 +183,6 @@ async fn native_session_messages_prefer_transcript_over_legacy_snapshot() {
         &mut options,
         Some(&history),
         thread_id,
-        &session_data,
         &ProviderType::ClaudeLlm,
     )
     .await;
@@ -250,9 +204,16 @@ async fn native_session_messages_prefer_transcript_over_legacy_snapshot() {
 
 #[tokio::test]
 async fn native_session_messages_are_attached_for_all_native_model_backends() {
-    let session_data = json!({
-        "messages": [ProviderMessage::assistant_text("previous answer").to_json_value()]
-    });
+    let history = history_without_transcript();
+    history
+        .transcript_store()
+        .append_committed_messages(
+            "thread::native",
+            Some("run-1"),
+            &[ProviderMessage::assistant_text("previous answer").to_json_value()],
+        )
+        .await
+        .expect("append transcript");
 
     for provider_type in [
         ProviderType::Gpt,
@@ -269,9 +230,8 @@ async fn native_session_messages_are_attached_for_all_native_model_backends() {
 
         attach_native_session_messages(
             &mut options,
-            None,
+            Some(&history),
             "thread::native",
-            &session_data,
             &provider_type,
         )
         .await;
@@ -285,9 +245,6 @@ async fn native_session_messages_are_attached_for_all_native_model_backends() {
 
 #[tokio::test]
 async fn native_session_messages_are_not_attached_for_other_providers() {
-    let session_data = json!({
-        "messages": [ProviderMessage::assistant_text("previous answer").to_json_value()]
-    });
     let mut options = ProviderRunOptions {
         thread_id: "thread::claude".to_owned(),
         message: "next".to_owned(),
@@ -300,7 +257,6 @@ async fn native_session_messages_are_not_attached_for_other_providers() {
         &mut options,
         None,
         "thread::claude",
-        &session_data,
         &ProviderType::ClaudeCode,
     )
     .await;
@@ -378,23 +334,3 @@ fn test_resolve_persisted_sdk_session_id_for_provider_ignores_other_provider_leg
     assert!(resolved.is_none());
 }
 
-#[test]
-fn persisted_provider_messages_reads_committed_cache_only() {
-    // Native provider resume state comes from the bounded committed cache; live
-    // run recovery is driven by committed transcript controls elsewhere.
-    let session_data = serde_json::json!({
-        "messages": [
-            {"role": "user", "content": "q1"},
-            {"role": "assistant", "content": "a1"}
-        ]
-    });
-    let messages = persisted_provider_messages_from_thread(&session_data);
-    assert_eq!(
-        messages.len(),
-        2,
-        "resume should use the committed cache without side-channel tails"
-    );
-
-    let empty = serde_json::json!({});
-    assert!(persisted_provider_messages_from_thread(&empty).is_empty());
-}

@@ -145,23 +145,6 @@ pub(super) fn attach_provider_sdk_session_metadata(
     }
 }
 
-pub(super) fn persisted_provider_messages_from_thread(
-    session_data: &Value,
-) -> Vec<ProviderMessage> {
-    let committed = session_data
-        .get("messages")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut messages = Vec::with_capacity(committed.len());
-    for value in &committed {
-        if let Some(message) = ProviderMessage::from_value(value) {
-            messages.push(message);
-        }
-    }
-    messages
-}
-
 /// Newest committed provider-session messages read from the transcript
 /// (control records skipped), parsed through the same
 /// `ProviderMessage::from_value` path the legacy snapshot reader used.
@@ -196,7 +179,6 @@ pub(super) async fn attach_native_session_messages(
     options: &mut ProviderRunOptions,
     history: Option<&Arc<ThreadHistoryRepository>>,
     thread_id: &str,
-    session_data: &Value,
     provider_type: &ProviderType,
 ) {
     if !matches!(
@@ -205,13 +187,10 @@ pub(super) async fn attach_native_session_messages(
     ) {
         return;
     }
-    let mut messages = provider_session_messages_from_transcript(history, thread_id).await;
-    if messages.is_empty() {
-        // Legacy fallback (#TASK-1864 batch 1): pre-transcript threads only
-        // have the thread-record `messages` snapshot. Batch 2's import
-        // backfills their transcripts; this branch is deleted afterwards.
-        messages = persisted_provider_messages_from_thread(session_data);
-    }
+    // The committed transcript is the only session source: Batch 2's
+    // import backfilled every pre-transcript thread, and record bodies no
+    // longer carry a messages snapshot (#TASK-1864 closing batch).
+    let messages = provider_session_messages_from_transcript(history, thread_id).await;
     if messages.is_empty() {
         return;
     }

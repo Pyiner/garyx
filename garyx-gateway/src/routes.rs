@@ -1350,24 +1350,6 @@ pub(crate) async fn detach_channel_endpoint_key(
     }
 }
 
-fn summarize_text(value: Option<&str>, limit: usize) -> Option<String> {
-    let text = value?.trim();
-    if text.is_empty() {
-        return None;
-    }
-    if text.chars().count() <= limit {
-        return Some(text.to_owned());
-    }
-    Some(
-        text.chars()
-            .take(limit.saturating_sub(1))
-            .collect::<String>()
-            .trim_end()
-            .to_owned()
-            + "…",
-    )
-}
-
 fn last_message_preview(data: &Value, role: &str) -> Option<String> {
     // Write-time preview fields are the source (#TASK-1864 batch 1).
     if let Some(preview) = garyx_models::message_preview::preview_field_for_role(role)
@@ -1375,27 +1357,6 @@ fn last_message_preview(data: &Value, role: &str) -> Option<String> {
         .and_then(Value::as_str)
     {
         return Some(preview.to_owned());
-    }
-    // Legacy fallback for records not yet touched by a post-batch-1 run;
-    // deleted after Batch 2's import backfills the fields.
-    let messages = data.get("messages").and_then(Value::as_array)?;
-    for message in messages.iter().rev() {
-        let Some(obj) = message.as_object() else {
-            continue;
-        };
-        if obj.get("role").and_then(Value::as_str) != Some(role) {
-            continue;
-        }
-        let Some(content) = obj.get("content") else {
-            continue;
-        };
-        let text = match content {
-            Value::String(value) => Some(value.as_str()),
-            _ => None,
-        };
-        if let Some(summary) = summarize_text(text, 160) {
-            return Some(summary);
-        }
     }
     None
 }

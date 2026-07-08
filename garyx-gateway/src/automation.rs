@@ -488,24 +488,6 @@ fn last_thread_message_preview(data: &Value, role: &str) -> Option<String> {
     {
         return Some(preview.to_owned());
     }
-    // Legacy fallback for records not yet touched by a post-batch-1 run;
-    // deleted after Batch 2's import backfills the fields.
-    let messages = data.get("messages").and_then(Value::as_array)?;
-    for message in messages.iter().rev() {
-        let Some(obj) = message.as_object() else {
-            continue;
-        };
-        if obj.get("role").and_then(Value::as_str) != Some(role) {
-            continue;
-        }
-        let text = match obj.get("content") {
-            Some(Value::String(value)) => Some(value.as_str()),
-            _ => obj.get("text").and_then(Value::as_str),
-        };
-        if let Some(summary) = summarize_text(text, 160) {
-            return Some(summary);
-        }
-    }
     None
 }
 
