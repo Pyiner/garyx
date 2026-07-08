@@ -11,29 +11,36 @@ reinterpreted in feature code.
 - Configured bot account `config` is ordinary application state. Mobile and
   desktop should not add token-specific merge, redaction, or preservation paths
   beyond keeping real secrets out of committed fixtures.
-- Thread records and known endpoint state: `garyx-router`.
+- Thread records: the `thread_records` table in
+  `<data_dir>/garyx-db.sqlite3` (truth source; #TASK-1864). Record bodies
+  never contain the retired `messages` snapshot; conversation content
+  lives in the transcript jsonl files. Known endpoint state and the
+  `ThreadStore` trait: `garyx-router`; the production store is
+  `SqliteThreadStore` (garyx-gateway). The former JSON archive under
+  `~/.garyx/data/threads` survives only as the boot-import source and the
+  optional dual-write mirror (`sessions.thread_store=sqlite`, the
+  emergency mode).
 - MCP schema and tool behavior: `garyx-gateway/src/mcp.rs`.
 - Provider session behavior: `garyx-bridge`.
 - Channel/plugin stream presentation policy, buffering, and tool-call display
   helpers: `garyx-channels/src/plugin_tools.rs`.
 
-## Thread Queries Never Enumerate Record Files
+## Thread Queries Go Through SQL
 
-- In steady state the thread-record filesystem serves exactly two shapes:
-  point reads/writes of a single known `thread_id`, and transcript
-  append/range access. Every "find threads by condition" query — by channel
-  binding, team, task number, recency, or a bare count — must be answered by
-  a SQLite projection maintained from the write path.
-- Do not add code that calls `list_keys` and then `get`s record bodies to
-  filter them. Thread records carry their full legacy `messages` history
-  (multi-MB for busy threads); enumerating them materializes gigabytes and
-  was the root of the gateway's 5.5GB startup memory peaks. If a projection
-  lacks the column a query needs, add the column and its write-path update —
-  do not fall back to scanning files.
-- The only legitimate full walk over record files is a projection
-  repair/migration (startup reconciliation after a projection version bump
-  or loss), and even that path should avoid materializing `messages` when it
-  only needs metadata.
+- Every "find threads by condition" query — by channel binding, team, task
+  number, recency, or a bare count — must be answered by a SQLite
+  projection table. Projections derive inside the same transaction as
+  every record write, so they are structurally current: there is no
+  backfill, prune, reconcile, or read-time repair layer, and none should
+  be reintroduced. If a projection lacks the column a query needs, add the
+  column and its write-path derivation.
+- `ThreadStore::get/set/update/delete/exists` are point operations on one
+  known key; `list_keys` is a key listing. Do not build condition queries
+  by listing keys and fetching bodies — that is a projection's job.
+- The only full walk over the legacy JSON archive is the one-shot boot
+  import into `thread_records` (and it streams one record at a time). The
+  archive is not written by any primary path and is retired to
+  `~/.garyx/backups/` after the switchover.
 
 ## Recent Threads And Active Runs
 
@@ -41,13 +48,13 @@ reinterpreted in feature code.
   projection only.
 - Keep `recent_threads` current by writing it from the thread-store write path;
   do not make `GET /api/recent-threads` rescan router/thread files.
-- Provider bridge run persistence must use the same projecting thread store as
-  the gateway/router so active run state updates are dual-written into
-  `recent_threads` at write time.
+- Provider bridge run persistence must use the same thread store as the
+  gateway/router (the `SqliteThreadStore`) so active run state derives into
+  `recent_threads` inside the same write transaction.
 - Do not repair stale `active_run_id` or `run_state` in read routes.
-- Startup reconciliation may repair historically stale active-run projection
-  rows as a data migration, but steady-state correctness must come from the
-  thread-store write path.
+- The only startup recovery is `clear_stale_active_runs`: one SQL pass that
+  settles running rows orphaned by the previous process (the bridge run
+  index is empty at boot). There is no other startup reconciliation.
 
 ## Transcript Rendering
 

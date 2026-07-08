@@ -49,8 +49,11 @@ for personal data and remove it.
 
 - Config lives in `~/.garyx/garyx.json`; gateway/router state is the source of
   truth for persisted runtime data.
-- Thread records and endpoint state belong to `garyx-router`. Recent-thread
-  projections must be updated at write time, not repaired by read routes.
+- Thread records live in the `thread_records` SQLite table (truth source;
+  #TASK-1864); conversation content lives in transcript jsonl. Projections
+  derive in the same transaction as every record write — never repaired by
+  read routes, backfills, or reconciles. All thread condition queries go
+  through SQL projections.
 - Workspace identity is always the absolute directory path string. Do not add
   workspace IDs or infer root workspace rows from thread metadata.
 - `No workspace` means the user did not choose a workspace; runtime threads must
