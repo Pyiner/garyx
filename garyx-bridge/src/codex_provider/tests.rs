@@ -291,7 +291,10 @@ fn test_extract_usage_string_values() {
 }
 
 #[test]
-fn sub_agent_activity_items_map_to_tool_frames_named_by_agent_path() {
+fn completed_only_sub_agent_activity_synthesizes_a_paired_tool_use_frame() {
+    // App-server 0.144 emits `subAgentActivity` solely as `item/completed`
+    // (codex event_mapping); channels render tool activity from the ToolUse
+    // frame, so the provider must synthesize the pair.
     let item = json!({
         "type": "subAgentActivity",
         "id": "item-1",
@@ -300,12 +303,38 @@ fn sub_agent_activity_items_map_to_tool_frames_named_by_agent_path() {
         "agentThreadId": "thr-child",
     });
 
-    let started = build_tool_session_message(&item, false).expect("subAgentActivity maps");
-    assert_eq!(started.tool_name.as_deref(), Some("subAgent:reviewer"));
-    assert_eq!(started.tool_use_id.as_deref(), Some("item-1"));
+    let mut started_ids = std::collections::HashSet::new();
+    let messages = tool_session_messages_for_completed_item(&item, &mut started_ids);
+    assert_eq!(messages.len(), 2, "expected synthesized ToolUse + ToolResult");
+    assert_eq!(messages[0].role, ProviderMessageRole::ToolUse);
+    assert_eq!(messages[0].tool_name.as_deref(), Some("subAgent:reviewer"));
+    assert_eq!(messages[0].tool_use_id.as_deref(), Some("item-1"));
+    assert_eq!(messages[1].role, ProviderMessageRole::ToolResult);
+    assert_eq!(messages[1].tool_name.as_deref(), Some("subAgent:reviewer"));
+    assert_eq!(messages[1].tool_use_id.as_deref(), Some("item-1"));
 
-    let completed = build_tool_session_message(&item, true).expect("completed maps");
-    assert_eq!(completed.tool_name.as_deref(), Some("subAgent:reviewer"));
+    // A duplicate completion must not re-synthesize the ToolUse frame.
+    let duplicate = tool_session_messages_for_completed_item(&item, &mut started_ids);
+    assert_eq!(duplicate.len(), 1);
+}
+
+#[test]
+fn completed_item_with_prior_started_frame_stays_a_single_tool_result() {
+    let item = json!({
+        "type": "sleep",
+        "id": "item-3",
+        "durationMs": 1500,
+    });
+
+    let mut started_ids = std::collections::HashSet::new();
+    let started = tool_session_message_for_started_item(&item, &mut started_ids)
+        .expect("sleep maps at item/started");
+    assert_eq!(started.tool_name.as_deref(), Some("sleep"));
+    assert!(started_ids.contains("item-3"));
+
+    let messages = tool_session_messages_for_completed_item(&item, &mut started_ids);
+    assert_eq!(messages.len(), 1, "started items complete without synthesis");
+    assert_eq!(messages[0].tool_name.as_deref(), Some("sleep"));
 }
 
 #[test]
@@ -315,19 +344,10 @@ fn sub_agent_activity_without_agent_path_uses_generic_name() {
         "id": "item-2",
         "kind": "interacted",
     });
-    let msg = build_tool_session_message(&item, false).expect("maps without agentPath");
-    assert_eq!(msg.tool_name.as_deref(), Some("subAgent"));
-}
-
-#[test]
-fn sleep_items_map_to_tool_frames() {
-    let item = json!({
-        "type": "sleep",
-        "id": "item-3",
-        "durationMs": 1500,
-    });
-    let msg = build_tool_session_message(&item, false).expect("sleep maps");
-    assert_eq!(msg.tool_name.as_deref(), Some("sleep"));
+    let mut started_ids = std::collections::HashSet::new();
+    let messages = tool_session_messages_for_completed_item(&item, &mut started_ids);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].tool_name.as_deref(), Some("subAgent"));
 }
 
 #[test]
@@ -384,57 +404,137 @@ fn extract_rerouted_model_reads_to_model() {
     assert_eq!(extract_rerouted_model(&json!({})), None);
 }
 
-#[test]
-fn usage_from_single_token_usage_snapshot_uses_last_breakdown() {
-    // Single-request turn: one snapshot, `last` is the whole turn.
-    let snapshot = json!({
-        "last": { "inputTokens": 1200, "outputTokens": 340 },
-        "total": { "inputTokens": 99999, "outputTokens": 88888 },
-        "modelContextWindow": 372000,
-    });
-    assert_eq!(
-        usage_from_token_usage_snapshots(&snapshot, &snapshot),
-        (1200, 340)
-    );
-    assert_eq!(
-        usage_from_token_usage_snapshots(&json!({}), &json!({})),
-        (0, 0)
-    );
+fn token_usage_params(turn: &str, last: (i64, i64), total: (i64, i64)) -> serde_json::Value {
+    json!({
+        "threadId": "thr-1",
+        "turnId": turn,
+        "tokenUsage": {
+            "last": { "inputTokens": last.0, "outputTokens": last.1 },
+            "total": { "inputTokens": total.0, "outputTokens": total.1 },
+            "modelContextWindow": 372000,
+        }
+    })
 }
 
 #[test]
-fn usage_from_token_usage_snapshots_adds_total_growth_for_multi_request_turns() {
-    // Resumed thread: totals already include prior turns. The turn consists of
-    // two requests (1200/340 then 800/60); its usage is first `last` plus the
-    // observed `total` growth.
-    let first = json!({
-        "last": { "inputTokens": 1200, "outputTokens": 340 },
-        "total": { "inputTokens": 51200, "outputTokens": 10340 },
-    });
-    let latest = json!({
-        "last": { "inputTokens": 800, "outputTokens": 60 },
-        "total": { "inputTokens": 52000, "outputTokens": 10400 },
-    });
-    assert_eq!(
-        usage_from_token_usage_snapshots(&first, &latest),
-        (1200 + 800, 340 + 60)
-    );
+fn turn_usage_fresh_thread_single_request_uses_totals() {
+    let mut tracker = CodexTurnUsageTracker::default();
+    assert!(tracker.observe(
+        &token_usage_params("turn-1", (1200, 340), (1200, 340)),
+        "thr-1",
+        "turn-1"
+    ));
+    assert_eq!(tracker.finish(None, false), (1200, 340));
+    assert_eq!(tracker.latest_totals(), Some((1200, 340)));
 }
 
 #[test]
-fn usage_from_token_usage_snapshots_clamps_negative_total_regression() {
-    let first = json!({
-        "last": { "inputTokens": 500, "outputTokens": 50 },
-        "total": { "inputTokens": 9000, "outputTokens": 900 },
-    });
-    let regressed = json!({
-        "last": { "inputTokens": 100, "outputTokens": 10 },
-        "total": { "inputTokens": 100, "outputTokens": 10 },
-    });
-    assert_eq!(
-        usage_from_token_usage_snapshots(&first, &regressed),
-        (500, 50)
+fn turn_usage_resumed_thread_derives_from_replay_baseline() {
+    // Resume replay emits the prior turn's snapshot (old turnId) first, then
+    // this turn performs two requests.
+    let mut tracker = CodexTurnUsageTracker::default();
+    tracker.observe(
+        &token_usage_params("turn-old", (900, 100), (50000, 10000)),
+        "thr-1",
+        "turn-2",
     );
+    tracker.observe(
+        &token_usage_params("turn-2", (1200, 340), (51200, 10340)),
+        "thr-1",
+        "turn-2",
+    );
+    tracker.observe(
+        &token_usage_params("turn-2", (800, 60), (52000, 10400)),
+        "thr-1",
+        "turn-2",
+    );
+    assert_eq!(tracker.finish(None, true), (2000, 400));
+}
+
+#[test]
+fn turn_usage_stale_snapshot_reissued_under_current_turn_counts_zero() {
+    // Reviewer repro (#TASK-2058): a usage-limit failure right after resume
+    // re-sends the unchanged prior-turn snapshot with the *current* turnId.
+    // Totals have not moved from the replayed baseline, so the turn used zero.
+    let mut tracker = CodexTurnUsageTracker::default();
+    tracker.observe(
+        &token_usage_params("turn-old", (1200, 340), (51200, 10340)),
+        "thr-1",
+        "turn-2",
+    );
+    tracker.observe(
+        &token_usage_params("turn-2", (1200, 340), (51200, 10340)),
+        "thr-1",
+        "turn-2",
+    );
+    assert_eq!(tracker.finish(None, true), (0, 0));
+}
+
+#[test]
+fn turn_usage_stale_snapshot_counts_zero_against_stored_baseline_too() {
+    // Same repro but without a replay snapshot: the previous in-process turn
+    // stored the thread's totals as the baseline.
+    let mut tracker = CodexTurnUsageTracker::default();
+    tracker.observe(
+        &token_usage_params("turn-2", (1200, 340), (51200, 10340)),
+        "thr-1",
+        "turn-2",
+    );
+    assert_eq!(tracker.finish(Some((51200, 10340)), true), (0, 0));
+}
+
+#[test]
+fn turn_usage_second_in_process_turn_uses_stored_baseline() {
+    // Turn 2 on the same in-process thread: no replay, baseline comes from the
+    // totals remembered when turn 1 finished.
+    let mut tracker = CodexTurnUsageTracker::default();
+    tracker.observe(
+        &token_usage_params("turn-2", (700, 90), (51900, 10430)),
+        "thr-1",
+        "turn-2",
+    );
+    assert_eq!(tracker.finish(Some((51200, 10340)), true), (700, 90));
+}
+
+#[test]
+fn turn_usage_repeated_same_request_snapshots_add_nothing() {
+    let mut tracker = CodexTurnUsageTracker::default();
+    for _ in 0..3 {
+        tracker.observe(
+            &token_usage_params("turn-1", (1200, 340), (1200, 340)),
+            "thr-1",
+            "turn-1",
+        );
+    }
+    assert_eq!(tracker.finish(None, false), (1200, 340));
+}
+
+#[test]
+fn turn_usage_resumed_thread_without_any_baseline_falls_back_to_last_plus_growth() {
+    let mut tracker = CodexTurnUsageTracker::default();
+    tracker.observe(
+        &token_usage_params("turn-2", (1200, 340), (51200, 10340)),
+        "thr-1",
+        "turn-2",
+    );
+    tracker.observe(
+        &token_usage_params("turn-2", (800, 60), (52000, 10400)),
+        "thr-1",
+        "turn-2",
+    );
+    assert_eq!(tracker.finish(None, true), (2000, 400));
+}
+
+#[test]
+fn turn_usage_ignores_other_threads_and_reports_zero_without_snapshots() {
+    let mut tracker = CodexTurnUsageTracker::default();
+    assert!(!tracker.observe(
+        &token_usage_params("turn-1", (1200, 340), (1200, 340)),
+        "thr-other",
+        "turn-1"
+    ));
+    assert_eq!(tracker.finish(None, false), (0, 0));
+    assert_eq!(tracker.latest_totals(), None);
 }
 
 #[test]

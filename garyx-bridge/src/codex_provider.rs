@@ -4,7 +4,7 @@
 //! Implements `AgentLoopProvider` backed by `codex_sdk::CodexClient`,
 //! managing thread/turn lifecycle and streaming notifications.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -400,31 +400,131 @@ fn extract_rerouted_model(params: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Per-turn `(input_tokens, output_tokens)` from the first and latest
-/// `thread/tokenUsage/updated` snapshots seen during the turn.
-///
-/// As of app-server 0.144 `turn/completed` no longer carries usage, so these
-/// snapshots are the authoritative source. `total` is thread-cumulative
-/// (including prior turns on a resumed thread) and `last` is the most recent
-/// request, so the turn's own consumption is the first snapshot's `last`
-/// (the turn's first request) plus the `total` growth observed since that
-/// snapshot. A single-snapshot turn degenerates to its `last` breakdown, and
-/// repeated snapshots for the same request add zero because `total` does not
-/// move.
-fn usage_from_token_usage_snapshots(first: &Value, latest: &Value) -> (i64, i64) {
-    fn read(snapshot: &Value, section: &str, key: &str) -> i64 {
+/// Cumulative `(input, output)` totals carried by a `thread/tokenUsage/updated`
+/// snapshot's `total` breakdown.
+fn token_usage_totals(snapshot: &Value) -> (i64, i64) {
+    let read = |key: &str| {
         snapshot
-            .get(section)
-            .and_then(|s| s.get(key))
+            .get("total")
+            .and_then(|total| total.get(key))
             .map(coerce_i64)
             .unwrap_or(0)
-    }
-    let turn_tokens = |key: &str| {
-        let first_request = read(first, "last", key);
-        let growth = (read(latest, "total", key) - read(first, "total", key)).max(0);
-        first_request + growth
     };
-    (turn_tokens("inputTokens"), turn_tokens("outputTokens"))
+    (read("inputTokens"), read("outputTokens"))
+}
+
+/// Per-turn usage bookkeeping over `thread/tokenUsage/updated` notifications.
+///
+/// As of app-server 0.144 `turn/completed` no longer carries usage, so a
+/// turn's consumption must derive from these snapshots. `total` is
+/// thread-cumulative, so the turn's own usage is the growth of `total` over a
+/// pre-turn baseline. The baseline comes from snapshots that carry a *prior*
+/// turn id (resume/fork replay emits one), or from the totals remembered when
+/// the previous in-process turn on the same thread finished. Deriving from
+/// `total` growth alone also keeps a stale snapshot that Codex re-sends under
+/// the current turn id (e.g. an immediate usage-limit failure) at zero, since
+/// its totals have not moved.
+#[derive(Default)]
+struct CodexTurnUsageTracker {
+    replay_baseline: Option<(i64, i64)>,
+    first: Option<Value>,
+    latest: Option<Value>,
+}
+
+impl CodexTurnUsageTracker {
+    /// Feed a `thread/tokenUsage/updated` notification. Returns `true` when
+    /// the notification belonged to this tracker's thread and was consumed.
+    fn observe(&mut self, params: &Value, thread_id: &str, turn_id: &str) -> bool {
+        let Some(usage) = params.get("tokenUsage").filter(|v| v.is_object()) else {
+            return false;
+        };
+        let event_thread = params.get("threadId").and_then(Value::as_str);
+        if event_thread != Some(thread_id) {
+            // Codex clients are shared across Garyx threads; another thread's
+            // usage must influence neither this turn nor its baseline.
+            return false;
+        }
+        let event_turn = params.get("turnId").and_then(Value::as_str);
+        if event_turn == Some(turn_id) {
+            if self.first.is_none() {
+                self.first = Some(usage.clone());
+            }
+            self.latest = Some(usage.clone());
+        } else {
+            // A snapshot for a prior turn (resume/fork replay): the thread's
+            // cumulative totals immediately before this turn.
+            let totals = token_usage_totals(usage);
+            self.replay_baseline = Some(max_totals(self.replay_baseline, totals));
+        }
+        true
+    }
+
+    /// The turn's `(input_tokens, output_tokens)`.
+    ///
+    /// `stored_baseline` is the totals remembered from the previous in-process
+    /// turn on this thread; `thread_was_resumed` reports whether this run
+    /// attached to an existing Codex thread (resume or fork).
+    fn finish(
+        &self,
+        stored_baseline: Option<(i64, i64)>,
+        thread_was_resumed: bool,
+    ) -> (i64, i64) {
+        let Some(latest) = self.latest.as_ref() else {
+            return (0, 0);
+        };
+        let latest_totals = token_usage_totals(latest);
+        let baseline = match (self.replay_baseline, stored_baseline) {
+            (Some(replay), Some(stored)) => Some(max_totals(Some(replay), stored)),
+            (replay, stored) => replay.or(stored),
+        };
+        match baseline {
+            Some((base_in, base_out)) => (
+                (latest_totals.0 - base_in).max(0),
+                (latest_totals.1 - base_out).max(0),
+            ),
+            // Fresh thread: totals started from zero, so they are the turn.
+            None if !thread_was_resumed => latest_totals,
+            // Resumed thread with no observable baseline: best effort from the
+            // first current-turn snapshot's last-request breakdown plus the
+            // `total` growth observed since.
+            None => {
+                let Some(first) = self.first.as_ref() else {
+                    return (0, 0);
+                };
+                let first_totals = token_usage_totals(first);
+                let read_last = |snapshot: &Value, key: &str| {
+                    snapshot
+                        .get("last")
+                        .and_then(|last| last.get(key))
+                        .map(coerce_i64)
+                        .unwrap_or(0)
+                };
+                (
+                    read_last(first, "inputTokens") + (latest_totals.0 - first_totals.0).max(0),
+                    read_last(first, "outputTokens") + (latest_totals.1 - first_totals.1).max(0),
+                )
+            }
+        }
+    }
+
+    /// The latest cumulative totals observed for this thread, to remember as
+    /// the next turn's baseline.
+    fn latest_totals(&self) -> Option<(i64, i64)> {
+        let observed = self
+            .latest
+            .as_ref()
+            .map(token_usage_totals)
+            .map(|totals| max_totals(self.replay_baseline, totals));
+        observed.or(self.replay_baseline)
+    }
+}
+
+/// Element-wise max of monotonic cumulative totals.
+fn max_totals(current: Option<(i64, i64)>, candidate: (i64, i64)) -> (i64, i64) {
+    match current {
+        Some((input, output)) => (input.max(candidate.0), output.max(candidate.1)),
+        None => candidate,
+    }
 }
 
 fn resolve_codex_actual_model_with_config_path(
@@ -835,6 +935,49 @@ fn codex_thread_item_type(item: &Value) -> Option<&str> {
         .filter(|kind| !kind.is_empty())
 }
 
+/// Record a started structured-activity item so its completion can be paired.
+fn tool_session_message_for_started_item(
+    item: &Value,
+    started_item_ids: &mut HashSet<String>,
+) -> Option<ProviderMessage> {
+    let msg = build_tool_session_message(item, false)?;
+    if let Some(id) = msg.tool_use_id.as_deref().filter(|id| !id.is_empty()) {
+        started_item_ids.insert(id.to_owned());
+    }
+    Some(msg)
+}
+
+/// Map a completed structured-activity item to session messages.
+///
+/// Some item types are completed-only on the wire (app-server 0.144 emits
+/// `subAgentActivity` solely as `item/completed`). A lone `ToolResult` frame is
+/// invisible on channels that render tool activity from the `ToolUse` frame,
+/// so when no matching `item/started` was seen, synthesize the paired
+/// `ToolUse` first. This stays inside the provider-neutral stream contract.
+fn tool_session_messages_for_completed_item(
+    item: &Value,
+    started_item_ids: &mut HashSet<String>,
+) -> Vec<ProviderMessage> {
+    let Some(completed) = build_tool_session_message(item, true) else {
+        return Vec::new();
+    };
+    let mut messages = Vec::with_capacity(2);
+    if let Some(id) = completed
+        .tool_use_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        && !started_item_ids.contains(id)
+    {
+        // Mark as started so a duplicate completion cannot re-synthesize.
+        started_item_ids.insert(id.to_owned());
+        if let Some(started) = build_tool_session_message(item, false) {
+            messages.push(started);
+        }
+    }
+    messages.push(completed);
+    messages
+}
+
 fn is_codex_structured_activity_item_type(item_type: &str) -> bool {
     // "reasoning" is intentionally excluded: Codex internal chain-of-thought
     // must not be persisted as Garyx activity (#TASK-963).
@@ -1172,6 +1315,11 @@ pub struct CodexAgentProvider {
     /// because the ChatGPT-plan usage quota was exhausted. Consumed once by the
     /// bridge run-completion path via `take_rate_limit`.
     pending_rate_limits: Mutex<HashMap<String, ProviderRateLimit>>,
+    /// codex_thread_id -> last observed cumulative `(input, output)` token
+    /// totals from `thread/tokenUsage/updated`. Serves as the usage baseline
+    /// for the next turn on the same in-process thread; resumed threads get
+    /// their baseline from the replayed prior-turn snapshot instead.
+    thread_usage_totals: Mutex<HashMap<String, (i64, i64)>>,
     ready: Mutex<bool>,
 }
 
@@ -1338,6 +1486,7 @@ impl CodexAgentProvider {
             active_session_callbacks: Mutex::new(HashMap::new()),
             active_session_pending_acks: Mutex::new(HashMap::new()),
             pending_rate_limits: Mutex::new(HashMap::new()),
+            thread_usage_totals: Mutex::new(HashMap::new()),
             ready: Mutex::new(false),
         }
     }
@@ -1786,6 +1935,9 @@ impl CodexAgentProvider {
             let session_map = self.session_map.lock().await;
             resolve_existing_thread_id(&session_map, &options.thread_id, sdk_session_id.as_deref())
         };
+        // Attached to an existing Codex thread (resume or fork): its
+        // cumulative token totals include prior turns.
+        let thread_was_resumed = existing_thread_id.is_some();
         let include_memory = existing_thread_id.is_none() && !fork_session;
         let thread_params = build_thread_start_params(
             &effective_config,
@@ -1861,11 +2013,12 @@ impl CodexAgentProvider {
         let mut current_agent_message_item_id: Option<String> = None;
         let mut current_agent_message_has_text = false;
         let mut thread_title: Option<String> = None;
-        // First and latest `thread/tokenUsage/updated` snapshots for this
-        // turn. As of app-server 0.144 `turn/completed` no longer carries
-        // usage, so per-turn usage derives from these snapshots.
-        let mut first_token_usage: Option<Value> = None;
-        let mut latest_token_usage: Option<Value> = None;
+        // As of app-server 0.144 `turn/completed` no longer carries usage, so
+        // per-turn usage derives from `thread/tokenUsage/updated` snapshots.
+        let mut turn_usage = CodexTurnUsageTracker::default();
+        // Structured-activity items whose `item/started` produced a ToolUse
+        // frame; completions without one synthesize the pair.
+        let mut started_tool_item_ids: HashSet<String> = HashSet::new();
 
         let timeout = Duration::from_secs_f64(self.config.request_timeout_seconds);
 
@@ -1915,6 +2068,14 @@ impl CodexAgentProvider {
                         codex_thread_id = %codex_thread_id,
                         "codex app-server advisory: {advisory}"
                     );
+                    continue;
+                }
+
+                // Token-usage snapshots are consumed ahead of the turn gate:
+                // a snapshot replayed for a *prior* turn (resume/fork) is this
+                // turn's usage baseline and would otherwise be dropped.
+                if method == "thread/tokenUsage/updated" {
+                    turn_usage.observe(params, &thread_id, &turn_id);
                     continue;
                 }
 
@@ -1978,18 +2139,23 @@ impl CodexAgentProvider {
                                     live_callback.as_ref(),
                                 );
                             }
-                            if let Some(msg) = build_tool_session_message(item, false) {
+                            if let Some(msg) =
+                                tool_session_message_for_started_item(item, &mut started_tool_item_ids)
+                            {
                                 emit_tool_stream_event(&msg, live_callback.as_ref());
                                 session_messages.push(msg);
                             }
                         }
                     }
                     "item/completed" => {
-                        if let Some(item) = params.get("item")
-                            && let Some(msg) = build_tool_session_message(item, true)
-                        {
-                            emit_tool_stream_event(&msg, live_callback.as_ref());
-                            session_messages.push(msg);
+                        if let Some(item) = params.get("item") {
+                            for msg in tool_session_messages_for_completed_item(
+                                item,
+                                &mut started_tool_item_ids,
+                            ) {
+                                emit_tool_stream_event(&msg, live_callback.as_ref());
+                                session_messages.push(msg);
+                            }
                         }
                     }
                     "error" => {
@@ -2030,14 +2196,6 @@ impl CodexAgentProvider {
                             actual_model = Some(to_model);
                         }
                     }
-                    "thread/tokenUsage/updated" => {
-                        if let Some(usage) = params.get("tokenUsage").filter(|v| v.is_object()) {
-                            if first_token_usage.is_none() {
-                                first_token_usage = Some(usage.clone());
-                            }
-                            latest_token_usage = Some(usage.clone());
-                        }
-                    }
                     "turn/completed" => {
                         let turn = params
                             .get("turn")
@@ -2059,6 +2217,18 @@ impl CodexAgentProvider {
 
         // Cleanup tracking
         self.cleanup_active_run_state(&run_id).await;
+
+        // Read the usage baseline remembered from the previous in-process turn
+        // and remember this turn's cumulative totals for the next one, even
+        // when the run fails: the tokens were consumed either way.
+        let stored_usage_baseline = {
+            let mut totals = self.thread_usage_totals.lock().await;
+            let stored = totals.get(&thread_id).copied();
+            if let Some(latest) = turn_usage.latest_totals() {
+                totals.insert(thread_id.clone(), max_totals(stored, latest));
+            }
+            stored
+        };
 
         let duration_ms = start.elapsed().as_millis() as i64;
         let response = response_parts.join("");
@@ -2138,12 +2308,7 @@ impl CodexAgentProvider {
                 // `turn/completed` omits usage on app-server >= 0.144; derive
                 // this turn's usage from its token-usage snapshots instead.
                 let (snapshot_input, snapshot_output) =
-                    match (first_token_usage.as_ref(), latest_token_usage.as_ref()) {
-                        (Some(first), Some(latest)) => {
-                            usage_from_token_usage_snapshots(first, latest)
-                        }
-                        _ => (0, 0),
-                    };
+                    turn_usage.finish(stored_usage_baseline, thread_was_resumed);
                 (snapshot_input, snapshot_output, cost)
             } else {
                 (input_tokens, output_tokens, cost)
