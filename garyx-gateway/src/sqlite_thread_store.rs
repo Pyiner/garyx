@@ -279,7 +279,6 @@ impl ThreadStore for SqliteThreadStore {
     }
 }
 
-
 /// Assemble the SQLite-backed thread store for runtime wiring
 /// (#TASK-1864): build the store over `garyx_db` and run the one-shot
 /// boot import from the file archive when this machine has not imported
@@ -604,12 +603,12 @@ mod contract_tests {
             import_thread_records_if_needed(&garyx_db, &source, &sqlite, &transcript_store).await;
         assert_eq!(summary.imported, 1);
 
-        // A file-mode rollback rewrites the record under the same key count…
+        // A manual recovery rewrites the archive under the same key count…
         source
             .set("thread::rollback", json!({"thread_id": "thread::rollback", "label": "v2"}))
             .await;
-        // …and the file-mode boot invalidates the import state
-        // (#TASK-1901: same key count must not skip the re-import).
+        // …and clearing the import-state row (the manual recovery step)
+        // forces the re-import (#TASK-1901: same key count must not skip it).
         assert!(
             garyx_db
                 .clear_projection_state(THREAD_RECORDS_IMPORT_NAME)
@@ -625,7 +624,6 @@ mod contract_tests {
             "the re-import must pick up the rollback write"
         );
     }
-
 
     #[tokio::test]
     async fn boot_import_migrates_the_archive_once() {

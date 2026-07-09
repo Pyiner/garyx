@@ -1012,10 +1012,10 @@ impl GaryxDbService {
     }
 
     /// Drop a projection/migration state row so its one-shot job runs
-    /// again on the next eligible boot. Used by the file thread-store
-    /// backend to invalidate the sqlite import whenever the archive is
-    /// the live truth (review #TASK-1901: a same-key-count rollback write
-    /// must not be skipped by the next import).
+    /// again on the next eligible boot. Manual recovery hook: clearing
+    /// the thread-records import row forces a fresh boot import from the
+    /// archived source (review #TASK-1901: a same-key-count rewrite must
+    /// not be skipped by the next import).
     pub fn clear_projection_state(&self, name: &str) -> GaryxDbResult<bool> {
         let conn = self.conn()?;
         let removed = conn.execute(

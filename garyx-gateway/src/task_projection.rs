@@ -218,4 +218,3 @@ fn source_channel_account_id(source: &TaskSource) -> Option<String> {
     let account_id = normalized(source.account_id.as_deref())?;
     Some(format!("{channel}:{account_id}"))
 }
-
