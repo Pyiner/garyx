@@ -1824,6 +1824,12 @@ pub struct ThreadStreamParams {
     /// frames, so a stale resume may be degraded to the initial window.
     #[serde(default)]
     pub windowed_resume: Option<u8>,
+    /// Capability negotiation (#TASK-1956 knife 1): `delta` declares that
+    /// live frames may carry `render_delta` instead of a full
+    /// `render_state`. Undeclared connections receive full frames
+    /// indefinitely — a permanent contract surface, not a transition flag.
+    #[serde(default)]
+    pub render_mode: Option<ThreadStreamRenderMode>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -1831,6 +1837,13 @@ pub struct ThreadStreamParams {
 pub enum ThreadStreamReplayScope {
     Resume,
     Initial,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadStreamRenderMode {
+    Full,
+    Delta,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1924,16 +1937,31 @@ pub async fn thread_stream(
     // the overlap idempotent.
     let rx = state.ops.events.subscribe();
 
+    // Delta negotiation (#TASK-1956 knife 1): declared connections get a
+    // per-connection diff base; every full frame (replay/snapshot-only
+    // below, first-live/same-seq-reseed in the live loop) seeds it.
+    let delta_base: Option<Arc<ThreadStreamDeltaBase>> = (params.render_mode
+        == Some(ThreadStreamRenderMode::Delta))
+    .then(|| Arc::new(std::sync::Mutex::new(None)));
+
     tracing::info!(
         thread_id = %thread_id,
         after_seq,
         render_floor = replay_options.render_floor,
         windowed_resume = replay_options.windowed_resume,
         replay_scope = ?replay_options.replay_scope,
+        render_delta = delta_base.is_some(),
         "per-thread stream connected"
     );
 
-    let replay = build_thread_stream_replay(&state, &thread_id, after_seq, replay_options).await;
+    let replay = build_thread_stream_replay(
+        &state,
+        &thread_id,
+        after_seq,
+        replay_options,
+        delta_base.as_deref(),
+    )
+    .await;
     let render_floor_for_live = replay.render_floor;
     let replay_events = replay
         .events
@@ -1949,6 +1977,7 @@ pub async fn thread_stream(
         .then(move |item| {
             let state_for_live = state_for_live.clone();
             let thread_for_live = thread_for_live.clone();
+            let delta_base_for_live = delta_base.clone();
             let forwarded = match item {
                 Ok(raw) => committed_thread_stream_live_payload(
                     &raw,
@@ -1973,6 +2002,7 @@ pub async fn thread_stream(
                             seq,
                             payload,
                             render_floor_for_live,
+                            delta_base_for_live.as_deref(),
                         )
                         .await,
                     ),
@@ -2002,6 +2032,44 @@ struct ThreadStreamReplay {
     render_floor: u64,
 }
 
+/// Per-connection delta base for `render_mode=delta` connections
+/// (#TASK-1956 knife 1): the seq and rows digest of the last frame this
+/// connection sent. `None` until the first full frame seeds it. Seeding
+/// rule (one rule, everywhere): every frame that carries a full
+/// `render_state` — replay, snapshot-only, or a full live frame — resets
+/// this base to that frame's snapshot; the very next live frame may be a
+/// delta. Wrapped in a `Mutex` only because the live stream's future
+/// cannot borrow closure captures; access is strictly sequential.
+type ThreadStreamDeltaBase = std::sync::Mutex<Option<ThreadStreamRenderBase>>;
+
+struct ThreadStreamRenderBase {
+    seq: u64,
+    rows_hash: u64,
+    row_hashes: HashMap<String, u64>,
+}
+
+fn lock_thread_stream_delta_base(
+    base: &ThreadStreamDeltaBase,
+) -> std::sync::MutexGuard<'_, Option<ThreadStreamRenderBase>> {
+    // A poisoned base only means a panic elsewhere while seeding; the
+    // cached digest is still coherent (worst case the next frame goes
+    // out full and reseeds), so recover instead of propagating the panic.
+    base.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Seed the connection's delta base from a full snapshot and stamp the
+/// snapshot with its `rows_hash` chain token. Called by every full-frame
+/// constructor on delta connections.
+fn seed_thread_stream_delta_base(base: &ThreadStreamDeltaBase, render_state: &mut RenderSnapshot) {
+    let digest = garyx_models::render_rows_digest(&render_state.rows);
+    render_state.rows_hash = Some(digest.rows_hash);
+    *lock_thread_stream_delta_base(base) = Some(ThreadStreamRenderBase {
+        seq: render_state.based_on_seq,
+        rows_hash: digest.rows_hash,
+        row_hashes: digest.row_hashes,
+    });
+}
+
 struct ThreadStreamReplayBuilder {
     event_payloads: Vec<Value>,
     max_seq: u64,
@@ -2025,6 +2093,7 @@ async fn build_thread_stream_replay(
     thread_id: &str,
     after_seq: u64,
     options: ThreadStreamReplayOptions,
+    delta_base: Option<&ThreadStreamDeltaBase>,
 ) -> ThreadStreamReplay {
     if matches!(options.replay_scope, ThreadStreamReplayScope::Initial) {
         if let Some(initial_user_turns) = options.initial_user_turns {
@@ -2049,6 +2118,7 @@ async fn build_thread_stream_replay(
                 after_seq,
                 window.records,
                 window.floor_seq,
+                delta_base,
             )
             .await;
         }
@@ -2080,16 +2150,23 @@ async fn build_thread_stream_replay(
         if options.windowed_resume
             && replay.serialized_bytes > THREAD_STREAM_RESUME_REPLAY_BYTE_BUDGET
         {
-            return degraded_windowed_resume_replay(state, thread_id, after_seq).await;
+            return degraded_windowed_resume_replay(state, thread_id, after_seq, delta_base).await;
         }
-        return finalize_thread_stream_replay(state, thread_id, replay, options.render_floor, None)
-            .await;
+        return finalize_thread_stream_replay(
+            state,
+            thread_id,
+            replay,
+            options.render_floor,
+            None,
+            delta_base,
+        )
+        .await;
     }
 
     if options.windowed_resume {
         // The gap self-heal below would page in the ENTIRE span; an
         // opted-in client gets the window instead of megabytes.
-        return degraded_windowed_resume_replay(state, thread_id, after_seq).await;
+        return degraded_windowed_resume_replay(state, thread_id, after_seq, delta_base).await;
     }
 
     let mut cursor = after_seq;
@@ -2117,7 +2194,15 @@ async fn build_thread_stream_replay(
         }
         cursor = replay.max_seq;
     }
-    finalize_thread_stream_replay(state, thread_id, replay, options.render_floor, None).await
+    finalize_thread_stream_replay(
+        state,
+        thread_id,
+        replay,
+        options.render_floor,
+        None,
+        delta_base,
+    )
+    .await
 }
 
 /// Serve an opted-in stale resume as the initial window: same records a
@@ -2128,6 +2213,7 @@ async fn degraded_windowed_resume_replay(
     state: &Arc<AppState>,
     thread_id: &str,
     after_seq: u64,
+    delta_base: Option<&ThreadStreamDeltaBase>,
 ) -> ThreadStreamReplay {
     let window = state
         .threads
@@ -2157,6 +2243,7 @@ async fn degraded_windowed_resume_replay(
         replay,
         window.floor_seq,
         Some("windowed"),
+        delta_base,
     )
     .await
 }
@@ -2167,6 +2254,7 @@ async fn thread_stream_replay_from_records(
     after_seq: u64,
     records: Vec<ThreadTranscriptRecord>,
     render_floor: u64,
+    delta_base: Option<&ThreadStreamDeltaBase>,
 ) -> ThreadStreamReplay {
     let mut replay = ThreadStreamReplayBuilder {
         event_payloads: Vec::with_capacity(records.len()),
@@ -2175,7 +2263,7 @@ async fn thread_stream_replay_from_records(
         serialized_bytes: 0,
     };
     append_thread_stream_replay_records(&mut replay, thread_id, records);
-    finalize_thread_stream_replay(state, thread_id, replay, render_floor, None).await
+    finalize_thread_stream_replay(state, thread_id, replay, render_floor, None, delta_base).await
 }
 
 async fn finalize_thread_stream_replay(
@@ -2184,6 +2272,7 @@ async fn finalize_thread_stream_replay(
     replay: ThreadStreamReplayBuilder,
     render_floor: u64,
     replay_kind: Option<&'static str>,
+    delta_base: Option<&ThreadStreamDeltaBase>,
 ) -> ThreadStreamReplay {
     let mut events = Vec::new();
     let mut max_seq = replay.max_seq;
@@ -2195,6 +2284,7 @@ async fn finalize_thread_stream_replay(
             replay.event_payloads,
             render_floor,
             replay_kind,
+            delta_base,
         )
         .await;
         events.push(event);
@@ -2205,6 +2295,7 @@ async fn finalize_thread_stream_replay(
             replay.max_seq,
             render_floor,
             replay_kind,
+            delta_base,
         )
         .await;
         if let Ok(event) = &event {
@@ -2280,8 +2371,68 @@ async fn committed_thread_stream_live_event(
     seq: u64,
     payload: Value,
     render_floor: u64,
+    delta_base: Option<&ThreadStreamDeltaBase>,
 ) -> Result<ThreadStreamEvent, io::Error> {
-    thread_stream_frame_event(state, thread_id, seq, vec![payload], render_floor, None).await
+    let Some(delta_base) = delta_base else {
+        // Undeclared connection: full frames, byte-identical to the
+        // pre-delta contract (no rows_hash).
+        return thread_stream_frame_event(
+            state,
+            thread_id,
+            seq,
+            vec![payload],
+            render_floor,
+            None,
+            None,
+        )
+        .await;
+    };
+    let mut render_state =
+        thread_render_snapshot_at_seq(state, thread_id, seq, render_floor).await?;
+    if render_state.based_on_seq != seq {
+        return Err(thread_stream_reconnect_error(
+            "render snapshot seq mismatch",
+        ));
+    }
+    let digest = garyx_models::render_rows_digest(&render_state.rows);
+    let delta = {
+        let mut guard = lock_thread_stream_delta_base(delta_base);
+        let delta = match guard.as_ref() {
+            // Base strictly behind this frame: normal delta step.
+            Some(base) if base.seq < seq => Some(garyx_models::derive_render_delta_from_base(
+                base.seq,
+                base.rows_hash,
+                &base.row_hashes,
+                &render_state,
+                digest.rows_hash,
+            )),
+            // Same-seq overwrite (a changed payload re-landed on
+            // `seq == last_sent_seq`; design "Same-seq overwrites") or no
+            // base yet: emit a full frame instead of a delta.
+            _ => None,
+        };
+        // Either way this frame becomes the new base (the seeding rule for
+        // full frames; for delta frames the chain simply advances).
+        *guard = Some(ThreadStreamRenderBase {
+            seq,
+            rows_hash: digest.rows_hash,
+            row_hashes: digest.row_hashes,
+        });
+        delta
+    };
+    match delta {
+        Some(delta) => Ok(ThreadStreamEvent {
+            id: seq,
+            payload: thread_stream_delta_frame_payload(thread_id, vec![payload], &delta),
+        }),
+        None => {
+            render_state.rows_hash = Some(digest.rows_hash);
+            Ok(ThreadStreamEvent {
+                id: seq,
+                payload: thread_stream_frame_payload(thread_id, vec![payload], &render_state, None),
+            })
+        }
+    }
 }
 
 async fn thread_stream_snapshot_only_frame_event(
@@ -2290,9 +2441,13 @@ async fn thread_stream_snapshot_only_frame_event(
     requested_seq: u64,
     render_floor: u64,
     replay_kind: Option<&'static str>,
+    delta_base: Option<&ThreadStreamDeltaBase>,
 ) -> Result<ThreadStreamEvent, io::Error> {
-    let render_state =
+    let mut render_state =
         thread_render_snapshot_at_seq(state, thread_id, requested_seq, render_floor).await?;
+    if let Some(delta_base) = delta_base {
+        seed_thread_stream_delta_base(delta_base, &mut render_state);
+    }
     let id = render_state.based_on_seq;
     Ok(ThreadStreamEvent {
         id,
@@ -2307,12 +2462,17 @@ async fn thread_stream_frame_event(
     event_payloads: Vec<Value>,
     render_floor: u64,
     replay_kind: Option<&'static str>,
+    delta_base: Option<&ThreadStreamDeltaBase>,
 ) -> Result<ThreadStreamEvent, io::Error> {
-    let render_state = thread_render_snapshot_at_seq(state, thread_id, seq, render_floor).await?;
+    let mut render_state =
+        thread_render_snapshot_at_seq(state, thread_id, seq, render_floor).await?;
     if render_state.based_on_seq != seq {
         return Err(thread_stream_reconnect_error(
             "render snapshot seq mismatch",
         ));
+    }
+    if let Some(delta_base) = delta_base {
+        seed_thread_stream_delta_base(delta_base, &mut render_state);
     }
     Ok(ThreadStreamEvent {
         id: seq,
@@ -2353,6 +2513,23 @@ fn thread_stream_frame_payload(
         obj.insert("replay".to_owned(), Value::String(kind.to_owned()));
     }
     payload.to_string()
+}
+
+/// Live frame for a `render_mode=delta` connection: `render_delta`
+/// replaces `render_state`; `events` stay the cursor/body source of
+/// truth, unchanged.
+fn thread_stream_delta_frame_payload(
+    thread_id: &str,
+    event_payloads: Vec<Value>,
+    render_delta: &garyx_models::RenderDelta,
+) -> String {
+    json!({
+        "type": "thread_render_frame",
+        "thread_id": thread_id,
+        "events": event_payloads,
+        "render_delta": render_delta,
+    })
+    .to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

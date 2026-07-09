@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -30,6 +31,20 @@ pub struct RenderSnapshot {
     pub rate_limit: Option<RenderRateLimit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<RenderWindow>,
+    /// Combined hash over the per-row structural hashes in `rows` order
+    /// (#TASK-1956 knife 1). The server is the only hasher: clients treat
+    /// this as an opaque token and compare it by equality against
+    /// `RenderDelta.from_rows_hash` to keep the delta chain honest. In Rust
+    /// this is a `u64`; on the wire it is a decimal STRING because u64
+    /// exceeds JavaScript's 2^53 safe-integer range. `None` (absent on the
+    /// wire) on connections that did not declare `render_mode=delta`, which
+    /// keeps undeclared frames byte-identical.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "rows_hash_token"
+    )]
+    pub rows_hash: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,13 +84,13 @@ pub enum RenderProgressLocus {
     ToolGroup,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RenderRow {
     UserTurn(RenderUserTurnRow),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RenderCapsuleCard {
     pub id: String,
     pub capsule_id: String,
@@ -84,14 +99,14 @@ pub struct RenderCapsuleCard {
     pub action: RenderCapsuleAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RenderCapsuleAction {
     Created,
     Updated,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RenderUserTurnRow {
     pub id: String,
     pub user: Option<RenderMessageRef>,
@@ -102,21 +117,21 @@ pub struct RenderUserTurnRow {
     pub capsule_cards: Vec<RenderCapsuleCard>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RenderActivityRow {
     AssistantReply(RenderAssistantReplyRow),
     Step(RenderStepRow),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RenderAssistantReplyRow {
     pub id: String,
     pub message: RenderMessageRef,
     pub streaming: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RenderStepRow {
     pub id: String,
     pub steps: Vec<RenderStepItem>,
@@ -126,21 +141,21 @@ pub struct RenderStepRow {
     pub finished_at: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RenderStepItem {
     AssistantMessage(RenderAssistantStep),
     ToolGroup(RenderToolGroup),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RenderAssistantStep {
     pub id: String,
     pub message: RenderMessageRef,
     pub streaming: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RenderToolGroup {
     pub id: String,
     pub status: RenderToolGroupStatus,
@@ -149,14 +164,14 @@ pub struct RenderToolGroup {
     pub finished_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RenderToolGroupStatus {
     Active,
     Completed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RenderToolEntry {
     pub id: String,
     pub tool_use_id: Option<String>,
@@ -165,7 +180,7 @@ pub struct RenderToolEntry {
     pub tool_result: Option<RenderMessageRef>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RenderToolEntryStatus {
     Running,
@@ -173,7 +188,7 @@ pub enum RenderToolEntryStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RenderMessageRef {
     pub id: String,
     pub seq: u64,
@@ -190,6 +205,287 @@ pub struct RenderFilteredPlaceholder {
 #[serde(rename_all = "snake_case")]
 pub enum RenderPlaceholderFilterReason {
     EmptyStreamingAssistant,
+}
+
+/// Serde codec for `RenderSnapshot.rows_hash`: `u64` in Rust, decimal
+/// string on the wire (u64 exceeds JS's 2^53 safe-integer range; the
+/// contract type is an opaque string token).
+mod rows_hash_token {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
+        value.map(|hash| hash.to_string()).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        let token = Option::<String>::deserialize(deserializer)?;
+        token
+            .map(|token| token.parse::<u64>().map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
+
+/// Incremental live-frame payload (#TASK-1956 knife 1). Scalar fields are
+/// always sent whole; rows travel as the full id order plus the bodies of
+/// new/changed rows only. `from_rows_hash`/`rows_hash` chain consecutive
+/// frames: the server is the only hasher, clients compare the opaque
+/// tokens by equality and take the gap path on any mismatch. Serde naming
+/// is aligned with `RenderSnapshot` field for field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderDelta {
+    /// The client must hold the snapshot at this seq...
+    pub from_seq: u64,
+    /// ...with exactly this rows content (drift tripwire).
+    pub from_rows_hash: String,
+    pub based_on_seq: u64,
+    /// Combined rows hash AFTER applying this delta; the client stores it
+    /// as its new chain token on accept.
+    pub rows_hash: String,
+    /// Full row id sequence: re-order is unambiguous.
+    pub row_order: Vec<String>,
+    /// Full bodies for new/changed rows only.
+    pub upsert_rows: Vec<RenderRow>,
+    #[serde(rename = "tailActivity")]
+    pub tail_activity: RenderTailActivity,
+    #[serde(rename = "activeToolGroupId")]
+    pub active_tool_group_id: Option<String>,
+    pub progress_locus: RenderProgressLocus,
+    #[serde(rename = "rateLimit", default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<RenderRateLimit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<RenderWindow>,
+    pub filtered_placeholders: Vec<RenderFilteredPlaceholder>,
+}
+
+/// Why `apply_render_delta` rejected a delta. Every variant is a protocol
+/// violation on the receiving side: the consumer discards the frame and
+/// enters its existing gap path (reconnect + authoritative refetch).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenderDeltaError {
+    /// `delta.from_seq` does not match the held snapshot's `based_on_seq`.
+    FromSeqMismatch {
+        delta_from_seq: u64,
+        prev_based_on_seq: u64,
+    },
+    /// `delta.from_rows_hash` does not match the held rows-hash token:
+    /// the delta base drifted (same-seq drops, guard interactions, bugs).
+    FromRowsHashMismatch {
+        delta_from_rows_hash: String,
+        prev_rows_hash: String,
+    },
+    /// A `row_order` id resolves to neither `upsert_rows` nor the held
+    /// snapshot's rows.
+    MissingRow { row_id: String },
+    /// The reassembled rows do not hash to `delta.rows_hash`: the chain is
+    /// broken even though every id resolved.
+    RowsHashMismatch {
+        delta_rows_hash: String,
+        reassembled_rows_hash: String,
+    },
+}
+
+impl std::fmt::Display for RenderDeltaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FromSeqMismatch {
+                delta_from_seq,
+                prev_based_on_seq,
+            } => write!(
+                f,
+                "render delta from_seq {delta_from_seq} does not match held snapshot seq {prev_based_on_seq}"
+            ),
+            Self::FromRowsHashMismatch {
+                delta_from_rows_hash,
+                prev_rows_hash,
+            } => write!(
+                f,
+                "render delta from_rows_hash {delta_from_rows_hash} does not match held rows hash {prev_rows_hash}"
+            ),
+            Self::MissingRow { row_id } => {
+                write!(
+                    f,
+                    "render delta row id {row_id} missing from upsert rows and held snapshot"
+                )
+            }
+            Self::RowsHashMismatch {
+                delta_rows_hash,
+                reassembled_rows_hash,
+            } => write!(
+                f,
+                "render delta rows_hash {delta_rows_hash} does not match reassembled rows hash {reassembled_rows_hash}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RenderDeltaError {}
+
+/// Per-row structural hashes (keyed by row id) plus the combined rows hash
+/// for one snapshot's rows. This is what a delta-mode connection caches
+/// per frame instead of the full previous snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderRowsDigest {
+    pub rows_hash: u64,
+    pub row_hashes: HashMap<String, u64>,
+}
+
+pub fn render_row_id(row: &RenderRow) -> &str {
+    match row {
+        RenderRow::UserTurn(turn) => &turn.id,
+    }
+}
+
+/// Structural hash of one row. The algorithm is a server implementation
+/// detail: tokens never leave one server process's lifetime (every new
+/// connection reseeds from a full frame), so cross-version stability is
+/// not required — only in-process determinism.
+pub fn render_row_hash(row: &RenderRow) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    row.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// One pass over `rows`: per-row hashes by id plus the combined hash over
+/// the per-row hashes in row order (row count included, so truncation and
+/// reorder both change the token).
+pub fn render_rows_digest(rows: &[RenderRow]) -> RenderRowsDigest {
+    let mut combined = std::collections::hash_map::DefaultHasher::new();
+    let mut row_hashes = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let row_hash = render_row_hash(row);
+        row_hash.hash(&mut combined);
+        row_hashes.insert(render_row_id(row).to_owned(), row_hash);
+    }
+    rows.len().hash(&mut combined);
+    RenderRowsDigest {
+        rows_hash: combined.finish(),
+        row_hashes,
+    }
+}
+
+/// Diff two full snapshots into a delta (oracle side; the gateway's live
+/// loop uses [`derive_render_delta_from_base`] so it only has to cache row
+/// hashes, never the previous snapshot's bodies).
+pub fn derive_render_delta(prev: &RenderSnapshot, next: &RenderSnapshot) -> RenderDelta {
+    let prev_digest = render_rows_digest(&prev.rows);
+    derive_render_delta_from_base(
+        prev.based_on_seq,
+        prev_digest.rows_hash,
+        &prev_digest.row_hashes,
+        next,
+        render_rows_digest(&next.rows).rows_hash,
+    )
+}
+
+/// Diff `next` against a previously-sent frame known only by its seq,
+/// combined rows hash, and per-row hashes. `next_rows_hash` must be the
+/// combined hash of `next.rows` (see [`render_rows_digest`]).
+pub fn derive_render_delta_from_base(
+    from_seq: u64,
+    from_rows_hash: u64,
+    from_row_hashes: &HashMap<String, u64>,
+    next: &RenderSnapshot,
+    next_rows_hash: u64,
+) -> RenderDelta {
+    let mut row_order = Vec::with_capacity(next.rows.len());
+    let mut upsert_rows = Vec::new();
+    for row in &next.rows {
+        let row_id = render_row_id(row);
+        row_order.push(row_id.to_owned());
+        if from_row_hashes.get(row_id) != Some(&render_row_hash(row)) {
+            upsert_rows.push(row.clone());
+        }
+    }
+    RenderDelta {
+        from_seq,
+        from_rows_hash: from_rows_hash.to_string(),
+        based_on_seq: next.based_on_seq,
+        rows_hash: next_rows_hash.to_string(),
+        row_order,
+        upsert_rows,
+        tail_activity: next.tail_activity,
+        active_tool_group_id: next.active_tool_group_id.clone(),
+        progress_locus: next.progress_locus,
+        rate_limit: next.rate_limit.clone(),
+        window: next.window,
+        filtered_placeholders: next.filtered_placeholders.clone(),
+    }
+}
+
+/// Reassemble the next full snapshot from the held one plus a delta —
+/// the reference client algorithm and the oracle's other side.
+///
+/// Validation order matches the client contract: seq base, rows-hash
+/// chain token, row-id completeness, then the reassembled-rows hash
+/// tripwire. The held token is `prev.rows_hash` when present (clients
+/// never hash; they store the last accepted token); a `prev` without the
+/// token is hashed locally, which only the server-side oracle does.
+///
+/// `visible_message_ids` is NOT carried by deltas (zero consumers,
+/// deleted end-to-end in #TASK-1956 batch 4), so the reassembled snapshot
+/// leaves it empty.
+pub fn apply_render_delta(
+    prev: &RenderSnapshot,
+    delta: &RenderDelta,
+) -> Result<RenderSnapshot, RenderDeltaError> {
+    if delta.from_seq != prev.based_on_seq {
+        return Err(RenderDeltaError::FromSeqMismatch {
+            delta_from_seq: delta.from_seq,
+            prev_based_on_seq: prev.based_on_seq,
+        });
+    }
+    let prev_rows_hash = prev
+        .rows_hash
+        .unwrap_or_else(|| render_rows_digest(&prev.rows).rows_hash)
+        .to_string();
+    if delta.from_rows_hash != prev_rows_hash {
+        return Err(RenderDeltaError::FromRowsHashMismatch {
+            delta_from_rows_hash: delta.from_rows_hash.clone(),
+            prev_rows_hash,
+        });
+    }
+    let upsert_by_id: HashMap<&str, &RenderRow> = delta
+        .upsert_rows
+        .iter()
+        .map(|row| (render_row_id(row), row))
+        .collect();
+    let prev_by_id: HashMap<&str, &RenderRow> = prev
+        .rows
+        .iter()
+        .map(|row| (render_row_id(row), row))
+        .collect();
+    let mut rows = Vec::with_capacity(delta.row_order.len());
+    for row_id in &delta.row_order {
+        let row = upsert_by_id
+            .get(row_id.as_str())
+            .or_else(|| prev_by_id.get(row_id.as_str()))
+            .copied()
+            .ok_or_else(|| RenderDeltaError::MissingRow {
+                row_id: row_id.clone(),
+            })?;
+        rows.push(row.clone());
+    }
+    let reassembled_rows_hash = render_rows_digest(&rows).rows_hash;
+    if delta.rows_hash != reassembled_rows_hash.to_string() {
+        return Err(RenderDeltaError::RowsHashMismatch {
+            delta_rows_hash: delta.rows_hash.clone(),
+            reassembled_rows_hash: reassembled_rows_hash.to_string(),
+        });
+    }
+    Ok(RenderSnapshot {
+        based_on_seq: delta.based_on_seq,
+        rows,
+        tail_activity: delta.tail_activity,
+        active_tool_group_id: delta.active_tool_group_id.clone(),
+        progress_locus: delta.progress_locus,
+        visible_message_ids: Vec::new(),
+        filtered_placeholders: delta.filtered_placeholders.clone(),
+        rate_limit: delta.rate_limit.clone(),
+        window: delta.window,
+        rows_hash: Some(reassembled_rows_hash),
+    })
 }
 
 pub fn reduce_transcript_render_state<'a>(
@@ -313,6 +609,7 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         filtered_placeholders,
         rate_limit,
         window: None,
+        rows_hash: None,
     }
 }
 
@@ -1291,6 +1588,7 @@ mod tests {
     use super::*;
     use serde::Deserialize;
     use serde_json::json;
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::PathBuf;
 
@@ -1391,9 +1689,7 @@ mod tests {
         let snapshot = reduce_transcript_render_state(&records);
         let mut group_ids = Vec::new();
         for row in &snapshot.rows {
-            let RenderRow::UserTurn(turn) = row else {
-                continue;
-            };
+            let turn = expect_user_turn(row);
             for activity in &turn.activity {
                 let RenderActivityRow::Step(step) = activity else {
                     continue;
@@ -1429,12 +1725,14 @@ mod tests {
             tool_result_record(4, "call_gap", false),
         ];
         let run_state = reduce_transcript_run_state(&records);
-        assert!(run_state.busy, "run_start without run_end keeps the run busy");
+        assert!(
+            run_state.busy,
+            "run_start without run_end keeps the run busy"
+        );
         // The run-state reducer legitimately reports Thinking after a
         // tool_result; the render layer still anchors the tail on the tool
         // group so the indicator does not flicker through the gap.
-        let snapshot =
-            reduce_transcript_render_state_with_run_state(records.iter(), &run_state);
+        let snapshot = reduce_transcript_render_state_with_run_state(records.iter(), &run_state);
         assert_eq!(
             snapshot.tail_activity,
             RenderTailActivity::ToolActive,
@@ -1495,9 +1793,7 @@ mod tests {
         let snapshot = reduce_transcript_render_state(&records);
         let mut sequence = Vec::new();
         for row in &snapshot.rows {
-            let RenderRow::UserTurn(turn) = row else {
-                continue;
-            };
+            let turn = expect_user_turn(row);
             for activity in &turn.activity {
                 match activity {
                     RenderActivityRow::AssistantReply(_) => sequence.push("reply".to_owned()),
@@ -1522,10 +1818,8 @@ mod tests {
             sequence,
             vec![
                 "tools(1)", // orphan call stays at its own position
-                "text",
-                "tools(1)", // call_b right where it happened
-                "text",
-                "tools(1)", // call_c right where it happened
+                "text", "tools(1)", // call_b right where it happened
+                "text", "tools(1)", // call_c right where it happened
                 "text",
             ],
             "tool groups must interleave with narration, got {sequence:?}",
@@ -1551,9 +1845,7 @@ mod tests {
         let mut groups = Vec::new();
         let mut sequence = Vec::new();
         for row in &snapshot.rows {
-            let RenderRow::UserTurn(turn) = row else {
-                continue;
-            };
+            let turn = expect_user_turn(row);
             for activity in &turn.activity {
                 let RenderActivityRow::Step(step) = activity else {
                     continue;
@@ -1584,7 +1876,10 @@ mod tests {
             groups[0].entries[0].tool_result.is_some(),
             "late result must be backfilled into the flushed entry",
         );
-        assert_eq!(groups[0].entries[0].status, RenderToolEntryStatus::Completed);
+        assert_eq!(
+            groups[0].entries[0].status,
+            RenderToolEntryStatus::Completed
+        );
     }
 
     #[test]
@@ -2162,6 +2457,279 @@ mod tests {
 
         let snapshot = reduce_transcript_render_state(&records);
         assert!(snapshot.rate_limit.is_none());
+    }
+
+    // ---- render delta (#TASK-1956 knife 1) ----
+
+    /// A stream that exercises every row mutation class the delta path
+    /// must encode: new rows (user turns), in-place tail mutation
+    /// (assistant/tool activity growing inside the open turn), and
+    /// untouched rows (the finished first turn while the second runs).
+    fn delta_oracle_records() -> Vec<Value> {
+        vec![
+            control_record(1, "run_start"),
+            user_record(2, "First ask", "00000000-0000-0000-0000-00000000d001"),
+            assistant_record(3, "Let me check"),
+            tool_use_record(4, "call_delta_a", "Bash"),
+            tool_result_record(5, "call_delta_a", false),
+            assistant_record(6, "First answer"),
+            control_record(7, "run_end"),
+            control_record(8, "run_start"),
+            user_record(9, "Second ask", "00000000-0000-0000-0000-00000000d002"),
+            tool_use_record(10, "call_delta_b", "Read"),
+            tool_result_record(11, "call_delta_b", true),
+            assistant_record(12, "Second answer"),
+            control_record(13, "run_end"),
+        ]
+    }
+
+    /// What a delta reassembly is expected to produce for a snapshot the
+    /// reducer built directly: same rows and scalars, `rows_hash` stamped
+    /// (the chain token), `visible_message_ids` empty (not carried by
+    /// deltas; zero consumers, deleted end-to-end in batch 4).
+    fn delta_expected(mut snapshot: RenderSnapshot) -> RenderSnapshot {
+        snapshot.visible_message_ids = Vec::new();
+        snapshot.rows_hash = Some(render_rows_digest(&snapshot.rows).rows_hash);
+        snapshot
+    }
+
+    /// Structural oracle over real captured record streams and the
+    /// synthetic mutation stream: at every seq,
+    /// `apply_render_delta(prev, derive_render_delta(prev, next))` must
+    /// equal the snapshot the reducer derives directly, and the
+    /// `rows_hash` token chain must stay connected frame to frame.
+    #[test]
+    fn delta_oracle_apply_matches_direct_snapshot_at_every_seq() {
+        let mut streams = vec![("synthetic-mutations".to_owned(), delta_oracle_records())];
+        for fixture in [
+            "stream-sync/transcript-with-control.jsonl",
+            "stream-sync/transcript-with-tool.jsonl",
+            "stream-sync/multi-tool-lull.jsonl",
+            "stream-sync/parallel-tool-lull.jsonl",
+            "stream-sync/stream-events-with-user-ack.jsonl",
+        ] {
+            let path = fixture_root().join(fixture);
+            let raw = fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            let records = raw
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            streams.push((fixture.to_owned(), records));
+        }
+
+        for (name, records) in streams {
+            let mut held = delta_expected(reduce_transcript_render_state(&records[..1]));
+            for upto in 2..=records.len() {
+                let next = reduce_transcript_render_state(&records[..upto]);
+                let delta = derive_render_delta(
+                    &reduce_transcript_render_state(&records[..upto - 1]),
+                    &next,
+                );
+                // Chain continuity: the delta must depart from exactly the
+                // token the held snapshot carries.
+                assert_eq!(
+                    Some(delta.from_rows_hash.clone()),
+                    held.rows_hash.map(|hash| hash.to_string()),
+                    "{name}: rows_hash chain broke entering step {upto}"
+                );
+                held = apply_render_delta(&held, &delta).unwrap_or_else(|error| {
+                    panic!("{name}: delta rejected at step {upto}: {error}")
+                });
+                assert_eq!(
+                    held,
+                    delta_expected(next),
+                    "{name}: reassembly diverged at step {upto}"
+                );
+            }
+        }
+    }
+
+    /// The wire minimality claim: a commit that only touches the open
+    /// turn re-sends that one row, not the finished turns before it.
+    #[test]
+    fn delta_upserts_only_changed_rows() {
+        let records = delta_oracle_records();
+        // Seq 12 appends assistant text inside the second turn; the first
+        // turn's row is byte-identical and must not travel.
+        let prev = reduce_transcript_render_state(&records[..11]);
+        let next = reduce_transcript_render_state(&records[..12]);
+        assert_eq!(next.rows.len(), 2, "fixture should hold two user turns");
+        let delta = derive_render_delta(&prev, &next);
+        assert_eq!(
+            delta
+                .upsert_rows
+                .iter()
+                .map(|row| render_row_id(row).to_owned())
+                .collect::<Vec<_>>(),
+            vec![render_row_id(&next.rows[1]).to_owned()],
+            "only the mutated open turn may be re-sent"
+        );
+        assert_eq!(delta.row_order.len(), 2, "row_order always travels whole");
+    }
+
+    #[test]
+    fn rows_hash_serializes_as_decimal_string_token() {
+        let records = delta_oracle_records();
+        let mut snapshot = reduce_transcript_render_state(&records);
+        assert!(
+            !serde_json::to_value(&snapshot)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("rows_hash"),
+            "undeclared connections must stay byte-identical: no rows_hash key"
+        );
+        // u64::MAX exceeds JS's 2^53 safe-integer range: the token must be
+        // a STRING on the wire and survive a roundtrip exactly.
+        snapshot.rows_hash = Some(u64::MAX);
+        let value = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            value.get("rows_hash").and_then(Value::as_str),
+            Some("18446744073709551615")
+        );
+        let back: RenderSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(back.rows_hash, Some(u64::MAX));
+    }
+
+    #[test]
+    fn render_delta_wire_names_align_with_render_snapshot() {
+        let records = delta_oracle_records();
+        let prev = reduce_transcript_render_state(&records[..9]);
+        let next = reduce_transcript_render_state(&records);
+        let delta = derive_render_delta(&prev, &next);
+        let value = serde_json::to_value(&delta).unwrap();
+        let keys = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        // Scalar fields use RenderSnapshot's exact serde names; rateLimit
+        // and window are absent here because both are None.
+        assert_eq!(
+            keys,
+            BTreeSet::from(
+                [
+                    "from_seq",
+                    "from_rows_hash",
+                    "based_on_seq",
+                    "rows_hash",
+                    "row_order",
+                    "upsert_rows",
+                    "tailActivity",
+                    "activeToolGroupId",
+                    "progress_locus",
+                    "filtered_placeholders",
+                ]
+                .map(str::to_owned)
+            )
+        );
+        let back: RenderDelta = serde_json::from_value(value).unwrap();
+        assert_eq!(back, delta);
+    }
+
+    /// Gap tripwire: a delta departing from the wrong seq must be
+    /// rejected (the receiver discards it and takes its gap path).
+    #[test]
+    fn apply_render_delta_rejects_from_seq_mismatch() {
+        let records = delta_oracle_records();
+        let prev = reduce_transcript_render_state(&records[..9]);
+        let next = reduce_transcript_render_state(&records[..10]);
+        let mut delta = derive_render_delta(&prev, &next);
+        delta.from_seq += 1;
+        assert_eq!(
+            apply_render_delta(&prev, &delta),
+            Err(RenderDeltaError::FromSeqMismatch {
+                delta_from_seq: delta.from_seq,
+                prev_based_on_seq: prev.based_on_seq,
+            })
+        );
+    }
+
+    /// Drift tripwire: same seq but different held rows content (same-seq
+    /// drops, guard interactions, future bugs) must be an explicit exit,
+    /// never a silent mis-render.
+    #[test]
+    fn apply_render_delta_rejects_from_rows_hash_mismatch() {
+        let records = delta_oracle_records();
+        let prev = reduce_transcript_render_state(&records[..9]);
+        let next = reduce_transcript_render_state(&records[..10]);
+        let delta = derive_render_delta(&prev, &next);
+        // The held snapshot drifted: same seq, structurally different rows
+        // (a different origin id yields a different user-turn row).
+        let mut drifted_records = records[..9].to_vec();
+        drifted_records[8] = user_record(
+            9,
+            "Second ask, drifted",
+            "00000000-0000-0000-0000-00000000dead",
+        );
+        let drifted = reduce_transcript_render_state(&drifted_records);
+        assert_eq!(drifted.based_on_seq, prev.based_on_seq);
+        let error = apply_render_delta(&drifted, &delta).unwrap_err();
+        assert!(
+            matches!(error, RenderDeltaError::FromRowsHashMismatch { .. }),
+            "expected FromRowsHashMismatch, got {error:?}"
+        );
+    }
+
+    /// Protocol-violation tripwire: every id in `row_order` must resolve
+    /// from `upsert_rows` or the held snapshot.
+    #[test]
+    fn apply_render_delta_rejects_missing_row_id() {
+        let records = delta_oracle_records();
+        let prev = reduce_transcript_render_state(&records[..9]);
+        let next = reduce_transcript_render_state(&records[..10]);
+        let mut delta = derive_render_delta(&prev, &next);
+        delta.row_order.push("row-from-nowhere".to_owned());
+        assert_eq!(
+            apply_render_delta(&prev, &delta),
+            Err(RenderDeltaError::MissingRow {
+                row_id: "row-from-nowhere".to_owned(),
+            })
+        );
+    }
+
+    /// Chain tripwire: if the reassembled rows do not hash to the token
+    /// the delta declares (a dropped upsert, a tampered body), the frame
+    /// is rejected even though every id resolved.
+    #[test]
+    fn apply_render_delta_rejects_reassembled_rows_hash_mismatch() {
+        let records = delta_oracle_records();
+        let prev = reduce_transcript_render_state(&records[..11]);
+        let next = reduce_transcript_render_state(&records[..12]);
+        let mut delta = derive_render_delta(&prev, &next);
+        // Simulate a diff bug: the changed row's body is dropped from the
+        // wire, so the receiver falls back to its stale held body.
+        assert_eq!(delta.upsert_rows.len(), 1, "fixture must change one row");
+        delta.upsert_rows.clear();
+        let error = apply_render_delta(&prev, &delta).unwrap_err();
+        assert!(
+            matches!(error, RenderDeltaError::RowsHashMismatch { .. }),
+            "expected RowsHashMismatch, got {error:?}"
+        );
+    }
+
+    /// The digest treats order and length as content: reorder and
+    /// truncation must both change the combined token.
+    #[test]
+    fn render_rows_digest_detects_reorder_and_truncation() {
+        let records = delta_oracle_records();
+        let snapshot = reduce_transcript_render_state(&records);
+        assert_eq!(snapshot.rows.len(), 2, "fixture should hold two user turns");
+        let forward = render_rows_digest(&snapshot.rows);
+        assert_eq!(
+            forward.rows_hash,
+            render_rows_digest(&snapshot.rows).rows_hash,
+            "digest must be deterministic"
+        );
+        let reversed = vec![snapshot.rows[1].clone(), snapshot.rows[0].clone()];
+        assert_ne!(forward.rows_hash, render_rows_digest(&reversed).rows_hash);
+        assert_ne!(
+            forward.rows_hash,
+            render_rows_digest(&snapshot.rows[..1]).rows_hash
+        );
     }
 
     fn load_render_fixture() -> RenderFixture {

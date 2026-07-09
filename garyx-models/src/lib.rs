@@ -86,12 +86,14 @@ pub use transcript_kind::{
 };
 pub use transcript_render_state::{
     RenderActivityRow, RenderAssistantReplyRow, RenderAssistantStep, RenderCapsuleAction,
-    RenderCapsuleCard, RenderFilteredPlaceholder, RenderMessageRef, RenderPlaceholderFilterReason,
-    RenderProgressLocus, RenderRow, RenderSnapshot, RenderStepItem, RenderStepRow,
-    RenderTailActivity, RenderToolEntry, RenderToolEntryStatus, RenderToolGroup,
-    RenderToolGroupStatus, RenderUserTurnRow, RenderWindow,
+    RenderCapsuleCard, RenderDelta, RenderDeltaError, RenderFilteredPlaceholder, RenderMessageRef,
+    RenderPlaceholderFilterReason, RenderProgressLocus, RenderRow, RenderRowsDigest,
+    RenderSnapshot, RenderStepItem, RenderStepRow, RenderTailActivity, RenderToolEntry,
+    RenderToolEntryStatus, RenderToolGroup, RenderToolGroupStatus, RenderUserTurnRow, RenderWindow,
+    apply_render_delta, derive_render_delta, derive_render_delta_from_base,
     final_assistant_text_from_render_records, reduce_transcript_render_state,
-    reduce_transcript_render_state_with_run_state,
+    reduce_transcript_render_state_with_run_state, render_row_hash, render_row_id,
+    render_rows_digest,
 };
 pub use transcript_run_state::{
     TranscriptRunActivity, TranscriptRunState, apply_transcript_record, reduce_transcript_run_state,

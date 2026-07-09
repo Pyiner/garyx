@@ -17,6 +17,7 @@ use garyx_models::provider::{
     ProviderType, SDK_SESSION_FORK_METADATA_KEY, StreamEvent,
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink};
+use garyx_models::{RenderDelta, apply_render_delta, render_rows_digest};
 use garyx_router::{MessageRouter, RunTranscriptRecordDraft};
 use std::path::Path;
 use std::process::Command;
@@ -168,6 +169,7 @@ fn thread_stream_replay_options_last_event_id_forces_resume() {
         initial_user_turns: Some(1),
         render_floor: Some(7),
         windowed_resume: None,
+        render_mode: None,
     };
 
     let (after_seq, options) = thread_stream_replay_options(&params, Some(9), true);
@@ -299,9 +301,14 @@ async fn thread_stream_replay_pages_when_tail_cap_overflows() {
         .await
         .unwrap();
 
-    let replay =
-        build_thread_stream_replay(&state, &thread_id, 0, ThreadStreamReplayOptions::resume(0))
-            .await;
+    let replay = build_thread_stream_replay(
+        &state,
+        &thread_id,
+        0,
+        ThreadStreamReplayOptions::resume(0),
+        None,
+    )
+    .await;
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.sent_payloads.len(), THREAD_TRANSCRIPT_REPLAY_CAP + 2);
     assert_eq!(replay.max_seq, (THREAD_TRANSCRIPT_REPLAY_CAP + 2) as u64);
@@ -386,7 +393,7 @@ async fn windowed_resume_over_budget_degrades_to_window() {
         render_floor: 0,
         windowed_resume: true,
     };
-    let replay = build_thread_stream_replay(&state, &thread_id, 0, opted_in).await;
+    let replay = build_thread_stream_replay(&state, &thread_id, 0, opted_in, None).await;
     assert_eq!(replay.events.len(), 1);
     let event = replay.events[0].as_ref().unwrap();
     let frame: Value = serde_json::from_str(&event.payload).unwrap();
@@ -414,7 +421,7 @@ async fn windowed_resume_over_budget_degrades_to_window() {
 
     // Same span WITHOUT the opt-in keeps today's verbatim replay.
     let legacy = ThreadStreamReplayOptions::resume(0);
-    let replay = build_thread_stream_replay(&state, &thread_id, 0, legacy).await;
+    let replay = build_thread_stream_replay(&state, &thread_id, 0, legacy, None).await;
     let event = replay.events[0].as_ref().unwrap();
     let frame: Value = serde_json::from_str(&event.payload).unwrap();
     assert!(
@@ -465,7 +472,7 @@ async fn windowed_resume_within_budget_keeps_verbatim_replay() {
         render_floor: 0,
         windowed_resume: true,
     };
-    let replay = build_thread_stream_replay(&state, &thread_id, 0, opted_in).await;
+    let replay = build_thread_stream_replay(&state, &thread_id, 0, opted_in, None).await;
     let event = replay.events[0].as_ref().unwrap();
     let frame: Value = serde_json::from_str(&event.payload).unwrap();
     assert!(
@@ -505,9 +512,14 @@ async fn thread_stream_replay_after_seq_emits_one_aligned_render_frame() {
         .await
         .unwrap();
 
-    let replay =
-        build_thread_stream_replay(&state, thread_id, 1, ThreadStreamReplayOptions::resume(0))
-            .await;
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        1,
+        ThreadStreamReplayOptions::resume(0),
+        None,
+    )
+    .await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 3);
@@ -583,9 +595,14 @@ async fn thread_stream_replay_render_floor_windows_event_frame() {
         .await
         .unwrap();
 
-    let replay =
-        build_thread_stream_replay(&state, thread_id, 2, ThreadStreamReplayOptions::resume(3))
-            .await;
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        2,
+        ThreadStreamReplayOptions::resume(3),
+        None,
+    )
+    .await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 4);
@@ -668,6 +685,7 @@ async fn thread_stream_replay_initial_user_turn_window_trims_and_carries_bodies(
             render_floor: 0,
             windowed_resume: false,
         },
+        None,
     )
     .await;
 
@@ -736,6 +754,7 @@ async fn thread_stream_replay_initial_user_turn_window_trims_and_carries_bodies(
         live_record.seq,
         live_payload,
         replay.render_floor,
+        None,
     )
     .await
     .unwrap();
@@ -930,9 +949,14 @@ async fn thread_stream_replay_caught_up_emits_snapshot_only_frame() {
         .await
         .unwrap();
 
-    let replay =
-        build_thread_stream_replay(&state, thread_id, 3, ThreadStreamReplayOptions::resume(0))
-            .await;
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        3,
+        ThreadStreamReplayOptions::resume(0),
+        None,
+    )
+    .await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 3);
@@ -1000,9 +1024,14 @@ async fn thread_stream_replay_render_floor_windows_snapshot_only_frame() {
         .await
         .unwrap();
 
-    let replay =
-        build_thread_stream_replay(&state, thread_id, 4, ThreadStreamReplayOptions::resume(3))
-            .await;
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        4,
+        ThreadStreamReplayOptions::resume(3),
+        None,
+    )
+    .await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 4);
@@ -1034,6 +1063,726 @@ async fn thread_stream_replay_render_floor_windows_snapshot_only_frame() {
     );
 }
 
+// ---- render_mode=delta (#TASK-1956 knife 1) ----
+
+fn new_delta_base() -> ThreadStreamDeltaBase {
+    std::sync::Mutex::new(None)
+}
+
+/// Append one live record and return `(seq, committed payload)` exactly as
+/// the broadcast bus would carry it.
+async fn append_live_delta_record(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    run_id: &str,
+    message: Value,
+    timestamp: &str,
+) -> (u64, Value) {
+    let append = state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some(run_id),
+            &[RunTranscriptRecordDraft::with_timestamp(message, timestamp)],
+        )
+        .await
+        .unwrap();
+    let record = append.appended_records.last().unwrap();
+    (
+        record.seq,
+        committed_thread_stream_replay_payload_value(thread_id, record),
+    )
+}
+
+/// What a delta reassembly must produce for a snapshot the store derived
+/// directly: same rows and scalars, `rows_hash` stamped,
+/// `visible_message_ids` empty (not carried by deltas; zero consumers,
+/// deleted end-to-end in batch 4).
+fn delta_expected_snapshot(mut snapshot: RenderSnapshot) -> RenderSnapshot {
+    snapshot.visible_message_ids = Vec::new();
+    snapshot.rows_hash = Some(render_rows_digest(&snapshot.rows).rows_hash);
+    snapshot
+}
+
+fn frame_render_state(frame: &Value) -> RenderSnapshot {
+    serde_json::from_value(frame.get("render_state").expect("render_state").clone())
+        .expect("render_state decodes")
+}
+
+fn frame_render_delta(frame: &Value) -> RenderDelta {
+    serde_json::from_value(frame.get("render_delta").expect("render_delta").clone())
+        .expect("render_delta decodes")
+}
+
+/// Structural oracle (#TASK-1956 validation a): a delta-mode connection is
+/// driven record by record through the real live path; at every seq the
+/// client algorithm's reassembly must equal the store's direct snapshot,
+/// and the rows_hash token chain must stay connected from the seeding
+/// full frame through every delta.
+#[tokio::test]
+async fn thread_stream_delta_oracle_matches_full_snapshot_at_every_seq() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delta-oracle";
+    let run_id = "run::delta-oracle";
+    append_dangling_run_start(&state, thread_id, run_id).await;
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some(run_id),
+            &[RunTranscriptRecordDraft::with_timestamp(
+                json!({
+                    "role": "user",
+                    "text": "First ask",
+                    "timestamp": "2026-06-18T12:00:00Z",
+                    "metadata": {"origin_id": "00000000-0000-0000-0000-00000000e001"}
+                }),
+                "2026-06-18T12:00:00Z",
+            )],
+        )
+        .await
+        .unwrap();
+
+    // Replay (full frame) seeds the delta base per the unified seeding rule.
+    let delta_base = new_delta_base();
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        0,
+        ThreadStreamReplayOptions::resume(0),
+        Some(&delta_base),
+    )
+    .await;
+    let seed_frame: Value =
+        serde_json::from_str(&replay.events[0].as_ref().unwrap().payload).unwrap();
+    assert!(
+        seed_frame.get("render_delta").is_none(),
+        "replay frames stay full"
+    );
+    let mut held = frame_render_state(&seed_frame);
+    assert!(
+        held.rows_hash.is_some(),
+        "delta-mode full frames must carry the rows_hash chain token"
+    );
+
+    // A live run mutating the open turn in place (assistant + tool
+    // activity), then a fresh turn: every row-change class the diff must
+    // encode, driven through the same per-connection state the live loop
+    // keeps.
+    let live_messages = [
+        json!({"role": "assistant", "text": "Let me check", "timestamp": "2026-06-18T12:00:01Z"}),
+        json!({
+            "role": "tool_use",
+            "content": {"tool": "Bash", "input": {}},
+            "tool_use_id": "call_delta_live",
+            "tool_name": "Bash",
+            "timestamp": "2026-06-18T12:00:02Z"
+        }),
+        json!({
+            "role": "tool_result",
+            "content": {"result": "ok"},
+            "tool_use_id": "call_delta_live",
+            "is_error": false,
+            "timestamp": "2026-06-18T12:00:03Z"
+        }),
+        json!({"role": "assistant", "text": "First answer", "timestamp": "2026-06-18T12:00:04Z"}),
+        json!({
+            "role": "user",
+            "text": "Second ask",
+            "timestamp": "2026-06-18T12:00:05Z",
+            "metadata": {"origin_id": "00000000-0000-0000-0000-00000000e002"}
+        }),
+        json!({"role": "assistant", "text": "Second answer", "timestamp": "2026-06-18T12:00:06Z"}),
+    ];
+    let mut sent_payloads = replay.sent_payloads;
+    let mut last_sent_seq = replay.max_seq;
+    for message in live_messages {
+        let (seq, payload) =
+            append_live_delta_record(&state, thread_id, run_id, message, "2026-06-18T12:00:07Z")
+                .await;
+        let (forward_seq, forward_payload) = committed_thread_stream_live_payload(
+            &payload.to_string(),
+            thread_id,
+            &mut sent_payloads,
+            &mut last_sent_seq,
+        )
+        .unwrap()
+        .expect("fresh live commit forwards");
+        assert_eq!(forward_seq, seq);
+        let event = committed_thread_stream_live_event(
+            &state,
+            thread_id,
+            forward_seq,
+            forward_payload,
+            0,
+            Some(&delta_base),
+        )
+        .await
+        .unwrap();
+        assert_eq!(event.id, seq);
+        let frame: Value = serde_json::from_str(&event.payload).unwrap();
+        assert!(
+            frame.get("render_state").is_none(),
+            "live frames on a seeded delta connection must not resend full rows"
+        );
+        let frame_events = frame.get("events").and_then(Value::as_array).unwrap();
+        assert_eq!(
+            frame_events[0].get("seq").and_then(Value::as_u64),
+            Some(seq),
+            "events stay the body/cursor source of truth, unchanged"
+        );
+        let delta = frame_render_delta(&frame);
+        assert_eq!(delta.from_seq, held.based_on_seq);
+        assert_eq!(
+            Some(delta.from_rows_hash.clone()),
+            held.rows_hash.map(|hash| hash.to_string()),
+            "rows_hash chain broke at seq {seq}"
+        );
+        held = apply_render_delta(&held, &delta)
+            .unwrap_or_else(|error| panic!("delta rejected at seq {seq}: {error}"));
+        let expected = state
+            .threads
+            .history
+            .transcript_store()
+            .render_snapshot_at_seq(thread_id, seq)
+            .await
+            .unwrap();
+        assert_eq!(
+            held,
+            delta_expected_snapshot(expected),
+            "reassembly diverged at seq {seq}"
+        );
+    }
+}
+
+/// Seeding rule, no-replay-seed arm: a live frame arriving before any
+/// full frame seeded the base goes out FULL (with the chain token) and
+/// seeds; the next live frame is a delta.
+#[tokio::test]
+async fn thread_stream_delta_first_live_frame_without_seed_is_full_then_delta() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delta-first-live";
+    let run_id = "run::delta-first-live";
+    let delta_base = new_delta_base();
+
+    let (seq_one, payload_one) = append_live_delta_record(
+        &state,
+        thread_id,
+        run_id,
+        json!({"role": "user", "content": "one"}),
+        "2026-06-18T12:00:00Z",
+    )
+    .await;
+    let event = committed_thread_stream_live_event(
+        &state,
+        thread_id,
+        seq_one,
+        payload_one,
+        0,
+        Some(&delta_base),
+    )
+    .await
+    .unwrap();
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    assert!(
+        frame.get("render_delta").is_none(),
+        "an unseeded connection must receive a full frame first"
+    );
+    let held = frame_render_state(&frame);
+    assert!(held.rows_hash.is_some());
+
+    let (seq_two, payload_two) = append_live_delta_record(
+        &state,
+        thread_id,
+        run_id,
+        json!({"role": "assistant", "content": "two"}),
+        "2026-06-18T12:00:01Z",
+    )
+    .await;
+    let event = committed_thread_stream_live_event(
+        &state,
+        thread_id,
+        seq_two,
+        payload_two,
+        0,
+        Some(&delta_base),
+    )
+    .await
+    .unwrap();
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let delta = frame_render_delta(&frame);
+    assert_eq!(delta.from_seq, seq_one);
+    let reassembled = apply_render_delta(&held, &delta).unwrap();
+    assert_eq!(reassembled.based_on_seq, seq_two);
+}
+
+/// Adversarial family (#TASK-1956 finding 1): a control rewrite re-lands a
+/// changed payload on an already-sent seq. The server must NOT emit a
+/// delta for it — full frame, reseed — and the delta chain must resume
+/// cleanly on the next commit (here the interleaved range_rewrite control
+/// record itself).
+#[tokio::test]
+async fn thread_stream_delta_same_seq_overwrite_reseeds_with_full_frame() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delta-same-seq";
+    let run_id = "run::delta-same-seq";
+    let store = state.threads.history.transcript_store();
+    let user_message = json!({"role": "user", "content": "rewrite me"});
+    let assistant_message = json!({"role": "assistant", "content": "original answer"});
+    store
+        .append_run_records(
+            thread_id,
+            Some(run_id),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    user_message.clone(),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    assistant_message.clone(),
+                    "2026-06-18T12:00:01Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let delta_base = new_delta_base();
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        0,
+        ThreadStreamReplayOptions::resume(0),
+        Some(&delta_base),
+    )
+    .await;
+    let seed_frame: Value =
+        serde_json::from_str(&replay.events[0].as_ref().unwrap().payload).unwrap();
+    let held = frame_render_state(&seed_frame);
+    assert_eq!(held.based_on_seq, 2);
+
+    // Control rewrite: seq 2's payload changes in place; a range_rewrite
+    // marker record lands after it.
+    store
+        .rewrite_from_messages(
+            thread_id,
+            &[
+                user_message,
+                json!({"role": "assistant", "content": "rewritten answer"}),
+            ],
+        )
+        .await
+        .unwrap();
+    let records = store.records_after_seq(thread_id, 1, 100).await.unwrap();
+    let rewritten = records.iter().find(|record| record.seq == 2).unwrap();
+    assert_eq!(
+        rewritten.message.get("content").and_then(Value::as_str),
+        Some("rewritten answer"),
+        "rewrite must re-land on the already-sent seq"
+    );
+    let marker = records.iter().find(|record| record.seq > 2).expect(
+        "rewrite should append a range_rewrite control marker after the overwritten record",
+    );
+
+    // The changed payload at seq == last-sent seq: full frame, reseed.
+    let overwrite_event = committed_thread_stream_live_event(
+        &state,
+        thread_id,
+        2,
+        committed_thread_stream_replay_payload_value(thread_id, rewritten),
+        0,
+        Some(&delta_base),
+    )
+    .await
+    .unwrap();
+    let overwrite_frame: Value = serde_json::from_str(&overwrite_event.payload).unwrap();
+    assert!(
+        overwrite_frame.get("render_delta").is_none(),
+        "a same-seq overwrite must not travel as a delta"
+    );
+    let reseeded = frame_render_state(&overwrite_frame);
+    assert_eq!(reseeded.based_on_seq, 2);
+    assert!(reseeded.rows_hash.is_some());
+
+    // Delta resumes cleanly from the reseeded base on the very next
+    // commit — the interleaved control rewrite marker.
+    let marker_event = committed_thread_stream_live_event(
+        &state,
+        thread_id,
+        marker.seq,
+        committed_thread_stream_replay_payload_value(thread_id, marker),
+        0,
+        Some(&delta_base),
+    )
+    .await
+    .unwrap();
+    let marker_frame: Value = serde_json::from_str(&marker_event.payload).unwrap();
+    let delta = frame_render_delta(&marker_frame);
+    assert_eq!(delta.from_seq, 2);
+    assert_eq!(
+        Some(delta.from_rows_hash.clone()),
+        reseeded.rows_hash.map(|hash| hash.to_string())
+    );
+    let reassembled = apply_render_delta(&reseeded, &delta).unwrap();
+    let expected = store
+        .render_snapshot_at_seq(thread_id, marker.seq)
+        .await
+        .unwrap();
+    assert_eq!(reassembled, delta_expected_snapshot(expected));
+}
+
+/// Adversarial family: a snapshot-only frame interleaved between deltas
+/// (caught-up reconnect replay on the same connection state) reseeds the
+/// base; the next delta chains from ITS token.
+#[tokio::test]
+async fn thread_stream_delta_snapshot_only_frame_reseeds_base() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delta-snapshot-only";
+    let run_id = "run::delta-snapshot-only";
+    let delta_base = new_delta_base();
+    let (seq_one, payload_one) = append_live_delta_record(
+        &state,
+        thread_id,
+        run_id,
+        json!({"role": "user", "content": "one"}),
+        "2026-06-18T12:00:00Z",
+    )
+    .await;
+    committed_thread_stream_live_event(
+        &state,
+        thread_id,
+        seq_one,
+        payload_one,
+        0,
+        Some(&delta_base),
+    )
+    .await
+    .unwrap();
+
+    let snapshot_only = thread_stream_snapshot_only_frame_event(
+        &state,
+        thread_id,
+        seq_one,
+        0,
+        None,
+        Some(&delta_base),
+    )
+    .await
+    .unwrap();
+    let snapshot_frame: Value = serde_json::from_str(&snapshot_only.payload).unwrap();
+    assert!(snapshot_frame.get("render_delta").is_none());
+    let held = frame_render_state(&snapshot_frame);
+    assert!(
+        held.rows_hash.is_some(),
+        "snapshot-only frames on delta connections carry the chain token"
+    );
+
+    let (seq_two, payload_two) = append_live_delta_record(
+        &state,
+        thread_id,
+        run_id,
+        json!({"role": "assistant", "content": "two"}),
+        "2026-06-18T12:00:01Z",
+    )
+    .await;
+    let event = committed_thread_stream_live_event(
+        &state,
+        thread_id,
+        seq_two,
+        payload_two,
+        0,
+        Some(&delta_base),
+    )
+    .await
+    .unwrap();
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let delta = frame_render_delta(&frame);
+    assert_eq!(
+        Some(delta.from_rows_hash.clone()),
+        held.rows_hash.map(|hash| hash.to_string()),
+        "the delta after a snapshot-only frame must chain from its token"
+    );
+    assert!(apply_render_delta(&held, &delta).is_ok());
+}
+
+/// Adversarial family: a floor advance arrives as a (windowed) replay
+/// frame mid-connection, which reseeds the base onto the windowed row
+/// set; subsequent deltas compose with the window (row_order windowed,
+/// `window` riding along whole).
+#[tokio::test]
+async fn thread_stream_delta_floor_advance_replay_reseeds_windowed_base() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delta-floor-advance";
+    let run_id = "run::delta-floor-advance";
+    let store = state.threads.history.transcript_store();
+    store
+        .append_run_records(
+            thread_id,
+            Some(run_id),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "user",
+                        "text": "older question",
+                        "timestamp": "2026-06-18T12:00:00Z",
+                        "metadata": {"origin_id": "00000000-0000-0000-0000-00000000f001"}
+                    }),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "older answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "user",
+                        "text": "new question",
+                        "timestamp": "2026-06-18T12:00:02Z",
+                        "metadata": {"origin_id": "00000000-0000-0000-0000-00000000f002"}
+                    }),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "new answer"}),
+                    "2026-06-18T12:00:03Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    // Connection starts unwindowed and seeds on the full-history frame.
+    let delta_base = new_delta_base();
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        0,
+        ThreadStreamReplayOptions::resume(0),
+        Some(&delta_base),
+    )
+    .await;
+    let full_frame: Value =
+        serde_json::from_str(&replay.events[0].as_ref().unwrap().payload).unwrap();
+    assert_eq!(frame_render_state(&full_frame).rows.len(), 2);
+
+    // Floor advance mid-connection: the windowed replay frame reseeds.
+    let windowed = build_thread_stream_replay(
+        &state,
+        thread_id,
+        4,
+        ThreadStreamReplayOptions::resume(3),
+        Some(&delta_base),
+    )
+    .await;
+    let windowed_frame: Value =
+        serde_json::from_str(&windowed.events[0].as_ref().unwrap().payload).unwrap();
+    let held = frame_render_state(&windowed_frame);
+    assert_eq!(held.rows.len(), 1, "windowed base must drop pre-floor rows");
+    assert!(held.window.is_some());
+    assert!(held.rows_hash.is_some());
+
+    // The next live delta is derived against the windowed rows and
+    // reassembles the windowed snapshot, window metadata included.
+    let (live_seq, live_payload) = append_live_delta_record(
+        &state,
+        thread_id,
+        run_id,
+        json!({"role": "assistant", "content": "live continuation"}),
+        "2026-06-18T12:00:04Z",
+    )
+    .await;
+    let event = committed_thread_stream_live_event(
+        &state,
+        thread_id,
+        live_seq,
+        live_payload,
+        3,
+        Some(&delta_base),
+    )
+    .await
+    .unwrap();
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let delta = frame_render_delta(&frame);
+    assert_eq!(delta.row_order.len(), 1, "row_order stays windowed");
+    assert!(delta.window.is_some(), "window rides along whole");
+    let reassembled = apply_render_delta(&held, &delta).unwrap();
+    let expected = store
+        .render_snapshot_in_window(thread_id, 3, live_seq)
+        .await
+        .unwrap();
+    assert_eq!(reassembled, delta_expected_snapshot(expected));
+}
+
+/// Hard gate: connections that do not declare `render_mode=delta` stay
+/// byte-identical to the pre-delta contract — no rows_hash token, no
+/// render_delta, on replay and live frames alike.
+#[tokio::test]
+async fn thread_stream_undeclared_connection_frames_carry_no_delta_fields() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delta-undeclared";
+    let run_id = "run::delta-undeclared";
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some(run_id),
+            &[RunTranscriptRecordDraft::with_timestamp(
+                json!({"role": "user", "content": "one"}),
+                "2026-06-18T12:00:00Z",
+            )],
+        )
+        .await
+        .unwrap();
+
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        0,
+        ThreadStreamReplayOptions::resume(0),
+        None,
+    )
+    .await;
+    let replay_frame: Value =
+        serde_json::from_str(&replay.events[0].as_ref().unwrap().payload).unwrap();
+    assert!(replay_frame.get("render_delta").is_none());
+    assert!(
+        replay_frame
+            .get("render_state")
+            .and_then(|render_state| render_state.get("rows_hash"))
+            .is_none(),
+        "undeclared replay frames must not grow a rows_hash key"
+    );
+
+    let (seq, payload) = append_live_delta_record(
+        &state,
+        thread_id,
+        run_id,
+        json!({"role": "assistant", "content": "two"}),
+        "2026-06-18T12:00:01Z",
+    )
+    .await;
+    let event = committed_thread_stream_live_event(&state, thread_id, seq, payload, 0, None)
+        .await
+        .unwrap();
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    assert!(frame.get("render_delta").is_none());
+    assert!(
+        frame
+            .get("render_state")
+            .and_then(|render_state| render_state.get("rows_hash"))
+            .is_none(),
+        "undeclared live frames must not grow a rows_hash key"
+    );
+}
+
+/// End-to-end negotiation through the HTTP handler: `?render_mode=delta`
+/// turns live frames into deltas after a full seeding replay frame, and
+/// the client algorithm reassembles them against the seed.
+#[tokio::test]
+async fn thread_stream_handler_negotiates_delta_live_frames() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let (thread_id, _) = create_thread_record(
+        &state.threads.thread_store,
+        ThreadEnsureOptions {
+            label: Some("Delta negotiation".to_owned()),
+            workspace_dir: None,
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
+            agent_id: None,
+            metadata: HashMap::new(),
+            provider_type: None,
+            sdk_session_id: None,
+            thread_kind: None,
+            origin_channel: None,
+            origin_account_id: None,
+            origin_from_id: None,
+            is_group: None,
+        },
+    )
+    .await
+    .unwrap();
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            &thread_id,
+            Some("run::delta-negotiation"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "one"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "two"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .uri(format!("/api/threads/{thread_id}/stream?render_mode=delta"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body();
+
+    let live_append = state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            &thread_id,
+            Some("run::delta-negotiation"),
+            &[RunTranscriptRecordDraft::with_timestamp(
+                json!({"role": "assistant", "content": "live continuation"}),
+                "2026-06-18T12:00:02Z",
+            )],
+        )
+        .await
+        .unwrap();
+    let live_record = live_append.appended_records.last().unwrap();
+    state
+        .ops
+        .events
+        .sender()
+        .send(committed_thread_stream_replay_payload_value(&thread_id, live_record).to_string())
+        .unwrap();
+
+    let frames = read_sse_data_frames(body, 2).await;
+    let held = frame_render_state(&frames[0]);
+    assert!(
+        held.rows_hash.is_some(),
+        "the seeding replay frame must carry the chain token"
+    );
+    assert!(frames[0].get("render_delta").is_none());
+    assert!(
+        frames[1].get("render_state").is_none(),
+        "the live frame on a declared connection must be a delta"
+    );
+    let delta = frame_render_delta(&frames[1]);
+    let reassembled = apply_render_delta(&held, &delta).unwrap();
+    assert_eq!(reassembled.based_on_seq, live_record.seq);
+    let expected = state
+        .threads
+        .history
+        .transcript_store()
+        .render_snapshot_at_seq(&thread_id, live_record.seq)
+        .await
+        .unwrap();
+    assert_eq!(reassembled, delta_expected_snapshot(expected));
+}
+
 #[tokio::test]
 async fn thread_stream_replay_caught_up_clamps_overlarge_cursor_to_snapshot_seq() {
     let state = AppStateBuilder::new(test_config()).build();
@@ -1059,9 +1808,14 @@ async fn thread_stream_replay_caught_up_clamps_overlarge_cursor_to_snapshot_seq(
         .await
         .unwrap();
 
-    let replay =
-        build_thread_stream_replay(&state, thread_id, 99, ThreadStreamReplayOptions::resume(0))
-            .await;
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        99,
+        ThreadStreamReplayOptions::resume(0),
+        None,
+    )
+    .await;
 
     assert_eq!(replay.events.len(), 1);
     assert_eq!(replay.max_seq, 2);
@@ -1111,9 +1865,10 @@ async fn thread_stream_live_event_carries_committed_payload_and_render_snapshot(
     let live_record = append.appended_records.last().unwrap();
     let payload = committed_thread_stream_replay_payload_value(thread_id, live_record);
 
-    let event = committed_thread_stream_live_event(&state, thread_id, live_record.seq, payload, 0)
-        .await
-        .unwrap();
+    let event =
+        committed_thread_stream_live_event(&state, thread_id, live_record.seq, payload, 0, None)
+            .await
+            .unwrap();
 
     assert_eq!(event.id, live_record.seq);
     let frame: Value = serde_json::from_str(&event.payload).unwrap();
@@ -1180,9 +1935,10 @@ async fn thread_stream_live_event_respects_render_floor() {
     let live_record = append.appended_records.last().unwrap();
     let payload = committed_thread_stream_replay_payload_value(thread_id, live_record);
 
-    let event = committed_thread_stream_live_event(&state, thread_id, live_record.seq, payload, 3)
-        .await
-        .unwrap();
+    let event =
+        committed_thread_stream_live_event(&state, thread_id, live_record.seq, payload, 3, None)
+            .await
+            .unwrap();
 
     assert_eq!(event.id, live_record.seq);
     let frame: Value = serde_json::from_str(&event.payload).unwrap();
