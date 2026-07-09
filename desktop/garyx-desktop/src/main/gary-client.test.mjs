@@ -560,7 +560,7 @@ test("streamThreadEvents connects to per-thread stream with resume cursor", asyn
 
     assert.equal(
       urls[0],
-      "http://127.0.0.1:31337/api/threads/thread%3A%3Aper-thread/stream?after_seq=4&windowed_resume=1&render_mode=delta",
+      "http://127.0.0.1:31337/api/threads/thread%3A%3Aper-thread/stream?after_seq=4&render_mode=delta",
     );
     assert.equal(lastEventIds[0], "4");
     assert.equal(events.length, 1);
@@ -647,7 +647,7 @@ test("streamThreadEvents pins render_floor and reports window floors (#TASK-1715
     );
     assert.equal(
       urls[0],
-      "http://127.0.0.1:31337/api/threads/thread%3A%3Afloor/stream?after_seq=4801&windowed_resume=1&render_mode=delta&render_floor=4700",
+      "http://127.0.0.1:31337/api/threads/thread%3A%3Afloor/stream?after_seq=4801&render_mode=delta&render_floor=4700",
     );
     assert.deepEqual(
       floors,
@@ -665,7 +665,7 @@ test("streamThreadEvents pins render_floor and reports window floors (#TASK-1715
     );
     assert.equal(
       urls[1],
-      "http://127.0.0.1:31337/api/threads/thread%3A%3Afloor/stream?after_seq=4801&windowed_resume=1&render_mode=delta",
+      "http://127.0.0.1:31337/api/threads/thread%3A%3Afloor/stream?after_seq=4801&render_mode=delta",
     );
   } finally {
     globalThis.fetch = originalFetch;

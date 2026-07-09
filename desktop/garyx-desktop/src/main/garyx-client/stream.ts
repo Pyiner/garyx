@@ -563,7 +563,7 @@ export async function streamThreadEvents(
           // render_mode=delta (#TASK-1956 batch 2): live frames carry
           // `render_delta` instead of a full `render_state`; the
           // reassembler below rebuilds full snapshots for downstream.
-          `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&windowed_resume=1&render_mode=delta${renderFloorParam}`,
+          `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&render_mode=delta${renderFloorParam}`,
         ),
         {
           headers,

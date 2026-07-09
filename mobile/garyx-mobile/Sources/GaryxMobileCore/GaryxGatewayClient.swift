@@ -913,7 +913,8 @@ public final class GaryxGatewayClient {
     ) throws -> URLRequest {
         var queryItems = [
             URLQueryItem(name: "after_seq", value: String(max(afterSeq, 0))),
-            URLQueryItem(name: "windowed_resume", value: "1"),
+            // Windowed resume degrade is the gateway default since
+            // #TASK-1956 batch 4; the old opt-in flag is gone.
             // render_mode=delta (#TASK-1956 batch 3): live frames may carry
             // `render_delta` instead of a full `render_state`;
             // GatewayStreamFrameProcessor reassembles full snapshots, so
