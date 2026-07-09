@@ -101,12 +101,20 @@ per-connection state (`sent_committed_payloads`, `last_sent_seq`); add
 `RenderRow` derives `Hash` (pure data); after deriving the new snapshot,
 hash each row structurally, diff hashes by row id against `last_render`,
 and **serialize only the changed rows** — the diff itself costs no
-serialization. The first live frame on a connection (no `last_render`, or
-following any replay frame) is a full `render_state` frame that seeds the
-cache. Rationale for not sharing across connections: desktop's hub
-multiplexes renderer windows into one connection per thread, so real
-fan-out is 1–2 connections/thread — a shared cache's complexity (locking,
-floor-keyed variants) buys nothing.
+serialization. `rows_hash` (the chain token, below) is the hash of the
+per-row hashes in `row_order` — also serialization-free.
+
+Seeding rule (one rule, everywhere): **every frame that carries a full
+`render_state` — replay, snapshot-only, or a full live frame (first on the
+connection, or a same-seq reseed) — immediately sets the delta base on
+both server and client to that frame's snapshot; the very next live frame
+may be a delta.** There is no other cache-invalidation event: floor
+advances arrive as replay frames and are covered by this rule.
+
+Rationale for not sharing across connections: desktop's hub multiplexes
+renderer windows into one connection per thread, so real fan-out is 1–2
+connections/thread — a shared cache's complexity (locking, floor-keyed
+variants) buys nothing.
 
 Same-seq overwrites (finding 1). The gateway deliberately forwards a
 changed payload at an already-sent seq (rewrite paths;
@@ -121,17 +129,35 @@ Two defenses, both mandatory:
   refetch on both clients (`refetch_authoritative` / control-rewrite
   planner), so the transient full frame is belt-and-suspenders, not the
   primary recovery.
-- Client: `from_rows_hash` must equal the hash of the rows the client
-  actually holds. Any base drift — same-seq drops, guard interactions,
-  future bugs — becomes an explicit gap-path exit instead of silent
-  mis-render. The hash is over the serialized rows array (stable JSON), and
-  the oracle test pins server and client hashing to the same bytes.
+- Client: `from_rows_hash` must equal the rows-hash the client holds. Any
+  base drift — same-seq drops, guard interactions, future bugs — becomes an
+  explicit gap-path exit instead of silent mis-render.
+
+Hash contract (hash chaining — the server is the only hasher). Clients
+never compute a hash: cross-language canonical JSON (Rust `None` ⇒ `null`
+vs Swift `encodeIfPresent` omission, number formatting, key order) is
+exactly the kind of contract that rots. Instead:
+
+- Every frame that carries a full `render_state` also carries
+  `render_state.rows_hash`: the server's combined hash over its per-row
+  structural hashes in row order (algorithm is a server implementation
+  detail; clients treat it as an opaque token).
+- Every delta frame carries `from_rows_hash` and `rows_hash` (the value
+  after applying this delta).
+- The client transport layer stores the last accepted token and compares
+  `from_rows_hash` by equality; on accept it stores the frame's
+  `rows_hash`. Chain intact ⇒ the client's reassembled rows are the
+  server's rows (the server only advances its own chain over states it
+  actually emitted); chain broken ⇒ gap path.
+
+The chain lives in the transport layer (hub forwarder / stream actor),
+which sees every frame — renderer-side dedupe guards can never desync it.
 
 Client application (both ends, same semantics):
 
 1. Validate `from_seq == local snapshot.based_on_seq` **and**
-   `from_rows_hash == hash(local rows)`. Mismatch ⇒ discard the frame and
-   enter the existing gap path. No new recovery machinery.
+   `from_rows_hash == stored rows-hash token`. Mismatch ⇒ discard the frame
+   and enter the existing gap path. No new recovery machinery.
 2. Rebuild rows in `row_order`: take the body from `upsert_rows` if present,
    else from the previous snapshot by id. A missing id (in neither) is a
    protocol violation ⇒ same gap path.
@@ -163,9 +189,9 @@ after); stated here as an explicit invariant.
 
 Floor interaction: `row_order` is derived from the connection's own
 windowed snapshot, so floors compose naturally; `window` rides along whole.
-The diff cache is keyed by the connection's effective floor: a floor change
-mid-connection (windowed replay) already forces a replay frame, which
-reseeds.
+A floor change mid-connection arrives as a replay frame, which seeds a new
+base per the seeding rule above — the diff cache needs no separate
+floor-keying.
 
 Compatibility: `render_mode=delta` is a permanent negotiation, not a
 transition flag. Connections that do not declare it — old iOS builds, curl,
