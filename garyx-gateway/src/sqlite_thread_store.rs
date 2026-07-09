@@ -27,8 +27,8 @@ use crate::task_projection::task_projection_draft_from_thread_data;
 use crate::thread_meta_projection::thread_meta_projection_from_thread_data_with_active_run;
 use garyx_router::is_hidden_thread_value;
 
-/// Remove fields that must never reach the truth table or its file
-/// mirror: the retired `messages` snapshot (#TASK-1864 batch 1).
+/// Remove fields that must never reach the truth table: the retired
+/// `messages` snapshot (#TASK-1864 batch 1).
 pub(crate) fn strip_retired_record_fields(data: &mut Value) {
     if let Some(object) = data.as_object_mut() {
         object.remove("messages");
@@ -138,23 +138,11 @@ impl SqliteThreadStore {
         })
     }
 
-    /// Trait `set` with an acceptance signal: `false` means the write was
-    /// rejected (archived thread) — the mirror layer must not write either.
-    pub(crate) async fn set_accepted(&self, thread_id: &str, data: Value) -> bool {
-        let lock = self.key_lock(thread_id);
-        let _guard = lock.lock().await;
-        if self.reject_archived_thread_write(thread_id).await {
-            return false;
-        }
-        self.write_record(thread_id, data).await;
-        true
-    }
-
     async fn write_record(&self, key: &str, mut data: Value) {
         // Structural invariant of the truth table: bodies never carry the
         // retired `messages` snapshot (#TASK-1864). Batch 1 removed every
-        // producer; this strip guards legacy values arriving through
-        // import/mirror paths.
+        // producer; this strip guards legacy values arriving through the
+        // boot-import path.
         strip_retired_record_fields(&mut data);
         let body = match serde_json::to_string(&data) {
             Ok(body) => body,
@@ -211,7 +199,13 @@ impl ThreadStore for SqliteThreadStore {
     }
 
     async fn set(&self, thread_id: &str, data: Value) {
-        self.set_accepted(thread_id, data).await;
+        let lock = self.key_lock(thread_id);
+        let _guard = lock.lock().await;
+        // Archived threads silently drop writes (review #TASK-1901).
+        if self.reject_archived_thread_write(thread_id).await {
+            return;
+        }
+        self.write_record(thread_id, data).await;
     }
 
     async fn delete(&self, thread_id: &str) -> bool {
@@ -262,23 +256,11 @@ impl ThreadStore for SqliteThreadStore {
     }
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-        self.update_accepted(thread_id, updates).await.map(|_| ())
-    }
-}
-
-impl SqliteThreadStore {
-    /// Trait `update` with an acceptance signal: `Ok(false)` means the
-    /// write was rejected (archived thread) — the mirror layer must not
-    /// write either (review #TASK-1901).
-    pub(crate) async fn update_accepted(
-        &self,
-        thread_id: &str,
-        updates: Value,
-    ) -> Result<bool, ThreadStoreError> {
         let lock = self.key_lock(thread_id);
         let _guard = lock.lock().await;
+        // Archived threads silently drop writes (review #TASK-1901).
         if self.reject_archived_thread_write(thread_id).await {
-            return Ok(false);
+            return Ok(());
         }
         // Read-merge-write under the per-key lock: equivalent to an atomic
         // top-level merge because no other writer for this key can
@@ -293,16 +275,16 @@ impl SqliteThreadStore {
             }
         }
         self.write_record(thread_id, data).await;
-        Ok(true)
+        Ok(())
     }
 }
 
 
 /// Assemble the SQLite-backed thread store for runtime wiring
-/// (#TASK-1864 batch 2): build the store over `garyx_db`, run the one-shot
+/// (#TASK-1864): build the store over `garyx_db` and run the one-shot
 /// boot import from the file archive when this machine has not imported
-/// yet, and wrap the dual-write mirror in `sqlite` mode
-/// (`mirror: Some(file store)`). The returned store is what
+/// yet. SQLite is the only backend — the dual-write mirror and backend
+/// selection are retired. The returned store is what
 /// `AppStateBuilder::with_thread_store` should receive; the builder
 /// deliberately does not re-wrap SQLite backends in the projecting store.
 pub async fn assemble_sqlite_thread_store(
@@ -351,9 +333,9 @@ pub(crate) async fn import_thread_records_if_needed(
     let source_keys = source.list_keys(None).await;
     // Gate on state-row existence, not the key count: in steady state new
     // threads change the count, and a count-sensitive gate would re-import
-    // on every boot, flowing the possibly one-write-behind file mirror
-    // back over the SQL truth. A rollback to the file backend clears this
-    // row at boot, which is the only event that must force a re-import.
+    // on every boot, flowing the stale file archive back over the SQL
+    // truth. Clearing the state row is the only event that forces a
+    // re-import.
     match garyx_db
         .projection_state_exists(THREAD_RECORDS_IMPORT_NAME, THREAD_RECORDS_IMPORT_VERSION)
     {
@@ -604,43 +586,6 @@ mod contract_tests {
         run_contract(&store).await;
     }
 
-    /// Mirror whose first write stalls until released — reproduces the
-    /// #TASK-1901 ordering race: without the mirror-spanning key lock,
-    /// SQL committing v1→v2 could still leave the mirror at v1.
-    struct StallingMirror {
-        inner: InMemoryThreadStore,
-        gate: tokio::sync::Semaphore,
-        stalled_once: std::sync::atomic::AtomicBool,
-    }
-
-    #[async_trait]
-    impl ThreadStore for StallingMirror {
-        async fn get(&self, thread_id: &str) -> Option<Value> {
-            self.inner.get(thread_id).await
-        }
-        async fn set(&self, thread_id: &str, data: Value) {
-            if !self
-                .stalled_once
-                .swap(true, std::sync::atomic::Ordering::SeqCst)
-            {
-                let _permit = self.gate.acquire().await.expect("gate");
-            }
-            self.inner.set(thread_id, data).await;
-        }
-        async fn delete(&self, thread_id: &str) -> bool {
-            self.inner.delete(thread_id).await
-        }
-        async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
-            self.inner.list_keys(prefix).await
-        }
-        async fn exists(&self, thread_id: &str) -> bool {
-            self.inner.exists(thread_id).await
-        }
-        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-            self.inner.update(thread_id, updates).await
-        }
-    }
-
     #[tokio::test]
     async fn cleared_import_state_forces_a_reimport() {
         let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
@@ -783,7 +728,7 @@ mod contract_tests {
                     "updated_at": "2026-07-08T00:00:00Z",
                     "history": {"message_count": 3, "last_message_at": "2026-07-08T00:00:00Z"},
                     "last_user_preview": "hello preview",
-                    // Legacy snapshot arriving through an import/mirror
+                    // Legacy snapshot arriving through the boot-import
                     // path must never reach the truth table.
                     "messages": [{"role": "user", "content": "legacy"}],
                 }),
