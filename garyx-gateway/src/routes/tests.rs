@@ -168,7 +168,6 @@ fn thread_stream_replay_options_last_event_id_forces_resume() {
         replay_scope: Some(ThreadStreamReplayScope::Initial),
         initial_user_turns: Some(1),
         render_floor: Some(7),
-        windowed_resume: None,
         render_mode: None,
     };
 
@@ -268,7 +267,7 @@ fn thread_stream_live_payload_only_forwards_committed_messages() {
 }
 
 #[tokio::test]
-async fn thread_stream_replay_pages_when_tail_cap_overflows() {
+async fn thread_stream_replay_tail_cap_overflow_degrades_to_window() {
     let state = AppStateBuilder::new(test_config()).build();
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
@@ -290,8 +289,18 @@ async fn thread_stream_replay_pages_when_tail_cap_overflows() {
     )
     .await
     .unwrap();
+    // Over-cap span: records_after_seq truncates the tail, so the resume
+    // enters the gap self-heal path. Forward paging stays for sub-budget
+    // gaps, but a span this size always crosses the byte budget, so the
+    // replay degrades to the cold-open window instead of paging megabytes.
     let messages: Vec<Value> = (1..=THREAD_TRANSCRIPT_REPLAY_CAP + 2)
-        .map(|seq| json!({"role": "assistant", "content": format!("m{seq}")}))
+        .map(|seq| {
+            if seq % 2_500 == 1 {
+                json!({"role": "user", "content": format!("turn {seq}")})
+            } else {
+                json!({"role": "assistant", "content": format!("m{seq}")})
+            }
+        })
         .collect();
     state
         .threads
@@ -310,8 +319,6 @@ async fn thread_stream_replay_pages_when_tail_cap_overflows() {
     )
     .await;
     assert_eq!(replay.events.len(), 1);
-    assert_eq!(replay.sent_payloads.len(), THREAD_TRANSCRIPT_REPLAY_CAP + 2);
-    assert_eq!(replay.max_seq, (THREAD_TRANSCRIPT_REPLAY_CAP + 2) as u64);
     let event = replay.events[0].as_ref().unwrap();
     assert_eq!(event.id, replay.max_seq);
     let frame: Value = serde_json::from_str(&event.payload).unwrap();
@@ -320,35 +327,32 @@ async fn thread_stream_replay_pages_when_tail_cap_overflows() {
         Some("thread_render_frame")
     );
     assert_eq!(
-        frame
-            .get("render_state")
-            .and_then(|state| state.get("based_on_seq"))
-            .and_then(Value::as_u64),
-        Some(replay.max_seq)
+        frame.get("replay").and_then(Value::as_str),
+        Some("windowed"),
+        "over-budget gap self-heal must degrade to the windowed replay"
     );
     let events = frame.get("events").and_then(Value::as_array).unwrap();
-    assert_eq!(events.len(), THREAD_TRANSCRIPT_REPLAY_CAP + 2);
-    assert_eq!(events[0].get("seq").and_then(Value::as_u64), Some(1));
+    assert!(
+        events.len() < messages.len(),
+        "windowed replay must not page in the full span ({} events)",
+        events.len()
+    );
+    assert!(
+        replay.render_floor > 0,
+        "windowed replay must carry the cold-open floor"
+    );
     assert_eq!(
         events
             .last()
             .and_then(|event| event.get("seq"))
             .and_then(Value::as_u64),
-        Some(replay.max_seq)
-    );
-    assert!(
-        replay.sent_payloads.contains_key(&1),
-        "overflow replay must include the oldest missing page, not only the newest tail"
-    );
-    assert!(
-        replay
-            .sent_payloads
-            .contains_key(&u64::try_from(THREAD_TRANSCRIPT_REPLAY_CAP + 2).unwrap())
+        Some((THREAD_TRANSCRIPT_REPLAY_CAP + 2) as u64),
+        "window must still end at the committed ledger tail"
     );
 }
 
 #[tokio::test]
-async fn windowed_resume_over_budget_degrades_to_window() {
+async fn resume_over_budget_degrades_to_window_by_default() {
     let state = AppStateBuilder::new(test_config()).build();
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
@@ -387,20 +391,23 @@ async fn windowed_resume_over_budget_degrades_to_window() {
         .await
         .unwrap();
 
-    let opted_in = ThreadStreamReplayOptions {
-        replay_scope: ThreadStreamReplayScope::Resume,
-        initial_user_turns: None,
-        render_floor: 0,
-        windowed_resume: true,
-    };
-    let replay = build_thread_stream_replay(&state, &thread_id, 0, opted_in, None).await;
+    // A plain resume with no extra parameters: the over-budget degrade is
+    // unconditional (#TASK-1956 knife 2), not an opt-in capability.
+    let replay = build_thread_stream_replay(
+        &state,
+        &thread_id,
+        0,
+        ThreadStreamReplayOptions::resume(0),
+        None,
+    )
+    .await;
     assert_eq!(replay.events.len(), 1);
     let event = replay.events[0].as_ref().unwrap();
     let frame: Value = serde_json::from_str(&event.payload).unwrap();
     assert_eq!(
         frame.get("replay").and_then(Value::as_str),
         Some("windowed"),
-        "over-budget opted-in resume must be marked as a windowed replay"
+        "over-budget resume must be degraded to a windowed replay by default"
     );
     let events = frame.get("events").and_then(Value::as_array).unwrap();
     assert!(
@@ -418,22 +425,10 @@ async fn windowed_resume_over_budget_degrades_to_window() {
         .and_then(Value::as_u64)
         .unwrap();
     assert!(first_seq > 1, "window starts above the ledger head");
-
-    // Same span WITHOUT the opt-in keeps today's verbatim replay.
-    let legacy = ThreadStreamReplayOptions::resume(0);
-    let replay = build_thread_stream_replay(&state, &thread_id, 0, legacy, None).await;
-    let event = replay.events[0].as_ref().unwrap();
-    let frame: Value = serde_json::from_str(&event.payload).unwrap();
-    assert!(
-        frame.get("replay").is_none(),
-        "non-opted-in resume must never be degraded"
-    );
-    let events = frame.get("events").and_then(Value::as_array).unwrap();
-    assert_eq!(events.len(), messages.len());
 }
 
 #[tokio::test]
-async fn windowed_resume_within_budget_keeps_verbatim_replay() {
+async fn resume_within_budget_keeps_verbatim_replay() {
     let state = AppStateBuilder::new(test_config()).build();
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
@@ -466,18 +461,19 @@ async fn windowed_resume_within_budget_keeps_verbatim_replay() {
         .await
         .unwrap();
 
-    let opted_in = ThreadStreamReplayOptions {
-        replay_scope: ThreadStreamReplayScope::Resume,
-        initial_user_turns: None,
-        render_floor: 0,
-        windowed_resume: true,
-    };
-    let replay = build_thread_stream_replay(&state, &thread_id, 0, opted_in, None).await;
+    let replay = build_thread_stream_replay(
+        &state,
+        &thread_id,
+        0,
+        ThreadStreamReplayOptions::resume(0),
+        None,
+    )
+    .await;
     let event = replay.events[0].as_ref().unwrap();
     let frame: Value = serde_json::from_str(&event.payload).unwrap();
     assert!(
         frame.get("replay").is_none(),
-        "within-budget resume stays verbatim even when opted in"
+        "within-budget resume stays a verbatim replay"
     );
     let events = frame.get("events").and_then(Value::as_array).unwrap();
     assert_eq!(events.len(), 20);
@@ -683,7 +679,6 @@ async fn thread_stream_replay_initial_user_turn_window_trims_and_carries_bodies(
             replay_scope: ThreadStreamReplayScope::Initial,
             initial_user_turns: Some(1),
             render_floor: 0,
-            windowed_resume: false,
         },
         None,
     )

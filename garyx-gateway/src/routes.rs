@@ -1820,10 +1820,6 @@ pub struct ThreadStreamParams {
     pub initial_user_turns: Option<usize>,
     #[serde(default)]
     pub render_floor: Option<u64>,
-    /// Capability opt-in: the client understands `replay:"windowed"`
-    /// frames, so a stale resume may be degraded to the initial window.
-    #[serde(default)]
-    pub windowed_resume: Option<u8>,
     /// Capability negotiation (#TASK-1956 knife 1): `delta` declares that
     /// live frames may carry `render_delta` instead of a full
     /// `render_state`. Undeclared connections receive full frames
@@ -1851,12 +1847,11 @@ struct ThreadStreamReplayOptions {
     replay_scope: ThreadStreamReplayScope,
     initial_user_turns: Option<usize>,
     render_floor: u64,
-    windowed_resume: bool,
 }
 
-/// Serialized-replay byte budget for opted-in resume connections; over
-/// this, the resume degrades to the initial window (design:
-/// perf-thread-stream-replay-degrade.md).
+/// Serialized-replay byte budget for resume connections; over this, any
+/// resume degrades to the initial window — unconditionally, for every
+/// consumer (design: thread-render-frame-incremental.md knife 2).
 const THREAD_STREAM_RESUME_REPLAY_BYTE_BUDGET: usize = 1024 * 1024;
 /// User-turn window served for a degraded resume — same default the
 /// desktop and iOS cold-open planners use.
@@ -1869,7 +1864,6 @@ impl ThreadStreamReplayOptions {
             replay_scope: ThreadStreamReplayScope::Resume,
             initial_user_turns: None,
             render_floor,
-            windowed_resume: false,
         }
     }
 }
@@ -1897,7 +1891,6 @@ fn thread_stream_replay_options(
             replay_scope,
             initial_user_turns,
             render_floor: params.render_floor.unwrap_or(0),
-            windowed_resume: params.windowed_resume == Some(1),
         },
     )
 }
@@ -1948,7 +1941,6 @@ pub async fn thread_stream(
         thread_id = %thread_id,
         after_seq,
         render_floor = replay_options.render_floor,
-        windowed_resume = replay_options.windowed_resume,
         replay_scope = ?replay_options.replay_scope,
         render_delta = delta_base.is_some(),
         "per-thread stream connected"
@@ -2143,13 +2135,10 @@ async fn build_thread_stream_replay(
             serialized_bytes: 0,
         };
         append_thread_stream_replay_records(&mut replay, thread_id, tail);
-        // Opted-in stale resume over the byte budget: abandon the span
-        // replay and serve the initial window instead (design:
-        // perf-thread-stream-replay-degrade.md). Clients that did not
-        // declare `windowed_resume=1` keep the verbatim replay.
-        if options.windowed_resume
-            && replay.serialized_bytes > THREAD_STREAM_RESUME_REPLAY_BYTE_BUDGET
-        {
+        // Stale resume over the byte budget: abandon the span replay and
+        // serve the initial window instead — unconditionally, for every
+        // consumer (design: thread-render-frame-incremental.md knife 2).
+        if replay.serialized_bytes > THREAD_STREAM_RESUME_REPLAY_BYTE_BUDGET {
             return degraded_windowed_resume_replay(state, thread_id, after_seq, delta_base).await;
         }
         return finalize_thread_stream_replay(
@@ -2163,12 +2152,11 @@ async fn build_thread_stream_replay(
         .await;
     }
 
-    if options.windowed_resume {
-        // The gap self-heal below would page in the ENTIRE span; an
-        // opted-in client gets the window instead of megabytes.
-        return degraded_windowed_resume_replay(state, thread_id, after_seq, delta_base).await;
-    }
-
+    // Gap self-heal: page the span in forward. A sub-budget gap keeps the
+    // verbatim paged replay; the moment the accumulated serialization
+    // crosses the byte budget the resume degrades to the window instead of
+    // paging in megabytes (design: thread-render-frame-incremental.md
+    // knife 2).
     let mut cursor = after_seq;
     let mut replay = ThreadStreamReplayBuilder {
         event_payloads: Vec::new(),
@@ -2189,6 +2177,9 @@ async fn build_thread_stream_replay(
         }
         let page_len = page.len();
         append_thread_stream_replay_records(&mut replay, thread_id, page);
+        if replay.serialized_bytes > THREAD_STREAM_RESUME_REPLAY_BYTE_BUDGET {
+            return degraded_windowed_resume_replay(state, thread_id, after_seq, delta_base).await;
+        }
         if replay.max_seq == cursor || page_len < THREAD_TRANSCRIPT_REPLAY_CAP {
             break;
         }
@@ -2205,7 +2196,7 @@ async fn build_thread_stream_replay(
     .await
 }
 
-/// Serve an opted-in stale resume as the initial window: same records a
+/// Serve an over-budget stale resume as the initial window: same records a
 /// `replay_scope=initial` connection would get, marked
 /// `replay:"windowed"` so the client rebuilds from the window instead of
 /// appending.
