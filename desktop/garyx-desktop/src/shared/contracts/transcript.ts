@@ -192,6 +192,41 @@ export interface RenderState {
   filtered_placeholders: RenderFilteredPlaceholder[];
   rateLimit?: RenderRateLimit | null;
   window?: RenderStateWindow | null;
+  /**
+   * Opaque rows-hash chain token (#TASK-1956 knife 1). The server is the
+   * only hasher; the client compares it by equality against
+   * `RenderDelta.from_rows_hash` to validate the delta chain. Present on
+   * every frame of a `render_mode=delta` connection; absent otherwise.
+   */
+  rows_hash?: string;
+}
+
+/**
+ * Wire mirror of `garyx-models` `RenderDelta` (transcript_render_state.rs,
+ * #TASK-1956 knife 1): the live-frame payload of a `render_mode=delta`
+ * connection. Scalar fields are always sent whole; rows travel as the full
+ * id order plus full bodies for new/changed rows only. Reassembly and
+ * validation live in the main-process transport layer (garyx-client
+ * stream); the renderer only ever sees full `RenderState` snapshots.
+ */
+export interface RenderDelta {
+  /** The client must hold the snapshot at this seq... */
+  from_seq: number;
+  /** ...with exactly this rows content (chain token, drift tripwire). */
+  from_rows_hash: string;
+  based_on_seq: number;
+  /** Chain token AFTER applying this delta; stored on accept. */
+  rows_hash: string;
+  /** Full row id sequence: re-order is unambiguous. */
+  row_order: string[];
+  /** Full bodies for new/changed rows only. */
+  upsert_rows: RenderRow[];
+  tailActivity: RenderTailActivity;
+  activeToolGroupId: string | null;
+  progress_locus: RenderProgressLocus;
+  rateLimit?: RenderRateLimit | null;
+  window?: RenderStateWindow | null;
+  filtered_placeholders: RenderFilteredPlaceholder[];
 }
 
 export interface CommittedMessageEvent {

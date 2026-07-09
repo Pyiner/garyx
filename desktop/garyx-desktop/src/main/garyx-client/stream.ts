@@ -6,6 +6,8 @@ import type {
   MessageFileAttachment,
   MessageImageAttachment,
   OpenChatStreamResult,
+  RenderDelta,
+  RenderRow,
   RenderState,
   SendMessageInput,
   SendStreamingInputResult,
@@ -113,8 +115,12 @@ function resolveInputThreadId(input: SendMessageInput): string {
 export class ThreadStreamGapError extends Error {
   resumeAfterSeq: number;
 
-  constructor(resumeAfterSeq: number) {
-    super(`Thread stream seq gap after ${resumeAfterSeq}`);
+  constructor(resumeAfterSeq: number, reason?: string) {
+    super(
+      reason
+        ? `Thread stream seq gap after ${resumeAfterSeq}: ${reason}`
+        : `Thread stream seq gap after ${resumeAfterSeq}`,
+    );
     this.name = "ThreadStreamGapError";
     this.resumeAfterSeq = resumeAfterSeq;
   }
@@ -284,23 +290,164 @@ function parseRenderState(value: unknown): RenderState | null {
   return record as unknown as RenderState;
 }
 
+/** Per-connection delta reassembly base (#TASK-1956 batch 2): the last
+ * full `render_state` this connection accepted, `rows_hash` chain token
+ * included. The chain only needs to live within one connection — after a
+ * reconnect the first frame is always a full replay/snapshot frame, which
+ * reseeds unconditionally — so the holder is created per connection in
+ * {@link forwardThreadStreamBody} and dies with it. */
+interface RenderFrameReassembly {
+  held: RenderState | null;
+}
+
+function renderRowId(row: unknown): string | undefined {
+  return asString(parseRecord(row).id);
+}
+
+// Reassemble a full render snapshot from the held one plus a wire
+// `render_delta` (#TASK-1956 batch 2). Mirrors `apply_render_delta` in
+// garyx-models/src/transcript_render_state.rs minus the reassembled-rows
+// hash tripwire: the server is the only hasher; the client stores
+// `rows_hash` as an opaque token and validates the chain by equality.
+// Every violation is a protocol breach — throw ThreadStreamGapError and
+// ride the existing gap pipeline (hub stop → authoritative refetch); the
+// reconnect's replay frame reseeds the chain. `visibleMessageIds` is not
+// carried by deltas (zero consumers, deleted end-to-end in batch 4), so
+// the reassembled snapshot leaves it empty, matching the Rust oracle.
+function applyRenderDeltaFrame(
+  held: RenderState | null,
+  value: unknown,
+  resumeAfterSeq: number,
+): RenderState {
+  const violation = (reason: string) =>
+    new ThreadStreamGapError(resumeAfterSeq, `render delta ${reason}`);
+  const delta = parseRecord(value) as Partial<RenderDelta> &
+    Record<string, unknown>;
+  const fromSeq = asFiniteNumber(delta.from_seq);
+  const basedOnSeq = asFiniteNumber(delta.based_on_seq);
+  const fromRowsHash = asString(delta.from_rows_hash);
+  const rowsHash = asString(delta.rows_hash);
+  if (
+    typeof fromSeq !== "number" ||
+    typeof basedOnSeq !== "number" ||
+    !fromRowsHash ||
+    !rowsHash ||
+    !Array.isArray(delta.row_order) ||
+    !Array.isArray(delta.upsert_rows)
+  ) {
+    throw violation("frame is malformed");
+  }
+  if (!held || fromSeq !== held.based_on_seq) {
+    throw violation(
+      `from_seq ${fromSeq} does not match held snapshot seq ${held ? held.based_on_seq : "(none)"}`,
+    );
+  }
+  // Pure equality on the opaque chain token — the client never hashes. A
+  // held snapshot without a token (a full frame that arrived without
+  // rows_hash) can never anchor a delta.
+  if (fromRowsHash !== held.rows_hash) {
+    throw violation("from_rows_hash does not match held rows-hash token");
+  }
+  const upsertById = new Map<string, RenderRow>();
+  const orderIds = new Set<string>();
+  for (const rowId of delta.row_order) {
+    if (!asString(rowId)) {
+      throw violation("row_order carries a non-string id");
+    }
+    orderIds.add(rowId as string);
+  }
+  for (const row of delta.upsert_rows) {
+    const rowId = renderRowId(row);
+    if (!rowId) {
+      throw violation("upsert row is missing its id");
+    }
+    if (upsertById.has(rowId)) {
+      throw violation(`upsert row id ${rowId} appears more than once`);
+    }
+    // Every upsert must be referenced by row_order: a stray upsert is a
+    // producer/consumer disagreement, not ignorable padding.
+    if (!orderIds.has(rowId)) {
+      throw violation(`upsert row id ${rowId} is absent from row_order`);
+    }
+    upsertById.set(rowId, row as RenderRow);
+  }
+  const prevById = new Map<string, RenderRow>();
+  for (const row of held.rows) {
+    const rowId = renderRowId(row);
+    if (rowId) {
+      prevById.set(rowId, row);
+    }
+  }
+  // Rebuild rows in row_order: upsert body wins, else the held row by id.
+  const rows: RenderRow[] = [];
+  for (const rowId of delta.row_order as string[]) {
+    const row = upsertById.get(rowId) ?? prevById.get(rowId);
+    if (!row) {
+      throw violation(
+        `row id ${rowId} missing from upsert rows and held snapshot`,
+      );
+    }
+    rows.push(row);
+  }
+  // Scalar fields are replaced wholesale; rateLimit/window mirror the full
+  // frame's wire shape (absent when the server skipped them).
+  return {
+    based_on_seq: basedOnSeq,
+    rows,
+    tailActivity: delta.tailActivity as RenderState["tailActivity"],
+    activeToolGroupId:
+      (delta.activeToolGroupId as RenderState["activeToolGroupId"]) ?? null,
+    progress_locus: delta.progress_locus as RenderState["progress_locus"],
+    visibleMessageIds: [],
+    filtered_placeholders: Array.isArray(delta.filtered_placeholders)
+      ? (delta.filtered_placeholders as RenderState["filtered_placeholders"])
+      : [],
+    ...(delta.rateLimit !== undefined
+      ? { rateLimit: delta.rateLimit as RenderState["rateLimit"] }
+      : {}),
+    ...(delta.window !== undefined
+      ? { window: delta.window as RenderState["window"] }
+      : {}),
+    rows_hash: rowsHash,
+  };
+}
+
 // Unwrap a `thread_render_frame` into one atomic desktop event: the contiguous
 // committed events plus the full render snapshot. Gap detection runs per inner
 // event (never on `based_on_seq` alone) so batched catch-up frames stay
 // gapless instead of triggering an endless reconnect.
+//
+// Delta frames (#TASK-1956 batch 2): a frame may carry `render_delta`
+// instead of `render_state`; it is reassembled against `reassembly.held`
+// BEFORE any event is emitted, so a chain violation discards the frame
+// atomically. Either way the emitted desktop event always carries a full
+// `renderState` — the renderer, mirror, and frontier never learn deltas
+// exist. Every frame that carries a full `render_state` (replay,
+// snapshot-only, first-live, same-seq reseed) unconditionally replaces the
+// held snapshot + chain token; there is no other cache-invalidation event.
 function mapThreadRenderFrameEvent(
   payload: Record<string, unknown>,
   connectionLastSeq: number,
+  reassembly: RenderFrameReassembly,
 ): { event: DesktopChatStreamEvent; lastSeq: number } | null {
   const threadId =
     asString(payload.threadId) || asString(payload.thread_id) || "";
   if (!threadId) {
     return null;
   }
-  const renderState = parseRenderState(payload.render_state ?? payload.renderState);
+  let renderState = parseRenderState(payload.render_state ?? payload.renderState);
   if (!renderState) {
-    return null;
+    const rawDelta = payload.render_delta ?? payload.renderDelta;
+    if (rawDelta === undefined || rawDelta === null) {
+      return null;
+    }
+    renderState = applyRenderDeltaFrame(
+      reassembly.held,
+      rawDelta,
+      connectionLastSeq,
+    );
   }
+  reassembly.held = renderState;
   const rawEvents = Array.isArray(payload.events) ? payload.events : [];
   // A frame marked replay:"windowed" is a server-degraded stale resume:
   // its records start at the window floor, deliberately NOT contiguous
@@ -416,7 +563,10 @@ export async function streamThreadEvents(
       response = await gatewayStreamFetch(
         buildUrl(
           settings,
-          `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&windowed_resume=1${renderFloorParam}`,
+          // render_mode=delta (#TASK-1956 batch 2): live frames carry
+          // `render_delta` instead of a full `render_state`; the
+          // reassembler below rebuilds full snapshots for downstream.
+          `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&windowed_resume=1&render_mode=delta${renderFloorParam}`,
         ),
         {
           headers,
@@ -474,6 +624,9 @@ async function forwardThreadStreamBody(
   let buffer = "";
   let dataLines: string[] = [];
   let connectionLastSeq = afterSeq;
+  // Delta chain state lives in this single-connection closure and dies
+  // with it: a reconnect always starts on a full replay frame (reseed).
+  const reassembly: RenderFrameReassembly = { held: null };
 
   const flushEvent = () => {
     if (dataLines.length === 0) {
@@ -488,7 +641,7 @@ async function forwardThreadStreamBody(
     if (asString(payload.type) !== "thread_render_frame") {
       return;
     }
-    const frame = mapThreadRenderFrameEvent(payload, connectionLastSeq);
+    const frame = mapThreadRenderFrameEvent(payload, connectionLastSeq, reassembly);
     if (!frame) {
       return;
     }
