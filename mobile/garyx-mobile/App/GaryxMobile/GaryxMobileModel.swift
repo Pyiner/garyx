@@ -10,7 +10,7 @@ enum GaryxTranscriptCacheLog {
     static let logger = Logger(subsystem: "com.garyx.mobile", category: "transcript-cache")
 }
 
-struct GaryxPendingUploadPreview {
+struct GaryxPendingUploadPreview: Sendable {
     var name: String
     var mediaType: String
     var previewDataUrl: String?

@@ -3,42 +3,29 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WidgetKit
 
+private struct GaryxPreparedLocalChatFile: Sendable {
+    let blob: GaryxUploadChatAttachmentBlob
+    let preview: GaryxPendingUploadPreview
+}
+
 extension GaryxMobileModel {
     func attachFiles(from urls: [URL]) async {
         guard !urls.isEmpty else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
-            let localFiles = try urls.map { url in
-                let didAccess = url.startAccessingSecurityScopedResource()
-                defer {
-                    if didAccess {
-                        url.stopAccessingSecurityScopedResource()
-                    }
-                }
-                let data = try Data(contentsOf: url)
-                let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey])
-                let mediaType = resourceValues?.contentType?.preferredMIMEType
-                    ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-                    ?? "application/octet-stream"
-                let kind = mediaType.hasPrefix("image/") ? "image" : "file"
-                let encoded = data.base64EncodedString()
-                let name = url.lastPathComponent.isEmpty ? "attachment" : url.lastPathComponent
-                return (
-                    blob: GaryxUploadChatAttachmentBlob(
-                        kind: kind,
-                        name: name,
-                        mediaType: mediaType,
-                        dataBase64: encoded
-                    ),
-                    preview: GaryxPendingUploadPreview(
-                        name: name,
-                        mediaType: mediaType,
-                        previewDataUrl: kind == "image" ? Self.dataUrl(mediaType: mediaType, base64: encoded) : nil
-                    )
-                )
-            }
+            let localFiles = try await Task.detached(priority: .userInitiated) {
+                try Self.prepareLocalChatFiles(from: urls)
+            }.value
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             let uploaded = try await client().uploadChatAttachments(
                 GaryxUploadChatAttachmentsRequest(files: localFiles.map(\.blob))
             )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard uploaded.files.count == localFiles.count else {
+                throw GaryxGatewayError.encodingFailed(
+                    "Gateway did not return every uploaded file."
+                )
+            }
             var previews = localFiles.map(\.preview)
             composerAttachments.append(
                 contentsOf: uploaded.files.map { file in
@@ -54,45 +41,69 @@ extension GaryxMobileModel {
                 }
             )
         } catch {
+            guard !Task.isCancelled, runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
+        }
+    }
+
+    nonisolated private static func prepareLocalChatFiles(
+        from urls: [URL]
+    ) throws -> [GaryxPreparedLocalChatFile] {
+        try urls.map { url in
+            let didAccess = url.startAccessingSecurityScopedResource()
+            defer {
+                if didAccess {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            let data = try Data(contentsOf: url)
+            let resourceValues = try? url.resourceValues(forKeys: [.contentTypeKey])
+            let mediaType = resourceValues?.contentType?.preferredMIMEType
+                ?? UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+                ?? "application/octet-stream"
+            let kind = mediaType.hasPrefix("image/") ? "image" : "file"
+            let encoded = data.base64EncodedString()
+            let name = url.lastPathComponent.isEmpty ? "attachment" : url.lastPathComponent
+            return GaryxPreparedLocalChatFile(
+                blob: GaryxUploadChatAttachmentBlob(
+                    kind: kind,
+                    name: name,
+                    mediaType: mediaType,
+                    dataBase64: encoded
+                ),
+                preview: GaryxPendingUploadPreview(
+                    name: name,
+                    mediaType: mediaType,
+                    previewDataUrl: kind == "image"
+                        ? Self.dataUrl(mediaType: mediaType, base64: encoded)
+                        : nil
+                )
+            )
         }
     }
 
     func attachImages(_ images: [GaryxMobileSelectedImage]) async {
         guard !images.isEmpty else { return }
-        for image in images {
-            do {
-                let encoded = image.data.base64EncodedString()
-                let uploaded = try await client().uploadChatAttachments(
-                    GaryxUploadChatAttachmentsRequest(
-                        files: [
-                            GaryxUploadChatAttachmentBlob(
-                                kind: "image",
-                                name: image.name,
-                                mediaType: image.mediaType,
-                                dataBase64: encoded
-                            ),
-                        ]
-                    )
+        let runtimeGeneration = gatewayRuntimeGeneration
+        let batch = await Task.detached(priority: .userInitiated) {
+            GaryxChatImageUploadBatch.prepare(images)
+        }.value
+        guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+        do {
+            let uploaded = try await client().uploadChatAttachments(batch.request)
+            let attachments = await Task.detached(priority: .userInitiated) {
+                batch.composerAttachments(from: uploaded.files)
+            }.value
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard let attachments else {
+                throw GaryxGatewayError.encodingFailed(
+                    "Gateway did not return every uploaded image."
                 )
-                guard let file = uploaded.files.first else {
-                    throw GaryxGatewayError.encodingFailed("Gateway did not return an uploaded image.")
-                }
-                let fallbackMediaType = image.mediaType.isEmpty ? "image/jpeg" : image.mediaType
-                composerAttachments.append(
-                    GaryxMobileComposerAttachment(
-                        id: "\(file.path)-\(UUID().uuidString)",
-                        kind: file.kind.isEmpty ? "image" : file.kind,
-                        name: file.name,
-                        mediaType: file.mediaType.isEmpty ? fallbackMediaType : file.mediaType,
-                        path: file.path,
-                        previewDataUrl: Self.dataUrl(mediaType: fallbackMediaType, base64: encoded)
-                    )
-                )
-            } catch {
-                lastError = displayMessage(for: error)
-                return
             }
+            composerAttachments.append(contentsOf: attachments)
+        } catch {
+            guard !Task.isCancelled, runtimeGeneration == gatewayRuntimeGeneration else { return }
+            lastError = displayMessage(for: error)
         }
     }
 

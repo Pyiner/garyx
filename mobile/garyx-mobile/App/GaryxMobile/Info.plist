@@ -55,6 +55,8 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Garyx connects to your local Garyx gateway on this network.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Garyx uses the camera to attach photos to your messages.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

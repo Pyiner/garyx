@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import ImageIO
 import PhotosUI
@@ -12,8 +13,12 @@ private enum GaryxComposerLayout {
     static let bottomBarHorizontalPadding: CGFloat = 14
     static let bottomBarTopPadding: CGFloat = 2
     static let bottomBarBottomPadding: CGFloat = 7
-    static let actionButtonSide: CGFloat = 32
+    static let actionButtonSide: CGFloat = 36
     static let actionButtonFill = Color.primary.opacity(0.06)
+    static let addPanelWidth: CGFloat = 286
+    static let addPanelCornerRadius: CGFloat = 28
+    static let addPanelRowCornerRadius: CGFloat = 16
+    static let addPanelIconSide: CGFloat = 42
     static let inputHorizontalPadding: CGFloat = 16
     static let inputTopPadding: CGFloat = 15
     static let inputBottomPadding: CGFloat = 8
@@ -48,6 +53,20 @@ private enum GaryxComposerLayout {
     static let draftFieldIdentity = "garyx-composer-draft-field"
 }
 
+private enum GaryxComposerCameraAlert: String, Identifiable {
+    case permissionDenied
+    case unavailable
+
+    var id: String { rawValue }
+}
+
+/// The picker owns this image after capture and Garyx never mutates it. The
+/// narrow wrapper makes that immutable handoff explicit so JPEG preparation
+/// can happen away from the main actor without stalling the composer.
+private struct GaryxCapturedCameraImage: @unchecked Sendable {
+    let image: UIImage
+}
+
 
 struct GaryxComposer: View {
     @Environment(\.isEnabled) private var isEnabled
@@ -65,7 +84,11 @@ struct GaryxComposer: View {
     @State private var isPickingAttachments = false
     @State private var isPickingPhotos = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var isPickingCamera = false
+    @State private var cameraAlert: GaryxComposerCameraAlert?
     @State private var showsWorkspaceModeSheet = false
+    @State private var showsAddPanel = false
+    @State private var isAddingAttachments = false
 
     private var hasLocalPayload: Bool {
         !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.composerAttachments.isEmpty
@@ -129,7 +152,11 @@ struct GaryxComposer: View {
         ) { result in
             switch result {
             case .success(let urls):
-                Task { await model.attachFiles(from: urls) }
+                Task { @MainActor in
+                    isAddingAttachments = true
+                    defer { isAddingAttachments = false }
+                    await model.attachFiles(from: urls)
+                }
             case .failure(let error):
                 model.lastError = error.localizedDescription
             }
@@ -140,9 +167,38 @@ struct GaryxComposer: View {
             maxSelectionCount: 10,
             matching: .images
         )
+        .fullScreenCover(isPresented: $isPickingCamera) {
+            GaryxCameraPicker(isPresented: $isPickingCamera) { image in
+                Task { @MainActor in
+                    isAddingAttachments = true
+                    defer { isAddingAttachments = false }
+                    await attachCameraPhoto(image)
+                }
+            }
+            .ignoresSafeArea()
+        }
+        .alert(item: $cameraAlert) { alert in
+            switch alert {
+            case .permissionDenied:
+                Alert(
+                    title: Text("Camera access is off"),
+                    message: Text("Allow camera access in Settings to take a photo for this message."),
+                    primaryButton: .default(Text("Open Settings"), action: openAppSettings),
+                    secondaryButton: .cancel()
+                )
+            case .unavailable:
+                Alert(
+                    title: Text("Camera unavailable"),
+                    message: Text("This device does not have a camera available right now."),
+                    dismissButton: .default(Text("OK"))
+                )
+            }
+        }
         .onChange(of: selectedPhotoItems) { _, items in
             guard !items.isEmpty else { return }
-            Task {
+            Task { @MainActor in
+                isAddingAttachments = true
+                defer { isAddingAttachments = false }
                 await attachPhotos(items)
                 selectedPhotoItems = []
             }
@@ -179,21 +235,29 @@ struct GaryxComposer: View {
         .onChange(of: model.sidebarVisible) { _, visible in
             if visible {
                 showsWorkspaceModeSheet = false
+                showsAddPanel = false
             }
         }
         .onChange(of: model.selectedThread?.id) { _, threadId in
             if threadId != nil {
                 showsWorkspaceModeSheet = false
             }
+            showsAddPanel = false
         }
         .onChange(of: model.activePanel) { _, panel in
             if panel != .chat {
                 showsWorkspaceModeSheet = false
+                showsAddPanel = false
             }
         }
         .onChange(of: showsWorkspaceModeStrip) { _, visible in
             if !visible {
                 showsWorkspaceModeSheet = false
+            }
+        }
+        .onChange(of: isAddingAttachments) { _, isAdding in
+            if isAdding {
+                showsAddPanel = false
             }
         }
         #if DEBUG
@@ -431,6 +495,7 @@ struct GaryxComposer: View {
                         foreground: Color(.systemBackground),
                         background: Color(.label)
                     )
+                    .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Stop current run")
@@ -445,6 +510,7 @@ struct GaryxComposer: View {
                         foreground: canSendLocalPayload ? Color(.systemBackground) : Color(.systemGray2),
                         background: canSendLocalPayload ? Color(.label) : Color(.systemGray5)
                     )
+                    .frame(width: 44, height: 44)
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSendLocalPayload)
@@ -457,50 +523,103 @@ struct GaryxComposer: View {
     }
 
     private var addMenuButton: some View {
-        Menu {
-            if !model.slashCommands.isEmpty {
-                Section("Commands") {
-                    ForEach(Array(model.slashCommands.prefix(6))) { command in
-                        Button {
-                            insertSlashCommand(command)
-                        } label: {
-                            Label(command.name, systemImage: "command")
-                        }
-                    }
-                }
-            }
-
-            Section("Attach") {
-                Button {
-                    DispatchQueue.main.async {
-                        isPickingPhotos = true
-                    }
-                } label: {
-                    Label("Photo library", systemImage: "photo")
-                }
-
-                Button {
-                    DispatchQueue.main.async {
-                        isPickingAttachments = true
-                    }
-                } label: {
-                    Label("File", systemImage: "doc")
-                }
-            }
-
+        Button {
+            showsAddPanel.toggle()
         } label: {
-            GaryxCircleBadge(
-                systemName: "plus",
-                foreground: .primary,
-                background: GaryxComposerLayout.actionButtonFill,
-                diameter: GaryxComposerLayout.actionButtonSide,
-                iconSize: 20,
-                iconWeight: .regular
-            )
+            Group {
+                if isAddingAttachments {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.primary)
+                        .frame(
+                            width: GaryxComposerLayout.actionButtonSide,
+                            height: GaryxComposerLayout.actionButtonSide
+                        )
+                        .background(GaryxComposerLayout.actionButtonFill, in: Circle())
+                } else {
+                    GaryxCircleBadge(
+                        systemName: "plus",
+                        foreground: .primary,
+                        background: GaryxComposerLayout.actionButtonFill,
+                        diameter: GaryxComposerLayout.actionButtonSide,
+                        iconSize: 20,
+                        iconWeight: .regular
+                    )
+                    .rotationEffect(.degrees(showsAddPanel ? 45 : 0))
+                }
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
         }
-        .tint(.secondary)
         .buttonStyle(.plain)
-        .accessibilityLabel("Composer options")
+        .disabled(isAddingAttachments)
+        .accessibilityLabel(isAddingAttachments ? "Adding attachments" : "Add attachment")
+        .accessibilityHint("Take a photo, choose photos or files, or insert a saved command")
+        .animation(.spring(response: 0.22, dampingFraction: 0.82), value: showsAddPanel)
+        .popover(
+            isPresented: $showsAddPanel,
+            attachmentAnchor: .rect(.bounds),
+            arrowEdge: .bottom
+        ) {
+            GaryxComposerAddPopover(
+                commands: Array(model.slashCommands.prefix(6)),
+                onChooseCamera: presentCameraPicker,
+                onChoosePhotos: presentPhotoPicker,
+                onChooseFiles: presentFilePicker,
+                onChooseCommand: { command in
+                    showsAddPanel = false
+                    insertSlashCommand(command)
+                }
+            )
+            .presentationCompactAdaptation(.popover)
+            .presentationBackground(.ultraThinMaterial)
+            .presentationCornerRadius(GaryxComposerLayout.addPanelCornerRadius)
+        }
+    }
+
+    private func presentCameraPicker() {
+        showsAddPanel = false
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            cameraAlert = .unavailable
+            return
+        }
+
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            isPickingCamera = true
+        case .notDetermined:
+            Task {
+                let granted = await AVCaptureDevice.requestAccess(for: .video)
+                if granted {
+                    isPickingCamera = true
+                } else {
+                    cameraAlert = .permissionDenied
+                }
+            }
+        case .denied, .restricted:
+            cameraAlert = .permissionDenied
+        @unknown default:
+            cameraAlert = .unavailable
+        }
+    }
+
+    private func presentPhotoPicker() {
+        showsAddPanel = false
+        DispatchQueue.main.async {
+            isPickingPhotos = true
+        }
+    }
+
+    private func presentFilePicker() {
+        showsAddPanel = false
+        DispatchQueue.main.async {
+            isPickingAttachments = true
+        }
+    }
+
+    private func openAppSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
     }
 
     private func insertSlashCommand(_ command: GaryxSlashCommand) {
@@ -548,6 +667,27 @@ struct GaryxComposer: View {
             }
         }
         await model.attachImages(images)
+    }
+
+    private func attachCameraPhoto(_ image: UIImage) async {
+        let capture = GaryxCapturedCameraImage(image: image)
+        let prepared = await Task.detached(priority: .userInitiated) {
+            guard let data = capture.image.jpegData(compressionQuality: 0.92) else {
+                return nil as GaryxMobileSelectedImage?
+            }
+            return Self.preparedPhotoUpload(
+                data: data,
+                index: 0,
+                mediaType: "image/jpeg",
+                fileExtension: "jpg"
+            )
+        }.value
+
+        guard let prepared else {
+            model.lastError = "That photo is too large to prepare for upload."
+            return
+        }
+        await model.attachImages([prepared])
     }
 
     nonisolated private static func preparedPhotoUpload(
@@ -630,6 +770,230 @@ struct GaryxComposer: View {
 
     nonisolated private static var maxPreparedPhotoBytes: Int {
         1_350_000
+    }
+}
+
+private struct GaryxCameraPicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let onCapture: (UIImage) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        private let parent: GaryxCameraPicker
+
+        init(parent: GaryxCameraPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.isPresented = false
+        }
+
+        func imagePickerController(
+            _ picker: UIImagePickerController,
+            didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+        ) {
+            parent.isPresented = false
+            guard let image = info[.originalImage] as? UIImage else { return }
+            parent.onCapture(image)
+        }
+    }
+}
+
+private struct GaryxComposerAddPopover: View {
+    private enum Page {
+        case root
+        case commands
+    }
+
+    let commands: [GaryxSlashCommand]
+    let onChooseCamera: () -> Void
+    let onChoosePhotos: () -> Void
+    let onChooseFiles: () -> Void
+    let onChooseCommand: (GaryxSlashCommand) -> Void
+    @State private var page: Page = .root
+
+    var body: some View {
+        Group {
+            switch page {
+            case .root:
+                rootActions
+            case .commands:
+                commandActions
+            }
+        }
+        .frame(width: GaryxComposerLayout.addPanelWidth)
+        .padding(8)
+        .animation(.snappy(duration: 0.22), value: page)
+    }
+
+    private var rootActions: some View {
+        VStack(spacing: 2) {
+            actionRow(
+                title: "Camera",
+                subtitle: "Take a new photo",
+                systemName: "camera",
+                action: onChooseCamera
+            )
+            actionRow(
+                title: "Photos",
+                subtitle: "Choose up to 10 images",
+                systemName: "photo.on.rectangle.angled",
+                action: onChoosePhotos
+            )
+            actionRow(
+                title: "Files",
+                subtitle: "Documents, images, and more",
+                systemName: "paperclip",
+                action: onChooseFiles
+            )
+            if !commands.isEmpty {
+                actionRow(
+                    title: "Commands",
+                    subtitle: "Insert a saved prompt",
+                    systemName: "command",
+                    trailingText: "\(commands.count)",
+                    showsChevron: true
+                ) {
+                    page = .commands
+                }
+            }
+        }
+    }
+
+    private var commandActions: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 8) {
+                Button {
+                    page = .root
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(GaryxFont.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 36, height: 36)
+                        .background(Color.primary.opacity(0.055), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back to attachments")
+
+                Text("Commands")
+                    .font(GaryxFont.callout(weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 2) {
+                    ForEach(commands) { command in
+                        actionRow(
+                            title: commandTitle(command),
+                            subtitle: command.description.isEmpty ? "Insert command" : command.description,
+                            systemName: "command"
+                        ) {
+                            onChooseCommand(command)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 310)
+        }
+    }
+
+    private func actionRow(
+        title: String,
+        subtitle: String,
+        systemName: String,
+        trailingText: String? = nil,
+        showsChevron: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 13) {
+                Image(systemName: systemName)
+                    .font(GaryxFont.system(size: 18, weight: .medium))
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(.primary)
+                    .frame(
+                        width: GaryxComposerLayout.addPanelIconSide,
+                        height: GaryxComposerLayout.addPanelIconSide
+                    )
+                    .background(Color.primary.opacity(0.055), in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(GaryxFont.callout(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                if let trailingText {
+                    Text(trailingText)
+                        .font(GaryxFont.caption(weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .frame(minHeight: 24)
+                        .background(Color.primary.opacity(0.05), in: Capsule())
+                }
+                if showsChevron {
+                    Image(systemName: "chevron.right")
+                        .font(GaryxFont.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(minHeight: 58)
+            .contentShape(
+                RoundedRectangle(
+                    cornerRadius: GaryxComposerLayout.addPanelRowCornerRadius,
+                    style: .continuous
+                )
+            )
+        }
+        .buttonStyle(GaryxComposerAddPanelRowButtonStyle())
+        .accessibilityElement(children: .combine)
+    }
+
+    private func commandTitle(_ command: GaryxSlashCommand) -> String {
+        command.name.hasPrefix("/") ? command.name : "/\(command.name)"
+    }
+}
+
+private struct GaryxComposerAddPanelRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                Color.primary.opacity(configuration.isPressed ? 0.075 : 0),
+                in: RoundedRectangle(
+                    cornerRadius: GaryxComposerLayout.addPanelRowCornerRadius,
+                    style: .continuous
+                )
+            )
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

@@ -235,7 +235,7 @@ extension GaryxMobileModel {
         return "User message"
     }
 
-    static func dataUrl(mediaType: String, base64: String) -> String {
+    nonisolated static func dataUrl(mediaType: String, base64: String) -> String {
         let normalizedType = mediaType.trimmingCharacters(in: .whitespacesAndNewlines)
         let type = normalizedType.isEmpty ? "application/octet-stream" : normalizedType
         return "data:\(type);base64,\(base64)"

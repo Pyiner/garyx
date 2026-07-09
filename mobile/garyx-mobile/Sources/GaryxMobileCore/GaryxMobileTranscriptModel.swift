@@ -367,7 +367,7 @@ private extension Dictionary where Key == String, Value == GaryxJSONValue {
     }
 }
 
-struct GaryxMobileComposerAttachment: Identifiable, Equatable {
+struct GaryxMobileComposerAttachment: Identifiable, Equatable, Sendable {
     var id: String
     var kind: String
     var name: String
@@ -384,4 +384,59 @@ struct GaryxMobileSelectedImage: Equatable, Sendable {
     var name: String
     var mediaType: String
     var data: Data
+}
+
+/// Prepared payload for one photo-picker selection. The gateway upload route
+/// accepts multiple files, so all selected photos share one request instead of
+/// paying one HTTP round trip per image. Preparation is pure and Sendable so
+/// the app can Base64-encode the batch away from the main actor.
+struct GaryxChatImageUploadBatch: Equatable, Sendable {
+    let request: GaryxUploadChatAttachmentsRequest
+
+    static func prepare(_ images: [GaryxMobileSelectedImage]) -> GaryxChatImageUploadBatch {
+        GaryxChatImageUploadBatch(
+            request: GaryxUploadChatAttachmentsRequest(
+                files: images.map { image in
+                    GaryxUploadChatAttachmentBlob(
+                        kind: "image",
+                        name: image.name,
+                        mediaType: image.mediaType,
+                        dataBase64: image.data.base64EncodedString()
+                    )
+                }
+            )
+        )
+    }
+
+    /// The gateway writes and returns the batch in request order. Reject a
+    /// partial response so the composer never silently drops one selected
+    /// photo while presenting the rest as a successful upload.
+    func composerAttachments(
+        from uploadedFiles: [GaryxUploadedChatAttachment],
+        makeID: (Int, GaryxUploadedChatAttachment) -> String = { _, file in
+            "\(file.path)-\(UUID().uuidString)"
+        }
+    ) -> [GaryxMobileComposerAttachment]? {
+        guard uploadedFiles.count == request.files.count else { return nil }
+
+        return zip(request.files, uploadedFiles).enumerated().map { index, pair in
+            let (source, uploaded) = pair
+            let sourceMediaType = Self.normalizedMediaType(source.mediaType)
+            let uploadedMediaType = uploaded.mediaType.trimmingCharacters(in: .whitespacesAndNewlines)
+            let uploadedKind = uploaded.kind.trimmingCharacters(in: .whitespacesAndNewlines)
+            return GaryxMobileComposerAttachment(
+                id: makeID(index, uploaded),
+                kind: uploadedKind.isEmpty ? "image" : uploadedKind,
+                name: uploaded.name,
+                mediaType: uploadedMediaType.isEmpty ? sourceMediaType : uploadedMediaType,
+                path: uploaded.path,
+                previewDataUrl: "data:\(sourceMediaType);base64,\(source.dataBase64)"
+            )
+        }
+    }
+
+    private static func normalizedMediaType(_ mediaType: String?) -> String {
+        let value = mediaType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? "image/jpeg" : value
+    }
 }
