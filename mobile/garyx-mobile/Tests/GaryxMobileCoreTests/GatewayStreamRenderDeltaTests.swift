@@ -622,8 +622,7 @@ final class GatewayStreamRenderDeltaTests: XCTestCase {
 
     /// Expected reassembly of a delta produced by `deltaFramePayload`:
     /// scalars replaced wholesale (`tailActivity`/`progress_locus` fixed by
-    /// the fixture), `visibleMessageIds` left empty (not carried by
-    /// deltas), the delta's `rows_hash` stored as the new token.
+    /// the fixture), the delta's `rows_hash` stored as the new token.
     private func expectedDeltaSnapshot(
         basedOnSeq: Int,
         rows: [GaryxRenderRow],
@@ -635,7 +634,6 @@ final class GatewayStreamRenderDeltaTests: XCTestCase {
             tailActivity: .assistantStreaming,
             activeToolGroupId: nil,
             progressLocus: .tail,
-            visibleMessageIds: [],
             filteredPlaceholders: [],
             rateLimit: nil,
             window: nil,
@@ -690,7 +688,6 @@ final class GatewayStreamRenderDeltaTests: XCTestCase {
             "rows": rows,
             "tailActivity": "none",
             "progress_locus": "none",
-            "visibleMessageIds": [] as [Any],
             "filtered_placeholders": [] as [Any],
         ]
         if let rowsHash {

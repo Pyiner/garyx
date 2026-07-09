@@ -141,7 +141,6 @@ final class GaryxMobileResumeCursorRenderStateReproTests: XCTestCase {
                 "rows": rows,
                 "tailActivity": "none",
                 "progress_locus": "none",
-                "visibleMessageIds": [],
                 "filtered_placeholders": [],
             ],
         ])

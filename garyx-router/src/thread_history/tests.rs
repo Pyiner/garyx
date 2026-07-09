@@ -148,9 +148,9 @@ async fn render_snapshot_at_seq_uses_committed_records_up_to_bound() {
         .unwrap();
 
     assert_eq!(snapshot.based_on_seq, 2);
-    assert_eq!(snapshot.visible_message_ids, vec!["seq:1", "seq:2"]);
+    assert_eq!(row_ref_ids(&snapshot), vec!["seq:1", "seq:2"]);
     assert!(
-        !snapshot.visible_message_ids.iter().any(|id| id == "seq:3"),
+        !row_ref_ids(&snapshot).iter().any(|id| id == "seq:3"),
         "render snapshot must not include future records beyond the frame seq"
     );
 }
@@ -238,7 +238,7 @@ async fn render_snapshot_in_window_omits_capsule_marker_below_floor() {
         .unwrap();
 
     assert_eq!(snapshot.based_on_seq, 3);
-    assert_eq!(snapshot.visible_message_ids, vec!["seq:3"]);
+    assert_eq!(row_ref_ids(&snapshot), vec!["seq:3"]);
     assert!(first_capsule_cards(&snapshot).is_empty());
     assert_eq!(
         snapshot.window,
@@ -328,7 +328,7 @@ async fn render_snapshot_in_window_limits_rows_and_reports_window() {
         .unwrap();
 
     assert_eq!(snapshot.based_on_seq, 4);
-    assert_eq!(snapshot.visible_message_ids, vec!["seq:3", "seq:4"]);
+    assert_eq!(row_ref_ids(&snapshot), vec!["seq:3", "seq:4"]);
     assert_eq!(
         snapshot.window,
         Some(garyx_models::RenderWindow {
@@ -375,7 +375,7 @@ async fn render_snapshot_in_window_uses_full_prefix_run_state() {
         .await
         .unwrap();
 
-    assert_eq!(snapshot.visible_message_ids, vec!["seq:2"]);
+    assert_eq!(row_ref_ids(&snapshot), vec!["seq:2"]);
     assert_eq!(
         snapshot.tail_activity,
         garyx_models::RenderTailActivity::Thinking,
@@ -863,6 +863,47 @@ async fn reconcile_run_tail_empty_run_id_is_noop_not_double_append() {
 
 fn draft(message: serde_json::Value) -> RunTranscriptRecordDraft {
     RunTranscriptRecordDraft::from_message(message)
+}
+
+/// Every message-ref id the snapshot's row tree references — the
+/// "which messages does this snapshot render" oracle.
+fn row_ref_ids(snapshot: &garyx_models::RenderSnapshot) -> Vec<String> {
+    use garyx_models::{RenderActivityRow, RenderRow, RenderStepItem};
+    let mut ids = Vec::new();
+    for row in &snapshot.rows {
+        let RenderRow::UserTurn(row) = row;
+        if let Some(user) = &row.user {
+            ids.push(user.id.clone());
+        }
+        for activity in &row.activity {
+            match activity {
+                RenderActivityRow::AssistantReply(reply) => ids.push(reply.message.id.clone()),
+                RenderActivityRow::Step(step) => {
+                    for item in &step.steps {
+                        match item {
+                            RenderStepItem::AssistantMessage(message) => {
+                                ids.push(message.message.id.clone());
+                            }
+                            RenderStepItem::ToolGroup(group) => {
+                                for entry in &group.entries {
+                                    if let Some(tool_use) = &entry.tool_use {
+                                        ids.push(tool_use.id.clone());
+                                    }
+                                    if let Some(tool_result) = &entry.tool_result {
+                                        ids.push(tool_result.id.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(final_message) = &step.final_message {
+                        ids.push(final_message.id.clone());
+                    }
+                }
+            }
+        }
+    }
+    ids
 }
 
 fn first_capsule_cards(

@@ -21,8 +21,6 @@ pub struct RenderSnapshot {
     #[serde(rename = "activeToolGroupId")]
     pub active_tool_group_id: Option<String>,
     pub progress_locus: RenderProgressLocus,
-    #[serde(rename = "visibleMessageIds")]
-    pub visible_message_ids: Vec<String>,
     pub filtered_placeholders: Vec<RenderFilteredPlaceholder>,
     /// Present when the active run terminated because the provider's rolling
     /// usage quota was exhausted. Clients render a banner + live countdown to
@@ -436,10 +434,6 @@ pub fn derive_render_delta_from_base(
 /// tripwire. The held token is `prev.rows_hash` when present (clients
 /// never hash; they store the last accepted token); a `prev` without the
 /// token is hashed locally, which only the server-side oracle does.
-///
-/// `visible_message_ids` is NOT carried by deltas (zero consumers,
-/// deleted end-to-end in #TASK-1956 batch 4), so the reassembled snapshot
-/// leaves it empty.
 pub fn apply_render_delta(
     prev: &RenderSnapshot,
     delta: &RenderDelta,
@@ -506,7 +500,6 @@ pub fn apply_render_delta(
         tail_activity: delta.tail_activity,
         active_tool_group_id: delta.active_tool_group_id.clone(),
         progress_locus: delta.progress_locus,
-        visible_message_ids: Vec::new(),
         filtered_placeholders: delta.filtered_placeholders.clone(),
         rate_limit: delta.rate_limit.clone(),
         window: delta.window,
@@ -546,7 +539,6 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         .max()
         .unwrap_or(0);
     let latest_capsules = latest_capsules_by_id(records.iter().copied());
-    let mut visible_message_ids = Vec::new();
     let mut filtered_placeholders = Vec::new();
     let mut blocks = Vec::new();
     let mut capsule_marks = Vec::new();
@@ -584,7 +576,6 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
                     });
                     continue;
                 }
-                visible_message_ids.push(reference.id.clone());
                 blocks.push(RenderBlock::Message(RenderMessageBlock {
                     reference,
                     role,
@@ -593,7 +584,6 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
                 }));
             }
             "tool_trace" => {
-                visible_message_ids.push(reference.id.clone());
                 current_tool_group.push_tool_message(
                     ToolMessage {
                         reference,
@@ -631,7 +621,6 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         tail_activity,
         active_tool_group_id,
         progress_locus,
-        visible_message_ids,
         filtered_placeholders,
         rate_limit,
         window: None,
@@ -1934,7 +1923,7 @@ mod tests {
         );
         assert_eq!(user.id, "origin:00000000-0000-0000-0000-000000000001");
         assert_eq!(user.seq, 2);
-        assert_eq!(snapshot.visible_message_ids, vec![user.id.clone()]);
+        assert_eq!(row_ref_ids(&snapshot), vec![user.id.clone()]);
     }
 
     #[test]
@@ -1979,7 +1968,10 @@ mod tests {
         );
         let reply = expect_assistant_reply(&second.activity[0]);
         assert_eq!(reply.message.seq, 7);
-        assert!(!snapshot.visible_message_ids.contains(&"seq:6".to_owned()));
+        assert!(
+            !row_ref_ids(&snapshot).contains(&"seq:6".to_owned()),
+            "user_ack control record must not surface as a rendered message"
+        );
     }
 
     #[test]
@@ -2075,7 +2067,10 @@ mod tests {
             expect_user_turn(&snapshot.rows[0]).id,
             "user_turn:origin:00000000-0000-0000-0000-000000000001"
         );
-        assert!(!snapshot.visible_message_ids.contains(&"seq:3".to_owned()));
+        assert!(
+            !row_ref_ids(&snapshot).contains(&"seq:3".to_owned()),
+            "user_ack control record must not surface as a rendered message"
+        );
     }
 
     #[test]
@@ -2511,10 +2506,8 @@ mod tests {
 
     /// What a delta reassembly is expected to produce for a snapshot the
     /// reducer built directly: same rows and scalars, `rows_hash` stamped
-    /// (the chain token), `visible_message_ids` empty (not carried by
-    /// deltas; zero consumers, deleted end-to-end in batch 4).
+    /// (the chain token).
     fn delta_expected(mut snapshot: RenderSnapshot) -> RenderSnapshot {
-        snapshot.visible_message_ids = Vec::new();
         snapshot.rows_hash = Some(render_rows_digest(&snapshot.rows).rows_hash);
         snapshot
     }
@@ -2982,5 +2975,42 @@ mod tests {
             RenderActivityRow::Step(row) => row,
             other => panic!("expected step, got {other:?}"),
         }
+    }
+
+    /// Every message-ref id the snapshot's row tree references — the
+    /// "which messages does this snapshot render" oracle.
+    fn row_ref_ids(snapshot: &RenderSnapshot) -> Vec<String> {
+        let mut ids = Vec::new();
+        let mut push = |reference: Option<&RenderMessageRef>| {
+            if let Some(reference) = reference {
+                ids.push(reference.id.clone());
+            }
+        };
+        for row in &snapshot.rows {
+            let RenderRow::UserTurn(row) = row;
+            push(row.user.as_ref());
+            for activity in &row.activity {
+                match activity {
+                    RenderActivityRow::AssistantReply(reply) => push(Some(&reply.message)),
+                    RenderActivityRow::Step(step) => {
+                        for item in &step.steps {
+                            match item {
+                                RenderStepItem::AssistantMessage(message) => {
+                                    push(Some(&message.message));
+                                }
+                                RenderStepItem::ToolGroup(group) => {
+                                    for entry in &group.entries {
+                                        push(entry.tool_use.as_ref());
+                                        push(entry.tool_result.as_ref());
+                                    }
+                                }
+                            }
+                        }
+                        push(step.final_message.as_ref());
+                    }
+                }
+            }
+        }
+        ids
     }
 }

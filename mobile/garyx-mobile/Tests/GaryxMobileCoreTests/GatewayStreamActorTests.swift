@@ -363,7 +363,6 @@ final class GatewayStreamActorTests: XCTestCase {
                 "rows": [],
                 "tailActivity": "none",
                 "progress_locus": "none",
-                "visibleMessageIds": [],
                 "filtered_placeholders": [],
             ],
         ])

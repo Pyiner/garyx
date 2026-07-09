@@ -205,7 +205,6 @@ test("empty-ledger caught-up frame at based_on_seq=0 stores the snapshot", () =>
     tailActivity: "none",
     activeToolGroupId: null,
     progress_locus: "none",
-    visibleMessageIds: [],
     filtered_placeholders: [],
   };
 
@@ -711,7 +710,6 @@ test("dual-run: remote apply plus committed-stream frames match the legacy pure 
       tailActivity: "none",
       activeToolGroupId: null,
       progress_locus: "none",
-      visibleMessageIds: [],
       filtered_placeholders: [],
     },
   });
@@ -1585,7 +1583,6 @@ test("a windowed replay frame drops committed records below the window floor", (
       tailActivity: "none",
       activeToolGroupId: null,
       progress_locus: "none",
-      visibleMessageIds: [],
       filtered_placeholders: [],
     },
   });
@@ -1609,7 +1606,6 @@ test("a windowed replay frame drops committed records below the window floor", (
       tailActivity: "none",
       activeToolGroupId: null,
       progress_locus: "none",
-      visibleMessageIds: [],
       filtered_placeholders: [],
       window: { floor_seq: 4801, has_more_above: true },
     },

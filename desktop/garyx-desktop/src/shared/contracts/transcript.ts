@@ -188,7 +188,6 @@ export interface RenderState {
   tailActivity: RenderTailActivity;
   activeToolGroupId: string | null;
   progress_locus: RenderProgressLocus;
-  visibleMessageIds: string[];
   filtered_placeholders: RenderFilteredPlaceholder[];
   rateLimit?: RenderRateLimit | null;
   window?: RenderStateWindow | null;

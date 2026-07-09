@@ -1339,7 +1339,6 @@ test("2c: cache-restored windowed snapshot pins render_floor on the committed st
       tailActivity: "none",
       activeToolGroupId: null,
       progress_locus: "none",
-      visibleMessageIds: [],
       filtered_placeholders: [],
       window: { floor_seq: 37, has_more_above: true },
     },

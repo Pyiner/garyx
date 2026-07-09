@@ -464,7 +464,6 @@ function renderFramePayload(threadId, events, basedOnSeq) {
       tailActivity: "none",
       activeToolGroupId: null,
       progress_locus: "none",
-      visibleMessageIds: [],
       filtered_placeholders: [],
     },
   });

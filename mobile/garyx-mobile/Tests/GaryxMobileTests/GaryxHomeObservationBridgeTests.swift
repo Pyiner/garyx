@@ -19,8 +19,7 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
             GaryxRenderSnapshot(
                 basedOnSeq: 1,
                 rows: [],
-                tailActivity: .thinking,
-                visibleMessageIds: ["message-1"]
+                tailActivity: .thinking
             ),
             for: thread.id
         )

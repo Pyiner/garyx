@@ -41,6 +41,48 @@ fn authed_request() -> axum::http::request::Builder {
     crate::test_support::authed_request()
 }
 
+/// Every message-ref id a wire `render_state.rows` tree references, in
+/// tree order — the "which messages does this frame render" oracle.
+fn render_state_ref_ids(render_state: &Value) -> Vec<String> {
+    fn push_ref(ids: &mut Vec<String>, reference: Option<&Value>) {
+        if let Some(id) = reference
+            .and_then(|reference| reference.get("id"))
+            .and_then(Value::as_str)
+        {
+            ids.push(id.to_owned());
+        }
+    }
+    fn values<'a>(parent: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
+        parent.get(key).and_then(Value::as_array).into_iter().flatten()
+    }
+    let mut ids = Vec::new();
+    for row in values(render_state, "rows") {
+        push_ref(&mut ids, row.get("user"));
+        for activity in values(row, "activity") {
+            match activity.get("kind").and_then(Value::as_str) {
+                Some("assistant_reply") => push_ref(&mut ids, activity.get("message")),
+                Some("step") => {
+                    for item in values(activity, "steps") {
+                        match item.get("kind").and_then(Value::as_str) {
+                            Some("assistant_message") => push_ref(&mut ids, item.get("message")),
+                            Some("tool_group") => {
+                                for entry in values(item, "entries") {
+                                    push_ref(&mut ids, entry.get("tool_use"));
+                                    push_ref(&mut ids, entry.get("tool_result"));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    push_ref(&mut ids, activity.get("final_message"));
+                }
+                _ => {}
+            }
+        }
+    }
+    ids
+}
+
 async fn append_dangling_run_start(state: &Arc<AppState>, thread_id: &str, run_id: &str) {
     state
         .threads
@@ -541,13 +583,8 @@ async fn thread_stream_replay_after_seq_emits_one_aligned_render_frame() {
         Some(3)
     );
     assert_eq!(
-        frame
-            .get("render_state")
-            .and_then(|state| state.get("visibleMessageIds"))
-            .and_then(Value::as_array)
-            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
-            .unwrap(),
-        vec!["seq:1", "seq:2", "seq:3"]
+        render_state_ref_ids(frame.get("render_state").unwrap()),
+        ["seq:1", "seq:2", "seq:3"]
     );
     assert!(
         frame
@@ -614,14 +651,7 @@ async fn thread_stream_replay_render_floor_windows_event_frame() {
         vec![3, 4]
     );
     let render_state = frame.get("render_state").unwrap();
-    assert_eq!(
-        render_state
-            .get("visibleMessageIds")
-            .and_then(Value::as_array)
-            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
-            .unwrap(),
-        vec!["seq:3", "seq:4"]
-    );
+    assert_eq!(render_state_ref_ids(render_state), ["seq:3", "seq:4"]);
     assert_eq!(
         render_state
             .get("window")
@@ -707,14 +737,7 @@ async fn thread_stream_replay_initial_user_turn_window_trims_and_carries_bodies(
         "initial replay must carry window bodies even when after_seq is already caught up"
     );
     let render_state = frame.get("render_state").unwrap();
-    assert_eq!(
-        render_state
-            .get("visibleMessageIds")
-            .and_then(Value::as_array)
-            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
-            .unwrap(),
-        vec!["seq:3", "seq:4"]
-    );
+    assert_eq!(render_state_ref_ids(render_state), ["seq:3", "seq:4"]);
     assert_eq!(
         render_state
             .get("window")
@@ -756,12 +779,8 @@ async fn thread_stream_replay_initial_user_turn_window_trims_and_carries_bodies(
     let live_frame: Value = serde_json::from_str(&live_event.payload).unwrap();
     let live_render_state = live_frame.get("render_state").unwrap();
     assert_eq!(
-        live_render_state
-            .get("visibleMessageIds")
-            .and_then(Value::as_array)
-            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
-            .unwrap(),
-        vec!["seq:3", "seq:4", "seq:5"],
+        render_state_ref_ids(live_render_state),
+        ["seq:3", "seq:4", "seq:5"],
         "live frame after initial replay must not widen back to the full transcript"
     );
     assert_eq!(
@@ -878,13 +897,8 @@ async fn thread_stream_handler_keeps_initial_floor_for_live_frames() {
         "thread_stream handler must wire initial replay's effective floor into live frames"
     );
     assert_eq!(
-        frames[1]
-            .get("render_state")
-            .and_then(|state| state.get("visibleMessageIds"))
-            .and_then(Value::as_array)
-            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
-            .unwrap(),
-        vec!["seq:3", "seq:4", "seq:5"]
+        render_state_ref_ids(frames[1].get("render_state").unwrap()),
+        ["seq:3", "seq:4", "seq:5"]
     );
 }
 
@@ -969,13 +983,8 @@ async fn thread_stream_replay_caught_up_emits_snapshot_only_frame() {
         Some(3)
     );
     assert_eq!(
-        frame
-            .get("render_state")
-            .and_then(|state| state.get("visibleMessageIds"))
-            .and_then(Value::as_array)
-            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
-            .unwrap(),
-        vec!["seq:1", "seq:2", "seq:3"]
+        render_state_ref_ids(frame.get("render_state").unwrap()),
+        ["seq:1", "seq:2", "seq:3"]
     );
     assert!(
         frame
@@ -1041,14 +1050,7 @@ async fn thread_stream_replay_render_floor_windows_snapshot_only_frame() {
             .is_some_and(Vec::is_empty)
     );
     let render_state = frame.get("render_state").unwrap();
-    assert_eq!(
-        render_state
-            .get("visibleMessageIds")
-            .and_then(Value::as_array)
-            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
-            .unwrap(),
-        vec!["seq:3", "seq:4"]
-    );
+    assert_eq!(render_state_ref_ids(render_state), ["seq:3", "seq:4"]);
     assert_eq!(
         render_state
             .get("window")
@@ -1092,11 +1094,8 @@ async fn append_live_delta_record(
 }
 
 /// What a delta reassembly must produce for a snapshot the store derived
-/// directly: same rows and scalars, `rows_hash` stamped,
-/// `visible_message_ids` empty (not carried by deltas; zero consumers,
-/// deleted end-to-end in batch 4).
+/// directly: same rows and scalars, `rows_hash` stamped.
 fn delta_expected_snapshot(mut snapshot: RenderSnapshot) -> RenderSnapshot {
-    snapshot.visible_message_ids = Vec::new();
     snapshot.rows_hash = Some(render_rows_digest(&snapshot.rows).rows_hash);
     snapshot
 }
@@ -2004,13 +2003,8 @@ async fn thread_stream_live_event_carries_committed_payload_and_render_snapshot(
         Some(live_record.seq)
     );
     assert_eq!(
-        frame
-            .get("render_state")
-            .and_then(|state| state.get("visibleMessageIds"))
-            .and_then(Value::as_array)
-            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
-            .unwrap(),
-        vec!["seq:1", "seq:2"]
+        render_state_ref_ids(frame.get("render_state").unwrap()),
+        ["seq:1", "seq:2"]
     );
 }
 
@@ -2057,14 +2051,7 @@ async fn thread_stream_live_event_respects_render_floor() {
     assert_eq!(event.id, live_record.seq);
     let frame: Value = serde_json::from_str(&event.payload).unwrap();
     let render_state = frame.get("render_state").unwrap();
-    assert_eq!(
-        render_state
-            .get("visibleMessageIds")
-            .and_then(Value::as_array)
-            .map(|items| { items.iter().filter_map(Value::as_str).collect::<Vec<_>>() })
-            .unwrap(),
-        vec!["seq:3", "seq:4"]
-    );
+    assert_eq!(render_state_ref_ids(render_state), ["seq:3", "seq:4"]);
     assert_eq!(
         render_state
             .get("window")

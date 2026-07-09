@@ -38,8 +38,7 @@ final class GaryxTranscriptCacheTests: XCTestCase {
                     ]
                 )),
             ],
-            tailActivity: .none,
-            visibleMessageIds: ["seq:1", "seq:2"]
+            tailActivity: .none
         )
     }
 

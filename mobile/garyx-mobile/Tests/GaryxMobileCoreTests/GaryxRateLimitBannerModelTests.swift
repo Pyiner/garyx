@@ -80,7 +80,6 @@ final class GaryxRateLimitBannerModelTests: XCTestCase {
             "rows": [],
             "tailActivity": "none",
             "progress_locus": "none",
-            "visibleMessageIds": [],
             "filtered_placeholders": [],
             "rateLimit": {
                 "provider": "codex_app_server",
@@ -107,7 +106,6 @@ final class GaryxRateLimitBannerModelTests: XCTestCase {
             "rows": [],
             "tailActivity": "none",
             "progress_locus": "none",
-            "visibleMessageIds": [],
             "filtered_placeholders": []
         }
         """

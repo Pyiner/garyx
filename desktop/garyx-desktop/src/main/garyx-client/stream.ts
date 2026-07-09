@@ -311,9 +311,7 @@ function renderRowId(row: unknown): string | undefined {
 // `rows_hash` as an opaque token and validates the chain by equality.
 // Every violation is a protocol breach — throw ThreadStreamGapError and
 // ride the existing gap pipeline (hub stop → authoritative refetch); the
-// reconnect's replay frame reseeds the chain. `visibleMessageIds` is not
-// carried by deltas (zero consumers, deleted end-to-end in batch 4), so
-// the reassembled snapshot leaves it empty, matching the Rust oracle.
+// reconnect's replay frame reseeds the chain.
 function applyRenderDeltaFrame(
   held: RenderState | null,
   value: unknown,
@@ -398,7 +396,6 @@ function applyRenderDeltaFrame(
     activeToolGroupId:
       (delta.activeToolGroupId as RenderState["activeToolGroupId"]) ?? null,
     progress_locus: delta.progress_locus as RenderState["progress_locus"],
-    visibleMessageIds: [],
     filtered_placeholders: Array.isArray(delta.filtered_placeholders)
       ? (delta.filtered_placeholders as RenderState["filtered_placeholders"])
       : [],

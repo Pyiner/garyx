@@ -37,7 +37,6 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             "tailActivity": "thinking",
             "activeToolGroupId": "tool-group:active",
             "progress_locus": "tool_group",
-            "visibleMessageIds": ["seq:1", "seq:2"],
             "filtered_placeholders": [
               {
                 "message": { "id": "seq:3", "seq": 3, "role": "assistant" },
@@ -62,7 +61,6 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(frame.renderState?.tailActivity, .thinking)
         XCTAssertEqual(frame.renderState?.activeToolGroupId, "tool-group:active")
         XCTAssertEqual(frame.renderState?.progressLocus, .toolGroup)
-        XCTAssertEqual(frame.renderState?.visibleMessageIds, ["seq:1", "seq:2"])
         XCTAssertEqual(frame.renderState?.filteredPlaceholders.only?.reason, .emptyStreamingAssistant)
         XCTAssertEqual(frame.renderState?.window, GaryxRenderWindow(floorSeq: 1, hasMoreAbove: true))
     }
@@ -79,7 +77,6 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             "tailActivity": "none",
             "activeToolGroupId": null,
             "progress_locus": "none",
-            "visibleMessageIds": [],
             "filtered_placeholders": []
           }
         }
@@ -136,7 +133,6 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
           "tailActivity": "none",
           "activeToolGroupId": null,
           "progress_locus": "none",
-          "visibleMessageIds": ["seq:1"],
           "filtered_placeholders": []
         }
         """#)
@@ -209,7 +205,6 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
           "tailActivity": "none",
           "activeToolGroupId": null,
           "progress_locus": "none",
-          "visibleMessageIds": ["seq:1", "seq:2", "seq:3"],
           "filtered_placeholders": []
         }
         """#)
@@ -792,7 +787,6 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             ],
             "tailActivity": "thinking",
             "progress_locus": "tail",
-            "visibleMessageIds": [],
             "filtered_placeholders": []
           }
         }

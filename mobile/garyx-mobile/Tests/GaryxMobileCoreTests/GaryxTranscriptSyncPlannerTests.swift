@@ -426,7 +426,6 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
               "tailActivity": "none",
               "activeToolGroupId": null,
               "progress_locus": "none",
-              "visibleMessageIds": ["seq:2"],
               "filtered_placeholders": [],
               "window": { "floor_seq": 2, "has_more_above": true }
             }
@@ -448,7 +447,6 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
               "tailActivity": "none",
               "activeToolGroupId": null,
               "progress_locus": "none",
-              "visibleMessageIds": ["seq:2"],
               "filtered_placeholders": [],
               "window": { "floor_seq": 2, "has_more_above": true }
             }

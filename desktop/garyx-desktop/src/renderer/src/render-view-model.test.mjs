@@ -98,11 +98,14 @@ test('every fixture render_state maps to exactly its visible messages', () => {
     const messages = messagesBySeqFor(renderState);
     const blocks = buildThreadViewBlocks(renderState, messages);
     const ids = blockMessageIds(blocks);
-    // No drops, no duplicates: flattened blocks resolve exactly the visible set.
+    // No drops, no duplicates: flattened blocks resolve exactly the message
+    // refs the row tree references.
     assert.deepEqual(
       [...ids].sort(),
-      [...renderState.visibleMessageIds].sort(),
-      `${fixtureCase.name}: block message ids must equal visibleMessageIds`,
+      collectRefs(renderState)
+        .map((ref) => ref.id)
+        .sort(),
+      `${fixtureCase.name}: block message ids must equal the row-tree refs`,
     );
     // Every resolved block carries a real body (no unresolved placeholder).
     for (const block of blocks) {
@@ -202,7 +205,6 @@ test('render_state ref seq resolves the body keyed by that same seq', () => {
     tailActivity: 'none',
     activeToolGroupId: null,
     progress_locus: 'none',
-    visibleMessageIds: ['seq:2'],
     filtered_placeholders: [],
   };
   // Body stored at seq 2 with a STABLE (non-seq-encoding) id, as optimistic
@@ -238,7 +240,6 @@ test('origin user ids remain stable while the body resolves by seq', () => {
     tailActivity: 'none',
     activeToolGroupId: null,
     progress_locus: 'none',
-    visibleMessageIds: [originId],
     filtered_placeholders: [],
   };
   const messages = new Map([
@@ -269,7 +270,6 @@ test('local optimistic user row renders before committed render_state includes i
     tailActivity: 'none',
     activeToolGroupId: null,
     progress_locus: 'none',
-    visibleMessageIds: [],
     filtered_placeholders: [],
   };
 
@@ -300,7 +300,6 @@ test('local optimistic user row dedupes once render_state represents its origin 
     tailActivity: 'none',
     activeToolGroupId: null,
     progress_locus: 'none',
-    visibleMessageIds: [originId],
     filtered_placeholders: [],
   };
   const committed = {
@@ -446,7 +445,6 @@ test('team flatten preserves block order and per-message metadata', () => {
     tailActivity: 'none',
     activeToolGroupId: null,
     progress_locus: 'none',
-    visibleMessageIds: ['seq:1', 'seq:2', 'seq:3', 'seq:4', 'seq:5'],
     filtered_placeholders: [],
   };
   const messages = messagesBySeqFor(renderState, {
@@ -504,7 +502,6 @@ test('solo capsule_cards pass through the turn without entering visible ids/bloc
     tailActivity: 'none',
     activeToolGroupId: null,
     progress_locus: 'none',
-    visibleMessageIds: ['seq:1', 'seq:2'],
     filtered_placeholders: [],
   };
   const messages = messagesBySeqFor(renderState);
@@ -545,7 +542,6 @@ test('orphan turn with capsule_cards surfaces a top-level capsule_only row', () 
     tailActivity: 'none',
     activeToolGroupId: null,
     progress_locus: 'none',
-    visibleMessageIds: ['seq:1', 'seq:2'],
     filtered_placeholders: [],
   };
   // Drop the user body (seq 1): the turn becomes an orphan, but its cards must
@@ -584,7 +580,6 @@ test('team flatten emits a capsule_cards block after the turn, not a message', (
     tailActivity: 'none',
     activeToolGroupId: null,
     progress_locus: 'none',
-    visibleMessageIds: ['seq:1', 'seq:2'],
     filtered_placeholders: [],
   };
   const messages = messagesBySeqFor(renderState);
@@ -645,7 +640,6 @@ test('unknown render activity and step item kinds are skipped', () => {
     tailActivity: 'none',
     activeToolGroupId: null,
     progress_locus: 'none',
-    visibleMessageIds: ['seq:1', 'seq:2', 'seq:3'],
     filtered_placeholders: [],
   };
   const messages = messagesBySeqFor(renderState);

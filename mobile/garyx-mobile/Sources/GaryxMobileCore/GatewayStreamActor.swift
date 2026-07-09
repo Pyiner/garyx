@@ -310,17 +310,13 @@ public struct GatewayStreamFrameProcessor: Sendable {
             }
             rows.append(row)
         }
-        // Scalar fields are replaced wholesale. `visibleMessageIds` is not
-        // carried by deltas (zero consumers, deleted end-to-end in batch
-        // 4), so the reassembled snapshot leaves it empty, matching the
-        // Rust oracle.
+        // Scalar fields are replaced wholesale.
         let snapshot = GaryxRenderSnapshot(
             basedOnSeq: delta.basedOnSeq,
             rows: rows,
             tailActivity: delta.tailActivity,
             activeToolGroupId: delta.activeToolGroupId,
             progressLocus: delta.progressLocus,
-            visibleMessageIds: [],
             filteredPlaceholders: delta.filteredPlaceholders,
             rateLimit: delta.rateLimit,
             window: delta.window,

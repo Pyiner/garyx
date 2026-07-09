@@ -208,7 +208,6 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
     public var tailActivity: GaryxRenderTailActivity
     public var activeToolGroupId: String?
     public var progressLocus: GaryxRenderProgressLocus
-    public var visibleMessageIds: [String]
     public var filteredPlaceholders: [GaryxRenderFilteredPlaceholder]
     public var rateLimit: GaryxRenderRateLimit?
     public var window: GaryxRenderWindow?
@@ -225,7 +224,6 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         tailActivity: GaryxRenderTailActivity = .none,
         activeToolGroupId: String? = nil,
         progressLocus: GaryxRenderProgressLocus = .none,
-        visibleMessageIds: [String] = [],
         filteredPlaceholders: [GaryxRenderFilteredPlaceholder] = [],
         rateLimit: GaryxRenderRateLimit? = nil,
         window: GaryxRenderWindow? = nil,
@@ -236,7 +234,6 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         self.tailActivity = tailActivity
         self.activeToolGroupId = activeToolGroupId
         self.progressLocus = progressLocus
-        self.visibleMessageIds = visibleMessageIds
         self.filteredPlaceholders = filteredPlaceholders
         self.rateLimit = rateLimit
         self.window = window
@@ -249,7 +246,6 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         case tailActivity
         case activeToolGroupId
         case progressLocus = "progress_locus"
-        case visibleMessageIds
         case filteredPlaceholders = "filtered_placeholders"
         case rateLimit
         case window
@@ -263,7 +259,6 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         tailActivity = try container.decodeIfPresent(GaryxRenderTailActivity.self, forKey: .tailActivity) ?? .none
         activeToolGroupId = try container.decodeIfPresent(String.self, forKey: .activeToolGroupId)
         progressLocus = try container.decodeIfPresent(GaryxRenderProgressLocus.self, forKey: .progressLocus) ?? .none
-        visibleMessageIds = try container.decodeIfPresent([String].self, forKey: .visibleMessageIds) ?? []
         filteredPlaceholders = try container.decodeIfPresent([GaryxRenderFilteredPlaceholder].self, forKey: .filteredPlaceholders) ?? []
         rateLimit = try container.decodeIfPresent(GaryxRenderRateLimit.self, forKey: .rateLimit)
         window = try container.decodeIfPresent(GaryxRenderWindow.self, forKey: .window)
@@ -277,7 +272,6 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         try container.encode(tailActivity, forKey: .tailActivity)
         try container.encodeIfPresent(activeToolGroupId, forKey: .activeToolGroupId)
         try container.encode(progressLocus, forKey: .progressLocus)
-        try container.encode(visibleMessageIds, forKey: .visibleMessageIds)
         try container.encode(filteredPlaceholders, forKey: .filteredPlaceholders)
         try container.encodeIfPresent(rateLimit, forKey: .rateLimit)
         try container.encodeIfPresent(window, forKey: .window)

@@ -20,10 +20,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
-        "visibleMessageIds": [
-          "seq:2"
-        ]
+        "tailActivity": "thinking"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -94,11 +91,7 @@
             }
           }
         ],
-        "tailActivity": "assistant_streaming",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3"
-        ]
+        "tailActivity": "assistant_streaming"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -179,10 +172,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
-        "visibleMessageIds": [
-          "seq:2"
-        ]
+        "tailActivity": "thinking"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -266,11 +256,7 @@
             }
           }
         ],
-        "tailActivity": "assistant_streaming",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3"
-        ]
+        "tailActivity": "assistant_streaming"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -391,12 +377,7 @@
             }
           }
         ],
-        "tailActivity": "tool_active",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4"
-        ]
+        "tailActivity": "tool_active"
       },
       "expected_run_state": {
         "activity": "using_tool",
@@ -476,13 +457,7 @@
             }
           }
         ],
-        "tailActivity": "tool_active",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4",
-          "seq:5"
-        ]
+        "tailActivity": "tool_active"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -572,14 +547,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4",
-          "seq:5",
-          "seq:7"
-        ]
+        "tailActivity": "thinking"
       },
       "expected_run_state": {
         "activity": "reconciling",
@@ -655,12 +623,7 @@
             "user": null
           }
         ],
-        "tailActivity": "tool_active",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4"
-        ]
+        "tailActivity": "tool_active"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -747,13 +710,7 @@
             "user": null
           }
         ],
-        "tailActivity": "tool_active",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4",
-          "seq:5"
-        ]
+        "tailActivity": "tool_active"
       },
       "expected_run_state": {
         "activity": "using_tool",
@@ -844,14 +801,7 @@
             "user": null
           }
         ],
-        "tailActivity": "tool_active",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4",
-          "seq:5",
-          "seq:6"
-        ]
+        "tailActivity": "tool_active"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -934,12 +884,7 @@
             "user": null
           }
         ],
-        "tailActivity": "tool_active",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4"
-        ]
+        "tailActivity": "tool_active"
       },
       "expected_run_state": {
         "activity": "using_tool",
@@ -1026,13 +971,7 @@
             "user": null
           }
         ],
-        "tailActivity": "tool_active",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4",
-          "seq:5"
-        ]
+        "tailActivity": "tool_active"
       },
       "expected_run_state": {
         "activity": "using_tool",
@@ -1123,14 +1062,7 @@
             "user": null
           }
         ],
-        "tailActivity": "tool_active",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4",
-          "seq:5",
-          "seq:6"
-        ]
+        "tailActivity": "tool_active"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -1196,11 +1128,7 @@
             "user": null
           }
         ],
-        "tailActivity": "tool_active",
-        "visibleMessageIds": [
-          "seq:3",
-          "seq:4"
-        ]
+        "tailActivity": "tool_active"
       },
       "expected_run_state": null,
       "name": "orphan tool slice",
@@ -1274,13 +1202,7 @@
             }
           }
         ],
-        "tailActivity": "none",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4",
-          "seq:5"
-        ]
+        "tailActivity": "none"
       },
       "expected_run_state": {
         "activity": "idle",
@@ -1450,12 +1372,7 @@
             }
           }
         ],
-        "tailActivity": "tool_active",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4"
-        ]
+        "tailActivity": "tool_active"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -1581,11 +1498,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3"
-        ]
+        "tailActivity": "thinking"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -1704,13 +1617,7 @@
             }
           }
         ],
-        "tailActivity": "none",
-        "visibleMessageIds": [
-          "seq:2",
-          "seq:3",
-          "seq:4",
-          "seq:5"
-        ]
+        "tailActivity": "none"
       },
       "name": "team interleave flatten",
       "records": [
@@ -1826,10 +1733,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
-        "visibleMessageIds": [
-          "origin:00000000-0000-0000-0000-000000000001"
-        ]
+        "tailActivity": "thinking"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -1940,14 +1844,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
-        "visibleMessageIds": [
-          "origin:00000000-0000-0000-0000-000000000001",
-          "seq:3",
-          "seq:4",
-          "origin:00000000-0000-0000-0000-000000000002",
-          "seq:7"
-        ]
+        "tailActivity": "thinking"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -2133,15 +2030,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
-        "visibleMessageIds": [
-          "origin:00000000-0000-0000-0000-000000000001",
-          "seq:3",
-          "origin:00000000-0000-0000-0000-000000000002",
-          "seq:6",
-          "origin:00000000-0000-0000-0000-000000000003",
-          "seq:9"
-        ]
+        "tailActivity": "thinking"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -2303,10 +2192,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
-        "visibleMessageIds": [
-          "seq:2"
-        ]
+        "tailActivity": "thinking"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -2377,11 +2263,7 @@
             }
           }
         ],
-        "tailActivity": "thinking",
-        "visibleMessageIds": [
-          "origin:00000000-0000-0000-0000-000000000001",
-          "seq:3"
-        ]
+        "tailActivity": "thinking"
       },
       "expected_run_state": {
         "activity": "thinking",
@@ -2489,13 +2371,7 @@
             }
           }
         ],
-        "tailActivity": "none",
-        "visibleMessageIds": [
-          "origin:00000000-0000-0000-0000-000000000001",
-          "seq:3",
-          "origin:00000000-0000-0000-0000-000000000002",
-          "seq:6"
-        ]
+        "tailActivity": "none"
       },
       "name": "cold-replay-equals-live",
       "records": [

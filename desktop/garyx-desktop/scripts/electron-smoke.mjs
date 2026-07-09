@@ -547,13 +547,6 @@ async function createMockGateway(workspaceDir) {
           : tailActivity === 'none'
             ? 'none'
             : 'tail',
-      visibleMessageIds: blocks.flatMap((block) =>
-        block.type === 'message'
-          ? [block.ref.id]
-          : block.entries.flatMap((entry) =>
-              [entry.use?.id, entry.result?.id].filter(Boolean),
-            ),
-      ),
       filtered_placeholders: [],
     };
   }

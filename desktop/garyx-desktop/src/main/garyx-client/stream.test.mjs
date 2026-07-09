@@ -53,7 +53,6 @@ function renderStateFixture(basedOnSeq, rows, rowsHash, extra = {}) {
     tailActivity: "none",
     activeToolGroupId: null,
     progress_locus: "none",
-    visibleMessageIds: [],
     filtered_placeholders: [],
     ...(rowsHash === null ? {} : { rows_hash: rowsHash }),
     ...extra,
@@ -176,7 +175,6 @@ test("delta frame reassembles a full render_state from the held snapshot", async
   // Scalars replaced wholesale from the delta.
   assert.equal(reassembled.renderState.tailActivity, "assistant_streaming");
   assert.equal(reassembled.renderState.progress_locus, "tail");
-  assert.deepEqual(reassembled.renderState.visibleMessageIds, []);
   assert.deepEqual(committedSeqs, [5, 6]);
 });
 

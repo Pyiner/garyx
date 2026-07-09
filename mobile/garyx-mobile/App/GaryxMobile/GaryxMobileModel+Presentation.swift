@@ -373,8 +373,7 @@ extension GaryxMobileModel {
                 renderSnapshotsByThread[threadId] = GaryxRenderSnapshot(
                     basedOnSeq: tick,
                     rows: [],
-                    tailActivity: .thinking,
-                    visibleMessageIds: ["message-\(tick)"]
+                    tailActivity: .thinking
                 )
                 try? await Task.sleep(nanoseconds: 16_666_667)
             }
