@@ -8,19 +8,11 @@
   bottom: 12px;
   left: 0;
   z-index: 10;
-  width: min(var(--container-2xl), 100%);
+  /* Keep the surface ring and shadow inside thread-main's clipping boundary,
+     including when the window is narrower than the normal content width. */
+  width: min(var(--container-2xl), calc(100% - 32px));
   margin: 0 auto;
   overflow: visible;
-}
-
-/* When a side panel (inspector / logs) is open, thread-main narrows and
-   the composer would fill it edge-to-edge — `thread-main { overflow: hidden }`
-   then clips the composer-surface's 1px ring + 16px drop shadow on the
-   left and right. Shrink the wrap so the shadow has 16px of breathing room
-   on each side. */
-.thread-layout.with-inspector-panel .composer-shell-wrap,
-.thread-layout.with-log-panel .composer-shell-wrap {
-  width: min(var(--container-2xl), calc(100% - 32px));
 }
 
 .composer-shell-wrap::before {

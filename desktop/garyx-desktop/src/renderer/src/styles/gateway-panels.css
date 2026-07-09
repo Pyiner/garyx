@@ -114,36 +114,83 @@
 /* ============================================================
    Top-right child task tree popover on thread detail
    ============================================================ */
+.thread-layout:has(.thread-subtask-pop) {
+  container: thread-task-tree / inline-size;
+}
+
+.thread-main:has(.thread-subtask-pop) {
+  --thread-subtask-width: 296px;
+  --thread-subtask-edge-gap: 12px;
+  --thread-subtask-content-gap: 12px;
+  --thread-subtask-rail-width: calc(
+    var(--thread-subtask-width) + var(--thread-subtask-edge-gap) +
+      var(--thread-subtask-content-gap)
+  );
+  transition: padding-right 180ms var(--ease-out-quart);
+}
+
+.thread-main:has(.thread-subtask-pop) .composer-shell-wrap {
+  transition:
+    right 180ms var(--ease-out-quart),
+    width 180ms var(--ease-out-quart);
+}
+
 .thread-subtask-pop {
   position: absolute;
   top: 12px;
-  right: 18px;
+  right: var(--thread-subtask-edge-gap);
   z-index: 30;
-  width: 330px;
-  max-height: min(62vh, 560px);
+  width: var(--thread-subtask-width);
+  max-height: min(58vh, 520px);
   overflow-y: auto;
   scrollbar-width: none;
   border: 1px solid var(--border, rgba(26, 28, 31, 0.1));
-  border-radius: 13px;
+  border-radius: 12px;
   background: var(--bg-primary, var(--color-token-bg-primary));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
-  padding: 6px;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.08),
+    0 2px 8px rgba(0, 0, 0, 0.04);
+  padding: 5px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(14px) scale(0.985);
+  transform-origin: right center;
+  visibility: hidden;
+  transition:
+    opacity 150ms var(--ease-out-quart),
+    transform 180ms var(--ease-out-quart),
+    visibility 0s linear 180ms;
 }
 .thread-subtask-pop::-webkit-scrollbar {
   display: none;
 }
-/* Reserve the right rail for the popover: padding-right narrows in-flow
-   message content while the absolute popover stays pinned to the border box.
-   The :has() selector avoids reserving space when no active child task
-   popover is rendered. */
-.thread-main:has(.thread-subtask-pop) {
-  padding-right: 360px;
-}
-/* The composer is absolute and does not consume padding-right, so reserve the
-   same right rail explicitly to keep it aligned with the message column. */
-.thread-main:has(.thread-subtask-pop) .composer-shell-wrap {
-  right: 360px;
-  width: min(var(--container-2xl), calc(100% - 360px));
+
+/* Only reserve a task-tree rail when both the full-width composer and the
+   compact tree fit. Below that point the tree behaves like a responsive
+   drawer: it slides away and gives the conversation the whole width. */
+@container thread-task-tree (min-width: 1024px) {
+  .thread-main:has(.thread-subtask-pop) {
+    padding-right: var(--thread-subtask-rail-width);
+  }
+
+  .thread-main:has(.thread-subtask-pop) .composer-shell-wrap {
+    right: var(--thread-subtask-rail-width);
+    width: min(
+      var(--container-2xl),
+      calc(100% - var(--thread-subtask-rail-width) - 32px)
+    );
+  }
+
+  .thread-subtask-pop {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0) scale(1);
+    visibility: visible;
+    transition:
+      opacity 150ms var(--ease-out-quart),
+      transform 180ms var(--ease-out-quart),
+      visibility 0s;
+  }
 }
 .thread-subtask-toggle {
   display: inline-flex;
@@ -191,17 +238,18 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px 8px;
+  padding: 5px 7px 6px;
 }
+.thread-subtask-head > svg { width: 12px; height: 12px; }
 /* The count chip hides when no task is active (all-done trees stay visible),
    so the head lays out start-aligned with the chip pushed to the far edge. */
 .thread-subtask-head .thread-subtask-count {
   margin-left: auto;
 }
 .thread-subtask-head-title {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   color: var(--fg-desc, rgba(26, 28, 31, 0.5));
 }
@@ -222,14 +270,14 @@
 .thread-subtask-item {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 7px;
   width: 100%;
   text-align: left;
   border: none;
   background: transparent;
   border-radius: 8px;
   cursor: pointer;
-  padding: 8px;
+  padding: 6px 7px;
   position: relative;
   transition: background 0.12s ease;
 }
@@ -241,9 +289,9 @@
   content: "";
   position: absolute;
   left: 0;
-  top: 7px;
-  bottom: 7px;
-  width: 3px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
   border-radius: 9999px;
   background: var(--orange, var(--color-accent-orange));
 }
@@ -266,13 +314,13 @@
 .thread-subtask-row1 { display: flex; align-items: baseline; gap: 7px; }
 .thread-subtask-num {
   font-family: var(--font-mono, "SF Mono", monospace);
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
   color: var(--fg-desc, rgba(26, 28, 31, 0.5));
   flex: 0 0 auto;
 }
 .thread-subtask-title {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--fg, var(--color-token-text-primary));
   line-height: 1.3;
@@ -290,19 +338,20 @@
   font-weight: 700;
 }
 .thread-subtask-row2 {
-  margin-top: 4px;
+  margin-top: 3px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
+  gap: 5px;
+  font-size: 10.5px;
   color: var(--fg-secondary, var(--color-token-text-secondary));
   font-weight: 500;
 }
-.thread-subtask-row2 .agent-option-avatar { width: 15px; height: 15px; font-size: 8px; }
+.thread-subtask-row2 .agent-option-avatar { width: 14px; height: 14px; font-size: 8px; }
 .thread-subtask-status {
   font-size: 10px;
   font-weight: 600;
-  padding: 1px 7px;
+  padding: 0 6px;
+  line-height: 17px;
   border-radius: 9999px;
   font-variant-numeric: tabular-nums;
 }
@@ -310,3 +359,11 @@
 .thread-subtask-status.tone-review { background: var(--purple-bg, #f3eefb); color: var(--purple, #7345b6); }
 .thread-subtask-status.tone-todo,
 .thread-subtask-status.tone-done { background: var(--bg-tertiary, var(--color-token-bg-tertiary)); color: var(--fg-desc, rgba(26, 28, 31, 0.5)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-main:has(.thread-subtask-pop),
+  .thread-main:has(.thread-subtask-pop) .composer-shell-wrap,
+  .thread-subtask-pop {
+    transition: none;
+  }
+}
