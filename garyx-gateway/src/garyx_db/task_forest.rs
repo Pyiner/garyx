@@ -1175,53 +1175,54 @@ fn empty_anchored_task_forest_page() -> TaskForestPage {
 
 /// Shared CTE prefix for anchored forest queries: the deduped task projection
 /// (one row per task number, newest wins) plus resolved parent edges.
+///
+/// Performance shape (#TASK-1956): the desktop task-tree panel polls the
+/// anchored forest every 5s, so this prefix must stay cheap on stores with
+/// thousands of tasks. Three structural choices keep it O(N log N):
+/// `deduped`/`parent_edges` are MATERIALIZED (the recursive walk re-joins
+/// them per step, and inlining re-ran the whole projection scan each step);
+/// parent resolution uses equi-joins instead of a correlated OR subquery
+/// (`deduped` is unique per task number, so no LIMIT 1 ranking is needed);
+/// and the `'#TASK-' || number` fallback match is anchored on an indexable
+/// `CAST(substr(...))` key with the original string equality re-checked, so
+/// the join never degenerates into an N^2 stringify-and-compare scan.
+/// Presentation joins (thread_meta/recent_threads) live in the final
+/// per-node SELECT, not here: they only decorate emitted rows.
 fn anchored_forest_cte_prefix(where_sql: &str) -> String {
     format!(
         "WITH RECURSIVE filtered AS (
             SELECT task.thread_id, task.number, task.status, task.title,
                    task.creator_json, task.assignee_json, task.source_json,
                    task.executor_json, task.updated_at, task.updated_by_json,
-                   COALESCE(meta.agent_id, '') AS runtime_agent_id,
-                   COALESCE(meta.message_count, 0) AS reply_count,
                    task.parent_task_number,
                    task.source_thread_id,
                    task.source_task_thread_id,
                    task.source_task_id,
-                   recent.active_run_id,
-                   recent.run_state,
-                   recent.last_active_at,
                    ROW_NUMBER() OVER (
                        PARTITION BY task.number
                        ORDER BY task.updated_at DESC, task.thread_id ASC
                    ) AS rn
             FROM task_projection task
-            LEFT JOIN thread_meta meta ON meta.thread_id = task.thread_id
-            LEFT JOIN recent_threads recent ON recent.thread_id = task.thread_id
             WHERE {where_sql}
          ),
-         deduped AS (
+         deduped AS MATERIALIZED (
             SELECT * FROM filtered WHERE rn = 1
          ),
-         parent_edges AS (
+         parent_edges AS MATERIALIZED (
             SELECT child.thread_id,
                    COALESCE(
-                       (
-                           SELECT parent.thread_id
-                           FROM deduped parent
-                           WHERE (
-                                 child.parent_task_number IS NOT NULL
-                             AND parent.number = child.parent_task_number
-                           )
-                              OR (
-                                 child.parent_task_number IS NULL
-                             AND child.source_task_id = ('#TASK-' || parent.number) COLLATE NOCASE
-                              )
-                           ORDER BY parent.updated_at DESC, parent.thread_id ASC
-                           LIMIT 1
-                       ),
+                       p1.thread_id,
+                       p2.thread_id,
                        child.source_task_thread_id
                    ) AS parent_thread_id
             FROM deduped child
+            LEFT JOIN deduped p1
+              ON child.parent_task_number IS NOT NULL
+             AND p1.number = child.parent_task_number
+            LEFT JOIN deduped p2
+              ON child.parent_task_number IS NULL
+             AND p2.number = CAST(substr(child.source_task_id, 7) AS INTEGER)
+             AND child.source_task_id = ('#TASK-' || p2.number) COLLATE NOCASE
          )"
     )
 }
@@ -1231,12 +1232,13 @@ const ANCHORED_FOREST_NODE_COLUMNS: &str =
                 deduped.creator_json, deduped.assignee_json,
                 deduped.source_json, deduped.executor_json,
                 deduped.updated_at, deduped.updated_by_json,
-                deduped.runtime_agent_id, deduped.reply_count,
+                COALESCE(meta.agent_id, '') AS runtime_agent_id,
+                COALESCE(meta.message_count, 0) AS reply_count,
                 deduped.parent_task_number,
                 edge.parent_thread_id,
-                deduped.active_run_id,
-                COALESCE(deduped.run_state, 'idle') AS run_state,
-                deduped.last_active_at,
+                recent.active_run_id,
+                COALESCE(recent.run_state, 'idle') AS run_state,
+                recent.last_active_at,
                 deduped.source_task_id,
                 deduped.source_task_thread_id";
 
@@ -1348,6 +1350,8 @@ fn origin_seeded_task_rows_from_conn(
          FROM down
          JOIN deduped ON deduped.thread_id = down.thread_id
          LEFT JOIN parent_edges edge ON edge.thread_id = deduped.thread_id
+         LEFT JOIN thread_meta meta ON meta.thread_id = deduped.thread_id
+         LEFT JOIN recent_threads recent ON recent.thread_id = deduped.thread_id
          ORDER BY down.depth ASC, deduped.number ASC, deduped.thread_id ASC",
         prefix = anchored_forest_cte_prefix(where_sql),
         columns = ANCHORED_FOREST_NODE_COLUMNS
@@ -1402,6 +1406,8 @@ fn climbed_task_tree_rows_from_conn(
          FROM down
          JOIN deduped ON deduped.thread_id = down.thread_id
          LEFT JOIN parent_edges edge ON edge.thread_id = deduped.thread_id
+         LEFT JOIN thread_meta meta ON meta.thread_id = deduped.thread_id
+         LEFT JOIN recent_threads recent ON recent.thread_id = deduped.thread_id
          ORDER BY down.depth ASC, deduped.number ASC, deduped.thread_id ASC",
         prefix = anchored_forest_cte_prefix(where_sql),
         columns = ANCHORED_FOREST_NODE_COLUMNS

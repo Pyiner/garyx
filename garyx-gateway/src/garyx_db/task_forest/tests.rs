@@ -1294,3 +1294,99 @@ fn pinned_task_forest_skips_only_pins_without_any_projection() {
     assert!(page.root_thread_ids.is_empty());
     assert_eq!(page.skipped_pinned_thread_ids, vec!["thread::chat"]);
 }
+
+#[test]
+fn anchored_forest_resolves_legacy_task_ref_parent_without_parent_number() {
+    // Legacy projection rows can carry a `#TASK-n` source_task_id without a
+    // derived parent_task_number; the anchored forest must resolve that
+    // parent through the string fallback edge (#TASK-1956 rewrite guard).
+    let db = GaryxDbService::memory().expect("db opens");
+    db.replace_task_projection(task_projection_draft(
+        "thread::p2root",
+        7,
+        TaskStatus::InProgress,
+        "2026-01-01T00:00:01.000Z",
+        Some(TaskSource {
+            thread_id: Some("thread::origin".to_owned()),
+            task_id: None,
+            task_thread_id: None,
+            bot_id: None,
+            channel: None,
+            account_id: None,
+        }),
+        1,
+    ))
+    .expect("insert origin-seeded root");
+
+    // Fallback child: no parent_task_number, lowercase task ref, and no
+    // source_task_thread_id so the string edge is its only way into the tree.
+    let mut legacy_child = task_projection_draft(
+        "thread::p2legacy",
+        8,
+        TaskStatus::InProgress,
+        "2026-01-01T00:00:02.000Z",
+        Some(TaskSource {
+            thread_id: None,
+            task_id: Some("#task-7".to_owned()),
+            task_thread_id: None,
+            bot_id: None,
+            channel: None,
+            account_id: None,
+        }),
+        1,
+    );
+    legacy_child.parent_task_number = None;
+    legacy_child.source_task_thread_id = None;
+    db.replace_task_projection(legacy_child)
+        .expect("insert legacy fallback child");
+
+    // Zero-padded ref must NOT match number 7: the historical contract is
+    // exact string equality against '#TASK-' || number (NOCASE only).
+    let mut padded_orphan = task_projection_draft(
+        "thread::p2padded",
+        9,
+        TaskStatus::InProgress,
+        "2026-01-01T00:00:03.000Z",
+        Some(TaskSource {
+            thread_id: None,
+            task_id: Some("#TASK-007".to_owned()),
+            task_thread_id: None,
+            bot_id: None,
+            channel: None,
+            account_id: None,
+        }),
+        1,
+    );
+    padded_orphan.parent_task_number = None;
+    padded_orphan.source_task_thread_id = None;
+    db.replace_task_projection(padded_orphan)
+        .expect("insert zero-padded orphan");
+
+    let page = db
+        .list_task_forest_anchored("thread::origin", &TaskListFilter::default())
+        .expect("anchored forest");
+
+    assert_eq!(
+        page.tasks
+            .iter()
+            .map(|node| node.thread_id())
+            .collect::<Vec<_>>(),
+        vec!["thread::origin", "thread::p2root", "thread::p2legacy"],
+        "lowercase legacy ref hangs under its parent; padded ref stays out"
+    );
+    let legacy = page
+        .tasks
+        .iter()
+        .find(|node| node.thread_id() == "thread::p2legacy")
+        .expect("legacy child present");
+    assert_eq!(legacy.parent_thread_id(), Some("thread::p2root"));
+    // Depth convention (pre-existing): thread root and seeds both 0,
+    // descendants count from the seed.
+    assert_eq!(
+        page.tasks
+            .iter()
+            .map(|node| node.depth())
+            .collect::<Vec<_>>(),
+        vec![Some(0), Some(0), Some(1)]
+    );
+}
