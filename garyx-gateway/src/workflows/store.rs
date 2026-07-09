@@ -5,8 +5,9 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::garyx_db::{
-    GaryxDbService, WorkflowChildRunRecord, WorkflowEventDraft, WorkflowEventRecord,
-    WorkflowRunDraft, WorkflowRunDrilldownSnapshot, WorkflowRunRecord,
+    GaryxDbService, WorkflowChildRunDraft, WorkflowChildRunRecord, WorkflowChildRunUsage,
+    WorkflowEventDraft, WorkflowEventRecord, WorkflowRunDraft, WorkflowRunDrilldownSnapshot,
+    WorkflowRunRecord,
 };
 
 use super::WorkflowError;
@@ -32,6 +33,19 @@ pub struct WorkflowDefinitionPackage {
 #[derive(Clone)]
 pub struct WorkflowStore {
     db: Arc<GaryxDbService>,
+}
+
+/// Owned argument bundle for [`WorkflowStore::finish_child_run`] so the whole
+/// terminal update crosses into the blocking pool as one move.
+pub struct FinishChildRun {
+    pub workflow_run_id: String,
+    pub workflow_child_run_id: String,
+    pub status: &'static str,
+    pub result_text: Option<String>,
+    pub result_json: Option<String>,
+    pub result_preview: Option<String>,
+    pub error: Option<String>,
+    pub usage: Option<WorkflowChildRunUsage>,
 }
 
 /// Async facade over the workflow tables. Every method routes through
@@ -125,6 +139,60 @@ impl WorkflowStore {
         Ok(self
             .db
             .run_blocking(move |db| db.append_workflow_event(draft))
+            .await?)
+    }
+
+    /// `get_run` without the NotFound mapping — callers that treat a missing
+    /// run as a normal state (cancellation checks, parent lookups).
+    pub async fn try_get_run(
+        &self,
+        workflow_run_id: &str,
+    ) -> Result<Option<WorkflowRunRecord>, WorkflowError> {
+        let id = workflow_run_id.to_owned();
+        Ok(self
+            .db
+            .run_blocking(move |db| db.get_workflow_run(&id))
+            .await?)
+    }
+
+    pub async fn upsert_child_run(
+        &self,
+        draft: WorkflowChildRunDraft,
+    ) -> Result<WorkflowChildRunRecord, WorkflowError> {
+        Ok(self
+            .db
+            .run_blocking(move |db| db.upsert_workflow_child_run(draft))
+            .await?)
+    }
+
+    pub async fn get_child_run(
+        &self,
+        workflow_run_id: &str,
+        workflow_child_run_id: &str,
+    ) -> Result<Option<WorkflowChildRunRecord>, WorkflowError> {
+        let workflow_id = workflow_run_id.to_owned();
+        let child_id = workflow_child_run_id.to_owned();
+        Ok(self
+            .db
+            .run_blocking(move |db| db.get_workflow_child_run(&workflow_id, &child_id))
+            .await?)
+    }
+
+    pub async fn finish_child_run(&self, args: FinishChildRun) -> Result<bool, WorkflowError> {
+        Ok(self
+            .db
+            .run_blocking(move |db| {
+                db.finish_workflow_child_run(
+                    &args.workflow_run_id,
+                    &args.workflow_child_run_id,
+                    args.status,
+                    args.result_text.as_deref(),
+                    args.result_json.as_deref(),
+                    args.result_preview.as_deref(),
+                    args.error.as_deref(),
+                    args.usage,
+                )
+            })
             .await?)
     }
 

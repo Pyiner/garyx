@@ -656,7 +656,7 @@ impl WorkflowRuntime {
         workflow_run_id: String,
         call: WorkflowAgentCall,
     ) -> Result<WorkflowAgentExecutionResult, WorkflowError> {
-        if self.is_workflow_cancelled(&workflow_run_id)? {
+        if self.is_workflow_cancelled(&workflow_run_id).await? {
             return Ok(WorkflowAgentExecutionResult {
                 workflow_child_run_id: String::new(),
                 thread_id: String::new(),
@@ -677,7 +677,7 @@ impl WorkflowRuntime {
             .workflow_scheduler
             .acquire_child_permit(&workflow_run_id)
             .await?;
-        if self.is_workflow_cancelled(&workflow_run_id)? {
+        if self.is_workflow_cancelled(&workflow_run_id).await? {
             return Ok(WorkflowAgentExecutionResult {
                 workflow_child_run_id: String::new(),
                 thread_id: String::new(),
@@ -704,13 +704,13 @@ impl WorkflowRuntime {
                 call.schema_json.as_ref(),
             )
             .await?;
-        let db = &self.state.ops.garyx_db;
+        let store = WorkflowStore::new(self.state.ops.garyx_db.clone());
         let result_mode = if call.schema_json.is_some() {
             "structured"
         } else {
             "text"
         };
-        db.upsert_workflow_child_run(WorkflowChildRunDraft {
+        store.upsert_child_run(WorkflowChildRunDraft {
             workflow_id: workflow_run_id.clone(),
             workflow_child_run_id: Some(child_run_id.clone()),
             thread_id: thread_id.clone(),
@@ -732,7 +732,8 @@ impl WorkflowRuntime {
             cost_usd: 0.0,
             started_at: Some(now_string()),
             finished_at: None,
-        })?;
+        })
+        .await?;
         if let Some(schema) = &call.schema_json {
             if let Some(provider_type) = self
                 .workflow_child_provider_type(call.agent_id.as_deref())
@@ -745,18 +746,18 @@ impl WorkflowRuntime {
                     provider_type.as_slug()
                 );
                 return finish_failed_workflow_child(
-                    db,
+                    &store,
                     &workflow_run_id,
                     &child_run_id,
                     &thread_id,
                     call,
                     error,
                     None,
-                );
+                ).await;
             }
             validate_result_tool_schema(schema)?;
         }
-        db.append_workflow_event(WorkflowEventDraft {
+        store.append_event(WorkflowEventDraft {
             event_id: None,
             workflow_id: workflow_run_id.clone(),
             workflow_child_run_id: Some(child_run_id.clone()),
@@ -769,10 +770,12 @@ impl WorkflowRuntime {
                 "resultMode": result_mode,
             })
             .to_string(),
-        })?;
+        })
+        .await?;
 
-        let parent_thread_id = db
-            .get_workflow_run(&workflow_run_id)?
+        let parent_thread_id = store
+            .try_get_run(&workflow_run_id)
+            .await?
             .map(|workflow| workflow.parent_thread_id)
             .unwrap_or_else(|| workflow_run_id.clone());
         let mut metadata = workflow_child_metadata(
@@ -814,29 +817,31 @@ impl WorkflowRuntime {
             Ok(result) => result,
             Err(error) => {
                 return finish_failed_workflow_child(
-                    db,
+                    &store,
                     &workflow_run_id,
                     &child_run_id,
                     &thread_id,
                     call,
                     error.to_string(),
                     None,
-                );
+                ).await;
             }
         };
 
         let usage = provider_result_usage(&result);
-        if self.is_workflow_cancelled(&workflow_run_id)? {
-            db.finish_workflow_child_run(
-                &workflow_run_id,
-                &child_run_id,
-                "cancelled",
-                None,
-                None,
-                None,
-                Some("workflow cancelled"),
-                Some(usage),
-            )?;
+        if self.is_workflow_cancelled(&workflow_run_id).await? {
+            store
+                .finish_child_run(FinishChildRun {
+                    workflow_run_id: workflow_run_id.clone(),
+                    workflow_child_run_id: child_run_id.clone(),
+                    status: "cancelled",
+                    result_text: None,
+                    result_json: None,
+                    result_preview: None,
+                    error: Some("workflow cancelled".to_owned()),
+                    usage: Some(usage),
+                })
+                .await?;
             return Ok(WorkflowAgentExecutionResult {
                 workflow_child_run_id: child_run_id,
                 thread_id,
@@ -854,8 +859,9 @@ impl WorkflowRuntime {
 
         if result.success {
             let child_result = if let Some(schema) = &call.schema_json {
-                let payload_result = db
-                    .get_workflow_child_run(&workflow_run_id, &child_run_id)?
+                let payload_result = store
+                    .get_child_run(&workflow_run_id, &child_run_id)
+                    .await?
                     .and_then(|child| child.result_json)
                     .ok_or_else(|| {
                         WorkflowError::BadRequest(format!(
@@ -877,14 +883,14 @@ impl WorkflowRuntime {
                     Ok(payload) => payload,
                     Err(error) => {
                         return finish_failed_workflow_child(
-                            db,
+                            &store,
                             &workflow_run_id,
                             &child_run_id,
                             &thread_id,
                             call,
                             error.to_string(),
                             Some(usage),
-                        );
+                        ).await;
                     }
                 }
             } else {
@@ -897,28 +903,33 @@ impl WorkflowRuntime {
             let preview = summarize(preview_source.trim(), 240);
             let structured_result_json =
                 call.schema_json.is_some().then(|| child_result.to_string());
-            db.finish_workflow_child_run(
-                &workflow_run_id,
-                &child_run_id,
-                "succeeded",
-                if call.schema_json.is_some() {
-                    None
-                } else {
-                    Some(&result.response)
-                },
-                structured_result_json.as_deref(),
-                Some(&preview),
-                None,
-                Some(usage),
-            )?;
-            db.append_workflow_event(WorkflowEventDraft {
-                event_id: None,
-                workflow_id: workflow_run_id.clone(),
-                workflow_child_run_id: Some(child_run_id.clone()),
-                thread_id: Some(thread_id.clone()),
-                event_type: "workflow.child_succeeded".to_owned(),
-                payload_json: json!({"preview": preview, "resultMode": result_mode}).to_string(),
-            })?;
+            store
+                .finish_child_run(FinishChildRun {
+                    workflow_run_id: workflow_run_id.clone(),
+                    workflow_child_run_id: child_run_id.clone(),
+                    status: "succeeded",
+                    result_text: if call.schema_json.is_some() {
+                        None
+                    } else {
+                        Some(result.response.clone())
+                    },
+                    result_json: structured_result_json.clone(),
+                    result_preview: Some(preview.clone()),
+                    error: None,
+                    usage: Some(usage),
+                })
+                .await?;
+            store
+                .append_event(WorkflowEventDraft {
+                    event_id: None,
+                    workflow_id: workflow_run_id.clone(),
+                    workflow_child_run_id: Some(child_run_id.clone()),
+                    thread_id: Some(thread_id.clone()),
+                    event_type: "workflow.child_succeeded".to_owned(),
+                    payload_json: json!({"preview": preview, "resultMode": result_mode})
+                        .to_string(),
+                })
+                .await?;
             Ok(WorkflowAgentExecutionResult {
                 workflow_child_run_id: child_run_id,
                 thread_id,
@@ -937,24 +948,28 @@ impl WorkflowRuntime {
             let error = result
                 .error
                 .unwrap_or_else(|| "child run failed".to_owned());
-            db.finish_workflow_child_run(
-                &workflow_run_id,
-                &child_run_id,
-                "failed",
-                None,
-                None,
-                None,
-                Some(&error),
-                Some(usage),
-            )?;
-            db.append_workflow_event(WorkflowEventDraft {
-                event_id: None,
-                workflow_id: workflow_run_id,
-                workflow_child_run_id: Some(child_run_id.clone()),
-                thread_id: Some(thread_id.clone()),
-                event_type: "workflow.child_failed".to_owned(),
-                payload_json: json!({"error": error}).to_string(),
-            })?;
+            store
+                .finish_child_run(FinishChildRun {
+                    workflow_run_id: workflow_run_id.clone(),
+                    workflow_child_run_id: child_run_id.clone(),
+                    status: "failed",
+                    result_text: None,
+                    result_json: None,
+                    result_preview: None,
+                    error: Some(error.clone()),
+                    usage: Some(usage),
+                })
+                .await?;
+            store
+                .append_event(WorkflowEventDraft {
+                    event_id: None,
+                    workflow_id: workflow_run_id,
+                    workflow_child_run_id: Some(child_run_id.clone()),
+                    thread_id: Some(thread_id.clone()),
+                    event_type: "workflow.child_failed".to_owned(),
+                    payload_json: json!({"error": error}).to_string(),
+                })
+                .await?;
             Ok(WorkflowAgentExecutionResult {
                 workflow_child_run_id: child_run_id,
                 thread_id,
@@ -1006,11 +1021,9 @@ impl WorkflowRuntime {
             metadata: workflow_child_metadata(
                 workflow_run_id,
                 workflow_child_run_id,
-                &self
-                    .state
-                    .ops
-                    .garyx_db
-                    .get_workflow_run(workflow_run_id)?
+                &WorkflowStore::new(self.state.ops.garyx_db.clone())
+                    .try_get_run(workflow_run_id)
+                    .await?
                     .map(|workflow| workflow.parent_thread_id)
                     .unwrap_or_else(|| workflow_run_id.to_owned()),
                 label,
@@ -1025,12 +1038,10 @@ impl WorkflowRuntime {
         Ok(thread_id)
     }
 
-    fn is_workflow_cancelled(&self, workflow_run_id: &str) -> Result<bool, WorkflowError> {
-        Ok(self
-            .state
-            .ops
-            .garyx_db
-            .get_workflow_run(workflow_run_id)?
+    async fn is_workflow_cancelled(&self, workflow_run_id: &str) -> Result<bool, WorkflowError> {
+        Ok(WorkflowStore::new(self.state.ops.garyx_db.clone())
+            .try_get_run(workflow_run_id)
+            .await?
             .is_some_and(|record| record.status == "cancelled"))
     }
 
@@ -1112,8 +1123,8 @@ fn normalize_phase_plan(
     Ok(normalized)
 }
 
-fn finish_failed_workflow_child(
-    db: &GaryxDbService,
+async fn finish_failed_workflow_child(
+    store: &WorkflowStore,
     workflow_run_id: &str,
     child_run_id: &str,
     thread_id: &str,
@@ -1121,24 +1132,28 @@ fn finish_failed_workflow_child(
     error: String,
     usage: Option<WorkflowChildRunUsage>,
 ) -> Result<WorkflowAgentExecutionResult, WorkflowError> {
-    db.finish_workflow_child_run(
-        workflow_run_id,
-        child_run_id,
-        "failed",
-        None,
-        None,
-        None,
-        Some(&error),
-        usage,
-    )?;
-    db.append_workflow_event(WorkflowEventDraft {
-        event_id: None,
-        workflow_id: workflow_run_id.to_owned(),
-        workflow_child_run_id: Some(child_run_id.to_owned()),
-        thread_id: Some(thread_id.to_owned()),
-        event_type: "workflow.child_failed".to_owned(),
-        payload_json: json!({"error": error}).to_string(),
-    })?;
+    store
+        .finish_child_run(FinishChildRun {
+            workflow_run_id: workflow_run_id.to_owned(),
+            workflow_child_run_id: child_run_id.to_owned(),
+            status: "failed",
+            result_text: None,
+            result_json: None,
+            result_preview: None,
+            error: Some(error.clone()),
+            usage,
+        })
+        .await?;
+    store
+        .append_event(WorkflowEventDraft {
+            event_id: None,
+            workflow_id: workflow_run_id.to_owned(),
+            workflow_child_run_id: Some(child_run_id.to_owned()),
+            thread_id: Some(thread_id.to_owned()),
+            event_type: "workflow.child_failed".to_owned(),
+            payload_json: json!({"error": error}).to_string(),
+        })
+        .await?;
     Ok(WorkflowAgentExecutionResult {
         workflow_child_run_id: child_run_id.to_owned(),
         thread_id: thread_id.to_owned(),

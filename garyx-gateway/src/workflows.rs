@@ -117,7 +117,7 @@ pub use routes::{
 };
 pub use runtime::WorkflowRuntime;
 pub use scheduler::{WorkflowChildPermit, WorkflowScheduler};
-pub use store::{WorkflowDefinitionPackage, WorkflowDefinitionRecord, WorkflowStore};
+pub use store::{FinishChildRun, WorkflowDefinitionPackage, WorkflowDefinitionRecord, WorkflowStore};
 pub use structured_result::{
     StructuredResultContext, StructuredResultSubmission, structured_result_context_for_thread,
     submit_structured_result_for_thread,
