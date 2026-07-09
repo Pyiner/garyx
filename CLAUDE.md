@@ -143,6 +143,17 @@ Detailed runtime, SDK, and workflow rules:
 Use the narrowest reliable validation for the touched area. Common commands and
 fallbacks live in @docs/agents/validation.md.
 
+For Rust changes, prefer the fast local loop before any full workspace run:
+`scripts/test/rust_tier1_fast.sh --changed`. For focused work, run the touched
+crate or exact test directly, for example `cargo test -p garyx-gateway --lib`,
+`cargo test -p garyx-router --all-targets`, or
+`cargo test -p garyx-gateway some_exact_test_name --lib -- --exact --nocapture`.
+Use `RUST_TEST_FAIL_FAST=1` when a quick first failure is more useful than a
+complete report. Reserve `scripts/test/rust_tier2_pr.sh` for PR-ready or
+cross-crate validation, and
+`RUN_EXTERNAL_AI_TESTS=1 scripts/test/rust_tier3_extended.sh` for
+ignored/external-provider integration coverage.
+
 For fast Mac app iteration, it is fine to run the desktop app in dev mode and
 attach with CDP while working through UI behavior. Before handoff, still do one
 packaged-app check when renderer resources, preload IPC, app bundling, or
