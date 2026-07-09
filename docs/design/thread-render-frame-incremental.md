@@ -62,10 +62,11 @@ Clients:
 
 ## Design
 
-Three knives, in dependency order. The end state has no full-`render_state`
-live frames, no opt-in resume flag, and no dead fields — per the "do not
-keep old logic" doctrine, with one explicitly bounded compatibility window
-for iOS's independent release train.
+Three knives, in dependency order. The end state: both production clients
+speak delta, the opt-in resume flag and the dead field are gone. Full
+frames remain the negotiated default for undeclared consumers (old iOS
+builds, curl, debug tooling) — that is a permanent, zero-cost contract
+surface, not a compatibility layer.
 
 ### Knife 1 — delta live frames (`render_delta`)
 
@@ -79,7 +80,8 @@ stay full) carry `render_delta` instead of `render_state`:
   "thread_id": "…",
   "events": [ /* unchanged: committed_message records, cursor/gap source */ ],
   "render_delta": {
-    "from_seq": 2551,          // client must hold the snapshot at this seq
+    "from_seq": 2551,          // client must hold the snapshot at this seq…
+    "from_rows_hash": "…",     // …with exactly this rows content (drift tripwire)
     "based_on_seq": 2552,
     "row_order": ["row-id", …], // full id sequence (~3KB @ 107 rows): re-order is unambiguous
     "upsert_rows": [ /* full RenderRow bodies, only new/changed rows */ ],
@@ -95,41 +97,92 @@ stay full) carry `render_delta` instead of `render_state`:
 
 Server derivation. Per-connection (not shared): the live loop already owns
 per-connection state (`sent_committed_payloads`, `last_sent_seq`); add
-`last_render: Option<(u64 /*seq*/, HashMap<RowId, String /*serialized row*/>)>`.
-After deriving the new snapshot, serialize each row once, diff by row id
-against `last_render`, emit changed/new rows + the id order. First live
-frame on a connection (no `last_render`, or after any replay frame) is a
-full `render_state` frame that seeds the cache. Rationale for not sharing
-across connections: desktop's hub multiplexes renderer windows into one
-connection per thread, so real fan-out is 1–2 connections/thread — a
-shared cache's complexity (locking, floor-keyed variants) buys nothing.
+`last_render: Option<(u64 /*seq*/, u64 /*rows hash*/, HashMap<RowId, u64 /*row hash*/>)>`.
+`RenderRow` derives `Hash` (pure data); after deriving the new snapshot,
+hash each row structurally, diff hashes by row id against `last_render`,
+and **serialize only the changed rows** — the diff itself costs no
+serialization. The first live frame on a connection (no `last_render`, or
+following any replay frame) is a full `render_state` frame that seeds the
+cache. Rationale for not sharing across connections: desktop's hub
+multiplexes renderer windows into one connection per thread, so real
+fan-out is 1–2 connections/thread — a shared cache's complexity (locking,
+floor-keyed variants) buys nothing.
+
+Same-seq overwrites (finding 1). The gateway deliberately forwards a
+changed payload at an already-sent seq (rewrite paths;
+`should_forward_committed_payload` dedupes only identical payloads), and
+desktop's monotonic render guard would silently drop a same-seq render
+update — so a delta base could drift without tripping a plain seq check.
+Two defenses, both mandatory:
+
+- Server: when a live commit re-lands on `seq == last_sent_seq` (payload
+  changed), do **not** emit a delta. Emit a full `render_state` frame and
+  reseed the diff cache. Rewrite flows already end in an authoritative
+  refetch on both clients (`refetch_authoritative` / control-rewrite
+  planner), so the transient full frame is belt-and-suspenders, not the
+  primary recovery.
+- Client: `from_rows_hash` must equal the hash of the rows the client
+  actually holds. Any base drift — same-seq drops, guard interactions,
+  future bugs — becomes an explicit gap-path exit instead of silent
+  mis-render. The hash is over the serialized rows array (stable JSON), and
+  the oracle test pins server and client hashing to the same bytes.
 
 Client application (both ends, same semantics):
 
-1. Validate `from_seq == local render snapshot's based_on_seq`. Mismatch ⇒
-   discard the frame and enter the existing gap path (desktop: gap error →
-   authoritative refetch; iOS: resume override reconnect). No new recovery
-   machinery.
+1. Validate `from_seq == local snapshot.based_on_seq` **and**
+   `from_rows_hash == hash(local rows)`. Mismatch ⇒ discard the frame and
+   enter the existing gap path. No new recovery machinery.
 2. Rebuild rows in `row_order`: take the body from `upsert_rows` if present,
    else from the previous snapshot by id. A missing id (in neither) is a
    protocol violation ⇒ same gap path.
-3. Replace the scalar fields wholesale; bump `based_on_seq`; run the existing
-   dedupe guards unchanged (`based_on_seq` monotonic guard on desktop,
-   `renderEquivalent`/flush gate on iOS).
+3. Replace the scalar fields wholesale; bump `based_on_seq`.
+
+Where the client reassembles (finding 2). Delta reassembly and validation
+live in each platform's **transport layer**, not the render layer:
+
+- Desktop: in the main-process stream parser (`mapThreadRenderFrameEvent` in
+  gary-client/stream.ts), which already owns `ThreadStreamGapError` — a
+  failed validation throws it and rides the existing hub stop → gap error →
+  authoritative refetch pipeline, socket teardown included. The reassembled
+  **full** `render_state` is what gets emitted to the renderer:
+  `DesktopChatStreamEvent`, `GatewayMirror.applyFrame`, the frontier guard,
+  and every renderer contract stay byte-identical to today. The per-thread
+  previous-snapshot cache lives next to the forwarder state in the hub.
+- iOS: in `GatewayStreamFrameProcessor` (GatewayStreamActor), which already
+  owns the `.gap(resumeAfterSeq:)` exit; the emitted action stream still
+  carries a full snapshot, so `applyThreadRenderSnapshot`, the mapper, and
+  `renderEquivalent`/flush-gate dedupe are untouched.
+
+This confines knives' client work to two transport files + tests; the
+render layers never learn deltas exist.
+
+Ordering with local optimistic rows: deltas apply to the authoritative
+server snapshot **before** local pending user rows are overlaid — which is
+the existing order on both ends (server rows first, optimistic append
+after); stated here as an explicit invariant.
 
 Floor interaction: `row_order` is derived from the connection's own
 windowed snapshot, so floors compose naturally; `window` rides along whole.
+The diff cache is keyed by the connection's effective floor: a floor change
+mid-connection (windowed replay) already forces a replay frame, which
+reseeds.
 
-Compatibility: connections that do not send `render_mode=delta` receive
-full frames. Desktop ships in lockstep with the gateway (same repo, same
-release) and declares the mode immediately. iOS declares it from the next
-TestFlight build; until the fleet moves, old iOS builds keep receiving full
-frames. The full-live-frame path is deleted when the iOS floor version has
-delta (tracked as the knife-4 cleanup gate) — the flag itself stays, as the
-negotiation is what lets a curl/debug subscriber read frames at all.
+Compatibility: `render_mode=delta` is a permanent negotiation, not a
+transition flag. Connections that do not declare it — old iOS builds, curl,
+debug tooling, tests — receive full frames indefinitely; the full live
+frame is the same constructor the replay/snapshot-only paths use, so
+keeping it costs nothing. Desktop ships in lockstep with the gateway and
+declares the mode immediately; iOS declares it from the next TestFlight
+build. (Supersedes the earlier "delete the full-live-frame path" cleanup
+item, which contradicted debug readability — resolved in favor of
+default-full.)
 
-Expected effect on the forensics thread: 358KB → ~10–15KB per commit frame
-(~25–35×), and the per-commit CPU pulse shrinks by the serialization share.
+Expected effect on the forensics thread: **wire** per commit frame 358KB →
+~10–15KB (~25–35×), with the same reduction in downstream IPC/JSON.parse
+and re-render diffing on both clients. Server-side snapshot **derivation**
+cost is explicitly unchanged (File-store cached-tail already bounds it);
+row serialization drops to changed-rows-only. The on-device validation
+below measures bytes and CPU separately so the claim stays honest.
 
 ### Knife 2 — windowed resume becomes the default
 
@@ -174,27 +227,39 @@ Pure deletion, no behavior change.
 - Gateway: routes tests drive a captured real-thread record stream through
   a delta-mode connection; assert (a) frame-by-frame reassembly on the
   client algorithm equals the full snapshot at every seq (structural oracle:
-  delta-apply(prev, delta) == render_snapshot_at_seq), (b) first-live-frame
-  seeding, (c) mismatch ⇒ reconnect error, (d) default windowed degrade
-  fires without the flag, (e) deleted field absent.
-- Sabotage red-green: break the diff (drop one changed row) and assert the
-  oracle test fails; break from_seq validation and assert the gap test fails.
-- Desktop: mirror contract tests feed delta frames through `applyFrame`;
-  electron-smoke mock updated to the new contract. One packaged-app check
-  (dist:dir) since main-process stream code changes.
-- iOS: GaryxMobileCore SwiftPM tests for decode + apply + gap fallback,
-  driven by captured frame fixtures; no pbxproj changes expected (Core-only
-  for the state machinery).
-- On-device: repeat the 8-subscriber forensics; expect commit-pulse CPU and
-  per-subscriber byte accounting to collapse (12.42MB/90s → ~1MB dominated
-  by the seed frame).
+  delta-apply(prev, delta) == render_snapshot_at_seq, including hash
+  equality so server and client hashing pin to the same bytes), (b)
+  first-live-frame seeding, (c) seq or hash mismatch ⇒ reconnect error, (d)
+  default windowed degrade fires without the flag, (e) deleted field absent.
+- Adversarial oracle cases (finding 1 family): same-seq overwrite mid-run ⇒
+  full-frame reseed, then delta resumes cleanly; range-rewrite /
+  transcript-reset control records interleaved with deltas; snapshot-only
+  replay frame interleaved between deltas ⇒ reseed; floor advance
+  (windowed replay) mid-connection ⇒ reseed.
+- Sabotage red-green: break the diff (drop one changed row) ⇒ oracle test
+  fails; break from_seq validation ⇒ gap test fails; break the hash ⇒
+  drift-tripwire test fails.
+- Desktop: unit tests target the main-process reassembler in
+  gary-client/stream.ts (delta → full render_state, gap throw on
+  seq/hash/row-id violations); mirror/renderer contract tests are
+  unchanged by construction — one guard test asserts the renderer-facing
+  event still carries a full snapshot. electron-smoke mock updated only in
+  its stream fixtures. One packaged-app check (dist:dir) since
+  main-process stream code changes.
+- iOS: GaryxMobileCore SwiftPM tests for the frame-processor reassembly +
+  gap fallback, driven by captured frame fixtures; mapper tests unchanged;
+  no pbxproj changes expected (Core-only).
+- On-device: repeat the 8-subscriber forensics, reporting wire bytes and
+  CPU separately; expect per-subscriber bytes 12.42MB/90s → ~1MB (dominated
+  by the seed frame) and the commit-pulse CPU to drop by the
+  serialization + push share (derivation share explicitly remains).
 
 ## Batches (each lands with its own codex review)
 
-1. models+gateway: `render_mode=delta`, per-connection diff, delta frames,
-   oracle tests. (Full frames still default.)
-2. desktop: declare delta, apply path, contract tests, packaged check.
-3. iOS: declare delta, Core apply path, SwiftPM tests.
+1. models+gateway: `render_mode=delta`, per-connection hash diff, delta
+   frames, same-seq full-frame reseed, oracle + adversarial tests. (Full
+   frames remain the default for undeclared connections — permanently.)
+2. desktop: declare delta, main-process reassembler + tests, packaged check.
+3. iOS: declare delta, frame-processor reassembly + SwiftPM tests.
 4. cleanup: flip windowed-resume default + delete the parameter; delete
-   `visible_message_ids`; delete the full-live-frame path once the iOS floor
-   carries batch 3 (this last deletion may trail the rest).
+   `visible_message_ids` on all three ends.
