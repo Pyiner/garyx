@@ -3,7 +3,7 @@ import { net, session } from "electron";
 import {
   setGatewayFetch,
   setGatewayStreamFetch,
-} from "./gary-client/http.ts";
+} from "./garyx-client/http.ts";
 
 /**
  * In-memory session partition that carries only the per-thread SSE streams.

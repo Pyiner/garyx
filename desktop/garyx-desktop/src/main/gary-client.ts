@@ -1,19 +1,22 @@
-// Barrel: re-exports the gary-client gateway client, split by domain.
-// Importers depend on `./gary-client`; keep this surface stable.
+// Barrel: re-exports the garyx-client gateway client, split by domain.
+// Importers depend on `./gary-client`; keep this surface stable. The barrel
+// keeps its legacy `gary-client` filename only because in-flight WIP holds
+// index.ts/thread-stream-hub.ts; rename it to `garyx-client.ts` (and update
+// importers) once that lands.
 
-export * from "./gary-client/threads.ts";
-export * from "./gary-client/workspaces.ts";
-export * from "./gary-client/tasks.ts";
-export * from "./gary-client/automations.ts";
-export * from "./gary-client/workflows.ts";
-export * from "./gary-client/capsules.ts";
-export * from "./gary-client/dreams.ts";
-export * from "./gary-client/agents.ts";
-export * from "./gary-client/catalog.ts";
-export * from "./gary-client/provider.ts";
-export * from "./gary-client/channels.ts";
-export * from "./gary-client/bots.ts";
-export * from "./gary-client/gateway.ts";
+export * from "./garyx-client/threads.ts";
+export * from "./garyx-client/workspaces.ts";
+export * from "./garyx-client/tasks.ts";
+export * from "./garyx-client/automations.ts";
+export * from "./garyx-client/workflows.ts";
+export * from "./garyx-client/capsules.ts";
+export * from "./garyx-client/dreams.ts";
+export * from "./garyx-client/agents.ts";
+export * from "./garyx-client/catalog.ts";
+export * from "./garyx-client/provider.ts";
+export * from "./garyx-client/channels.ts";
+export * from "./garyx-client/bots.ts";
+export * from "./garyx-client/gateway.ts";
 
 export {
   GatewayRequestError,
@@ -21,8 +24,8 @@ export {
   requestText,
   setGatewayFetch,
   setGatewayStreamFetch,
-} from "./gary-client/http.ts";
-export type { GatewayFetch } from "./gary-client/http.ts";
+} from "./garyx-client/http.ts";
+export type { GatewayFetch } from "./garyx-client/http.ts";
 export {
   ThreadStreamGapError,
   streamThreadEvents,
@@ -30,4 +33,4 @@ export {
   sendStreamingInput,
   interruptThread,
   interruptSession,
-} from "./gary-client/stream.ts";
+} from "./garyx-client/stream.ts";

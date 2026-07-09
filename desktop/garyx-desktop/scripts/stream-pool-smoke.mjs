@@ -69,9 +69,9 @@ function waitFor(predicate, timeoutMs) {
 async function main() {
   const baseUrl = await listen();
 
-  const http = await import("../src/main/gary-client/http.ts");
+  const http = await import("../src/main/garyx-client/http.ts");
   const { streamThreadEvents } = await import(
-    "../src/main/gary-client/stream.ts"
+    "../src/main/garyx-client/stream.ts"
   );
   if (legacySinglePool) {
     // The pre-fix composition: one pool for everything (what a bare
