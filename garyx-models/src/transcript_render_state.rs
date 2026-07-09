@@ -275,6 +275,11 @@ pub enum RenderDeltaError {
         delta_from_rows_hash: String,
         prev_rows_hash: String,
     },
+    /// An `upsert_rows` entry's id appears more than once.
+    DuplicateUpsertRow { row_id: String },
+    /// An `upsert_rows` entry's id is absent from `row_order`: stray
+    /// upserts are a producer/consumer disagreement, not ignorable padding.
+    UnexpectedUpsertRow { row_id: String },
     /// A `row_order` id resolves to neither `upsert_rows` nor the held
     /// snapshot's rows.
     MissingRow { row_id: String },
@@ -303,6 +308,15 @@ impl std::fmt::Display for RenderDeltaError {
                 f,
                 "render delta from_rows_hash {delta_from_rows_hash} does not match held rows hash {prev_rows_hash}"
             ),
+            Self::DuplicateUpsertRow { row_id } => {
+                write!(f, "render delta upsert row id {row_id} appears more than once")
+            }
+            Self::UnexpectedUpsertRow { row_id } => {
+                write!(
+                    f,
+                    "render delta upsert row id {row_id} is absent from row_order"
+                )
+            }
             Self::MissingRow { row_id } => {
                 write!(
                     f,
@@ -446,11 +460,23 @@ pub fn apply_render_delta(
             prev_rows_hash,
         });
     }
-    let upsert_by_id: HashMap<&str, &RenderRow> = delta
-        .upsert_rows
-        .iter()
-        .map(|row| (render_row_id(row), row))
-        .collect();
+    let mut upsert_by_id: HashMap<&str, &RenderRow> =
+        HashMap::with_capacity(delta.upsert_rows.len());
+    for row in &delta.upsert_rows {
+        let row_id = render_row_id(row);
+        if upsert_by_id.insert(row_id, row).is_some() {
+            return Err(RenderDeltaError::DuplicateUpsertRow {
+                row_id: row_id.to_owned(),
+            });
+        }
+        // Every upsert must be referenced by row_order: a stray upsert is a
+        // producer/consumer disagreement, not ignorable padding.
+        if !delta.row_order.iter().any(|ordered| ordered == row_id) {
+            return Err(RenderDeltaError::UnexpectedUpsertRow {
+                row_id: row_id.to_owned(),
+            });
+        }
+    }
     let prev_by_id: HashMap<&str, &RenderRow> = prev
         .rows
         .iter()
@@ -2688,6 +2714,45 @@ mod tests {
             Err(RenderDeltaError::MissingRow {
                 row_id: "row-from-nowhere".to_owned(),
             })
+        );
+    }
+
+    /// Protocol-violation tripwire (#TASK-2032 finding 1): an upsert whose
+    /// id is absent from `row_order` is a producer/consumer disagreement
+    /// and must be rejected, not silently ignored.
+    #[test]
+    fn apply_render_delta_rejects_upsert_outside_row_order() {
+        let records = delta_oracle_records();
+        let prev = reduce_transcript_render_state(&records[..9]);
+        let next = reduce_transcript_render_state(&records[..10]);
+        let mut delta = derive_render_delta(&prev, &next);
+        let mut stray = next.rows[0].clone();
+        let RenderRow::UserTurn(row) = &mut stray;
+        row.id = "row-outside-order".to_owned();
+        delta.upsert_rows.push(stray);
+        assert_eq!(
+            apply_render_delta(&prev, &delta),
+            Err(RenderDeltaError::UnexpectedUpsertRow {
+                row_id: "row-outside-order".to_owned(),
+            })
+        );
+    }
+
+    /// Duplicate upsert ids are equally malformed: the receiver must not
+    /// pick a winner silently.
+    #[test]
+    fn apply_render_delta_rejects_duplicate_upsert_ids() {
+        let records = delta_oracle_records();
+        let prev = reduce_transcript_render_state(&records[..9]);
+        let next = reduce_transcript_render_state(&records[..10]);
+        let mut delta = derive_render_delta(&prev, &next);
+        assert!(!delta.upsert_rows.is_empty(), "fixture must change a row");
+        let duplicate = delta.upsert_rows[0].clone();
+        delta.upsert_rows.push(duplicate);
+        let error = apply_render_delta(&prev, &delta).unwrap_err();
+        assert!(
+            matches!(error, RenderDeltaError::DuplicateUpsertRow { .. }),
+            "expected DuplicateUpsertRow, got {error:?}"
         );
     }
 

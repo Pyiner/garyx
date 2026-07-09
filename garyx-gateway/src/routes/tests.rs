@@ -1259,6 +1259,121 @@ async fn thread_stream_delta_oracle_matches_full_snapshot_at_every_seq() {
     }
 }
 
+/// Structural oracle over the CAPTURED fixture streams (#TASK-2032 review
+/// finding 2): the same per-connection live path, driven by real recorded
+/// transcripts instead of synthetic messages. Every seq must reassemble to
+/// the store's direct snapshot with an unbroken rows_hash chain.
+#[tokio::test]
+async fn thread_stream_delta_oracle_holds_on_captured_fixture_streams() {
+    let fixture_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("repo root")
+        .join("test-fixtures");
+    for fixture in [
+        "stream-sync/transcript-with-control.jsonl",
+        "stream-sync/transcript-with-tool.jsonl",
+        "stream-sync/multi-tool-lull.jsonl",
+        "stream-sync/parallel-tool-lull.jsonl",
+        "stream-sync/stream-events-with-user-ack.jsonl",
+    ] {
+        let path = fixture_root.join(fixture);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let records: Vec<Value> = raw
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(records.len() >= 2, "fixture {fixture} too short for a live tail");
+
+        let state = AppStateBuilder::new(test_config()).build();
+        let thread_id = format!("thread::delta-fixture-{}", fixture.replace(['/', '.'], "-"));
+        let run_id = "run::delta-fixture";
+        append_dangling_run_start(&state, &thread_id, run_id).await;
+
+        // First record lands before the connection; the replay full frame
+        // seeds the delta base per the unified seeding rule.
+        append_live_delta_record(
+            &state,
+            &thread_id,
+            run_id,
+            records[0]["message"].clone(),
+            records[0]["timestamp"].as_str().unwrap_or("2026-06-18T12:00:00Z"),
+        )
+        .await;
+        let delta_base = new_delta_base();
+        let replay = build_thread_stream_replay(
+            &state,
+            &thread_id,
+            0,
+            ThreadStreamReplayOptions::resume(0),
+            Some(&delta_base),
+        )
+        .await;
+        let seed_frame: Value =
+            serde_json::from_str(&replay.events[0].as_ref().unwrap().payload).unwrap();
+        let mut held = frame_render_state(&seed_frame);
+        let mut sent_payloads = replay.sent_payloads;
+        let mut last_sent_seq = replay.max_seq;
+
+        // The remaining captured records arrive through the live path.
+        for record in &records[1..] {
+            let (seq, payload) = append_live_delta_record(
+                &state,
+                &thread_id,
+                run_id,
+                record["message"].clone(),
+                record["timestamp"].as_str().unwrap_or("2026-06-18T12:00:01Z"),
+            )
+            .await;
+            let (forward_seq, forward_payload) = committed_thread_stream_live_payload(
+                &payload.to_string(),
+                &thread_id,
+                &mut sent_payloads,
+                &mut last_sent_seq,
+            )
+            .unwrap()
+            .expect("fresh captured commit forwards");
+            let event = committed_thread_stream_live_event(
+                &state,
+                &thread_id,
+                forward_seq,
+                forward_payload,
+                0,
+                Some(&delta_base),
+            )
+            .await
+            .unwrap();
+            let frame: Value = serde_json::from_str(&event.payload).unwrap();
+            assert!(
+                frame.get("render_state").is_none(),
+                "fixture {fixture}: live frames on a seeded delta connection stay delta"
+            );
+            let delta = frame_render_delta(&frame);
+            assert_eq!(
+                Some(delta.from_rows_hash.clone()),
+                held.rows_hash.map(|hash| hash.to_string()),
+                "fixture {fixture}: rows_hash chain broke at seq {seq}"
+            );
+            held = apply_render_delta(&held, &delta)
+                .unwrap_or_else(|error| panic!("fixture {fixture}: delta rejected at seq {seq}: {error}"));
+            let expected = state
+                .threads
+                .history
+                .transcript_store()
+                .render_snapshot_at_seq(&thread_id, seq)
+                .await
+                .unwrap();
+            assert_eq!(
+                held,
+                delta_expected_snapshot(expected),
+                "fixture {fixture}: reassembly diverged at seq {seq}"
+            );
+        }
+    }
+}
+
+
 /// Seeding rule, no-replay-seed arm: a live frame arriving before any
 /// full frame seeded the base goes out FULL (with the chain token) and
 /// seeds; the next live frame is a delta.
