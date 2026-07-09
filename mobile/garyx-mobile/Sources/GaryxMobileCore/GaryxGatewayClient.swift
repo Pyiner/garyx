@@ -914,6 +914,11 @@ public final class GaryxGatewayClient {
         var queryItems = [
             URLQueryItem(name: "after_seq", value: String(max(afterSeq, 0))),
             URLQueryItem(name: "windowed_resume", value: "1"),
+            // render_mode=delta (#TASK-1956 batch 3): live frames may carry
+            // `render_delta` instead of a full `render_state`;
+            // GatewayStreamFrameProcessor reassembles full snapshots, so
+            // everything downstream of the action stream never sees deltas.
+            URLQueryItem(name: "render_mode", value: "delta"),
         ]
         if let replayScope {
             queryItems.append(URLQueryItem(name: "replay_scope", value: replayScope.rawValue))

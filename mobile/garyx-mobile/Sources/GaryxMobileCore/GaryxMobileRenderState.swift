@@ -4,7 +4,13 @@ public struct GaryxThreadRenderFrame: Decodable, Equatable, Sendable {
     public var type: String
     public var threadId: String
     public var events: [GaryxThreadRenderFrameEvent]
-    public var renderState: GaryxRenderSnapshot
+    /// Full snapshot. Replay/snapshot-only frames always carry it; on a
+    /// `render_mode=delta` connection live frames may carry `renderDelta`
+    /// instead (#TASK-1956 batch 3).
+    public var renderState: GaryxRenderSnapshot?
+    /// Incremental live frame body; reassembled into a full snapshot by
+    /// `GatewayStreamFrameProcessor` before anything downstream sees it.
+    public var renderDelta: GaryxRenderDelta?
     /// "windowed": the gateway degraded a stale opted-in resume to the
     /// initial window; the frame's records start at the window floor and
     /// the discontinuity is authorized by this marker.
@@ -16,6 +22,7 @@ public struct GaryxThreadRenderFrame: Decodable, Equatable, Sendable {
         case threadIdSnake = "thread_id"
         case events
         case renderState = "render_state"
+        case renderDelta = "render_delta"
         case replay
     }
 
@@ -24,8 +31,103 @@ public struct GaryxThreadRenderFrame: Decodable, Equatable, Sendable {
         type = try container.garyxDecodeFirstString(.type) ?? ""
         threadId = try container.garyxDecodeFirstString(.threadIdSnake, .threadId) ?? ""
         events = try container.decodeIfPresent([GaryxThreadRenderFrameEvent].self, forKey: .events) ?? []
-        renderState = try container.decode(GaryxRenderSnapshot.self, forKey: .renderState)
+        renderState = try container.decodeIfPresent(GaryxRenderSnapshot.self, forKey: .renderState)
+        renderDelta = try container.decodeIfPresent(GaryxRenderDelta.self, forKey: .renderDelta)
         replay = try container.decodeIfPresent(String.self, forKey: .replay)
+    }
+}
+
+/// Wire shape of a `render_delta` live frame body (#TASK-1956 batch 3),
+/// field-for-field aligned with the garyx-models `RenderDelta` serde names.
+/// `fromRowsHash`/`rowsHash` are opaque chain tokens (decimal strings on the
+/// wire): the server is the only hasher; the client validates the chain by
+/// pure equality and stores the accepted frame's `rowsHash` as its next
+/// token. The chain-critical fields decode strictly — a frame missing them
+/// is undecodable, gets ignored, and the broken chain surfaces as a
+/// `from_seq` mismatch on the next delta (gap path, replay reseed).
+public struct GaryxRenderDelta: Decodable, Equatable, Sendable {
+    /// The client must hold the snapshot at this seq...
+    public var fromSeq: Int
+    /// ...with exactly this rows content (drift tripwire).
+    public var fromRowsHash: String
+    public var basedOnSeq: Int
+    /// Chain token AFTER applying this delta.
+    public var rowsHash: String
+    /// Full row id sequence: re-order is unambiguous.
+    public var rowOrder: [String]
+    /// Full bodies for new/changed rows only.
+    public var upsertRows: [GaryxRenderRow]
+    public var tailActivity: GaryxRenderTailActivity
+    public var activeToolGroupId: String?
+    public var progressLocus: GaryxRenderProgressLocus
+    public var rateLimit: GaryxRenderRateLimit?
+    public var window: GaryxRenderWindow?
+    public var filteredPlaceholders: [GaryxRenderFilteredPlaceholder]
+
+    public init(
+        fromSeq: Int,
+        fromRowsHash: String,
+        basedOnSeq: Int,
+        rowsHash: String,
+        rowOrder: [String],
+        upsertRows: [GaryxRenderRow],
+        tailActivity: GaryxRenderTailActivity = .none,
+        activeToolGroupId: String? = nil,
+        progressLocus: GaryxRenderProgressLocus = .none,
+        rateLimit: GaryxRenderRateLimit? = nil,
+        window: GaryxRenderWindow? = nil,
+        filteredPlaceholders: [GaryxRenderFilteredPlaceholder] = []
+    ) {
+        self.fromSeq = fromSeq
+        self.fromRowsHash = fromRowsHash
+        self.basedOnSeq = basedOnSeq
+        self.rowsHash = rowsHash
+        self.rowOrder = rowOrder
+        self.upsertRows = upsertRows
+        self.tailActivity = tailActivity
+        self.activeToolGroupId = activeToolGroupId
+        self.progressLocus = progressLocus
+        self.rateLimit = rateLimit
+        self.window = window
+        self.filteredPlaceholders = filteredPlaceholders
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case fromSeq = "from_seq"
+        case fromRowsHash = "from_rows_hash"
+        case basedOnSeq = "based_on_seq"
+        case rowsHash = "rows_hash"
+        case rowOrder = "row_order"
+        case upsertRows = "upsert_rows"
+        case tailActivity
+        case activeToolGroupId
+        case progressLocus = "progress_locus"
+        case rateLimit
+        case window
+        case filteredPlaceholders = "filtered_placeholders"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fromSeq = try container.decode(Int.self, forKey: .fromSeq)
+        fromRowsHash = try container.decode(String.self, forKey: .fromRowsHash)
+        basedOnSeq = try container.decode(Int.self, forKey: .basedOnSeq)
+        rowsHash = try container.decode(String.self, forKey: .rowsHash)
+        rowOrder = try container.decode([String].self, forKey: .rowOrder)
+        // Strict, not lossy: silently dropping an undecodable upsert body
+        // would fall back to the held row — a stale body the equality-only
+        // chain check cannot catch. Failing the frame decode is safe: the
+        // next delta gaps on `from_seq` and the replay reseeds.
+        upsertRows = try container.decode([GaryxRenderRow].self, forKey: .upsertRows)
+        tailActivity = try container.decodeIfPresent(GaryxRenderTailActivity.self, forKey: .tailActivity) ?? .none
+        activeToolGroupId = try container.decodeIfPresent(String.self, forKey: .activeToolGroupId)
+        progressLocus = try container.decodeIfPresent(GaryxRenderProgressLocus.self, forKey: .progressLocus) ?? .none
+        rateLimit = try container.decodeIfPresent(GaryxRenderRateLimit.self, forKey: .rateLimit)
+        window = try container.decodeIfPresent(GaryxRenderWindow.self, forKey: .window)
+        filteredPlaceholders = try container.decodeIfPresent(
+            [GaryxRenderFilteredPlaceholder].self,
+            forKey: .filteredPlaceholders
+        ) ?? []
     }
 }
 
@@ -85,6 +187,12 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
     public var filteredPlaceholders: [GaryxRenderFilteredPlaceholder]
     public var rateLimit: GaryxRenderRateLimit?
     public var window: GaryxRenderWindow?
+    /// Opaque rows-hash chain token (#TASK-1956 batch 3): a decimal string
+    /// minted by the server, present on full frames of `render_mode=delta`
+    /// connections. The client never hashes — it stores the last accepted
+    /// token and compares `GaryxRenderDelta.fromRowsHash` by equality. A
+    /// snapshot without a token can never anchor a delta.
+    public var rowsHash: String?
 
     public init(
         basedOnSeq: Int,
@@ -95,7 +203,8 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         visibleMessageIds: [String] = [],
         filteredPlaceholders: [GaryxRenderFilteredPlaceholder] = [],
         rateLimit: GaryxRenderRateLimit? = nil,
-        window: GaryxRenderWindow? = nil
+        window: GaryxRenderWindow? = nil,
+        rowsHash: String? = nil
     ) {
         self.basedOnSeq = basedOnSeq
         self.rows = rows
@@ -106,6 +215,7 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         self.filteredPlaceholders = filteredPlaceholders
         self.rateLimit = rateLimit
         self.window = window
+        self.rowsHash = rowsHash
     }
 
     enum CodingKeys: String, CodingKey {
@@ -118,6 +228,7 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         case filteredPlaceholders = "filtered_placeholders"
         case rateLimit
         case window
+        case rowsHash = "rows_hash"
     }
 
     public init(from decoder: Decoder) throws {
@@ -131,6 +242,7 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         filteredPlaceholders = try container.decodeIfPresent([GaryxRenderFilteredPlaceholder].self, forKey: .filteredPlaceholders) ?? []
         rateLimit = try container.decodeIfPresent(GaryxRenderRateLimit.self, forKey: .rateLimit)
         window = try container.decodeIfPresent(GaryxRenderWindow.self, forKey: .window)
+        rowsHash = try container.decodeIfPresent(String.self, forKey: .rowsHash)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -144,6 +256,7 @@ public struct GaryxRenderSnapshot: Codable, Equatable, Sendable {
         try container.encode(filteredPlaceholders, forKey: .filteredPlaceholders)
         try container.encodeIfPresent(rateLimit, forKey: .rateLimit)
         try container.encodeIfPresent(window, forKey: .window)
+        try container.encodeIfPresent(rowsHash, forKey: .rowsHash)
     }
 }
 
@@ -221,10 +334,16 @@ public enum GaryxRenderProgressLocus: String, Codable, Equatable, Sendable {
 
 public enum GaryxRenderRow: Codable, Equatable, Sendable {
     case userTurn(GaryxRenderUserTurnRow)
-    case unknown
+    /// Forward-compatible fallback for row kinds this build does not know.
+    /// The `id` is preserved (#TASK-1956 batch 3) because row identity is
+    /// the delta-reassembly key: a delta may carry an unknown row forward
+    /// via `row_order`, and losing the id would turn every such delta into
+    /// a missing-row gap loop against a newer server.
+    case unknown(id: String?)
 
     enum CodingKeys: String, CodingKey {
         case kind
+        case id
     }
 
     enum Kind: String, Codable {
@@ -234,7 +353,7 @@ public enum GaryxRenderRow: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         guard let kind = try? container.decode(Kind.self, forKey: .kind) else {
-            self = .unknown
+            self = .unknown(id: (try? container.decodeIfPresent(String.self, forKey: .id)) ?? nil)
             return
         }
         switch kind {
@@ -247,9 +366,10 @@ public enum GaryxRenderRow: Codable, Equatable, Sendable {
         switch self {
         case let .userTurn(row):
             try row.encode(to: encoder)
-        case .unknown:
+        case let .unknown(id):
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("unknown", forKey: .kind)
+            try container.encodeIfPresent(id, forKey: .id)
         }
     }
 }

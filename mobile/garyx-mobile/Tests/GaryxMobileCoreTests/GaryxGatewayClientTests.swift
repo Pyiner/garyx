@@ -67,6 +67,9 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(queryItems.first(where: { $0.name == "replay_scope" })?.value, "initial")
         XCTAssertEqual(queryItems.first(where: { $0.name == "initial_user_turns" })?.value, "1")
         XCTAssertEqual(queryItems.first(where: { $0.name == "render_floor" })?.value, "7")
+        // #TASK-1956 batch 3: every stream connection declares delta mode;
+        // the frame processor reassembles full snapshots downstream.
+        XCTAssertEqual(queryItems.first(where: { $0.name == "render_mode" })?.value, "delta")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
     }
 

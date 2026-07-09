@@ -357,8 +357,8 @@ final class GaryxTranscriptSyncPlannerTests: XCTestCase {
 
     func testCapturedOneTurnInitialWindowRequiresLargerMobileDefault() throws {
         let frames = try Self.scrubbedCapturedInitialWindowFrames()
-        XCTAssertEqual(frames.map { $0.renderState.rows.count }, [1, 1])
-        XCTAssertEqual(frames.first?.renderState.window, GaryxRenderWindow(floorSeq: 2, hasMoreAbove: true))
+        XCTAssertEqual(frames.map { $0.renderState?.rows.count }, [1, 1])
+        XCTAssertEqual(frames.first?.renderState?.window, GaryxRenderWindow(floorSeq: 2, hasMoreAbove: true))
 
         let cold = GaryxThreadWindowPlanner.streamRequest(
             afterSeq: 42,

@@ -58,13 +58,13 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(frame.threadId, "thread::1")
         XCTAssertEqual(frame.events.only?.seq, 2)
         XCTAssertEqual(frame.events.only?.message?.id, "history:1")
-        XCTAssertEqual(frame.renderState.basedOnSeq, 2)
-        XCTAssertEqual(frame.renderState.tailActivity, .thinking)
-        XCTAssertEqual(frame.renderState.activeToolGroupId, "tool-group:active")
-        XCTAssertEqual(frame.renderState.progressLocus, .toolGroup)
-        XCTAssertEqual(frame.renderState.visibleMessageIds, ["seq:1", "seq:2"])
-        XCTAssertEqual(frame.renderState.filteredPlaceholders.only?.reason, .emptyStreamingAssistant)
-        XCTAssertEqual(frame.renderState.window, GaryxRenderWindow(floorSeq: 1, hasMoreAbove: true))
+        XCTAssertEqual(frame.renderState?.basedOnSeq, 2)
+        XCTAssertEqual(frame.renderState?.tailActivity, .thinking)
+        XCTAssertEqual(frame.renderState?.activeToolGroupId, "tool-group:active")
+        XCTAssertEqual(frame.renderState?.progressLocus, .toolGroup)
+        XCTAssertEqual(frame.renderState?.visibleMessageIds, ["seq:1", "seq:2"])
+        XCTAssertEqual(frame.renderState?.filteredPlaceholders.only?.reason, .emptyStreamingAssistant)
+        XCTAssertEqual(frame.renderState?.window, GaryxRenderWindow(floorSeq: 1, hasMoreAbove: true))
     }
 
     func testFrameDecodesSnapshotOnlyInitialFrame() throws {
@@ -90,9 +90,9 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(frame.type, "thread_render_frame")
         XCTAssertEqual(frame.threadId, "thread::1")
         XCTAssertTrue(frame.events.isEmpty)
-        XCTAssertEqual(frame.renderState.basedOnSeq, 7)
-        XCTAssertEqual(frame.renderState.rows, [])
-        XCTAssertEqual(frame.renderState.tailActivity, .none)
+        XCTAssertEqual(frame.renderState?.basedOnSeq, 7)
+        XCTAssertEqual(frame.renderState?.rows, [])
+        XCTAssertEqual(frame.renderState?.tailActivity, GaryxRenderTailActivity.none)
     }
 
     func testUserTurnDecodesMissingCapsuleCardsAsEmpty() throws {
