@@ -137,9 +137,11 @@ impl<'de> Deserialize<'de> for CodexModelsResponse {
     where
         D: serde::Deserializer<'de>,
     {
+        // `models` is intentionally required: a response without it is a
+        // structurally different payload and must fail parsing (falling back
+        // to the builtin catalog) instead of masquerading as an empty catalog.
         #[derive(Deserialize)]
         struct RawCodexModelsResponse {
-            #[serde(default)]
             models: Vec<Value>,
         }
 
@@ -759,6 +761,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![CodexReasoningEffort::Low, CodexReasoningEffort::Ultra]
         );
+    }
+
+    #[test]
+    fn catalog_without_top_level_models_field_fails_parsing() {
+        assert!(serde_json::from_value::<CodexModelsResponse>(json!({ "data": [] })).is_err());
+        assert!(serde_json::from_value::<CodexModelsResponse>(json!({})).is_err());
+        let empty: CodexModelsResponse = serde_json::from_value(json!({ "models": [] }))
+            .expect("an explicit empty models list is a valid catalog");
+        assert!(empty.models.is_empty());
     }
 
     #[test]
