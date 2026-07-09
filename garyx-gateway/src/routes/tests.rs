@@ -1282,7 +1282,11 @@ async fn thread_stream_delta_oracle_holds_on_captured_fixture_streams() {
         let records: Vec<Value> = raw
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(|line| serde_json::from_str(line).unwrap())
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            // Only committed transcript records reach the live commit
+            // pipeline in production; skip stream-event lines (e.g.
+            // stream_input) whose `message` would be null.
+            .filter(|record| record.get("message").is_some_and(|m| !m.is_null()))
             .collect();
         assert!(records.len() >= 2, "fixture {fixture} too short for a live tail");
 
