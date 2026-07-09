@@ -2,6 +2,16 @@
 
 Use the narrowest reliable validation for the touched area.
 
+## Fast Local Loop
+
+Prefer changed-package or single-file checks while iterating:
+
+```bash
+scripts/test/rust_tier1_fast.sh --changed
+cd desktop/garyx-desktop && npm run test:unit -- src/renderer/src/render-view-model.test.mjs
+cd desktop/garyx-desktop && npm run test:unit -- --list
+```
+
 ## Broad Checks
 
 ```bash
