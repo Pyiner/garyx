@@ -253,8 +253,8 @@ Pure deletion, no behavior change.
 - Gateway: routes tests drive a captured real-thread record stream through
   a delta-mode connection; assert (a) frame-by-frame reassembly on the
   client algorithm equals the full snapshot at every seq (structural oracle:
-  delta-apply(prev, delta) == render_snapshot_at_seq, including hash
-  equality so server and client hashing pin to the same bytes), (b)
+  delta-apply(prev, delta) == render_snapshot_at_seq, and the rows_hash
+  token chain is preserved across full and delta frames), (b)
   first-live-frame seeding, (c) seq or hash mismatch ⇒ reconnect error, (d)
   default windowed degrade fires without the flag, (e) deleted field absent.
 - Adversarial oracle cases (finding 1 family): same-seq overwrite mid-run ⇒
