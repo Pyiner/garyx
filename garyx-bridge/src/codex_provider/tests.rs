@@ -291,6 +291,153 @@ fn test_extract_usage_string_values() {
 }
 
 #[test]
+fn sub_agent_activity_items_map_to_tool_frames_named_by_agent_path() {
+    let item = json!({
+        "type": "subAgentActivity",
+        "id": "item-1",
+        "kind": "started",
+        "agentPath": "reviewer",
+        "agentThreadId": "thr-child",
+    });
+
+    let started = build_tool_session_message(&item, false).expect("subAgentActivity maps");
+    assert_eq!(started.tool_name.as_deref(), Some("subAgent:reviewer"));
+    assert_eq!(started.tool_use_id.as_deref(), Some("item-1"));
+
+    let completed = build_tool_session_message(&item, true).expect("completed maps");
+    assert_eq!(completed.tool_name.as_deref(), Some("subAgent:reviewer"));
+}
+
+#[test]
+fn sub_agent_activity_without_agent_path_uses_generic_name() {
+    let item = json!({
+        "type": "subAgentActivity",
+        "id": "item-2",
+        "kind": "interacted",
+    });
+    let msg = build_tool_session_message(&item, false).expect("maps without agentPath");
+    assert_eq!(msg.tool_name.as_deref(), Some("subAgent"));
+}
+
+#[test]
+fn sleep_items_map_to_tool_frames() {
+    let item = json!({
+        "type": "sleep",
+        "id": "item-3",
+        "durationMs": 1500,
+    });
+    let msg = build_tool_session_message(&item, false).expect("sleep maps");
+    assert_eq!(msg.tool_name.as_deref(), Some("sleep"));
+}
+
+#[test]
+fn reasoning_items_stay_excluded_from_tool_frames() {
+    let item = json!({
+        "type": "reasoning",
+        "id": "item-4",
+    });
+    assert!(build_tool_session_message(&item, false).is_none());
+}
+
+#[test]
+fn advisory_notifications_render_messages_for_known_methods_only() {
+    assert_eq!(
+        codex_advisory_notification_message("warning", &json!({ "message": "quota nearly used" })),
+        Some("quota nearly used".to_owned())
+    );
+    assert_eq!(
+        codex_advisory_notification_message(
+            "configWarning",
+            &json!({ "summary": "bad key", "details": "unknown field", "path": "/tmp/config.toml" })
+        ),
+        Some("bad key (unknown field) [config: /tmp/config.toml]".to_owned())
+    );
+    assert_eq!(
+        codex_advisory_notification_message(
+            "deprecationNotice",
+            &json!({ "summary": "old flag", "details": "use --new" })
+        ),
+        Some("old flag (use --new)".to_owned())
+    );
+    // Blank payloads and unrelated methods are not advisories.
+    assert_eq!(
+        codex_advisory_notification_message("warning", &json!({ "message": "  " })),
+        None
+    );
+    assert_eq!(
+        codex_advisory_notification_message("turn/completed", &json!({ "message": "x" })),
+        None
+    );
+}
+
+#[test]
+fn extract_rerouted_model_reads_to_model() {
+    assert_eq!(
+        extract_rerouted_model(&json!({
+            "fromModel": "gpt-5.6-sol",
+            "toModel": "gpt-5.6-luna",
+            "reason": "capacity",
+        })),
+        Some("gpt-5.6-luna".to_owned())
+    );
+    assert_eq!(extract_rerouted_model(&json!({ "toModel": "  " })), None);
+    assert_eq!(extract_rerouted_model(&json!({})), None);
+}
+
+#[test]
+fn usage_from_single_token_usage_snapshot_uses_last_breakdown() {
+    // Single-request turn: one snapshot, `last` is the whole turn.
+    let snapshot = json!({
+        "last": { "inputTokens": 1200, "outputTokens": 340 },
+        "total": { "inputTokens": 99999, "outputTokens": 88888 },
+        "modelContextWindow": 372000,
+    });
+    assert_eq!(
+        usage_from_token_usage_snapshots(&snapshot, &snapshot),
+        (1200, 340)
+    );
+    assert_eq!(
+        usage_from_token_usage_snapshots(&json!({}), &json!({})),
+        (0, 0)
+    );
+}
+
+#[test]
+fn usage_from_token_usage_snapshots_adds_total_growth_for_multi_request_turns() {
+    // Resumed thread: totals already include prior turns. The turn consists of
+    // two requests (1200/340 then 800/60); its usage is first `last` plus the
+    // observed `total` growth.
+    let first = json!({
+        "last": { "inputTokens": 1200, "outputTokens": 340 },
+        "total": { "inputTokens": 51200, "outputTokens": 10340 },
+    });
+    let latest = json!({
+        "last": { "inputTokens": 800, "outputTokens": 60 },
+        "total": { "inputTokens": 52000, "outputTokens": 10400 },
+    });
+    assert_eq!(
+        usage_from_token_usage_snapshots(&first, &latest),
+        (1200 + 800, 340 + 60)
+    );
+}
+
+#[test]
+fn usage_from_token_usage_snapshots_clamps_negative_total_regression() {
+    let first = json!({
+        "last": { "inputTokens": 500, "outputTokens": 50 },
+        "total": { "inputTokens": 9000, "outputTokens": 900 },
+    });
+    let regressed = json!({
+        "last": { "inputTokens": 100, "outputTokens": 10 },
+        "total": { "inputTokens": 100, "outputTokens": 10 },
+    });
+    assert_eq!(
+        usage_from_token_usage_snapshots(&first, &regressed),
+        (500, 50)
+    );
+}
+
+#[test]
 fn test_resolve_runtime_codex_env_merges_provider_env() {
     let config = CodexAppServerConfig {
         env: HashMap::from([

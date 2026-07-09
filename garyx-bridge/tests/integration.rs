@@ -432,6 +432,14 @@ async fn test_codex_provider_full() {
         *got_final.lock().unwrap(),
         "Never received final chunk callback"
     );
+    // App-server 0.144 dropped usage from `turn/completed`; per-turn usage must
+    // still be reported via the `thread/tokenUsage/updated` snapshots.
+    assert!(
+        result.input_tokens > 0 && result.output_tokens > 0,
+        "Expected non-zero usage for a real streaming run, got input={} output={}",
+        result.input_tokens,
+        result.output_tokens
+    );
 
     // --- Shutdown ---
     provider.shutdown().await.expect("shutdown failed");

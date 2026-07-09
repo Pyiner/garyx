@@ -360,6 +360,73 @@ fn read_codex_cli_default_model_from_path(path: &Path) -> Option<String> {
     normalize_non_empty(parsed.model.as_deref())
 }
 
+/// Human-readable message for account/config-scoped advisory notifications
+/// (`warning`, `configWarning`, `deprecationNotice`) that carry no turn
+/// affinity. Returns `None` for every other method.
+fn codex_advisory_notification_message(method: &str, params: &Value) -> Option<String> {
+    let text_field = |key: &str| {
+        params
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    let with_details = |summary: String| match text_field("details") {
+        Some(details) => format!("{summary} ({details})"),
+        None => summary,
+    };
+    match method {
+        "warning" => text_field("message"),
+        "configWarning" => text_field("summary").map(|summary| {
+            let summary = with_details(summary);
+            match text_field("path") {
+                Some(path) => format!("{summary} [config: {path}]"),
+                None => summary,
+            }
+        }),
+        "deprecationNotice" => text_field("summary").map(with_details),
+        _ => None,
+    }
+}
+
+/// Extract the destination model from a `model/rerouted` notification.
+fn extract_rerouted_model(params: &Value) -> Option<String> {
+    params
+        .get("toModel")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Per-turn `(input_tokens, output_tokens)` from the first and latest
+/// `thread/tokenUsage/updated` snapshots seen during the turn.
+///
+/// As of app-server 0.144 `turn/completed` no longer carries usage, so these
+/// snapshots are the authoritative source. `total` is thread-cumulative
+/// (including prior turns on a resumed thread) and `last` is the most recent
+/// request, so the turn's own consumption is the first snapshot's `last`
+/// (the turn's first request) plus the `total` growth observed since that
+/// snapshot. A single-snapshot turn degenerates to its `last` breakdown, and
+/// repeated snapshots for the same request add zero because `total` does not
+/// move.
+fn usage_from_token_usage_snapshots(first: &Value, latest: &Value) -> (i64, i64) {
+    fn read(snapshot: &Value, section: &str, key: &str) -> i64 {
+        snapshot
+            .get(section)
+            .and_then(|s| s.get(key))
+            .map(coerce_i64)
+            .unwrap_or(0)
+    }
+    let turn_tokens = |key: &str| {
+        let first_request = read(first, "last", key);
+        let growth = (read(latest, "total", key) - read(first, "total", key)).max(0);
+        first_request + growth
+    };
+    (turn_tokens("inputTokens"), turn_tokens("outputTokens"))
+}
+
 fn resolve_codex_actual_model_with_config_path(
     config: &CodexAppServerConfig,
     metadata: &HashMap<String, Value>,
@@ -779,9 +846,11 @@ fn is_codex_structured_activity_item_type(item_type: &str) -> bool {
         "mcpToolCall",
         "dynamicToolCall",
         "collabAgentToolCall",
+        "subAgentActivity",
         "webSearch",
         "imageView",
         "imageGeneration",
+        "sleep",
         "enteredReviewMode",
         "exitedReviewMode",
         "contextCompaction",
@@ -825,6 +894,21 @@ fn codex_structured_activity_name(item_type: &str, item: &Value) -> String {
             .filter(|value| !value.is_empty())
     {
         return tool.to_owned();
+    }
+
+    // Sub-agent delegation activity (Codex multi-agent v2, e.g. the GPT-5.6
+    // `ultra` reasoning tier). Name it by the delegated agent path so channels
+    // and transcript rows show which sub-agent is active.
+    if item_type.eq_ignore_ascii_case("subAgentActivity") {
+        if let Some(agent_path) = item
+            .get("agentPath")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return format!("subAgent:{agent_path}");
+        }
+        return "subAgent".to_owned();
     }
 
     item_type.to_owned()
@@ -1685,7 +1769,7 @@ impl CodexAgentProvider {
 
         let start = Instant::now();
         let effective_config = self.effective_config();
-        let actual_model = resolve_codex_actual_model(&effective_config, &options.metadata);
+        let mut actual_model = resolve_codex_actual_model(&effective_config, &options.metadata);
         let mut response_parts: Vec<String> = Vec::new();
         let mut session_messages: Vec<ProviderMessage> = Vec::new();
         let mut notification_rx = client.subscribe_events();
@@ -1777,6 +1861,11 @@ impl CodexAgentProvider {
         let mut current_agent_message_item_id: Option<String> = None;
         let mut current_agent_message_has_text = false;
         let mut thread_title: Option<String> = None;
+        // First and latest `thread/tokenUsage/updated` snapshots for this
+        // turn. As of app-server 0.144 `turn/completed` no longer carries
+        // usage, so per-turn usage derives from these snapshots.
+        let mut first_token_usage: Option<Value> = None;
+        let mut latest_token_usage: Option<Value> = None;
 
         let timeout = Duration::from_secs_f64(self.config.request_timeout_seconds);
 
@@ -1809,6 +1898,23 @@ impl CodexAgentProvider {
                     if let Some(snapshot) = extract_rate_limit_snapshot(params) {
                         latest_rate_limit_snapshot = Some(snapshot);
                     }
+                    continue;
+                }
+
+                // Advisory notices are account/config-scoped (no or optional
+                // turn affinity), so log them before the turn-affinity gate
+                // would silently drop them.
+                if let Some(advisory) = codex_advisory_notification_message(method, params) {
+                    let codex_thread_id = params
+                        .get("threadId")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    tracing::warn!(
+                        method = %method,
+                        thread_id = %options.thread_id,
+                        codex_thread_id = %codex_thread_id,
+                        "codex app-server advisory: {advisory}"
+                    );
                     continue;
                 }
 
@@ -1888,16 +1994,48 @@ impl CodexAgentProvider {
                     }
                     "error" => {
                         if let Some(err_obj) = params.get("error") {
-                            streamed_error_message = Some(
-                                err_obj
-                                    .get("message")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("codex turn error")
-                                    .to_owned(),
+                            let message = err_obj
+                                .get("message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("codex turn error")
+                                .to_owned();
+                            let will_retry = params
+                                .get("willRetry")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false);
+                            tracing::warn!(
+                                thread_id = %options.thread_id,
+                                will_retry,
+                                "codex turn error notification: {message}"
                             );
+                            streamed_error_message = Some(message);
                             if codex_error_is_usage_limit(err_obj.get("codexErrorInfo")) {
                                 usage_limit_hit = true;
                             }
+                        }
+                    }
+                    "model/rerouted" => {
+                        if let Some(to_model) = extract_rerouted_model(params) {
+                            let from_model = params
+                                .get("fromModel")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            tracing::info!(
+                                thread_id = %options.thread_id,
+                                from_model = %from_model,
+                                to_model = %to_model,
+                                reason = ?params.get("reason"),
+                                "codex rerouted the turn to a different model"
+                            );
+                            actual_model = Some(to_model);
+                        }
+                    }
+                    "thread/tokenUsage/updated" => {
+                        if let Some(usage) = params.get("tokenUsage").filter(|v| v.is_object()) {
+                            if first_token_usage.is_none() {
+                                first_token_usage = Some(usage.clone());
+                            }
+                            latest_token_usage = Some(usage.clone());
                         }
                     }
                     "turn/completed" => {
@@ -1994,7 +2132,23 @@ impl CodexAgentProvider {
             .await;
         }
 
-        let (input_tokens, output_tokens, cost) = extract_usage(&completed);
+        let (input_tokens, output_tokens, cost) = {
+            let (input_tokens, output_tokens, cost) = extract_usage(&completed);
+            if input_tokens == 0 && output_tokens == 0 {
+                // `turn/completed` omits usage on app-server >= 0.144; derive
+                // this turn's usage from its token-usage snapshots instead.
+                let (snapshot_input, snapshot_output) =
+                    match (first_token_usage.as_ref(), latest_token_usage.as_ref()) {
+                        (Some(first), Some(latest)) => {
+                            usage_from_token_usage_snapshots(first, latest)
+                        }
+                        _ => (0, 0),
+                    };
+                (snapshot_input, snapshot_output, cost)
+            } else {
+                (input_tokens, output_tokens, cost)
+            }
+        };
 
         live_callback(StreamEvent::Done);
 
