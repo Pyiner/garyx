@@ -10,7 +10,12 @@ use crate::provider::GaryxNativeConfig;
 
 pub const OPENAI_RESPONSES_BASE_URL: &str = "https://api.openai.com/v1";
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-pub const CODEX_MODELS_CLIENT_VERSION_FLOOR: &str = "0.124.0";
+/// The newest Codex models-catalog shape Garyx itself understands. The backend
+/// gates catalog entries by `client_version` (each model carries a
+/// `minimal_client_version`), so this floor must be raised whenever Garyx
+/// gains support for a newer catalog generation (e.g. `0.144.0` unlocks the
+/// GPT-5.6 family and the `max`/`ultra` reasoning levels).
+pub const CODEX_MODELS_CLIENT_VERSION_FLOOR: &str = "0.144.0";
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -22,6 +27,8 @@ pub enum CodexReasoningEffort {
     Medium,
     High,
     XHigh,
+    Max,
+    Ultra,
 }
 
 impl CodexReasoningEffort {
@@ -33,6 +40,8 @@ impl CodexReasoningEffort {
             Self::Medium => "medium",
             Self::High => "high",
             Self::XHigh => "xhigh",
+            Self::Max => "max",
+            Self::Ultra => "ultra",
         }
     }
 
@@ -44,6 +53,8 @@ impl CodexReasoningEffort {
             Self::Medium => "Medium",
             Self::High => "High",
             Self::XHigh => "Extra High",
+            Self::Max => "Max",
+            Self::Ultra => "Ultra",
         }
     }
 }
@@ -93,9 +104,13 @@ pub struct CodexModelInfo {
     pub slug: String,
     pub display_name: String,
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_reasoning_effort"
+    )]
     pub default_reasoning_level: Option<CodexReasoningEffort>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_reasoning_levels")]
     pub supported_reasoning_levels: Vec<CodexReasoningEffortPreset>,
     #[serde(default)]
     pub additional_speed_tiers: Vec<String>,
@@ -107,9 +122,59 @@ pub struct CodexModelInfo {
     pub priority: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
 pub struct CodexModelsResponse {
     pub models: Vec<CodexModelInfo>,
+}
+
+// The models catalog is a remote contract that keeps evolving (new reasoning
+// levels, new per-model fields). Parse it leniently: an unknown reasoning
+// level drops only that level, and an unparseable catalog entry drops only
+// that entry, so the rest of the catalog stays dynamic instead of the whole
+// response failing and falling back to the builtin snapshot.
+impl<'de> Deserialize<'de> for CodexModelsResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawCodexModelsResponse {
+            #[serde(default)]
+            models: Vec<Value>,
+        }
+
+        let raw = RawCodexModelsResponse::deserialize(deserializer)?;
+        Ok(Self {
+            models: raw
+                .models
+                .into_iter()
+                .filter_map(|model| serde_json::from_value(model).ok())
+                .collect(),
+        })
+    }
+}
+
+fn lenient_reasoning_effort<'de, D>(
+    deserializer: D,
+) -> Result<Option<CodexReasoningEffort>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<Value>::deserialize(deserializer)?;
+    Ok(raw.and_then(|value| serde_json::from_value(value).ok()))
+}
+
+fn lenient_reasoning_levels<'de, D>(
+    deserializer: D,
+) -> Result<Vec<CodexReasoningEffortPreset>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<Value>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|level| serde_json::from_value(level).ok())
+        .collect())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +242,10 @@ pub fn codex_builtin_model_presets() -> Vec<CodexModelPreset> {
     available_codex_model_presets(codex_builtin_models(), true)
 }
 
+/// Fallback snapshot of the Codex backend models catalog, used when the
+/// dynamic `/models` fetch is unavailable. Keep this mirroring the backend
+/// response (slugs, display names, descriptions, priorities, reasoning
+/// levels) for the current `CODEX_MODELS_CLIENT_VERSION_FLOOR`.
 pub fn codex_builtin_models() -> Vec<CodexModelInfo> {
     vec![
         codex_builtin_model(
@@ -184,41 +253,62 @@ pub fn codex_builtin_models() -> Vec<CodexModelInfo> {
             "GPT-5.5",
             "Frontier model for complex coding, research, and real-world work.",
             0,
+            CodexReasoningEffort::Medium,
+            codex_default_reasoning_levels(),
+            true,
+        ),
+        codex_builtin_model(
+            "gpt-5.6-sol",
+            "GPT-5.6-Sol",
+            "Latest frontier agentic coding model.",
+            1,
+            CodexReasoningEffort::Low,
+            codex_extended_reasoning_levels(true),
+            true,
+        ),
+        codex_builtin_model(
+            "gpt-5.6-terra",
+            "GPT-5.6-Terra",
+            "Balanced agentic coding model for everyday work.",
+            2,
+            CodexReasoningEffort::Medium,
+            codex_extended_reasoning_levels(true),
+            true,
+        ),
+        codex_builtin_model(
+            "gpt-5.6-luna",
+            "GPT-5.6-Luna",
+            "Fast and affordable agentic coding model.",
+            3,
+            CodexReasoningEffort::Medium,
+            codex_extended_reasoning_levels(false),
             true,
         ),
         codex_builtin_model(
             "gpt-5.4",
-            "gpt-5.4",
+            "GPT-5.4",
             "Strong model for everyday coding.",
-            2,
+            16,
+            CodexReasoningEffort::Medium,
+            codex_default_reasoning_levels(),
             true,
         ),
         codex_builtin_model(
             "gpt-5.4-mini",
             "GPT-5.4-Mini",
             "Small, fast, and cost-efficient model for simpler coding tasks.",
-            4,
-            false,
-        ),
-        codex_builtin_model(
-            "gpt-5.3-codex",
-            "gpt-5.3-codex",
-            "Coding-optimized model.",
-            6,
+            23,
+            CodexReasoningEffort::Medium,
+            codex_default_reasoning_levels(),
             false,
         ),
         codex_builtin_model(
             "gpt-5.3-codex-spark",
             "GPT-5.3-Codex-Spark",
             "Ultra-fast coding model.",
-            8,
-            false,
-        ),
-        codex_builtin_model(
-            "gpt-5.2",
-            "gpt-5.2",
-            "Optimized for professional work and long-running agents.",
-            10,
+            26,
+            CodexReasoningEffort::High,
+            codex_default_reasoning_levels(),
             false,
         ),
     ]
@@ -229,14 +319,16 @@ fn codex_builtin_model(
     display_name: &str,
     description: &str,
     priority: i32,
+    default_reasoning_level: CodexReasoningEffort,
+    supported_reasoning_levels: Vec<CodexReasoningEffortPreset>,
     supports_fast_service_tier: bool,
 ) -> CodexModelInfo {
     CodexModelInfo {
         slug: slug.to_owned(),
         display_name: display_name.to_owned(),
         description: Some(description.to_owned()),
-        default_reasoning_level: Some(CodexReasoningEffort::Medium),
-        supported_reasoning_levels: codex_default_reasoning_levels(),
+        default_reasoning_level: Some(default_reasoning_level),
+        supported_reasoning_levels,
         additional_speed_tiers: if supports_fast_service_tier {
             vec!["fast".to_owned()]
         } else {
@@ -272,6 +364,23 @@ pub fn codex_default_reasoning_levels() -> Vec<CodexReasoningEffortPreset> {
             "Extra high reasoning depth for complex problems",
         ),
     ]
+}
+
+/// The default reasoning levels extended with `max` (and optionally `ultra`),
+/// matching the GPT-5.6 family catalog entries.
+pub fn codex_extended_reasoning_levels(include_ultra: bool) -> Vec<CodexReasoningEffortPreset> {
+    let mut levels = codex_default_reasoning_levels();
+    levels.push(reasoning_effort_preset(
+        CodexReasoningEffort::Max,
+        "Maximum reasoning depth for the hardest problems",
+    ));
+    if include_ultra {
+        levels.push(reasoning_effort_preset(
+            CodexReasoningEffort::Ultra,
+            "Maximum reasoning with automatic task delegation",
+        ));
+    }
+    levels
 }
 
 fn reasoning_effort_preset(
@@ -493,25 +602,44 @@ pub fn parse_codex_cli_version(output: &str) -> Option<String> {
     output
         .split_whitespace()
         .rev()
-        .find(|token| is_semver_token(token))
+        .find(|token| semver_triple(token).is_some())
         .map(ToOwned::to_owned)
 }
 
-fn is_semver_token(value: &str) -> bool {
+/// The `client_version` Garyx declares when fetching the Codex models catalog
+/// directly: the detected local CLI version when it is at least the floor,
+/// otherwise [`CODEX_MODELS_CLIENT_VERSION_FLOOR`]. The floor is Garyx's own
+/// catalog capability, so a missing or older local Codex CLI must not hide
+/// catalog entries the native GPT provider fully supports.
+pub fn effective_codex_models_client_version(detected: Option<&str>) -> String {
+    let floor = CODEX_MODELS_CLIENT_VERSION_FLOOR;
+    let Some((detected, detected_triple)) = detected
+        .and_then(|version| Some((version, semver_triple(version)?)))
+    else {
+        return floor.to_owned();
+    };
+    match semver_triple(floor) {
+        Some(floor_triple) if detected_triple < floor_triple => floor.to_owned(),
+        _ => detected.to_owned(),
+    }
+}
+
+fn semver_triple(value: &str) -> Option<(u64, u64, u64)> {
     let mut parts = value.split('.');
-    let Some(major) = parts.next() else {
-        return false;
-    };
-    let Some(minor) = parts.next() else {
-        return false;
-    };
-    let Some(patch) = parts.next() else {
-        return false;
-    };
-    parts.next().is_none()
-        && major.chars().all(|ch| ch.is_ascii_digit())
-        && minor.chars().all(|ch| ch.is_ascii_digit())
-        && patch.chars().all(|ch| ch.is_ascii_digit())
+    let major = parse_semver_component(parts.next()?)?;
+    let minor = parse_semver_component(parts.next()?)?;
+    let patch = parse_semver_component(parts.next()?)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+fn parse_semver_component(value: &str) -> Option<u64> {
+    if value.is_empty() || !value.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    value.parse::<u64>().ok()
 }
 
 #[cfg(test)]
@@ -539,9 +667,121 @@ mod tests {
     fn reasoning_effort_matches_codex_wire_values() {
         assert_eq!(CodexReasoningEffort::None.to_string(), "none");
         assert_eq!(CodexReasoningEffort::Minimal.to_string(), "minimal");
+        assert_eq!(CodexReasoningEffort::Max.to_string(), "max");
+        assert_eq!(CodexReasoningEffort::Ultra.to_string(), "ultra");
         assert_eq!(
             "xhigh".parse::<CodexReasoningEffort>(),
             Ok(CodexReasoningEffort::XHigh)
+        );
+        assert_eq!(
+            "max".parse::<CodexReasoningEffort>(),
+            Ok(CodexReasoningEffort::Max)
+        );
+        assert_eq!(
+            "ultra".parse::<CodexReasoningEffort>(),
+            Ok(CodexReasoningEffort::Ultra)
+        );
+    }
+
+    #[test]
+    fn catalog_with_max_and_ultra_levels_deserializes() {
+        let catalog: CodexModelsResponse = serde_json::from_value(json!({
+            "models": [{
+                "slug": "gpt-5.6-sol",
+                "display_name": "GPT-5.6-Sol",
+                "description": "Latest frontier agentic coding model.",
+                "default_reasoning_level": "low",
+                "supported_reasoning_levels": [
+                    { "effort": "low", "description": "Fast" },
+                    { "effort": "max", "description": "Maximum reasoning depth" },
+                    { "effort": "ultra", "description": "Maximum reasoning with delegation" }
+                ],
+                "visibility": "list",
+                "supported_in_api": true,
+                "priority": 1,
+                "unknown_future_field": { "ignored": true }
+            }]
+        }))
+        .expect("catalog with max/ultra levels should deserialize");
+
+        let levels: Vec<_> = catalog.models[0]
+            .supported_reasoning_levels
+            .iter()
+            .map(|preset| preset.effort)
+            .collect();
+        assert_eq!(
+            levels,
+            vec![
+                CodexReasoningEffort::Low,
+                CodexReasoningEffort::Max,
+                CodexReasoningEffort::Ultra
+            ]
+        );
+    }
+
+    #[test]
+    fn catalog_parsing_is_lenient_about_unknown_levels_and_entries() {
+        let catalog: CodexModelsResponse = serde_json::from_value(json!({
+            "models": [
+                {
+                    "slug": "gpt-5.6-sol",
+                    "display_name": "GPT-5.6-Sol",
+                    "description": null,
+                    "default_reasoning_level": "hyper",
+                    "supported_reasoning_levels": [
+                        { "effort": "low", "description": "Fast" },
+                        { "effort": "hyper", "description": "A future level Garyx does not know yet" },
+                        { "effort": "ultra", "description": "Delegating" }
+                    ],
+                    "visibility": "list",
+                    "priority": 1
+                },
+                {
+                    "slug": "gpt-6-future",
+                    "display_name": "GPT-6",
+                    "description": null,
+                    "visibility": "a-future-visibility-variant",
+                    "priority": 0
+                }
+            ]
+        }))
+        .expect("catalog should parse leniently");
+
+        assert_eq!(catalog.models.len(), 1);
+        let model = &catalog.models[0];
+        assert_eq!(model.slug, "gpt-5.6-sol");
+        assert_eq!(model.default_reasoning_level, None);
+        assert_eq!(
+            model
+                .supported_reasoning_levels
+                .iter()
+                .map(|preset| preset.effort)
+                .collect::<Vec<_>>(),
+            vec![CodexReasoningEffort::Low, CodexReasoningEffort::Ultra]
+        );
+    }
+
+    #[test]
+    fn effective_client_version_clamps_older_cli_to_floor() {
+        assert_eq!(
+            effective_codex_models_client_version(Some("0.142.5")),
+            CODEX_MODELS_CLIENT_VERSION_FLOOR
+        );
+        assert_eq!(
+            effective_codex_models_client_version(Some("0.150.2")),
+            "0.150.2"
+        );
+        assert_eq!(
+            effective_codex_models_client_version(Some(CODEX_MODELS_CLIENT_VERSION_FLOOR)),
+            CODEX_MODELS_CLIENT_VERSION_FLOOR
+        );
+        assert_eq!(
+            effective_codex_models_client_version(None),
+            CODEX_MODELS_CLIENT_VERSION_FLOOR
+        );
+        assert_eq!(
+            effective_codex_models_client_version(Some("not-a-version")),
+            CODEX_MODELS_CLIENT_VERSION_FLOOR
         );
     }
 
@@ -577,6 +817,34 @@ mod tests {
         );
         assert_eq!(default.service_tiers[0].id, "priority");
         assert_eq!(default.service_tiers[0].name, "Fast");
+    }
+
+    #[test]
+    fn builtin_catalog_includes_gpt_5_6_family_with_max_and_ultra() {
+        let presets = codex_builtin_model_presets();
+        let sol = presets
+            .iter()
+            .find(|preset| preset.model == "gpt-5.6-sol")
+            .expect("builtin catalog should include gpt-5.6-sol");
+        assert_eq!(sol.default_reasoning_effort, CodexReasoningEffort::Low);
+        assert_eq!(
+            sol.supported_reasoning_efforts
+                .iter()
+                .map(|preset| preset.effort.to_string())
+                .collect::<Vec<_>>(),
+            vec!["low", "medium", "high", "xhigh", "max", "ultra"]
+        );
+        let luna = presets
+            .iter()
+            .find(|preset| preset.model == "gpt-5.6-luna")
+            .expect("builtin catalog should include gpt-5.6-luna");
+        assert_eq!(
+            luna.supported_reasoning_efforts
+                .iter()
+                .map(|preset| preset.effort.to_string())
+                .collect::<Vec<_>>(),
+            vec!["low", "medium", "high", "xhigh", "max"]
+        );
     }
 
     #[test]

@@ -1209,7 +1209,7 @@ pub(crate) enum AgentAction {
         /// Optional model override. Omit to use the provider default.
         #[arg(long)]
         model: Option<String>,
-        /// Optional reasoning effort override: low, medium, high, or xhigh.
+        /// Optional reasoning effort override, for example low, medium, high, xhigh, max, or ultra (supported values depend on the provider and model).
         #[arg(long)]
         model_reasoning_effort: Option<String>,
         /// Optional model service tier override, for example priority for Fast mode.
@@ -1258,7 +1258,7 @@ pub(crate) enum AgentAction {
         /// Clear the model override and use the provider default.
         #[arg(long)]
         clear_model: bool,
-        /// Optional reasoning effort override: low, medium, high, or xhigh. Pass an empty string to clear it.
+        /// Optional reasoning effort override, for example low, medium, high, xhigh, max, or ultra (supported values depend on the provider and model). Pass an empty string to clear it.
         #[arg(long)]
         model_reasoning_effort: Option<String>,
         /// Optional model service tier override, for example priority for Fast mode. Pass an empty string to clear it.
@@ -1307,7 +1307,7 @@ pub(crate) enum AgentAction {
         /// Clear the model override and use the provider default.
         #[arg(long)]
         clear_model: bool,
-        /// Optional reasoning effort override: low, medium, high, or xhigh. Pass an empty string to clear it.
+        /// Optional reasoning effort override, for example low, medium, high, xhigh, max, or ultra (supported values depend on the provider and model). Pass an empty string to clear it.
         #[arg(long)]
         model_reasoning_effort: Option<String>,
         /// Optional model service tier override, for example priority for Fast mode. Pass an empty string to clear it.

@@ -80,6 +80,11 @@ pub(super) fn native_reasoning_effort_metadata(
             "Use the highest supported adaptive reasoning effort.",
         )),
         "max" => Some(("max", "Max", "Maximum capability with deepest reasoning.")),
+        "ultra" => Some((
+            "ultra",
+            "Ultra",
+            "Maximum reasoning with automatic task delegation.",
+        )),
         _ => None,
     }
 }

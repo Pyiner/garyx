@@ -5,10 +5,10 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use garyx_models::codex_models::{
-    CODEX_MODELS_CLIENT_VERSION_FLOOR, CodexModelPreset, CodexModelServiceTier,
-    CodexModelsResponse, CodexReasoningEffort, CodexReasoningEffortPreset,
-    available_codex_model_presets, codex_builtin_model_presets, models_endpoint,
-    parse_codex_cli_version, resolve_codex_auth,
+    CodexModelPreset, CodexModelServiceTier, CodexModelsResponse, CodexReasoningEffort,
+    CodexReasoningEffortPreset, available_codex_model_presets, codex_builtin_model_presets,
+    effective_codex_models_client_version, models_endpoint, parse_codex_cli_version,
+    resolve_codex_auth,
 };
 use garyx_models::config::{AgentProviderConfig, GaryxConfig};
 use garyx_models::provider::{GaryxNativeConfig, ProviderType};

@@ -185,11 +185,16 @@ pub(super) fn provider_service_tier_options(
 }
 
 pub(super) async fn resolve_codex_models_client_version() -> String {
+    // Explicit override: honored verbatim (escape hatch to pin a catalog
+    // generation, including one below the floor).
     if let Ok(value) = std::env::var("CODEX_CLIENT_VERSION")
         && let Some(version) = parse_codex_cli_version(&value)
     {
         return version;
     }
+    // The local CLI version is only a hint for this direct catalog fetch; an
+    // old or missing CLI must not hide models Garyx itself supports, so the
+    // detected version is clamped up to the catalog-capability floor.
     let version = timeout(
         Duration::from_secs(2),
         Command::new("codex").arg("--version").output(),
@@ -199,7 +204,7 @@ pub(super) async fn resolve_codex_models_client_version() -> String {
     .and_then(Result::ok)
     .and_then(|output| String::from_utf8(output.stdout).ok())
     .and_then(|output| parse_codex_cli_version(&output));
-    version.unwrap_or_else(|| CODEX_MODELS_CLIENT_VERSION_FLOOR.to_owned())
+    effective_codex_models_client_version(version.as_deref())
 }
 
 pub(super) fn configured_gpt_config(config: &GaryxConfig) -> GaryxNativeConfig {
