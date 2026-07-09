@@ -260,8 +260,15 @@ public struct GatewayStreamFrameProcessor: Sendable {
             heldSnapshot = snapshot
             return .snapshot(snapshot)
         }
-        guard let delta = frame.renderDelta else {
+        guard let deltaPayload = frame.renderDelta else {
             return .ignore
+        }
+        // A delta the client cannot decode is a protocol violation of the
+        // same class as a broken chain: discard the frame atomically (its
+        // committed events replay after the gap) — never silently. Desktop
+        // parity: `applyRenderDeltaFrame` throws "frame is malformed".
+        guard case let .delta(delta) = deltaPayload else {
+            return .violation
         }
         guard let held = heldSnapshot, delta.fromSeq == held.basedOnSeq else {
             return .violation
@@ -325,13 +332,18 @@ public struct GatewayStreamFrameProcessor: Sendable {
 }
 
 private extension GaryxRenderRow {
-    /// Row identity for delta reassembly. Unknown row kinds keep their id
-    /// so a newer server's rows survive `row_order` carry-forward.
+    /// Row identity for delta reassembly. Unknown row kinds keep their full
+    /// wire object, so the id is read out of the preserved payload — a
+    /// newer server's rows survive `row_order` carry-forward intact.
     var garyxDeltaRowId: String? {
         switch self {
         case let .userTurn(row):
             return row.id
-        case let .unknown(id):
+        case let .unknown(raw):
+            guard case let .object(fields) = raw,
+                  case let .string(id)? = fields["id"] else {
+                return nil
+            }
             return id
         }
     }

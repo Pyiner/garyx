@@ -10,7 +10,11 @@ public struct GaryxThreadRenderFrame: Decodable, Equatable, Sendable {
     public var renderState: GaryxRenderSnapshot?
     /// Incremental live frame body; reassembled into a full snapshot by
     /// `GatewayStreamFrameProcessor` before anything downstream sees it.
-    public var renderDelta: GaryxRenderDelta?
+    /// `nil` when the wire frame carried no `render_delta` (absent or JSON
+    /// null); `.malformed` when the key was present but its body failed the
+    /// strict decode — that distinction is what lets the processor gap
+    /// instead of silently dropping the frame (#TASK-2038 P1).
+    public var renderDelta: GaryxRenderDeltaPayload?
     /// "windowed": the gateway degraded a stale opted-in resume to the
     /// initial window; the frame's records start at the window floor and
     /// the discontinuity is authorized by this marker.
@@ -32,9 +36,29 @@ public struct GaryxThreadRenderFrame: Decodable, Equatable, Sendable {
         threadId = try container.garyxDecodeFirstString(.threadIdSnake, .threadId) ?? ""
         events = try container.decodeIfPresent([GaryxThreadRenderFrameEvent].self, forKey: .events) ?? []
         renderState = try container.decodeIfPresent(GaryxRenderSnapshot.self, forKey: .renderState)
-        renderDelta = try container.decodeIfPresent(GaryxRenderDelta.self, forKey: .renderDelta)
+        do {
+            renderDelta = try container.decodeIfPresent(GaryxRenderDelta.self, forKey: .renderDelta)
+                .map(GaryxRenderDeltaPayload.delta)
+        } catch is DecodingError {
+            // Key present, body undecodable. Failing the whole frame here
+            // would surface as an envelope-level `.ignored` — dropping the
+            // frame's committed events with no replay recovery. Record the
+            // malformed slot instead and let the processor gap on it.
+            renderDelta = .malformed
+        }
         replay = try container.decodeIfPresent(String.self, forKey: .replay)
     }
+}
+
+/// The `render_delta` slot of a frame envelope (#TASK-2038 P1). A live
+/// frame the client cannot decode is a protocol breach of the same class
+/// as a broken chain: it must ride the `.gap(resumeAfterSeq:)` exit so the
+/// replay recovers the frame's committed events. Desktop behaves the same
+/// (`applyRenderDeltaFrame` throws its gap error on malformed bodies).
+public enum GaryxRenderDeltaPayload: Equatable, Sendable {
+    case delta(GaryxRenderDelta)
+    /// The `render_delta` key was present but its body failed strict decode.
+    case malformed
 }
 
 /// Wire shape of a `render_delta` live frame body (#TASK-1956 batch 3),
@@ -42,9 +66,10 @@ public struct GaryxThreadRenderFrame: Decodable, Equatable, Sendable {
 /// `fromRowsHash`/`rowsHash` are opaque chain tokens (decimal strings on the
 /// wire): the server is the only hasher; the client validates the chain by
 /// pure equality and stores the accepted frame's `rowsHash` as its next
-/// token. The chain-critical fields decode strictly — a frame missing them
-/// is undecodable, gets ignored, and the broken chain surfaces as a
-/// `from_seq` mismatch on the next delta (gap path, replay reseed).
+/// token. The chain-critical fields decode strictly — a delta missing them
+/// is undecodable, the envelope records the slot as
+/// `GaryxRenderDeltaPayload.malformed`, and the processor gaps immediately
+/// (replay reseed), matching the desktop reassembler.
 public struct GaryxRenderDelta: Decodable, Equatable, Sendable {
     /// The client must hold the snapshot at this seq...
     public var fromSeq: Int
@@ -116,8 +141,8 @@ public struct GaryxRenderDelta: Decodable, Equatable, Sendable {
         rowOrder = try container.decode([String].self, forKey: .rowOrder)
         // Strict, not lossy: silently dropping an undecodable upsert body
         // would fall back to the held row — a stale body the equality-only
-        // chain check cannot catch. Failing the frame decode is safe: the
-        // next delta gaps on `from_seq` and the replay reseeds.
+        // chain check cannot catch. Failing the body decode is safe: the
+        // envelope records `.malformed` and the processor gaps immediately.
         upsertRows = try container.decode([GaryxRenderRow].self, forKey: .upsertRows)
         tailActivity = try container.decodeIfPresent(GaryxRenderTailActivity.self, forKey: .tailActivity) ?? .none
         activeToolGroupId = try container.decodeIfPresent(String.self, forKey: .activeToolGroupId)
@@ -335,15 +360,16 @@ public enum GaryxRenderProgressLocus: String, Codable, Equatable, Sendable {
 public enum GaryxRenderRow: Codable, Equatable, Sendable {
     case userTurn(GaryxRenderUserTurnRow)
     /// Forward-compatible fallback for row kinds this build does not know.
-    /// The `id` is preserved (#TASK-1956 batch 3) because row identity is
-    /// the delta-reassembly key: a delta may carry an unknown row forward
-    /// via `row_order`, and losing the id would turn every such delta into
-    /// a missing-row gap loop against a newer server.
-    case unknown(id: String?)
+    /// The FULL wire object is preserved and written back verbatim on
+    /// encode (#TASK-2038 P2, desktop parity): the row's `id` is the
+    /// delta-reassembly key — a delta may carry an unknown row forward via
+    /// `row_order` — and the snapshot is persisted by
+    /// `GaryxTranscriptCache`, so a lossy `{kind:unknown,id}` husk would
+    /// make forward-compat loss *persistent* across restarts.
+    case unknown(raw: GaryxJSONValue)
 
     enum CodingKeys: String, CodingKey {
         case kind
-        case id
     }
 
     enum Kind: String, Codable {
@@ -353,7 +379,7 @@ public enum GaryxRenderRow: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         guard let kind = try? container.decode(Kind.self, forKey: .kind) else {
-            self = .unknown(id: (try? container.decodeIfPresent(String.self, forKey: .id)) ?? nil)
+            self = try .unknown(raw: GaryxJSONValue(from: decoder))
             return
         }
         switch kind {
@@ -366,10 +392,8 @@ public enum GaryxRenderRow: Codable, Equatable, Sendable {
         switch self {
         case let .userTurn(row):
             try row.encode(to: encoder)
-        case let .unknown(id):
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode("unknown", forKey: .kind)
-            try container.encodeIfPresent(id, forKey: .id)
+        case let .unknown(raw):
+            try raw.encode(to: encoder)
         }
     }
 }

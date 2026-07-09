@@ -99,7 +99,8 @@ final class GatewayStreamRenderDeltaTests: XCTestCase {
 
         // The delta re-references the unknown row without upserting it: its
         // preserved id must resolve from the held snapshot instead of
-        // tripping the missing-row violation.
+        // tripping the missing-row violation — and the carried-forward row
+        // must still hold its FULL wire body (#TASK-2038 P2).
         let result = processor.processPayload(
             deltaFramePayload(
                 fromSeq: 2, fromRowsHash: "1001", basedOnSeq: 3, rowsHash: "1002",
@@ -114,11 +115,56 @@ final class GatewayStreamRenderDeltaTests: XCTestCase {
                 basedOnSeq: 3,
                 rows: [
                     userTurnRow(id: "turn-1", userSeq: 1, replySeq: 3),
-                    .unknown(id: "row-x"),
+                    .unknown(raw: .object([
+                        "kind": .string("future_widget"),
+                        "id": .string("row-x"),
+                        "payload": .string("opaque"),
+                    ])),
                 ],
                 rowsHash: "1002"
             ),
         ])
+    }
+
+    func testUnknownRowCarriedForwardByDeltaRetainsItsOriginalPayload() throws {
+        var processor = GatewayStreamFrameProcessor()
+        let futureRow: [String: Any] = [
+            "kind": "future_widget",
+            "id": "row-x",
+            "payload": ["answer": 42, "tags": ["a", "b"]] as [String: Any],
+        ]
+        _ = processor.processPayload(
+            fullFramePayload(
+                basedOnSeq: 2,
+                rows: [userTurnRowJSON(id: "turn-1", userSeq: 1), futureRow],
+                rowsHash: "1001"
+            ),
+            threadId: threadId
+        )
+
+        let result = processor.processPayload(
+            deltaFramePayload(
+                fromSeq: 2, fromRowsHash: "1001", basedOnSeq: 3, rowsHash: "1002",
+                rowOrder: ["turn-1", "row-x"],
+                upsertRows: [userTurnRowJSON(id: "turn-1", userSeq: 1, replySeq: 3)]
+            ),
+            threadId: threadId
+        )
+        XCTAssertNil(result.reconnect)
+
+        // The reassembled snapshot is what `GaryxTranscriptCache` persists:
+        // the carried-forward unknown row must still hold its FULL wire
+        // body (#TASK-2038 P2), not a lossy `{kind:unknown,id}` husk.
+        let rows = appliedSnapshots(in: result.actions).first?.rows ?? []
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(
+            try JSONDecoder().decode(GaryxJSONValue.self, from: JSONEncoder().encode(rows[1])),
+            try JSONDecoder().decode(
+                GaryxJSONValue.self,
+                from: JSONSerialization.data(withJSONObject: futureRow)
+            ),
+            "delta carry-forward must keep the unknown row's original payload, not just its id"
+        )
     }
 
     // MARK: - Protocol violations ride the existing gap exit
@@ -217,6 +263,95 @@ final class GatewayStreamRenderDeltaTests: XCTestCase {
             threadId: threadId
         )
         XCTAssertEqual(result.reconnect, .gap(resumeAfterSeq: 2))
+        XCTAssertEqual(result.actions, [])
+    }
+
+    // MARK: - Malformed delta frames gap, never vanish (#TASK-2038 P1)
+
+    func testMalformedDeltaFrameGapsInsteadOfBeingSilentlyIgnored() {
+        var processor = seededProcessor()
+
+        // `render_delta` is present but missing its chain-critical
+        // `rows_hash`, so the strict body decode fails. The frame must ride
+        // the gap exit — its committed events are recovered by the replay —
+        // never fall out of the envelope decode as a silent `.ignored` that
+        // drops seq 3 without moving the cursor. Desktop parity:
+        // `applyRenderDeltaFrame` throws its gap error on malformed bodies.
+        let result = processor.processPayload(
+            malformedDeltaFramePayload(
+                events: [event(seq: 3, role: "assistant", text: "dropped with the frame, replayed after the gap")]
+            ),
+            threadId: threadId
+        )
+
+        XCTAssertEqual(result.reconnect, .gap(resumeAfterSeq: 2))
+        XCTAssertEqual(result.actions, [], "the malformed frame is discarded atomically, events included")
+        XCTAssertEqual(processor.connectionLastSeq, 2, "the cursor must not advance past the dropped events")
+    }
+
+    func testNonObjectDeltaPayloadGaps() {
+        var processor = seededProcessor()
+
+        let result = processor.processPayload(
+            jsonString([
+                "type": "thread_render_frame",
+                "thread_id": threadId,
+                "events": [] as [Any],
+                "render_delta": "not an object",
+            ]),
+            threadId: threadId
+        )
+
+        XCTAssertEqual(result.reconnect, .gap(resumeAfterSeq: 2))
+        XCTAssertEqual(result.actions, [])
+        XCTAssertEqual(processor.connectionLastSeq, 2)
+    }
+
+    func testFrameCarryingFullStateAndMalformedDeltaReseedsFromTheFullState() {
+        var processor = seededProcessor()
+
+        // Same edge decision as the well-formed both-payloads frame: the
+        // full snapshot is authoritative and reseeding is always safe, so a
+        // malformed delta riding a full-state frame must not gap (and must
+        // not kill the whole frame's decode either).
+        let result = processor.processPayload(
+            malformedDeltaFramePayload(
+                renderState: renderStateJSON(
+                    basedOnSeq: 3,
+                    rows: [userTurnRowJSON(id: "turn-A", userSeq: 3)],
+                    rowsHash: "2001"
+                )
+            ),
+            threadId: threadId
+        )
+
+        XCTAssertNil(result.reconnect)
+        XCTAssertEqual(appliedSnapshots(in: result.actions), [
+            GaryxRenderSnapshot(
+                basedOnSeq: 3,
+                rows: [userTurnRow(id: "turn-A", userSeq: 3)],
+                rowsHash: "2001"
+            ),
+        ])
+    }
+
+    func testNullDeltaSlotIsIgnoredNotGapped() {
+        var processor = seededProcessor()
+
+        // A JSON-null `render_delta` means "no delta", exactly like an
+        // absent key (desktop treats null and undefined the same). Nothing
+        // to render, nothing to gap over.
+        let result = processor.processPayload(
+            jsonString([
+                "type": "thread_render_frame",
+                "thread_id": threadId,
+                "events": [] as [Any],
+                "render_delta": NSNull(),
+            ]),
+            threadId: threadId
+        )
+
+        XCTAssertNil(result.reconnect)
         XCTAssertEqual(result.actions, [])
     }
 
@@ -617,6 +752,32 @@ final class GatewayStreamRenderDeltaTests: XCTestCase {
                 "activeToolGroupId": NSNull(),
                 "progress_locus": "tail",
                 "filtered_placeholders": [] as [Any],
+            ] as [String: Any],
+        ]
+        if let renderState {
+            frame["render_state"] = renderState
+        }
+        return jsonString(frame)
+    }
+
+    /// A frame whose `render_delta` key is present but undecodable: the
+    /// chain-critical `rows_hash` is missing, so the strict body decode
+    /// throws (#TASK-2038 P1 probe shape).
+    private func malformedDeltaFramePayload(
+        events: [[String: Any]] = [],
+        renderState: [String: Any]? = nil
+    ) -> String {
+        var frame: [String: Any] = [
+            "type": "thread_render_frame",
+            "thread_id": threadId,
+            "events": events,
+            "render_delta": [
+                "from_seq": 2,
+                "from_rows_hash": "1001",
+                "based_on_seq": 3,
+                // "rows_hash" deliberately missing.
+                "row_order": ["turn-1"],
+                "upsert_rows": [] as [Any],
             ] as [String: Any],
         ]
         if let renderState {
