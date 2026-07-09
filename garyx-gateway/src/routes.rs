@@ -2885,7 +2885,13 @@ pub async fn archive_thread(
         );
     }
     let Some(thread_data) = state.threads.thread_store.get(trimmed).await else {
-        if let Err(error) = state.ops.garyx_db.mark_thread_archived(trimmed) {
+        let archive_id = trimmed.to_owned();
+        if let Err(error) = state
+            .ops
+            .garyx_db
+            .run_blocking(move |db| db.mark_thread_archived(&archive_id))
+            .await
+        {
             return archive_internal_error(error);
         }
         let stale_projection = remove_deleted_thread_projection_records(&state, trimmed).await;
@@ -2929,7 +2935,13 @@ pub async fn archive_thread(
         }
     }
 
-    if let Err(error) = state.ops.garyx_db.mark_thread_archived(trimmed) {
+    let archive_id = trimmed.to_owned();
+    if let Err(error) = state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| db.mark_thread_archived(&archive_id))
+        .await
+    {
         return archive_internal_error(error);
     }
     let delete_data = state

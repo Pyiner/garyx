@@ -11,11 +11,13 @@ use super::WorkflowError;
 use super::runtime::WorkflowAgentExecutionResult;
 use super::store::{WorkflowDefinitionPackage, WorkflowDefinitionRecord, WorkflowStore};
 
-pub(super) fn workflow_payload(
+pub(super) async fn workflow_payload(
     store: &WorkflowStore,
     workflow_run_id: &str,
 ) -> Result<Value, WorkflowError> {
-    let snapshot = store.drilldown_snapshot(workflow_run_id, 0, WORKFLOW_INLINE_EVENTS_LIMIT)?;
+    let snapshot = store
+        .drilldown_snapshot(workflow_run_id, 0, WORKFLOW_INLINE_EVENTS_LIMIT)
+        .await?;
     workflow_run_drilldown_snapshot_json(&snapshot)
 }
 

@@ -423,6 +423,7 @@ async fn sdk_start_persists_workflow_input() {
         &WorkflowStore::new(state.ops.garyx_db.clone()),
         &workflow_run_id,
     )
+    .await
     .expect("workflow payload");
     assert_eq!(payload["workflow"]["input"], "test workflow input");
 
@@ -1729,6 +1730,7 @@ async fn sdk_agent_executes_hidden_child_and_structured_schema() {
         &WorkflowStore::new(state.ops.garyx_db.clone()),
         &workflow_id,
     )
+    .await
     .expect("workflow payload");
     assert_eq!(final_payload["workflow"]["totalChildren"], 1);
     assert_eq!(final_payload["workflow"]["completedChildren"], 1);
@@ -1786,6 +1788,7 @@ async fn optional_structured_child_missing_submit_result_fails_child_not_workflo
         &WorkflowStore::new(state.ops.garyx_db.clone()),
         &workflow_id,
     )
+    .await
     .expect("workflow payload");
     assert_eq!(payload["workflow"]["status"], "running");
     let children = payload["children"].as_array().expect("children");
@@ -1834,6 +1837,7 @@ async fn optional_child_bridge_error_fails_child_not_workflow() {
         &WorkflowStore::new(state.ops.garyx_db.clone()),
         &workflow_id,
     )
+    .await
     .expect("workflow payload");
     assert_eq!(payload["workflow"]["totalChildren"], 1);
     assert_eq!(payload["workflow"]["completedChildren"], 1);
@@ -1903,6 +1907,7 @@ async fn structured_child_with_native_provider_fails_before_launch() {
         &WorkflowStore::new(state.ops.garyx_db.clone()),
         &workflow_id,
     )
+    .await
     .expect("workflow payload");
     assert_eq!(payload["workflow"]["status"], "running");
     let children = payload["children"].as_array().expect("children");
@@ -2044,6 +2049,7 @@ async fn sdk_workflow_routes_start_log_run_agent_and_finish() {
 
     let events = WorkflowStore::new(state.ops.garyx_db.clone())
         .events_after(&workflow_id, 0, 20)
+        .await
         .expect("events");
     assert!(
         events

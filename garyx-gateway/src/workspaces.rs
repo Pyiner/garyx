@@ -142,10 +142,12 @@ async fn seed_workspaces_from_configuration_if_empty(
             );
         }
     }
+    let drafts: Vec<_> = drafts.into_values().collect();
     state
         .ops
         .garyx_db
-        .seed_workspaces_if_empty(drafts.into_values().collect())?;
+        .run_blocking(move |db| db.seed_workspaces_if_empty(drafts))
+        .await?;
     Ok(())
 }
 
@@ -251,7 +253,8 @@ pub async fn upsert_workspace(
     if let Err(error) = state
         .ops
         .garyx_db
-        .upsert_workspace(WorkspaceDraft { name, path })
+        .run_blocking(move |db| db.upsert_workspace(WorkspaceDraft { name, path }))
+        .await
     {
         return workspace_error_response(error);
     }
@@ -273,10 +276,12 @@ pub async fn delete_workspace(
         }
     };
 
+    let path_key = workspace_path_key(&path);
     if let Err(error) = state
         .ops
         .garyx_db
-        .delete_workspace(&workspace_path_key(&path))
+        .run_blocking(move |db| db.delete_workspace(&path_key).map(|_| ()))
+        .await
     {
         return workspace_error_response(error);
     }

@@ -14,9 +14,9 @@ pub async fn cancel_workflow_run(
     workflow_run_id: &str,
 ) -> Result<bool, WorkflowError> {
     let store = WorkflowStore::new(state.ops.garyx_db.clone());
-    match store.cancel_run(workflow_run_id) {
+    match store.cancel_run(workflow_run_id).await {
         Ok(true) => {
-            let run = store.get_run(workflow_run_id)?;
+            let run = store.get_run(workflow_run_id).await?;
             mark_workflow_run_task_in_review(
                 state,
                 &run,

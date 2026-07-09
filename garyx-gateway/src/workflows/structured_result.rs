@@ -77,13 +77,24 @@ pub async fn submit_structured_result_for_thread(
     } else {
         Some(preview)
     };
-    let updated = state.ops.garyx_db.submit_workflow_child_result(
-        &context.workflow_id,
-        &context.workflow_child_run_id,
-        &context.thread_id,
-        &payload.to_string(),
-        preview.as_deref(),
-    )?;
+    let submit_workflow_id = context.workflow_id.clone();
+    let submit_child_run_id = context.workflow_child_run_id.clone();
+    let submit_thread_id = context.thread_id.clone();
+    let payload_json = payload.to_string();
+    let submit_preview = preview.clone();
+    let updated = state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| {
+            db.submit_workflow_child_result(
+                &submit_workflow_id,
+                &submit_child_run_id,
+                &submit_thread_id,
+                &payload_json,
+                submit_preview.as_deref(),
+            )
+        })
+        .await?;
     if !updated {
         return Err(WorkflowError::Conflict(
             "structured result target is already terminal or already has a submitted result"

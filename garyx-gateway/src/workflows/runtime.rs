@@ -266,7 +266,8 @@ impl WorkflowRuntime {
             created_by: request.created_by.or_else(|| Some("sdk".to_owned())),
             started_at: Some(now_string()),
             finished_at: None,
-        })?;
+        })
+        .await?;
         let workflow_run_id = workflow.workflow_id.clone();
         store.append_event(WorkflowEventDraft {
             event_id: None,
@@ -280,8 +281,9 @@ impl WorkflowRuntime {
                 "input": workflow.input_json.as_deref().map(parse_json_field),
             })
             .to_string(),
-        })?;
-        workflow_payload(&store, &workflow_run_id)
+        })
+        .await?;
+        workflow_payload(&store, &workflow_run_id).await
     }
 
     async fn workflow_task_context(
@@ -493,7 +495,7 @@ impl WorkflowRuntime {
         request: WorkflowSdkAgentRequest,
     ) -> Result<Value, WorkflowError> {
         let store = WorkflowStore::new(self.state.ops.garyx_db.clone());
-        let workflow = store.get_run(&workflow_run_id)?;
+        let workflow = store.get_run(&workflow_run_id).await?;
         if matches!(
             workflow.status.as_str(),
             "succeeded" | "failed" | "cancelled"
@@ -546,16 +548,28 @@ impl WorkflowRuntime {
             ));
         }
         let store = WorkflowStore::new(self.state.ops.garyx_db.clone());
-        let existing = store.get_run(workflow_run_id)?;
+        let existing = store.get_run(workflow_run_id).await?;
         let result_json = request.result.as_ref().map(Value::to_string);
         let output_text = request.output_text;
-        let updated = self.state.ops.garyx_db.update_workflow_run_status(
-            workflow_run_id,
-            status,
-            result_json.as_deref(),
-            output_text.as_deref(),
-            request.error.as_deref(),
-        )?;
+        let update_run_id = workflow_run_id.to_owned();
+        let update_status = status.to_owned();
+        let update_error = request.error.clone();
+        let update_result_json = result_json.clone();
+        let update_output_text = output_text.clone();
+        let updated = self
+            .state
+            .ops
+            .garyx_db
+            .run_blocking(move |db| {
+                db.update_workflow_run_status(
+                    &update_run_id,
+                    &update_status,
+                    update_result_json.as_deref(),
+                    update_output_text.as_deref(),
+                    update_error.as_deref(),
+                )
+            })
+            .await?;
         if !updated {
             return Err(WorkflowError::Conflict(
                 "workflow is already terminal".to_owned(),
@@ -596,7 +610,8 @@ impl WorkflowRuntime {
                 "source": "sdk",
             })
             .to_string(),
-        })?;
+        })
+        .await?;
         if let Some(task_thread_id) = existing.task_thread_id.as_deref() {
             mark_workflow_task_in_review(
                 &self.state,
@@ -606,16 +621,16 @@ impl WorkflowRuntime {
             )
             .await?;
         }
-        workflow_payload(&store, workflow_run_id)
+        workflow_payload(&store, workflow_run_id).await
     }
 
-    pub fn append_sdk_event(
+    pub async fn append_sdk_event(
         &self,
         workflow_run_id: &str,
         request: WorkflowSdkEventRequest,
     ) -> Result<Value, WorkflowError> {
         let store = WorkflowStore::new(self.state.ops.garyx_db.clone());
-        store.get_run(workflow_run_id)?;
+        store.get_run(workflow_run_id).await?;
         let event_type = request
             .event_type
             .as_deref()
@@ -631,7 +646,8 @@ impl WorkflowRuntime {
             thread_id: request.thread_id,
             event_type,
             payload_json: payload.to_string(),
-        })?;
+        })
+        .await?;
         Ok(workflow_event_json(&event))
     }
 

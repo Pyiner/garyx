@@ -239,7 +239,7 @@ pub async fn get_workflow(
     Path(workflow_run_id): Path<String>,
 ) -> impl IntoResponse {
     let store = WorkflowStore::new(state.ops.garyx_db.clone());
-    match workflow_payload(&store, &workflow_run_id) {
+    match workflow_payload(&store, &workflow_run_id).await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(error) => workflow_error_response(error),
     }
@@ -250,11 +250,14 @@ pub async fn list_workflows(
     Query(query): Query<WorkflowListQuery>,
 ) -> impl IntoResponse {
     let store = WorkflowStore::new(state.ops.garyx_db.clone());
-    match store.list_runs(
-        query.parent_thread_id.as_deref(),
-        query.limit.min(200),
-        query.offset,
-    ) {
+    match store
+        .list_runs(
+            query.parent_thread_id.as_deref(),
+            query.limit.min(200),
+            query.offset,
+        )
+        .await
+    {
         Ok(records) => (
             StatusCode::OK,
             Json(json!({
@@ -273,7 +276,10 @@ pub async fn list_thread_workflows(
     Query(query): Query<WorkflowListQuery>,
 ) -> impl IntoResponse {
     let store = WorkflowStore::new(state.ops.garyx_db.clone());
-    match store.list_runs(Some(&thread_id), query.limit.min(200), query.offset) {
+    match store
+        .list_runs(Some(&thread_id), query.limit.min(200), query.offset)
+        .await
+    {
         Ok(records) => (
             StatusCode::OK,
             Json(json!({
@@ -293,7 +299,10 @@ pub async fn workflow_events(
     Query(query): Query<WorkflowEventsQuery>,
 ) -> impl IntoResponse {
     let store = WorkflowStore::new(state.ops.garyx_db.clone());
-    match store.events_after(&workflow_run_id, query.after, query.limit.min(500)) {
+    match store
+        .events_after(&workflow_run_id, query.after, query.limit.min(500))
+        .await
+    {
         Ok(events) => (
             StatusCode::OK,
             Json(json!({
@@ -314,7 +323,10 @@ pub async fn append_workflow_event(
     Path(workflow_run_id): Path<String>,
     Json(payload): Json<WorkflowSdkEventRequest>,
 ) -> impl IntoResponse {
-    match WorkflowRuntime::new(state).append_sdk_event(&workflow_run_id, payload) {
+    match WorkflowRuntime::new(state)
+        .append_sdk_event(&workflow_run_id, payload)
+        .await
+    {
         Ok(value) => (StatusCode::CREATED, Json(value)).into_response(),
         Err(error) => workflow_error_response(error),
     }
@@ -354,7 +366,7 @@ pub async fn cancel_workflow(
 ) -> impl IntoResponse {
     let store = WorkflowStore::new(state.ops.garyx_db.clone());
     match cancel_workflow_run(&state, &workflow_run_id).await {
-        Ok(true) => match workflow_payload(&store, &workflow_run_id) {
+        Ok(true) => match workflow_payload(&store, &workflow_run_id).await {
             Ok(value) => (StatusCode::OK, Json(value)).into_response(),
             Err(error) => workflow_error_response(error),
         },

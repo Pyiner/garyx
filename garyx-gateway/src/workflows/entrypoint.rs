@@ -87,6 +87,7 @@ pub fn spawn_workflow_task_entrypoint(
                 Ok(status) if status.success() => {
                     match WorkflowStore::new(state.ops.garyx_db.clone())
                         .get_run(&task_thread_for_spawn)
+                        .await
                     {
                         Ok(_) => {}
                         Err(WorkflowError::NotFound(_)) => {
@@ -213,6 +214,7 @@ pub fn spawn_workflow_thread_entrypoint(
                 Ok(status) if status.success() => {
                     match WorkflowStore::new(state.ops.garyx_db.clone())
                         .get_run(&workflow_thread_for_spawn)
+                        .await
                     {
                         Ok(_) => {}
                         Err(WorkflowError::NotFound(_)) => {
@@ -397,13 +399,15 @@ pub(super) async fn mark_workflow_thread_entrypoint_failed(
     workflow_thread_id: &str,
     note: String,
 ) {
-    let _ = state.ops.garyx_db.update_workflow_run_status(
-        workflow_thread_id,
-        "failed",
-        None,
-        None,
-        Some(&note),
-    );
+    let fail_run_id = workflow_thread_id.to_owned();
+    let fail_note = note.clone();
+    let _ = state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| {
+            db.update_workflow_run_status(&fail_run_id, "failed", None, None, Some(&fail_note))
+        })
+        .await;
     let Some(mut record) = state.threads.thread_store.get(workflow_thread_id).await else {
         return;
     };
