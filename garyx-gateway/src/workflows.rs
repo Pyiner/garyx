@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::garyx_db::{
-    GaryxDbError, GaryxDbService, WorkflowChildRunDraft, WorkflowChildRunUsage, WorkflowEventDraft,
+    GaryxDbError, WorkflowChildRunDraft, WorkflowChildRunUsage, WorkflowEventDraft,
     WorkflowRunDraft,
 };
 use crate::server::AppState;

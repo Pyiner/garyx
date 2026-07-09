@@ -64,34 +64,23 @@ impl RuntimeAssembler {
 
         let bridge = Arc::new(MultiProviderBridge::new());
 
-        // Thread-record backend selection (#TASK-1864 batch 2, D8). SQLite
-        // backends run their one-shot boot import before serving requests;
-        // `sqlite` keeps a best-effort file mirror for hot rollback.
-        let backend = garyx_gateway::resolve_thread_store_backend(&self.config);
-        // The truth database lives inside the configured data dir, matching
-        // the archive/transcripts it replaces (review #TASK-1927).
+        // Thread records live in SQLite, full stop (#TASK-1864). The file
+        // archive survives only as the one-shot boot-import source for
+        // upgrades from pre-SQLite installs; there is no runtime file mode
+        // and no dual-write mirror. Emergency recovery = the archived
+        // backups plus a fresh boot import, not a mode switch.
         let garyx_db = Arc::new(garyx_gateway::garyx_db::GaryxDbService::open(
             garyx_models::local_paths::garyx_database_path_for_data_dir(Path::new(
                 &session_data_dir,
             )),
         )?);
         let assembled_garyx_db = Some(garyx_db.clone());
-        let mirror = match backend {
-            garyx_gateway::ThreadStoreBackend::Sqlite => {
-                tracing::info!("thread store backend: sqlite (dual-write file mirror)");
-                Some(file_store.clone())
-            }
-            garyx_gateway::ThreadStoreBackend::SqliteOnly => {
-                tracing::info!("thread store backend: sqlite-only");
-                None
-            }
-        };
+        tracing::info!("thread store backend: sqlite");
         let thread_store: Arc<dyn ThreadStore> = garyx_gateway::assemble_sqlite_thread_store(
             garyx_db,
             transcript_store.clone(),
             &bridge,
             file_store.clone(),
-            mirror,
         )
         .await;
         let thread_history = Arc::new(ThreadHistoryRepository::new(

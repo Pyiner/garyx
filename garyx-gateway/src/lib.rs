@@ -41,7 +41,7 @@ pub mod server;
 pub mod skills;
 mod sqlite_thread_store;
 pub use sqlite_thread_store::{
-    ThreadStoreBackend, assemble_sqlite_thread_store, resolve_thread_store_backend,
+    assemble_sqlite_thread_store,
 };
 mod task_notifications;
 mod task_projection;

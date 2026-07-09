@@ -1077,14 +1077,6 @@ pub struct SessionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<String>,
 
-    /// Thread-record storage backend (#TASK-1864): `sqlite-only`
-    /// (default) — the garyx-db thread_records table is the truth;
-    /// `sqlite` adds a best-effort live file mirror (emergency mode);
-    /// `file` is retired and degrades to `sqlite` with a warning. The
-    /// `GARYX_THREAD_STORE` environment variable overrides this value
-    /// (emergency switch without editing config).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_store: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

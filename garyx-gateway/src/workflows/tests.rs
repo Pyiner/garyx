@@ -1,5 +1,5 @@
 use super::*;
-use crate::garyx_db::WorkflowChildRunDraft;
+use crate::garyx_db::{GaryxDbService, WorkflowChildRunDraft};
 use async_trait::async_trait;
 use axum::body::{Body, to_bytes};
 use garyx_bridge::MultiProviderBridge;
