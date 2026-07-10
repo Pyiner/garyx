@@ -269,20 +269,14 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                         in: morphNamespace
                     )
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(threadTitle)
-                        .font(GaryxFont.callout(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .matchedGeometryEffect(
-                            id: GaryxThreadRuntimeMorphID.title,
-                            in: morphNamespace
-                        )
-                    Text("Agent & model")
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                Text(threadTitle)
+                    .font(GaryxFont.callout(weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .matchedGeometryEffect(
+                        id: GaryxThreadRuntimeMorphID.title,
+                        in: morphNamespace
+                    )
             } else {
                 Button {
                     setPage(.main)

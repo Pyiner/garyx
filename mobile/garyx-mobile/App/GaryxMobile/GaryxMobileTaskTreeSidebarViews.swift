@@ -19,8 +19,8 @@ private enum GaryxTaskTreeSidebarMetrics {
     static let axisDecisionDistance: CGFloat = 14
     static let axisDecisionRatio: CGFloat = 1.5
     static let indentStep: CGFloat = 12
-    /// Compact hierarchy glyph shared by the panel header and empty state.
-    static let treeGlyph = "list.bullet.indent"
+    /// Compact task-list glyph shared by the panel header and empty state.
+    static let treeGlyph = "list.bullet"
 
     static func panelWidth(containerWidth: CGFloat) -> CGFloat {
         min(max(containerWidth * 0.55, 300), 420)
