@@ -3,11 +3,43 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ThreadPage } from '../app-shell/components/ThreadPage';
 import { deriveThreadActivityModel } from '../app-shell/thread-activity';
 import { isRuntimeBusy } from '../message-machine';
+import { RichMessageText } from '../message-rich-text';
 import { buildThreadAvatarCatalog } from '../thread-avatar';
 import { buildStories, type Story, type StoryStep } from './scenarios';
 
 const PLAY_INTERVAL_MS = 1600;
 const EMPTY_THREAD_AVATAR_CATALOG = buildThreadAvatarCatalog([]);
+const MARKDOWN_PARITY_FIXTURE = [
+  '是的，悉尼的“时区偏移”还会变，因为悉尼所在的新南威尔士州仍实行夏令时。',
+  '',
+  '截至 **2026年7月9日**，悉尼是 **AEST，UTC+10**，比北京时间快 **2 小时**。下一次变化是：',
+  '',
+  '- **2026年10月4日 02:00**：拨快 1 小时到 03:00，进入 **AEDT，UTC+11**',
+  '- **2027年4月4日 03:00**：拨慢 1 小时到 02:00，回到 **AEST，UTC+10**',
+  '',
+  '所以如果你是在排会议或写代码，最好用 `Australia/Sydney`，不要硬编码 `+10` 或 `+11`。',
+  '',
+  '来源：[NSW 官方 daylight saving 页面](https://example.test/nsw)，[timeanddate](https://example.test/time)。',
+  '',
+  '---',
+  '',
+  '# 一级标题',
+  '',
+  '## 二级标题',
+  '',
+  '### 三级标题',
+  '',
+  '> 引用内容保持正常字形，并使用清晰的左侧竖线。',
+  '',
+  '| Phase | Owner | Risk |',
+  '| --- | --- | --- |',
+  '| Freeze | infra | low |',
+  '| Backfill | data | medium |',
+  '',
+  '```ts',
+  'const ready = true;',
+  '```',
+].join('\n');
 
 function noop() {}
 
@@ -296,7 +328,13 @@ export function StorybookApp() {
           <MachineBadges step={step} />
         </div>
         <section className="storybook-stage">
-          <ThreadStage key={`${story.id}:${boundedStepIndex}`} step={step} />
+          {story.id === 'markdown-parity' ? (
+            <div className="storybook-markdown-parity">
+              <RichMessageText text={MARKDOWN_PARITY_FIXTURE} tone="assistant" />
+            </div>
+          ) : (
+            <ThreadStage key={`${story.id}:${boundedStepIndex}`} step={step} />
+          )}
         </section>
       </main>
     </div>

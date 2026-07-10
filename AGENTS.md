@@ -94,6 +94,10 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   selectors, not copied command output; Mac and iOS resolve those selectors
   generically against their cached message bodies and must not add separate
   provider-specific JSON field switch tables.
+- Desktop `RichMessageText` uses Streamdown, which wraps Markdown blocks in
+  `display: contents` containers. First/last-block CSS must target the logical
+  message root; broad descendant selectors such as `p:last-child` can match
+  every wrapped paragraph and accidentally remove all paragraph spacing.
 - Keep mobile SwiftUI feature surfaces in feature-specific files.
 - Mobile page backgrounds and bottom floating controls should use the shared
   safe-area chrome helpers (`garyxPageBackground`, `garyxFloatingBottomChrome`)

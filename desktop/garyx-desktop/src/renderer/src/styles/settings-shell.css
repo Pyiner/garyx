@@ -294,7 +294,7 @@
 .messages-scroller {
   height: calc(100% - var(--composer-scroll-clip-height));
   min-height: 0;
-  width: min(var(--container-2xl), 100%);
+  width: min(var(--thread-content-max-width), 100%);
   max-width: 100%;
   margin: 0 auto;
   background: var(--color-token-bg-primary);
@@ -308,9 +308,8 @@
   scrollbar-width: none;
   max-width: 100%;
   box-sizing: border-box;
-  padding: 8px 2px
-    calc(var(--composer-scroll-clip-height) + var(--composer-message-clearance))
-    0;
+  padding: 8px 16px
+    calc(var(--composer-scroll-clip-height) + var(--composer-message-clearance));
   scroll-padding-block-end: calc(
     var(--composer-scroll-clip-height) + var(--composer-message-clearance)
   );

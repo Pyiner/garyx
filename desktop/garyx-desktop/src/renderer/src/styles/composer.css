@@ -10,7 +10,7 @@
   z-index: 10;
   /* Keep the surface ring and shadow inside thread-main's clipping boundary,
      including when the window is narrower than the normal content width. */
-  width: min(var(--container-2xl), calc(100% - 32px));
+  width: min(var(--thread-content-max-width), calc(100% - 32px));
   margin: 0 auto;
   overflow: visible;
 }
@@ -206,7 +206,7 @@
   z-index: 1;
   display: grid;
   gap: 0;
-  width: min(var(--container-2xl), 100%);
+  width: min(var(--thread-content-max-width), 100%);
   margin: 0 auto;
   overflow: visible;
   border: 0;

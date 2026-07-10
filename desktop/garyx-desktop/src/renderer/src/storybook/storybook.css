@@ -238,3 +238,9 @@
 .storybook-stage .thread-layout {
   height: 100%;
 }
+
+.storybook-markdown-parity {
+  width: min(var(--thread-reading-width), calc(100% - 32px));
+  margin: 48px auto;
+  background: var(--color-token-bg-primary);
+}

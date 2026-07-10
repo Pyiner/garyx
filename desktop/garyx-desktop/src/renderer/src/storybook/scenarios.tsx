@@ -463,6 +463,17 @@ export function buildStories(): Story[] {
     ],
   };
 
+  const markdownParity: Story = {
+    id: 'markdown-parity',
+    name: '消息排版 · 阅读基线',
+    description: '固定宽度与固定内容，用于核对正文、列表、强调和行内代码的像素级排版。',
+    steps: [
+      step('Markdown 阅读基线', '直接渲染 RichMessageText，隔离消息状态与工具行。', {
+        messages: [],
+      }),
+    ],
+  };
+
   const taskNotification: Story = {
     id: 'task-notification',
     name: '任务通知 · 待审查卡片',
@@ -507,6 +518,7 @@ export function buildStories(): Story[] {
     steerPath,
     historyPath,
     longToolRun,
+    markdownParity,
     richContent,
     taskNotification,
   ];

@@ -653,7 +653,7 @@ export function ThreadPage({
 
           {showHistoryLoadingPlaceholder ? (
             <Bubble
-              className="w-fit max-w-[min(100%,680px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
+              className="w-fit max-w-[min(100%,736px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
               variant="ghost"
             >
               <BubbleContent>
@@ -695,7 +695,7 @@ export function ThreadPage({
                 </BubbleContent>
               </Bubble>
               <Bubble
-                className="w-fit max-w-[min(100%,680px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
+                className="w-fit max-w-[min(100%,736px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
                 variant="ghost"
               >
                 <BubbleContent>
@@ -798,13 +798,13 @@ export function ThreadPage({
                     className={
                       entry.message.error
                         ? "max-w-[min(77%,680px)] self-start"
-                        : `w-[min(100%,680px)] self-start ${entry.message.pending ? "text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]" : ""}`
+                        : `w-[min(100%,736px)] self-start ${entry.message.pending ? "text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]" : ""}`
                     }
                     key={`${block.key}:body`}
                     variant={entry.message.error ? "destructive" : "ghost"}
                   >
                     <BubbleContent
-                      className={entry.message.error ? "rounded-[20px]" : ""}
+                      className={entry.message.error ? "rounded-[20px]" : "border-0"}
                     >
                       <RichMessageContent
                         altPrefix={entry.message.role}
@@ -936,7 +936,7 @@ export function ThreadPage({
 
           {showTailThinking ? (
             <Bubble
-              className="w-fit max-w-[min(100%,680px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
+              className="w-fit max-w-[min(100%,736px)] self-start text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]"
               variant="ghost"
             >
               <BubbleContent>
