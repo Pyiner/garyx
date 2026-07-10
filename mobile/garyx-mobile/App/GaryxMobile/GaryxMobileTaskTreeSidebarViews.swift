@@ -18,7 +18,6 @@ private enum GaryxTaskTreeSidebarMetrics {
     static let edgeGestureWidth: CGFloat = 24
     static let axisDecisionDistance: CGFloat = 14
     static let axisDecisionRatio: CGFloat = 1.5
-    static let leadingCornerRadius: CGFloat = 28
     static let indentStep: CGFloat = 12
     /// The tree icon shared by the panel header and empty state.
     static let treeGlyph = "arrow.triangle.branch"
@@ -131,14 +130,16 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
     ) -> some View {
         let dragActive = dragAxis == .horizontal
 
-        // Full-bleed panel: `ignoresSafeArea` at the end of the chain lets the
-        // glass background and clip reach the physical top/bottom edges, while
-        // the content pads itself back inside the safe area. (The previous
-        // outset-clip approach exposed regions the material never painted,
-        // which showed as mismatched safe-area strips.)
-        return GaryxTaskTreeSidebarPanel(onClose: { closePanel() })
-            .padding(.top, safeAreaInsets.top)
-            .padding(.bottom, safeAreaInsets.bottom)
+        // Full-height rail: the material reaches the physical top and bottom
+        // edges, while the header and scrolling content own their respective
+        // safe-area insets. A trailing navigation rail is anchored to the
+        // screen edge rather than floating like a card, so its leading edge
+        // stays square at every reveal progress.
+        return GaryxTaskTreeSidebarPanel(
+            topSafeAreaInset: safeAreaInsets.top,
+            bottomSafeAreaInset: safeAreaInsets.bottom,
+            onClose: { closePanel() }
+        )
             .frame(width: panelWidth)
             .frame(maxHeight: .infinity)
             .garyxAdaptiveGlass(
@@ -147,15 +148,7 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
                 fallbackMaterial: .ultraThinMaterial,
                 in: Rectangle()
             )
-            .clipShape(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: GaryxTaskTreeSidebarMetrics.leadingCornerRadius * progress,
-                    bottomLeadingRadius: GaryxTaskTreeSidebarMetrics.leadingCornerRadius * progress,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 0,
-                    style: .continuous
-                )
-            )
+            .clipShape(Rectangle())
             // Pre-baked gradient strip instead of `.shadow`: animated shadow
             // radii force full-screen offscreen blurs every drag frame (the
             // left drawer's frame-rate lesson).
@@ -316,40 +309,44 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
 
 private struct GaryxTaskTreeSidebarPanel: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    let topSafeAreaInset: CGFloat
+    let bottomSafeAreaInset: CGFloat
     let onClose: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+                .padding(.top, topSafeAreaInset)
             Divider()
-                .opacity(0.35)
+                .opacity(0.24)
             content
+                .padding(.bottom, bottomSafeAreaInset)
         }
     }
 
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: GaryxTaskTreeSidebarMetrics.treeGlyph)
-                .font(GaryxFont.system(size: 14, weight: .semibold))
+                .font(GaryxFont.system(size: 15, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text("Task tree")
-                .font(GaryxFont.subheadline(weight: .semibold))
+                .font(GaryxFont.body(weight: .semibold))
                 .foregroundStyle(.primary)
             if model.taskTreeActiveBadgeCount > 0 {
                 Text("\(model.taskTreeActiveBadgeCount)")
                     .font(GaryxFont.system(size: 11, weight: .bold))
-                    .foregroundStyle(GaryxTheme.accent)
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
-                    .background(GaryxTheme.accent.opacity(0.12), in: Capsule())
+                    .background(Color.primary.opacity(0.08), in: Capsule())
                     .accessibilityLabel("\(model.taskTreeActiveBadgeCount) active tasks")
             }
             Spacer(minLength: 0)
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(GaryxFont.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
+                    .font(GaryxFont.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -461,10 +458,10 @@ private struct GaryxTaskTreeSidebarRowView: View {
                         if row.isCurrent {
                             Text("Current")
                                 .font(GaryxFont.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(.primary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1.5)
-                                .background(GaryxTheme.accent, in: Capsule())
+                                .background(Color.primary.opacity(0.10), in: Capsule())
                         }
                     }
 
@@ -492,7 +489,7 @@ private struct GaryxTaskTreeSidebarRowView: View {
             .background {
                 if row.isCurrent {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(GaryxTheme.accent.opacity(0.10))
+                        .fill(Color.primary.opacity(0.055))
                 }
             }
             .contentShape(Rectangle())
