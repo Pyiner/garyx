@@ -1421,3 +1421,61 @@ async fn test_auth_flow_start_routes_feishu_alias_end_to_end() {
         "alias `lark` must resolve to feishu; got 404 (routing broke or plugin not registered)",
     );
 }
+
+// --- bounded graceful drain (#TASK-1903) -----------------------------------
+//
+// Reproduction pin: axum's graceful shutdown waits for every in-flight
+// connection, and the gateway's SSE streams never end on their own, so an
+// unbounded wait turned every SIGTERM into a hang-until-SIGKILL (29/29
+// observed shutdowns force-killed). `serve_with_bounded_drain` bounds the
+// post-signal drain; these tests pin both the bound and its guard rails.
+
+#[tokio::test]
+async fn bounded_drain_forces_exit_when_connections_never_close() {
+    // Models the incident: the signal fired but connections (infinite SSE)
+    // never drain, so the serve future stays pending forever. Without the
+    // bound this await hangs indefinitely.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let _ = tx.send(());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        serve_with_bounded_drain(
+            std::future::pending::<std::io::Result<()>>(),
+            rx,
+            std::time::Duration::from_millis(100),
+        ),
+    )
+    .await
+    .expect("bounded drain must terminate a never-draining server");
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn bounded_drain_never_cuts_short_before_the_signal() {
+    // No shutdown signal → no deadline: the server must keep running.
+    let (_tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_millis(300),
+        serve_with_bounded_drain(
+            std::future::pending::<std::io::Result<()>>(),
+            rx,
+            std::time::Duration::from_millis(10),
+        ),
+    )
+    .await;
+    assert!(outcome.is_err(), "drain must not trigger without a signal");
+}
+
+#[tokio::test]
+async fn bounded_drain_prefers_the_fully_graceful_path() {
+    // A server that drains cleanly within the window returns its own result.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let _ = tx.send(());
+    let result = serve_with_bounded_drain(
+        std::future::ready(Err(std::io::Error::other("serve outcome wins"))),
+        rx,
+        std::time::Duration::from_secs(30),
+    )
+    .await;
+    assert_eq!(result.unwrap_err().to_string(), "serve outcome wins");
+}
