@@ -67,22 +67,119 @@ test('token indirections resolve to the measured reference values', () => {
   assert.ok(baseCss.includes('--text-base: 13px;'));
 });
 
-test('recipe styles every shared floating slot from the tokens', () => {
-  const slots = [
-    "[data-slot='dropdown-menu-content']",
-    "[data-slot='dropdown-menu-sub-content']",
-    "[data-slot='select-content']",
+// Parse menus.css into selector → declarations so tests can pin individual
+// recipe rules; deleting a rule or one of its declarations must fail here.
+function parseRecipeRules(css) {
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [];
+  const rulePattern = /([^{}]+)\{([^{}]*)\}/g;
+  let match;
+  while ((match = rulePattern.exec(stripped)) !== null) {
+    const selectors = match[1]
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const declarations = match[2]
+      .split(';')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    rules.push({ selectors, declarations });
+  }
+  return rules;
+}
+
+function expectRecipe(rules, selector, expectedDeclarations) {
+  const rule = rules.find((candidate) => candidate.selectors.includes(selector));
+  assert.ok(rule, `menus.css must have a rule for ${selector}`);
+  for (const expected of expectedDeclarations) {
+    assert.ok(
+      rule.declarations.some((declaration) => declaration.includes(expected)),
+      `menus.css rule for ${selector} must declare ${expected}`,
+    );
+  }
+}
+
+test('recipe pins every shared floating slot to the tokens', () => {
+  const rules = parseRecipeRules(menusCss);
+  const surfaceDeclarations = [
+    'border-radius: var(--menu-surface-radius)',
+    'background: var(--menu-surface-bg)',
+    'box-shadow: var(--menu-surface-shadow)',
+    'backdrop-filter: blur(var(--menu-surface-blur))',
+  ];
+  expectRecipe(rules, "[data-slot='dropdown-menu-content']", [
+    'padding: var(--menu-surface-padding)',
+    ...surfaceDeclarations,
+  ]);
+  expectRecipe(rules, "[data-slot='dropdown-menu-sub-content']", surfaceDeclarations);
+  expectRecipe(rules, "[data-slot='select-content']", surfaceDeclarations);
+  expectRecipe(rules, '.menu-popover-surface', surfaceDeclarations);
+  expectRecipe(rules, "[data-slot='select-content'] [data-slot='select-viewport']", [
+    'padding: var(--menu-surface-padding)',
+  ]);
+  const rowDeclarations = [
+    'padding: var(--menu-item-padding-y) var(--menu-item-padding-x)',
+    'border-radius: var(--menu-item-radius)',
+    'font-size: var(--menu-item-font-size)',
+    'font-weight: var(--menu-item-font-weight)',
+    'line-height: var(--menu-item-line-height)',
+    'gap: var(--menu-item-gap)',
+  ];
+  for (const slot of [
     "[data-slot='dropdown-menu-item']",
     "[data-slot='dropdown-menu-checkbox-item']",
     "[data-slot='dropdown-menu-sub-trigger']",
     "[data-slot='select-item']",
-    "[data-slot='dropdown-menu-shortcut']",
-    "[data-slot='dropdown-menu-separator']",
-    '.icon-menu-trigger',
-  ];
-  for (const slot of slots) {
-    assert.ok(menusCss.includes(slot), `menus.css must style ${slot}`);
+  ]) {
+    expectRecipe(rules, slot, rowDeclarations);
+    expectRecipe(rules, `${slot}[data-highlighted]`, [
+      'background: var(--menu-item-hover-bg)',
+    ]);
+    expectRecipe(rules, `${slot} svg`, [
+      'opacity: var(--menu-item-icon-opacity)',
+    ]);
   }
+  expectRecipe(rules, "[data-slot='dropdown-menu-shortcut']", [
+    'margin-left: auto',
+    'color: var(--menu-shortcut-color)',
+    'font-size: var(--text-sm)',
+  ]);
+  for (const slot of ["[data-slot='dropdown-menu-label']", "[data-slot='select-label']"]) {
+    expectRecipe(rules, slot, [
+      'color: var(--color-token-description-foreground)',
+      'font-size: var(--text-xs-plus)',
+    ]);
+  }
+  for (const slot of [
+    "[data-slot='dropdown-menu-separator']",
+    "[data-slot='select-separator']",
+  ]) {
+    expectRecipe(rules, slot, [
+      'height: 1px',
+      'margin: 4px var(--menu-item-padding-x)',
+      'background: var(--menu-separator-color)',
+    ]);
+  }
+  expectRecipe(rules, '.icon-menu-trigger', [
+    'width: var(--menu-trigger-size)',
+    'height: var(--menu-trigger-size)',
+    'border-radius: var(--menu-trigger-radius)',
+    'color: var(--menu-trigger-color)',
+  ]);
+  expectRecipe(rules, ".icon-menu-trigger[data-state='open']", [
+    'background: var(--menu-trigger-hover-bg)',
+  ]);
+  expectRecipe(rules, '.menu-item-two-line', [
+    'min-height: 44px',
+    'border-radius: var(--menu-item-radius)',
+  ]);
+  expectRecipe(rules, '.menu-item-two-line-title', [
+    'font-size: var(--menu-item-font-size)',
+    'font-weight: var(--menu-item-font-weight)',
+  ]);
+  expectRecipe(rules, '.menu-item-two-line-caption', [
+    'color: var(--color-token-description-foreground)',
+  ]);
   // The recipe must stay overridable by per-surface CSS files.
   assert.ok(menusCss.includes('@layer components'));
 });
@@ -109,6 +206,12 @@ test('retired per-surface menu forks stay deleted', () => {
   const composerCss = read('styles/composer.css');
   assert.ok(!composerCss.includes('.floating-action-menu-row {'));
   assert.ok(!composerCss.includes('rgba(13, 13, 13, 0.52)'));
+  const channelPluginsCss = read('styles/channel-plugins.css');
+  assert.ok(
+    !channelPluginsCss.includes('padding: 0 !important'),
+    'select viewport padding must come from the shared recipe, not be zeroed',
+  );
+  assert.ok(!channelPluginsCss.includes('saturate('));
   const taskForestCss = read('styles/task-forest.css');
   assert.ok(!taskForestCss.includes('#ececea'));
   const gatewaySwitcherSource = read('GatewaySwitcher.tsx');

@@ -454,10 +454,11 @@ button.new-thread-resume-link:hover {
 
 [data-slot="select-content"].new-thread-workspace-menu > div,
 [data-slot="select-content"].new-thread-mode-menu > div {
+  /* Popper sizing only; the 4px viewport inset comes from the shared
+     select-viewport rule in styles/menus.css. */
   width: 100% !important;
   height: auto !important;
   min-width: 0 !important;
-  padding: 0 !important;
 }
 
 [data-slot="select-content"].new-thread-workspace-menu [data-slot="select-label"],
