@@ -476,9 +476,15 @@ public struct GaryxConversationScrollState: Equatable {
     /// TOP when rows are inserted above (`defaultScrollAnchor(.bottom, for:
     /// .sizeChanges)` only pins a reader who is already at the bottom), so a
     /// prepend physically pushes the reading position out and parks the
-    /// viewport over the just-loaded oldest rows. The view executes this by
-    /// scrolling the pre-prepend first row back to the viewport top: the list
-    /// grows above, the reader stays put and keeps scrolling up manually.
+    /// viewport over the just-loaded oldest rows.
+    ///
+    /// The view executes this with exact offset compensation against the
+    /// hosting scroll view (`GaryxHistoryPrependOffsetCompensation`): the
+    /// content grew by ΔH above, so the same reading position now lives at
+    /// `capturedOffset + ΔH` — exact for any distance from the loaded start,
+    /// including prefetches that fire up to 1.5 viewports away. The
+    /// pre-prepend first row only serves as a coarse fallback anchor when the
+    /// hosting scroll view cannot be resolved.
     public struct ReadingAnchorRestore: Equatable {
         /// The row that was first before the prepend — the new content's
         /// lower boundary. `preservesScrollForPrependedHistory` guarantees it
@@ -515,6 +521,28 @@ public struct GaryxConversationScrollState: Equatable {
             hasTailContent: hasTailContent
         )
         return ReadingAnchorRestore(anchorRowId: anchorRowId)
+    }
+
+    /// Exact reading-position math for an older-history prepend.
+    ///
+    /// Captured before the prepend lays out: the hosting scroll view's
+    /// content offset and content height. Once the layout has grown by
+    /// ΔH = `currentContentHeight - capturedContentHeight`, the identical
+    /// reading position sits at `capturedOffsetY + ΔH` — independent of how
+    /// far the reader was from the loaded start, so a prefetch that fired
+    /// 1.5 viewports early restores just as exactly as one at the very top.
+    ///
+    /// Returns nil while the content has not grown yet (the caller retries
+    /// on a later layout pass) and for shrinking content (thread switches and
+    /// evictions are not prepends and must never be "compensated").
+    public static func compensatedHistoryPrependOffset(
+        capturedOffsetY: CGFloat,
+        capturedContentHeight: CGFloat,
+        currentContentHeight: CGFloat
+    ) -> CGFloat? {
+        let growth = currentContentHeight - capturedContentHeight
+        guard growth > 0.5 else { return nil }
+        return capturedOffsetY + growth
     }
 
     /// Whether a messages change is an older-history prepend whose reading

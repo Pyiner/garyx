@@ -852,6 +852,69 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(state.hasTailContent)
     }
 
+    /// Exact prepend offset compensation (#TASK-2088 regression): the reader
+    /// prefetched from ~640pt above the loaded start — one full prefetch
+    /// distance away, NOT at the top. The compensated offset must preserve
+    /// the reading position exactly for any distance, because it only
+    /// depends on how much the content grew, never on where the reader was.
+    func testPrependOffsetCompensationIsExactAtPrefetchDistance() {
+        // Reader offset 640pt below the loaded start (content 3000pt tall);
+        // a network page prepends 2400pt of older rows.
+        XCTAssertEqual(
+            GaryxConversationScrollState.compensatedHistoryPrependOffset(
+                capturedOffsetY: 640,
+                capturedContentHeight: 3_000,
+                currentContentHeight: 5_400
+            ),
+            3_040
+        )
+        // At the very top (T≈0) the same math holds.
+        XCTAssertEqual(
+            GaryxConversationScrollState.compensatedHistoryPrependOffset(
+                capturedOffsetY: 0,
+                capturedContentHeight: 3_000,
+                currentContentHeight: 5_400
+            ),
+            2_400
+        )
+        // Rubber-banded past the top (negative offset) stays exact too.
+        XCTAssertEqual(
+            GaryxConversationScrollState.compensatedHistoryPrependOffset(
+                capturedOffsetY: -40,
+                capturedContentHeight: 3_000,
+                currentContentHeight: 5_400
+            ),
+            2_360
+        )
+    }
+
+    /// Compensation only fires once the layout actually grew: unchanged and
+    /// shrinking content (thread switch, residency eviction) return nil so
+    /// the caller retries or gives up instead of teleporting the reader.
+    func testPrependOffsetCompensationRequiresGrowth() {
+        XCTAssertNil(
+            GaryxConversationScrollState.compensatedHistoryPrependOffset(
+                capturedOffsetY: 640,
+                capturedContentHeight: 3_000,
+                currentContentHeight: 3_000
+            )
+        )
+        XCTAssertNil(
+            GaryxConversationScrollState.compensatedHistoryPrependOffset(
+                capturedOffsetY: 640,
+                capturedContentHeight: 3_000,
+                currentContentHeight: 3_000.4
+            )
+        )
+        XCTAssertNil(
+            GaryxConversationScrollState.compensatedHistoryPrependOffset(
+                capturedOffsetY: 640,
+                capturedContentHeight: 3_000,
+                currentContentHeight: 800
+            )
+        )
+    }
+
     /// Only a genuine prepend restores the reading anchor: tail appends,
     /// unchanged rows, and thread switches must not scroll anywhere.
     func testRenderRowsChangedOnlyRestoresForGenuinePrepends() {

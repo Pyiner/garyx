@@ -41,6 +41,58 @@ private final class GaryxConversationScrollStateBox {
     var state = GaryxConversationScrollState()
 }
 
+/// Weak handle to the UIScrollView hosting the conversation transcript.
+/// Older-history prepends need exact offset compensation (content grew by ΔH
+/// above → same reading position now lives at offset + ΔH), and only the
+/// UIKit scroll view exposes contentOffset/contentSize for that. Resolved by
+/// `GaryxEnclosingScrollViewReader`; a nil handle degrades to the coarse
+/// fallback anchor scroll, never a crash.
+private final class GaryxConversationHostScrollViewBox {
+    weak var scrollView: UIScrollView?
+}
+
+/// Invisible bridge view that resolves the enclosing UIScrollView of the
+/// transcript content into `GaryxConversationHostScrollViewBox`. Walking the
+/// superview chain from inside the ScrollView's content is the only stable
+/// way to reach SwiftUI's hosting UIScrollView; it re-resolves on every move
+/// to a window so scroll-view identity changes (thread switches recreate the
+/// scroll view) never leave a stale handle.
+private struct GaryxEnclosingScrollViewReader: UIViewRepresentable {
+    let box: GaryxConversationHostScrollViewBox
+
+    final class ResolverView: UIView {
+        var box: GaryxConversationHostScrollViewBox?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            resolve()
+        }
+
+        func resolve() {
+            var candidate: UIView? = superview
+            while let view = candidate, !(view is UIScrollView) {
+                candidate = view.superview
+            }
+            if let scrollView = candidate as? UIScrollView {
+                box?.scrollView = scrollView
+            }
+        }
+    }
+
+    func makeUIView(context: Context) -> ResolverView {
+        let view = ResolverView()
+        view.box = box
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        return view
+    }
+
+    func updateUIView(_ uiView: ResolverView, context: Context) {
+        uiView.box = box
+        uiView.resolve()
+    }
+}
+
 struct GaryxMessageBubbleActions {
     var model: GaryxMobileModel?
     var localFilePreview: @MainActor (_ target: String, _ reportsError: Bool) async -> GaryxWorkspaceFilePreview?
@@ -78,6 +130,7 @@ struct GaryxConversationView: View {
     // conversation body; `showsScrollToBottomButton` is the only scroll
     // fact the body reads, mirrored into SwiftUI state when it flips.
     @State private var scrollStateBox = GaryxConversationScrollStateBox()
+    @State private var hostScrollViewBox = GaryxConversationHostScrollViewBox()
     @State private var showsScrollToBottomButton = false
     @State private var scrollPreservationThreadId: String?
     @State private var rowScrollPreservationThreadId: String?
@@ -204,7 +257,13 @@ struct GaryxConversationView: View {
                         hasTailContent: !newValue.isEmpty || showsDebouncedTailThinking
                     )
                     if let restore {
-                        scheduleReadingAnchorRestore(restore, proxy: proxy)
+                        // Capture synchronously: onChange runs before the new
+                        // rows lay out, so the scroll view still reports the
+                        // pre-prepend offset and content height.
+                        let captured = hostScrollViewBox.scrollView.map {
+                            (offsetY: $0.contentOffset.y, contentHeight: $0.contentSize.height)
+                        }
+                        scheduleReadingAnchorRestore(restore, captured: captured, proxy: proxy)
                     }
                 }
                 .onChange(of: model.showsTailThinkingIndicator) { _, _ in
@@ -408,6 +467,10 @@ struct GaryxConversationView: View {
             .padding(.top, 18)
             .padding(.bottom, 24)
             .garyxVerticalScrollContentWidth(alignment: .topLeading)
+            // Resolve the hosting UIScrollView for exact older-history
+            // prepend offset compensation. Must sit on content INSIDE the
+            // scroll view so the superview walk reaches it.
+            .background(GaryxEnclosingScrollViewReader(box: hostScrollViewBox))
             // Do not attach a count-driven animation to the transcript
             // container. A send changes the message count, composer height,
             // spacer, and bottom anchor in the same layout pass; animating the
@@ -541,42 +604,79 @@ struct GaryxConversationView: View {
         scheduleScrollToConversationTail(proxy, request: request)
     }
 
-    /// Pin the reading position through an older-history prepend: scroll the
-    /// pre-prepend first row back to the viewport top, immediately and across
-    /// the next layout passes (the freshly inserted rows above are still
-    /// measuring, so a single scrollTo can land short while their estimated
-    /// heights settle). Without this, SwiftUI keeps the offset relative to
-    /// the content top and the viewport ends up parked over the just-loaded
-    /// oldest rows (#TASK-2073 follow-up).
+    /// Pin the reading position through an older-history prepend.
+    ///
+    /// Preferred path — exact offset compensation: the caller captured the
+    /// hosting UIScrollView's contentOffset and contentSize BEFORE the new
+    /// rows laid out; once the content has grown by ΔH, the identical
+    /// reading position sits at `capturedOffset + ΔH`
+    /// (`compensatedHistoryPrependOffset`), regardless of how far the reader
+    /// was from the loaded start when the prefetch fired. Attempts retry
+    /// across the next layout passes until the growth is observable, then
+    /// stop — compensation must apply exactly once per prepend.
+    ///
+    /// Fallback — when the hosting scroll view could not be resolved, scroll
+    /// the pre-prepend first row back to the viewport top (coarse: loses the
+    /// in-viewport offset, but still strictly better than parking the
+    /// viewport over the just-loaded oldest rows).
     private func scheduleReadingAnchorRestore(
         _ restore: GaryxConversationScrollState.ReadingAnchorRestore,
+        captured: (offsetY: CGFloat, contentHeight: CGFloat)?,
         proxy: ScrollViewProxy
     ) {
         readingAnchorRestoreGeneration += 1
         let generation = readingAnchorRestoreGeneration
         let identity = conversationScrollIdentity
 
-        for (index, delay) in [DispatchTimeInterval.milliseconds(0), .milliseconds(16), .milliseconds(60)].enumerated() {
+        guard let captured, hostScrollViewBox.scrollView != nil else {
+            // No UIKit handle: coarse anchor fallback, single shot.
+            DispatchQueue.main.async {
+                guard generation == readingAnchorRestoreGeneration,
+                      identity == conversationScrollIdentity else {
+                    return
+                }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(restore.anchorRowId, anchor: .top)
+                }
+            }
+            return
+        }
+
+        for delay in [DispatchTimeInterval.milliseconds(0), .milliseconds(16), .milliseconds(60), .milliseconds(140)] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 DispatchQueue.main.async {
                     guard generation == readingAnchorRestoreGeneration,
-                          identity == conversationScrollIdentity else {
+                          identity == conversationScrollIdentity,
+                          let scrollView = hostScrollViewBox.scrollView else {
                         return
                     }
-                    // The immediate attempt always runs — skipping it is a
-                    // guaranteed visible jump. Late retries only re-pin while
-                    // no reader gesture drives the scroll view, so settling
-                    // row heights cannot fight an intentional follow-up drag.
-                    if index > 0, scrollStateBox.state.isUserScrollInteracting {
+                    guard let compensated = GaryxConversationScrollState.compensatedHistoryPrependOffset(
+                        capturedOffsetY: captured.offsetY,
+                        capturedContentHeight: captured.contentHeight,
+                        currentContentHeight: scrollView.contentSize.height
+                    ) else {
+                        // Layout has not grown yet — a later attempt retries.
                         return
                     }
-                    // No animation: the restore must be invisible — the whole
-                    // point is that the viewport does not appear to move.
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        proxy.scrollTo(restore.anchorRowId, anchor: .top)
-                    }
+                    let minOffset = -scrollView.adjustedContentInset.top
+                    let maxOffset = max(
+                        minOffset,
+                        scrollView.contentSize.height - scrollView.bounds.height
+                            + scrollView.adjustedContentInset.bottom
+                    )
+                    scrollView.setContentOffset(
+                        CGPoint(
+                            x: scrollView.contentOffset.x,
+                            y: min(max(compensated, minOffset), maxOffset)
+                        ),
+                        animated: false
+                    )
+                    // Applied exactly once: kill the remaining attempts of
+                    // this chain (a newer prepend has already re-armed with
+                    // its own generation).
+                    readingAnchorRestoreGeneration &+= 1
                 }
             }
         }
