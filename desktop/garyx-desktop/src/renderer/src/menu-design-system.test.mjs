@@ -110,8 +110,16 @@ test('retired per-surface menu forks stay deleted', () => {
   assert.ok(!composerCss.includes('.floating-action-menu-row {'));
   assert.ok(!composerCss.includes('rgba(13, 13, 13, 0.52)'));
   const taskForestCss = read('styles/task-forest.css');
-  assert.ok(taskForestCss.includes('var(--menu-surface-shadow)'));
   assert.ok(!taskForestCss.includes('#ececea'));
+  const gatewaySwitcherSource = read('GatewaySwitcher.tsx');
+  assert.ok(
+    gatewaySwitcherSource.includes('menu-popover-surface gateway-switcher-popover'),
+    'gateway popover opts into the shared surface marker',
+  );
+  assert.ok(
+    gatewaySwitcherSource.includes('menu-item-two-line gateway-switcher-item'),
+    'gateway rows use the shared two-line variant',
+  );
 });
 
 test('per-surface CSS never redefines the menu surface or row identity', () => {
@@ -119,7 +127,7 @@ test('per-surface CSS never redefines the menu surface or row identity', () => {
   // visual identity. Per-surface CSS may set widths, heights, and layout for
   // menu slots, but any of these properties on a menu selector is a fork.
   const slotPattern =
-    /dropdown-menu-content|dropdown-menu-sub-content|select-content|dropdown-menu-item|dropdown-menu-checkbox-item|dropdown-menu-sub-trigger|select-item(?!-indicator)|dropdown-menu-label|select-label|dropdown-menu-separator|select-separator|dropdown-menu-shortcut|menu-item-two-line/;
+    /dropdown-menu-content|dropdown-menu-sub-content|select-content|dropdown-menu-item|dropdown-menu-checkbox-item|dropdown-menu-sub-trigger|select-item(?!-indicator)|dropdown-menu-label|select-label|dropdown-menu-separator|select-separator|dropdown-menu-shortcut|menu-item-two-line|menu-popover-surface|popover-content|-popover\b/;
   const forbiddenProps = [
     'background',
     'background-color',
@@ -148,7 +156,12 @@ test('per-surface CSS never redefines the menu surface or row identity', () => {
     while ((match = rulePattern.exec(css)) !== null) {
       const selector = match[1].trim();
       const body = match[2];
-      if (!slotPattern.test(selector)) {
+      // Judge the subject (last compound) of each selector: descendant chrome
+      // inside a menu (badges, glyphs) is not the menu surface itself.
+      const subjects = selector
+        .split(',')
+        .map((part) => part.trim().split(/[\s>+~]+/).pop() ?? '');
+      if (!subjects.some((subject) => slotPattern.test(subject))) {
         continue;
       }
       // Pseudo-element indicators (selection dots, chevrons) draw semantic

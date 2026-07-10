@@ -206,7 +206,7 @@ export function GatewayIdentityBar({
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className="gateway-switcher-popover"
+          className="menu-popover-surface gateway-switcher-popover"
           side="top"
           sideOffset={10}
         >

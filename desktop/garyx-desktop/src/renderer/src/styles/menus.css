@@ -102,6 +102,17 @@
     color: var(--color-token-text-primary);
   }
 
+  /* Menu-like popovers opt into the same surface with this marker class;
+     the consumer keeps only widths, padding, and internal layout local. */
+  .menu-popover-surface {
+    border: 0;
+    border-radius: var(--menu-surface-radius);
+    background: var(--menu-surface-bg);
+    box-shadow: var(--menu-surface-shadow);
+    backdrop-filter: blur(var(--menu-surface-blur));
+    color: var(--color-token-text-primary);
+  }
+
   [data-slot='select-content'] [data-slot='select-viewport'] {
     padding: var(--menu-surface-padding);
   }
