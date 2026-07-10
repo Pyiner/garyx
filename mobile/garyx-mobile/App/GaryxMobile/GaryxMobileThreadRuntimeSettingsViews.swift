@@ -257,18 +257,30 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, 14)
                     .fixedSize(horizontal: false, vertical: true)
+                    .transition(mainPageTransition)
                 } else {
                     ScrollView {
                         optionsPage
-                            .padding(.horizontal, 14)
-                            .padding(.bottom, 14)
+                            .padding(.horizontal, 12)
+                            .padding(.top, 4)
+                            .padding(.bottom, 12)
                             .garyxVerticalScrollContentWidth()
                     }
                     .frame(height: optionsPageHeight)
                     .scrollIndicators(.hidden)
+                    .garyxAdaptiveSoftScrollEdge(for: [.top, .bottom])
+                    .transition(subPageTransition)
                 }
             }
             .opacity(isExpanded ? 1 : 0)
+        }
+        // Collapsing from a sub-page must not shrink the surface around the
+        // "< Model" header: settle back to the compact-row header in the
+        // same transaction so the capsule hand-off stays seamless.
+        .onChange(of: isExpanded) { _, expanded in
+            if !expanded {
+                page = .main
+            }
         }
         .task(id: providerType) {
             guard !providerType.isEmpty,
@@ -279,12 +291,39 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         }
     }
 
+    /// Menu-style drill-in: the leaving page exits fast, the entering page
+    /// fades in slightly later from its side of the stack, so the two pages
+    /// never visibly overlap on the translucent glass. Reduce Motion keeps
+    /// only the staggered fade.
+    private var mainPageTransition: AnyTransition {
+        pageTransition(edgeOffset: -12)
+    }
+
+    private var subPageTransition: AnyTransition {
+        pageTransition(edgeOffset: 12)
+    }
+
+    private func pageTransition(edgeOffset: CGFloat) -> AnyTransition {
+        let offset: CGFloat = reduceMotion ? 0 : edgeOffset
+        return .asymmetric(
+            insertion: AnyTransition.offset(x: offset)
+                .combined(with: .opacity)
+                .animation(.easeOut(duration: 0.18).delay(0.05)),
+            removal: AnyTransition.offset(x: offset)
+                .combined(with: .opacity)
+                .animation(.easeIn(duration: 0.10))
+        )
+    }
+
     private var panelMaxHeight: CGFloat {
         min(UIScreen.main.bounds.height * 0.62, 520)
     }
 
     private var optionsPageHeight: CGFloat {
-        min(max(CGFloat(optionsPageCount) * 52 + 28, 96), panelMaxHeight)
+        let rows = CGFloat(optionsPageCount)
+        let hairlines = max(rows - 1, 0) * (1 / UIScreen.main.scale)
+        let content = rows * 44 + hairlines + 4 + 12
+        return min(max(content, 96), panelMaxHeight)
     }
 
     private var optionsPageCount: Int {
@@ -306,39 +345,75 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         case .main:
             EmptyView()
         case .model:
-            optionsCard {
-                GaryxAgentSheetOptionsPanel(
-                    options: modelOptions,
-                    selectedId: selectedModelOptionId
-                ) { selected in
-                    setPage(.main)
-                    Task {
-                        await selectModel(selected)
-                    }
+            optionsMenu(
+                options: modelOptions,
+                selectedId: selectedModelOptionId
+            ) { selected in
+                setPage(.main)
+                Task {
+                    await selectModel(selected)
                 }
             }
         case .thinkingLevel:
-            optionsCard {
-                GaryxAgentSheetOptionsPanel(
-                    options: reasoningEffortOptions,
-                    selectedId: selectedReasoningEffortOptionId
-                ) { selected in
-                    setPage(.main)
-                    Task {
-                        await model.updateSelectedThreadRuntimeSettings(reasoningEffort: selected)
-                    }
+            optionsMenu(
+                options: reasoningEffortOptions,
+                selectedId: selectedReasoningEffortOptionId
+            ) { selected in
+                setPage(.main)
+                Task {
+                    await model.updateSelectedThreadRuntimeSettings(reasoningEffort: selected)
                 }
             }
         case .speed:
-            optionsCard {
-                GaryxAgentSheetOptionsPanel(
-                    options: serviceTierOptions,
-                    selectedId: selectedServiceTierOptionId
-                ) { selected in
-                    setPage(.main)
-                    Task {
-                        await model.updateSelectedThreadRuntimeSettings(serviceTier: selected)
+            optionsMenu(
+                options: serviceTierOptions,
+                selectedId: selectedServiceTierOptionId
+            ) { selected in
+                setPage(.main)
+                Task {
+                    await model.updateSelectedThreadRuntimeSettings(serviceTier: selected)
+                }
+            }
+        }
+    }
+
+    /// Options render as a quiet menu directly on the glass surface —
+    /// no filled card, hairline separators, trailing checkmark. The panel
+    /// itself is the menu surface.
+    private func optionsMenu(
+        options: [(id: String, label: String)],
+        selectedId: String,
+        onSelect: @escaping (String) -> Void
+    ) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                Button {
+                    onSelect(option.id)
+                } label: {
+                    HStack(spacing: 12) {
+                        Text(option.label)
+                            .font(GaryxFont.callout(weight: selectedId == option.id ? .semibold : .regular))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+
+                        Spacer(minLength: 0)
+
+                        if selectedId == option.id {
+                            GaryxSelectionCheckmark(size: 15)
+                        }
                     }
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 44)
+                    .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                }
+                .buttonStyle(GaryxRuntimeMenuRowButtonStyle())
+
+                if index < options.count - 1 {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.075))
+                        .frame(height: 1 / UIScreen.main.scale)
+                        .padding(.horizontal, 16)
                 }
             }
         }
@@ -352,24 +427,37 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                 // re-truncates the title.
                 GaryxThreadRuntimeCompactRow()
                     .frame(width: compactRowWidth, alignment: .leading)
+                    .transition(mainPageTransition)
             } else {
-                Button {
-                    setPage(.main)
-                } label: {
-                    HStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Button {
+                        setPage(.main)
+                    } label: {
                         Image(systemName: "chevron.left")
                             .font(GaryxFont.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Text(page.title)
-                            .font(GaryxFont.callout(weight: .medium))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .frame(width: 30, height: 30)
+                            .background(
+                                Color.primary.opacity(0.045),
+                                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+                            }
+                            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                     }
-                    .padding(.horizontal, 12)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
+
+                    Text(page.title)
+                        .font(GaryxFont.callout(weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
                 .frame(height: 44)
+                .transition(subPageTransition)
             }
 
             Spacer(minLength: 0)
@@ -456,16 +544,6 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
             }
-        }
-    }
-
-    private func optionsCard<Content: View>(
-        @ViewBuilder content: @escaping () -> Content
-    ) -> some View {
-        contentCard {
-            content()
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
         }
     }
 
@@ -645,12 +723,13 @@ struct GaryxThreadRuntimeSettingsPanel: View {
 
     private func setPage(_ nextPage: Page) {
         guard page != nextPage else { return }
-        if reduceMotion {
-            page = nextPage
+        let duration: Double = if reduceMotion {
+            0.13
         } else {
-            withAnimation(.easeOut(duration: 0.18)) {
-                page = nextPage
-            }
+            nextPage == .main ? 0.18 : 0.20
+        }
+        withAnimation(.easeOut(duration: duration)) {
+            page = nextPage
         }
     }
 
@@ -722,6 +801,20 @@ struct GaryxThreadRuntimeSettingsPanel: View {
             return nil
         }
         return value
+    }
+}
+
+/// Pressed-only highlight for menu rows on the glass surface: a faint wash
+/// while touched, nothing persistent — selection is carried by the
+/// checkmark alone.
+private struct GaryxRuntimeMenuRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                Color.primary.opacity(configuration.isPressed ? 0.045 : 0),
+                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+            )
+            .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
     }
 }
 
