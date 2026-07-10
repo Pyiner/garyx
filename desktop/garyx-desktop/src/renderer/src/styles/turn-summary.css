@@ -547,17 +547,33 @@
 }
 
 /* Thumbnails extracted from a tool result or loaded from an Image view path,
-   always visible below the tool-group summary like the iOS thumbnail strip;
-   each frame opens the shared image lightbox on click. */
+   always visible below the tool-group summary like the iOS thumbnail strip.
+   The capped grid keeps at most five compact thumbnails on each row. */
 .tool-trace-images {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
+  width: 100%;
+  max-width: 544px;
   padding: 4px 0 2px;
 }
 
 .tool-trace-images:empty {
   display: none;
+}
+
+.tool-trace-images > .message-image-frame-compact,
+.tool-trace-images > .message-image-loading {
+  width: 100%;
+  max-width: none;
+  height: auto;
+  aspect-ratio: 4 / 5;
+}
+
+.tool-trace-images .message-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .tool-trace-group-images {
