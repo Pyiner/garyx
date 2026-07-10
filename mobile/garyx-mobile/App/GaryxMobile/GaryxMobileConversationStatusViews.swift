@@ -212,26 +212,32 @@ struct GaryxUserMessageLoadingBubble: View {
     }
 }
 
-/// Tail banner shown when the selected thread's last run was cut off by the
-/// provider's usage quota. The countdown re-derives every second from the
-/// server-provided reset time via `GaryxRateLimitBannerModel`; when the gateway
-/// scheduled an auto-resend the banner says so and flips to "resending" the
-/// moment the window recovers.
+/// Tail card shown when the selected thread's last run was cut off by the
+/// provider's usage quota. The reset wall-clock time and countdown re-derive
+/// every second from the server-provided reset time via
+/// `GaryxRateLimitBannerModel`; when the gateway scheduled an auto-resend the
+/// card says when it fires, otherwise a Continue button dispatches a literal
+/// "continue" prompt through the regular send pipeline.
 struct GaryxRateLimitBanner: View {
     let rateLimit: GaryxRenderRateLimit
+    var onContinue: (() -> Void)?
 
-    private let accent = Color(red: 0.85, green: 0.60, blue: 0.17)
-    private let fill = Color(red: 0.99, green: 0.96, blue: 0.91)
-    private let stroke = Color(red: 0.94, green: 0.886, blue: 0.77)
+    @State private var sending = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             if let model = GaryxRateLimitBannerModel.make(from: rateLimit, now: context.date) {
-                HStack(alignment: .top, spacing: 10) {
-                    Circle()
-                        .fill(accent)
-                        .frame(width: 8, height: 8)
-                        .padding(.top, 5)
+                HStack(alignment: .center, spacing: 12) {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(.tertiarySystemFill))
+                        .frame(width: 30, height: 30)
+                        .overlay(
+                            Image(systemName: rateLimit.willAutoResend
+                                ? "arrow.clockwise"
+                                : "hourglass")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Color(.secondaryLabel))
+                        )
                     VStack(alignment: .leading, spacing: 2) {
                         Text(model.title)
                             .font(GaryxFont.body())
@@ -243,19 +249,51 @@ struct GaryxRateLimitBanner: View {
                             .foregroundStyle(GaryxTheme.secondaryText)
                     }
                     Spacer(minLength: 0)
+                    if model.showContinue, let onContinue {
+                        Button {
+                            guard !sending else { return }
+                            sending = true
+                            onContinue()
+                        } label: {
+                            Text(sending ? "Sending…" : "Continue")
+                                .font(GaryxFont.caption())
+                                .fontWeight(.semibold)
+                                .foregroundStyle(
+                                    sending ? Color(.secondaryLabel) : Color(.label)
+                                )
+                                .padding(.horizontal, 14)
+                                .frame(height: 28)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color(.systemBackground))
+                                )
+                                .overlay(
+                                    Capsule(style: .continuous)
+                                        .stroke(Color(.separator), lineWidth: 1)
+                                )
+                                .contentShape(Capsule(style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(sending)
+                    }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 11)
                 .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(.systemBackground))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(stroke, lineWidth: 1)
+                        .stroke(Color(.separator).opacity(0.6), lineWidth: 1)
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)
             }
+        }
+        .onChange(of: rateLimit) { _, _ in
+            // A fresh rate-limit context re-arms the Continue action.
+            sending = false
         }
     }
 }

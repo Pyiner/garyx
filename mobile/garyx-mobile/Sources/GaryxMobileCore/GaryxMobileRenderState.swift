@@ -1377,18 +1377,24 @@ public struct GaryxRateLimitBannerModel: Equatable, Sendable {
     /// True when the quota window has recovered and a resend is imminent — the
     /// view can show an active/in-progress treatment.
     public let isResending: Bool
+    /// True when a manual Continue action makes sense: no automatic resend is
+    /// scheduled, so the user nudges the thread forward themselves.
+    public let showContinue: Bool
 
-    public init(title: String, detail: String, isResending: Bool) {
+    public init(title: String, detail: String, isResending: Bool, showContinue: Bool) {
         self.title = title
         self.detail = detail
         self.isResending = isResending
+        self.showContinue = showContinue
     }
 
     /// Build banner content for a rate-limit context relative to `now`. Returns
-    /// `nil` when there is no rate-limit to display.
+    /// `nil` when there is no rate-limit to display. `timeZone` is injectable
+    /// so the reset wall-clock formatting is unit-testable.
     public static func make(
         from rateLimit: GaryxRenderRateLimit?,
-        now: Date = Date()
+        now: Date = Date(),
+        timeZone: TimeZone = .current
     ) -> GaryxRateLimitBannerModel? {
         guard let rateLimit else { return nil }
 
@@ -1400,28 +1406,39 @@ public struct GaryxRateLimitBannerModel: Equatable, Sendable {
         let resetDate = rateLimit.resetAt.flatMap(parseTimestamp)
         let remaining = resetDate.map { $0.timeIntervalSince(now) }
         let recovered = resetDate != nil && (remaining ?? -1) <= 0
+        let clock = resetDate.map { formatResetClock($0, now: now, timeZone: timeZone) }
+        let message = rateLimit.message?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         var detail: String
         var isResending = false
+        var showContinue = false
         if rateLimit.willAutoResend {
-            if let remaining, !recovered {
-                detail = "Auto-resend in \(formatRemaining(remaining))"
+            if let remaining, let clock, !recovered {
+                detail = "Auto-resend at \(clock) · \(formatRemaining(remaining)) left"
             } else if resetDate != nil {
                 detail = "Quota recovered — resending…"
                 isResending = true
             } else {
                 detail = "Will auto-resend when the quota recovers."
             }
-        } else if let remaining, !recovered {
-            detail = "Resets in \(formatRemaining(remaining))"
         } else {
-            detail = "Try again shortly."
+            showContinue = true
+            if let remaining, let clock, !recovered {
+                detail = "Resets at \(clock) · \(formatRemaining(remaining)) left"
+            } else if let clock {
+                detail = "Reset at \(clock) — quota should be available again."
+            } else if let message, !message.isEmpty {
+                detail = message
+            } else {
+                detail = "Try again shortly."
+            }
         }
 
         return GaryxRateLimitBannerModel(
             title: title,
             detail: detail,
-            isResending: isResending
+            isResending: isResending,
+            showContinue: showContinue
         )
     }
 
@@ -1439,6 +1456,27 @@ public struct GaryxRateLimitBannerModel: Equatable, Sendable {
         case "secondary": return "weekly limit"
         default: return nil
         }
+    }
+
+    /// Local wall-clock reset time; includes the date once it is not today
+    /// (weekly windows can reset days out).
+    static func formatResetClock(_ reset: Date, now: Date, timeZone: TimeZone) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+
+        let time = DateFormatter()
+        time.locale = Locale(identifier: "en_US_POSIX")
+        time.timeZone = timeZone
+        time.dateFormat = "HH:mm"
+
+        if calendar.isDate(reset, inSameDayAs: now) {
+            return time.string(from: reset)
+        }
+        let day = DateFormatter()
+        day.locale = Locale(identifier: "en_US_POSIX")
+        day.timeZone = timeZone
+        day.dateFormat = "MMM d"
+        return "\(day.string(from: reset)) \(time.string(from: reset))"
     }
 
     static func formatRemaining(_ seconds: TimeInterval) -> String {

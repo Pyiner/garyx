@@ -395,8 +395,10 @@ struct GaryxConversationView: View {
                             .transition(.opacity)
                     }
                     if let rateLimit = model.selectedThreadRateLimit {
-                        GaryxRateLimitBanner(rateLimit: rateLimit)
-                            .transition(.garyxTranscriptAppear)
+                        GaryxRateLimitBanner(rateLimit: rateLimit) {
+                            Task { await model.send("continue") }
+                        }
+                        .transition(.garyxTranscriptAppear)
                     }
                 }
             }
