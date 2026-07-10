@@ -27,6 +27,12 @@
   -webkit-app-region: no-drag;
 }
 
+.thread-task-tree-header-slot {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
 /* Collapsed sidebar (no conversation rail): the header hugs the window's left
    edge, so the title must clear the traffic lights (x 18-70) and the sidebar
    toggle (x 84-110) that float above it. */
@@ -641,6 +647,18 @@
   white-space: nowrap;
 }
 
+@media (max-width: 720px) {
+  .conversation.thread-view .conversation-header-action-logs {
+    width: 30px;
+    min-width: 30px;
+    padding: 0;
+  }
+
+  .conversation.thread-view .conversation-header-action-logs > span {
+    display: none;
+  }
+}
+
 .conversation-header-action-button-unread:not(.is-open) {
   background: rgba(15, 23, 42, 0.035);
   color: var(--color-token-text-primary);
@@ -895,6 +913,13 @@
   display: block;
   overflow: hidden;
   padding: 8px 12px 12px;
+}
+
+/* Codex keeps the conversation canvas edge-to-edge and lets the transcript
+   and composer own the consistent 16px reading gutter. Extra page padding
+   would double that gutter exactly where the window is already constrained. */
+.conversation.thread-view .conversation-body {
+  padding-inline: 0;
 }
 
 .thread-layout {

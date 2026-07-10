@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { ListTree, MessageSquare } from "lucide-react";
 
 import type {
@@ -15,6 +24,7 @@ import {
   type ThreadAvatarCatalog,
 } from "../../thread-avatar";
 import { AgentOptionAvatar } from "./AgentOptionAvatar";
+import { isDockedTaskTree } from "../responsive-layout-model";
 import {
   buildTaskRows,
   isCurrentTaskTreeNode,
@@ -88,6 +98,12 @@ export function ThreadTaskTreePopover({
 }: ThreadTaskTreePopoverProps) {
   const { t } = useI18n();
   const [snapshot, setSnapshot] = useState<ForestSnapshot>(EMPTY_SNAPSHOT);
+  const [compactOpen, setCompactOpen] = useState(false);
+  const [docked, setDocked] = useState(false);
+  const [triggerHost, setTriggerHost] = useState<HTMLElement | null>(null);
+  const compactTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const popoverId = useId();
   const mountedRef = useRef(true);
   const currentThreadRef = useRef<string | null>(threadId);
 
@@ -100,7 +116,50 @@ export function ThreadTaskTreePopover({
 
   useEffect(() => {
     currentThreadRef.current = threadId;
+    setCompactOpen(false);
   }, [threadId]);
+
+  useEffect(() => {
+    setTriggerHost(
+      document.querySelector<HTMLElement>(
+        "[data-thread-task-tree-trigger-host]",
+      ),
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!compactOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (
+        compactTriggerRef.current?.contains(target) ||
+        popoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setCompactOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return;
+      }
+      setCompactOpen(false);
+      compactTriggerRef.current?.focus();
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [compactOpen]);
 
   const load = useCallback(async () => {
     if (!threadId) {
@@ -148,6 +207,31 @@ export function ThreadTaskTreePopover({
     [snapshot],
   );
 
+  useLayoutEffect(() => {
+    const threadMain = popoverRef.current?.parentElement;
+    if (!threadMain) {
+      return;
+    }
+
+    const syncDockedState = () => {
+      const nextDocked = isDockedTaskTree(
+        threadMain.getBoundingClientRect().width,
+      );
+      setDocked(nextDocked);
+      if (nextDocked) {
+        setCompactOpen(false);
+      }
+    };
+
+    syncDockedState();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(syncDockedState);
+    observer.observe(threadMain);
+    return () => observer.disconnect();
+  }, [rows.length]);
+
   // Nothing to show when this conversation has no anchored task tree.
   if (!threadId || rows.length === 0) {
     return null;
@@ -160,6 +244,7 @@ export function ThreadTaskTreePopover({
     if (snapshot.treeKey) {
       treeKeyByAnchor.set(targetThreadId, snapshot.treeKey);
     }
+    setCompactOpen(false);
     onOpenThread(targetThreadId);
   };
 
@@ -247,21 +332,43 @@ export function ThreadTaskTreePopover({
   };
 
   return (
-    <div className="thread-subtask-pop">
-      <div className="thread-subtask-head">
-        <ListTree aria-hidden size={13} />
-        <span className="thread-subtask-head-title">{t("Task tree")}</span>
-        {activeCount > 0 ? (
-          <span className="thread-subtask-count">{activeCount}</span>
-        ) : null}
+    <>
+      {triggerHost && !docked
+        ? createPortal(
+            <button
+              aria-controls={popoverId}
+              aria-expanded={compactOpen}
+              aria-label={t("Task tree")}
+              className={`thread-subtask-toggle${compactOpen ? " is-open" : ""}${activeCount > 0 ? " has-active" : ""}`}
+              onClick={() => setCompactOpen((current) => !current)}
+              ref={compactTriggerRef}
+              type="button"
+            >
+              <ListTree aria-hidden size={14} />
+            </button>,
+            triggerHost,
+          )
+        : null}
+      <div
+        className={`thread-subtask-pop${compactOpen ? " is-compact-open" : ""}`}
+        id={popoverId}
+        ref={popoverRef}
+      >
+        <div className="thread-subtask-head">
+          <ListTree aria-hidden size={13} />
+          <span className="thread-subtask-head-title">{t("Task tree")}</span>
+          {activeCount > 0 ? (
+            <span className="thread-subtask-count">{activeCount}</span>
+          ) : null}
+        </div>
+        <div className="thread-subtask-list">
+          {rows.map((row) =>
+            row.kind === "thread"
+              ? renderThreadRow(row.thread, row.depth)
+              : renderTaskRow(row.task, row.depth),
+          )}
+        </div>
       </div>
-      <div className="thread-subtask-list">
-        {rows.map((row) =>
-          row.kind === "thread"
-            ? renderThreadRow(row.thread, row.depth)
-            : renderTaskRow(row.task, row.depth),
-        )}
-      </div>
-    </div>
+    </>
   );
 }

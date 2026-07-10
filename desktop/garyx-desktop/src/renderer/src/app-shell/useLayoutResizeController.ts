@@ -15,12 +15,17 @@ import {
   defaultSideToolsPanelWidth,
 } from "./diagnostics-helpers";
 import type { ContentView } from "./types";
+import {
+  isCompactSidebarViewport,
+  resolveSidebarCollapsed,
+} from "./responsive-layout-model";
 
 type UseLayoutResizeControllerArgs = {
   contentView: ContentView;
   desktopState: DesktopState | null;
   inspectorOpen: boolean;
   openCapsuleTabs: SideCapsuleTab[];
+  secondaryRailOpen: boolean;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
   setSettingsDraft: React.Dispatch<React.SetStateAction<DesktopSettings>>;
   threadLogsOpen: boolean;
@@ -31,6 +36,7 @@ export function useLayoutResizeController({
   desktopState,
   inspectorOpen,
   openCapsuleTabs,
+  secondaryRailOpen,
   setDesktopState,
   setSettingsDraft,
   threadLogsOpen,
@@ -44,15 +50,33 @@ export function useLayoutResizeController({
   );
   const [sideToolsResizing, setSideToolsResizing] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(245);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+  const [sidebarCollapsedByUser, setSidebarCollapsedByUser] = useState(() => {
     try {
       return window.localStorage.getItem("garyx.sidebarCollapsed") === "1";
     } catch {
       return false;
     }
   });
+  const initialCompactSidebarViewport = isCompactSidebarViewport({
+    secondaryRailOpen,
+    viewportWidth: window.innerWidth,
+  });
+  const [compactSidebarViewport, setCompactSidebarViewport] = useState(
+    initialCompactSidebarViewport,
+  );
+  const compactSidebarViewportRef = useRef(initialCompactSidebarViewport);
+  const [compactSidebarOpen, setCompactSidebarOpen] = useState(false);
+  const sidebarCollapsed = resolveSidebarCollapsed({
+    compactOpen: compactSidebarOpen,
+    compactViewport: compactSidebarViewport,
+    userCollapsed: sidebarCollapsedByUser,
+  });
   const toggleSidebarCollapsed = useCallback(() => {
-    setSidebarCollapsed((current) => {
+    if (compactSidebarViewport) {
+      setCompactSidebarOpen((current) => !current);
+      return;
+    }
+    setSidebarCollapsedByUser((current) => {
       const next = !current;
       try {
         window.localStorage.setItem("garyx.sidebarCollapsed", next ? "1" : "0");
@@ -61,7 +85,7 @@ export function useLayoutResizeController({
       }
       return next;
     });
-  }, []);
+  }, [compactSidebarViewport]);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [railWidth, setRailWidth] = useState(258);
   const [railResizing, setRailResizing] = useState(false);
@@ -89,6 +113,26 @@ export function useLayoutResizeController({
       root.style.removeProperty("--spacing-token-rail");
     };
   }, [railWidth]);
+
+  useEffect(() => {
+    const syncCompactSidebar = () => {
+      const nextCompact = isCompactSidebarViewport({
+        secondaryRailOpen,
+        viewportWidth: window.innerWidth,
+      });
+      if (nextCompact && !compactSidebarViewportRef.current) {
+        setCompactSidebarOpen(false);
+      }
+      compactSidebarViewportRef.current = nextCompact;
+      setCompactSidebarViewport(nextCompact);
+    };
+
+    syncCompactSidebar();
+    window.addEventListener("resize", syncCompactSidebar);
+    return () => {
+      window.removeEventListener("resize", syncCompactSidebar);
+    };
+  }, [secondaryRailOpen]);
   const threadLayoutRef = useRef<HTMLDivElement | null>(null);
   const conversationRef = useRef<HTMLElement | null>(null);
   const threadLogsPanelWidthRef = useRef(

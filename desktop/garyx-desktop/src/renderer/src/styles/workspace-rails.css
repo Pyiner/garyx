@@ -1208,6 +1208,10 @@
   border-left: 1px solid var(--color-token-border-light);
 }
 
+.app-shell.sidebar-collapsed:not(.with-bot-conversation-rail) .conversation {
+  border-radius: 0;
+}
+
 .conversation:not(.settings-view) {
   grid-template-rows: auto minmax(0, 1fr);
 }

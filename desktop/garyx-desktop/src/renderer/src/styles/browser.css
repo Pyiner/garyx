@@ -546,7 +546,7 @@
     grid-template-columns: 0px var(--spacing-token-rail, 258px) minmax(0, 1fr);
   }
 
-  .conversation-body {
+  .conversation:not(.thread-view) .conversation-body {
     padding-inline: 20px;
   }
 
@@ -566,44 +566,10 @@
 }
 
 @media (max-width: 920px) {
-  body {
-    overflow: auto;
-  }
-
-  .app-shell {
-    grid-template-columns: 1fr;
-    height: auto;
-    max-height: none;
-  }
-
-  .left-rail {
-    padding-top: calc(var(--inset-toolbar-sm) + 8px);
-    min-height: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--color-token-border);
-  }
-
-  .bot-conversation-rail {
-    height: auto;
-    max-height: 42vh;
-    padding-top: 12px;
-    border-right: 0;
-    border-bottom: 1px solid var(--color-token-border);
-  }
-
-  .bot-conversation-rail::after {
-    display: none;
-  }
-
-  .conversation {
-    min-height: 70vh;
-  }
-
   .conversation.with-side-tools {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .conversation-header,
   .composer-actions {
     align-items: stretch;
     flex-direction: column;
@@ -612,18 +578,6 @@
   .composer .composer-actions {
     align-items: center;
     flex-direction: row;
-  }
-
-  .conversation-heading-row {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .conversation-header-actions {
-    width: 100%;
-    justify-content: space-between;
-    flex-wrap: wrap;
   }
 
   .composer-queue-text {
@@ -670,10 +624,6 @@
   .settings-managed-row-actions {
     width: 100%;
     justify-content: flex-start;
-  }
-
-  .messages {
-    padding-inline: 0;
   }
 
   .bot-endpoint-card {

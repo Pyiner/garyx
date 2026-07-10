@@ -82,6 +82,12 @@ export function ConversationHeaderActions({
               <span>{gatewayStatusLabel}</span>
             </div>
           ) : null}
+          {selectedThreadId ? (
+            <span
+              className="thread-task-tree-header-slot"
+              data-thread-task-tree-trigger-host
+            />
+          ) : null}
           <ThreadInfoPopover
             threadId={selectedThreadId}
             threadInfo={threadInfo}

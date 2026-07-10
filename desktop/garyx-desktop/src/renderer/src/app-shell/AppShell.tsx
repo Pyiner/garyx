@@ -1163,6 +1163,13 @@ export function AppShell() {
   const activeHistoryPagination = activeThreadMessageKey
     ? historyPaginationByThread[activeThreadMessageKey] || null
     : null;
+  const secondaryConversationRailRequested =
+    contentView === "thread" &&
+    Boolean(
+      botConversationGroupId ||
+        workspaceConversationPath ||
+        recentThreadsRailOpen,
+    );
   const {
     conversationRef,
     currentConversationWidth,
@@ -1191,6 +1198,7 @@ export function AppShell() {
     desktopState,
     inspectorOpen,
     openCapsuleTabs,
+    secondaryRailOpen: secondaryConversationRailRequested,
     setDesktopState,
     setSettingsDraft,
     threadLogsOpen,
@@ -3807,6 +3815,7 @@ export function AppShell() {
   );
   const conversationClassName = [
     "conversation",
+    contentView === "thread" ? "thread-view" : null,
     isSettingsView ? "settings-view" : null,
     isCapsulesView ? "capsules-view" : null,
     isAutomationView ? "automation-view" : null,

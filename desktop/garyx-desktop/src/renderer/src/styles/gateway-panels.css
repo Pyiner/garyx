@@ -140,7 +140,7 @@
   top: 12px;
   right: var(--thread-subtask-edge-gap);
   z-index: 30;
-  width: var(--thread-subtask-width);
+  width: min(var(--thread-subtask-width), calc(100% - 24px));
   max-height: min(58vh, 520px);
   overflow-y: auto;
   scrollbar-width: none;
@@ -161,14 +161,25 @@
     transform 180ms var(--ease-out-quart),
     visibility 0s linear 180ms;
 }
+.thread-subtask-pop.is-compact-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0) scale(1);
+  visibility: visible;
+  transition:
+    opacity 150ms var(--ease-out-quart),
+    transform 180ms var(--ease-out-quart),
+    visibility 0s;
+}
 .thread-subtask-pop::-webkit-scrollbar {
   display: none;
 }
 
 /* Only reserve a task-tree rail when both the full-width composer and the
    compact tree fit. Below that point the tree behaves like a responsive
-   drawer: it slides away and gives the conversation the whole width. */
-@container thread-task-tree (min-width: 1024px) {
+   overlay opened from the conversation header, giving the transcript the
+   whole width while the tree is closed. */
+@container thread-task-tree (min-width: 1088px) {
   .thread-main:has(.thread-subtask-pop) {
     padding-right: var(--thread-subtask-rail-width);
   }
@@ -176,12 +187,13 @@
   .thread-main:has(.thread-subtask-pop) .composer-shell-wrap {
     right: var(--thread-subtask-rail-width);
     width: min(
-      var(--container-2xl),
+      var(--thread-reading-width),
       calc(100% - var(--thread-subtask-rail-width) - 32px)
     );
   }
 
   .thread-subtask-pop {
+    width: var(--thread-subtask-width);
     opacity: 1;
     pointer-events: auto;
     transform: translateX(0) scale(1);
@@ -193,24 +205,38 @@
   }
 }
 .thread-subtask-toggle {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 10px 0 11px;
-  border-radius: 9px;
-  border: 1px solid var(--border, rgba(26, 28, 31, 0.1));
-  background: var(--bg-primary, var(--color-token-bg-primary));
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.03);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--fg-secondary, var(--color-token-text-secondary));
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-token-description-foreground);
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
-.thread-subtask-toggle:hover {
-  background: var(--bg-tertiary, var(--color-token-bg-tertiary));
-  border-color: var(--border-heavy, var(--color-border-heavy));
+.thread-subtask-toggle:hover,
+.thread-subtask-toggle.is-open {
+  background: var(--color-token-row-hover);
+  color: var(--color-token-text-primary);
+}
+.thread-subtask-toggle.has-active::after {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--color-token-bg-primary);
+  border-radius: 999px;
+  background: var(--color-accent-orange);
+  content: "";
 }
 .thread-subtask-count {
   font-size: 10px;

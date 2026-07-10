@@ -32,6 +32,27 @@
 - Menu shortcut hints use the shared `DropdownMenuShortcut` component, not
   local spans.
 
+## Responsive Conversation Layout
+
+- Keep the desktop app shell horizontal at every supported window width.
+  Narrow windows collapse a rail; they must never stack the whole sidebar
+  above the conversation or turn the viewport into a document-height page.
+- Match the measured Codex rail behavior: auto-collapse the global rail at
+  720px and below. When Garyx's secondary conversation rail is open, collapse
+  the global rail at 980px and below so the conversation remains usable.
+  Compact-mode toggles are temporary and must not overwrite the user's
+  desktop-width collapse preference.
+- The transcript owns a 768px outer scroller with 16px internal gutters, which
+  yields a 736px reading edge. The composer uses the same 736px edge directly;
+  both become `available width - 32px` when constrained.
+- A task tree may reserve its 320px rail only when the thread canvas is at
+  least 1088px wide, leaving the full reading column intact. Below that width,
+  expose the tree through the 28px conversation-header control and show it as
+  a dismissible overlay with Escape, outside-click, and focus-return behavior.
+- Validate responsive changes in the installed app around the actual seams:
+  640, 720/721, 980/981, 1332/1333, and a wide desktop width. Restore the
+  user's original window size after CDP measurement.
+
 ## Workspace File Tree
 
 - The workspace file browser should read directories on demand.
