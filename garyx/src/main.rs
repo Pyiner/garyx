@@ -24,9 +24,9 @@ mod main_tests;
 use cli::{
     AgentAction, AutoUpdateAction, AutomationAction, AutomationDataTriggerAction,
     AutomationTriggerAction, BotAction, BotEndpointAction, ChannelsAction, Cli, CommandAction,
-    Commands, ConfigAction, DbAction, DbFieldAction, DbRecordAction, DbTableAction, DreamAction,
-    GatewayAction, LogsAction, PluginsAction, ProviderAction, TaskAction, TeamAction, ThreadAction,
-    ToolAction, WorkflowAction, WorkflowDefinitionAction,
+    Commands, ConfigAction, DbAction, DbFieldAction, DbRecordAction, DbTableAction, GatewayAction,
+    LogsAction, PluginsAction, ProviderAction, TaskAction, TeamAction, ThreadAction, ToolAction,
+    WorkflowAction, WorkflowDefinitionAction,
 };
 use commands::{
     ProviderSetOptions, cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list,
@@ -42,9 +42,9 @@ use commands::{
     cmd_config_provider_model, cmd_config_set, cmd_config_show, cmd_config_unset,
     cmd_config_validate, cmd_db_events, cmd_db_field_add, cmd_db_field_drop, cmd_db_record_delete,
     cmd_db_record_get, cmd_db_record_insert, cmd_db_record_update, cmd_db_sql, cmd_db_table_create,
-    cmd_db_table_drop, cmd_db_table_list, cmd_db_table_schema, cmd_doctor, cmd_dream_auto,
-    cmd_dream_list, cmd_dream_scan, cmd_dream_show, cmd_endpoint_bind, cmd_endpoint_detach,
-    cmd_endpoint_list, cmd_gateway_install, cmd_gateway_reload_config, cmd_gateway_restart,
+    cmd_db_table_drop, cmd_db_table_list, cmd_db_table_schema, cmd_doctor, cmd_endpoint_bind,
+    cmd_endpoint_detach, cmd_endpoint_list, cmd_gateway_install, cmd_gateway_reload_config,
+    cmd_gateway_restart,
     cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear,
     cmd_logs_path, cmd_logs_tail, cmd_onboard, cmd_provider_list, cmd_provider_set,
     cmd_provider_show, cmd_send_message, cmd_status, cmd_task_create, cmd_task_delete,
@@ -1209,48 +1209,6 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 cmd_thread_create(config_path, title, workspace_dir, agent_id, worktree, json).await
             }
-        },
-        Some(Commands::Dream { action }) => match action {
-            DreamAction::List {
-                from,
-                to,
-                since_hours,
-                limit,
-                json,
-            } => {
-                cmd_dream_list(
-                    config_path,
-                    from.as_deref(),
-                    to.as_deref(),
-                    since_hours,
-                    limit,
-                    json,
-                )
-                .await
-            }
-            DreamAction::Scan {
-                from,
-                to,
-                since_hours,
-                mode,
-                limit,
-                json,
-            } => {
-                cmd_dream_scan(
-                    config_path,
-                    from.as_deref(),
-                    to.as_deref(),
-                    since_hours,
-                    &mode,
-                    limit,
-                    json,
-                )
-                .await
-            }
-            DreamAction::Show { dream_id, json } => {
-                cmd_dream_show(config_path, &dream_id, json).await
-            }
-            DreamAction::Auto { state, json } => cmd_dream_auto(config_path, &state, json).await,
         },
         Some(Commands::Task { action }) => match action {
             TaskAction::List {

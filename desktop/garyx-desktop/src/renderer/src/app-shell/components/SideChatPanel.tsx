@@ -863,7 +863,6 @@ export function SideChatPanel({
       selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
       selectedThreadId={sideChatThreadId}
       showAutomationRunInitialPlaceholder={false}
-      showDreams={false}
       // Side chats fork the provider session without importing visible
       // history, so there is never parent history to wait for — the panel
       // opens as an empty thread instead of a loading placeholder.

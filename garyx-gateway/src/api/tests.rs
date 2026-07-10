@@ -2382,7 +2382,7 @@ async fn test_settings_update_merge_true_rejects_unknown_patch_field() {
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
-                "dreams": {
+                "tasks": {
                     "enbaled": true
                 }
             }))
@@ -2403,7 +2403,7 @@ async fn test_settings_update_merge_true_rejects_unknown_patch_field() {
         error
             .as_str()
             .unwrap_or_default()
-            .contains("$.dreams.enbaled")
+            .contains("$.tasks.enbaled")
     }));
 }
 
@@ -2742,8 +2742,8 @@ async fn test_settings_update_merge_true_ignores_untouched_legacy_account_config
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
-                "dreams": {
-                    "enabled": true
+                "tasks": {
+                    "enabled": false
                 }
             }))
             .unwrap(),
@@ -2753,11 +2753,11 @@ async fn test_settings_update_merge_true_ignores_untouched_legacy_account_config
     assert_eq!(resp.status(), 200);
 
     let live = state_with_path.config_snapshot();
-    assert!(live.dreams.enabled);
+    assert!(!live.tasks.enabled);
 
     let persisted: Value =
         serde_json::from_str(&tokio::fs::read_to_string(&config_path).await.unwrap()).unwrap();
-    assert_eq!(persisted["dreams"]["enabled"], true);
+    assert_eq!(persisted["tasks"]["enabled"], false);
     assert_eq!(
         persisted["channels"]["weixin"]["accounts"]["test-weixin"]["config"]["uin"],
         ""
@@ -2820,8 +2820,8 @@ async fn test_settings_update_merge_true_rejects_touched_legacy_account_config_e
                         }
                     }
                 },
-                "dreams": {
-                    "enabled": true
+                "tasks": {
+                    "enabled": false
                 }
             }))
             .unwrap(),
@@ -2840,7 +2840,7 @@ async fn test_settings_update_merge_true_rejects_touched_legacy_account_config_e
             .unwrap_or_default()
             .contains("$.channels.weixin.accounts.test-weixin.config.uin must not be blank")
     }));
-    assert!(!state_with_path.config_snapshot().dreams.enabled);
+    assert!(state_with_path.config_snapshot().tasks.enabled);
 }
 
 #[tokio::test]

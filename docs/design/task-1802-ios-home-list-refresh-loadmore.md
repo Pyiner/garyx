@@ -61,7 +61,7 @@ onRefreshAll: {
 ```
 
 `refreshRemoteState()` (`GaryxMobileModel+Gateway.swift:520-604`) fans out
-to agents, teams, skills, capsules, dreams, gateway settings, automations,
+to agents, teams, skills, capsules, gateway settings, automations,
 slash commands, MCP servers, channel endpoints, workspaces, configured
 bots, bot consoles, and channel plugins — and `refreshAll` awaits the
 whole thing *after* the thread refresh completes. The refresh spinner

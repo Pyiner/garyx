@@ -40,7 +40,7 @@ the shared path.
 **Shared path** (`openThread(id:source:)` → `openThread(id:requestId:source:)`
 → `openThreadDestination` → `selectThread`), used by deep links
 (`+Navigation.swift:206`), tasks (`+TaskTree.swift:134`), automations
-(`+DreamsAutomations.swift:68/80/82`), bots (`+Bots.swift:9`,
+(`+Automations.swift`), bots (`+Bots.swift:9`,
 `+ThreadLifecycle.swift:278`), workflow children
 (`GaryxMobileWorkflowRunViews.swift:333`):
 

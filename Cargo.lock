@@ -977,7 +977,6 @@ dependencies = [
  "cctty",
  "chrono",
  "chrono-tz",
- "claude-agent-sdk",
  "cron",
  "filetime",
  "futures-util",

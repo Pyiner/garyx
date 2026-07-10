@@ -90,11 +90,7 @@ import type {
   DesktopCapsuleSummary,
   DesktopCapsuleThumbnailResult,
   DesktopCapsulesPage,
-  DesktopDreamTopic,
-  DesktopDreamsPage,
-  ListDreamsInput,
-  ScanDreamsInput,
-} from "./dream-capsule.ts";
+} from "./capsule.ts";
 import type {
   DesktopApiProviderType,
   DesktopCodingUsage,
@@ -300,9 +296,6 @@ export interface GaryxDesktopApi {
   stopTask: (input: StopTaskInput) => Promise<void>;
   deleteTask: (input: DeleteTaskInput) => Promise<void>;
   updateTaskTitle: (input: UpdateTaskTitleInput) => Promise<void>;
-  listDreams: (input?: ListDreamsInput) => Promise<DesktopDreamsPage>;
-  scanDreams: (input?: ScanDreamsInput) => Promise<DesktopDreamsPage>;
-  getDream: (dreamId: string) => Promise<DesktopDreamTopic | null>;
   listCapsules: () => Promise<DesktopCapsulesPage>;
   getCapsule: (capsuleId: string) => Promise<DesktopCapsuleSummary | null>;
   getCapsuleHtml: (capsuleId: string) => Promise<DesktopCapsuleHtmlResult>;

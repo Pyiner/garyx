@@ -1,53 +1,5 @@
 import type { DesktopApiProviderType } from "./provider.ts";
 
-export interface DesktopDreamSpan {
-  spanId: string;
-  dreamId: string;
-  threadId: string;
-  workspacePath?: string | null;
-  startSeq: number;
-  endSeq: number;
-  startAt: string;
-  endAt: string;
-  excerpt: string;
-  messageCount: number;
-}
-
-export interface DesktopDreamTopic {
-  dreamId: string;
-  title: string;
-  summary: string;
-  firstMessageAt: string;
-  lastMessageAt: string;
-  updatedAt: string;
-  source: string;
-  confidence: number;
-  messageCount: number;
-  spanCount: number;
-  spans: DesktopDreamSpan[];
-}
-
-export interface DesktopDreamScan {
-  runId: string;
-  scannedFrom: string;
-  scannedTo: string;
-  createdAt: string;
-  source: string;
-  status: string;
-  topicsCount: number;
-  spansCount: number;
-  error?: string | null;
-}
-
-export interface DesktopDreamsPage {
-  dreams: DesktopDreamTopic[];
-  count: number;
-  from: string;
-  to: string;
-  latestScan?: DesktopDreamScan | null;
-  scan?: DesktopDreamScan | null;
-}
-
 export interface DesktopCapsuleSummary {
   id: string;
   title: string;
@@ -87,15 +39,4 @@ export type DesktopCapsuleThumbnailResult =
 
 export interface DeleteCapsuleInput {
   capsuleId: string;
-}
-
-export interface ListDreamsInput {
-  from?: string | null;
-  to?: string | null;
-  sinceHours?: number;
-  limit?: number;
-}
-
-export interface ScanDreamsInput extends ListDreamsInput {
-  mode?: "auto" | "claude" | "heuristic";
 }

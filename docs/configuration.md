@@ -446,60 +446,6 @@ Telegram owns its BotCommands publishing and refreshes the projected menu on
 startup and every 10 minutes; the gateway no longer exposes a manual Telegram
 command-sync endpoint.
 
-## Dreams
-
-Dreams are persisted topic summaries extracted from recent user messages. They
-are stored in the local Garyx SQLite database and can point back to one or more
-thread spans, so desktop and mobile clients can open the source thread from a
-topic.
-
-Dreams are off by default. When the switch is off, the desktop and mobile apps
-hide the Dreams entry points; manual scans remain available through the CLI and
-API.
-
-```json
-{
-  "dreams": {
-    "enabled": false,
-    "scan_interval_secs": 3600,
-    "scan_since_hours": 1
-  }
-}
-```
-
-When `dreams.enabled` is `true`, the gateway checks once per configured interval
-whether the last `scan_since_hours` window contains user messages. If no recent
-user message exists, the scan is skipped without invoking Claude or touching the
-Dreams database. Automatic and manual scans are incremental: existing topics
-from the same recent thread set are sent to the extractor so it can update an
-existing topic, create a new one, or leave topics unchanged without deleting
-older spans outside the scan window.
-
-The desktop and mobile settings surfaces currently expose only
-`dreams.enabled`. `scan_interval_secs` and `scan_since_hours` are JSON-only
-knobs for now.
-
-The gateway exposes:
-
-```text
-GET /api/dreams
-POST /api/dreams/scan
-GET /api/dreams/{dream_id}
-```
-
-The CLI exposes the same surface:
-
-```bash
-garyx dream list --since-hours 24
-garyx dream scan --since-hours 24 --mode auto
-garyx dream show <dream_id>
-```
-
-`auto` scan mode uses a temporary Claude Code extraction pass when available
-and falls back to the deterministic heuristic splitter if Claude cannot produce
-usable JSON. The temporary extractor runs without workspace settings, MCP
-config, or built-in tools.
-
 ## Automations
 
 Scheduled automations are managed from the CLI:

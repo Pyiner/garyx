@@ -121,7 +121,7 @@ extension GaryxMobileModel {
     func openPanel(_ panel: GaryxMobilePanel, source: GaryxMobilePanelOpenSource = .current) {
         invalidatePendingThreadOpen()
         var nextState = navigationState
-        nextState.openPanel(panel, dreamsAutoScanEnabled: dreamsAutoScanEnabled, source: source)
+        nextState.openPanel(panel, source: source)
         navigationState = nextState
         setSidebarVisible(false)
     }
@@ -490,7 +490,7 @@ extension GaryxMobileModel {
             default:
                 panel
             }
-            activePanel = targetPanel == .dreams && !dreamsAutoScanEnabled ? .chat : targetPanel
+            activePanel = targetPanel
             setSidebarVisible(false, animated: false)
             return
         }

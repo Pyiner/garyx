@@ -14,7 +14,6 @@ import {
   AutomationIcon,
   BackIcon,
   CapsulesIcon,
-  DreamsIcon,
   NewThreadIcon,
   RecentIcon,
   SettingsIcon,
@@ -33,10 +32,8 @@ type AppLeftRailProps = {
   isTeamsView: boolean;
   isSkillsView: boolean;
   isTasksView: boolean;
-  isDreamsView: boolean;
   isBrowserView: boolean;
   recentRailOpen: boolean;
-  showDreams: boolean;
   settingsActiveTab: SettingsTabId;
   selectedAutomationId: string | null;
   activeBotConversationGroupId: string | null;
@@ -56,7 +53,6 @@ type AppLeftRailProps = {
   onOpenAgents: () => void;
   onOpenSkills: () => void;
   onOpenTasks: () => void;
-  onOpenDreams: () => void;
   onOpenBot: (group: ReturnType<typeof buildBotGroups>[number]) => void;
   onOpenPinnedThread: (threadId: string) => void;
   onUnpinThread: (threadId: string) => void;
@@ -83,10 +79,8 @@ export function AppLeftRail({
   isTeamsView,
   isSkillsView,
   isTasksView,
-  isDreamsView,
   isBrowserView,
   recentRailOpen,
-  showDreams,
   settingsActiveTab,
   selectedAutomationId,
   activeBotConversationGroupId,
@@ -106,7 +100,6 @@ export function AppLeftRail({
   onOpenAgents,
   onOpenSkills,
   onOpenTasks,
-  onOpenDreams,
   onOpenBot,
   onOpenPinnedThread,
   onUnpinThread,
@@ -124,7 +117,7 @@ export function AppLeftRail({
   formatThreadTimestamp,
 }: AppLeftRailProps) {
   const { t } = useI18n();
-  const isThreadView = !isSettingsView && !isAutomationView && !isCapsulesView && !isAgentsView && !isTeamsView && !isSkillsView && !isTasksView && !isDreamsView && !isBrowserView;
+  const isThreadView = !isSettingsView && !isAutomationView && !isCapsulesView && !isAgentsView && !isTeamsView && !isSkillsView && !isTasksView && !isBrowserView;
   const visibleSelectedThreadId = isThreadView ? selectedThreadId : null;
   return (
     <aside className={`left-rail ${isSettingsView ? 'settings-rail-shell' : ''}`}>
@@ -187,16 +180,6 @@ export function AppLeftRail({
               <AutomationIcon />
               <span>{t('Automation')}</span>
             </button>
-            {showDreams ? (
-              <button
-                className={`sidebar-action ${isDreamsView ? 'active' : ''}`}
-                onClick={onOpenDreams}
-                type="button"
-              >
-                <DreamsIcon />
-                <span>{t('Dreams')}</span>
-              </button>
-            ) : null}
             <button
               className={`sidebar-action ${isCapsulesView ? 'active' : ''}`}
               onClick={onOpenCapsules}

@@ -16,7 +16,7 @@ Capsule 是 agent 通过 MCP 工具创建 / 更新的**自包含单文件 HTML**
 
 依据：`garyx_db`（`garyx-gateway/src/garyx_db/mod.rs`）已有两类表——(a) router thread 数据的 write-time
 投影（`recent_threads` / `task_projection` / `thread_meta`）；(b) gateway 自有、无 router 拥有的目录表
-（`workspaces` / `workflow_runs` / `dream_topics` / `automation_thread_runs`）。Capsule 属于 (b)，
+（`workspaces` / `workflow_runs` / `automation_thread_runs`）。Capsule 属于 (b)，
 **照 `workspaces` 先例**：一张扁平权威表 + CRUD，保持 gateway→router 单向依赖。创建它的 thread / agent
 仅作**快照列**记录（write-time 从 MCP 请求上下文取，非活引用）。
 
@@ -167,7 +167,7 @@ base-uri 'none'; form-action 'none'
 
 ## 7. Desktop UI（Mac，IA 真相源，顶层入口）
 
-左 rail **顶层**入口 `Capsules`（放 Automation/Dreams 之后、Tasks 之前）。落点（`desktop/garyx-desktop/src/…`）：
+左 rail **顶层**入口 `Capsules`（放 Automation 之后、Tasks 之前）。落点（`desktop/garyx-desktop/src/…`）：
 - renderer：`app-shell/types.ts` 加 `'capsules'` 到 `ContentView`；`desktop-route.ts` 加 `capsules: 'capsules'`（`#/capsules` 深链）；
   `icons.tsx` 加 `CapsulesIcon`（lucide `Package`/`Box` 或自绘 capsule glyph，单色）；`components/AppLeftRail.tsx` 加
   `isCapsulesView`/`onOpenCapsules` + nav button；`AppShell.tsx` 加 view flag、saved-view、render branch `<CapsulesPanel/>`。

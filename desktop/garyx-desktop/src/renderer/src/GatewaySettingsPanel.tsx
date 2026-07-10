@@ -1251,31 +1251,6 @@ export function GatewaySettingsPanel({
           />
         </div>
       </div>
-      <div className="codex-section">
-        <div className="codex-section-header">
-          <span className="codex-section-title">{t('Labs')}</span>
-          {renderGatewaySaveAction()}
-        </div>
-        <div className="codex-list-card">
-          <SettingsControlRow
-            control={
-              <SettingsSwitch
-                checked={Boolean(gatewayDraft?.dreams?.enabled)}
-                disabled={gatewaySaving}
-                label="dreams.enabled"
-                onChange={(nextValue) => {
-                  void onSaveGatewaySettingsPatch(
-                    { dreams: { enabled: nextValue } },
-                    { refreshDesktopState: 'background' },
-                  );
-                }}
-              />
-            }
-            description={t('Show Dreams in the apps and run automatic scans on the configured interval when recent user messages exist.')}
-            label={t('Dreams')}
-          />
-        </div>
-      </div>
     </>
   );
 

@@ -114,10 +114,7 @@ struct GaryxSettingsOverviewContent: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     private var managementPanels: [GaryxMobilePanel] {
-        [
-            model.dreamsAutoScanEnabled ? .dreams : nil,
-            .skills,
-        ].compactMap { $0 }
+        [.skills]
     }
     private let settingsTabs: [GaryxMobileSettingsTab] = [
         .gateway,
@@ -140,10 +137,6 @@ struct GaryxSettingsOverviewContent: View {
             }
 
             GaryxSettingsOverviewSection(title: "Settings") {
-                GaryxDreamsAutoScanRow()
-                Divider()
-                    .padding(.leading, 54)
-
                 ForEach(Array(settingsTabs.enumerated()), id: \.element.id) { index, tab in
                     GaryxSettingsTabLinkRow(tab: tab)
                     if index < settingsTabs.count - 1 {
@@ -212,8 +205,6 @@ struct GaryxSettingsPanelLinkRow: View {
         switch panel {
         case .workspaces:
             "\(model.userWorkspacePaths.count) workspaces"
-        case .dreams:
-            "\(model.dreams.count) topics"
         case .workspaceBots:
             "\(model.mobileBotGroups.count) bots / \(visibleWorkspaceCount) workspaces"
         case .agents:

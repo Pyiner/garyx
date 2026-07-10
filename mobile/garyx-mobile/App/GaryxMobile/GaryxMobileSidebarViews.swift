@@ -101,12 +101,6 @@ private struct GaryxRootRouteContentView: View {
             } else {
                 GaryxConversationView()
             }
-        case .dreams:
-            if model.dreamsAutoScanEnabled {
-                GaryxDreamsView()
-            } else {
-                GaryxConversationView()
-            }
         case .workspaces:
             GaryxWorkspacesView()
         case .automations:

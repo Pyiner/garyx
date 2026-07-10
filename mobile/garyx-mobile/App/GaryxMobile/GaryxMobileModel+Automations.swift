@@ -1,73 +1,6 @@
 import Foundation
-import SwiftUI
-import UniformTypeIdentifiers
-import WidgetKit
 
 extension GaryxMobileModel {
-    func refreshDreams() async {
-        guard hasGatewaySettings, dreamsAutoScanEnabled else {
-            dreams = []
-            latestDreamScan = nil
-            return
-        }
-        do {
-            let page = try await client().listDreams(sinceHours: 24, limit: 80)
-            dreams = page.dreams
-            latestDreamScan = page.scan ?? page.latestScan
-        } catch {
-            lastError = displayMessage(for: error)
-        }
-    }
-
-    func scanDreams() async {
-        guard hasGatewaySettings, dreamsAutoScanEnabled, !isScanningDreams else { return }
-        isScanningDreams = true
-        defer { isScanningDreams = false }
-        do {
-            let page = try await client().scanDreams(
-                request: GaryxDreamScanRequest(sinceHours: 24, mode: "auto", limit: 600)
-            )
-            dreams = page.dreams
-            latestDreamScan = page.scan ?? page.latestScan
-        } catch {
-            lastError = displayMessage(for: error)
-        }
-    }
-
-    func setDreamsAutoScanEnabled(_ enabled: Bool) async {
-        guard hasGatewaySettings, dreamsAutoScanEnabled != enabled, !isSavingDreamsSettings else {
-            return
-        }
-        let previous = dreamsAutoScanEnabled
-        dreamsAutoScanEnabled = enabled
-        isSavingDreamsSettings = true
-        defer { isSavingDreamsSettings = false }
-        do {
-            _ = try await client().saveGatewaySettings([
-                "dreams": .object([
-                    "enabled": .bool(enabled)
-                ])
-            ])
-            gatewaySettingsStatus = "Saved"
-            if !enabled {
-                dreams = []
-                latestDreamScan = nil
-                if activePanel == .dreams {
-                    activePanel = .chat
-                }
-            } else {
-                await refreshDreams()
-            }
-        } catch {
-            dreamsAutoScanEnabled = previous
-            lastError = displayMessage(for: error)
-        }
-    }
-
-    func openDreamSpan(_ span: GaryxDreamSpan) async {
-        await openThread(id: span.threadId)
-    }
-
     func runAutomation(_ automation: GaryxAutomationSummary) async {
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
@@ -157,7 +90,6 @@ extension GaryxMobileModel {
             return false
         }
     }
-
 
     func createAutomation(
         label rawLabel: String,

@@ -541,7 +541,6 @@ extension GaryxMobileModel {
             async let teamsResult = garyxCaptureCatalog { try await gateway.listTeams() }
             async let skillsResult = garyxCaptureCatalog { try await gateway.listSkills() }
             async let capsulesResult = garyxCaptureCatalog { try await gateway.listCapsules() }
-            async let dreamsResult: GaryxDreamsPage? = try? gateway.listDreams(sinceHours: 24, limit: 80)
             async let gatewaySettingsResult: [String: GaryxJSONValue]? = try? gateway.gatewaySettings()
             async let automationsResult = garyxCaptureCatalog { try await gateway.listAutomations() }
             async let slashCommandsResult = garyxCaptureCatalog { try await gateway.listSlashCommands() }
@@ -575,7 +574,6 @@ extension GaryxMobileModel {
 
             let nextSkills = await skillsResult
             let nextCapsules = await capsulesResult
-            let nextDreamsPage = await dreamsResult
             let nextGatewaySettings = await gatewaySettingsResult
             let nextAutomations = await automationsResult
             let nextSlashCommands = await slashCommandsResult
@@ -608,13 +606,8 @@ extension GaryxMobileModel {
             if case let .success(value) = nextCapsules {
                 capsules = value
             }
-            if let page = nextDreamsPage {
-                dreams = page.dreams
-                latestDreamScan = page.scan ?? page.latestScan
-            }
             if let settings = nextGatewaySettings {
                 gatewaySettingsDocument = settings
-                applyGatewayRuntimeSettings(settings)
             }
             if case let .success(value) = nextAutomations {
                 GaryxEquatableAssignment.assignIfChanged(
@@ -715,19 +708,6 @@ extension GaryxMobileModel {
         guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
         guard let scopeId else { return true }
         return scopeId == currentGatewayScopeId
-    }
-
-    func applyGatewayRuntimeSettings(_ settings: [String: GaryxJSONValue]) {
-        dreamsAutoScanEnabled = settings
-            .objectValue(forKeys: ["dreams"])?
-            .boolValue(forKeys: ["enabled"]) ?? false
-        if !dreamsAutoScanEnabled {
-            dreams = []
-            latestDreamScan = nil
-            if activePanel == .dreams {
-                activePanel = .chat
-            }
-        }
     }
 
     private func catalogRefreshFailureMessage(from outcomes: [AnyCatalogResult]) -> String? {

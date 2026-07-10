@@ -9,7 +9,7 @@ export * from "./contracts/transcript.ts";
 export * from "./contracts/channel.ts";
 export * from "./contracts/automation.ts";
 export * from "./contracts/task.ts";
-export * from "./contracts/dream-capsule.ts";
+export * from "./contracts/capsule.ts";
 export * from "./contracts/agent-team.ts";
 export * from "./contracts/catalog.ts";
 export * from "./contracts/bot.ts";

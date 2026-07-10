@@ -89,9 +89,6 @@ const api: GaryxDesktopApi = {
   listTasks: (input) => ipcRenderer.invoke("garyx:list-tasks", input),
   listTaskForest: (input) =>
     ipcRenderer.invoke("garyx:list-task-forest", input),
-  listDreams: (input) => ipcRenderer.invoke("garyx:list-dreams", input),
-  scanDreams: (input) => ipcRenderer.invoke("garyx:scan-dreams", input),
-  getDream: (dreamId) => ipcRenderer.invoke("garyx:get-dream", dreamId),
   listCapsules: () => ipcRenderer.invoke("garyx:list-capsules"),
   getCapsule: (capsuleId) => ipcRenderer.invoke("garyx:get-capsule", capsuleId),
   getCapsuleHtml: (capsuleId) => ipcRenderer.invoke("garyx:get-capsule-html", capsuleId),

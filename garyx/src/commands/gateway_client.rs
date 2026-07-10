@@ -320,20 +320,6 @@ pub(super) async fn post_gateway_json(
     execute_gateway_json(builder, gateway, GatewayRetryPolicy::ConnectOnly).await
 }
 
-pub(super) async fn post_gateway_json_with_timeout(
-    gateway: &GatewayEndpoint,
-    path: &str,
-    payload: &Value,
-    timeout_secs: u64,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    let url = format!("{}{}", gateway.base_url, path);
-    let builder = shared_http_client()
-        .post(&url)
-        .json(payload)
-        .timeout(std::time::Duration::from_secs(timeout_secs.max(1)));
-    execute_gateway_json(builder, gateway, GatewayRetryPolicy::ConnectOnly).await
-}
-
 pub(super) async fn post_gateway_json_as_cli_actor(
     gateway: &GatewayEndpoint,
     path: &str,

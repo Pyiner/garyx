@@ -225,11 +225,6 @@ final class GaryxMobileModel: ObservableObject {
     @Published var recentThreadIds: [String] = [] {
         didSet { emitHomeProjectionSnapshot() }
     }
-    @Published var dreams: [GaryxDreamTopic] = []
-    @Published var latestDreamScan: GaryxDreamScan?
-    @Published var isScanningDreams = false
-    @Published var dreamsAutoScanEnabled = false
-    @Published var isSavingDreamsSettings = false
     @Published var agents: [GaryxAgentSummary] = [] {
         didSet {
             predecodeAgentAvatarImages()

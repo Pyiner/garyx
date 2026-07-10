@@ -50,7 +50,7 @@ the local cache.
   - Replace `selectedThreadTask` with `selectedThreadTasks`.
   - Add presentation helpers for visible task list, filtered subtitle/counts,
     and the menu title.
-- `mobile/garyx-mobile/App/GaryxMobile/GaryxMobileModel+TasksDreamsAutomations.swift`
+- `mobile/garyx-mobile/App/GaryxMobile/GaryxMobileModel+Automations.swift`
   - Remove `promoteSelectedThreadToTask()`.
   - Remove promote-only helpers:
     - `taskSummary(forThreadId:)`

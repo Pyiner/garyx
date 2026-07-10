@@ -23,7 +23,6 @@ public enum GaryxMobileConnectionState: Equatable, Sendable {
 
 public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
     case chat
-    case dreams
     case workspaces
     case automations
     case capsules
@@ -41,8 +40,6 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .chat:
             "Chat"
-        case .dreams:
-            "Dreams"
         case .workspaces:
             "Workspaces"
         case .automations:
@@ -70,8 +67,6 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .chat:
             "bubble.left.and.text.bubble.right.fill"
-        case .dreams:
-            "moon.stars.fill"
         case .workspaces:
             "folder"
         case .automations:
@@ -559,18 +554,14 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
 
     public mutating func openPanel(
         _ panel: GaryxMobilePanel,
-        dreamsAutoScanEnabled: Bool,
         source: GaryxMobilePanelOpenSource
     ) {
-        let targetPanel = resolvedPanel(panel, dreamsAutoScanEnabled: dreamsAutoScanEnabled)
+        let targetPanel = resolvedPanel(panel)
         let route = GaryxMobilePanelRoute(
             panel: targetPanel,
             settingsTab: targetPanel == .settings ? activeSettingsTab : .manage
         )
-        let resolvedSource: GaryxMobilePanelOpenSource = panel == .dreams && targetPanel == .chat
-            ? .replace
-            : source
-        openRoute(route, source: resolvedSource)
+        openRoute(route, source: source)
     }
 
     public mutating func openSettings(
@@ -620,18 +611,13 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
         workspaceBotsDrilldown = route.panel == .workspaceBots ? route.workspaceBotsDrilldown : nil
     }
 
-    private func resolvedPanel(
-        _ panel: GaryxMobilePanel,
-        dreamsAutoScanEnabled: Bool
-    ) -> GaryxMobilePanel {
+    private func resolvedPanel(_ panel: GaryxMobilePanel) -> GaryxMobilePanel {
         switch panel {
         case .bots, .workspaces:
             // Bot and workspace conversations browse through the
             // workspace-threads page drilldowns; the .workspaces panel itself
             // is the file browser.
             .workspaceBots
-        case .dreams where !dreamsAutoScanEnabled:
-            .chat
         default:
             panel
         }

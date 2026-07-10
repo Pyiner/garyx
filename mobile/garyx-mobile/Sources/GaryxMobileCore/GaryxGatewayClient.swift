@@ -350,22 +350,6 @@ public final class GaryxGatewayClient {
         return try await delete("/api/thread-pins/\(threadId.urlPathEncoded)")
     }
 
-    public func listDreams(sinceHours: Int = 24, limit: Int = 80) async throws -> GaryxDreamsPage {
-        try await get(
-            "/api/dreams",
-            queryItems: [
-                URLQueryItem(name: "since_hours", value: String(max(1, sinceHours))),
-                URLQueryItem(name: "limit", value: String(max(1, limit))),
-            ]
-        )
-    }
-
-    public func scanDreams(
-        request: GaryxDreamScanRequest = GaryxDreamScanRequest()
-    ) async throws -> GaryxDreamsPage {
-        try await post("/api/dreams/scan", body: request)
-    }
-
     public func threadHistory(
         threadId: String,
         limit: Int = 100,

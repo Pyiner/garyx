@@ -1133,39 +1133,6 @@ impl Default for PluginsConfig {
     }
 }
 
-/// Dreams topic extraction and automatic scan configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct DreamsConfig {
-    /// Master switch for app entry points and automatic scans. API/CLI
-    /// manual scans stay available when this is false.
-    #[serde(default)]
-    pub enabled: bool,
-    /// Seconds between automatic scan attempts while enabled.
-    #[serde(default = "default_dreams_scan_interval_secs")]
-    pub scan_interval_secs: u64,
-    /// Lookback window, in hours, for each automatic scan.
-    #[serde(default = "default_dreams_scan_since_hours")]
-    pub scan_since_hours: i64,
-}
-
-fn default_dreams_scan_interval_secs() -> u64 {
-    3_600
-}
-
-fn default_dreams_scan_since_hours() -> i64 {
-    1
-}
-
-impl Default for DreamsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            scan_interval_secs: default_dreams_scan_interval_secs(),
-            scan_since_hours: default_dreams_scan_since_hours(),
-        }
-    }
-}
-
 /// Root configuration for Garyx.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct GaryxConfig {
@@ -1181,8 +1148,6 @@ pub struct GaryxConfig {
     pub desktop: DesktopConfig,
     #[serde(default)]
     pub tasks: TasksConfig,
-    #[serde(default)]
-    pub dreams: DreamsConfig,
     #[serde(default)]
     pub cron: CronConfig,
     #[serde(default)]

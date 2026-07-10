@@ -27,7 +27,6 @@ final class GaryxMobileRouteLinkTests: XCTestCase {
             .workspace("/tmp/workspace"),
             .bot(channel: "channel-a", accountId: "1000000001"),
             .workspaceFile(workspaceDir: "/tmp/workspace", path: "docs/index.html"),
-            .panel(.dreams),
         ]
 
         for route in routes {

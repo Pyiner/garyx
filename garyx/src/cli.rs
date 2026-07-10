@@ -11,7 +11,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
     name = "garyx",
     version = VERSION,
     about = "Garyx – AI chat gateway",
-    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, team, provider, channels, commands, automation, workflow, db\n  Work with threads   task, thread, message, bot, usage, tool, dream\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
+    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, team, provider, channels, commands, automation, workflow, db\n  Work with threads   task, thread, message, bot, usage, tool\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -191,12 +191,6 @@ pub(crate) enum Commands {
     Thread {
         #[command(subcommand)]
         action: ThreadAction,
-    },
-    /// Dream topic map across recent threads
-    #[command(display_order = 46, alias = "dreams")]
-    Dream {
-        #[command(subcommand)]
-        action: DreamAction,
     },
     /// Task overlay utilities
     #[command(display_order = 40, alias = "tasks")]
@@ -1577,68 +1571,6 @@ pub(crate) enum WorkflowDefinitionAction {
         /// Workflow package directory or garyx.workflow.json manifest path
         #[arg(long)]
         file: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum DreamAction {
-    /// List persisted dream topics for a time window
-    #[command(alias = "ls")]
-    List {
-        /// RFC3339 lower bound. Defaults to --since-hours before now.
-        #[arg(long)]
-        from: Option<String>,
-        /// RFC3339 upper bound. Defaults to now.
-        #[arg(long)]
-        to: Option<String>,
-        /// Look back this many hours when --from is omitted.
-        #[arg(long, default_value_t = 24)]
-        since_hours: i64,
-        /// Maximum topics to show
-        #[arg(long, default_value_t = 80)]
-        limit: usize,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Scan recent user messages and upsert dream topics in that window
-    Scan {
-        /// RFC3339 lower bound. Defaults to --since-hours before now.
-        #[arg(long)]
-        from: Option<String>,
-        /// RFC3339 upper bound. Defaults to now.
-        #[arg(long)]
-        to: Option<String>,
-        /// Look back this many hours when --from is omitted.
-        #[arg(long, default_value_t = 24)]
-        since_hours: i64,
-        /// Extraction mode: auto, claude, or heuristic
-        #[arg(long, default_value = "auto", value_parser = ["auto", "claude", "heuristic"])]
-        mode: String,
-        /// Maximum user messages to inspect
-        #[arg(long, default_value_t = 600)]
-        limit: usize,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show or set the hourly automatic dream scan switch
-    Auto {
-        /// Desired state: status, on, or off
-        #[arg(default_value = "status", value_parser = ["status", "on", "off"])]
-        state: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show one dream topic and its thread spans
-    #[command(visible_alias = "get")]
-    Show {
-        /// Dream id
-        dream_id: String,
         /// Output as JSON
         #[arg(long)]
         json: bool,

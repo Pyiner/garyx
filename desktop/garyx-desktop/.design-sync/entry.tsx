@@ -34,4 +34,3 @@ export * from '@/app-shell/components/UpdatePill';
 export * from '@/app-shell/components/RendererPerformancePanel';
 export * from '@/app-shell/components/ThreadLogPanel';
 export * from '@/app-shell/components/TaskForestConsole';
-export * from '@/app-shell/components/DreamsPanel';

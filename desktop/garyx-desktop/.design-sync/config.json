@@ -43,7 +43,6 @@
     "UpdatePill": "src/renderer/src/app-shell/components/UpdatePill.tsx",
     "RendererPerformancePanel": "src/renderer/src/app-shell/components/RendererPerformancePanel.tsx",
     "ThreadLogPanel": "src/renderer/src/app-shell/components/ThreadLogPanel.tsx",
-    "TaskForestConsole": "src/renderer/src/app-shell/components/TaskForestConsole.tsx",
-    "DreamsPanel": "src/renderer/src/app-shell/components/DreamsPanel.tsx"
+    "TaskForestConsole": "src/renderer/src/app-shell/components/TaskForestConsole.tsx"
   }
 }

@@ -8,7 +8,7 @@ Implementation follows `docs/design/capsule.md` sections 4-7:
 
 - Renderer must not receive or construct gateway auth. Capsule metadata and HTML are fetched by the main process through the existing authenticated Garyx client and exposed through preload IPC.
 - HTML execution must use `<iframe sandbox="allow-scripts" srcDoc={htmlFromIpc} />` only. No `allow-same-origin`, no Electron `webview`, no `WebContentsView`, and no direct `src` pointing at `/serve`.
-- Desktop navigation gets a top-level `Capsules` entry after Automation/Dreams and before Tasks, with route `#/capsules` and `ContentView` value `capsules`.
+- Desktop navigation gets a top-level `Capsules` entry after Automation and before Tasks, with route `#/capsules` and `ContentView` value `capsules`.
 - The new panel owns only desktop composition state; gateway DB/file state remains authoritative.
 - Agent/provider presentation must reuse existing desktop identity helpers (`AgentOptionAvatar` / `ProviderAgentIcon` data), not local provider switch tables.
 
@@ -16,10 +16,10 @@ Implementation follows `docs/design/capsule.md` sections 4-7:
 
 - API contracts live in `desktop/garyx-desktop/src/shared/contracts.ts` and are consumed by main, preload, and renderer.
 - Authenticated gateway JSON fetch is centralized in `src/main/gary-client.ts` via `requestJson`. I will add a parallel text helper using the same auth/custom-header path.
-- Main IPC handlers are registered in `src/main/index.ts` next to Dreams/Tasks handlers, with settings resolved in main before calling `gary-client` methods.
+- Main IPC handlers are registered in `src/main/index.ts` next to Tasks handlers, with settings resolved in main before calling `gary-client` methods.
 - Preload exposes `window.garyxDesktop` by mirroring `GaryxDesktopApi` methods through `ipcRenderer.invoke`.
 - App navigation and saved/deep-link routing live in `app-shell/types.ts`, `app-shell/desktop-route.ts`, `AppLeftRail.tsx`, and `AppShell.tsx`.
-- Existing top-level panels (`DreamsPanel`, `TasksPanel`) provide loading/error/empty/header/button class patterns. Capsules will reuse these tokens/styles instead of introducing a new component framework.
+- The existing `TasksPanel` provides loading/error/empty/header/button class patterns. Capsules will reuse these tokens/styles instead of introducing a new component framework.
 
 ## Data and IPC contract
 
@@ -105,12 +105,12 @@ In `src/preload/index.ts`, expose matching `GaryxDesktopApi` methods. Renderer c
 - `app-shell/icons.tsx`: import lucide `Package` (or `Box` if the installed icon name differs) and export monochrome `CapsulesIcon` using `SettingsRailIcon`.
 - `app-shell/components/AppLeftRail.tsx`:
   - Add props `isCapsulesView` and `onOpenCapsules`.
-  - Add a sidebar button after Automation/Dreams and before Tasks labeled `Capsules` with `CapsulesIcon`.
+  - Add a sidebar button after Automation and before Tasks labeled `Capsules` with `CapsulesIcon`.
   - Include Capsules in `isThreadView` exclusion.
 - `app-shell/AppShell.tsx`:
   - Lazy import `CapsulesPanel`.
   - Add `const isCapsulesView = contentView === 'capsules'`.
-  - Include Capsules in non-thread/context/header decisions (`shouldShowConversationRail`, `canEditThreadTitle`, `conversationContextText`, `conversationClassName`, static/full-page branch like Tasks/Dreams).
+  - Include Capsules in non-thread/context/header decisions (`shouldShowConversationRail`, `canEditThreadTitle`, `conversationContextText`, `conversationClassName`, and the static/full-page branch used by Tasks).
   - Pass `isCapsulesView`/`onOpenCapsules` to `AppLeftRail`; handler sets `contentView` to `capsules`.
   - Render `<CapsulesPanel agents={desktopAgents} onToast={pushToast} />` in the main branch before Tasks.
   - Keep saved/deep-link view behavior within the existing route helpers; no gateway state persistence changes.
@@ -174,10 +174,10 @@ Full-height two-column panel:
 
 ## Styling plan (`src/renderer/src/styles.css`)
 
-Add a scoped `capsules-*` block near `dreams/tasks` styles:
+Add a scoped `capsules-*` block near the task styles:
 
 - `.conversation.capsules-view` and `.conversation.capsules-view .conversation-body` match the full-page zero-padding pattern used by tasks/workflow.
-- `.capsules-page` mirrors `tasks-page`/`dreams-page` full-height layout.
+- `.capsules-page` mirrors the `tasks-page` full-height layout.
 - `.capsules-layout` two-column grid, responsive collapse below ~900px.
 - `.capsules-list`, `.capsules-list-row`, selected/hover states use monochrome/neutral tokens, not semantic green.
 - `.capsules-runner-frame` fills right pane with border/radius/background and has no pointer-host overlays.
@@ -221,7 +221,7 @@ After implementation:
    - `cd desktop/garyx-desktop && npm run dist:dir`
    - Quit stale Garyx (`osascript -e 'quit app "Garyx"'` or equivalent), open installed app (`open -a Garyx`).
    - Attach CDP: `playwright-cli -s=<session> attach --cdp=http://127.0.0.1:39222`.
-   - Verify Capsules nav appears after Automation/Dreams and before Tasks.
+   - Verify Capsules nav appears after Automation and before Tasks.
    - Open Capsules tab, verify list loads metadata, select one capsule, and verify the runner iframe displays the synthetic HTML.
    - Inspect DOM/attributes through CDP: iframe has `sandbox="allow-scripts"`, has `srcdoc`, and does not have `allow-same-origin` or `src`.
 

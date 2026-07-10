@@ -113,7 +113,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       selectableNewThreadWorkspaces={[]}
       selectedThreadId="storybook-thread"
       showAutomationRunInitialPlaceholder={false}
-      showDreams={false}
       showHistoryLoadingPlaceholder={state.showHistoryLoadingPlaceholder}
       showTailThinking={activity.showPendingAckLoading}
       threadLayoutRef={threadLayoutRef}

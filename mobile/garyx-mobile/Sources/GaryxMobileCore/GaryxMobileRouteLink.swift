@@ -168,8 +168,6 @@ public enum GaryxMobileRouteLink {
                 return nil
             }
             return .workspaceFile(workspaceDir: workspace, path: path)
-        case "dreams":
-            return .panel(.dreams)
         default:
             return nil
         }
@@ -200,8 +198,6 @@ public enum GaryxMobileRouteLink {
         switch panel {
         case .chat:
             "chat"
-        case .dreams:
-            "dreams"
         case .workspaces, .workspaceBots, .bots:
             "workspace-bots"
         case .automations:

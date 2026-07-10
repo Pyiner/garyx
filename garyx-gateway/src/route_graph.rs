@@ -6,9 +6,8 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::server::AppState;
 use crate::{
-    api, app_db, automation, capsules, chat, coding_usage, commands, dashboard, dreams,
-    gateway_auth, mcp, mcp_config, provider_auth, routes, tasks, tool_image, workflows,
-    workspace_files, workspaces,
+    api, app_db, automation, capsules, chat, coding_usage, commands, dashboard, gateway_auth, mcp,
+    mcp_config, provider_auth, routes, tasks, tool_image, workflows, workspace_files, workspaces,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -78,12 +77,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/thread-pins/{key}",
             axum::routing::put(routes::pin_thread).delete(routes::unpin_thread),
-        )
-        .route("/api/dreams", axum::routing::get(dreams::list_dreams))
-        .route("/api/dreams/scan", axum::routing::post(dreams::scan_dreams))
-        .route(
-            "/api/dreams/{dream_id}",
-            axum::routing::get(dreams::get_dream),
         )
         .route(
             "/api/threads/{key}",

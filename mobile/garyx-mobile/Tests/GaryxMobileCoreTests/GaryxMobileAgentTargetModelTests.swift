@@ -164,7 +164,7 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
         XCTAssertFalse(state.presentsContent)
         XCTAssertEqual(state.rootNavigationPath, [])
 
-        state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.automations, source: .current)
 
         XCTAssertEqual(state.activePanel, .automations)
         XCTAssertTrue(state.presentsContent)
@@ -176,9 +176,9 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
 
     func testCurrentPanelNavigationPushesPreviousPresentedRoute() {
         var state = GaryxMobileNavigationState()
-        state.openPanel(.skills, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.skills, source: .current)
 
-        state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.automations, source: .current)
 
         XCTAssertEqual(state.activePanel, .automations)
         XCTAssertEqual(state.mainPanelBackStack, [GaryxMobilePanelRoute(panel: .skills, settingsTab: .manage)])
@@ -187,7 +187,7 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
 
     func testPopToHomeResetsContentState() {
         var state = GaryxMobileNavigationState()
-        state.openPanel(.workspaceBots, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.workspaceBots, source: .current)
         state.setWorkspaceBotsDrilldown(.bot("bot-1"))
 
         state.popToHome()
@@ -210,7 +210,7 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
 
     func testConversationOpenedFromCurrentPanelReturnsToThatPanel() {
         var state = GaryxMobileNavigationState()
-        state.openPanel(.skills, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.skills, source: .current)
 
         state.openConversation(source: .current)
 
@@ -225,9 +225,9 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
 
     func testSidebarNavigationClearsPreviousRouteStack() {
         var state = GaryxMobileNavigationState()
-        state.openPanel(.skills, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.skills, source: .current)
 
-        state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .sidebar)
+        state.openPanel(.automations, source: .sidebar)
 
         XCTAssertEqual(state.activePanel, .automations)
         XCTAssertTrue(state.mainPanelBackStack.isEmpty)
@@ -242,7 +242,7 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
         state.showSettingsOverview()
         XCTAssertEqual(state.leadingEdgeAction, .popToHome)
 
-        state.openPanel(.workspaceBots, dreamsAutoScanEnabled: true, source: .replace)
+        state.openPanel(.workspaceBots, source: .replace)
         state.setWorkspaceBotsDrilldown(.bot("agent-1"))
         // Drilldowns opened from the drawer have no back stack; back pops
         // straight home instead of surfacing the overview list.
@@ -253,7 +253,7 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
 
     func testDrilldownOpenedFromPageGoesBackToThatPage() {
         var state = GaryxMobileNavigationState()
-        state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .sidebar)
+        state.openPanel(.automations, source: .sidebar)
 
         state.openRoute(
             GaryxMobilePanelRoute(
@@ -271,7 +271,7 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
 
     func testDirectPanelMutationClearsStackAndWorkspaceDrilldown() {
         var state = GaryxMobileNavigationState()
-        state.openPanel(.workspaceBots, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.workspaceBots, source: .current)
         state.setWorkspaceBotsDrilldown(.workspace("/workspace"))
 
         state.setActivePanel(.chat)
@@ -285,13 +285,13 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
     func testWorkspaceBotsDrilldownRoutePersistsInNavigationState() {
         var state = GaryxMobileNavigationState()
 
-        state.openPanel(.workspaceBots, dreamsAutoScanEnabled: true, source: .replace)
+        state.openPanel(.workspaceBots, source: .replace)
         state.setWorkspaceBotsDrilldown(.workspace("/workspace"))
 
         XCTAssertEqual(state.workspaceBotsDrilldown, .workspace("/workspace"))
         XCTAssertEqual(state.leadingEdgeAction, .popToHome)
 
-        state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .current)
+        state.openPanel(.automations, source: .current)
 
         XCTAssertNil(state.workspaceBotsDrilldown)
         XCTAssertTrue(state.goBackInMainPanel())

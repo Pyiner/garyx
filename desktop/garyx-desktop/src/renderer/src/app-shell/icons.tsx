@@ -5,7 +5,6 @@ import {
   Cpu,
   History,
   ListTodo,
-  MoonStar,
   Router,
   Settings2,
   SlidersHorizontal,
@@ -145,12 +144,6 @@ export function AutomationIcon() {
         <path d="M16.5 6.5V4.5C16.5 3.11929 15.3807 2 14 2H3C1.61929 2 0.5 3.11929 0.5 4.5V12.5C0.5 13.8807 1.61929 15 3 15H7.5M0.5 6.5H9M5 0.5V4M12 0.5V4M13 9V10.882C13 11.2607 13.214 11.607 13.5528 11.7764L15 12.5M13 16C10.5147 16 8.5 13.9853 8.5 11.5C8.5 9.01472 10.5147 7 13 7C15.4853 7 17.5 9.01472 17.5 11.5C17.5 13.9853 15.4853 16 13 16Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
       </g>
     </svg>
-  );
-}
-
-export function DreamsIcon() {
-  return (
-    <SettingsRailIcon glyph={MoonStar} />
   );
 }
 

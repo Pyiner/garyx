@@ -3,7 +3,6 @@ import {
   lazy,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -85,7 +84,6 @@ import {
   type AddBotDialogHandle,
 } from "./components/AddBotDialogRoot";
 import { WorkspaceFileTree } from "./components/WorkspaceFileTree";
-import { DreamsPanel } from "./components/DreamsPanel";
 import {
   ThreadSideToolsPanel,
   type SideCapsuleTab,
@@ -273,7 +271,6 @@ type ThreadEntrySelectionSource =
   | "bot-root"
   | "bot-conversation"
   | "workspace-conversation"
-  | "dreams"
   | "tasks";
 
 const GatewaySettingsPanel = lazy(() =>
@@ -1883,7 +1880,6 @@ export function AppShell() {
   const isBotsView = contentView === "bots";
   const isAutomationView = contentView === "automation";
   const isCapsulesView = contentView === "capsules";
-  const showDreamsFeature = Boolean(gatewaySettingsDraft?.dreams?.enabled);
   const isAgentsView = contentView === "agents";
   const isTeamsView = contentView === "teams";
   const isSkillsView = contentView === "skills";
@@ -1893,18 +1889,11 @@ export function AppShell() {
     contentView === "thread" && activeThread?.threadType === "workflow_run"
       ? activeThread.id
       : null;
-  const isDreamsView = contentView === "dreams" && showDreamsFeature;
   const shouldShowConversationRail = contentView === "thread";
   const visibleSelectedThreadId = shouldShowConversationRail ? selectedThreadId : null;
   const visibleThreadEntrySelectionSource = shouldShowConversationRail
     ? threadEntrySelectionSource
     : null;
-
-  useLayoutEffect(() => {
-    if (contentView === "dreams" && !showDreamsFeature) {
-      desktopRouteStore.navigate({ kind: "thread-home" }, { replace: true });
-    }
-  }, [contentView, desktopRouteStore, showDreamsFeature]);
 
   const botRootSelectedThreadId =
     visibleThreadEntrySelectionSource === "bot-root" ? visibleSelectedThreadId : null;
@@ -2104,7 +2093,6 @@ export function AppShell() {
     !isSkillsView &&
     !isTasksView &&
     !isWorkflowView &&
-    !isDreamsView &&
     !isBotsView &&
     !isAgentsView &&
     !isTeamsView,
@@ -4157,7 +4145,6 @@ export function AppShell() {
     isSkillsView ? "skills-view" : null,
     isTasksView ? "tasks-view" : null,
     isWorkflowView ? "workflow-view" : null,
-    isDreamsView ? "dreams-view" : null,
     showConversationSideTools ? "with-side-tools" : null,
     sideToolsResizing ? "side-tools-resizing" : null,
   ]
@@ -4378,7 +4365,6 @@ export function AppShell() {
         selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
         selectedThreadId={selectedThreadId}
         showAutomationRunInitialPlaceholder={showAutomationRunInitialPlaceholder}
-        showDreams={showDreamsFeature}
         showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
         showTailThinking={showTailThinking}
         rateLimit={activeRateLimit}
@@ -4653,14 +4639,12 @@ export function AppShell() {
         formatThreadTimestamp={formatThreadTimestamp}
         isAutomationView={isAutomationView}
         isCapsulesView={isCapsulesView}
-        showDreams={showDreamsFeature}
         isAgentsView={isAgentsView}
         isBrowserView={isBrowserView}
         isTeamsView={isTeamsView}
         isSettingsView={isSettingsView}
         isSkillsView={isSkillsView}
         isTasksView={isTasksView || isWorkflowView}
-        isDreamsView={isDreamsView}
         recentRailOpen={shouldShowConversationRail && recentThreadsRailOpen}
         onBackToThreads={() => {
           desktopRouteStore.navigate({ kind: "thread-home" }, { replace: true });
@@ -4743,9 +4727,6 @@ export function AppShell() {
         }}
         onOpenTasks={() => {
           desktopRouteStore.navigate({ kind: "view", view: "tasks" }, { replace: true });
-        }}
-        onOpenDreams={() => {
-          desktopRouteStore.navigate({ kind: "view", view: "dreams" }, { replace: true });
         }}
         onRequestRemoveWorkspace={(workspace) => {
           void handleRequestRemoveWorkspace(workspace);
@@ -4896,7 +4877,7 @@ export function AppShell() {
           ref={conversationRef}
           style={conversationStyle}
         >
-          {isCapsulesView || isTasksView || isWorkflowView || isDreamsView ? null : showStaticWindowToolbar ? (
+          {isCapsulesView || isTasksView || isWorkflowView ? null : showStaticWindowToolbar ? (
             <div aria-hidden="true" className="settings-window-toolbar" />
           ) : (
             <header className="conversation-header">
@@ -5204,12 +5185,6 @@ export function AppShell() {
                   </section>
                 </div>
               )
-            ) : isDreamsView ? (
-              <DreamsPanel
-                onOpenThread={(threadId) => {
-                  void openExistingThread(threadId, "dreams");
-                }}
-              />
             ) : isBotsView ? (
               <BotConsolePage
                 busyBotId={

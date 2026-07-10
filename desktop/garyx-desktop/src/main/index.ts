@@ -64,7 +64,6 @@ import type {
   GatewayConfigDocument,
   GatewaySettingsSaveRequestOptions,
   DeleteTaskInput,
-  ListDreamsInput,
   ListTaskForestInput,
   ListProviderRecentSessionsInput,
   ListTasksInput,
@@ -79,7 +78,6 @@ import type {
   RunAutomationNowInput,
   SaveSkillFileInput,
   SaveMemoryDocumentInput,
-  ScanDreamsInput,
   SelectAutomationInput,
   SelectWorkspaceInput,
   RenderState,
@@ -141,14 +139,12 @@ import {
   getCodingUsage,
   getCapsule,
   getCapsuleHtml,
-  getDream,
   getTask,
   getWorkflowDefinitionSource,
   getWorkflowRun,
   getWorkspaceGitStatus,
   interruptThread,
   listCapsules,
-  listDreams,
   listTaskForest,
   listTasks,
   listWorkflowDefinitions,
@@ -169,7 +165,6 @@ import {
   saveGatewaySettings,
   saveSkillFile,
   sendStreamingInput,
-  scanDreams,
   stopTask,
   toggleMcpServer,
   toggleSkill,
@@ -799,21 +794,6 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:get-task", async (_event, input: GetTaskInput) => {
     const settings = await resolveSettings();
     return getTask(settings, input);
-  });
-
-  ipcMain.handle("garyx:list-dreams", async (_event, input?: ListDreamsInput) => {
-    const settings = await resolveSettings();
-    return listDreams(settings, input || {});
-  });
-
-  ipcMain.handle("garyx:scan-dreams", async (_event, input?: ScanDreamsInput) => {
-    const settings = await resolveSettings();
-    return scanDreams(settings, input || {});
-  });
-
-  ipcMain.handle("garyx:get-dream", async (_event, dreamId: string) => {
-    const settings = await resolveSettings();
-    return getDream(settings, dreamId);
   });
 
   ipcMain.handle("garyx:list-capsules", async () => {

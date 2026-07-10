@@ -35,13 +35,12 @@ state-to-hash effect in the bridge navigates (replace) on every change.
 External hash edits go the other way through `subscribeExternal` →
 `applyDesktopRoute`.
 
-`setContentView` write sites (49) fall into three classes:
+`setContentView` write sites fall into three classes:
 
-- **A. Pure view switches (14)** — rail buttons (`agents`, `skills`,
-  `capsules` + clear preview, `tasks`, `dreams`), `onBackToThreads`,
-  `onOpenThreads`, `onOpenTasks`, `onOpenRecent` (plus rail-open local
-  state), the dreams feature-gate fallback, `openSettingsView` (plus tab
-  resource loading side effect).
+- **A. Pure view switches** — rail buttons (`agents`, `skills`,
+  `capsules` + clear preview, `tasks`), `onBackToThreads`, `onOpenThreads`,
+  `onOpenTasks`, `onOpenRecent` (plus rail-open local state), and
+  `openSettingsView` (plus tab resource loading side effect).
 - **B. Compound transitions (19)** — `openExistingThread`,
   `openWorkflowTask`, thread-created success, new-thread draft entry,
   workflow start, `onOpenCapsule`, automation select / dialog-save /
