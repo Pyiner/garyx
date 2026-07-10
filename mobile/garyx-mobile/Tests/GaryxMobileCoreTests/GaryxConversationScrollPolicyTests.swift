@@ -413,6 +413,139 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(state.showsScrollToBottomButton)
     }
 
+    /// Pre-iOS 18 there is no scroll-phase API: sustained upward movement
+    /// across stable-layout frames must count as the reader's scroll, flip
+    /// the anchoring, and arm automatic history paging.
+    func testUpwardReadingTravelActsAsReaderScrollWithoutPhaseEvents() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        // At the tail; content height stays 3020 through every frame.
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -2_200,
+                contentBottomOffset: 820,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        XCTAssertFalse(state.hasUserScrolledSinceOpen)
+
+        // Slow upward drag in 10pt steps: same layout, top offset rising.
+        for step in 1...12 {
+            _ = state.metricsChanged(
+                GaryxConversationLayoutMetrics(
+                    contentTopOffset: -2_200 + CGFloat(step) * 10,
+                    contentBottomOffset: 820 + CGFloat(step) * 10,
+                    viewportHeight: 800
+                ),
+                hasTailContent: true
+            )
+        }
+        XCTAssertTrue(state.hasUserScrolledSinceOpen)
+        XCTAssertEqual(state.anchoring, .browsingHistory)
+        XCTAssertTrue(state.hasMovedTowardOlderHistory)
+
+        // Continue to the loaded start: automatic paging fires.
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -400,
+                contentBottomOffset: 2_620,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        XCTAssertTrue(
+            state.shouldPrefetchOlderHistory(
+                hasMoreHistoryBefore: true,
+                isLoadingOlderHistory: false,
+                hasPendingPrefetch: false
+            )
+        )
+    }
+
+    /// Layout settling (streaming markdown, async thumbnails) grows the
+    /// content height, so it must never masquerade as reader travel — the
+    /// pre-first-gesture drift repin has to stay armed.
+    func testLayoutSettlingDoesNotCountAsReaderTravel() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -100,
+                contentBottomOffset: 900,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        // Tail keeps growing while the top edge also shifts up: height changes,
+        // so no travel accumulates.
+        let request = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -60,
+                contentBottomOffset: 1_400,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        XCTAssertFalse(state.hasUserScrolledSinceOpen)
+        XCTAssertFalse(state.hasMovedTowardOlderHistory)
+        XCTAssertEqual(request, .init(reason: .repair, animated: false))
+    }
+
+    /// Keyboard / bottom chrome changes resize the viewport; top-offset
+    /// movement caused by them must not count as reader travel.
+    func testViewportResizeDoesNotCountAsReaderTravel() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -300,
+                contentBottomOffset: 700,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: -260,
+                contentBottomOffset: 740,
+                viewportHeight: 500
+            ),
+            hasTailContent: true
+        )
+        XCTAssertFalse(state.hasUserScrolledSinceOpen)
+    }
+
+    /// Downward movement (including programmatic tail repairs) resets the
+    /// accumulator: travel must be sustained, not netted across reversals.
+    func testDownwardMovementResetsUpwardTravel() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        var top: CGFloat = -2_200
+        func frame(_ delta: CGFloat) {
+            top += delta
+            _ = state.metricsChanged(
+                GaryxConversationLayoutMetrics(
+                    contentTopOffset: top,
+                    contentBottomOffset: top + 3_020,
+                    viewportHeight: 800
+                ),
+                hasTailContent: true
+            )
+        }
+        frame(0)
+        frame(16)
+        frame(-6)
+        frame(16)
+        XCTAssertFalse(state.hasUserScrolledSinceOpen)
+        frame(16)
+        XCTAssertTrue(state.hasUserScrolledSinceOpen)
+    }
+
     func testHistoryPrefetchRequiresMovementAndProximity() {
         var state = GaryxConversationScrollState()
         XCTAssertFalse(

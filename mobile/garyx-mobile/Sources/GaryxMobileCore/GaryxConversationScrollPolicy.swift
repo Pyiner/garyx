@@ -193,8 +193,20 @@ public struct GaryxConversationScrollState: Equatable {
     /// Whether the reader has scrolled at all since the thread opened.
     /// Until they do, drifting away from the bottom can only be late layout
     /// settling (markdown measuring, async thumbnails), so the tail re-pins
-    /// instead of stranding the viewport mid-history.
+    /// instead of stranding the viewport mid-history. Set from the iOS 18
+    /// scroll-phase report, or from sustained upward reading travel across
+    /// stable-layout frames (the pure-geometry equivalent used before iOS 18,
+    /// where no scroll-phase API exists).
     public private(set) var hasUserScrolledSinceOpen = false
+    /// Cumulative upward content travel across frames whose content and
+    /// viewport sizes held still. Layout settling always changes the content
+    /// height and keyboard/chrome changes always change the viewport, so
+    /// sustained stable-layout upward movement can only be the reader.
+    private var upwardReadingTravel: CGFloat = 0
+    /// Upward travel needed before it counts as a deliberate reader scroll.
+    public static let upwardTravelIntentThreshold: CGFloat = 24
+    /// Size jitter tolerated while still treating two frames as same-layout.
+    private static let stableLayoutTolerance: CGFloat = 2
     /// Tracks the visible-tail-gap level so repairs fire on its rising edge
     /// only. A persistent gap (such as lazy-layout estimation drift around a
     /// collapsed tail row) must not regenerate a repair on every frame, or
@@ -269,9 +281,11 @@ public struct GaryxConversationScrollState: Equatable {
         _ metrics: GaryxConversationLayoutMetrics,
         hasTailContent: Bool
     ) -> TailScrollRequest? {
+        let previousMetrics = self.metrics
         self.metrics = metrics
         self.hasTailContent = hasTailContent
         guard metrics.viewportHeight > 0 else { return nil }
+        trackUpwardReadingTravel(previous: previousMetrics, current: metrics)
         if metrics.isPulledPastTop {
             // A top rubber-band pull is a deliberate reach for older history.
             // Short transcripts can only express the intent this way; recording
@@ -302,6 +316,41 @@ public struct GaryxConversationScrollState: Equatable {
             return TailScrollRequest(reason: .repair, animated: false)
         }
         return nil
+    }
+
+    /// Accumulate upward reading travel between two measurement frames and
+    /// promote it to a reader-scroll signal once it crosses the intent
+    /// threshold. Pure geometry, so it works before iOS 18 (no scroll-phase
+    /// API) and is harmlessly redundant with the phase report on iOS 18.
+    ///
+    /// Only frames whose content height and viewport held still count:
+    /// layout settling changes the content height, and keyboard / bottom
+    /// chrome changes change the viewport, so neither can masquerade as the
+    /// reader. Downward movement (including tail-repair scrolls) resets the
+    /// accumulator.
+    private mutating func trackUpwardReadingTravel(
+        previous: GaryxConversationLayoutMetrics,
+        current: GaryxConversationLayoutMetrics
+    ) {
+        guard let previousTop = previous.contentTopOffset,
+              let currentTop = current.contentTopOffset,
+              let previousHeight = previous.contentHeight,
+              let currentHeight = current.contentHeight,
+              abs(currentHeight - previousHeight) <= Self.stableLayoutTolerance,
+              abs(current.viewportHeight - previous.viewportHeight) <= Self.stableLayoutTolerance
+        else {
+            upwardReadingTravel = 0
+            return
+        }
+        let delta = currentTop - previousTop
+        if delta > 0 {
+            upwardReadingTravel += delta
+        } else if delta < 0 {
+            upwardReadingTravel = 0
+        }
+        if upwardReadingTravel >= Self.upwardTravelIntentThreshold {
+            hasUserScrolledSinceOpen = true
+        }
     }
 
     /// The reader's scroll gesture started or ended (finger down, or a fling

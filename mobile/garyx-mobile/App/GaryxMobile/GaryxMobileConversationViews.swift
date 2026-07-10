@@ -438,9 +438,11 @@ struct GaryxConversationView: View {
                 $0.userScrollInteractionChanged(isInteracting: isInteracting)
             }
         }
-        .refreshable {
-            await model.loadSelectedThreadHistory()
-        }
+        // Deliberately no `.refreshable`: the transcript is live (SSE +
+        // automatic open/cold-start loading), so a top rubber-band pull has
+        // exactly one meaning here — reach for older history (isPulledPastTop).
+        // Keeping pull-to-refresh would bind two conflicting intents to the
+        // same gesture.
         .overlay {
             if isComposerFocused {
                 Color.clear
