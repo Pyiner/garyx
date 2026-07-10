@@ -2,11 +2,21 @@ import Foundation
 import SwiftUI
 import UIKit
 
-struct GaryxThreadRuntimeSettingsSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var model: GaryxMobileModel
+enum GaryxThreadRuntimeMorphID {
+    static let surface = "thread-runtime-surface"
+    static let avatar = "thread-runtime-avatar"
+    static let title = "thread-runtime-title"
+}
 
-    private enum Page {
+struct GaryxThreadRuntimeSettingsPanel: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    let width: CGFloat
+    let morphNamespace: Namespace.ID
+    let onClose: () -> Void
+
+    private enum Page: Hashable {
         case main
         case model
         case thinkingLevel
@@ -23,9 +33,16 @@ struct GaryxThreadRuntimeSettingsSheet: View {
     }
 
     @State private var page = Page.main
+    @State private var showsPanelBody = false
 
     private var selectedThread: GaryxThreadSummary? { model.selectedThread }
     private var runtime: GaryxThreadRuntimeSummary? { selectedThread?.threadRuntime }
+
+    private var threadTitle: String {
+        normalized(selectedThread?.title)
+            ?? normalized(model.draftThreadTitle)
+            ?? "Thread"
+    }
 
     private var providerType: String {
         normalized(runtime?.providerType)
@@ -102,71 +119,70 @@ struct GaryxThreadRuntimeSettingsSheet: View {
     }
 
     var body: some View {
-        GaryxGlassPanel(
-            cornerRadius: 28,
-            fallbackMaterial: .ultraThinMaterial,
-            tint: Color(.systemBackground).opacity(0.97),
-            shadowOpacity: 0.13
-        ) {
-            VStack(spacing: 0) {
-                header
+        let shape = RoundedRectangle(cornerRadius: 28, style: .continuous)
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        switch page {
-                        case .main:
-                            currentAgentSection
-                            runtimeSettingsSection
-                        case .model:
-                            optionsCard {
-                                GaryxAgentSheetOptionsPanel(
-                                    options: modelOptions,
-                                    selectedId: selectedModelOptionId
-                                ) { selected in
-                                    page = .main
-                                    Task {
-                                        await selectModel(selected)
-                                    }
-                                }
-                            }
-                        case .thinkingLevel:
-                            optionsCard {
-                                GaryxAgentSheetOptionsPanel(
-                                    options: reasoningEffortOptions,
-                                    selectedId: selectedReasoningEffortOptionId
-                                ) { selected in
-                                    page = .main
-                                    Task {
-                                        await model.updateSelectedThreadRuntimeSettings(reasoningEffort: selected)
-                                    }
-                                }
-                            }
-                        case .speed:
-                            optionsCard {
-                                GaryxAgentSheetOptionsPanel(
-                                    options: serviceTierOptions,
-                                    selectedId: selectedServiceTierOptionId
-                                ) { selected in
-                                    page = .main
-                                    Task {
-                                        await model.updateSelectedThreadRuntimeSettings(serviceTier: selected)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 14)
-                    .garyxVerticalScrollContentWidth()
+        VStack(spacing: 0) {
+            header
+
+            if page == .main {
+                VStack(alignment: .leading, spacing: 12) {
+                    currentAgentSection
+                    runtimeSettingsSection
                 }
-                .frame(maxHeight: panelMaxHeight)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
+                .fixedSize(horizontal: false, vertical: true)
+                .opacity(showsPanelBody ? 1 : 0)
+            } else {
+                ScrollView {
+                    optionsPage
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 14)
+                        .garyxVerticalScrollContentWidth()
+                }
+                .frame(height: optionsPageHeight)
                 .scrollIndicators(.hidden)
+                .opacity(showsPanelBody ? 1 : 0)
             }
         }
-        .frame(width: panelWidth)
-        .padding(2)
-        .presentationBackground(.clear)
-        .presentationBackgroundInteraction(.enabled)
+        .frame(width: width)
+        .background {
+            shape
+                .fill(Color.clear)
+                .garyxAdaptiveGlass(
+                    .regular,
+                    isInteractive: false,
+                    tint: Color(.systemBackground).opacity(0.72),
+                    fallbackMaterial: .ultraThinMaterial,
+                    in: shape
+                )
+                .matchedGeometryEffect(
+                    id: GaryxThreadRuntimeMorphID.surface,
+                    in: morphNamespace
+                )
+        }
+        .clipShape(shape)
+        .overlay {
+            shape
+                .stroke(Color.white.opacity(0.30), lineWidth: 0.7)
+        }
+        .overlay {
+            shape
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.10), radius: 24, x: 0, y: 10)
+        .padding(1)
+        .accessibilityAddTraits(.isModal)
+        .accessibilityAction(.escape, onClose)
+        .onAppear {
+            if reduceMotion {
+                showsPanelBody = true
+            } else {
+                withAnimation(.easeOut(duration: 0.18).delay(0.09)) {
+                    showsPanelBody = true
+                }
+            }
+        }
         .task(id: providerType) {
             guard !providerType.isEmpty,
                   model.providerModelsByType[providerType] == nil else {
@@ -175,33 +191,101 @@ struct GaryxThreadRuntimeSettingsSheet: View {
             await model.loadProviderModels(providerType: providerType)
         }
         .onChange(of: selectedThread?.id) { _, _ in
-            dismiss()
+            onClose()
         }
-    }
-
-    private var panelWidth: CGFloat {
-        min(UIScreen.main.bounds.width - 48, 348)
     }
 
     private var panelMaxHeight: CGFloat {
         min(UIScreen.main.bounds.height * 0.62, 520)
     }
 
+    private var optionsPageHeight: CGFloat {
+        min(max(CGFloat(optionsPageCount) * 52 + 28, 96), panelMaxHeight)
+    }
+
+    private var optionsPageCount: Int {
+        switch page {
+        case .main:
+            0
+        case .model:
+            modelOptions.count
+        case .thinkingLevel:
+            reasoningEffortOptions.count
+        case .speed:
+            serviceTierOptions.count
+        }
+    }
+
+    @ViewBuilder
+    private var optionsPage: some View {
+        switch page {
+        case .main:
+            EmptyView()
+        case .model:
+            optionsCard {
+                GaryxAgentSheetOptionsPanel(
+                    options: modelOptions,
+                    selectedId: selectedModelOptionId
+                ) { selected in
+                    setPage(.main)
+                    Task {
+                        await selectModel(selected)
+                    }
+                }
+            }
+        case .thinkingLevel:
+            optionsCard {
+                GaryxAgentSheetOptionsPanel(
+                    options: reasoningEffortOptions,
+                    selectedId: selectedReasoningEffortOptionId
+                ) { selected in
+                    setPage(.main)
+                    Task {
+                        await model.updateSelectedThreadRuntimeSettings(reasoningEffort: selected)
+                    }
+                }
+            }
+        case .speed:
+            optionsCard {
+                GaryxAgentSheetOptionsPanel(
+                    options: serviceTierOptions,
+                    selectedId: selectedServiceTierOptionId
+                ) { selected in
+                    setPage(.main)
+                    Task {
+                        await model.updateSelectedThreadRuntimeSettings(serviceTier: selected)
+                    }
+                }
+            }
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             if page == .main {
+                avatar(diameter: 26)
+                    .matchedGeometryEffect(
+                        id: GaryxThreadRuntimeMorphID.avatar,
+                        in: morphNamespace
+                    )
+
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Thread")
-                        .font(GaryxFont.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Text("Agent & model")
+                    Text(threadTitle)
                         .font(GaryxFont.callout(weight: .semibold))
                         .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .matchedGeometryEffect(
+                            id: GaryxThreadRuntimeMorphID.title,
+                            in: morphNamespace
+                        )
+                    Text("Agent & model")
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             } else {
                 Button {
-                    page = .main
+                    setPage(.main)
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.left")
@@ -221,16 +305,20 @@ struct GaryxThreadRuntimeSettingsSheet: View {
         }
         .overlay(alignment: .trailing) {
             Button {
-                dismiss()
+                onClose()
             } label: {
-                GaryxCompactGlassIcon(systemName: "xmark", diameter: 30, iconSize: 12)
+                Image(systemName: "xmark")
+                    .font(GaryxFont.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Close")
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 16)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
     }
 
     private var currentAgentSection: some View {
@@ -240,12 +328,7 @@ struct GaryxThreadRuntimeSettingsSheet: View {
                 .foregroundStyle(.secondary)
                 .padding(.leading, 4)
 
-            GaryxGlassPanel(
-                cornerRadius: 18,
-                fallbackMaterial: .thinMaterial,
-                tint: Color(.secondarySystemBackground).opacity(0.58),
-                shadowOpacity: 0.018
-            ) {
+            contentCard {
                 HStack(spacing: 12) {
                     avatar(diameter: 32)
 
@@ -281,19 +364,14 @@ struct GaryxThreadRuntimeSettingsSheet: View {
                 .padding(.leading, 4)
                 .padding(.top, 10)
 
-            GaryxGlassPanel(
-                cornerRadius: 18,
-                fallbackMaterial: .thinMaterial,
-                tint: Color(.secondarySystemBackground).opacity(0.58),
-                shadowOpacity: 0.018
-            ) {
+            contentCard {
                 VStack(spacing: 0) {
                     settingsRow(
                         title: "Model",
                         value: actualModelLabel,
                         enabled: canSelectModel
                     ) {
-                        page = .model
+                        setPage(.model)
                     }
 
                     if canSelectReasoningEffort {
@@ -304,7 +382,7 @@ struct GaryxThreadRuntimeSettingsSheet: View {
                             value: actualReasoningEffortLabel,
                             enabled: true
                         ) {
-                            page = .thinkingLevel
+                            setPage(.thinkingLevel)
                         }
                     }
 
@@ -316,7 +394,7 @@ struct GaryxThreadRuntimeSettingsSheet: View {
                             value: actualServiceTierLabel,
                             enabled: true
                         ) {
-                            page = .speed
+                            setPage(.speed)
                         }
                     }
                 }
@@ -329,16 +407,23 @@ struct GaryxThreadRuntimeSettingsSheet: View {
     private func optionsCard<Content: View>(
         @ViewBuilder content: @escaping () -> Content
     ) -> some View {
-        GaryxGlassPanel(
-            cornerRadius: 18,
-            fallbackMaterial: .thinMaterial,
-            tint: Color(.secondarySystemBackground).opacity(0.58),
-            shadowOpacity: 0.018
-        ) {
+        contentCard {
             content()
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
         }
+    }
+
+    private func contentCard<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        return content()
+            .background(Color(.secondarySystemBackground).opacity(0.64), in: shape)
+            .overlay {
+                shape
+                    .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+            }
     }
 
     private func settingsRow(
@@ -501,6 +586,17 @@ struct GaryxThreadRuntimeSettingsSheet: View {
             reasoningEffort: nextReasoningEffort,
             serviceTier: nextServiceTier
         )
+    }
+
+    private func setPage(_ nextPage: Page) {
+        guard page != nextPage else { return }
+        if reduceMotion {
+            page = nextPage
+        } else {
+            withAnimation(.easeOut(duration: 0.18)) {
+                page = nextPage
+            }
+        }
     }
 
     private var actualModelLabel: String {

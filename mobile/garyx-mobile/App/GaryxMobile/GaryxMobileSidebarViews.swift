@@ -1624,6 +1624,7 @@ struct GaryxSidebarThreadRowView: View {
 /// page background so it sits cleanly on any avatar.
 struct GaryxAvatarTypingBadge: View {
     var isPaused = false
+    var scale: CGFloat = 1
 
     var body: some View {
         Group {
@@ -1646,19 +1647,19 @@ struct GaryxAvatarTypingBadge: View {
     }
 
     private func badge(activeDot: Int) -> some View {
-        HStack(spacing: 2.2) {
+        HStack(spacing: 2.2 * scale) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
                     .fill(Color(.systemGray))
-                    .frame(width: 3.2, height: 3.2)
+                    .frame(width: 3.2 * scale, height: 3.2 * scale)
                     .opacity(index == activeDot ? 1.0 : 0.4)
             }
         }
-        .frame(width: 22, height: 15)
+        .frame(width: 22 * scale, height: 15 * scale)
         .background(Color(.systemGray5), in: Capsule())
         .overlay {
             Capsule()
-                .stroke(GaryxTheme.background, lineWidth: 2)
+                .stroke(GaryxTheme.background, lineWidth: max(1, 2 * scale))
         }
     }
 }

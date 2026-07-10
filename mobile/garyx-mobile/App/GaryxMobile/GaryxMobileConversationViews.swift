@@ -68,6 +68,7 @@ struct GaryxConversationView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @FocusState private var isComposerFocused: Bool
+    @Namespace private var runtimePanelNamespace
     /// Unified scroll state machine (GaryxMobileCore). The view feeds it
     /// events and executes the tail-scroll requests it returns; UI such as
     /// the scroll-to-bottom control reads its projections.
@@ -85,6 +86,7 @@ struct GaryxConversationView: View {
     @State private var tailThinkingPresentationState = GaryxTailThinkingPresentationState()
     @State private var showsDebouncedTailThinking = false
     @State private var tailThinkingDebounceGeneration = 0
+    @State private var showsRuntimePanel = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -159,6 +161,7 @@ struct GaryxConversationView: View {
                     resetTailThinkingPresentation(proxy: proxy)
                 }
                 .onChange(of: model.selectedThread?.id) { _, _ in
+                    setRuntimePanelVisible(false)
                     scrollPreservationThreadId = model.selectedThread?.id
                     rowScrollPreservationThreadId = model.selectedThread?.id
                     pendingHistoryPrefetchThreadId = nil
@@ -209,7 +212,19 @@ struct GaryxConversationView: View {
         }
         .garyxPageBackground()
         .garyxAdaptiveTopBar {
-            GaryxConversationHeader()
+            GaryxConversationHeader(
+                isRuntimePanelExpanded: showsRuntimePanel,
+                runtimePanelNamespace: runtimePanelNamespace,
+                onToggleRuntimePanel: {
+                    setRuntimePanelVisible(!showsRuntimePanel)
+                },
+                onDismissRuntimePanel: {
+                    setRuntimePanelVisible(false)
+                }
+            )
+        }
+        .overlay {
+            runtimeSettingsOverlay
         }
         // Task-tree sidebar overlays the whole conversation surface, header
         // included, so the scrim blocks every control behind the open panel.
@@ -230,6 +245,60 @@ struct GaryxConversationView: View {
         .task(id: "\(model.selectedThread?.id ?? ""):\(model.selectedThreadHasCapsuleCards)") {
             guard model.selectedThreadHasCapsuleCards else { return }
             await model.refreshCapsules()
+        }
+    }
+
+    @ViewBuilder
+    private var runtimeSettingsOverlay: some View {
+        if showsRuntimePanel {
+            GeometryReader { geometry in
+                let panelWidth = min(max(geometry.size.width - 32, 300), 380)
+
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.10)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            setRuntimePanelVisible(false)
+                        }
+                        .accessibilityLabel("Close thread settings")
+                        .accessibilityAddTraits(.isButton)
+                        .transition(.opacity)
+
+                    GaryxThreadRuntimeSettingsPanel(
+                        width: panelWidth,
+                        morphNamespace: runtimePanelNamespace,
+                        onClose: {
+                            setRuntimePanelVisible(false)
+                        }
+                    )
+                    .environmentObject(model)
+                    // This overlay already begins beneath the safe-area top bar.
+                    // Keeping the destination at that origin makes the compact
+                    // title control feel like it is expanding in place.
+                    .padding(.top, 2)
+                    .transition(.identity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            .transition(.identity)
+        }
+    }
+
+    private func setRuntimePanelVisible(_ visible: Bool) {
+        guard showsRuntimePanel != visible else { return }
+        if visible {
+            garyxDismissKeyboard()
+        }
+        guard !reduceMotion else {
+            showsRuntimePanel = visible
+            return
+        }
+        let animation = visible
+            ? Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.36)
+            : Animation.timingCurve(0.25, 1, 0.5, 1, duration: 0.26)
+        withAnimation(animation) {
+            showsRuntimePanel = visible
         }
     }
 
@@ -576,6 +645,7 @@ struct GaryxConversationView: View {
             model.activePanel.rawValue,
             model.sidebarVisible ? "sidebar" : "content",
             model.showsSettings ? "settings" : "main",
+            showsRuntimePanel ? "runtime-panel" : "runtime-closed",
         ].joined(separator: "|")
     }
 
@@ -612,6 +682,11 @@ struct GaryxConversationView: View {
 
 struct GaryxConversationHeader: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    let isRuntimePanelExpanded: Bool
+    let runtimePanelNamespace: Namespace.ID
+    let onToggleRuntimePanel: () -> Void
+    let onDismissRuntimePanel: () -> Void
+
     @State private var showsRenamePrompt = false
     @State private var renameDraftTitle = ""
     @State private var showsBotBindingSheet = false
@@ -630,7 +705,12 @@ struct GaryxConversationHeader: View {
                     GaryxHeaderAgentControl()
                         .layoutPriority(1)
                 } else {
-                    GaryxThreadRuntimeHeaderControl()
+                    GaryxThreadRuntimeHeaderControl(
+                        isExpanded: isRuntimePanelExpanded,
+                        morphNamespace: runtimePanelNamespace,
+                        onToggle: onToggleRuntimePanel,
+                        onDismiss: onDismissRuntimePanel
+                    )
                     .layoutPriority(1)
                 }
 
@@ -736,6 +816,7 @@ struct GaryxConversationHeader: View {
     }
 
     private func dismissThreadPresentations() {
+        onDismissRuntimePanel()
         showsRenamePrompt = false
         showsBotBindingSheet = false
         botBindingThreadId = nil
@@ -744,7 +825,12 @@ struct GaryxConversationHeader: View {
 
 private struct GaryxThreadRuntimeHeaderControl: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @State private var showsRuntimePopover = false
+    let isExpanded: Bool
+    let morphNamespace: Namespace.ID
+    let onToggle: () -> Void
+    let onDismiss: () -> Void
+
+    @State private var compactSize = CGSize(width: 44, height: 44)
 
     private var selectedThread: GaryxThreadSummary? { model.selectedThread }
     private var runtime: GaryxThreadRuntimeSummary? { selectedThread?.threadRuntime }
@@ -758,42 +844,61 @@ private struct GaryxThreadRuntimeHeaderControl: View {
     }
 
     var body: some View {
-        Button {
-            openRuntimePopover()
-        } label: {
-            HStack(spacing: 8) {
-                if let target = model.selectedThreadAgentTarget {
-                    GaryxAgentAvatarView(
-                        agentId: target.id,
-                        avatarDataUrl: target.avatarDataUrl,
-                        kind: target.kind,
-                        label: target.title,
-                        providerType: target.providerType,
-                        builtIn: target.builtIn,
-                        diameter: 22
-                    )
-                }
+        Group {
+            if isExpanded {
+                Color.clear
+                    .frame(width: compactSize.width, height: compactSize.height)
+                    .accessibilityHidden(true)
+            } else {
+                Button(action: onToggle) {
+                    HStack(spacing: 8) {
+                        runtimeAvatar(diameter: 22)
+                            .matchedGeometryEffect(
+                                id: GaryxThreadRuntimeMorphID.avatar,
+                                in: morphNamespace
+                            )
 
-                Text(title)
-                    .font(GaryxFont.callout(weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(1)
+                        Text(title)
+                            .font(GaryxFont.callout(weight: .medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .layoutPriority(1)
+                            .matchedGeometryEffect(
+                                id: GaryxThreadRuntimeMorphID.title,
+                                in: morphNamespace
+                            )
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 44, alignment: .leading)
+                    .frame(maxWidth: 282, alignment: .leading)
+                    .background {
+                        Capsule()
+                            .fill(Color.clear)
+                            .garyxAdaptiveGlass(
+                                .regular,
+                                isInteractive: false,
+                                fallbackMaterial: .ultraThinMaterial,
+                                in: Capsule()
+                            )
+                            .matchedGeometryEffect(
+                                id: GaryxThreadRuntimeMorphID.surface,
+                                in: morphNamespace
+                            )
+                    }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .contentShape(Capsule())
+                .accessibilityLabel("\(title), thread settings")
+                .onGeometryChange(for: CGSize.self) { geometry in
+                    geometry.size
+                } action: { size in
+                    guard size.width > 0, size.height > 0 else { return }
+                    compactSize = size
+                }
             }
-            .padding(.horizontal, 12)
-            .frame(height: 44, alignment: .leading)
-            .frame(maxWidth: 282, alignment: .leading)
-            .garyxAdaptiveGlass(
-                .regular,
-                isInteractive: false,
-                fallbackMaterial: .ultraThinMaterial,
-                in: Capsule()
-            )
         }
-        .buttonStyle(.plain)
-        .contentShape(Capsule())
-        .accessibilityLabel("\(title), thread settings")
         .layoutPriority(1)
         .task(id: providerType) {
             guard !providerType.isEmpty,
@@ -803,42 +908,48 @@ private struct GaryxThreadRuntimeHeaderControl: View {
             await model.loadProviderModels(providerType: providerType)
         }
         .onChange(of: selectedThread?.id) { _, _ in
-            showsRuntimePopover = false
+            onDismiss()
         }
         .onChange(of: model.sidebarVisible) { _, visible in
             if visible {
-                showsRuntimePopover = false
+                onDismiss()
             }
         }
         .onChange(of: model.activePanel) { _, panel in
             if panel != .chat {
-                showsRuntimePopover = false
+                onDismiss()
             }
         }
         .onChange(of: model.showsSettings) { _, visible in
             if visible {
-                showsRuntimePopover = false
+                onDismiss()
             }
         }
-        .onChange(of: showsRuntimePopover) { _, visible in
+        .onChange(of: isExpanded) { _, visible in
             if visible {
                 garyxDismissKeyboard()
             }
         }
-        .popover(
-            isPresented: $showsRuntimePopover,
-            attachmentAnchor: .rect(.bounds),
-            arrowEdge: .top
-        ) {
-            GaryxThreadRuntimeSettingsSheet()
-                .environmentObject(model)
-                .presentationCompactAdaptation(.popover)
-        }
     }
 
-    private func openRuntimePopover() {
-        garyxDismissKeyboard()
-        showsRuntimePopover.toggle()
+    @ViewBuilder
+    private func runtimeAvatar(diameter: CGFloat) -> some View {
+        if let target = model.selectedThreadAgentTarget {
+            GaryxAgentAvatarView(
+                agentId: target.id,
+                avatarDataUrl: target.avatarDataUrl,
+                kind: target.kind,
+                label: target.title,
+                providerType: target.providerType,
+                builtIn: target.builtIn,
+                diameter: diameter
+            )
+        } else {
+            Image(systemName: "person.crop.circle")
+                .font(GaryxFont.system(size: diameter * 0.72, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: diameter, height: diameter)
+        }
     }
 
     private func normalized(_ value: String?) -> String? {

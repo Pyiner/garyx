@@ -19,8 +19,8 @@ private enum GaryxTaskTreeSidebarMetrics {
     static let axisDecisionDistance: CGFloat = 14
     static let axisDecisionRatio: CGFloat = 1.5
     static let indentStep: CGFloat = 12
-    /// The tree icon shared by the panel header and empty state.
-    static let treeGlyph = "arrow.triangle.branch"
+    /// Compact hierarchy glyph shared by the panel header and empty state.
+    static let treeGlyph = "list.bullet.indent"
 
     static func panelWidth(containerWidth: CGFloat) -> CGFloat {
         min(max(containerWidth * 0.55, 300), 420)
@@ -511,9 +511,8 @@ private struct GaryxTaskTreeSidebarRowView: View {
         )
         .overlay(alignment: .bottomTrailing) {
             if row.isRunning {
-                GaryxAvatarTypingBadge()
-                    .scaleEffect(0.8)
-                    .offset(x: 3, y: 3)
+                GaryxAvatarTypingBadge(scale: 0.64)
+                    .offset(x: 2, y: 2)
             }
         }
     }
