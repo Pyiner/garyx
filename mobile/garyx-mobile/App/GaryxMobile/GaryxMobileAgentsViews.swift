@@ -103,7 +103,7 @@ struct GaryxAgentDetailCard: View {
     @State private var showsEditForm = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        Group {
             GaryxAgentFormContent(
                 mode: .readOnly,
                 agentId: .constant(displayAgent.id),
@@ -118,21 +118,22 @@ struct GaryxAgentDetailCard: View {
                 builtIn: displayAgent.builtIn,
                 workspacePaths: model.userWorkspacePaths
             )
+            .fullScreenCover(isPresented: $showsEditForm) {
+                GaryxAgentEditSheet(agent: displayAgent) { updatedAgent in
+                    model.selectedAgentDetail = updatedAgent
+                }
+            }
 
             if !displayAgent.builtIn {
-                Button {
-                    showsEditForm = true
-                } label: {
-                    Label("Edit Agent", systemImage: "pencil")
-                        .font(GaryxFont.callout(weight: .semibold))
-                        .frame(maxWidth: .infinity)
+                Section {
+                    Button {
+                        showsEditForm = true
+                    } label: {
+                        Label("Edit Agent", systemImage: "pencil")
+                            .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity)
+                    }
                 }
-                .buttonStyle(GaryxPrimaryWideButtonStyle())
-            }
-        }
-        .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxAgentEditSheet(agent: displayAgent) { updatedAgent in
-                model.selectedAgentDetail = updatedAgent
             }
         }
     }
@@ -148,7 +149,7 @@ struct GaryxTeamDetailCard: View {
     @State private var showsEditForm = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        Group {
             GaryxTeamFormContent(
                 mode: .readOnly,
                 teamId: .constant(displayTeam.id),
@@ -159,19 +160,20 @@ struct GaryxTeamDetailCard: View {
                 workflowText: .constant(displayTeam.workflowText),
                 agents: model.agents
             )
-
-            Button {
-                showsEditForm = true
-            } label: {
-                Label("Edit Team", systemImage: "pencil")
-                    .font(GaryxFont.callout(weight: .semibold))
-                    .frame(maxWidth: .infinity)
+            .fullScreenCover(isPresented: $showsEditForm) {
+                GaryxTeamEditSheet(team: displayTeam) { updatedTeam in
+                    model.selectedTeamDetail = updatedTeam
+                }
             }
-            .buttonStyle(GaryxPrimaryWideButtonStyle())
-        }
-        .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxTeamEditSheet(team: displayTeam) { updatedTeam in
-                model.selectedTeamDetail = updatedTeam
+
+            Section {
+                Button {
+                    showsEditForm = true
+                } label: {
+                    Label("Edit Team", systemImage: "pencil")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                }
             }
         }
     }
@@ -223,10 +225,10 @@ private struct GaryxAgentAvatarPreviewSection: View {
                 label: avatarLabel,
                 providerType: providerType,
                 builtIn: builtIn,
-                diameter: 96
+                diameter: 76
             )
             .accessibilityLabel("\(kind == .team ? "Team" : "Agent") avatar preview")
-            .padding(16)
+            .padding(14)
             .frame(maxWidth: .infinity, alignment: .center)
         }
     }
@@ -261,7 +263,7 @@ private struct GaryxAgentFormContent: View {
     var onError: ((String) -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        Group {
             if mode.isEditable, let onGenerate, let onError {
                 GaryxAvatarEditorSection(
                     kind: .agent,
@@ -289,10 +291,10 @@ private struct GaryxAgentFormContent: View {
                     GaryxFormTextFieldRow(
                         title: "Agent ID",
                         text: $agentId,
+                        valuePlacement: .below,
                         autocapitalization: .never,
                         autocorrectionDisabled: true
                     )
-                    Divider().padding(.leading, 16)
                     GaryxFormTextFieldRow(
                         title: "Display name",
                         text: $displayName,
@@ -300,9 +302,7 @@ private struct GaryxAgentFormContent: View {
                     )
                 } else {
                     GaryxAgentReadOnlyTextRow(title: "Agent ID", value: agentId)
-                    Divider().padding(.leading, 16)
                     GaryxAgentReadOnlyTextRow(title: "Display name", value: displayName)
-                    Divider().padding(.leading, 16)
                     GaryxAgentReadOnlyTextRow(title: "Type", value: builtIn ? "Built-in" : "Custom")
                 }
             }
@@ -314,7 +314,6 @@ private struct GaryxAgentFormContent: View {
                         modelName: $modelName,
                         modelReasoningEffort: $modelReasoningEffort
                     )
-                    Divider().padding(.leading, 16)
                     GaryxAgentModelSelectionRow(
                         providerType: $providerType,
                         modelName: $modelName
@@ -326,10 +325,8 @@ private struct GaryxAgentFormContent: View {
                     )
                 } else {
                     GaryxFormReadOnlyRow(title: "Provider", value: GaryxAgentProviderPickerPresentation.label(for: providerType))
-                    Divider().padding(.leading, 16)
                     GaryxFormReadOnlyRow(title: "Model", value: modelDisplayValue)
                     if !modelReasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Divider().padding(.leading, 16)
                         GaryxFormReadOnlyRow(title: "Thinking level", value: modelReasoningEffort)
                     }
                 }
@@ -344,12 +341,12 @@ private struct GaryxAgentFormContent: View {
                         placeholder: "Optional",
                         allowsEmpty: true
                     )
-                    Divider().padding(.leading, 16)
                     GaryxFormTextAreaRow(
                         title: "System Prompt",
                         text: $systemPrompt,
                         minHeight: 132,
-                        lineLimits: 2...6
+                        lineLimits: 2...6,
+                        offersFocusedEditor: true
                     )
                 } else {
                     GaryxFormReadOnlyMultilineRow(
@@ -359,7 +356,6 @@ private struct GaryxAgentFormContent: View {
                         minHeight: 44,
                         valuePlacement: .below
                     )
-                    Divider().padding(.leading, 16)
                     GaryxFormReadOnlyMultilineRow(
                         title: "System Prompt",
                         value: systemPrompt,
@@ -386,6 +382,7 @@ private struct GaryxAgentEnvEditorSection: View {
     @Binding var draft: GaryxAgentEnvDraft
     @State private var viewMode: EnvViewMode = .form
     @State private var envText: String = ""
+    @FocusState private var isTextEditorFocused: Bool
 
     private enum EnvViewMode: String, CaseIterable {
         case form = "Form"
@@ -393,61 +390,45 @@ private struct GaryxAgentEnvEditorSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            GaryxFormGroupedSection(title: "Environment Variables") {
-                Picker("View", selection: viewModeBinding) {
-                    ForEach(EnvViewMode.allCases, id: \.self) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                Divider().padding(.leading, 16)
-                if viewMode == .text {
-                    TextEditor(text: envTextBinding)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                        .font(.system(.footnote, design: .monospaced))
-                        .frame(minHeight: 120)
-                        .scrollContentBackground(.hidden)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                } else {
-                    if draft.rows.isEmpty {
-                        Text("No environment variables")
-                            .font(GaryxFont.body())
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                    } else {
-                        ForEach(Array(draft.rows.enumerated()), id: \.element.id) { index, row in
-                            if index > 0 {
-                                Divider().padding(.leading, 16)
-                            }
-                            envRow(row)
-                        }
-                    }
-                    Divider().padding(.leading, 16)
-                    Button {
-                        draft.addRow()
-                    } label: {
-                        Label("Add Variable", systemImage: "plus")
-                            .font(GaryxFont.body())
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
-                    }
-                    .buttonStyle(.plain)
+        Section {
+            Picker("View", selection: viewModeBinding) {
+                ForEach(EnvViewMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
                 }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
+            if viewMode == .text {
+                TextEditor(text: envTextBinding)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .font(.system(.footnote, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .focused($isTextEditorFocused)
+                    .accessibilityLabel("Environment variables")
+                    .frame(minHeight: 160, alignment: .topLeading)
+            } else {
+                if draft.rows.isEmpty {
+                    Text("No environment variables")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(draft.rows) { row in
+                        envRow(row)
+                    }
+                }
+
+                Button {
+                    draft.addRow()
+                } label: {
+                    Label("Add Variable", systemImage: "plus")
+                }
+            }
+        } header: {
+            Text("Environment Variables")
+                .textCase(nil)
+        } footer: {
             Text(envHint)
-                .font(GaryxFont.caption())
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 14)
         }
     }
 
@@ -481,27 +462,36 @@ private struct GaryxAgentEnvEditorSection: View {
     }
 
     private func envRow(_ row: GaryxAgentEnvRow) -> some View {
-        HStack(spacing: 10) {
-            TextField("KEY", text: keyBinding(row))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled(true)
-                .font(GaryxFont.body())
-                .frame(maxWidth: 150, alignment: .leading)
-            TextField("value", text: valueBinding(row))
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled(true)
-                .font(GaryxFont.body())
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button(role: .destructive) {
-                draft.removeRow(id: row.id)
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundStyle(GaryxTheme.danger)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Variable")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button(role: .destructive) {
+                    draft.removeRow(id: row.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .accessibilityLabel("Remove variable")
             }
-            .buttonStyle(.borderless)
+
+            LabeledContent("Name") {
+                TextField("KEY", text: keyBinding(row))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.plain)
+            }
+            LabeledContent("Value") {
+                TextField("value", text: valueBinding(row))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.plain)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.vertical, 2)
     }
 
     private func keyBinding(_ row: GaryxAgentEnvRow) -> Binding<String> {
@@ -526,7 +516,7 @@ private struct GaryxTeamFormContent: View {
     var onError: ((String) -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        Group {
             if mode.isEditable, let onGenerate, let onError {
                 GaryxAvatarEditorSection(
                     kind: .team,
@@ -552,10 +542,10 @@ private struct GaryxTeamFormContent: View {
                     GaryxFormTextFieldRow(
                         title: "Team ID",
                         text: $teamId,
+                        valuePlacement: .below,
                         autocapitalization: .never,
                         autocorrectionDisabled: true
                     )
-                    Divider().padding(.leading, 16)
                     GaryxFormTextFieldRow(
                         title: "Display name",
                         text: $displayName,
@@ -563,7 +553,6 @@ private struct GaryxTeamFormContent: View {
                     )
                 } else {
                     GaryxAgentReadOnlyTextRow(title: "Team ID", value: teamId)
-                    Divider().padding(.leading, 16)
                     GaryxAgentReadOnlyTextRow(title: "Display name", value: displayName)
                 }
             }
@@ -575,7 +564,6 @@ private struct GaryxTeamFormContent: View {
                         memberAgentIds: $memberAgentIds,
                         agents: agents
                     )
-                    Divider().padding(.leading, 16)
                     GaryxTeamMembersSelectionRow(
                         leaderAgentId: $leaderAgentId,
                         memberAgentIds: $memberAgentIds,
@@ -583,7 +571,6 @@ private struct GaryxTeamFormContent: View {
                     )
                 } else {
                     GaryxFormReadOnlyRow(title: "Leader", value: agentLabel(for: leaderAgentId))
-                    Divider().padding(.leading, 16)
                     GaryxFormReadOnlyMultilineRow(
                         title: "Members",
                         value: memberLabels,
@@ -600,7 +587,8 @@ private struct GaryxTeamFormContent: View {
                         title: "Workflow",
                         text: $workflowText,
                         minHeight: 132,
-                        lineLimits: 2...6
+                        lineLimits: 2...6,
+                        offersFocusedEditor: true
                     )
                 } else {
                     GaryxFormReadOnlyMultilineRow(
@@ -937,7 +925,7 @@ private struct GaryxAvatarEditorSection: View {
 
     var body: some View {
         GaryxFormGroupedSection(title: "Avatar") {
-            VStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .center, spacing: 12) {
                 GaryxAgentAvatarView(
                     agentId: trimmedIdentifier,
                     avatarDataUrl: avatarDataUrl,
@@ -945,7 +933,7 @@ private struct GaryxAvatarEditorSection: View {
                     label: avatarLabel,
                     providerType: providerType,
                     builtIn: builtIn,
-                    diameter: 96
+                    diameter: 76
                 )
                 .accessibilityLabel("\(kind == .team ? "Team" : "Agent") avatar preview")
 
@@ -958,7 +946,7 @@ private struct GaryxAvatarEditorSection: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(14)
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .sheet(isPresented: $showsStyleSheet) {
@@ -987,6 +975,7 @@ private struct GaryxAvatarEditorSection: View {
                 isLoading: editorState.isUploading
             )
         }
+        .tint(Color.primary)
         .disabled(editorState.isBusy)
         .accessibilityLabel("Upload avatar")
 
@@ -1152,18 +1141,19 @@ private struct GaryxAvatarEditorActionLabel: View {
                     .font(GaryxFont.system(size: 14, weight: .semibold))
             }
             Text(title)
-                .font(GaryxFont.footnote(weight: .semibold))
+                .font(Font.footnote.weight(.semibold))
                 .lineLimit(1)
         }
         .foregroundStyle(.primary)
-        .frame(maxWidth: .infinity)
-        .frame(minHeight: 44)
         .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .frame(height: 38)
         .background(Color.primary.opacity(0.055), in: Capsule())
         .overlay {
             Capsule()
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         }
+        .frame(minHeight: 44)
     }
 }
 
@@ -1632,7 +1622,6 @@ private struct GaryxAgentReasoningEffortSelectionRow: View {
 
     var body: some View {
         if !effortChoices.isEmpty {
-            Divider().padding(.leading, 16)
             GaryxFormSelectionRow(
                 title: "Thinking level",
                 value: selectedEffortLabel,

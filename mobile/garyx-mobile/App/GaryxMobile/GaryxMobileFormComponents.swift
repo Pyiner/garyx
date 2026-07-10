@@ -36,54 +36,56 @@ struct GaryxFormSheet<Content: View>: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            GaryxFormPalette.pageBackground
-                .ignoresSafeArea()
-
-            ScrollView {
+        NavigationStack {
+            Form {
                 content
-                    .padding(.horizontal, 18)
-                    .padding(.top, 92)
-                    .padding(.bottom, 28)
-                    .frame(maxWidth: 560, alignment: .leading)
-                    .garyxVerticalScrollContentWidth(maxWidth: 560)
             }
-
-            ZStack {
-                HStack {
-                    Button(action: cancel) {
-                        GaryxToolbarIcon(systemName: "xmark")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Cancel")
-
-                    Spacer(minLength: 0)
-
-                    if let onSave {
-                        Button(action: onSave) {
-                            GaryxToolbarIcon(systemName: "checkmark")
-                                .opacity(canSave == false ? 0.42 : 1)
+            .formStyle(.grouped)
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if let onSave {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(action: cancel) {
+                            Text("Cancel")
+                                .foregroundStyle(.primary)
                         }
-                        .buttonStyle(.plain)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(action: onSave) {
+                            Text("Save")
+                                .fontWeight(.semibold)
+                                .foregroundStyle(canSave == false ? Color.secondary : Color.primary)
+                        }
                         .disabled(canSave == false)
-                        .accessibilityLabel("Save")
+                    }
+                } else {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(action: finish) {
+                            Text("Done")
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.primary)
+                        }
                     }
                 }
-
-                Text(title)
-                    .font(GaryxFont.title3(weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 10)
         }
+        .tint(GaryxTheme.controlTint)
     }
 
     private func cancel() {
         if let onCancel {
             onCancel()
         } else if let onDone {
+            onDone()
+        } else {
+            dismiss()
+        }
+    }
+
+    private func finish() {
+        if let onDone {
             onDone()
         } else {
             dismiss()
@@ -101,18 +103,11 @@ struct GaryxFormGroupedSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        Section {
+            content
+        } header: {
             Text(title)
-                .font(GaryxFont.caption(weight: .semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .padding(.horizontal, 14)
-
-            VStack(alignment: .leading, spacing: 0) {
-                content
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(GaryxFormPalette.cardBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .textCase(nil)
         }
     }
 }
@@ -129,16 +124,16 @@ private struct GaryxFormFieldTitle: View {
     var body: some View {
         HStack(spacing: 4) {
             Text(title)
-                .font(GaryxFont.body())
+                .font(Font.callout)
                 .foregroundStyle(.primary)
             if required {
                 Text("*")
-                    .font(GaryxFont.body(weight: .semibold))
+                    .font(Font.callout.weight(.semibold))
                     .foregroundStyle(GaryxTheme.danger)
             }
         }
-        .lineLimit(1)
-        .minimumScaleFactor(0.82)
+        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -146,11 +141,9 @@ struct GaryxFormRow<Content: View>: View {
     let title: String
     let required: Bool
     let valuePlacement: GaryxFormValuePlacement
-    let verticalAlignment: VerticalAlignment
     /// When set, the whole row becomes a tap target that runs `onTap` — used for
-    /// navigation / present rows so the dead title + spacer area is hittable
-    /// (D10). When `nil`, the layout is byte-for-byte unchanged, keeping the five
-    /// subclass wrappers (read-only / text / secure / text-area) regression-free.
+    /// navigation / present rows so the title and surrounding whitespace remain
+    /// hittable. Editable rows leave this `nil` so caret placement keeps working.
     let onTap: (() -> Void)?
     let content: Content
 
@@ -158,14 +151,12 @@ struct GaryxFormRow<Content: View>: View {
         title: String,
         required: Bool = false,
         valuePlacement: GaryxFormValuePlacement = .trailing,
-        verticalAlignment: VerticalAlignment = .center,
         onTap: (() -> Void)? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.required = required
         self.valuePlacement = valuePlacement
-        self.verticalAlignment = verticalAlignment
         self.onTap = onTap
         self.content = content()
     }
@@ -184,44 +175,36 @@ struct GaryxFormRow<Content: View>: View {
 
     @ViewBuilder
     private var rowLayout: some View {
-        switch valuePlacement {
-        case .trailing:
-            trailingRow
-        case .below:
+        if valuePlacement == .below {
             stackedRow
+        } else {
+            trailingRow
         }
     }
 
     private var trailingRow: some View {
-        HStack(alignment: verticalAlignment, spacing: 12) {
-            GaryxFormFieldTitle(title: title, required: required)
-                .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
-                .layoutPriority(2)
-            Spacer(minLength: 8)
+        LabeledContent {
             content
-                .font(GaryxFont.body())
+                .font(.body)
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .layoutPriority(0)
+        } label: {
+            GaryxFormFieldTitle(title: title, required: required)
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 52)
     }
 
     private var stackedRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             GaryxFormFieldTitle(title: title, required: required)
             content
-                .font(GaryxFont.body())
+                .font(.body)
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .layoutPriority(1)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -233,7 +216,7 @@ struct GaryxFormReadOnlyRow: View {
         GaryxFormRow(title: title) {
             Text(value)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .lineLimit(2)
                 .truncationMode(.middle)
         }
     }
@@ -247,37 +230,18 @@ struct GaryxFormReadOnlyMultilineRow: View {
     var valuePlacement: GaryxFormValuePlacement = .trailing
 
     var body: some View {
-        switch valuePlacement {
-        case .trailing:
-            trailingBody
-        case .below:
-            GaryxFormRow(title: title, valuePlacement: .below) {
-                valueText
-                    .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
-            }
-        }
-    }
-
-    private var trailingBody: some View {
-        HStack(alignment: .top, spacing: 12) {
-            GaryxFormFieldTitle(title: title)
-                .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
-                .layoutPriority(2)
-                .padding(.top, 16)
-            Spacer(minLength: 8)
+        GaryxFormRow(
+            title: title,
+            valuePlacement: valuePlacement
+        ) {
             valueText
                 .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
-                .layoutPriority(1)
-                .padding(.top, 16)
-                .padding(.bottom, 16)
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: minHeight + 32)
     }
 
     private var valueText: some View {
         Text(displayValue)
-            .font(GaryxFont.body())
+            .font(Font.callout)
             .foregroundStyle(isEmpty ? .secondary : .primary)
             .multilineTextAlignment(.leading)
             .textSelection(.enabled)
@@ -309,8 +273,8 @@ struct GaryxFormTextFieldRow: View {
     /// Long values like gateway URLs wrap onto extra lines instead of
     /// truncating, keeping the field name on the left.
     var wrapsValue = false
-    /// Tapping the label / spacer focuses the field so the row is not a dead
-    /// zone (D10). The field keeps its own tap handling for caret placement, so
+    /// Tapping the label or surrounding row focuses the field. The field keeps
+    /// its own tap handling for caret placement, so
     /// text rows are focus-on-tap, never wrapped in a `Button`.
     @FocusState private var isFocused: Bool
 
@@ -321,28 +285,41 @@ struct GaryxFormTextFieldRow: View {
                     .foregroundStyle(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
                     .lineLimit(wrapsValue ? 3 : 1)
                     .truncationMode(.middle)
-            } else if wrapsValue {
-                TextField(placeholder, text: $text, axis: .vertical)
-                    .textContentType(textContentType)
-                    .textInputAutocapitalization(autocapitalization)
-                    .autocorrectionDisabled(autocorrectionDisabled)
-                    .keyboardType(keyboardType)
-                    .lineLimit(1...3)
-                    .focused($isFocused)
             } else {
-                TextField(placeholder, text: $text)
-                    .textContentType(textContentType)
-                    .textInputAutocapitalization(autocapitalization)
-                    .autocorrectionDisabled(autocorrectionDisabled)
-                    .keyboardType(keyboardType)
-                    .lineLimit(1)
-                    .focused($isFocused)
+                editableField
             }
         }
         .contentShape(Rectangle())
         .onTapGesture {
             guard !isReadOnly else { return }
             isFocused = true
+        }
+    }
+
+    @ViewBuilder
+    private var editableField: some View {
+        if wrapsValue {
+            TextField(placeholder, text: $text, axis: .vertical)
+                .lineLimit(1...3)
+                .multilineTextAlignment(valuePlacement == .trailing ? .trailing : .leading)
+                .focused($isFocused)
+                .accessibilityLabel(title)
+                .textFieldStyle(.plain)
+                .textContentType(textContentType)
+                .textInputAutocapitalization(autocapitalization)
+                .autocorrectionDisabled(autocorrectionDisabled)
+                .keyboardType(keyboardType)
+        } else {
+            TextField(placeholder, text: $text)
+                .lineLimit(1)
+                .multilineTextAlignment(valuePlacement == .trailing ? .trailing : .leading)
+                .focused($isFocused)
+                .accessibilityLabel(title)
+                .textFieldStyle(.plain)
+                .textContentType(textContentType)
+                .textInputAutocapitalization(autocapitalization)
+                .autocorrectionDisabled(autocorrectionDisabled)
+                .keyboardType(keyboardType)
         }
     }
 
@@ -360,7 +337,7 @@ struct GaryxFormSecureFieldRow: View {
     var textContentType: UITextContentType?
     var autocapitalization: TextInputAutocapitalization?
     var autocorrectionDisabled = false
-    /// Tap-to-focus on the label / spacer (D10); the field keeps its own tap
+    /// Tap-to-focus on the full row; the field keeps its own tap
     /// handling, so secure rows are never wrapped in a `Button`.
     @FocusState private var isFocused: Bool
 
@@ -371,7 +348,10 @@ struct GaryxFormSecureFieldRow: View {
                 .textInputAutocapitalization(autocapitalization)
                 .autocorrectionDisabled(autocorrectionDisabled)
                 .lineLimit(1)
+                .multilineTextAlignment(valuePlacement == .trailing ? .trailing : .leading)
                 .focused($isFocused)
+                .accessibilityLabel(title)
+                .textFieldStyle(.plain)
         }
         .contentShape(Rectangle())
         .onTapGesture { isFocused = true }
@@ -379,52 +359,156 @@ struct GaryxFormSecureFieldRow: View {
 }
 
 struct GaryxFormTextAreaRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let title: String
     @Binding var text: String
     var placeholder: String = ""
-    var valuePlacement: GaryxFormValuePlacement = .below
     var minHeight: CGFloat = 112
     var lineLimits: ClosedRange<Int> = 2...6
     var autocapitalization: TextInputAutocapitalization?
     var autocorrectionDisabled = false
     var isDisabled = false
+    var offersFocusedEditor = false
+    @FocusState private var isFocused: Bool
+    @State private var showsFocusedEditor = false
 
     var body: some View {
-        switch valuePlacement {
-        case .trailing:
-            trailingBody
-        case .below:
-            GaryxFormRow(title: title, valuePlacement: .below) {
-                editor
-                    .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
+        VStack(alignment: .leading, spacing: 8) {
+            editorHeader
+
+            editor
+                .frame(minHeight: minHeight, alignment: .topLeading)
+        }
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fullScreenCover(isPresented: $showsFocusedEditor) {
+            GaryxFocusedTextEditorSheet(
+                title: title,
+                text: $text,
+                placeholder: placeholder,
+                autocapitalization: autocapitalization,
+                autocorrectionDisabled: autocorrectionDisabled
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var editorHeader: some View {
+        if offersFocusedEditor, !isDisabled, dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 5) {
+                GaryxFormFieldTitle(title: title)
+                focusedEditorButton
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                GaryxFormFieldTitle(title: title)
+                Spacer(minLength: 0)
+                if offersFocusedEditor, !isDisabled {
+                    focusedEditorButton
+                }
             }
         }
     }
 
-    private var trailingBody: some View {
-        HStack(alignment: .top, spacing: 12) {
-            GaryxFormFieldTitle(title: title)
-                .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
-                .layoutPriority(2)
-                .padding(.top, 16)
-            Spacer(minLength: 8)
-            editor
-                .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
-                .layoutPriority(1)
+    private var focusedEditorButton: some View {
+        Button("Full Screen") {
+            isFocused = false
+            showsFocusedEditor = true
         }
-        .padding(.horizontal, 16)
-        .frame(minHeight: minHeight + 32)
+        .font(.subheadline)
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
     }
 
     private var editor: some View {
         TextField(placeholder, text: $text, axis: .vertical)
             .textInputAutocapitalization(autocapitalization)
             .autocorrectionDisabled(autocorrectionDisabled)
-            .font(GaryxFont.body())
+            .font(Font.callout)
             .foregroundStyle(.primary)
             .multilineTextAlignment(.leading)
             .lineLimit(lineLimits)
+            .focused($isFocused)
+            .accessibilityLabel(title)
+            .textFieldStyle(.plain)
             .disabled(isDisabled)
+    }
+}
+
+private struct GaryxFocusedTextEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    @Binding var text: String
+    let placeholder: String
+    let autocapitalization: TextInputAutocapitalization?
+    let autocorrectionDisabled: Bool
+    @State private var draft: String
+    @FocusState private var isFocused: Bool
+
+    init(
+        title: String,
+        text: Binding<String>,
+        placeholder: String,
+        autocapitalization: TextInputAutocapitalization?,
+        autocorrectionDisabled: Bool
+    ) {
+        self.title = title
+        self._text = text
+        self.placeholder = placeholder
+        self.autocapitalization = autocapitalization
+        self.autocorrectionDisabled = autocorrectionDisabled
+        self._draft = State(initialValue: text.wrappedValue)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .topLeading) {
+                Color(.systemBackground)
+                    .ignoresSafeArea()
+
+                if draft.isEmpty, !placeholder.isEmpty {
+                    Text(placeholder)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 16)
+                        .allowsHitTesting(false)
+                }
+
+                TextEditor(text: $draft)
+                    .textInputAutocapitalization(autocapitalization)
+                    .autocorrectionDisabled(autocorrectionDisabled)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .focused($isFocused)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(action: { dismiss() }) {
+                        Text("Cancel")
+                            .foregroundStyle(.primary)
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        text = draft
+                        dismiss()
+                    } label: {
+                        Text("Done")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.primary)
+                    }
+                }
+            }
+            .onAppear {
+                draft = text
+                isFocused = true
+            }
+        }
+        .tint(GaryxTheme.controlTint)
     }
 }
 
@@ -451,6 +535,7 @@ private struct GaryxGatewayHeaderDraftRow: Identifiable {
 }
 
 struct GaryxGatewayHeadersEditor: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var text: String
     @State private var rows: [GaryxGatewayHeaderDraftRow] = []
     @State private var lastText = ""
@@ -459,52 +544,13 @@ struct GaryxGatewayHeadersEditor: View {
     @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 12) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        isExpanded.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        GaryxFormFieldTitle(title: "Headers")
-                        Image(systemName: "chevron.right")
-                            .font(GaryxFont.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                        if !isExpanded, configuredHeaderCount > 0 {
-                            Text("\(configuredHeaderCount)")
-                                .font(GaryxFont.caption(weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(.quaternary.opacity(0.5), in: Capsule())
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isExpanded ? "Hide headers" : "Show headers")
-
-                Spacer(minLength: 0)
-
-                if isExpanded {
-                    Button(action: addRow) {
-                        Label("Add Header", systemImage: "plus")
-                            .font(GaryxFont.caption(weight: .semibold))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                }
-            }
-
-            if isExpanded {
-            VStack(spacing: 12) {
+        DisclosureGroup(isExpanded: expandedBinding) {
+            VStack(alignment: .leading, spacing: 14) {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             Text("Header \(index + 1)")
-                                .font(GaryxFont.caption(weight: .semibold))
+                                .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.secondary)
                             Spacer(minLength: 0)
                             Button(role: .destructive) {
@@ -512,44 +558,55 @@ struct GaryxGatewayHeadersEditor: View {
                             } label: {
                                 Image(systemName: "trash")
                                     .font(GaryxFont.system(size: 13, weight: .semibold))
+                                    .frame(width: 32, height: 32)
                             }
                             .buttonStyle(.plain)
                             .disabled(rows.count == 1 && row.name.isEmpty && row.value.isEmpty)
                             .accessibilityLabel("Remove header")
                         }
 
-                        TextField(
-                            "Header name",
+                        GaryxInlineFormTextField(
+                            title: "Name",
+                            placeholder: "Header name",
+                            accessibilityLabel: "Header \(index + 1) name",
                             text: Binding(
                                 get: { value(for: row.id).name },
                                 set: { updateRow(row.id, name: $0) }
                             )
                         )
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                        .textFieldStyle(.roundedBorder)
 
-                        TextField(
-                            "Header value",
+                        GaryxInlineFormTextField(
+                            title: "Value",
+                            placeholder: "Header value",
+                            accessibilityLabel: "Header \(index + 1) value",
                             text: Binding(
                                 get: { value(for: row.id).value },
                                 set: { updateRow(row.id, value: $0) }
                             )
                         )
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                        .textFieldStyle(.roundedBorder)
                     }
 
                     if index < rows.count - 1 {
                         Divider()
                     }
                 }
+
+                Button(action: addRow) {
+                    Label("Add Header", systemImage: "plus")
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add header")
             }
+            .padding(.top, 8)
+        } label: {
+            LabeledContent("Headers") {
+                if configuredHeaderCount > 0 {
+                    Text("\(configuredHeaderCount)")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
         .onAppear {
             resetRows(from: text)
             isExpanded = configuredHeaderCount > 0
@@ -559,6 +616,17 @@ struct GaryxGatewayHeadersEditor: View {
                 resetRows(from: newValue)
             }
         }
+    }
+
+    private var expandedBinding: Binding<Bool> {
+        Binding(
+            get: { isExpanded },
+            set: { next in
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                    isExpanded = next
+                }
+            }
+        )
     }
 
     private var configuredHeaderCount: Int {
@@ -604,19 +672,38 @@ struct GaryxGatewayHeadersEditor: View {
     }
 }
 
+private struct GaryxInlineFormTextField: View {
+    let title: String
+    let placeholder: String
+    let accessibilityLabel: String
+    @Binding var text: String
+
+    var body: some View {
+        LabeledContent(title) {
+            TextField(placeholder, text: $text)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+                .multilineTextAlignment(.trailing)
+                .textFieldStyle(.plain)
+                .accessibilityLabel(accessibilityLabel)
+        }
+    }
+}
+
 struct GaryxFormMenuValueLabel: View {
     let value: String
 
     var body: some View {
         HStack(spacing: 6) {
             Text(value)
-                .font(GaryxFont.body(weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .font(Font.callout.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
                 .truncationMode(.middle)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(GaryxFont.system(size: 11, weight: .semibold))
+            Image(systemName: "chevron.down")
+                .font(GaryxFont.system(size: 10, weight: .semibold))
                 .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -629,30 +716,20 @@ struct GaryxFormSelectionRow: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Text(title)
-                    .font(GaryxFont.body())
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                    .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
-                    .layoutPriority(2)
-                Spacer(minLength: 8)
+        GaryxFormRow(title: title, onTap: action) {
+            HStack(spacing: 7) {
                 Text(displayValue)
-                    .font(GaryxFont.body())
+                    .font(Font.callout.weight(isPlaceholder ? .regular : .medium))
                     .foregroundStyle(isPlaceholder ? .secondary : .primary)
-                    .lineLimit(1)
+                    .lineLimit(2)
                     .truncationMode(.middle)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 52)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .accessibilityValue(displayValue)
     }
 
     private var displayValue: String {
@@ -693,19 +770,13 @@ struct GaryxFormMenuRow<MenuContent: View, ValueLabel: View>: View {
         Menu {
             menuContent
         } label: {
-            HStack(spacing: 12) {
-                GaryxFormFieldTitle(title: title, required: required)
-                    .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
-                    .layoutPriority(2)
-                Spacer(minLength: 8)
+            GaryxFormRow(title: title, required: required) {
                 valueLabel
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .layoutPriority(0)
             }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 52)
             .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 }
 
@@ -728,10 +799,9 @@ struct GaryxFormErrorText: View {
 
     var body: some View {
         Text(text)
-            .font(GaryxFont.caption(weight: .medium))
+            .font(Font.caption.weight(.medium))
             .foregroundStyle(GaryxTheme.danger)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 14)
     }
 }
 
@@ -756,34 +826,21 @@ struct GaryxWorkspacePathSelectionRow: View {
     @State private var showsPicker = false
 
     var body: some View {
-        Button {
-            showsPicker = true
-        } label: {
-            HStack(spacing: 12) {
-                Text(title)
-                    .font(GaryxFont.body())
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                    .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
-                    .layoutPriority(2)
-                Spacer(minLength: 8)
+        GaryxFormRow(title: title, onTap: { showsPicker = true }) {
+            HStack(spacing: 7) {
                 Text(displayValue)
-                    .font(GaryxFont.body(weight: path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .regular : .medium))
+                    .font(Font.callout.weight(path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .regular : .medium))
                     .foregroundStyle(path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .multilineTextAlignment(.trailing)
-                    .fixedSize(horizontal: false, vertical: true)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 52)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .accessibilityValue(displayValue)
         .sheet(isPresented: $showsPicker) {
             GaryxWorkspaceSelectSheet(
                 title: title,
@@ -820,17 +877,18 @@ struct GaryxWorkspacePathPickerField: View {
                         .frame(width: 28, height: 28)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(pathDisplayTitle)
-                            .font(GaryxFont.body(weight: selectedPath.isEmpty ? .regular : .semibold))
+                            .font(Font.body.weight(selectedPath.isEmpty ? .regular : .semibold))
                             .foregroundStyle(selectedPath.isEmpty ? .secondary : .primary)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(GaryxFont.system(size: 12, weight: .semibold))
+                    Image(systemName: "chevron.right")
+                        .font(GaryxFont.system(size: 11, weight: .semibold))
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
-                .padding(.horizontal, 16)
-                .frame(minHeight: 56)
+                .padding(.horizontal, GaryxFormMetrics.rowInset)
+                .frame(minHeight: GaryxFormMetrics.rowMinHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -996,12 +1054,12 @@ struct GaryxWorkspaceSelectSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(title)
-                            .font(GaryxFont.subheadline(weight: .semibold))
+                            .font(Font.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         if let badge {
                             Text(badge)
-                                .font(GaryxFont.caption(weight: .semibold))
+                                .font(Font.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .padding(.horizontal, 6)
@@ -1014,7 +1072,7 @@ struct GaryxWorkspaceSelectSheet: View {
                     }
                     if !detail.isEmpty {
                         Text(normalizedWorkspacePath(detail))
-                            .font(GaryxFont.caption())
+                            .font(Font.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -1107,11 +1165,11 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(workspaceDisplayName(currentPath).isEmpty ? "Folders" : workspaceDisplayName(currentPath))
-                        .font(GaryxFont.subheadline(weight: .semibold))
+                        .font(Font.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     Text(currentPath.isEmpty ? "Choose a folder" : workspacePathCompactLabel(currentPath))
-                        .font(GaryxFont.caption())
+                        .font(Font.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -1126,7 +1184,7 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
                                 GaryxSelectionCheckmark(size: 11)
                             }
                             Text(normalizedWorkspacePath(selectedPath) == normalizedWorkspacePath(currentPath) ? "Selected" : "Use this folder")
-                                .font(GaryxFont.caption(weight: .semibold))
+                                .font(Font.caption.weight(.semibold))
                         }
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 10)
@@ -1143,19 +1201,19 @@ private struct GaryxWorkspaceDirectoryBrowser: View {
 
             if isLoading {
                 Text("Loading folders...")
-                    .font(GaryxFont.subheadline())
+                    .font(Font.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 26)
             } else if let errorText {
                 Text(errorText)
-                    .font(GaryxFont.subheadline())
+                    .font(Font.subheadline)
                     .foregroundStyle(GaryxTheme.danger)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 26)
             } else if entries.isEmpty {
                 Text("No folders here.")
-                    .font(GaryxFont.subheadline())
+                    .font(Font.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 26)
@@ -1207,11 +1265,11 @@ private struct GaryxWorkspaceDirectoryBrowserRow: View {
                         .frame(width: 28, height: 28)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.name)
-                            .font(GaryxFont.subheadline(weight: .semibold))
+                            .font(Font.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         Text(workspacePathCompactLabel(entry.path))
-                            .font(GaryxFont.caption())
+                            .font(Font.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -1264,7 +1322,7 @@ private func workspacePathCompactLabel(_ path: String) -> String {
 private func sheetHeader(title: String) -> some View {
     HStack(alignment: .center, spacing: 12) {
         Text(title)
-            .font(GaryxFont.callout(weight: .medium))
+            .font(Font.callout.weight(.medium))
             .foregroundStyle(.primary)
             .lineLimit(1)
         Spacer(minLength: 0)
@@ -1322,25 +1380,12 @@ extension View {
     }
 }
 
-enum GaryxFormPalette {
-    static let pageBackground = Color(.systemGroupedBackground).opacity(0.72)
-    static let cardBackground = Color(.systemBackground)
+enum GaryxFormMetrics {
+    static let rowInset: CGFloat = 16
+    static let rowMinHeight: CGFloat = 54
 }
 
-extension View {
-    func garyxFormTextField(minHeight: CGFloat = 52, horizontalPadding: CGFloat = 16) -> some View {
-        self
-            .font(GaryxFont.body())
-            .foregroundStyle(.primary)
-            .padding(.horizontal, horizontalPadding)
-            .frame(minHeight: minHeight, alignment: .leading)
-    }
-
-    func garyxFormTextArea(minHeight: CGFloat = 132) -> some View {
-        self
-            .font(GaryxFont.body())
-            .foregroundStyle(.primary)
-            .padding(16)
-            .frame(minHeight: minHeight, alignment: .topLeading)
-    }
+enum GaryxFormPalette {
+    static let pageBackground = Color(.systemGroupedBackground)
+    static let cardBackground = Color(.secondarySystemGroupedBackground)
 }

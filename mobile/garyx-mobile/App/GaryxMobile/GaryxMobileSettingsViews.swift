@@ -159,16 +159,19 @@ struct GaryxSettingsOverviewSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
             Text(title)
-                .font(GaryxFont.caption(weight: .medium))
+                .font(Font.footnote.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 4)
 
             VStack(spacing: 0) {
                 content
             }
-            .background(GaryxTheme.surface)
+            .background(
+                Color(.secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+            )
         }
     }
 }
@@ -388,29 +391,26 @@ struct GaryxSavedGatewayProfileRow: View {
                 canSave: canSaveGateway,
                 onSave: saveGateway
             ) {
-                VStack(alignment: .leading, spacing: 22) {
-                    GaryxFormGroupedSection(title: "Gateway") {
-                        GaryxFormTextFieldRow(title: "Name", text: $label)
-                        Divider().padding(.leading, 16)
-                        GaryxFormTextFieldRow(
-                            title: "Gateway URL",
-                            text: $gatewayUrl,
-                            keyboardType: .URL,
-                            textContentType: .URL,
-                            autocapitalization: .never,
-                            autocorrectionDisabled: true,
-                            wrapsValue: true
-                        )
-                        Divider().padding(.leading, 16)
-                        GaryxFormSecureFieldRow(
-                            title: "Gateway Token",
-                            text: $token,
-                            autocapitalization: .never,
-                            autocorrectionDisabled: true
-                        )
-                        Divider().padding(.leading, 16)
-                        GaryxGatewayHeadersEditor(text: $headers)
-                    }
+                GaryxFormGroupedSection(title: "Gateway") {
+                    GaryxFormTextFieldRow(title: "Name", text: $label)
+                    GaryxFormTextFieldRow(
+                        title: "Gateway URL",
+                        text: $gatewayUrl,
+                        valuePlacement: .below,
+                        keyboardType: .URL,
+                        textContentType: .URL,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true,
+                        wrapsValue: true
+                    )
+                    GaryxFormSecureFieldRow(
+                        title: "Gateway Token",
+                        text: $token,
+                        valuePlacement: .below,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
+                    GaryxGatewayHeadersEditor(text: $headers)
                 }
             }
         }

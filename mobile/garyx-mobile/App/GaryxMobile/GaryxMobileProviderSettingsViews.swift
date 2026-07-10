@@ -380,25 +380,22 @@ struct GaryxModelProviderDefaultsSheet: View {
             onCancel: closeSheet,
             onSave: saveDefaults
         ) {
-            VStack(alignment: .leading, spacing: 22) {
+            Group {
                 if hydrationFailed {
-                    VStack(alignment: .leading, spacing: 10) {
+                    Section {
                         GaryxFormErrorText(text: "Couldn't load the current provider settings from the gateway, so editing is disabled to avoid overwriting newer values.")
                         Button {
                             Task { await hydrate() }
                         } label: {
                             Text("Retry")
-                                .font(GaryxFont.body(weight: .medium))
-                                .padding(.horizontal, 14)
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.bordered)
-                        .padding(.horizontal, 14)
                     }
                 }
 
                 GaryxFormGroupedSection(title: "Provider") {
                     GaryxFormReadOnlyRow(title: "Name", value: providerPresentation.displayName)
-                    Divider().padding(.leading, 16)
                     GaryxFormReadOnlyRow(title: "Type", value: provider.providerType)
                 }
 
@@ -420,7 +417,6 @@ struct GaryxModelProviderDefaultsSheet: View {
                         iconName: "cpu"
                     )
                     if !reasoningOptions.isEmpty {
-                        Divider().padding(.leading, 16)
                         GaryxProviderDefaultPickerRow(
                             title: "Thinking level",
                             value: $reasoningEffort,
@@ -430,7 +426,6 @@ struct GaryxModelProviderDefaultsSheet: View {
                         )
                     }
                     if supportsServiceTier {
-                        Divider().padding(.leading, 16)
                         GaryxProviderDefaultPickerRow(
                             title: "Speed",
                             value: $serviceTier,
@@ -475,45 +470,43 @@ struct GaryxModelProviderDefaultsSheet: View {
                 showsClaudeLoginSheet = true
             }
         case .native:
-            VStack(alignment: .leading, spacing: 6) {
-                GaryxFormGroupedSection(title: "Authentication") {
-                    // Every native provider gets the auth-source row (D1). Only
-                    // GPT has a second source (the shared Codex OAuth token);
-                    // Anthropic/Google expose their single API-key source so the
-                    // saved auth_source is always visible, never written silently.
-                    GaryxFormMenuRow(title: "Auth", value: authSourceLabel) {
-                        if GaryxProviderSettingsPresentation.offersGptTokenAuthSource(provider) {
-                            Button("Use GPT token") { selectAuthSource("codex") }
-                        }
-                        Button("Use API key") { selectAuthSource("api_key") }
+            Section {
+                // Every native provider gets the auth-source row (D1). Only
+                // GPT has a second source (the shared Codex OAuth token);
+                // Anthropic/Google expose their single API-key source so the
+                // saved auth_source is always visible, never written silently.
+                GaryxFormMenuRow(title: "Auth", value: authSourceLabel) {
+                    if GaryxProviderSettingsPresentation.offersGptTokenAuthSource(provider) {
+                        Button("Use GPT token") { selectAuthSource("codex") }
                     }
-                    if showsApiKeyField {
-                        Divider().padding(.leading, 16)
-                        GaryxFormTextFieldRow(
-                            title: "API key",
-                            text: $apiKey,
-                            placeholder: apiKeyPlaceholder,
-                            keyboardType: .asciiCapable,
-                            autocapitalization: .never,
-                            autocorrectionDisabled: true
-                        )
-                    }
-                    Divider().padding(.leading, 16)
+                    Button("Use API key") { selectAuthSource("api_key") }
+                }
+                if showsApiKeyField {
                     GaryxFormTextFieldRow(
-                        title: "Base URL",
-                        text: $baseUrl,
-                        placeholder: "Provider default",
-                        keyboardType: .URL,
+                        title: "API key",
+                        text: $apiKey,
+                        placeholder: apiKeyPlaceholder,
+                        valuePlacement: .below,
+                        keyboardType: .asciiCapable,
                         autocapitalization: .never,
-                        autocorrectionDisabled: true,
-                        wrapsValue: true
+                        autocorrectionDisabled: true
                     )
                 }
+                GaryxFormTextFieldRow(
+                    title: "Base URL",
+                    text: $baseUrl,
+                    placeholder: "Provider default",
+                    valuePlacement: .below,
+                    keyboardType: .URL,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true,
+                    wrapsValue: true
+                )
+            } header: {
+                Text("Authentication")
+                    .textCase(nil)
+            } footer: {
                 Text("The API key is stored on the gateway as \(apiKeyPlaceholder) and shown here in plain text. Clearing it blanks the key; remove it fully from the Mac app.")
-                    .font(GaryxFont.caption())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 14)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         case .managedOAuth:
             GaryxFormGroupedSection(title: "Authentication") {
@@ -529,27 +522,23 @@ struct GaryxModelProviderDefaultsSheet: View {
             provider: provider
         )
         if !fields.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                GaryxFormGroupedSection(title: "CLI Runtime") {
-                    ForEach(Array(fields.enumerated()), id: \.element.id) { index, field in
-                        if index > 0 {
-                            Divider().padding(.leading, 16)
-                        }
-                        if field.value.contains("\n") {
-                            GaryxFormReadOnlyMultilineRow(
-                                title: field.label,
-                                value: field.value,
-                                valuePlacement: .below
-                            )
-                        } else {
-                            GaryxFormReadOnlyRow(title: field.label, value: field.value)
-                        }
+            Section {
+                ForEach(fields) { field in
+                    if field.value.contains("\n") {
+                        GaryxFormReadOnlyMultilineRow(
+                            title: field.label,
+                            value: field.value,
+                            valuePlacement: .below
+                        )
+                    } else {
+                        GaryxFormReadOnlyRow(title: field.label, value: field.value)
                     }
                 }
+            } header: {
+                Text("CLI Runtime")
+                    .textCase(nil)
+            } footer: {
                 Text("Gateway-host runtime settings. Managed on the Mac app.")
-                    .font(GaryxFont.caption())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 14)
             }
         }
     }
@@ -736,8 +725,7 @@ private struct GaryxProviderUsageFormSection: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.vertical, 4)
         }
     }
 }

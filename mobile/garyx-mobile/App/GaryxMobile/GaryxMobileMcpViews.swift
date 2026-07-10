@@ -100,7 +100,7 @@ private struct GaryxMcpServerFormFields: View {
     let workspacePaths: [String]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        Group {
             GaryxFormGroupedSection(title: "Server") {
                 GaryxFormTextFieldRow(
                     title: "Name",
@@ -108,7 +108,6 @@ private struct GaryxMcpServerFormFields: View {
                     autocapitalization: .never,
                     autocorrectionDisabled: true
                 )
-                Divider().padding(.leading, 16)
                 GaryxWorkspacePathSelectionRow(
                     title: "Working directory",
                     path: $workingDir,
@@ -125,7 +124,6 @@ private struct GaryxMcpServerFormFields: View {
                     autocapitalization: .never,
                     autocorrectionDisabled: true
                 )
-                Divider().padding(.leading, 16)
                 GaryxFormTextFieldRow(
                     title: "Arguments",
                     text: $args,
@@ -133,7 +131,6 @@ private struct GaryxMcpServerFormFields: View {
                     autocapitalization: .never,
                     autocorrectionDisabled: true
                 )
-                Divider().padding(.leading, 16)
                 GaryxFormTextAreaRow(
                     title: "Environment variables",
                     text: $env,
@@ -149,12 +146,12 @@ private struct GaryxMcpServerFormFields: View {
                 GaryxFormTextFieldRow(
                     title: "URL",
                     text: $url,
+                    valuePlacement: .below,
                     keyboardType: .URL,
                     textContentType: .URL,
                     autocapitalization: .never,
                     autocorrectionDisabled: true
                 )
-                Divider().padding(.leading, 16)
                 GaryxFormTextAreaRow(
                     title: "Headers",
                     text: $headers,

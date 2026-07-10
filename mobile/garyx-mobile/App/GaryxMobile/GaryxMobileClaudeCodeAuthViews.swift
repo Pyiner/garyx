@@ -18,26 +18,26 @@ struct GaryxClaudeCodeAuthEntryRow: View {
     let onSignIn: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            GaryxFormGroupedSection(title: "Authentication") {
+        Group {
+            Section {
                 GaryxFormRow(title: "Status") {
                     GaryxStatusPill(text: entry.statusText, tone: entry.tone.garyxStatusPillTone)
                 }
                 if let account = entry.accountText {
-                    Divider().padding(.leading, 16)
                     GaryxFormReadOnlyRow(title: "Account", value: account)
+                }
+            } header: {
+                Text("Authentication")
+                    .textCase(nil)
+            } footer: {
+                if let caption {
+                    Text(caption)
                 }
             }
 
-            if let caption {
-                Text(caption)
-                    .font(GaryxFont.caption())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 14)
-                    .fixedSize(horizontal: false, vertical: true)
+            Section {
+                signInButton
             }
-
-            signInButton
         }
     }
 
@@ -47,29 +47,10 @@ struct GaryxClaudeCodeAuthEntryRow: View {
 
     @ViewBuilder
     private var signInButton: some View {
-        if entry.isSignedIn {
-            // Re-authenticate is an optional action for an already-signed-in
-            // account, so it gets a calmer full-width glass treatment.
-            Button(action: onSignIn) {
-                Label(entry.actionTitle, systemImage: entry.actionSymbolName)
-                    .font(GaryxFont.body(weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 52)
-                    .garyxAdaptiveGlass(
-                        .regular,
-                        isInteractive: true,
-                        fallbackMaterial: .thinMaterial,
-                        in: Capsule()
-                    )
-            }
-            .buttonStyle(.plain)
-        } else {
-            GaryxPrimaryCapsuleButton(
-                title: entry.actionTitle,
-                systemImage: entry.actionSymbolName,
-                action: onSignIn
-            )
+        Button(action: onSignIn) {
+            Label(entry.actionTitle, systemImage: entry.actionSymbolName)
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity)
         }
     }
 }

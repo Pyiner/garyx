@@ -12,6 +12,9 @@ enum GaryxTheme {
     private static let adaptivePageBackground = UIColor { traits in
         traits.userInterfaceStyle == .dark ? .systemBackground : sampledLightBackground
     }
+    private static let adaptiveControlTint = UIColor { traits in
+        traits.userInterfaceStyle == .dark ? .systemGray2 : .label
+    }
 
     static let background = Color(adaptivePageBackground)
     static let sidebar = Color(adaptivePageBackground)
@@ -21,6 +24,9 @@ enum GaryxTheme {
     static let primaryText = Color.primary
     static let secondaryText = Color.secondary
     static let tertiaryText = Color(.tertiaryLabel)
+    /// Monochrome tint for ordinary controls. It is black in light appearance
+    /// and a mid-gray in dark appearance so a switch's white thumb stays clear.
+    static let controlTint = Color(adaptiveControlTint)
     static let accent = Color(red: 0.000, green: 0.635, blue: 0.250)
     /// Inline links in rendered content. The system link blue adapts to
     /// light/dark; the green accent stays reserved for running/success

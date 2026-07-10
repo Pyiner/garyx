@@ -8,16 +8,31 @@
   top navigation actions, segmented controls for peer categories, and row-level
   ellipsis menus for secondary actions.
 - Do not port desktop card/action-bar layouts directly into mobile.
-- Mobile compact form rows must keep field names visible on the left and the
-  value or control on the right.
+- Build settings and creation flows from SwiftUI `Form`, `Section`,
+  `LabeledContent`, `Picker`, `Toggle`, and system toolbar placements before
+  introducing custom form geometry.
+- Keep short values and controls in adaptive labeled rows. Give prompts,
+  descriptions, environment variables, and other long or structured values a
+  vertical row or focused editor instead of compressing them into a trailing
+  column.
 - Do not rely on `TextField` or `SecureField` placeholders as the only field
   label inside grouped forms.
+- A grouped form section is already the content surface. Do not place editable
+  fields in additional filled input wells or recreate section cards, separators,
+  and row insets by hand.
+- Use native cancellation, confirmation, and Done actions in the navigation
+  toolbar. Keep destructive actions explicit and separate from Save.
+- Keep ordinary form actions, switches, pickers, and selection monochrome.
+  Green is semantic status color, not the default interactive tint.
 - Use Garyx's existing adaptive glass/material helpers for mobile chrome.
 - Bottom composers and attached trays should read as native iOS material:
   layered glass, system tint, fine highlights, and subtle shadow, not flat gray
   slabs.
 - Keep content readable, near-white, and integrated; reserve glass for
   navigation and transient controls rather than repeated content rows.
+- Treat Dynamic Type, dark mode, increased contrast, Reduce Motion, and Reduce
+  Transparency as layout inputs. Do not assume a fixed label column or a
+  light-only palette.
 - Mobile top-left controls and leading-edge gestures must share the same route
   action.
 - The home root is the pinned+recent thread list; conversations and module

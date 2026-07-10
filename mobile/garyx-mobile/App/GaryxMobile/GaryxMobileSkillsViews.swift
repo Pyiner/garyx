@@ -75,15 +75,15 @@ struct GaryxCreateSkillCard: View {
             canSave: canCreate,
             onSave: { Task { await createSkill() } }
         ) {
-            VStack(alignment: .leading, spacing: 22) {
+            Group {
                 GaryxFormGroupedSection(title: "Identity") {
                     GaryxFormTextFieldRow(
                         title: "ID",
                         text: $model.draftSkillId,
+                        valuePlacement: .below,
                         autocapitalization: .never,
                         autocorrectionDisabled: true
                     )
-                    Divider().padding(.leading, 16)
                     GaryxFormTextFieldRow(
                         title: "Name",
                         text: $model.draftSkillName,
@@ -98,12 +98,12 @@ struct GaryxCreateSkillCard: View {
                         minHeight: 104,
                         lineLimits: 2...4
                     )
-                    Divider().padding(.leading, 16)
                     GaryxFormTextAreaRow(
                         title: "Body",
                         text: $model.draftSkillBody,
                         minHeight: 220,
-                        lineLimits: 6...14
+                        lineLimits: 6...14,
+                        offersFocusedEditor: true
                     )
                 }
             }
@@ -161,7 +161,7 @@ struct GaryxSkillCard: View {
 
                 Toggle("", isOn: skillEnabledBinding)
                     .labelsHidden()
-                    .tint(Color(.systemBlue))
+                    .tint(GaryxTheme.controlTint)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 11)
@@ -179,14 +179,12 @@ struct GaryxSkillCard: View {
                 canSave: canSaveSkill,
                 onSave: { Task { await saveSkill() } }
             ) {
-                VStack(alignment: .leading, spacing: 22) {
-                    GaryxSkillMetadataFields(
-                        skill: skill,
-                        name: $name,
-                        description: $description,
-                        mode: .editable
-                    )
-                }
+                GaryxSkillMetadataFields(
+                    skill: skill,
+                    name: $name,
+                    description: $description,
+                    mode: .editable
+                )
             }
         }
         .confirmationDialog("Delete skill?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
@@ -247,7 +245,7 @@ struct GaryxSkillDetailCard: View {
 
     var body: some View {
         if let editor = model.selectedSkillEditor {
-            VStack(alignment: .leading, spacing: 22) {
+            Group {
                 GaryxSkillMetadataFields(
                     skill: editor.skill,
                     name: .constant(editor.skill.name),
@@ -306,34 +304,30 @@ private struct GaryxSkillMetadataFields: View {
 
     var body: some View {
         GaryxFormGroupedSection(title: "Skill") {
-            VStack(alignment: .leading, spacing: 0) {
-                switch mode {
-                case .readOnly:
-                    GaryxFormReadOnlyRow(title: "Name", value: skill.name)
-                case .editable:
-                    GaryxFormTextFieldRow(title: "Name", text: $name)
-                }
+            switch mode {
+            case .readOnly:
+                GaryxFormReadOnlyRow(title: "Name", value: skill.name)
+            case .editable:
+                GaryxFormTextFieldRow(title: "Name", text: $name)
+            }
 
-                Divider().padding(.leading, 16)
-                switch mode {
-                case .readOnly:
-                    GaryxFormReadOnlyMultilineRow(
-                        title: "Description",
-                        value: skill.description,
-                        placeholder: "No description provided.",
-                        minHeight: 86,
-                        valuePlacement: .below
-                    )
-                case .editable:
-                    GaryxFormTextAreaRow(
-                        title: "Description",
-                        text: $description,
-                        placeholder: "No description provided.",
-                        valuePlacement: .below,
-                        minHeight: 86,
-                        lineLimits: 2...5
-                    )
-                }
+            switch mode {
+            case .readOnly:
+                GaryxFormReadOnlyMultilineRow(
+                    title: "Description",
+                    value: skill.description,
+                    placeholder: "No description provided.",
+                    minHeight: 86,
+                    valuePlacement: .below
+                )
+            case .editable:
+                GaryxFormTextAreaRow(
+                    title: "Description",
+                    text: $description,
+                    placeholder: "No description provided.",
+                    minHeight: 86,
+                    lineLimits: 2...5
+                )
             }
         }
     }

@@ -204,74 +204,59 @@ struct GaryxBotAccountForm: View {
     }
 
     private var formContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        Group {
             GaryxFormGroupedSection(title: "Account") {
-                VStack(alignment: .leading, spacing: 0) {
-                    channelPicker
-                    Divider().padding(.leading, 16)
-                    GaryxFormTextFieldRow(
-                        title: "Account ID",
-                        text: $accountId,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true,
-                        isReadOnly: isEditing
-                    )
-                    Divider().padding(.leading, 16)
-                    GaryxFormTextFieldRow(
-                        title: "Display name",
-                        text: $displayName,
-                        placeholder: "Optional"
-                    )
-                    Divider().padding(.leading, 16)
-                    agentPicker
-                    Divider().padding(.leading, 16)
-                    GaryxWorkspacePathSelectionRow(
-                        title: "Working directory",
-                        path: $workspaceDir,
-                        workspacePaths: model.userWorkspacePaths,
-                        placeholder: "Optional",
-                        allowsEmpty: true
-                    )
-                    Divider().padding(.leading, 16)
-                    Picker("Workspace mode", selection: $workspaceMode) {
-                        Text("Local").tag("local")
-                        Text("Worktree").tag("worktree")
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(12)
-                    Divider().padding(.leading, 16)
-                    GaryxFormRow(title: "Enabled") {
-                        Toggle("Enabled", isOn: $enabled)
-                            .labelsHidden()
-                    }
+                channelPicker
+                GaryxFormTextFieldRow(
+                    title: "Account ID",
+                    text: $accountId,
+                    valuePlacement: .below,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true,
+                    isReadOnly: isEditing
+                )
+                GaryxFormTextFieldRow(
+                    title: "Display name",
+                    text: $displayName,
+                    placeholder: "Optional"
+                )
+                agentPicker
+                GaryxWorkspacePathSelectionRow(
+                    title: "Working directory",
+                    path: $workspaceDir,
+                    workspacePaths: model.userWorkspacePaths,
+                    placeholder: "Optional",
+                    allowsEmpty: true
+                )
+                Picker("Workspace mode", selection: $workspaceMode) {
+                    Text("Local").tag("local")
+                    Text("Worktree").tag("worktree")
+                }
+                .pickerStyle(.segmented)
+                GaryxFormRow(title: "Enabled") {
+                    Toggle("Enabled", isOn: $enabled)
+                        .labelsHidden()
                 }
             }
 
             GaryxFormGroupedSection(title: "Channel Auth") {
-                VStack(alignment: .leading, spacing: 0) {
-                    if let selectedPlugin {
-                        let fields = schemaFields(for: selectedPlugin)
-                        ForEach(Array(fields.enumerated()), id: \.element.id) { index, field in
-                            GaryxBotConfigFieldEditor(
-                                field: field,
-                                value: binding(for: field)
-                            )
-                            if index < fields.count - 1 {
-                                Divider().padding(.leading, 16)
-                            }
-                        }
-                        if fields.isEmpty {
-                            Text("This channel does not declare any manual configuration fields.")
-                                .font(GaryxFont.callout())
-                                .foregroundStyle(.secondary)
-                                .padding(16)
-                        }
-                    } else {
-                        Text("Channel catalog is still loading.")
+                if let selectedPlugin {
+                    let fields = schemaFields(for: selectedPlugin)
+                    ForEach(fields) { field in
+                        GaryxBotConfigFieldEditor(
+                            field: field,
+                            value: binding(for: field)
+                        )
+                    }
+                    if fields.isEmpty {
+                        Text("This channel does not declare any manual configuration fields.")
                             .font(GaryxFont.callout())
                             .foregroundStyle(.secondary)
-                            .padding(16)
                     }
+                } else {
+                    Text("Channel catalog is still loading.")
+                        .font(GaryxFont.callout())
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -443,6 +428,7 @@ struct GaryxBotAccountForm: View {
 private struct GaryxBotConfigFieldEditor: View {
     let field: GaryxBotSchemaField
     @Binding var value: GaryxJSONValue
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         if field.kind == .boolean {
@@ -502,8 +488,11 @@ private struct GaryxBotConfigFieldEditor: View {
             ))
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-            .font(GaryxFont.body())
+            .font(GaryxFont.callout())
             .lineLimit(1)
+            .focused($isFocused)
+            .accessibilityLabel(field.label)
+            .textFieldStyle(.plain)
         } else {
             TextField(field.placeholder, text: Binding(
                 get: { GaryxBotConfigValues.stringValue(value) },
@@ -512,8 +501,11 @@ private struct GaryxBotConfigFieldEditor: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .keyboardType(field.kind == .number ? .decimalPad : .default)
-            .font(GaryxFont.body())
+            .font(GaryxFont.callout())
             .lineLimit(1)
+            .focused($isFocused)
+            .accessibilityLabel(field.label)
+            .textFieldStyle(.plain)
         }
     }
 }

@@ -64,28 +64,25 @@ struct GaryxCreateSlashCommandCard: View {
             canSave: canCreate,
             onSave: { Task { await createCommand() } }
         ) {
-            VStack(alignment: .leading, spacing: 22) {
-                GaryxFormGroupedSection(title: "Command") {
-                    GaryxFormTextFieldRow(
-                        title: "Command name",
-                        text: $model.draftSlashName,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
-                    )
-                    Divider().padding(.leading, 16)
-                    GaryxFormTextFieldRow(
-                        title: "Description",
-                        text: $model.draftSlashDescription,
-                        placeholder: "Optional"
-                    )
-                    Divider().padding(.leading, 16)
-                    GaryxFormTextAreaRow(
-                        title: "Content",
-                        text: $model.draftSlashPrompt,
-                        minHeight: 132,
-                        lineLimits: 2...5
-                    )
-                }
+            GaryxFormGroupedSection(title: "Command") {
+                GaryxFormTextFieldRow(
+                    title: "Command name",
+                    text: $model.draftSlashName,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
+                GaryxFormTextFieldRow(
+                    title: "Description",
+                    text: $model.draftSlashDescription,
+                    placeholder: "Optional"
+                )
+                GaryxFormTextAreaRow(
+                    title: "Content",
+                    text: $model.draftSlashPrompt,
+                    minHeight: 132,
+                    lineLimits: 2...5,
+                    offersFocusedEditor: true
+                )
             }
         }
     }
@@ -149,28 +146,25 @@ struct GaryxSlashCommandCard: View {
                 canSave: canSaveCommand,
                 onSave: { Task { await saveCommand() } }
             ) {
-                VStack(alignment: .leading, spacing: 22) {
-                    GaryxFormGroupedSection(title: "Command") {
-                        GaryxFormTextFieldRow(
-                            title: "Name",
-                            text: $name,
-                            autocapitalization: .never,
-                            autocorrectionDisabled: true
-                        )
-                        Divider().padding(.leading, 16)
-                        GaryxFormTextFieldRow(
-                            title: "Description",
-                            text: $description,
-                            placeholder: "Optional"
-                        )
-                        Divider().padding(.leading, 16)
-                        GaryxFormTextAreaRow(
-                            title: "Prompt",
-                            text: $prompt,
-                            minHeight: 132,
-                            lineLimits: 2...6
-                        )
-                    }
+                GaryxFormGroupedSection(title: "Command") {
+                    GaryxFormTextFieldRow(
+                        title: "Name",
+                        text: $name,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
+                    GaryxFormTextFieldRow(
+                        title: "Description",
+                        text: $description,
+                        placeholder: "Optional"
+                    )
+                    GaryxFormTextAreaRow(
+                        title: "Prompt",
+                        text: $prompt,
+                        minHeight: 132,
+                        lineLimits: 2...6,
+                        offersFocusedEditor: true
+                    )
                 }
             }
         }

@@ -110,7 +110,7 @@ struct GaryxAutomationCard: View {
 
                 Toggle("", isOn: automationEnabledBinding)
                     .labelsHidden()
-                    .tint(Color(.systemBlue))
+                    .tint(GaryxTheme.controlTint)
             }
 
             Divider()
@@ -584,9 +584,9 @@ struct GaryxAutomationFormFields: View {
     @Binding var showsThreadPicker: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            GaryxFormGroupedSection(title: "Title") {
-                GaryxFormTextFieldRow(title: "Automation name", text: $draft.label)
+        Group {
+            GaryxFormGroupedSection(title: "Automation") {
+                GaryxFormTextFieldRow(title: "Name", text: $draft.label)
             }
 
             GaryxFormGroupedSection(title: "Target") {
@@ -595,9 +595,6 @@ struct GaryxAutomationFormFields: View {
                     Text("Existing Thread").tag(true)
                 }
                 .pickerStyle(.segmented)
-                .padding(12)
-
-                Divider().padding(.leading, 16)
                 targetPicker
             }
 
@@ -610,8 +607,9 @@ struct GaryxAutomationFormFields: View {
                     title: "Prompt",
                     text: $draft.prompt,
                     placeholder: "What should Garyx do?",
-                    minHeight: 142,
-                    lineLimits: 5...12
+                    minHeight: 124,
+                    lineLimits: 5...12,
+                    offersFocusedEditor: true
                 )
             }
         }
@@ -629,7 +627,6 @@ struct GaryxAutomationFormFields: View {
             }
         } else {
             agentPicker
-            Divider().padding(.leading, 16)
             let workspaceBinding = Binding<String>(
                 get: { draft.effectiveWorkspacePath(workspacePaths: workspacePaths) },
                 set: { draft.workspacePath = $0 }
@@ -680,7 +677,7 @@ struct GaryxAutomationScheduleEditor: View {
     @State private var showsOnceDatePicker = false
 
     var body: some View {
-        VStack(spacing: 0) {
+        Group {
             GaryxFormMenuRow(title: "Repeat", value: draft.repeatOption.label) {
                 ForEach(GaryxAutomationRepeatOption.allCases) { option in
                     Button {
@@ -692,14 +689,12 @@ struct GaryxAutomationScheduleEditor: View {
             }
 
             if draft.repeatOption == .interval {
-                Divider().padding(.leading, 16)
                 GaryxFormRow(title: "Hours") {
                     GaryxAutomationIntervalStepper(hours: $draft.intervalHours)
                 }
             }
 
             if draft.repeatOption == .once {
-                Divider().padding(.leading, 16)
                 GaryxFormRow(title: "Date", onTap: { showsOnceDatePicker = true }) {
                     GaryxFormMenuValueLabel(value: draft.date.formatted(date: .abbreviated, time: .omitted))
                 }
@@ -711,14 +706,13 @@ struct GaryxAutomationScheduleEditor: View {
                     )
                     .labelsHidden()
                     .datePickerStyle(.graphical)
-                    .tint(.secondary)
+                    .tint(GaryxTheme.controlTint)
                     .padding(12)
                     .presentationCompactAdaptation(.popover)
                 }
             }
 
             if draft.repeatOption == .weekly {
-                Divider().padding(.leading, 16)
                 GaryxFormMenuRow(title: "Day", value: selectedWeekdayLabel) {
                     ForEach(GaryxAutomationWeekdayOption.allCases) { option in
                         Button {
@@ -731,7 +725,6 @@ struct GaryxAutomationScheduleEditor: View {
             }
 
             if draft.repeatOption == .monthly {
-                Divider().padding(.leading, 16)
                 GaryxFormMenuRow(title: "Date", value: "\(draft.monthDay)") {
                     ForEach(1...31, id: \.self) { day in
                         Button {
@@ -744,28 +737,17 @@ struct GaryxAutomationScheduleEditor: View {
             }
 
             if draft.repeatOption != .interval {
-                Divider().padding(.leading, 16)
                 GaryxFormRow(title: "Time") {
-                    Text(draft.timeString)
-                        .font(GaryxFont.body(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 12)
-                        .frame(height: 34)
-                        .background(Color.primary.opacity(0.055), in: Capsule())
+                    DatePicker(
+                        "Time",
+                        selection: $draft.time,
+                        displayedComponents: [.hourAndMinute]
+                    )
+                    .labelsHidden()
+                    .datePickerStyle(.compact)
+                    .tint(GaryxTheme.controlTint)
+                    .fixedSize()
                 }
-
-                DatePicker(
-                    "Time",
-                    selection: $draft.time,
-                    displayedComponents: [.hourAndMinute]
-                )
-                .datePickerStyle(.wheel)
-                .labelsHidden()
-                .frame(maxWidth: .infinity)
-                .frame(height: 150)
-                .clipped()
-                .padding(.horizontal, 22)
-                .padding(.bottom, 10)
             }
         }
     }

@@ -198,33 +198,32 @@ struct GaryxGatewaySetupView: View {
             onCancel: closeSettingsSheet,
             onSave: { Task { await saveGatewaySettings() } }
         ) {
-            VStack(alignment: .leading, spacing: 22) {
-                if let failureMessage {
+            if let failureMessage {
+                Section {
                     GaryxFormErrorText(text: failureMessage)
                 }
+            }
 
-                GaryxFormGroupedSection(title: "Gateway") {
-                    GaryxFormTextFieldRow(title: "Name", text: $draftGatewayLabel)
-                    Divider().padding(.leading, 16)
-                    GaryxFormTextFieldRow(
-                        title: "Gateway URL",
-                        text: $draftGatewayURL,
-                        keyboardType: .URL,
-                        textContentType: .URL,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true,
-                        wrapsValue: true
-                    )
-                    Divider().padding(.leading, 16)
-                    GaryxFormSecureFieldRow(
-                        title: "Gateway Token",
-                        text: $draftGatewayAuthToken,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
-                    )
-                    Divider().padding(.leading, 16)
-                    GaryxGatewayHeadersEditor(text: $draftGatewayHeaders)
-                }
+            GaryxFormGroupedSection(title: "Gateway") {
+                GaryxFormTextFieldRow(title: "Name", text: $draftGatewayLabel)
+                GaryxFormTextFieldRow(
+                    title: "Gateway URL",
+                    text: $draftGatewayURL,
+                    valuePlacement: .below,
+                    keyboardType: .URL,
+                    textContentType: .URL,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true,
+                    wrapsValue: true
+                )
+                GaryxFormSecureFieldRow(
+                    title: "Gateway Token",
+                    text: $draftGatewayAuthToken,
+                    valuePlacement: .below,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
+                GaryxGatewayHeadersEditor(text: $draftGatewayHeaders)
             }
         }
         .onAppear(perform: initializeDraft)
