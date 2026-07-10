@@ -20,6 +20,18 @@
   gateway chat interrupt endpoint so the bridge can interrupt or abort the
   active thread run.
 
+## Menus And Popovers
+
+- All dropdown menus, select popups, menu-like popovers, and icon menu
+  triggers render from the shared recipe in
+  `desktop/garyx-desktop/src/renderer/src/styles/menus.css` (extracted 1:1
+  from the ChatGPT/Codex Mac app via CDP-measured computed styles).
+- Per-surface CSS may set menu widths or add semantic variants, but must not
+  fork the surface: no local menu backgrounds, borders, radii, shadows, item
+  typography, or hover washes.
+- Menu shortcut hints use the shared `DropdownMenuShortcut` component, not
+  local spans.
+
 ## Workspace File Tree
 
 - The workspace file browser should read directories on demand.

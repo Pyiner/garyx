@@ -4,6 +4,11 @@ import { DropdownMenu as DropdownPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
 
+// Menu surface, row, shortcut, and separator styling is the shared desktop
+// design system recipe in styles/menus.css (extracted 1:1 from the
+// ChatGPT/Codex Mac app). Components here only add structure that CSS cannot
+// express per instance; do not reintroduce local colors/radii/shadows.
+
 function DropdownMenu(
   props: React.ComponentProps<typeof DropdownPrimitive.Root>,
 ) {
@@ -26,7 +31,7 @@ function DropdownMenuGroup(
 
 function DropdownMenuContent({
   className,
-  sideOffset = 6,
+  sideOffset = 2,
   ...props
 }: React.ComponentProps<typeof DropdownPrimitive.Content>) {
   return (
@@ -34,10 +39,7 @@ function DropdownMenuContent({
       <DropdownPrimitive.Content
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
-        className={cn(
-          "z-[var(--z-app-floating)] min-w-[10rem] overflow-hidden rounded-xl border border-[#e4e4e2] bg-popover p-1.5 text-popover-foreground shadow-lg shadow-black/8",
-          className,
-        )}
+        className={className}
         {...props}
       />
     </DropdownPrimitive.Portal>
@@ -57,11 +59,7 @@ function DropdownMenuItem({
     <DropdownPrimitive.Item
       data-slot="dropdown-menu-item"
       data-variant={variant}
-      className={cn(
-        "relative flex cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors data-[highlighted]:bg-[#f5f5f3] data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        inset && "pl-8",
-        className,
-      )}
+      className={cn(inset && "pl-8", className)}
       {...props}
     />
   );
@@ -76,10 +74,7 @@ function DropdownMenuCheckboxItem({
   return (
     <DropdownPrimitive.CheckboxItem
       data-slot="dropdown-menu-checkbox-item"
-      className={cn(
-        "relative flex cursor-default select-none items-center gap-2 rounded-lg py-1.5 pr-2 pl-7 text-sm outline-none transition-colors data-[highlighted]:bg-[#f5f5f3] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-        className,
-      )}
+      className={cn("pl-7", className)}
       checked={checked}
       {...props}
     >
@@ -116,7 +111,20 @@ function DropdownMenuSeparator({
   return (
     <DropdownPrimitive.Separator
       data-slot="dropdown-menu-separator"
-      className={cn("-mx-1 my-1 h-px bg-border/60", className)}
+      className={className}
+      {...props}
+    />
+  );
+}
+
+function DropdownMenuShortcut({
+  className,
+  ...props
+}: React.ComponentProps<"span">) {
+  return (
+    <span
+      data-slot="dropdown-menu-shortcut"
+      className={className}
       {...props}
     />
   );
@@ -139,15 +147,11 @@ function DropdownMenuSubTrigger({
   return (
     <DropdownPrimitive.SubTrigger
       data-slot="dropdown-menu-sub-trigger"
-      className={cn(
-        "flex cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors data-[highlighted]:bg-[#f5f5f3] data-[state=open]:bg-[#f5f5f3] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
-        inset && "pl-8",
-        className,
-      )}
+      className={cn(inset && "pl-8", className)}
       {...props}
     >
       {children}
-      <ChevronRightIcon className="ml-auto size-3.5 opacity-60" />
+      <ChevronRightIcon aria-hidden />
     </DropdownPrimitive.SubTrigger>
   );
 }
@@ -160,10 +164,7 @@ function DropdownMenuSubContent({
     <DropdownPrimitive.Portal>
       <DropdownPrimitive.SubContent
         data-slot="dropdown-menu-sub-content"
-        className={cn(
-          "z-[var(--z-app-floating)] min-w-[8rem] overflow-hidden rounded-xl border border-[#e4e4e2] bg-popover p-1.5 text-popover-foreground shadow-lg shadow-black/8",
-          className,
-        )}
+        className={className}
         {...props}
       />
     </DropdownPrimitive.Portal>
@@ -179,6 +180,7 @@ export {
   DropdownMenuCheckboxItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,

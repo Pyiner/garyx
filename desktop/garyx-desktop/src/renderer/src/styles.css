@@ -4,6 +4,7 @@
 @import "./styles/theme.css";
 @import "./styles/shadcn-chat.css";
 @import "./styles/base.css";
+@import "./styles/menus.css";
 @import "./styles/gateway-setup.css";
 @import "./styles/sidebar.css";
 @import "./styles/workspace-rails.css";

@@ -301,7 +301,7 @@ export function AutomationListPage({
                         <MoreDotsIcon size={14} />
                       </button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" sideOffset={4}>
+                    <DropdownMenuContent align="end">
                       <DropdownMenuItem
                         disabled={isDeleting}
                         onSelect={() => onDelete(automation)}

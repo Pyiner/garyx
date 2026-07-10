@@ -10,13 +10,11 @@ import { cn } from "@/lib/utils";
 
 function FloatingActionMenuContent({
   className,
-  sideOffset = 6,
   ...props
 }: React.ComponentProps<typeof DropdownMenuContent>) {
   return (
     <DropdownMenuContent
       className={cn("floating-action-menu", className)}
-      sideOffset={sideOffset}
       {...props}
     />
   );

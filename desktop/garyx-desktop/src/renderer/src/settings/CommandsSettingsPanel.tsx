@@ -235,7 +235,7 @@ export function CommandsSettingsPanel({
                               <MoreDotsIcon size={14} />
                             </button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" sideOffset={4}>
+                          <DropdownMenuContent align="end">
                             <DropdownMenuItem
                               disabled={commandsSaving}
                               onSelect={() => { void handleDeleteCommandClick(command.name); }}

@@ -1063,7 +1063,7 @@ export function GatewaySettingsPanel({
                         <MoreDotsIcon size={14} />
                       </button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" sideOffset={4}>
+                    <DropdownMenuContent align="end">
                       <DropdownMenuItem
                         onSelect={() => {
                           if (

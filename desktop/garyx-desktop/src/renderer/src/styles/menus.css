@@ -1,0 +1,204 @@
+/* Shared floating menu / popover design system.
+ *
+ * Extracted 1:1 from the ChatGPT/Codex Mac app via CDP-measured computed
+ * styles (light mode). Every dropdown menu, select popup, and menu-like
+ * popover in the desktop app renders from this single recipe; per-surface
+ * CSS may only set widths or add semantic variants, never fork the surface.
+ *
+ * Reference measurements (Codex app, @2x, root 16px, no zoom):
+ *   trigger    28×28, radius 10, icon 18, color fg@49.5%,
+ *              hover/open wash fg@5.5%, disabled opacity 0.4
+ *   surface    white @90% + 8px backdrop blur, radius 15, padding 4,
+ *              hairline ring 0.5px fg@8% + shadow 0 8px 16px -4px black@12%
+ *   item       13px/445, line-height 1.4286, radius 12.5, padding 5px 8px,
+ *              icon 16 currentColor @75% opacity (100% highlighted),
+ *              highlight wash fg@5.5%, icon↔label gap 6px
+ *   shortcut   12px fg@49.5%, right-aligned, ≥8px gap from label
+ *   separator  1px line fg@8%, inset 8px horizontal, 4px vertical
+ */
+
+:root {
+  --menu-surface-bg: rgba(255, 255, 255, 0.9);
+  --menu-surface-blur: 8px;
+  --menu-surface-radius: var(--radius-xl);
+  --menu-surface-padding: 4px;
+  --menu-surface-shadow:
+    0 0 0 0.5px var(--color-token-border),
+    0 8px 16px -4px rgba(0, 0, 0, 0.12);
+  --menu-item-radius: var(--radius-lg);
+  --menu-item-padding-y: 5px;
+  --menu-item-padding-x: 8px;
+  --menu-item-font-size: var(--text-base);
+  --menu-item-font-weight: 445;
+  --menu-item-line-height: 1.4286;
+  --menu-item-gap: 6px;
+  --menu-item-hover-bg: var(--color-token-row-hover);
+  --menu-item-icon-size: 16px;
+  --menu-item-icon-opacity: 0.75;
+  --menu-shortcut-color: var(--color-token-description-foreground);
+  --menu-separator-color: var(--color-token-border);
+  --menu-trigger-size: 28px;
+  --menu-trigger-radius: var(--radius-md);
+  --menu-trigger-color: var(--color-token-description-foreground);
+  --menu-trigger-hover-bg: var(--color-token-row-hover);
+}
+
+@layer components {
+  /* ── Icon-only menu trigger (three-dot entries and friends) ── */
+
+  .icon-menu-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: var(--menu-trigger-size);
+    height: var(--menu-trigger-size);
+    padding: 0;
+    border: 0;
+    border-radius: var(--menu-trigger-radius);
+    background: transparent;
+    box-shadow: none;
+    color: var(--menu-trigger-color);
+    cursor: default;
+  }
+
+  .icon-menu-trigger svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .icon-menu-trigger:hover:not(:disabled),
+  .icon-menu-trigger[data-state='open'] {
+    background: var(--menu-trigger-hover-bg);
+  }
+
+  .icon-menu-trigger:disabled {
+    opacity: 0.4;
+  }
+
+  /* ── Menu surface ── */
+
+  [data-slot='dropdown-menu-content'],
+  [data-slot='dropdown-menu-sub-content'] {
+    z-index: var(--z-app-floating);
+    min-width: 10rem;
+    max-height: var(--radix-dropdown-menu-content-available-height);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: var(--menu-surface-padding);
+    border-radius: var(--menu-surface-radius);
+    background: var(--menu-surface-bg);
+    box-shadow: var(--menu-surface-shadow);
+    backdrop-filter: blur(var(--menu-surface-blur));
+    color: var(--color-token-text-primary);
+  }
+
+  [data-slot='select-content'] {
+    z-index: var(--z-app-floating);
+    border-radius: var(--menu-surface-radius);
+    background: var(--menu-surface-bg);
+    box-shadow: var(--menu-surface-shadow);
+    backdrop-filter: blur(var(--menu-surface-blur));
+    color: var(--color-token-text-primary);
+  }
+
+  [data-slot='select-content'] [data-slot='select-viewport'] {
+    padding: var(--menu-surface-padding);
+  }
+
+  /* ── Menu rows ── */
+
+  [data-slot='dropdown-menu-item'],
+  [data-slot='dropdown-menu-checkbox-item'],
+  [data-slot='dropdown-menu-sub-trigger'],
+  [data-slot='select-item'] {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--menu-item-gap);
+    padding: var(--menu-item-padding-y) var(--menu-item-padding-x);
+    border-radius: var(--menu-item-radius);
+    color: var(--color-token-text-primary);
+    font-size: var(--menu-item-font-size);
+    font-weight: var(--menu-item-font-weight);
+    line-height: var(--menu-item-line-height);
+    cursor: default;
+    user-select: none;
+    outline: none;
+  }
+
+  [data-slot='dropdown-menu-item'][data-highlighted],
+  [data-slot='dropdown-menu-checkbox-item'][data-highlighted],
+  [data-slot='dropdown-menu-sub-trigger'][data-highlighted],
+  [data-slot='dropdown-menu-sub-trigger'][data-state='open'],
+  [data-slot='select-item'][data-highlighted] {
+    background: var(--menu-item-hover-bg);
+  }
+
+  [data-slot='dropdown-menu-item'][data-disabled],
+  [data-slot='dropdown-menu-checkbox-item'][data-disabled],
+  [data-slot='dropdown-menu-sub-trigger'][data-disabled],
+  [data-slot='select-item'][data-disabled] {
+    pointer-events: none;
+    opacity: 0.4;
+  }
+
+  [data-slot='dropdown-menu-item'] svg,
+  [data-slot='dropdown-menu-checkbox-item'] svg,
+  [data-slot='dropdown-menu-sub-trigger'] svg,
+  [data-slot='select-item'] svg {
+    pointer-events: none;
+    flex-shrink: 0;
+    opacity: var(--menu-item-icon-opacity);
+  }
+
+  [data-slot='dropdown-menu-item'] svg:not([class*='size-']),
+  [data-slot='dropdown-menu-checkbox-item'] svg:not([class*='size-']),
+  [data-slot='dropdown-menu-sub-trigger'] svg:not([class*='size-']),
+  [data-slot='select-item'] svg:not([class*='size-']) {
+    width: var(--menu-item-icon-size);
+    height: var(--menu-item-icon-size);
+  }
+
+  [data-slot='dropdown-menu-item'][data-highlighted] svg,
+  [data-slot='dropdown-menu-checkbox-item'][data-highlighted] svg,
+  [data-slot='dropdown-menu-sub-trigger'][data-highlighted] svg,
+  [data-slot='dropdown-menu-sub-trigger'][data-state='open'] svg,
+  [data-slot='select-item'][data-highlighted] svg {
+    opacity: 1;
+  }
+
+  [data-slot='dropdown-menu-item'][data-variant='destructive'] {
+    color: var(--color-token-error-foreground);
+  }
+
+  [data-slot='dropdown-menu-item'][data-variant='destructive'][data-highlighted] {
+    background: var(--color-token-bg-error);
+    color: var(--color-token-error-foreground);
+  }
+
+  /* ── Shortcut hint ── */
+
+  [data-slot='dropdown-menu-shortcut'] {
+    margin-left: auto;
+    padding-left: 8px;
+    color: var(--menu-shortcut-color);
+    font-size: var(--text-sm);
+    white-space: nowrap;
+  }
+
+  /* ── Separator ── */
+
+  [data-slot='dropdown-menu-separator'] {
+    height: 1px;
+    margin: 4px var(--menu-item-padding-x);
+    background: var(--menu-separator-color);
+  }
+
+  /* ── Submenu chevron ── */
+
+  [data-slot='dropdown-menu-sub-trigger'] > svg:last-child {
+    margin-left: auto;
+    color: var(--menu-shortcut-color);
+  }
+}

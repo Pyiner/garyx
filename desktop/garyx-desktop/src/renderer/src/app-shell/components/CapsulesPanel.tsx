@@ -227,7 +227,7 @@ function CapsulePreviewPage({
                 <MoreHorizontal size={15} />
               </button>
             </DropdownMenuTrigger>
-            <FloatingActionMenuContent align="end" sideOffset={4}>
+            <FloatingActionMenuContent align="end">
               {sourceThreadId ? (
                 <FloatingActionMenuItem onSelect={onOpenSourceThread}>
                   <MessageSquare aria-hidden />

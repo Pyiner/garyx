@@ -649,16 +649,15 @@
 
 .gateway-switcher-popover {
   /* Hug the identity bar below: same width as the trigger, so the popover
-     and the bar read as one column even when the sidebar is resized. */
+     and the bar read as one column even when the sidebar is resized.
+     Surface styling is the shared menu recipe (styles/menus.css). */
   width: var(--radix-popover-trigger-width);
   min-width: 208px;
   padding: 8px;
-  border: 1px solid #ececea;
-  border-radius: 16px;
-  background: var(--color-token-bg-primary);
-  box-shadow:
-    0 24px 56px -16px rgba(28, 28, 26, 0.24),
-    0 4px 14px rgba(28, 28, 26, 0.07);
+  border-radius: var(--menu-surface-radius);
+  background: var(--menu-surface-bg);
+  box-shadow: var(--menu-surface-shadow);
+  backdrop-filter: blur(var(--menu-surface-blur));
 }
 
 .gateway-switcher-list {

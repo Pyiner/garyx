@@ -9,6 +9,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from './components/ui/dropdown-menu';
 import {
@@ -164,7 +165,7 @@ export function ConversationHeaderTitle({
                 <DropdownMenuTrigger asChild>
                   <button
                     aria-label={t('Thread actions')}
-                    className="conversation-title-menu-trigger"
+                    className="icon-menu-trigger"
                     title={t('Thread actions')}
                     type="button"
                   >
@@ -174,28 +175,20 @@ export function ConversationHeaderTitle({
                 <DropdownMenuContent
                   align="start"
                   className="thread-title-menu-content"
-                  sideOffset={8}
                 >
-                  <DropdownMenuItem
-                    className="thread-title-menu-item"
-                    onSelect={onTogglePinnedThread}
-                  >
+                  <DropdownMenuItem onSelect={onTogglePinnedThread}>
                     <PinIcon aria-hidden />
                     <span>
                       {isThreadPinned ? t('Unpin conversation') : t('Pin conversation')}
                     </span>
-                    <span className="thread-title-menu-shortcut">⌥⌘P</span>
+                    <DropdownMenuShortcut>⌥⌘P</DropdownMenuShortcut>
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="thread-title-menu-item"
-                    onSelect={onBeginEdit}
-                  >
+                  <DropdownMenuItem onSelect={onBeginEdit}>
                     <Pencil aria-hidden />
                     <span>{t('Rename conversation')}</span>
-                    <span className="thread-title-menu-shortcut">⌥⌘R</span>
+                    <DropdownMenuShortcut>⌥⌘R</DropdownMenuShortcut>
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    className="thread-title-menu-item"
                     disabled={archiveThreadDisabled}
                     onSelect={(event) => {
                       if (!archiveConfirming) {
@@ -210,7 +203,7 @@ export function ConversationHeaderTitle({
                   >
                     <Archive aria-hidden />
                     <span>{archiveConfirming ? t('Confirm') : t('Archive conversation')}</span>
-                    <span className="thread-title-menu-shortcut">⇧⌘A</span>
+                    <DropdownMenuShortcut>⇧⌘A</DropdownMenuShortcut>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

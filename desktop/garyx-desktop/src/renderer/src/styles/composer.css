@@ -648,36 +648,11 @@
   opacity: 0.5;
 }
 
+/* Row sizing, icon treatment, and the destructive variant come from the
+   shared menu recipe in styles/menus.css; only the width caps are local. */
 .floating-action-menu {
   min-width: 10rem;
   max-width: min(220px, calc(100vw - 32px));
-}
-
-.floating-action-menu-row {
-  min-height: 34px;
-  color: var(--color-token-text-primary);
-  font-weight: var(--font-weight-normal);
-  line-height: 1;
-}
-
-.floating-action-menu-row > svg:first-child {
-  color: rgba(13, 13, 13, 0.52);
-}
-
-.floating-action-menu-row--destructive,
-[data-slot="dropdown-menu-item"][data-variant="destructive"] {
-  color: var(--color-token-error-foreground);
-}
-
-.floating-action-menu-row--destructive > svg:first-child,
-[data-slot="dropdown-menu-item"][data-variant="destructive"] > svg:first-child {
-  color: currentColor;
-}
-
-.floating-action-menu-row--destructive[data-highlighted],
-[data-slot="dropdown-menu-item"][data-variant="destructive"][data-highlighted] {
-  background: var(--color-token-bg-error);
-  color: var(--color-token-error-foreground);
 }
 
 .agent-option-avatar {

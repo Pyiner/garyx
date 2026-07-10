@@ -140,79 +140,11 @@
   white-space: nowrap;
 }
 
-.conversation-title-menu-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  box-shadow: none;
-  color: color-mix(in srgb, var(--color-token-text-primary) 50%, transparent);
-  cursor: pointer;
-}
-
-.conversation-title-menu-trigger svg {
-  width: 16px;
-  height: 16px;
-}
-
-.conversation-title-menu-trigger:hover,
-.conversation-title-menu-trigger[data-state="open"] {
-  background: rgba(15, 23, 42, 0.045);
-  box-shadow: none;
-  color: color-mix(in srgb, var(--color-token-text-primary) 72%, transparent);
-}
-
-.conversation-title-menu-trigger:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
+/* The title three-dot trigger and its menu render from the shared recipe in
+   styles/menus.css (.icon-menu-trigger plus the dropdown data-slot rules).
+   Only the menu width is a per-surface choice, matching the Codex task menu. */
 .thread-title-menu-content {
-  width: min(224px, calc(100vw - 32px));
-  padding: 4px;
-  border: 1px solid rgba(26, 28, 31, 0.06);
-  border-radius: 13px;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow:
-    0 12px 32px rgba(0, 0, 0, 0.12),
-    0 2px 8px rgba(0, 0, 0, 0.07);
-}
-
-.thread-title-menu-item {
-  min-height: 32px;
-  gap: 8px;
-  padding: 0 8px;
-  border-radius: 9px;
-  color: var(--color-token-text-primary);
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-medium);
-  line-height: 1;
-}
-
-.thread-title-menu-item svg {
-  width: 15px;
-  height: 15px;
-  color: color-mix(in srgb, var(--color-token-text-primary) 62%, transparent);
-  stroke-width: 2;
-}
-
-.thread-title-menu-item[data-highlighted] {
-  background: color-mix(in srgb, var(--color-token-text-primary) 6%, transparent);
-}
-
-.thread-title-menu-shortcut {
-  margin-left: auto;
-  color: color-mix(in srgb, var(--color-token-text-primary) 42%, transparent);
-  font-size: var(--text-xs);
-  font-weight: var(--font-weight-normal);
-  letter-spacing: 0;
-  white-space: nowrap;
+  min-width: min(220px, calc(100vw - 32px));
 }
 
 .conversation-title-input {

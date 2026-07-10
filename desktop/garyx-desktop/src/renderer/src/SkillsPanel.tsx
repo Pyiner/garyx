@@ -757,7 +757,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                           <MoreDotsIcon size={14} />
                         </button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" sideOffset={4}>
+                      <DropdownMenuContent align="end">
                         <DropdownMenuItem
                           disabled={busy || creating || Boolean(editorBusy)}
                           onSelect={() => {

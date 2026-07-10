@@ -192,7 +192,7 @@ function AutomationThreadPicker({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className="max-h-[340px] w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto p-1.5"
+        className="max-h-[340px] w-[var(--radix-dropdown-menu-trigger-width)]"
       >
         <DropdownMenuLabel>{t('Recent Threads')}</DropdownMenuLabel>
         {missingThreadId ? (

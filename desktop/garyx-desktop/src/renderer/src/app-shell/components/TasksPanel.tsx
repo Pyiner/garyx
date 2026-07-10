@@ -621,7 +621,7 @@ export function TasksPanel({
             <MoreDotsIcon size={14} />
           </button>
         </DropdownMenuTrigger>
-        <FloatingActionMenuContent align="end" sideOffset={4}>
+        <FloatingActionMenuContent align="end">
           <DropdownMenuGroup>
             {!task.assignee ? (
               agents.length ? (
