@@ -7,7 +7,10 @@ import { createCodePlugin } from '@streamdown/code';
 import { Streamdown } from 'streamdown';
 
 import { prepareMessageMarkdown } from './message-markdown-preprocess.ts';
-import { CHAT_MESSAGE_REMARK_PLUGINS } from './message-rich-text-plugins.ts';
+import {
+  CHAT_MESSAGE_REHYPE_PLUGINS,
+  CHAT_MESSAGE_REMARK_PLUGINS,
+} from './message-rich-text-plugins.ts';
 
 const garyxCodePlugin = createCodePlugin({
   themes: ['github-light', 'github-dark'],
@@ -22,7 +25,7 @@ const STREAMDOWN_CONTROLS = {
   table: false,
 };
 
-function renderChatMarkdown({ text, tone = 'default' }) {
+function renderChatMarkdown({ components, text, tone = 'default' }) {
   const prepared = prepareMessageMarkdown(text, {
     surfaceCustomXmlTags: tone !== 'assistant',
   });
@@ -37,12 +40,14 @@ function renderChatMarkdown({ text, tone = 'default' }) {
       React.createElement(
         Streamdown,
         {
+          components,
           controls: STREAMDOWN_CONTROLS,
           dir: 'auto',
           lineNumbers: false,
           mode: 'streaming',
           normalizeHtmlIndentation: true,
           plugins: { cjk, code: garyxCodePlugin },
+          rehypePlugins: CHAT_MESSAGE_REHYPE_PLUGINS,
           remarkPlugins: CHAT_MESSAGE_REMARK_PLUGINS,
         },
         prepared,
@@ -50,6 +55,11 @@ function renderChatMarkdown({ text, tone = 'default' }) {
     ),
   );
 }
+
+const localImageComponents = {
+  'garyx-local-image': ({ alt, path }) =>
+    React.createElement('span', { 'data-local-image-path': path }, alt),
+};
 
 function brCount(html) {
   return (html.match(/<br\/?>/g) || []).length;
@@ -123,4 +133,54 @@ test('GFM tables still render after preserving Streamdown default remark plugins
   assert.match(html, /<table\b/);
   assert.match(html, /<td\b[^>]*>alpha<\/td>/);
   assert.equal(brCount(html), 0);
+});
+
+test('absolute-path Markdown images route through the local image renderer', () => {
+  const html = renderChatMarkdown({
+    components: localImageComponents,
+    text: '![Pairing QR](/Users/test/Applications/pairing-qr.png)',
+  });
+
+  assert.match(
+    html,
+    /<span data-local-image-path="\/Users\/test\/Applications\/pairing-qr\.png">Pairing QR<\/span>/,
+  );
+  assert.doesNotMatch(html, /<img\b[^>]*src="\/Users\/test/);
+});
+
+test('encoded absolute image paths are decoded before local preview loading', () => {
+  const html = renderChatMarkdown({
+    components: localImageComponents,
+    text: '![Pairing QR](/Users/test/My%20Images/pairing-qr.png)',
+  });
+
+  assert.match(html, /data-local-image-path="\/Users\/test\/My Images\/pairing-qr\.png"/);
+});
+
+test('remote Markdown images retain Streamdown native image rendering', () => {
+  const html = renderChatMarkdown({
+    components: localImageComponents,
+    text: '![Remote image](https://example.com/image.png)',
+  });
+
+  assert.match(html, /data-streamdown="image-wrapper"/);
+  assert.match(html, /<img\b[^>]*src="https:\/\/example\.com\/image\.png"/);
+  assert.doesNotMatch(html, /data-local-image-path/);
+});
+
+test('local image Markdown inside code remains code', () => {
+  const syntax = '![Pairing QR](/Users/test/Applications/pairing-qr.png)';
+  const inline = renderChatMarkdown({
+    components: localImageComponents,
+    text: `\`${syntax}\``,
+  });
+  const fenced = renderChatMarkdown({
+    components: localImageComponents,
+    text: `\`\`\`md\n${syntax}\n\`\`\``,
+  });
+
+  assert.match(inline, /data-streamdown="inline-code"/);
+  assert.match(fenced, /data-streamdown="code-block"/);
+  assert.doesNotMatch(inline, /data-local-image-path/);
+  assert.doesNotMatch(fenced, /data-local-image-path/);
 });

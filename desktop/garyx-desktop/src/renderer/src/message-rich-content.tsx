@@ -1,4 +1,11 @@
-import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { FileText } from "lucide-react";
 
 import type {
@@ -24,6 +31,7 @@ import {
 import {
   RichMessageText,
   type LocalFileLinkHandler,
+  type LocalMessageImageRenderer,
 } from "./message-rich-text";
 import { useI18n, type Translate } from "./i18n";
 import {
@@ -480,9 +488,9 @@ export function MessagePathImageAttachmentFrame({
   }
   if (!preview) {
     return (
-      <div aria-label={t("Loading")} className="message-image-loading" role="status">
+      <span aria-label={t("Loading")} className="message-image-loading" role="status">
         <span aria-hidden="true" className="message-image-spinner" />
-      </div>
+      </span>
     );
   }
   return (
@@ -527,6 +535,30 @@ export const RichMessageContent = memo(function RichMessageContent({
     [altPrefix, content],
   );
   const tone = useMemo(() => resolveMessageTone(altPrefix), [altPrefix]);
+  const renderLocalMarkdownImage = useCallback<LocalMessageImageRenderer>(
+    ({ alt, path }) => {
+      const label = alt.trim() || path.split("/").pop() || path;
+      const fallback = (
+        <span className="message-local-image-fallback" title={path}>
+          {label}
+        </span>
+      );
+      if (!loadImagePreview) {
+        return fallback;
+      }
+      return (
+        <MessagePathImageAttachmentFrame
+          alt={label}
+          compact={false}
+          fallback={fallback}
+          imageKey={`markdown-image:${path}`}
+          loadImagePreview={loadImagePreview}
+          path={path}
+        />
+      );
+    },
+    [loadImagePreview],
+  );
   const renderableSegments = useMemo<TranscriptSegment[]>(
     () =>
       segments.length
@@ -566,6 +598,7 @@ export const RichMessageContent = memo(function RichMessageContent({
         <RichMessageText
           key={segment.key}
           onLocalFileLinkClick={onLocalFileLinkClick}
+          renderLocalImage={renderLocalMarkdownImage}
           text={segment.text}
           tone={tone}
         />

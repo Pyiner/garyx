@@ -293,6 +293,13 @@
   );
 }
 
+.message-local-image-fallback {
+  display: inline-block;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-sm);
+  font-style: italic;
+}
+
 .message-rich pre {
   margin: 0;
   padding: 8px;

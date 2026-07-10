@@ -1,4 +1,10 @@
-import { memo, useMemo, type ComponentProps, type MouseEvent } from 'react';
+import {
+  memo,
+  useMemo,
+  type ComponentProps,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
 import { cjk } from '@streamdown/cjk';
 import { createCodePlugin } from '@streamdown/code';
 import {
@@ -8,12 +14,20 @@ import {
 } from 'streamdown';
 
 import { useI18n } from './i18n';
+import { localFilePathFromMessageLinkHref } from './message-local-images';
 import { prepareMessageMarkdown } from './message-markdown-preprocess';
-import { CHAT_MESSAGE_REMARK_PLUGINS } from './message-rich-text-plugins';
+import {
+  CHAT_MESSAGE_REHYPE_PLUGINS,
+  CHAT_MESSAGE_REMARK_PLUGINS,
+} from './message-rich-text-plugins';
 
 type RichMessageTone = 'default' | 'assistant';
 
 export type LocalFileLinkHandler = (absolutePath: string) => void;
+export type LocalMessageImageRenderer = (image: {
+  alt: string;
+  path: string;
+}) => ReactNode;
 
 const garyxCodePlugin = createCodePlugin({
   themes: ['github-light', 'github-dark'],
@@ -28,34 +42,7 @@ const STREAMDOWN_CONTROLS = {
   table: false,
 } as const;
 
-function normalizeLocalFilePath(target: string): string | null {
-  const trimmed = target.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const withoutQuery = trimmed.split('?')[0] || '';
-  const withoutFragment = withoutQuery.split('#')[0] || '';
-  const withoutLineSuffix = withoutFragment.replace(/:\d+(?::\d+)?$/, '');
-  return withoutLineSuffix.startsWith('/') ? withoutLineSuffix : null;
-}
-
-export function localFilePathFromMessageLinkHref(target: string): string | null {
-  if (!target) {
-    return null;
-  }
-  if (target.startsWith('/')) {
-    return normalizeLocalFilePath(target);
-  }
-  if (/^file:\/\//i.test(target)) {
-    try {
-      const url = new URL(target);
-      return normalizeLocalFilePath(decodeURIComponent(url.pathname || ''));
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
+export { localFilePathFromMessageLinkHref } from './message-local-images';
 
 function normalizeMessageLinkHref(target: string): string | null {
   if (!target) {
@@ -112,11 +99,13 @@ export const RichMessageText = memo(function RichMessageText({
   text,
   tone = 'default',
   onLocalFileLinkClick,
+  renderLocalImage,
   surfaceCustomXmlTags = true,
 }: {
   text: string;
   tone?: RichMessageTone;
   onLocalFileLinkClick?: LocalFileLinkHandler;
+  renderLocalImage?: LocalMessageImageRenderer;
   surfaceCustomXmlTags?: boolean;
 }) {
   const translations = useStreamdownTranslations();
@@ -163,8 +152,23 @@ export const RichMessageText = memo(function RichMessageText({
           </a>
         );
       },
+      'garyx-local-image'({ alt, path }) {
+        const localPath = typeof path === 'string' ? path : '';
+        const label = typeof alt === 'string' ? alt : '';
+        if (!localPath) {
+          return null;
+        }
+        if (!renderLocalImage) {
+          return (
+            <span className="message-local-image-fallback" title={localPath}>
+              {label || localPath.split('/').pop() || localPath}
+            </span>
+          );
+        }
+        return <>{renderLocalImage({ alt: label, path: localPath })}</>;
+      },
     }),
-    [onLocalFileLinkClick],
+    [onLocalFileLinkClick, renderLocalImage],
   );
 
   return (
@@ -177,6 +181,7 @@ export const RichMessageText = memo(function RichMessageText({
         mode="streaming"
         normalizeHtmlIndentation
         plugins={{ cjk, code: garyxCodePlugin }}
+        rehypePlugins={CHAT_MESSAGE_REHYPE_PLUGINS}
         remarkPlugins={CHAT_MESSAGE_REMARK_PLUGINS}
         translations={translations}
         urlTransform={streamdownUrlTransform}
