@@ -119,19 +119,12 @@
   white-space: nowrap;
 }
 
+/* Surface and row styling come from the shared menu recipe
+   (styles/menus.css); only widths are local. */
 .tasks-bot-filter-content {
   width: 168px;
   min-width: 168px;
   max-width: min(168px, calc(100vw - 24px));
-  border-radius: 10px;
-}
-
-.tasks-bot-filter-content [data-slot="select-item"] {
-  min-height: 32px;
-  padding-top: 6px;
-  padding-bottom: 6px;
-  border-radius: 7px;
-  font-weight: 400;
 }
 
 .tasks-segmented {
@@ -342,41 +335,24 @@
   white-space: nowrap;
 }
 
+/* Surface, row, and label styling come from the shared menu recipe
+   (styles/menus.css); only widths, max-heights, and layout are local. */
 .tasks-workspace-select-content {
   width: var(--radix-select-trigger-width);
   min-width: var(--radix-select-trigger-width);
   max-width: min(420px, calc(100vw - 48px));
   max-height: min(var(--radix-select-content-available-height), 320px);
-  border-radius: 10px;
 }
 
 .tasks-workspace-mode-content {
   width: max-content;
   min-width: var(--radix-select-trigger-width);
   max-width: 220px;
-  border-radius: 10px;
 }
 
 .tasks-workspace-select-content [data-slot="select-label"] {
   display: flex;
   align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 6px 8px;
-  color: var(--color-token-description-foreground);
-  font-size: var(--text-xs-plus);
-  font-weight: var(--font-weight-normal);
-}
-
-.tasks-workspace-select-content [data-slot="select-item"],
-.tasks-workspace-mode-content [data-slot="select-item"] {
-  min-height: 32px;
-  border-radius: 7px;
-  font-size: var(--text-sm);
-  font-weight: 400;
-}
-
-.tasks-workspace-select-content [data-slot="select-item"] {
   gap: 7px;
 }
 

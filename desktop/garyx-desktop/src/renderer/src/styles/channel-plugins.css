@@ -431,21 +431,13 @@ button.new-thread-resume-link:hover {
   background: var(--color-token-row-hover);
 }
 
+/* Surface, row, label, and separator styling come from the shared menu
+   recipe (styles/menus.css); only widths, heights, and layout are local. */
 [data-slot="select-content"].new-thread-workspace-menu,
 [data-slot="select-content"].new-thread-mode-menu {
   height: auto !important;
   max-height: 254px !important;
   overflow-y: auto;
-  padding: 4px;
-  border: 0;
-  border-radius: 15px;
-  background: rgba(255, 255, 255, 0.9);
-  color: var(--color-token-text-primary);
-  box-shadow:
-    0 0 0 0.5px var(--color-token-border),
-    0 8px 16px -4px rgba(0, 0, 0, 0.12);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  backdrop-filter: blur(16px) saturate(140%);
 }
 
 [data-slot="select-content"].new-thread-workspace-menu {
@@ -473,23 +465,6 @@ button.new-thread-resume-link:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 29px;
-  padding: 0 10px;
-  color: rgba(26, 28, 31, 0.5);
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 29px;
-}
-
-[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"],
-[data-slot="select-content"].new-thread-mode-menu [data-slot="select-item"] {
-  min-height: 29px;
-  gap: 8px;
-  padding: 0 32px 0 10px;
-  border-radius: 12.5px;
-  color: var(--color-token-text-primary);
-  font-size: 13px;
-  line-height: 29px;
 }
 
 [data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"] [data-slot="select-item-indicator"],
@@ -510,26 +485,6 @@ button.new-thread-resume-link:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"] svg,
-[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-label"] svg,
-[data-slot="select-content"].new-thread-mode-menu [data-slot="select-item"] svg,
-[data-slot="select-content"].new-thread-mode-menu [data-slot="select-label"] svg {
-  width: 16px;
-  height: 16px;
-}
-
-[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"][data-highlighted],
-[data-slot="select-content"].new-thread-mode-menu [data-slot="select-item"][data-highlighted] {
-  background: var(--color-token-row-hover);
-  color: var(--color-token-text-primary);
-}
-
-[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-separator"],
-[data-slot="select-content"].new-thread-mode-menu [data-slot="select-separator"] {
-  margin: 4px 8px;
-  background: rgba(26, 28, 31, 0.08);
 }
 
 /* ── Tasks: executor ── */

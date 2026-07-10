@@ -35,6 +35,13 @@ import type {
   DesktopWorkspaceMode,
 } from "@shared/contracts";
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "../../components/ui/dropdown-menu";
 import { WorkspaceFilePreview } from "../../workspace-file-preview";
 import { Package } from "lucide-react";
 import { PanelIcon } from "../icons";
@@ -402,7 +409,6 @@ export function ThreadSideToolsPanel({
   const [fileDirectoryCollapsed, setFileDirectoryCollapsed] = useState(false);
   const [browserMenuObstructionBottom, setBrowserMenuObstructionBottom] =
     useState<number | null>(null);
-  const addToolShellRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const previewDirectoryCollapseKeyRef = useRef<string | null>(null);
   const filePathCopiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -526,32 +532,6 @@ export function ThreadSideToolsPanel({
     }
     previewDirectoryCollapseKeyRef.current = previewDirectoryCollapseKey;
   }, [previewDirectoryCollapseKey]);
-
-  useEffect(() => {
-    if (!menuOpen) {
-      return;
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (target instanceof Node && addToolShellRef.current?.contains(target)) {
-        return;
-      }
-      setMenuOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setMenuOpen(false);
-      }
-    };
-
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown, true);
-    };
-  }, [menuOpen]);
 
   useEffect(() => {
     if (!menuOpen || activeTabKey !== "browser") {
@@ -759,37 +739,39 @@ export function ThreadSideToolsPanel({
             })}
           </div>
           {hasWorkspace ? (
-            <div className="side-tools-add-shell" ref={addToolShellRef}>
-              <button
-                aria-expanded={menuOpen}
-                aria-haspopup="menu"
-                className="codex-icon-button side-tools-add"
-                onClick={() => setMenuOpen((current) => !current)}
-                title={t("Add tool")}
-                type="button"
-              >
-                <Plus aria-hidden />
-              </button>
-              {menuOpen ? (
-                <div className="side-tools-menu" ref={menuRef} role="menu">
+            <div className="side-tools-add-shell">
+              <DropdownMenu modal={false} onOpenChange={setMenuOpen} open={menuOpen}>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="codex-icon-button side-tools-add"
+                    title={t("Add tool")}
+                    type="button"
+                  >
+                    <Plus aria-hidden />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="start"
+                  className="min-w-[190px]"
+                  ref={menuRef}
+                >
                   {tools.map((tool) => {
                     const Icon = tool.icon;
                     return (
-                      <button
-                        className="side-tools-menu-item"
+                      <DropdownMenuItem
                         key={tool.id}
-                        onClick={() => openTool(tool.id)}
-                        role="menuitem"
-                        type="button"
+                        onSelect={() => openTool(tool.id)}
                       >
                         <Icon aria-hidden size={15} strokeWidth={1.8} />
                         <span>{tool.label}</span>
-                        {tool.shortcut ? <kbd>{tool.shortcut}</kbd> : null}
-                      </button>
+                        {tool.shortcut ? (
+                          <DropdownMenuShortcut>{tool.shortcut}</DropdownMenuShortcut>
+                        ) : null}
+                      </DropdownMenuItem>
                     );
                   })}
-                </div>
-              ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           ) : null}
         </div>

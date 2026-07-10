@@ -236,14 +236,11 @@
   display: none;
 }
 
+/* Surface and row styling come from the shared menu recipe
+   (styles/menus.css); only widths are local. */
 .thread-bot-select-content {
   min-width: 190px;
   max-width: min(260px, calc(100vw - 32px));
-  border-radius: 10px;
-}
-
-.thread-bot-select-item {
-  min-height: 34px;
 }
 
 .thread-bot-select-option {

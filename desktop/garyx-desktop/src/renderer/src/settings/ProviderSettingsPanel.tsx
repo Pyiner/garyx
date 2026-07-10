@@ -481,7 +481,7 @@ function AgentProviderFields({
               <SelectTrigger className="w-full rounded-[14px] border-[#e7e7e5] bg-white text-[13px] shadow-none">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent className="rounded-[14px] border-[#e7e7e5] bg-white shadow-[0_12px_32px_rgba(0,0,0,0.08)]">
+              <SelectContent>
                 <SelectGroup>
                   <SelectItem value="claude_code">claude_code</SelectItem>
                   <SelectItem value="codex_app_server">codex_app_server</SelectItem>

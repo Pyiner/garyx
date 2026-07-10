@@ -141,7 +141,7 @@ export function GatewayIdentityBar({
     return (
       <div
         className={cn(
-          'gateway-switcher-item',
+          'menu-item-two-line gateway-switcher-item',
           isCurrent && 'is-current',
           switching && 'is-switching',
         )}
@@ -159,9 +159,9 @@ export function GatewayIdentityBar({
         tabIndex={0}
       >
         {renderGlyph(isCurrent, 'gateway-row-glyph')}
-        <span className="gateway-switcher-item-copy">
-          <span className="gateway-switcher-item-name">{profile.label}</span>
-          <span className="gateway-switcher-item-url">{profile.gatewayUrl}</span>
+        <span className="menu-item-two-line-copy">
+          <span className="menu-item-two-line-title">{profile.label}</span>
+          <span className="menu-item-two-line-caption">{profile.gatewayUrl}</span>
         </span>
         {switching ? (
           <span className="gateway-switcher-item-state">{t('Connecting…')}</span>

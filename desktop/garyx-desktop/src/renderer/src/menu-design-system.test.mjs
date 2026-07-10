@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -112,6 +112,93 @@ test('retired per-surface menu forks stay deleted', () => {
   const taskForestCss = read('styles/task-forest.css');
   assert.ok(taskForestCss.includes('var(--menu-surface-shadow)'));
   assert.ok(!taskForestCss.includes('#ececea'));
+});
+
+test('per-surface CSS never redefines the menu surface or row identity', () => {
+  // The recipe in menus.css is the only place allowed to give menus their
+  // visual identity. Per-surface CSS may set widths, heights, and layout for
+  // menu slots, but any of these properties on a menu selector is a fork.
+  const slotPattern =
+    /dropdown-menu-content|dropdown-menu-sub-content|select-content|dropdown-menu-item|dropdown-menu-checkbox-item|dropdown-menu-sub-trigger|select-item(?!-indicator)|dropdown-menu-label|select-label|dropdown-menu-separator|select-separator|dropdown-menu-shortcut|menu-item-two-line/;
+  const forbiddenProps = [
+    'background',
+    'background-color',
+    'border',
+    'border-radius',
+    'box-shadow',
+    'backdrop-filter',
+    '-webkit-backdrop-filter',
+    'color',
+    'font-size',
+    'font-weight',
+    'line-height',
+    'min-height',
+  ];
+  const stylesDirPath = path.join(rendererDir, 'styles');
+  const violations = [];
+  for (const file of readdirSync(stylesDirPath)) {
+    if (!file.endsWith('.css') || file === 'menus.css') {
+      continue;
+    }
+    const css = readFileSync(path.join(stylesDirPath, file), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '');
+    // Walk rule blocks: selector { declarations }
+    const rulePattern = /([^{}]+)\{([^{}]*)\}/g;
+    let match;
+    while ((match = rulePattern.exec(css)) !== null) {
+      const selector = match[1].trim();
+      const body = match[2];
+      if (!slotPattern.test(selector)) {
+        continue;
+      }
+      // Pseudo-element indicators (selection dots, chevrons) draw semantic
+      // marks, not the row surface.
+      if (/::(?:after|before)/.test(selector)) {
+        continue;
+      }
+      for (const declaration of body.split(';')) {
+        const property = declaration.split(':')[0]?.trim();
+        if (property && forbiddenProps.includes(property)) {
+          violations.push(`${file}: "${selector}" declares ${property}`);
+        }
+      }
+    }
+  }
+  assert.deepEqual(
+    violations,
+    [],
+    `menu identity forks found:\n${violations.join('\n')}`,
+  );
+});
+
+test('no hand-rolled DOM menus outside the shared components', () => {
+  // Every DOM menu must be a shared DropdownMenu so the recipe applies.
+  // (Native main-process menus use aria-haspopup on the trigger only.)
+  const offenders = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules') continue;
+        walk(entryPath);
+        continue;
+      }
+      if (!/\.(tsx|ts)$/.test(entry.name)) continue;
+      if (entryPath.includes(`${path.sep}components${path.sep}ui${path.sep}`)) {
+        continue;
+      }
+      const source = readFileSync(entryPath, 'utf8');
+      if (/role="menu"/.test(source)) {
+        offenders.push(path.relative(rendererDir, entryPath));
+      }
+    }
+  };
+  walk(rendererDir);
+  assert.deepEqual(
+    offenders,
+    [],
+    `hand-rolled role="menu" found in: ${offenders.join(', ')}`,
+  );
 });
 
 test('menus.css is imported into the renderer stylesheet chain', () => {

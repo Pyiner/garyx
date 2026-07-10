@@ -201,50 +201,8 @@
   flex: 0 0 auto;
 }
 
-.side-tools-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 30;
-  display: grid;
-  gap: 2px;
-  width: 190px;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--color-token-border) 82%, white);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--color-token-bg-primary) 96%, #f7f6f3);
-  box-shadow:
-    0 14px 28px rgba(15, 23, 42, 0.08),
-    0 2px 6px rgba(15, 23, 42, 0.05);
-}
-
-.side-tools-menu-item {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--color-token-text-primary);
-  font-size: 12px;
-  text-align: left;
-}
-
-.side-tools-menu-item:hover,
-.side-tools-menu-item:focus-visible {
-  background: color-mix(in srgb, var(--color-token-text-primary) 8%, transparent);
-  outline: none;
-}
-
-.side-tools-menu-item kbd {
-  color: var(--color-token-description-foreground);
-  font-family: var(--message-code-font);
-  font-size: 11px;
-  font-weight: 500;
-}
+/* The add-tool menu renders through the shared DropdownMenu recipe in
+   styles/menus.css; no local menu surface here. */
 
 .side-tools-picker {
   display: grid;

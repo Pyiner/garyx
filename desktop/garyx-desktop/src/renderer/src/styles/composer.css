@@ -960,11 +960,6 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
   opacity: 0.95;
 }
 
-[data-slot="dropdown-menu-item"][data-active] {
-  font-weight: var(--font-weight-normal);
-  color: var(--color-token-text-primary);
-}
-
 [data-slot="dropdown-menu-item"][data-active]::after {
   content: "";
   width: 6px;

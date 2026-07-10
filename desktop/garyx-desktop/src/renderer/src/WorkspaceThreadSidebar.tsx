@@ -1,5 +1,4 @@
-import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useState } from 'react';
 import { Trash } from 'lucide-react';
 
 import { NewTabIcon } from './app-shell/icons';
@@ -11,6 +10,12 @@ import type { DesktopWorkspace } from '@shared/contracts';
 import {
   type WorkspaceThreadGroup,
 } from './thread-model';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './components/ui/dropdown-menu';
 import { IconTooltip, TooltipProvider } from './components/ui/tooltip';
 import { useI18n } from './i18n';
 
@@ -41,60 +46,7 @@ export function WorkspaceThreadSidebar({
 }: WorkspaceThreadSidebarProps) {
   const { t } = useI18n();
   const [sectionCollapsed, setSectionCollapsed] = useState(false);
-  const [workspaceMenuStyle, setWorkspaceMenuStyle] = useState<CSSProperties | null>(null);
-  const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const visibleWorkspaceThreadGroups = workspaceThreadGroups;
-
-  const updateWorkspaceMenuPosition = useCallback((workspacePath: string | null) => {
-    if (!workspacePath) {
-      setWorkspaceMenuStyle(null);
-      return;
-    }
-
-    const button = menuButtonRefs.current[workspacePath];
-    if (!button) {
-      setWorkspaceMenuStyle(null);
-      return;
-    }
-
-    const rect = button.getBoundingClientRect();
-    const viewportPadding = 12;
-    const menuWidth = 146;
-    const estimatedHeight = 40;
-    const gap = 4;
-    const nextLeft = Math.max(
-      viewportPadding,
-      Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding),
-    );
-    let nextTop = rect.bottom + gap;
-    if (nextTop + estimatedHeight > window.innerHeight - viewportPadding) {
-      nextTop = Math.max(viewportPadding, rect.top - estimatedHeight - gap);
-    }
-
-    setWorkspaceMenuStyle({
-      left: `${nextLeft}px`,
-      top: `${nextTop}px`,
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!workspaceMenuOpenPath) {
-      setWorkspaceMenuStyle(null);
-      return;
-    }
-
-    const update = () => {
-      updateWorkspaceMenuPosition(workspaceMenuOpenPath);
-    };
-
-    update();
-    window.addEventListener('resize', update);
-    window.addEventListener('scroll', update, true);
-    return () => {
-      window.removeEventListener('resize', update);
-      window.removeEventListener('scroll', update, true);
-    };
-  }, [updateWorkspaceMenuPosition, workspaceMenuOpenPath]);
 
   const handleWorkspaceClick = useCallback(
     (workspacePath: string) => {
@@ -212,72 +164,47 @@ export function WorkspaceThreadSidebar({
                       </IconTooltip>
                       {group.canManageWorkspace ? (
                         <div className="workspace-more-menu-shell">
-                          <IconTooltip
-                            label={t('More actions for {name}', { name: workspace.name })}
-                            side="bottom"
+                          <DropdownMenu
+                            open={isMenuOpen}
+                            onOpenChange={(nextOpen) => {
+                              setWorkspaceMenuOpenPath(nextOpen ? workspacePath : null);
+                            }}
                           >
-                            <button
-                              aria-expanded={isMenuOpen}
-                              aria-haspopup="menu"
-                              aria-label={t('More actions for {name}', { name: workspace.name })}
-                              className="workspace-action-icon-button"
-                              ref={(node) => {
-                                menuButtonRefs.current[workspacePath] = node;
-                              }}
+                            <IconTooltip
+                              label={t('More actions for {name}', { name: workspace.name })}
+                              side="bottom"
+                            >
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  aria-label={t('More actions for {name}', { name: workspace.name })}
+                                  className="workspace-action-icon-button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                  }}
+                                  tabIndex={-1}
+                                  type="button"
+                                >
+                                  <MoreDotsIcon size={16} />
+                                </button>
+                              </DropdownMenuTrigger>
+                            </IconTooltip>
+                            <DropdownMenuContent
+                              align="end"
+                              className="min-w-[146px]"
                               onClick={(event) => {
                                 event.stopPropagation();
-                                setWorkspaceMenuOpenPath((current) => {
-                                  return current === workspacePath ? null : workspacePath;
-                                });
                               }}
-                              tabIndex={-1}
-                              type="button"
                             >
-                              <MoreDotsIcon size={16} />
-                            </button>
-                          </IconTooltip>
-                          {isMenuOpen && workspaceMenuStyle && typeof document !== 'undefined'
-                            ? createPortal(
-                              <div
-                                className="workspace-actions workspace-menu-portal"
-                                style={{
-                                  position: 'fixed',
-                                  left: workspaceMenuStyle.left,
-                                  top: workspaceMenuStyle.top,
-                                  zIndex: 2000,
-                                  display: 'block',
+                              <DropdownMenuItem
+                                onSelect={() => {
+                                  onRequestRemoveWorkspace(workspace);
                                 }}
                               >
-                                <div
-                                  className="workspace-more-menu"
-                                  role="menu"
-                                  style={{
-                                    position: 'static',
-                                    zIndex: 'auto',
-                                    minWidth: '146px',
-                                    maxHeight: 'min(240px, calc(100vh - 24px))',
-                                    overflowY: 'auto',
-                                  }}
-                                >
-                                  <button
-                                    className="workspace-menu-item"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      setWorkspaceMenuOpenPath(null);
-                                      onRequestRemoveWorkspace(workspace);
-                                    }}
-                                    role="menuitem"
-                                    title={t('Remove')}
-                                    type="button"
-                                  >
-                                    <Trash aria-hidden />
-                                    {t('Remove')}
-                                  </button>
-                                </div>
-                              </div>,
-                              document.body,
-                            )
-                            : null}
+                                <Trash aria-hidden />
+                                <span>{t('Remove')}</span>
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
                       ) : null}
                   </>

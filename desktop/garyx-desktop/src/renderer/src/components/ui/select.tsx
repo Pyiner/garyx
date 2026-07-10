@@ -92,7 +92,7 @@ function SelectLabel({
   return (
     <SelectPrimitive.Label
       data-slot="select-label"
-      className={cn("px-2 pt-2 pb-1 text-[11px] font-medium tracking-wide uppercase text-muted-foreground", className)}
+      className={className}
       {...props}
     />
   )
@@ -132,7 +132,7 @@ function SelectSeparator({
   return (
     <SelectPrimitive.Separator
       data-slot="select-separator"
-      className={cn("pointer-events-none -mx-1 my-1.5 h-px bg-border/60", className)}
+      className={cn("pointer-events-none", className)}
       {...props}
     />
   )
