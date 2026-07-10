@@ -25,6 +25,17 @@
 - Keep ordinary form actions, switches, pickers, and selection monochrome.
   Green is semantic status color, not the default interactive tint.
 - Use Garyx's existing adaptive glass/material helpers for mobile chrome.
+- iOS 26 Liquid Glass has two hard rules. First, inside a
+  `GlassEffectContainer`, apply glass directly to the content view
+  (`content.glassEffect(in:)` via `garyxAdaptiveGlass`); a glass shape inside
+  `.background {}` gets hoisted into the container's shared pass and draws
+  over that view's own foreground content. Second, the glass surface itself
+  has no hit-test region: interactive glass controls must declare an explicit
+  `.contentShape` on the button label or taps between the content glyphs fall
+  through.
+- Chrome that expands in place (title capsule → thread settings panel) is a
+  single morphing glass surface anchored to the collapsed control's rect via
+  anchor preference, not a matched-geometry pair of separate views.
 - Bottom composers and attached trays should read as native iOS material:
   layered glass, system tint, fine highlights, and subtle shadow, not flat gray
   slabs.

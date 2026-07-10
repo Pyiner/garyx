@@ -2,18 +2,153 @@ import Foundation
 import SwiftUI
 import UIKit
 
-enum GaryxThreadRuntimeMorphID {
-    static let surface = "thread-runtime-surface"
-    static let avatar = "thread-runtime-avatar"
-    static let title = "thread-runtime-title"
+/// Anchor of the compact title capsule in the conversation top bar. The
+/// runtime-panel morph surface resolves this anchor to start and end its
+/// expansion exactly at the capsule's rect.
+struct GaryxThreadRuntimeChromeAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>?
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+enum GaryxThreadRuntimeMorph {
+    /// Dynamic-island style: a quick spring with a hint of bounce on open,
+    /// a tighter settle on close.
+    static let openAnimation = Animation.spring(response: 0.42, dampingFraction: 0.76)
+    static let closeAnimation = Animation.spring(response: 0.32, dampingFraction: 0.92)
+    static let collapsedCornerRadius: CGFloat = 22
+    static let expandedCornerRadius: CGFloat = 28
+    /// The expanded panel intentionally overlaps the back and ellipsis
+    /// buttons, leaving only a slim margin — like the Dynamic Island
+    /// growing over surrounding status content.
+    static let horizontalMargin: CGFloat = 12
+    static let maxExpandedWidth: CGFloat = 560
+}
+
+/// The avatar+title row shared by the top-bar capsule and the expanded
+/// panel header. Both render the exact same view, so the morph never
+/// re-lays-out the title — the text cannot jump or jitter.
+struct GaryxThreadRuntimeCompactRow: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+
+    private var title: String {
+        model.selectedThread?.title ?? model.draftThreadTitle
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            avatar(diameter: 22)
+
+            Text(title)
+                .font(GaryxFont.callout(weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 44, alignment: .leading)
+        .frame(maxWidth: 282, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func avatar(diameter: CGFloat) -> some View {
+        if let target = model.selectedThreadAgentTarget {
+            GaryxAgentAvatarView(
+                agentId: target.id,
+                avatarDataUrl: target.avatarDataUrl,
+                kind: target.kind,
+                label: target.title,
+                providerType: target.providerType,
+                builtIn: target.builtIn,
+                diameter: diameter
+            )
+        } else {
+            Image(systemName: "person.crop.circle")
+                .font(GaryxFont.system(size: diameter * 0.72, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: diameter, height: diameter)
+        }
+    }
+}
+
+/// A single glass surface that morphs between the compact title capsule
+/// rect and the expanded settings panel — one shape, one glass, no
+/// matched-geometry pairs. The header row stays put; only the surface
+/// frame, corner radius, and body opacity animate.
+struct GaryxThreadRuntimeMorphSurface: View {
+    let isExpanded: Bool
+    let anchorRect: CGRect
+    let containerSize: CGSize
+    let onClose: () -> Void
+
+    var body: some View {
+        let expandedWidth = min(
+            containerSize.width - GaryxThreadRuntimeMorph.horizontalMargin * 2,
+            GaryxThreadRuntimeMorph.maxExpandedWidth
+        )
+        let expandedX = (containerSize.width - expandedWidth) / 2
+        let cornerRadius = isExpanded
+            ? GaryxThreadRuntimeMorph.expandedCornerRadius
+            : GaryxThreadRuntimeMorph.collapsedCornerRadius
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        GaryxThreadRuntimeSettingsPanel(
+            compactRowWidth: anchorRect.width,
+            isExpanded: isExpanded,
+            onClose: onClose
+        )
+        // Inner frame keeps the panel laid out at its final width the whole
+        // time, so text never reflows while the surface window grows.
+        .frame(width: expandedWidth, alignment: .topLeading)
+        .frame(
+            width: isExpanded ? expandedWidth : anchorRect.width,
+            height: isExpanded ? nil : anchorRect.height,
+            alignment: .topLeading
+        )
+        // Readability backing fades in with the expansion; the collapsed
+        // capsule stays pure glass like the top-bar original.
+        .background {
+            shape.fill(Color(.systemBackground).opacity(isExpanded ? 0.72 : 0))
+        }
+        .garyxAdaptiveGlass(
+            .regular,
+            isInteractive: false,
+            fallbackMaterial: .ultraThinMaterial,
+            in: shape
+        )
+        .clipShape(shape)
+        .overlay {
+            shape
+                .stroke(Color.white.opacity(0.30), lineWidth: 0.7)
+                .opacity(isExpanded ? 1 : 0)
+        }
+        .overlay {
+            shape
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                .opacity(isExpanded ? 1 : 0)
+        }
+        .shadow(
+            color: Color.black.opacity(isExpanded ? 0.10 : 0),
+            radius: 24, x: 0, y: 10
+        )
+        .offset(
+            x: isExpanded ? expandedX : anchorRect.minX,
+            y: anchorRect.minY
+        )
+        .accessibilityAddTraits(.isModal)
+        .accessibilityAction(.escape, onClose)
+    }
 }
 
 struct GaryxThreadRuntimeSettingsPanel: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    let width: CGFloat
-    let morphNamespace: Namespace.ID
+    let compactRowWidth: CGFloat
+    let isExpanded: Bool
     let onClose: () -> Void
 
     private enum Page: Hashable {
@@ -33,16 +168,9 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     }
 
     @State private var page = Page.main
-    @State private var showsPanelBody = false
 
     private var selectedThread: GaryxThreadSummary? { model.selectedThread }
     private var runtime: GaryxThreadRuntimeSummary? { selectedThread?.threadRuntime }
-
-    private var threadTitle: String {
-        normalized(selectedThread?.title)
-            ?? normalized(model.draftThreadTitle)
-            ?? "Thread"
-    }
 
     private var providerType: String {
         normalized(runtime?.providerType)
@@ -119,69 +247,30 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     }
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 28, style: .continuous)
-
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             header
 
-            if page == .main {
-                VStack(alignment: .leading, spacing: 12) {
-                    currentAgentSection
-                    runtimeSettingsSection
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 14)
-                .fixedSize(horizontal: false, vertical: true)
-                .opacity(showsPanelBody ? 1 : 0)
-            } else {
-                ScrollView {
-                    optionsPage
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 14)
-                        .garyxVerticalScrollContentWidth()
-                }
-                .frame(height: optionsPageHeight)
-                .scrollIndicators(.hidden)
-                .opacity(showsPanelBody ? 1 : 0)
-            }
-        }
-        .frame(width: width)
-        .background {
-            shape
-                .fill(Color.clear)
-                .garyxAdaptiveGlass(
-                    .regular,
-                    isInteractive: false,
-                    tint: Color(.systemBackground).opacity(0.72),
-                    fallbackMaterial: .ultraThinMaterial,
-                    in: shape
-                )
-                .matchedGeometryEffect(
-                    id: GaryxThreadRuntimeMorphID.surface,
-                    in: morphNamespace
-                )
-        }
-        .clipShape(shape)
-        .overlay {
-            shape
-                .stroke(Color.white.opacity(0.30), lineWidth: 0.7)
-        }
-        .overlay {
-            shape
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-        }
-        .shadow(color: Color.black.opacity(0.10), radius: 24, x: 0, y: 10)
-        .padding(1)
-        .accessibilityAddTraits(.isModal)
-        .accessibilityAction(.escape, onClose)
-        .onAppear {
-            if reduceMotion {
-                showsPanelBody = true
-            } else {
-                withAnimation(.easeOut(duration: 0.18).delay(0.09)) {
-                    showsPanelBody = true
+            Group {
+                if page == .main {
+                    VStack(alignment: .leading, spacing: 12) {
+                        currentAgentSection
+                        runtimeSettingsSection
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 14)
+                    .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ScrollView {
+                        optionsPage
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, 14)
+                            .garyxVerticalScrollContentWidth()
+                    }
+                    .frame(height: optionsPageHeight)
+                    .scrollIndicators(.hidden)
                 }
             }
+            .opacity(isExpanded ? 1 : 0)
         }
         .task(id: providerType) {
             guard !providerType.isEmpty,
@@ -189,9 +278,6 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                 return
             }
             await model.loadProviderModels(providerType: providerType)
-        }
-        .onChange(of: selectedThread?.id) { _, _ in
-            onClose()
         }
     }
 
@@ -263,20 +349,11 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             if page == .main {
-                avatar(diameter: 26)
-                    .matchedGeometryEffect(
-                        id: GaryxThreadRuntimeMorphID.avatar,
-                        in: morphNamespace
-                    )
-
-                Text(threadTitle)
-                    .font(GaryxFont.callout(weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .matchedGeometryEffect(
-                        id: GaryxThreadRuntimeMorphID.title,
-                        in: morphNamespace
-                    )
+                // The exact view that renders inside the top-bar capsule,
+                // pinned to the capsule's width: the morph never moves or
+                // re-truncates the title.
+                GaryxThreadRuntimeCompactRow()
+                    .frame(width: compactRowWidth, alignment: .leading)
             } else {
                 Button {
                     setPage(.main)
@@ -290,16 +367,15 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                     }
+                    .padding(.horizontal, 12)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .frame(height: 44)
             }
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
     }
 
     private var currentAgentSection: some View {

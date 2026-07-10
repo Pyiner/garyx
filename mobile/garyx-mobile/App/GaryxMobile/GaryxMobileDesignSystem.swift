@@ -163,6 +163,7 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
     let tint: Color?
     let fallbackMaterial: Material
     let shape: S
+    let isEnabled: Bool
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -170,7 +171,7 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
         if #available(iOS 26, *) {
             switch style {
             case .automatic:
-                content.glassEffect(in: shape)
+                content.glassEffect(isEnabled ? .regular : .identity, in: shape)
             case .regular:
                 content.glassEffect(resolvedGlass, in: shape)
             }
@@ -185,15 +186,18 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
     @ViewBuilder
     private func fallback(content: Content) -> some View {
         if let tint {
-            content.background(tint, in: shape)
+            content.background((isEnabled ? tint : Color.clear), in: shape)
         } else {
-            content.background(fallbackMaterial, in: shape)
+            content.background {
+                shape.fill(fallbackMaterial).opacity(isEnabled ? 1 : 0)
+            }
         }
     }
 
 #if compiler(>=6.2)
     @available(iOS 26, *)
     private var resolvedGlass: Glass {
+        guard isEnabled else { return .identity }
         var glass = Glass.regular
         if let tint {
             glass = glass.tint(tint)
@@ -346,7 +350,8 @@ extension View {
         isInteractive: Bool,
         tint: Color? = nil,
         fallbackMaterial: Material = .thinMaterial,
-        in shape: some Shape
+        in shape: some Shape,
+        isEnabled: Bool = true
     ) -> some View {
         modifier(
             GaryxAdaptiveGlassModifier(
@@ -354,7 +359,8 @@ extension View {
                 isInteractive: isInteractive,
                 tint: tint,
                 fallbackMaterial: fallbackMaterial,
-                shape: shape
+                shape: shape,
+                isEnabled: isEnabled
             )
         )
     }
