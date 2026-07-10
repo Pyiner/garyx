@@ -89,6 +89,34 @@ public struct GaryxConversationLayoutMetrics: Equatable {
     }
 }
 
+// MARK: - Atomic content-edge measurement
+
+/// One transcript content-edge measurement carrying BOTH edges.
+///
+/// The top sentinel and the bottom anchor each contribute their half; the
+/// view layer reduces every contribution into a single value per layout pass
+/// (one SwiftUI preference key), so the scroll state machine only ever
+/// observes atomic frames. Feeding the edges through two separate callbacks
+/// made every real scroll step look like a content-height change (top moved,
+/// bottom not yet), which permanently reset the upward-travel accumulator
+/// and broke the pre-iOS 18 reader-intent path (#TASK-2073 P2).
+public struct GaryxConversationContentEdges: Equatable {
+    public var top: CGFloat?
+    public var bottom: CGFloat?
+
+    public init(top: CGFloat? = nil, bottom: CGFloat? = nil) {
+        self.top = top
+        self.bottom = bottom
+    }
+
+    /// Combine two contributions; a later non-nil half wins its side.
+    /// Merge order between the two emitters does not matter because each
+    /// emitter only sets its own half.
+    public func merging(_ other: Self) -> Self {
+        Self(top: other.top ?? top, bottom: other.bottom ?? bottom)
+    }
+}
+
 // MARK: - Tail thinking presentation
 
 /// Presentation-only debounce for the server-owned tail thinking state.

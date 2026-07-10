@@ -16,19 +16,21 @@ private func garyxDismissKeyboard() {
     )
 }
 
-private struct GaryxConversationBottomOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+/// Single preference key carrying BOTH transcript content edges. The top
+/// sentinel and the bottom anchor each contribute their half and SwiftUI
+/// reduces them within one layout pass, so `onPreferenceChange` delivers an
+/// atomic frame. Do not split the edges back into separate keys: two
+/// callbacks make every scroll step look like a content-height change and
+/// permanently reset the state machine's upward-travel accumulator
+/// (#TASK-2073 P2).
+private struct GaryxConversationContentEdgesKey: PreferenceKey {
+    static var defaultValue = GaryxConversationContentEdges()
 
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-private struct GaryxConversationTopOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat?
-
-    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
-        value = nextValue() ?? value
+    static func reduce(
+        value: inout GaryxConversationContentEdges,
+        nextValue: () -> GaryxConversationContentEdges
+    ) {
+        value = value.merging(nextValue())
     }
 }
 
@@ -328,8 +330,10 @@ struct GaryxConversationView: View {
                     .background {
                         GeometryReader { geometry in
                             Color.clear.preference(
-                                key: GaryxConversationTopOffsetKey.self,
-                                value: geometry.frame(in: .named("garyx-conversation-scroll")).minY
+                                key: GaryxConversationContentEdgesKey.self,
+                                value: GaryxConversationContentEdges(
+                                    top: geometry.frame(in: .named("garyx-conversation-scroll")).minY
+                                )
                             )
                         }
                     }
@@ -401,8 +405,10 @@ struct GaryxConversationView: View {
                 .background {
                     GeometryReader { geometry in
                         Color.clear.preference(
-                            key: GaryxConversationBottomOffsetKey.self,
-                            value: geometry.frame(in: .named("garyx-conversation-scroll")).maxY
+                            key: GaryxConversationContentEdgesKey.self,
+                            value: GaryxConversationContentEdges(
+                                bottom: geometry.frame(in: .named("garyx-conversation-scroll")).maxY
+                            )
                         )
                     }
                 }
@@ -421,14 +427,17 @@ struct GaryxConversationView: View {
             metrics.viewportHeight = height
             applyMetrics(metrics, proxy: proxy)
         }
-        .onPreferenceChange(GaryxConversationBottomOffsetKey.self) { value in
+        .onPreferenceChange(GaryxConversationContentEdgesKey.self) { edges in
+            // One atomic frame per layout pass: both edges arrive together,
+            // so the state machine never sees a phantom content-height change
+            // mid-scroll (see GaryxConversationContentEdgesKey).
             var metrics = scrollStateBox.state.metrics
-            metrics.contentBottomOffset = value
-            applyMetrics(metrics, proxy: proxy)
-        }
-        .onPreferenceChange(GaryxConversationTopOffsetKey.self) { value in
-            var metrics = scrollStateBox.state.metrics
-            metrics.contentTopOffset = value
+            if let top = edges.top {
+                metrics.contentTopOffset = top
+            }
+            if let bottom = edges.bottom {
+                metrics.contentBottomOffset = bottom
+            }
             applyMetrics(metrics, proxy: proxy)
         }
         .scrollDisabled(isComposerFocused || sidebarDragActive)

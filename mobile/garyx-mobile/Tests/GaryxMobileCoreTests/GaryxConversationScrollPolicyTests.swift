@@ -413,6 +413,76 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(state.showsScrollToBottomButton)
     }
 
+    /// The two edge emitters (top sentinel, bottom anchor) contribute halves
+    /// of one preference value; merge must assemble the atomic frame in
+    /// either reduce order and let later contributions win their side.
+    func testContentEdgesMergeAssemblesAtomicFrame() {
+        let topHalf = GaryxConversationContentEdges(top: -120)
+        let bottomHalf = GaryxConversationContentEdges(bottom: 900)
+
+        XCTAssertEqual(
+            topHalf.merging(bottomHalf),
+            GaryxConversationContentEdges(top: -120, bottom: 900)
+        )
+        XCTAssertEqual(
+            bottomHalf.merging(topHalf),
+            GaryxConversationContentEdges(top: -120, bottom: 900)
+        )
+        // A later contribution for the same side wins.
+        XCTAssertEqual(
+            topHalf.merging(GaryxConversationContentEdges(top: -80)),
+            GaryxConversationContentEdges(top: -80, bottom: nil)
+        )
+    }
+
+    /// Regression shape for #TASK-2073 P2: the retired split-key adapter
+    /// delivered top and bottom through separate callbacks, so every scroll
+    /// step showed a phantom content-height change. The stable-layout guard
+    /// must keep rejecting that shape — atomic frames are the only way
+    /// upward travel may accumulate, which is exactly why the view merges
+    /// both edges into one preference value.
+    func testSplitEdgeDeliveryNeverAccumulatesReaderTravel() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        var top: CGFloat = -2_200
+        var bottom: CGFloat = 820
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: top,
+                contentBottomOffset: bottom,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        // Scroll up 10pt per step, but deliver top first and bottom second
+        // as two separate metrics updates (the old two-key adapter shape).
+        for _ in 1...40 {
+            top += 10
+            _ = state.metricsChanged(
+                GaryxConversationLayoutMetrics(
+                    contentTopOffset: top,
+                    contentBottomOffset: bottom,
+                    viewportHeight: 800
+                ),
+                hasTailContent: true
+            )
+            bottom += 10
+            _ = state.metricsChanged(
+                GaryxConversationLayoutMetrics(
+                    contentTopOffset: top,
+                    contentBottomOffset: bottom,
+                    viewportHeight: 800
+                ),
+                hasTailContent: true
+            )
+        }
+        XCTAssertFalse(
+            state.hasUserScrolledSinceOpen,
+            "Half-updated frames show phantom height changes and must never count as reader travel."
+        )
+    }
+
     /// Pre-iOS 18 there is no scroll-phase API: sustained upward movement
     /// across stable-layout frames must count as the reader's scroll, flip
     /// the anchoring, and arm automatic history paging.
