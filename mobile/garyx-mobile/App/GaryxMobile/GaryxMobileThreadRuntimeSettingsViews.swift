@@ -273,11 +273,16 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                     .transition(.identity)
                 } else {
                     ScrollView {
+                        // NOTE: no garyxVerticalScrollContentWidth here — its
+                        // containerRelativeFrame resolves to the SCREEN inside
+                        // this panel-embedded scroll view and pinned rows 12pt
+                        // past the panel's right edge (asymmetric insets). A
+                        // vertical ScrollView already proposes its own width.
                         optionsPage
                             .padding(.horizontal, 12)
                             .padding(.top, 4)
                             .padding(.bottom, 12)
-                            .garyxVerticalScrollContentWidth()
+                            .frame(maxWidth: .infinity)
                             .onGeometryChange(for: CGFloat.self) { geometry in
                                 geometry.size.height
                             } action: { height in
@@ -451,39 +456,30 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                         .transaction { $0.animation = nil }
                         .transition(.identity)
                 } else {
-                    // The button's 30pt visual sits inside a 44pt hit
-                    // target; leading padding 5 keeps the visual circle on
-                    // the same x=12 the compact row's content uses.
-                    HStack(spacing: 1) {
-                        Button {
-                            setPage(.main)
-                        } label: {
+                    // No back control: the whole header row — title and its
+                    // trailing empty space — pops back to the main page, and
+                    // picking an option pops too. The chevron is only a hint.
+                    Button {
+                        setPage(.main)
+                    } label: {
+                        HStack(spacing: 8) {
                             Image(systemName: "chevron.left")
-                                .font(GaryxFont.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .frame(width: 30, height: 30)
-                                .background(
-                                    Color.primary.opacity(0.045),
-                                    in: RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                )
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                        .stroke(Color.primary.opacity(0.05), lineWidth: 1)
-                                }
-                                .frame(width: 44, height: 44)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Back")
+                                .font(GaryxFont.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
 
-                        Text(page.title)
-                            .font(GaryxFont.scaledCallout(weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            Text(page.title)
+                                .font(GaryxFont.scaledCallout(weight: .medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.leading, 5)
-                    .padding(.trailing, 12)
-                    .frame(minHeight: 44)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
                     .transition(.identity)
                 }
             }
