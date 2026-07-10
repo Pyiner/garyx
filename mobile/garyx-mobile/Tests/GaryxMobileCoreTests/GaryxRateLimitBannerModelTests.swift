@@ -27,7 +27,7 @@ final class GaryxRateLimitBannerModelTests: XCTestCase {
             timeZone: utc
         )
         XCTAssertEqual(model?.title, "Codex 5-hour limit reached")
-        XCTAssertEqual(model?.detail, "Auto-resend at 06:05 · 05:30 left")
+        XCTAssertEqual(model?.detail, "Resets at 06:05 · 05:30 left · then auto-resends")
         XCTAssertEqual(model?.isResending, false)
         XCTAssertEqual(model?.showContinue, false)
     }
@@ -45,7 +45,7 @@ final class GaryxRateLimitBannerModelTests: XCTestCase {
             timeZone: utc
         )
         XCTAssertEqual(model?.title, "Codex weekly limit reached")
-        XCTAssertEqual(model?.detail, "Auto-resend at Jan 8 00:00 · 168:00:00 left")
+        XCTAssertEqual(model?.detail, "Resets at Jan 8 00:00 · 168:00:00 left · then auto-resends")
     }
 
     func testRecoveredWindowShowsResending() {
@@ -60,7 +60,7 @@ final class GaryxRateLimitBannerModelTests: XCTestCase {
             now: date("2030-01-01T06:00:05+00:00"),
             timeZone: utc
         )
-        XCTAssertEqual(model?.detail, "Quota recovered — resending…")
+        XCTAssertEqual(model?.detail, "Quota recovered — auto-resend within a minute…")
         XCTAssertEqual(model?.isResending, true)
         XCTAssertEqual(model?.showContinue, false)
     }

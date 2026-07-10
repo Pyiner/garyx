@@ -220,7 +220,11 @@ struct GaryxUserMessageLoadingBubble: View {
 /// "continue" prompt through the regular send pipeline.
 struct GaryxRateLimitBanner: View {
     let rateLimit: GaryxRenderRateLimit
-    var onContinue: (() -> Void)?
+    /// Dispatches the "continue" prompt. The button shows a sending state
+    /// until the call returns, so a failed or no-op send re-arms the button
+    /// instead of leaving it stuck; on success the run start clears the
+    /// rate-limit state and removes the card.
+    var onContinue: (() async -> Void)?
 
     @State private var sending = false
 
@@ -253,7 +257,13 @@ struct GaryxRateLimitBanner: View {
                         Button {
                             guard !sending else { return }
                             sending = true
-                            onContinue()
+                            Task {
+                                await onContinue()
+                                // Re-arm once the dispatch settles: a failed
+                                // send leaves the card mounted and the button
+                                // must come back.
+                                sending = false
+                            }
                         } label: {
                             Text(sending ? "Sending…" : "Continue")
                                 .font(GaryxFont.caption())
@@ -271,7 +281,11 @@ struct GaryxRateLimitBanner: View {
                                     Capsule(style: .continuous)
                                         .stroke(Color(.separator), lineWidth: 1)
                                 )
-                                .contentShape(Capsule(style: .continuous))
+                                // 44pt minimum touch target around the 28pt
+                                // visual capsule, matching the shared button
+                                // styles' hit-area convention.
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(sending)

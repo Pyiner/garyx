@@ -1414,9 +1414,12 @@ public struct GaryxRateLimitBannerModel: Equatable, Sendable {
         var showContinue = false
         if rateLimit.willAutoResend {
             if let remaining, let clock, !recovered {
-                detail = "Auto-resend at \(clock) · \(formatRemaining(remaining)) left"
+                // The gateway fires the resend a buffer after the reset, so
+                // the card promises the reset time and "then", not an exact
+                // resend instant.
+                detail = "Resets at \(clock) · \(formatRemaining(remaining)) left · then auto-resends"
             } else if resetDate != nil {
-                detail = "Quota recovered — resending…"
+                detail = "Quota recovered — auto-resend within a minute…"
                 isResending = true
             } else {
                 detail = "Will auto-resend when the quota recovers."

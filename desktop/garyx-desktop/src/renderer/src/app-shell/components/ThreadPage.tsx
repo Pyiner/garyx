@@ -364,7 +364,7 @@ type ThreadPageProps = {
   showHistoryLoadingPlaceholder: boolean;
   showTailThinking: boolean;
   rateLimit?: RenderRateLimit | null;
-  onRateLimitContinue?: () => void;
+  onRateLimitContinue?: () => void | Promise<unknown>;
   threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
   threadLogsMaxWidth: number;

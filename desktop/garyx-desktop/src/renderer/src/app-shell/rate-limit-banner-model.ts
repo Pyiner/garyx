@@ -101,10 +101,71 @@ export type RateLimitMessageSegment =
   | { kind: "text"; text: string }
   | { kind: "link"; text: string; url: string };
 
+/** Sentence punctuation (ASCII + common Unicode/CJK) that ends a bare URL. */
+const TRAILING_PUNCTUATION = new Set([
+  ...".,;:!?'\"",
+  ")",
+  "]",
+  "}",
+  "’", // ’
+  "”", // ”
+  "、",
+  "。",
+  "，",
+  "！",
+  "？",
+  "；",
+  "：",
+  "）",
+  "】",
+  "》",
+]);
+
+const BRACKET_PAIRS: Record<string, string> = {
+  ")": "(",
+  "]": "[",
+  "}": "{",
+  "）": "（",
+  "】": "【",
+  "》": "《",
+};
+
+function countChar(value: string, char: string): number {
+  let count = 0;
+  for (const c of value) {
+    if (c === char) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /**
- * Split a provider message into text and bare-URL link segments. Trailing
- * sentence punctuation stays in the following text segment so links like
- * "…/usage." do not swallow the period.
+ * Split a bare-URL token into the URL proper and trailing sentence
+ * punctuation. Closing brackets stay in the URL while they balance an opening
+ * bracket inside it (e.g. `wiki/Rate_(computing)`).
+ */
+function splitTrailingPunctuation(raw: string): { url: string; trailing: string } {
+  let url = raw;
+  while (url.length > 0) {
+    const last = url[url.length - 1];
+    if (!TRAILING_PUNCTUATION.has(last)) {
+      break;
+    }
+    const open = BRACKET_PAIRS[last];
+    if (open && countChar(url, open) >= countChar(url, last)) {
+      break;
+    }
+    url = url.slice(0, -1);
+  }
+  return { url, trailing: raw.slice(url.length) };
+}
+
+/**
+ * Split a provider message into text and bare-URL link segments. The link's
+ * visible text is the URL exactly as the provider wrote it; trailing sentence
+ * punctuation stays in the following text segment so links like "…/usage."
+ * do not swallow the period.
  */
 export function messageSegments(message: string): RateLimitMessageSegment[] {
   const segments: RateLimitMessageSegment[] = [];
@@ -116,13 +177,12 @@ export function messageSegments(message: string): RateLimitMessageSegment[] {
       segments.push({ kind: "text", text: part });
       continue;
     }
-    const trailing = /[.,;:)\]]+$/.exec(part)?.[0] ?? "";
-    const url = trailing ? part.slice(0, -trailing.length) : part;
-    segments.push({
-      kind: "link",
-      text: url.replace(/^https?:\/\//, ""),
-      url,
-    });
+    const { url, trailing } = splitTrailingPunctuation(part);
+    if (!url.replace(/^https?:\/\//, "")) {
+      segments.push({ kind: "text", text: part });
+      continue;
+    }
+    segments.push({ kind: "link", text: url, url });
     if (trailing) {
       segments.push({ kind: "text", text: trailing });
     }

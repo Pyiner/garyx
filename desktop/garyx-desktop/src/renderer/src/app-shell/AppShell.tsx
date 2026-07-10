@@ -4369,9 +4369,7 @@ export function AppShell() {
         showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
         showTailThinking={showTailThinking}
         rateLimit={activeRateLimit}
-        onRateLimitContinue={() => {
-          void handleSendPromptText("continue");
-        }}
+        onRateLimitContinue={() => handleSendPromptText("continue")}
         threadLayoutRef={threadLayoutRef}
         threadLayoutStyle={
           !embedded && threadLogsOpen

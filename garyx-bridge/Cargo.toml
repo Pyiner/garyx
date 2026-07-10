@@ -36,4 +36,5 @@ http = "1"
 serde_yaml = "0.9"
 
 [dev-dependencies]
+chrono-tz = "0.10"
 tempfile = { workspace = true }

@@ -33,7 +33,12 @@ export function RateLimitBanner({
   onContinue,
 }: {
   rateLimit?: RenderRateLimit | null;
-  onContinue?: () => void;
+  /**
+   * Dispatches the "continue" prompt. The button shows a sending state until
+   * the returned promise settles, so a no-op (busy thread) or failed dispatch
+   * re-arms the button instead of leaving it stuck.
+   */
+  onContinue?: () => void | Promise<unknown>;
 }) {
   const { t, locale } = useI18n();
   const [now, setNow] = useState(() => Date.now());
@@ -82,13 +87,18 @@ export function RateLimitBanner({
   let detail: ReactNode;
   switch (state.kind) {
     case "auto_resend_countdown":
-      detail = renderTemplate(t("Auto-resend at {time} · {remaining} left"), {
-        time: <strong style={strongStyle}>{clock}</strong>,
-        remaining: <strong style={strongStyle}>{remaining}</strong>,
-      });
+      // The gateway fires the resend a buffer after the reset, so the card
+      // promises the reset time and "then", not an exact resend instant.
+      detail = renderTemplate(
+        t("Resets at {time} · {remaining} left · then auto-resends"),
+        {
+          time: <strong style={strongStyle}>{clock}</strong>,
+          remaining: <strong style={strongStyle}>{remaining}</strong>,
+        },
+      );
       break;
     case "resending":
-      detail = t("Quota recovered — resending…");
+      detail = t("Quota recovered — auto-resend within a minute…");
       break;
     case "auto_resend_pending":
       detail = t("Will auto-resend when the quota recovers.");
@@ -133,7 +143,13 @@ export function RateLimitBanner({
       return;
     }
     setSending(true);
-    onContinue();
+    // Re-arm when the dispatch settles: a no-op (busy) or failed send leaves
+    // the card mounted, so the button must come back; on success the run
+    // start clears the rate-limit state and unmounts the card anyway.
+    void Promise.resolve()
+      .then(() => onContinue())
+      .catch(() => {})
+      .then(() => setSending(false));
   };
 
   return (

@@ -104,7 +104,7 @@ test("formatResetClock includes the date once the reset is not today", () => {
   assert.match(clock, /^[A-Za-z]{3} \d{1,2} \d{2}:\d{2}$/);
 });
 
-test("messageSegments linkifies bare URLs and keeps trailing punctuation", () => {
+test("messageSegments linkifies bare URLs verbatim and keeps trailing punctuation", () => {
   const segments = messageSegments(
     "You've hit your usage limit. Visit https://example.com/codex/settings/usage to purchase more credits or try again at 9:42 PM.",
   );
@@ -112,7 +112,7 @@ test("messageSegments linkifies bare URLs and keeps trailing punctuation", () =>
     { kind: "text", text: "You've hit your usage limit. Visit " },
     {
       kind: "link",
-      text: "example.com/codex/settings/usage",
+      text: "https://example.com/codex/settings/usage",
       url: "https://example.com/codex/settings/usage",
     },
     {
@@ -122,11 +122,36 @@ test("messageSegments linkifies bare URLs and keeps trailing punctuation", () =>
   ]);
 });
 
-test("messageSegments keeps sentence period out of a trailing URL", () => {
-  const segments = messageSegments("See https://example.com/usage.");
+test("messageSegments keeps sentence punctuation out of a trailing URL", () => {
+  for (const punctuation of [".", "!", "?", ";", '."', ")!", "。", "！"]) {
+    const segments = messageSegments(`See https://example.com/usage${punctuation}`);
+    assert.deepEqual(
+      segments,
+      [
+        { kind: "text", text: "See " },
+        {
+          kind: "link",
+          text: "https://example.com/usage",
+          url: "https://example.com/usage",
+        },
+        { kind: "text", text: punctuation },
+      ],
+      `punctuation ${JSON.stringify(punctuation)}`,
+    );
+  }
+});
+
+test("messageSegments keeps balanced closing brackets inside the URL", () => {
+  const segments = messageSegments(
+    "See https://en.wikipedia.org/wiki/Rate_(computing).",
+  );
   assert.deepEqual(segments, [
     { kind: "text", text: "See " },
-    { kind: "link", text: "example.com/usage", url: "https://example.com/usage" },
+    {
+      kind: "link",
+      text: "https://en.wikipedia.org/wiki/Rate_(computing)",
+      url: "https://en.wikipedia.org/wiki/Rate_(computing)",
+    },
     { kind: "text", text: "." },
   ]);
 });
@@ -134,5 +159,13 @@ test("messageSegments keeps sentence period out of a trailing URL", () => {
 test("messageSegments passes plain text through untouched", () => {
   assert.deepEqual(messageSegments("Try again shortly."), [
     { kind: "text", text: "Try again shortly." },
+  ]);
+});
+
+test("messageSegments treats a punctuation-only URL token as text", () => {
+  assert.deepEqual(messageSegments("broken https://... link"), [
+    { kind: "text", text: "broken " },
+    { kind: "text", text: "https://..." },
+    { kind: "text", text: " link" },
   ]);
 });

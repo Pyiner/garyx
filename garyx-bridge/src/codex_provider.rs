@@ -219,21 +219,39 @@ fn reset_at_from_usage_message(
     message: &str,
     now: chrono::DateTime<chrono::Local>,
 ) -> Option<String> {
-    use chrono::{Duration as ChronoDuration, LocalResult, TimeZone, Utc};
+    reset_at_from_usage_message_in(message, now)
+}
+
+/// A relative "try again in …" hint longer than this is treated as garbage
+/// from a malformed upstream message rather than a real quota window.
+const MAX_MESSAGE_RESET_DAYS: i64 = 30;
+
+/// Timezone-generic core of [`reset_at_from_usage_message`]; production passes
+/// `chrono::Local`, tests pass a fixed `chrono_tz` zone so DST edges are
+/// reproducible on any machine.
+fn reset_at_from_usage_message_in<Tz: chrono::TimeZone>(
+    message: &str,
+    now: chrono::DateTime<Tz>,
+) -> Option<String> {
+    use chrono::{Duration as ChronoDuration, LocalResult, Utc};
 
     static AT_TIME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(?i)try again (?:at|after)\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?")
-            .expect("valid regex")
+        regex::Regex::new(
+            r"(?i)\btry again (?:at|after)\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\b\.?",
+        )
+        .expect("valid regex")
     });
     static IN_DURATION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(
-            r"(?i)try again in\s+((?:\d+\s*(?:days?|hours?|minutes?|seconds?)(?:[,\s]|and\s)*)+)",
+            r"(?i)\btry again in\s+((?:\d+\s*(?:days?|hours?|minutes?|seconds?)(?:[,\s]|and\s)*)+)",
         )
         .expect("valid regex")
     });
     static DURATION_PART: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"(?i)(\d+)\s*(day|hour|minute|second)s?").expect("valid regex")
     });
+
+    let zone = now.timezone();
 
     if let Some(captures) = AT_TIME.captures(message) {
         let hour12: u32 = captures.get(1)?.as_str().parse().ok()?;
@@ -255,14 +273,14 @@ fn reset_at_from_usage_message(
             (h, true) => h + 12,
         };
 
-        // Resolve the wall-clock time in local time, tolerating DST edges: an
-        // ambiguous time takes the earliest instant, a gap time slides an hour
-        // forward.
-        let resolve = |naive: chrono::NaiveDateTime| match chrono::Local.from_local_datetime(&naive)
-        {
+        // Resolve the wall-clock time in the given zone, tolerating DST edges:
+        // an ambiguous time takes whichever occurrence is the earlier UTC
+        // instant (chrono does not guarantee ordering of the Ambiguous pair),
+        // a gap time slides an hour forward.
+        let resolve = |naive: chrono::NaiveDateTime| match zone.from_local_datetime(&naive) {
             LocalResult::Single(dt) => Some(dt),
-            LocalResult::Ambiguous(earliest, _) => Some(earliest),
-            LocalResult::None => chrono::Local
+            LocalResult::Ambiguous(a, b) => Some(if a <= b { a } else { b }),
+            LocalResult::None => zone
                 .from_local_datetime(&(naive + ChronoDuration::hours(1)))
                 .earliest(),
         };
@@ -272,8 +290,8 @@ fn reset_at_from_usage_message(
         // A reset time slightly in the past means the window just recovered;
         // keep it today so downstream consumers treat it as recovered instead
         // of scheduling a resend a full day out.
-        if reset < now - ChronoDuration::minutes(5) {
-            reset = resolve(today + ChronoDuration::days(1))?;
+        if reset < now.clone() - ChronoDuration::minutes(5) {
+            reset = resolve(today.checked_add_signed(ChronoDuration::days(1))?)?;
         }
         return Some(reset.with_timezone(&Utc).to_rfc3339());
     }
@@ -285,17 +303,26 @@ fn reset_at_from_usage_message(
         for part in DURATION_PART.captures_iter(body) {
             let amount: i64 = part.get(1)?.as_str().parse().ok()?;
             let unit = part.get(2)?.as_str().to_ascii_lowercase();
-            total = total
-                + match unit.as_str() {
-                    "day" => ChronoDuration::days(amount),
-                    "hour" => ChronoDuration::hours(amount),
-                    "minute" => ChronoDuration::minutes(amount),
-                    _ => ChronoDuration::seconds(amount),
-                };
+            // `try_*` + `checked_add` keep absurd amounts from a malformed
+            // upstream message from panicking on Duration overflow.
+            let step = match unit.as_str() {
+                "day" => ChronoDuration::try_days(amount),
+                "hour" => ChronoDuration::try_hours(amount),
+                "minute" => ChronoDuration::try_minutes(amount),
+                _ => ChronoDuration::try_seconds(amount),
+            }?;
+            total = total.checked_add(&step)?;
             matched = true;
         }
-        if matched && total > ChronoDuration::zero() {
-            return Some((now + total).with_timezone(&Utc).to_rfc3339());
+        if matched
+            && total > ChronoDuration::zero()
+            && total <= ChronoDuration::days(MAX_MESSAGE_RESET_DAYS)
+        {
+            return Some(
+                now.checked_add_signed(total)?
+                    .with_timezone(&Utc)
+                    .to_rfc3339(),
+            );
         }
     }
 

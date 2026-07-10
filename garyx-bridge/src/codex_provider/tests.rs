@@ -178,6 +178,51 @@ fn reset_from_message_returns_none_without_reset_hint() {
 }
 
 #[test]
+fn reset_from_message_rejects_word_boundary_false_positives() {
+    let now = local_now(9, 0);
+    // "PMaybe" is not an AM/PM marker.
+    assert!(reset_at_from_usage_message("try again at 9 PMaybe later", now).is_none());
+}
+
+#[test]
+fn reset_from_message_survives_absurd_durations_without_panicking() {
+    let now = local_now(9, 0);
+    // Duration overflow from a malformed upstream message must not panic.
+    assert!(reset_at_from_usage_message("try again in 9223372036854775807 days", now).is_none());
+    // Amounts past the plausibility cap are rejected too.
+    assert!(reset_at_from_usage_message("try again in 4000 days", now).is_none());
+}
+
+#[test]
+fn reset_from_message_ambiguous_dst_time_takes_earliest_instant() {
+    use chrono::TimeZone;
+    // America/New_York, 2026-11-01: clocks fall back at 02:00 EDT → 01:00 EST,
+    // so 01:30 occurs twice (05:30Z EDT and 06:30Z EST). The parse must pick
+    // the earliest UTC instant regardless of chrono's Ambiguous pair order.
+    let zone: chrono_tz::Tz = "America/New_York".parse().expect("zone");
+    let now = zone
+        .with_ymd_and_hms(2026, 11, 1, 0, 30, 0)
+        .single()
+        .expect("unambiguous midnight-thirty");
+    let reset = reset_at_from_usage_message_in("try again at 1:30 AM", now).expect("parsed");
+    assert_eq!(reset, "2026-11-01T05:30:00+00:00");
+}
+
+#[test]
+fn reset_from_message_dst_gap_time_slides_forward() {
+    use chrono::TimeZone;
+    // America/New_York, 2026-03-08: 02:00–03:00 does not exist (spring
+    // forward). A 2:30 AM hint resolves an hour later instead of failing.
+    let zone: chrono_tz::Tz = "America/New_York".parse().expect("zone");
+    let now = zone
+        .with_ymd_and_hms(2026, 3, 8, 0, 30, 0)
+        .single()
+        .expect("unambiguous half past midnight");
+    let reset = reset_at_from_usage_message_in("try again at 2:30 AM", now).expect("parsed");
+    assert_eq!(reset, "2026-03-08T07:30:00+00:00");
+}
+
+#[test]
 fn build_codex_rate_limit_falls_back_to_message_reset_without_snapshot() {
     // The real-world Codex shape: usage-limit error with no structured
     // snapshot, reset time only in the message. `reset_at` presence is what
