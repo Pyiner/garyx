@@ -207,10 +207,6 @@ test('retired per-surface menu forks stay deleted', () => {
   assert.ok(!composerCss.includes('.floating-action-menu-row {'));
   assert.ok(!composerCss.includes('rgba(13, 13, 13, 0.52)'));
   const channelPluginsCss = read('styles/channel-plugins.css');
-  assert.ok(
-    !channelPluginsCss.includes('padding: 0 !important'),
-    'select viewport padding must come from the shared recipe, not be zeroed',
-  );
   assert.ok(!channelPluginsCss.includes('saturate('));
   const taskForestCss = read('styles/task-forest.css');
   assert.ok(!taskForestCss.includes('#ececea'));
@@ -230,7 +226,7 @@ test('per-surface CSS never redefines the menu surface or row identity', () => {
   // visual identity. Per-surface CSS may set widths, heights, and layout for
   // menu slots, but any of these properties on a menu selector is a fork.
   const slotPattern =
-    /dropdown-menu-content|dropdown-menu-sub-content|select-content|dropdown-menu-item|dropdown-menu-checkbox-item|dropdown-menu-sub-trigger|select-item(?!-indicator)|dropdown-menu-label|select-label|dropdown-menu-separator|select-separator|dropdown-menu-shortcut|menu-item-two-line|menu-popover-surface|popover-content|-popover\b/;
+    /dropdown-menu-content|dropdown-menu-sub-content|select-content|dropdown-menu-item|dropdown-menu-checkbox-item|dropdown-menu-sub-trigger|select-item(?!-indicator)|select-viewport|dropdown-menu-label|select-label|dropdown-menu-separator|select-separator|dropdown-menu-shortcut|menu-item-two-line|menu-popover-surface|popover-content|-popover\b/;
   const forbiddenProps = [
     'background',
     'background-color',
@@ -272,9 +268,20 @@ test('per-surface CSS never redefines the menu surface or row identity', () => {
       if (/::(?:after|before)/.test(selector)) {
         continue;
       }
+      // The shared 4px viewport inset must never be overridden per surface:
+      // any padding declaration on the select viewport slot is a fork.
+      const locksPadding = subjects.some((subject) =>
+        /select-viewport/.test(subject),
+      );
       for (const declaration of body.split(';')) {
         const property = declaration.split(':')[0]?.trim();
-        if (property && forbiddenProps.includes(property)) {
+        if (!property) {
+          continue;
+        }
+        if (
+          forbiddenProps.includes(property) ||
+          (locksPadding && /^padding/.test(property))
+        ) {
           violations.push(`${file}: "${selector}" declares ${property}`);
         }
       }

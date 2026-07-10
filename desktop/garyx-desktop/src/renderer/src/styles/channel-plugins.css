@@ -452,8 +452,8 @@ button.new-thread-resume-link:hover {
   max-width: 260px;
 }
 
-[data-slot="select-content"].new-thread-workspace-menu > div,
-[data-slot="select-content"].new-thread-mode-menu > div {
+[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-viewport"],
+[data-slot="select-content"].new-thread-mode-menu [data-slot="select-viewport"] {
   /* Popper sizing only; the 4px viewport inset comes from the shared
      select-viewport rule in styles/menus.css. */
   width: 100% !important;
