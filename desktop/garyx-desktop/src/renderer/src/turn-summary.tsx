@@ -1,12 +1,10 @@
 import { memo, type ReactNode, useEffect, useState } from 'react';
 
-import { ChevronDown } from 'lucide-react';
-
+import { CodexMessageIcon } from './codex-message-icons';
 import { useI18n } from './i18n';
 import type { TurnRow } from './render-view-model';
 
-const ICON_SIZE = 15;
-const ICON_STROKE = 1.7;
+const ICON_SIZE = 14;
 
 function formatElapsed(seconds: number): string {
   const safe = Math.max(0, Math.round(seconds));
@@ -115,11 +113,10 @@ function TurnSummaryComponent({
         type="button"
       >
         <span className="turn-summary-label">{summaryLabel}</span>
-        <ChevronDown
-          aria-hidden
+        <CodexMessageIcon
           className="turn-summary-chevron"
+          name="chevron"
           size={ICON_SIZE}
-          strokeWidth={ICON_STROKE}
         />
       </button>
       <div aria-hidden className="turn-summary-divider" />

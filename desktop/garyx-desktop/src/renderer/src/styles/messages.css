@@ -393,25 +393,29 @@
 }
 
 .message-rich [data-streamdown="code-block"] {
+  position: relative;
+  display: block;
   gap: 0;
-  margin: 8px 0;
+  margin: 14px 0;
   padding: 0;
   width: 100%;
   min-width: 0;
   max-width: 100%;
   overflow: clip;
   contain: inline-size;
-  border: 1px solid rgba(255, 255, 255, 0.96);
+  border: 0;
   border-radius: 12.5px;
-  background: rgba(26, 28, 31, 0.08);
+  background: rgba(26, 28, 31, 0.047);
   box-shadow: none;
 }
 
 .message-rich [data-streamdown="code-block-header"] {
   height: 34px;
-  padding: 4px 8px;
+  box-sizing: border-box;
+  padding: 4px 34px 4px 8px;
   border-bottom: 0;
-  color: var(--color-token-text-secondary);
+  border-radius: 12.5px 12.5px 0 0;
+  color: rgba(26, 28, 31, 0.7);
   font-family: var(--message-reading-font);
   font-size: 13px;
   font-weight: var(--message-body-weight);
@@ -428,41 +432,66 @@
 
 .message-rich [data-streamdown="code-block-header"] span {
   margin-left: 0;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .message-rich [data-streamdown="code-block-actions"] {
+  display: flex;
+  align-items: center;
   gap: 1px;
+  width: max-content;
+  height: 26px;
+  padding: 0;
   border: 0;
+  border-radius: 0;
   background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: none;
 }
 
-/* streamdown ships its copy/download bar inside a sticky wrapper that uses
-   `-mt-10` to overlap the header. Our `.message-rich` sibling-margin reset
-   nukes that negative margin, so the sticky bar drops down and steals 32px
-   of empty space between the header and the code body. Re-apply the lift
-   here so the actions sit on the right side of the header (matching Codex).
-   Pad right + top so the actions box's distance to the code-block's right
-   edge matches its distance to the top — the wrapper itself is `flex
-   justify-end` with no right inset, which otherwise makes the icon hug the
-   border. */
+/* Streamdown renders the action bar as a separate sticky row after the
+   language header. Overlay that row so it occupies the same 26px control slot
+   as ChatGPT instead of adding height or exposing Streamdown's padded shell. */
 .message-rich
   [data-streamdown="code-block"]
   > div:has(> [data-streamdown="code-block-actions"]) {
-  margin-top: -34px;
-  padding: 4px 8px 0 0;
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  width: auto;
+  height: 34px;
+  margin: 0;
+  padding: 4px 8px 4px 0;
   box-sizing: border-box;
 }
 
 .message-rich [data-streamdown="code-block-copy-button"],
 .message-rich [data-streamdown="code-block-download-button"] {
-  color: var(--color-token-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(26, 28, 31, 0.494);
+  line-height: 1;
   border-radius: 10px;
 }
 
-/* Replace streamdown's bundled copy/download icons with shadcn (Lucide)
-   versions via mask-image, so we can keep streamdown's button machinery
-   (clipboard handling, success state) but ship a consistent icon set. */
+/* Keep Streamdown's clipboard behavior, but use the same compact filled copy
+   glyph as the Codex message actions. */
 .message-rich [data-streamdown="code-block-copy-button"] > svg,
 .message-rich [data-streamdown="code-block-download-button"] > svg {
   display: none;
@@ -471,7 +500,8 @@
 .message-rich [data-streamdown="code-block-copy-button"]::before,
 .message-rich [data-streamdown="code-block-download-button"]::before {
   content: "";
-  display: inline-block;
+  display: block;
+  flex: 0 0 auto;
   width: 16px;
   height: 16px;
   background-color: currentColor;
@@ -483,10 +513,9 @@
   mask-size: 16px 16px;
 }
 
-/* Lucide `copy` */
 .message-rich [data-streamdown="code-block-copy-button"]::before {
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect width='14' height='14' x='8' y='8' rx='2' ry='2'/><path d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/></svg>");
-  mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect width='14' height='14' x='8' y='8' rx='2' ry='2'/><path d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/></svg>");
+  -webkit-mask-image: url("../assets/codex-copy.svg");
+  mask-image: url("../assets/codex-copy.svg");
 }
 
 /* Lucide `download` */
@@ -497,7 +526,8 @@
 
 .message-rich [data-streamdown="code-block-copy-button"]:hover,
 .message-rich [data-streamdown="code-block-download-button"]:hover {
-  color: var(--color-token-foreground);
+  background: transparent;
+  color: rgba(26, 28, 31, 0.494);
 }
 
 .message-rich [data-streamdown="code-block-body"] {
@@ -514,7 +544,7 @@
   font-family: var(--message-code-font);
   font-size: 14px;
   font-weight: var(--message-body-weight);
-  line-height: 21px;
+  line-height: 22px;
   scrollbar-color: color-mix(in oklab, var(--color-token-foreground) 18%, transparent)
     transparent;
   scrollbar-gutter: stable;
@@ -539,6 +569,7 @@
   display: block;
   min-width: 100%;
   max-width: none;
+  line-height: 22px;
   white-space: pre;
   overflow-wrap: normal;
   word-break: normal;

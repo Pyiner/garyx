@@ -2,8 +2,9 @@ import { memo, type ComponentType, type ReactNode, useEffect, useMemo, useState 
 
 import type { RenderToolFieldProjection } from '@shared/contracts';
 
-import { Brain, ChevronDown, FileText, Folder, Globe, LayoutList, ListChecks, ListTree, MessageCircleQuestion, Pencil, Search, Terminal, Wrench } from 'lucide-react';
+import { Brain, Folder, Globe, LayoutList, ListChecks, ListTree, MessageCircleQuestion, Search, Wrench } from 'lucide-react';
 
+import { CodexMessageIcon, type CodexMessageIconName } from './codex-message-icons';
 import {
   resolveMergedToolTrace,
   type MergedToolTrace,
@@ -31,10 +32,13 @@ type ToolTraceTreeNode = {
 const ICON_SIZE = 16;
 const ICON_STROKE = 1.6;
 
+const CODEX_TOOL_ICON_MAP: Partial<Record<string, CodexMessageIconName>> = {
+  '⌘': 'command',
+  '≡': 'read',
+  '✎': 'edit',
+};
+
 const TOOL_ICON_MAP: Record<string, ComponentType<{ size?: number; strokeWidth?: number }>> = {
-  '⌘': Terminal,
-  '≡': FileText,
-  '✎': Pencil,
   '⌕': Search,
   '◌': Folder,
   '↗': Globe,
@@ -47,6 +51,10 @@ const TOOL_ICON_MAP: Record<string, ComponentType<{ size?: number; strokeWidth?:
 };
 
 function ToolIcon({ icon }: { icon: string }) {
+  const codexIcon = CODEX_TOOL_ICON_MAP[icon];
+  if (codexIcon) {
+    return <CodexMessageIcon name={codexIcon} size={ICON_SIZE} />;
+  }
   const Component = TOOL_ICON_MAP[icon];
   if (Component) {
     return <Component size={ICON_SIZE} strokeWidth={ICON_STROKE} />;
@@ -272,6 +280,26 @@ function summarizeToolTraceEntries(
   return parts.join(locale === 'zh-CN' ? '，' : ', ');
 }
 
+function resolveToolTraceGroupIcon(entries: ToolTraceEntry[]): string {
+  const mergedEntries = entries.map((entry) =>
+    resolveMergedToolTrace(entry.toolUse, entry.toolResult, entry.projection),
+  );
+
+  // Codex chooses the icon from the first summary category, whose category
+  // order is file changes, exploration, then commands. This is why a mixed
+  // "edited files, read files, ran commands" group carries the edit glyph.
+  if (mergedEntries.some((merged) => merged.icon === '✎' || FILE_TRACE_TITLES.has(merged.title))) {
+    return '✎';
+  }
+  if (mergedEntries.some((merged) => merged.icon === '≡')) {
+    return '≡';
+  }
+  if (mergedEntries.some((merged) => merged.icon === '⌘' || merged.title === 'Command')) {
+    return '⌘';
+  }
+  return mergedEntries[0]?.icon || '⊚';
+}
+
 type ToolTraceGroupImage =
   | {
       kind: 'embedded';
@@ -331,6 +359,7 @@ function ToolTraceGroupComponent({
     () => summarizeToolTraceEntries(entries, t, locale),
     [entries, locale, t],
   );
+  const groupIcon = useMemo(() => resolveToolTraceGroupIcon(entries), [entries]);
   const treeNodes = useMemo(() => buildToolTraceTree(entries), [entries]);
   const groupImages = useMemo(() => collectToolTraceGroupImages(entries), [entries]);
 
@@ -352,11 +381,17 @@ function ToolTraceGroupComponent({
         }}
         type="button"
       >
-        <span className="tool-trace-group-icon">
-          <Terminal size={ICON_SIZE} strokeWidth={ICON_STROKE} />
+        <span className="tool-trace-group-leading">
+          <span className="tool-trace-group-icon">
+            <ToolIcon icon={groupIcon} />
+          </span>
+          <span className="tool-trace-group-summary">{summary}</span>
         </span>
-        <span className="tool-trace-group-summary">{summary}</span>
-        <ChevronDown aria-hidden className="tool-trace-group-chevron" size={15} strokeWidth={1.7} />
+        <CodexMessageIcon
+          className="tool-trace-group-chevron"
+          name="chevron"
+          size={14}
+        />
       </button>
       {groupImages.length > 0 ? (
         <div className="tool-trace-images tool-trace-group-images">
