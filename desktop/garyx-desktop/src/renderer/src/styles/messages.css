@@ -666,12 +666,12 @@ button.message-image-frame:focus-visible {
 }
 
 .message-image-frame-compact {
-  width: min(168px, 100%);
+  width: min(158px, 100%);
 }
 
 .message-image-loading {
   display: grid;
-  width: min(168px, 100%);
+  width: min(158px, 100%);
   height: 112px;
   place-items: center;
   border: 0.5px solid var(--color-token-border-light);

@@ -549,7 +549,7 @@ export const RichMessageContent = memo(function RichMessageContent({
       return (
         <MessagePathImageAttachmentFrame
           alt={label}
-          compact={false}
+          compact
           fallback={fallback}
           imageKey={`markdown-image:${path}`}
           loadImagePreview={loadImagePreview}
