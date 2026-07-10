@@ -297,19 +297,6 @@ struct GaryxThreadRuntimeSettingsPanel: View {
 
             Spacer(minLength: 0)
         }
-        .overlay(alignment: .trailing) {
-            Button {
-                onClose()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(GaryxFont.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close")
-        }
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .padding(.bottom, 10)
