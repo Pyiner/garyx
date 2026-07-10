@@ -1123,6 +1123,43 @@ export function useMessageDispatchController({
     ignoreComposerSubmitUntilRef.current = performance.now() + durationMs;
   }
 
+  /**
+   * Dispatch a fixed prompt through the same intent pipeline as a composer
+   * send without touching the composer draft. Used by tail affordances such
+   * as the rate-limit banner's Continue action. No-op while the thread is
+   * already running.
+   */
+  async function handleSendPromptText(text: string) {
+    const prompt = text.trim();
+    if (!prompt) {
+      return;
+    }
+    const threadId = await ensureSelectedThreadId();
+    if (!threadId) {
+      return;
+    }
+    const runtime = selectThreadRuntime(messageStateRef.current, threadId);
+    if (runtime && isRuntimeBusy(runtime.state)) {
+      return;
+    }
+    if (!(await ensureThreadBotRouting(threadId))) {
+      return;
+    }
+    const intent = buildIntent({
+      threadId,
+      text: prompt,
+      source: "composer_send",
+      state: "dispatch_requested",
+      dispatchMode: "sync_send",
+    });
+    dispatchMessageState({
+      type: "intent/created",
+      intent,
+      enqueue: false,
+    });
+    await runQueuedBatch(threadId, intent.intentId);
+  }
+
   function handleComposerSubmit(options?: {
     useAlternateFollowUpBehavior?: boolean;
   }) {
@@ -1168,6 +1205,7 @@ export function useMessageDispatchController({
     handleComposerSubmit,
     handleInterrupt,
     handleRetryFailedMessage,
+    handleSendPromptText,
     handleSteerQueuedPrompt,
     ignoreComposerSubmitUntilRef,
     isComposingRef,

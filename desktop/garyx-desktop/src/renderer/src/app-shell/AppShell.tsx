@@ -2447,6 +2447,7 @@ export function AppShell() {
     handleComposerSubmit,
     handleInterrupt,
     handleRetryFailedMessage,
+    handleSendPromptText,
     handleSteerQueuedPrompt,
     ignoreComposerSubmitUntilRef,
     isComposingRef,
@@ -4368,6 +4369,9 @@ export function AppShell() {
         showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
         showTailThinking={showTailThinking}
         rateLimit={activeRateLimit}
+        onRateLimitContinue={() => {
+          void handleSendPromptText("continue");
+        }}
         threadLayoutRef={threadLayoutRef}
         threadLayoutStyle={
           !embedded && threadLogsOpen

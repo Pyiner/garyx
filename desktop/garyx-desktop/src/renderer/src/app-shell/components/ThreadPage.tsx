@@ -364,6 +364,7 @@ type ThreadPageProps = {
   showHistoryLoadingPlaceholder: boolean;
   showTailThinking: boolean;
   rateLimit?: RenderRateLimit | null;
+  onRateLimitContinue?: () => void;
   threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
   threadLogsMaxWidth: number;
@@ -544,6 +545,7 @@ export function ThreadPage({
   showHistoryLoadingPlaceholder,
   showTailThinking,
   rateLimit,
+  onRateLimitContinue,
   threadLayoutRef,
   threadLayoutStyle,
   threadLogsMaxWidth,
@@ -1200,7 +1202,7 @@ export function ThreadPage({
             </Bubble>
           ) : null}
 
-          <RateLimitBanner rateLimit={rateLimit} />
+          <RateLimitBanner onContinue={onRateLimitContinue} rateLimit={rateLimit} />
           </MessageScrollerContent>
           </MessageScrollerViewport>
           <MessageScrollerButton behavior="smooth" className="rounded-full shadow-sm">
