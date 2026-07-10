@@ -16,6 +16,17 @@
   color: #6f6f6a;
 }
 
+.gateway-identity-glyph {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+}
+
+.gateway-identity-glyph > svg {
+  width: 11px;
+  height: 11px;
+}
+
 .gateway-row-glyph {
   width: 26px;
   height: 26px;
@@ -31,6 +42,14 @@
   height: 9px;
   border-radius: 50%;
   box-shadow: 0 0 0 2px #f6f6f4;
+}
+
+.gateway-identity-glyph > .gateway-glyph-badge {
+  right: -2px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 1.5px #f6f6f4;
 }
 
 .gateway-switcher-popover .gateway-glyph-badge {

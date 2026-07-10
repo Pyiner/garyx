@@ -38,7 +38,7 @@ function gatewayUrlKey(gatewayUrl: string): string {
 const UNSAVED_CURRENT_PROFILE_ID = 'gateway-switcher::current-unsaved';
 
 /// Bottom-left gateway identity bar: replaces the plain Settings row with the
-/// current gateway's identity (glyph + name + connection state). The bar body
+/// current gateway's identity (glyph + name + connection badge). The bar body
 /// opens an upward popover that lists saved gateways — picking one switches
 /// directly. The trailing gear keeps Settings one click away; gateway
 /// management lives in Settings -> Gateway.
@@ -192,7 +192,7 @@ export function GatewayIdentityBar({
       >
         <PopoverTrigger asChild>
           <button
-            aria-label={t('Switch gateway')}
+            aria-label={`${t('Switch gateway')}: ${currentLabel} · ${toneLabel}`}
             className="gateway-identity-main"
             title={`${currentLabel} · ${toneLabel}`}
             type="button"
@@ -200,7 +200,6 @@ export function GatewayIdentityBar({
             {renderGlyph(true, 'gateway-identity-glyph')}
             <span className="gateway-identity-copy">
               <span className="gateway-identity-name">{currentLabel}</span>
-              <span className="gateway-identity-status">{toneLabel}</span>
             </span>
           </button>
         </PopoverTrigger>
@@ -229,7 +228,7 @@ export function GatewayIdentityBar({
           onClick={onOpenSettings}
           type="button"
         >
-          <SettingsIcon aria-hidden size={14} strokeWidth={1.9} />
+          <SettingsIcon aria-hidden size={18} strokeWidth={1.7} />
         </button>
       </IconTooltip>
     </div>

@@ -596,31 +596,18 @@
 }
 
 .gateway-identity-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  min-width: 0;
   flex: 1;
+  min-width: 0;
 }
 
 .gateway-identity-name {
+  display: block;
   min-width: 0;
   overflow: hidden;
   color: var(--color-token-text-primary);
-  font-size: 12.5px;
-  font-weight: 550;
-  line-height: 17px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.gateway-identity-status {
-  min-width: 0;
-  overflow: hidden;
-  color: #8f8f8a;
-  font-size: 11px;
-  font-weight: 450;
-  line-height: 14px;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -630,21 +617,21 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 9px;
+  gap: 4px;
+  width: 32px;
+  height: 32px;
+  padding: 4px 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
   background: transparent;
-  color: #8f8f8a;
+  color: var(--color-token-description-foreground);
+  font: 445 16px/24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: default;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
 }
 
 .gateway-identity-gear:hover {
-  background: rgba(28, 28, 26, 0.06);
-  color: #3a3a37;
+  background: var(--color-token-row-hover);
+  color: var(--color-token-description-foreground);
 }
 
 .gateway-switcher-popover {

@@ -860,16 +860,25 @@
 }
 
 .sidebar-footer {
-  flex: 0 0 auto;
-  margin-top: 0;
-  padding: 10px 0 0;
-  border-top: none;
+  position: relative;
+  flex: 0 0 46px;
+  height: 46px;
+  margin: 0 -8px -10px;
+  padding: 0;
 }
 
 .left-rail > .sidebar-footer {
-  position: sticky;
-  bottom: 0;
+  position: relative;
   z-index: 2;
+}
+
+.sidebar-footer::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 0.5px;
+  background: rgba(26, 28, 31, 0.1);
+  pointer-events: none;
 }
 
 .sidebar-update-slot {
@@ -881,7 +890,7 @@
 }
 
 .sidebar-footer .sidebar-action {
-  min-height: 31px;
+  min-height: 29px;
   color: var(--color-token-text-primary);
   font-size: var(--text-base);
   font-weight: 430;
