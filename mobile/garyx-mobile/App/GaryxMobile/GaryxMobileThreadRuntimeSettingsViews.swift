@@ -166,6 +166,11 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     }
 
     @State private var page = Page.main
+    /// Two-phase drill-in coordinator: the current page fades out fully,
+    /// then the page swaps and fades in. Only one page is ever mounted.
+    @State private var pageContentVisible = true
+    @State private var pageTransitionToken = 0
+    @State private var measuredOptionsHeight: CGFloat?
 
     private var selectedThread: GaryxThreadSummary? { model.selectedThread }
     private var runtime: GaryxThreadRuntimeSummary? { selectedThread?.threadRuntime }
@@ -257,7 +262,10 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, 14)
                     .fixedSize(horizontal: false, vertical: true)
-                    .transition(mainPageTransition)
+                    // The swap happens while the content is fully faded out;
+                    // .identity suppresses the DEFAULT branch crossfade that
+                    // would otherwise keep both pages visible together.
+                    .transition(.identity)
                 } else {
                     ScrollView {
                         optionsPage
@@ -265,21 +273,36 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                             .padding(.top, 4)
                             .padding(.bottom, 12)
                             .garyxVerticalScrollContentWidth()
+                            .onGeometryChange(for: CGFloat.self) { geometry in
+                                geometry.size.height
+                            } action: { height in
+                                guard height > 0 else { return }
+                                measuredOptionsHeight = height
+                            }
                     }
-                    .frame(height: optionsPageHeight)
+                    .frame(height: optionsViewportHeight)
+                    // Measured-height corrections (Dynamic Type growth)
+                    // settle with the same curve as the page entrance.
+                    .animation(.easeOut(duration: 0.18), value: optionsViewportHeight)
                     .scrollIndicators(.hidden)
                     .garyxAdaptiveSoftScrollEdge(for: [.top, .bottom])
-                    .transition(subPageTransition)
+                    .transition(.identity)
                 }
             }
-            .opacity(isExpanded ? 1 : 0)
+            // Exactly one page is ever mounted; drill-in is a two-phase
+            // fade-out → swap → fade-in, so two pages can never overlap on
+            // the translucent backing.
+            .opacity(isExpanded && pageContentVisible ? 1 : 0)
+            .offset(x: pageContentVisible ? 0 : pageHiddenOffset)
         }
-        // Collapsing from a sub-page must not shrink the surface around the
-        // "< Model" header: settle back to the compact-row header in the
-        // same transaction so the capsule hand-off stays seamless.
+        // Collapsing from a sub-page resets to the compact-row header
+        // instantly (no page transition), keeping the capsule hand-off
+        // free of "< Model" residue.
         .onChange(of: isExpanded) { _, expanded in
             if !expanded {
+                pageTransitionToken += 1
                 page = .main
+                pageContentVisible = true
             }
         }
         .task(id: providerType) {
@@ -291,39 +314,24 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         }
     }
 
-    /// Menu-style drill-in: the leaving page exits fast, the entering page
-    /// fades in slightly later from its side of the stack, so the two pages
-    /// never visibly overlap on the translucent glass. Reduce Motion keeps
-    /// only the staggered fade.
-    private var mainPageTransition: AnyTransition {
-        pageTransition(edgeOffset: -12)
-    }
-
-    private var subPageTransition: AnyTransition {
-        pageTransition(edgeOffset: 12)
-    }
-
-    private func pageTransition(edgeOffset: CGFloat) -> AnyTransition {
-        let offset: CGFloat = reduceMotion ? 0 : edgeOffset
-        return .asymmetric(
-            insertion: AnyTransition.offset(x: offset)
-                .combined(with: .opacity)
-                .animation(.easeOut(duration: 0.18).delay(0.05)),
-            removal: AnyTransition.offset(x: offset)
-                .combined(with: .opacity)
-                .animation(.easeIn(duration: 0.10))
-        )
+    /// The leaving page slips toward its side of the stack; the entering
+    /// page arrives from its own side. Reduce Motion keeps only the fade.
+    private var pageHiddenOffset: CGFloat {
+        reduceMotion ? 0 : (page == .main ? -12 : 12)
     }
 
     private var panelMaxHeight: CGFloat {
         min(UIScreen.main.bounds.height * 0.62, 520)
     }
 
-    private var optionsPageHeight: CGFloat {
+    /// Estimate from the default-size row metrics, corrected by the
+    /// measured content height once laid out — Dynamic Type sizes grow the
+    /// rows, and the viewport follows instead of forcing an inner scroll.
+    private var optionsViewportHeight: CGFloat {
         let rows = CGFloat(optionsPageCount)
         let hairlines = max(rows - 1, 0) * (1 / UIScreen.main.scale)
-        let content = rows * 44 + hairlines + 4 + 12
-        return min(max(content, 96), panelMaxHeight)
+        let estimate = rows * 44 + hairlines + 4 + 12
+        return min(max(measuredOptionsHeight ?? estimate, 96), panelMaxHeight)
     }
 
     private var optionsPageCount: Int {
@@ -392,7 +400,7 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                 } label: {
                     HStack(spacing: 12) {
                         Text(option.label)
-                            .font(GaryxFont.callout(weight: selectedId == option.id ? .semibold : .regular))
+                            .font(GaryxFont.scaledCallout(weight: selectedId == option.id ? .semibold : .regular))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -421,44 +429,53 @@ struct GaryxThreadRuntimeSettingsPanel: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
-            if page == .main {
-                // The exact view that renders inside the top-bar capsule,
-                // pinned to the capsule's width: the morph never moves or
-                // re-truncates the title.
-                GaryxThreadRuntimeCompactRow()
-                    .frame(width: compactRowWidth, alignment: .leading)
-                    .transition(mainPageTransition)
-            } else {
-                HStack(spacing: 8) {
-                    Button {
-                        setPage(.main)
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(GaryxFont.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 30, height: 30)
-                            .background(
-                                Color.primary.opacity(0.045),
-                                in: RoundedRectangle(cornerRadius: 15, style: .continuous)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 15, style: .continuous)
-                                    .stroke(Color.primary.opacity(0.05), lineWidth: 1)
-                            }
-                            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Back")
+            Group {
+                if page == .main {
+                    // The exact view that renders inside the top-bar capsule,
+                    // pinned to the capsule's width: the morph never moves or
+                    // re-truncates the title.
+                    GaryxThreadRuntimeCompactRow()
+                        .frame(width: compactRowWidth, alignment: .leading)
+                        .transition(.identity)
+                } else {
+                    // The button's 30pt visual sits inside a 44pt hit
+                    // target; leading padding 5 keeps the visual circle on
+                    // the same x=12 the compact row's content uses.
+                    HStack(spacing: 1) {
+                        Button {
+                            setPage(.main)
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(GaryxFont.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 30, height: 30)
+                                .background(
+                                    Color.primary.opacity(0.045),
+                                    in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                )
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                        .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+                                }
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Back")
 
-                    Text(page.title)
-                        .font(GaryxFont.callout(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                        Text(page.title)
+                            .font(GaryxFont.scaledCallout(weight: .medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                    }
+                    .padding(.leading, 5)
+                    .padding(.trailing, 12)
+                    .frame(minHeight: 44)
+                    .transition(.identity)
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 44)
-                .transition(subPageTransition)
             }
+            .opacity(pageContentVisible ? 1 : 0)
+            .offset(x: pageContentVisible ? 0 : pageHiddenOffset)
 
             Spacer(minLength: 0)
         }
@@ -723,13 +740,20 @@ struct GaryxThreadRuntimeSettingsPanel: View {
 
     private func setPage(_ nextPage: Page) {
         guard page != nextPage else { return }
-        let duration: Double = if reduceMotion {
-            0.13
-        } else {
-            nextPage == .main ? 0.18 : 0.20
+        pageTransitionToken += 1
+        let token = pageTransitionToken
+        withAnimation(.easeIn(duration: 0.10)) {
+            pageContentVisible = false
         }
-        withAnimation(.easeOut(duration: duration)) {
-            page = nextPage
+        Task { @MainActor in
+            // 100ms exit + 50ms rest before the new page enters.
+            try? await Task.sleep(for: .milliseconds(150))
+            guard token == pageTransitionToken else { return }
+            measuredOptionsHeight = nil
+            withAnimation(.easeOut(duration: reduceMotion ? 0.12 : 0.18)) {
+                page = nextPage
+                pageContentVisible = true
+            }
         }
     }
 

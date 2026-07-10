@@ -66,6 +66,14 @@ enum GaryxFont {
         .system(size: 16, weight: weight)
     }
 
+    /// Callout that follows Dynamic Type. Prefer this for reading surfaces
+    /// (menus, options, settings rows) where accessibility sizes must
+    /// actually grow the text; the fixed variants remain for chrome whose
+    /// geometry is pinned (e.g. the title-capsule morph).
+    static func scaledCallout(weight: Font.Weight = .regular) -> Font {
+        .system(.callout, design: .default, weight: weight)
+    }
+
     static func subheadline(weight: Font.Weight = .regular) -> Font {
         .system(size: 15, weight: weight)
     }
