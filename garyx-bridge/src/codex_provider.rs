@@ -243,12 +243,12 @@ fn reset_at_from_usage_message_in<Tz: chrono::TimeZone>(
     });
     static IN_DURATION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(
-            r"(?i)\btry again in\s+((?:\d+\s*(?:days?|hours?|minutes?|seconds?)(?:[,\s]|and\s)*)+)",
+            r"(?i)\btry again in\s+((?:\d+\s*(?:days?|hours?|minutes?|seconds?)\b(?:[,\s]|and\s)*)+)",
         )
         .expect("valid regex")
     });
     static DURATION_PART: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(?i)(\d+)\s*(day|hour|minute|second)s?").expect("valid regex")
+        regex::Regex::new(r"(?i)(\d+)\s*(day|hour|minute|second)s?\b").expect("valid regex")
     });
 
     let zone = now.timezone();

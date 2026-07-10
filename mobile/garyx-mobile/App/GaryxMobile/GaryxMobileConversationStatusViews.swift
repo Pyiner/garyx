@@ -243,12 +243,15 @@ struct GaryxRateLimitBanner: View {
                                 .foregroundStyle(Color(.secondaryLabel))
                         )
                     VStack(alignment: .leading, spacing: 2) {
+                        // Semantic fonts (not the fixed-size GaryxFont ramp)
+                        // so the card tracks Dynamic Type; defaults match the
+                        // previous 17/12pt values.
                         Text(model.title)
-                            .font(GaryxFont.body())
+                            .font(.body)
                             .fontWeight(.semibold)
                             .foregroundStyle(Color(.label))
                         Text(model.detail)
-                            .font(GaryxFont.caption())
+                            .font(.caption)
                             .monospacedDigit()
                             .foregroundStyle(GaryxTheme.secondaryText)
                     }
@@ -266,13 +269,15 @@ struct GaryxRateLimitBanner: View {
                             }
                         } label: {
                             Text(sending ? "Sending…" : "Continue")
-                                .font(GaryxFont.caption())
+                                .font(.caption)
                                 .fontWeight(.semibold)
                                 .foregroundStyle(
                                     sending ? Color(.secondaryLabel) : Color(.label)
                                 )
                                 .padding(.horizontal, 14)
-                                .frame(height: 28)
+                                // Vertical padding instead of a fixed height
+                                // so the capsule grows with Dynamic Type.
+                                .padding(.vertical, 7)
                                 .background(
                                     Capsule(style: .continuous)
                                         .fill(Color(.systemBackground))
@@ -281,9 +286,9 @@ struct GaryxRateLimitBanner: View {
                                     Capsule(style: .continuous)
                                         .stroke(Color(.separator), lineWidth: 1)
                                 )
-                                // 44pt minimum touch target around the 28pt
-                                // visual capsule, matching the shared button
-                                // styles' hit-area convention.
+                                // 44pt minimum touch target around the visual
+                                // capsule, matching the shared button styles'
+                                // hit-area convention.
                                 .frame(minWidth: 44, minHeight: 44)
                                 .contentShape(Rectangle())
                         }

@@ -182,6 +182,11 @@ fn reset_from_message_rejects_word_boundary_false_positives() {
     let now = local_now(9, 0);
     // "PMaybe" is not an AM/PM marker.
     assert!(reset_at_from_usage_message("try again at 9 PMaybe later", now).is_none());
+    // Duration units glued to trailing words are not real duration hints.
+    assert!(
+        reset_at_from_usage_message("try again in 2 hoursmaybe after maintenance", now).is_none()
+    );
+    assert!(reset_at_from_usage_message("try again in 30 minuteslater", now).is_none());
 }
 
 #[test]
