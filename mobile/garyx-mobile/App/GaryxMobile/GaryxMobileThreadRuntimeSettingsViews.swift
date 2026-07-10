@@ -97,8 +97,7 @@ struct GaryxThreadRuntimeMorphSurface: View {
 
         GaryxThreadRuntimeSettingsPanel(
             compactRowWidth: anchorRect.width,
-            isExpanded: isExpanded,
-            onClose: onClose
+            isExpanded: isExpanded
         )
         // Inner frame keeps the panel laid out at its final width the whole
         // time, so text never reflows while the surface window grows.
@@ -149,7 +148,6 @@ struct GaryxThreadRuntimeSettingsPanel: View {
 
     let compactRowWidth: CGFloat
     let isExpanded: Bool
-    let onClose: () -> Void
 
     private enum Page: Hashable {
         case main
