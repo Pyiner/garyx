@@ -232,3 +232,34 @@ export function createThreadStreamHub(deps: ThreadStreamHubDeps): ThreadStreamHu
     activeThreadIds: () => Array.from(forwarders.keys()),
   };
 }
+
+/**
+ * The renderer sink's true lifetime is the document, not the window. A
+ * main-frame cross-document navigation (Cmd+R reload, dev-server restart)
+ * replaces the document without running React effect cleanup, so the stop
+ * calls that normally balance every start never arrive — and `isSinkAlive`
+ * stays true because the window survives. Each forwarder orphaned that way
+ * holds a healthy gateway SSE socket indefinitely (the idle watchdog never
+ * fires on a live stream), so cross-reload thread switching accumulates one
+ * zombie socket per cycle: the TASK-1840 pool-starvation path. Dropping every
+ * forwarder when a cross-document navigation starts restores the invariant;
+ * the new document re-subscribes to exactly what it renders.
+ */
+export function bindThreadStreamSinkNavigation(
+  hub: ThreadStreamHub,
+  contents: {
+    on(
+      event: "did-start-navigation",
+      listener: (details: {
+        isMainFrame: boolean;
+        isSameDocument: boolean;
+      }) => void,
+    ): unknown;
+  },
+): void {
+  contents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) {
+      hub.stop();
+    }
+  });
+}

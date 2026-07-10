@@ -187,7 +187,10 @@ import {
   updateRemoteThread,
 } from "./gary-client";
 import { wireGatewayTransport } from "./gateway-transport";
-import { createThreadStreamHub } from "./thread-stream-hub";
+import {
+  bindThreadStreamSinkNavigation,
+  createThreadStreamHub,
+} from "./thread-stream-hub";
 import {
   clearThreadTranscriptCache,
   loadThreadTranscriptCache,
@@ -495,6 +498,7 @@ function createMainWindow(): BrowserWindow {
 
   bindBrowserWindow(window);
   subscribeUpdateStatus(window);
+  bindThreadStreamSinkNavigation(threadStreamHub, window.webContents);
   window.on("close", (event) => {
     if (!isQuitting) {
       event.preventDefault();

@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 
-import { createThreadStreamHub } from "./thread-stream-hub.ts";
+import {
+  bindThreadStreamSinkNavigation,
+  createThreadStreamHub,
+} from "./thread-stream-hub.ts";
 
 // Regression harness for #TASK-1840: during a gateway crash loop the desktop
 // stacked up zombie SSE connections until Chromium's 6-per-host pool was
@@ -257,6 +260,77 @@ test("a silent stream is aborted and re-dialed by the idle watchdog", async () =
       2000,
       "silent socket was closed",
     );
+
+    hub.stop();
+    await until(() => server.activeStreams() === 0, 2000, "stop() aborts all live streams");
+  } finally {
+    await server.close();
+  }
+});
+
+test("a renderer reload drops every forwarder the old document owned", async () => {
+  // Repro for #TASK-1902 (the TASK-1840 accumulation path): a full-page
+  // reload replaces the renderer document without running React effect
+  // cleanup, so the stop IPC that balances every start never arrives — and
+  // the window-level sink stays "alive". Cross-reload thread switching
+  // (select A -> Cmd+R -> select B, repeat) then accumulates one zombie
+  // forwarder and one live gateway socket per cycle until the 6-per-host
+  // pool starves. The did-start-navigation binding must drop them all.
+  const server = await startSseServer((ctx) => {
+    ctx.frame([ctx.afterSeq + 1]);
+    ctx.ping();
+  });
+  try {
+    const { hub } = makeHub(server.url);
+    const contents = new EventEmitter();
+    bindThreadStreamSinkNavigation(hub, contents);
+    const reload = () =>
+      contents.emit("did-start-navigation", {
+        isMainFrame: true,
+        isSameDocument: false,
+      });
+
+    // Incident recipe, 6 cycles: each document selects a different thread,
+    // then reloads without any effect cleanup running.
+    for (const threadId of ["t-1", "t-2", "t-3", "t-4", "t-5", "t-6"]) {
+      hub.start({ threadId, afterSeq: 0, consumerId: "selected-thread" });
+      await until(
+        () => server.requests(threadId) >= 1,
+        5000,
+        `${threadId} stream connected`,
+      );
+      reload();
+    }
+    hub.start({
+      threadId: "t-final",
+      afterSeq: 0,
+      consumerId: "selected-thread",
+    });
+    await until(
+      () => server.requests("t-final") >= 1,
+      5000,
+      "post-reload document stream connected",
+    );
+    await until(
+      () => server.activeStreams() === 1,
+      2000,
+      "pre-reload zombie streams all closed",
+    );
+    assert.deepEqual(hub.activeThreadIds(), ["t-final"]);
+
+    // Same-document navigations (hash change, pushState) and subframe
+    // navigations do not replace the document; its streams must survive.
+    contents.emit("did-start-navigation", {
+      isMainFrame: true,
+      isSameDocument: true,
+    });
+    contents.emit("did-start-navigation", {
+      isMainFrame: false,
+      isSameDocument: false,
+    });
+    await settle(100);
+    assert.deepEqual(hub.activeThreadIds(), ["t-final"]);
+    assert.equal(server.activeStreams(), 1);
 
     hub.stop();
     await until(() => server.activeStreams() === 0, 2000, "stop() aborts all live streams");
