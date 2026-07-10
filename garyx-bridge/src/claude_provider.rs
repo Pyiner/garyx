@@ -236,7 +236,7 @@ fn build_claude_rate_limit(
             .map(ToOwned::to_owned),
         used_percent: info
             .and_then(|object| object.get("utilization"))
-            .and_then(Value::as_i64),
+            .and_then(claude_utilization_percent),
         reached_type: if blocking_result {
             terminal_reason.map(ToOwned::to_owned)
         } else {
@@ -247,6 +247,24 @@ fn build_claude_rate_limit(
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
     })
+}
+
+/// Normalize the Claude `rate_limit_info.utilization` value to a whole
+/// percentage. The official CLI reports a `0..1` ratio (e.g. `0.93`), so
+/// ratios are scaled by 100; values above `1` are treated as already being
+/// percentages for tolerance. Numeric strings are accepted too.
+fn claude_utilization_percent(value: &Value) -> Option<i64> {
+    let raw = value.as_f64().or_else(|| {
+        value
+            .as_str()
+            .map(str::trim)
+            .and_then(|text| text.parse::<f64>().ok())
+    })?;
+    if !raw.is_finite() || raw < 0.0 {
+        return None;
+    }
+    let percent = if raw <= 1.0 { raw * 100.0 } else { raw };
+    Some(percent.round() as i64)
 }
 
 /// Compose a structured run error message from the result frame's terminal
@@ -940,7 +958,11 @@ fn emit_context_compaction_activity(
         Some(CONTEXT_COMPACTION_TOOL_NAME.to_owned()),
     )
     .with_timestamp(now.clone())
-    .with_metadata_value("source", serde_json::json!("claude_sdk"));
+    .with_metadata_value("source", serde_json::json!("claude_sdk"))
+    // `item_type` drives the channel-side placeholder policy
+    // (`plugin_tools::should_hide_tool_call_display`), keeping Claude
+    // compaction hidden on Telegram/Discord exactly like Codex compaction.
+    .with_metadata_value("item_type", serde_json::json!(CONTEXT_COMPACTION_TOOL_NAME));
     let mut tool_result = ProviderMessage::tool_result(
         serde_json::json!({
             "result": result_content,
@@ -951,7 +973,8 @@ fn emit_context_compaction_activity(
         Some(is_error),
     )
     .with_timestamp(now)
-    .with_metadata_value("source", serde_json::json!("claude_sdk"));
+    .with_metadata_value("source", serde_json::json!("claude_sdk"))
+    .with_metadata_value("item_type", serde_json::json!(CONTEXT_COMPACTION_TOOL_NAME));
     tool_result.text = (!result_text.is_empty()).then_some(result_text);
 
     for entry in [tool_use, tool_result] {
@@ -1589,6 +1612,16 @@ impl ClaudeCliProvider {
         run_id: &str,
         on_chunk: &StreamCallback,
     ) -> Result<Option<SdkRunOutcome>, BridgeError> {
+        // Drop any quota stash left by a prior attempt on this thread FIRST —
+        // before connect/send can fail — so a stale entry from an earlier
+        // attempt can never be attributed to this attempt's terminal record.
+        // The freshest attempt re-stages at the end of its message loop when
+        // it actually hits the quota.
+        self.pending_rate_limits
+            .lock()
+            .await
+            .remove(&options.thread_id);
+
         #[cfg(test)]
         {
             self.test_recorded_session_attempts
@@ -1698,12 +1731,10 @@ impl ClaudeCliProvider {
         source: &mut (impl MessageSource + Send),
         on_chunk: &StreamCallback,
     ) -> Result<(String, Option<ProcessedResult>, StreamSignals), BridgeError> {
-        // Drop any quota stash left by a prior attempt on this thread so a
-        // stale entry can never be attributed to this attempt's terminal
-        // record; the freshest attempt re-stages below when it actually hits
-        // the quota.
-        self.pending_rate_limits.lock().await.remove(thread_id);
-
+        // NOTE: the per-attempt quota-stash cleanup lives at the TOP of
+        // `execute_sdk_run` (before connect/send can fail), not here — a
+        // failed connect on a retry attempt must still discard the previous
+        // attempt's stash.
         let mut response_text = String::new();
         let mut result_data: Option<ProcessedResult> = None;
         let mut signals = StreamSignals::default();

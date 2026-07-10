@@ -3450,7 +3450,7 @@ async fn test_blocking_limit_result_stages_rate_limit_for_take() {
                 "status": "rejected",
                 "resetsAt": 1767225600,
                 "rateLimitType": "five_hour",
-                "utilization": 100,
+                "utilization": 0.93,
             },
         }),
     })))
@@ -3481,7 +3481,7 @@ async fn test_blocking_limit_result_stages_rate_limit_for_take() {
     assert_eq!(staged.provider, "claude_code");
     assert_eq!(staged.reset_at, unix_to_rfc3339(1767225600));
     assert_eq!(staged.window.as_deref(), Some("five_hour"));
-    assert_eq!(staged.used_percent, Some(100));
+    assert_eq!(staged.used_percent, Some(93));
     assert_eq!(staged.reached_type.as_deref(), Some("blocking_limit"));
     assert_eq!(staged.message.as_deref(), Some("usage limit reached"));
 
@@ -3747,6 +3747,20 @@ async fn test_compact_boundary_emits_paired_context_compaction_activity() {
 
     assert_eq!(tool_use.tool_name.as_deref(), Some("contextCompaction"));
     assert_eq!(tool_use.tool_use_id.as_deref(), Some("compact-uuid-1"));
+    // `item_type` must be present so channel placeholder policy
+    // (plugin_tools::should_hide_tool_call_display) hides compaction like
+    // it does for Codex.
+    assert_eq!(
+        tool_use.metadata.get("item_type").and_then(Value::as_str),
+        Some("contextCompaction")
+    );
+    assert_eq!(
+        tool_result
+            .metadata
+            .get("item_type")
+            .and_then(Value::as_str),
+        Some("contextCompaction")
+    );
     assert_eq!(tool_result.tool_use_id.as_deref(), Some("compact-uuid-1"));
     assert_eq!(tool_result.is_error, Some(false));
     let text = tool_result.text.clone().unwrap_or_default();
@@ -3828,5 +3842,68 @@ async fn test_failed_compact_status_emits_error_activity() {
     assert!(
         chunks.lock().expect("chunks mutex poisoned").is_empty(),
         "in-progress compacting status must not emit frames"
+    );
+}
+
+#[test]
+fn test_claude_utilization_percent_normalizes_ratio_and_percent() {
+    // Official CLI reports a 0..1 ratio.
+    assert_eq!(claude_utilization_percent(&json!(0.93)), Some(93));
+    assert_eq!(claude_utilization_percent(&json!(1.0)), Some(100));
+    assert_eq!(claude_utilization_percent(&json!(0)), Some(0));
+    // Values above 1 are treated as already-percentages for tolerance.
+    assert_eq!(claude_utilization_percent(&json!(93)), Some(93));
+    // Numeric strings are accepted.
+    assert_eq!(claude_utilization_percent(&json!("0.5")), Some(50));
+    // Garbage is rejected.
+    assert_eq!(claude_utilization_percent(&json!(-0.1)), None);
+    assert_eq!(claude_utilization_percent(&json!("nope")), None);
+    assert_eq!(claude_utilization_percent(&json!(null)), None);
+}
+
+#[tokio::test]
+async fn test_execute_sdk_run_entry_clears_stale_rate_limit_stash() {
+    let provider = make_provider();
+
+    // A previous attempt staged a rate limit for this thread.
+    provider.pending_rate_limits.lock().await.insert(
+        "thread::stale-stash".to_owned(),
+        garyx_models::provider::ProviderRateLimit {
+            provider: "claude_code".to_owned(),
+            ..Default::default()
+        },
+    );
+
+    // The next attempt dies at connect time (injected before the message
+    // loop, mirroring a connect/send failure that never reaches it).
+    provider
+        .test_run_attempts
+        .lock()
+        .await
+        .push_back(Err(BridgeError::RunFailed(
+            "failed to connect to claude: boom".to_owned(),
+        )));
+
+    let options = ProviderRunOptions {
+        thread_id: "thread::stale-stash".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::new(),
+    };
+    let cb: StreamCallback = Box::new(|_| {});
+    let attempt = provider
+        .execute_sdk_run(&options, None, "run-stale", &cb)
+        .await;
+    assert!(attempt.is_err(), "injected connect failure should surface");
+
+    // The stale stash from the earlier attempt must NOT be attributed to
+    // this failed attempt's terminal record.
+    assert!(
+        provider
+            .take_rate_limit("thread::stale-stash")
+            .await
+            .is_none(),
+        "connect-failure attempt must clear the stale rate-limit stash"
     );
 }
