@@ -196,7 +196,7 @@ impl ClaudeRun {
     pub async fn collect_until_result(&mut self) -> Result<ResultMessage> {
         while let Some(message) = self.next_message().await {
             match message {
-                Ok(Message::Result(result)) => return Ok(result),
+                Ok(Message::Result(result)) => return Ok(*result),
                 Ok(_) => continue,
                 Err(error) => return Err(error),
             }
