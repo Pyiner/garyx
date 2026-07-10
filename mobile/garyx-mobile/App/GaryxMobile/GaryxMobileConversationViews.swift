@@ -84,6 +84,7 @@ struct GaryxConversationView: View {
     @State private var pendingHistoryPrefetchThreadId: String?
     @State private var bottomChromeHeight: CGFloat = 0
     @State private var tailScrollRequestGeneration = 0
+    @State private var readingAnchorRestoreGeneration = 0
     @State private var tailThinkingPresentationState = GaryxTailThinkingPresentationState()
     @State private var showsDebouncedTailThinking = false
     @State private var tailThinkingDebounceGeneration = 0
@@ -196,13 +197,14 @@ struct GaryxConversationView: View {
                 .onChange(of: model.selectedThreadTurnRows().map(\.id)) { oldValue, newValue in
                     let threadUnchanged = model.selectedThread?.id == rowScrollPreservationThreadId
                     rowScrollPreservationThreadId = model.selectedThread?.id
-                    updateScrollState(proxy: proxy) {
-                        $0.renderRowsChanged(
-                            previousIds: oldValue,
-                            currentIds: newValue,
-                            threadUnchanged: threadUnchanged,
-                            hasTailContent: !newValue.isEmpty || showsDebouncedTailThinking
-                        )
+                    let restore = scrollStateBox.state.renderRowsChanged(
+                        previousIds: oldValue,
+                        currentIds: newValue,
+                        threadUnchanged: threadUnchanged,
+                        hasTailContent: !newValue.isEmpty || showsDebouncedTailThinking
+                    )
+                    if let restore {
+                        scheduleReadingAnchorRestore(restore, proxy: proxy)
                     }
                 }
                 .onChange(of: model.showsTailThinkingIndicator) { _, _ in
@@ -537,6 +539,47 @@ struct GaryxConversationView: View {
     ) {
         guard let request else { return }
         scheduleScrollToConversationTail(proxy, request: request)
+    }
+
+    /// Pin the reading position through an older-history prepend: scroll the
+    /// pre-prepend first row back to the viewport top, immediately and across
+    /// the next layout passes (the freshly inserted rows above are still
+    /// measuring, so a single scrollTo can land short while their estimated
+    /// heights settle). Without this, SwiftUI keeps the offset relative to
+    /// the content top and the viewport ends up parked over the just-loaded
+    /// oldest rows (#TASK-2073 follow-up).
+    private func scheduleReadingAnchorRestore(
+        _ restore: GaryxConversationScrollState.ReadingAnchorRestore,
+        proxy: ScrollViewProxy
+    ) {
+        readingAnchorRestoreGeneration += 1
+        let generation = readingAnchorRestoreGeneration
+        let identity = conversationScrollIdentity
+
+        for (index, delay) in [DispatchTimeInterval.milliseconds(0), .milliseconds(16), .milliseconds(60)].enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                DispatchQueue.main.async {
+                    guard generation == readingAnchorRestoreGeneration,
+                          identity == conversationScrollIdentity else {
+                        return
+                    }
+                    // The immediate attempt always runs — skipping it is a
+                    // guaranteed visible jump. Late retries only re-pin while
+                    // no reader gesture drives the scroll view, so settling
+                    // row heights cannot fight an intentional follow-up drag.
+                    if index > 0, scrollStateBox.state.isUserScrollInteracting {
+                        return
+                    }
+                    // No animation: the restore must be invisible — the whole
+                    // point is that the viewport does not appear to move.
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        proxy.scrollTo(restore.anchorRowId, anchor: .top)
+                    }
+                }
+            }
+        }
     }
 
     private func resetTailThinkingPresentation(proxy: ScrollViewProxy) {

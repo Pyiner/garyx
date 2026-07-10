@@ -834,15 +834,67 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertEqual(currentRowIds, ["turn:seq1", "turn:seq3"])
 
         var state = GaryxConversationScrollState()
-        let request = state.renderRowsChanged(
+        let restore = state.renderRowsChanged(
             previousIds: previousRowIds,
             currentIds: currentRowIds,
             threadUnchanged: true,
             hasTailContent: true
         )
 
-        XCTAssertNil(request)
+        // A prepend must hand the view a reading-anchor restore for the
+        // pre-prepend first row — SwiftUI alone keeps the offset relative to
+        // the content top, which would park the viewport over the freshly
+        // loaded oldest rows.
+        XCTAssertEqual(
+            restore,
+            GaryxConversationScrollState.ReadingAnchorRestore(anchorRowId: "turn:seq3")
+        )
         XCTAssertTrue(state.hasTailContent)
+    }
+
+    /// Only a genuine prepend restores the reading anchor: tail appends,
+    /// unchanged rows, and thread switches must not scroll anywhere.
+    func testRenderRowsChangedOnlyRestoresForGenuinePrepends() {
+        var state = GaryxConversationScrollState()
+
+        // Tail append: no restore.
+        XCTAssertNil(
+            state.renderRowsChanged(
+                previousIds: ["a", "b"],
+                currentIds: ["a", "b", "c"],
+                threadUnchanged: true,
+                hasTailContent: true
+            )
+        )
+        // Unchanged rows: no restore.
+        XCTAssertNil(
+            state.renderRowsChanged(
+                previousIds: ["a", "b"],
+                currentIds: ["a", "b"],
+                threadUnchanged: true,
+                hasTailContent: true
+            )
+        )
+        // Thread switch: replay of another thread's rows is not a prepend.
+        XCTAssertNil(
+            state.renderRowsChanged(
+                previousIds: ["a", "b"],
+                currentIds: ["x", "a", "b"],
+                threadUnchanged: false,
+                hasTailContent: true
+            )
+        )
+        // Genuine prepend anchors to the pre-prepend first row, and the
+        // anchoring state is untouched (restore is not a reader gesture).
+        let restore = state.renderRowsChanged(
+            previousIds: ["a", "b"],
+            currentIds: ["x", "y", "a", "b"],
+            threadUnchanged: true,
+            hasTailContent: true
+        )
+        XCTAssertEqual(restore?.anchorRowId, "a")
+        XCTAssertTrue(state.isFollowingTail)
+        XCTAssertFalse(state.hasUserScrolledSinceOpen)
     }
 
     func testPreservesScrollForPrependedHistory() {

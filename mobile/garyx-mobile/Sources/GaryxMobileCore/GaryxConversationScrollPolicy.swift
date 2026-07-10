@@ -470,26 +470,51 @@ public struct GaryxConversationScrollState: Equatable {
         return metrics.isNearLoadedHistoryStart
     }
 
+    /// Reading-position restore after an older-history prepend.
+    ///
+    /// A plain SwiftUI scroll view keeps its offset relative to the content
+    /// TOP when rows are inserted above (`defaultScrollAnchor(.bottom, for:
+    /// .sizeChanges)` only pins a reader who is already at the bottom), so a
+    /// prepend physically pushes the reading position out and parks the
+    /// viewport over the just-loaded oldest rows. The view executes this by
+    /// scrolling the pre-prepend first row back to the viewport top: the list
+    /// grows above, the reader stays put and keeps scrolling up manually.
+    public struct ReadingAnchorRestore: Equatable {
+        /// The row that was first before the prepend — the new content's
+        /// lower boundary. `preservesScrollForPrependedHistory` guarantees it
+        /// still exists in the new row set at index > 0.
+        public let anchorRowId: String
+
+        public init(anchorRowId: String) {
+            self.anchorRowId = anchorRowId
+        }
+    }
+
     /// Visible render rows changed after a render snapshot update. This covers
-    /// older-history expansion where cached messages were already prepended, but
-    /// the server row window only lowered its floor on the next stream frame.
+    /// every visible prepend shape: the in-memory window reveal, and the
+    /// network older page once the server row window lowers its floor.
+    /// Returns a restore request the view must execute so the prepend does
+    /// not move the reader (see `ReadingAnchorRestore`).
     public mutating func renderRowsChanged(
         previousIds: [String],
         currentIds: [String],
         threadUnchanged: Bool,
         hasTailContent: Bool
-    ) -> TailScrollRequest? {
+    ) -> ReadingAnchorRestore? {
         let isHistoryPrepend = Self.preservesScrollForPrependedHistory(
             previousIds: previousIds,
             currentIds: currentIds,
             threadUnchanged: threadUnchanged
         )
-        guard isHistoryPrepend else { return nil }
-        return contentChanged(
+        guard isHistoryPrepend, let anchorRowId = previousIds.first else { return nil }
+        // Keep the tail bookkeeping current; a history prepend never yields
+        // a tail scroll (`contentChanged` returns nil for prepends).
+        _ = contentChanged(
             isInitialLoad: false,
             isHistoryPrepend: true,
             hasTailContent: hasTailContent
         )
+        return ReadingAnchorRestore(anchorRowId: anchorRowId)
     }
 
     /// Whether a messages change is an older-history prepend whose reading
