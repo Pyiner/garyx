@@ -21,6 +21,13 @@ export type TranscriptSegment =
       alt: string;
     }
   | {
+      kind: "image_reference";
+      key: string;
+      path: string;
+      label: string;
+      mediaType?: string;
+    }
+  | {
       kind: "file";
       key: string;
       path?: string;
@@ -106,10 +113,25 @@ function imageReferenceSegmentFromUnknown(
   if (!path && !rawLabel) {
     return null;
   }
+  if (!path) {
+    return {
+      kind: "file",
+      key,
+      label,
+      mediaType:
+        (record && typeof record.media_type === "string"
+          ? record.media_type.trim()
+          : "") ||
+        (record && typeof record.mediaType === "string"
+          ? record.mediaType.trim()
+          : "") ||
+        undefined,
+    };
+  }
   return {
-    kind: "file",
+    kind: "image_reference",
     key,
-    path: path || undefined,
+    path,
     label,
     mediaType:
       (record && typeof record.media_type === "string"

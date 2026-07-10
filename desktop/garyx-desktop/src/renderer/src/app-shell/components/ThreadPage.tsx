@@ -1,5 +1,6 @@
 import {
   Fragment,
+  useCallback,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -65,6 +66,7 @@ import {
   RichMessageContent,
   buildOptimisticTranscriptContent,
   splitRichMessageContentIntoBubbleParts,
+  type MessageImagePreviewLoader,
 } from "../../message-rich-content";
 import { parseTaskNotificationText } from "../../task-notification";
 import { parseRestartNoticeText } from "../../restart-notice";
@@ -91,6 +93,7 @@ import type {
   UiTranscriptMessage,
 } from "../types";
 import { RUN_LOADING_LABEL } from "../loading-labels";
+import { resolveThreadFilePreviewTarget } from "../workspace-helpers";
 
 function normalizeMessageText(value: string | undefined): string {
   return value?.trim() || "";
@@ -191,6 +194,7 @@ function renderUserMessageBubbleParts({
   retryLabel,
   onRetry,
   onLocalFileLinkClick,
+  loadImagePreview,
   markUserTurnStart = true,
 }: {
   keyPrefix: string;
@@ -201,6 +205,7 @@ function renderUserMessageBubbleParts({
   retryLabel?: string;
   onRetry?: () => void;
   onLocalFileLinkClick: (path: string) => void;
+  loadImagePreview?: MessageImagePreviewLoader;
   markUserTurnStart?: boolean;
 }): ReactNode {
   const parts = splitRichMessageContentIntoBubbleParts({
@@ -224,6 +229,7 @@ function renderUserMessageBubbleParts({
           <RichMessageContent
             altPrefix="user"
             content={part.content}
+            loadImagePreview={loadImagePreview}
             onLocalFileLinkClick={onLocalFileLinkClick}
             text={part.text}
           />
@@ -249,6 +255,7 @@ function renderUserMessageBubbleParts({
           <RichMessageContent
             altPrefix="user"
             content={part.content}
+            loadImagePreview={loadImagePreview}
             onLocalFileLinkClick={onLocalFileLinkClick}
             text={part.text}
           />
@@ -267,6 +274,7 @@ function renderUserMessageBubbleParts({
           <RichMessageContent
             altPrefix="user"
             content={part.content}
+            loadImagePreview={loadImagePreview}
             onLocalFileLinkClick={onLocalFileLinkClick}
             text={part.text}
           />
@@ -552,6 +560,29 @@ export function ThreadPage({
   workspaceMutation,
 }: ThreadPageProps) {
   const { t } = useI18n();
+  const loadTranscriptImagePreview = useCallback<MessageImagePreviewLoader>(
+    async (path) => {
+      const target = resolveThreadFilePreviewTarget(
+        activeThreadSummary?.workspacePath,
+        path,
+      );
+      if (!target) {
+        return null;
+      }
+      const preview = await window.garyxDesktop.previewWorkspaceFile({
+        workspacePath: target.workspacePath,
+        filePath: target.filePath,
+      });
+      if (preview.previewKind !== "image" || !preview.dataBase64?.trim()) {
+        return null;
+      }
+      return {
+        src: `data:${preview.mediaType || "image/png"};base64,${preview.dataBase64}`,
+        alt: preview.name,
+      };
+    },
+    [activeThreadSummary?.workspacePath],
+  );
   // Colocated transcript scroll (endgame batch 5b): stick-to-bottom,
   // prepend anchoring, and scroll-triggered older-page loads. Null for
   // the side-chat instance, which passes lightweight handlers instead.
@@ -800,6 +831,7 @@ export function ThreadPage({
                       [],
                       [],
                     )}
+                    loadImagePreview={loadTranscriptImagePreview}
                     onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
                     text={activePendingAutomationRun.prompt}
                   />
@@ -847,6 +879,7 @@ export function ThreadPage({
                       active={block.key === activeToolGroupId}
                       defaultExpanded={block.defaultExpanded}
                       entries={block.entries}
+                      loadImagePreview={loadTranscriptImagePreview}
                       onThreadNavigate={onOpenThreadById}
                     />
                   </article>
@@ -872,6 +905,7 @@ export function ThreadPage({
                     <RichMessageContent
                       altPrefix={entry.message.role}
                       content={entry.message.content}
+                      loadImagePreview={loadTranscriptImagePreview}
                       onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
                       text={displayText}
                     />
@@ -885,6 +919,7 @@ export function ThreadPage({
                   content: entry.message.content,
                   pending: entry.message.pending,
                   error: entry.message.error,
+                  loadImagePreview: loadTranscriptImagePreview,
                   retryLabel: t("Retry"),
                   onRetry:
                     onRetryFailedMessage &&
@@ -926,6 +961,7 @@ export function ThreadPage({
                       <RichMessageContent
                         altPrefix={entry.message.role}
                         content={entry.message.content}
+                        loadImagePreview={loadTranscriptImagePreview}
                         onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
                         text={displayText}
                       />
@@ -941,6 +977,7 @@ export function ThreadPage({
                   <RichMessageContent
                     altPrefix={entry.message.role}
                     content={entry.message.content}
+                    loadImagePreview={loadTranscriptImagePreview}
                     onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
                     text={displayText}
                   />
@@ -1132,6 +1169,7 @@ export function ThreadPage({
                 intent.images,
                 intent.files,
               ),
+              loadImagePreview: loadTranscriptImagePreview,
               onLocalFileLinkClick: onLocalWorkspaceFileLinkClick,
             }),
           )}
@@ -1141,6 +1179,7 @@ export function ThreadPage({
               keyPrefix: `remote-pending:${input.id}`,
               text: input.text,
               content: input.content,
+              loadImagePreview: loadTranscriptImagePreview,
               onLocalFileLinkClick: onLocalWorkspaceFileLinkClick,
             }),
           )}

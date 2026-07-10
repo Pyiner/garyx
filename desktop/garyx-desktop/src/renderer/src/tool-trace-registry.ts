@@ -9,6 +9,12 @@ type ToolRole = 'tool_use' | 'tool_result';
 
 export type ToolResultImageSegment = Extract<TranscriptSegment, { kind: 'image' }>;
 
+export type ToolPathImageRef = {
+  key: string;
+  path: string;
+  alt: string;
+};
+
 export type ToolTraceMessage = Pick<
   TranscriptMessage,
   'role' | 'text' | 'content' | 'toolUseId' | 'toolName' | 'metadata' | 'isError'
@@ -73,6 +79,8 @@ export type MergedToolTrace = {
   resultLabel?: string;
   /** Image blocks extracted from the tool result, rendered as thumbnails. */
   resultImages: ToolResultImageSegment[];
+  /** Gateway-side image paths referenced by an Image view call. */
+  pathImages: ToolPathImageRef[];
   icon: string;
   isError: boolean;
 };
@@ -1369,6 +1377,29 @@ function collectToolResultImageSegments(value: unknown): ToolResultImageSegment[
   return segments;
 }
 
+function collectToolPathImages(
+  traces: Array<ParsedToolTrace | null>,
+): ToolPathImageRef[] {
+  const seenPaths = new Set<string>();
+  const images: ToolPathImageRef[] = [];
+  for (const trace of traces) {
+    if (trace?.toolKey !== 'imageView') {
+      continue;
+    }
+    const path = extractPath(asRecord(trace.payload) || trace.input)?.trim();
+    if (!path || seenPaths.has(path)) {
+      continue;
+    }
+    seenPaths.add(path);
+    images.push({
+      key: `image-view:${path}`,
+      path,
+      alt: path.split(/[\\/]/).filter(Boolean).pop() || 'Tool image',
+    });
+  }
+  return images;
+}
+
 /**
  * Remove image blocks from a tool-result payload before it is stringified
  * into the expandable detail. Mirrors the iOS presentation rule: the image
@@ -1434,6 +1465,7 @@ export function resolveMergedToolTrace(
   const resultImages = parsedResult
     ? collectToolResultImageSegments(parsedResult.result ?? parsedResult.payload)
     : [];
+  const pathImages = collectToolPathImages([parsedUse, parsedResult]);
   if (parsedResult && resultImages.length) {
     parsedResult.result = stripImageBlocks(parsedResult.result);
     parsedResult.payload = stripImageBlocks(parsedResult.payload);
@@ -1454,6 +1486,7 @@ export function resolveMergedToolTrace(
     resultDetail: resultSide?.detail || (parsedResult?.result ? truncateDetail(stringifyUnknown(parsedResult.result)) : undefined),
     resultLabel: resultSide?.detailLabel || (resultSide?.detail || parsedResult?.result ? 'Result' : undefined),
     resultImages,
+    pathImages,
     icon: useSide?.icon || resultSide?.icon || '·',
     isError: Boolean(parsedUse?.isError || parsedResult?.isError),
   };

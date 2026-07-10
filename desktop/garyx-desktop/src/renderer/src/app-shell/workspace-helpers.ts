@@ -110,6 +110,26 @@ export function resolveLocalFilePreviewTarget(
   return { workspacePath, filePath };
 }
 
+export function resolveThreadFilePreviewTarget(
+  threadWorkspacePath: string | null | undefined,
+  targetPath: string,
+): { workspacePath: string; filePath: string } | null {
+  const normalizedTarget = targetPath.trim();
+  if (!normalizedTarget) {
+    return null;
+  }
+  if (normalizedTarget.startsWith('/')) {
+    return resolveLocalFilePreviewTarget([], normalizedTarget);
+  }
+
+  const workspacePath = normalizeWorkspaceRootPath(threadWorkspacePath || '');
+  const filePath = normalizedTarget.replace(/^\.\//, '');
+  if (!workspacePath || !filePath) {
+    return null;
+  }
+  return { workspacePath, filePath };
+}
+
 function directoryAncestors(path: string): string[] {
   const normalized = path.trim().replace(/^\/+|\/+$/g, '');
   if (!normalized) {

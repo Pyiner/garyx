@@ -1,4 +1,4 @@
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { FileText } from "lucide-react";
 
 import type {
@@ -53,6 +53,10 @@ export {
 };
 
 type RichMessageLayout = "default" | "media_above";
+
+export type MessageImagePreviewLoader = (
+  path: string,
+) => Promise<{ src: string; alt?: string } | null>;
 
 export type RichMessageBubblePart = {
   kind: "text" | "image" | "file";
@@ -151,6 +155,14 @@ function contentFromSegments(segments: TranscriptSegment[]): unknown {
         url: segment.src,
       };
     }
+    if (segment.kind === "image_reference") {
+      return {
+        type: "image",
+        name: segment.label,
+        path: segment.path,
+        media_type: segment.mediaType,
+      };
+    }
     if (segment.kind === "file") {
       return {
         type: "file",
@@ -172,6 +184,14 @@ function contentFromSegments(segments: TranscriptSegment[]): unknown {
       return {
         type: "image",
         url: segment.src,
+      };
+    }
+    if (segment.kind === "image_reference") {
+      return {
+        type: "image",
+        name: segment.label,
+        path: segment.path,
+        media_type: segment.mediaType,
       };
     }
     if (segment.kind === "file") {
@@ -222,7 +242,10 @@ export function splitRichMessageContentIntoBubbleParts({
 }): RichMessageBubblePart[] {
   const segments = collectTranscriptSegments(content, altPrefix);
   const hasStandaloneSegment = segments.some(
-    (segment) => segment.kind === "image" || segment.kind === "file",
+    (segment) =>
+      segment.kind === "image" ||
+      segment.kind === "image_reference" ||
+      segment.kind === "file",
   );
   if (!hasStandaloneSegment) {
     return [
@@ -254,14 +277,14 @@ export function splitRichMessageContentIntoBubbleParts({
   };
 
   for (const segment of segments) {
-    if (segment.kind === "image") {
+    if (segment.kind === "image" || segment.kind === "image_reference") {
       flushContent();
       parts.push(
         buildBubblePart(
           `image:${partIndex++}`,
           [segment],
           "image",
-          segment.alt,
+          segment.kind === "image" ? segment.alt : segment.label,
         ),
       );
       continue;
@@ -402,6 +425,79 @@ export function MessageImageAttachmentFrame({
   );
 }
 
+export function MessagePathImageAttachmentFrame({
+  alt,
+  compact,
+  fallback = null,
+  imageKey,
+  loadImagePreview,
+  path,
+}: {
+  alt: string;
+  compact: boolean;
+  fallback?: ReactNode;
+  imageKey: string;
+  loadImagePreview?: MessageImagePreviewLoader;
+  path: string;
+}) {
+  const { t } = useI18n();
+  const [preview, setPreview] = useState<{ src: string; alt?: string } | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPreview(null);
+    setLoadFailed(false);
+    if (!loadImagePreview) {
+      setLoadFailed(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+    void loadImagePreview(path)
+      .then((loaded) => {
+        if (cancelled) {
+          return;
+        }
+        if (!loaded?.src.trim()) {
+          setLoadFailed(true);
+          return;
+        }
+        setPreview(loaded);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLoadFailed(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadImagePreview, path]);
+
+  if (loadFailed) {
+    return fallback;
+  }
+  if (!preview) {
+    return (
+      <div aria-label={t("Loading")} className="message-image-loading" role="status">
+        <span aria-hidden="true" className="message-image-spinner" />
+      </div>
+    );
+  }
+  return (
+    <MessageImageAttachmentFrame
+      compact={compact}
+      segment={{
+        kind: "image",
+        key: imageKey,
+        src: preview.src,
+        alt: preview.alt || alt,
+      }}
+    />
+  );
+}
+
 // Moved to message-rich-content-core.ts (endgame batch 3c-2) so the
 // React-free dispatch orchestrator can build optimistic bubbles; the
 // re-export keeps existing .tsx consumers working.
@@ -416,12 +512,14 @@ export const RichMessageContent = memo(function RichMessageContent({
   content,
   altPrefix = "message",
   layout = "default",
+  loadImagePreview,
   onLocalFileLinkClick,
 }: {
   text: string;
   content?: unknown;
   altPrefix?: string;
   layout?: RichMessageLayout;
+  loadImagePreview?: MessageImagePreviewLoader;
   onLocalFileLinkClick?: LocalFileLinkHandler;
 }) {
   const segments = useMemo(
@@ -484,6 +582,32 @@ export const RichMessageContent = memo(function RichMessageContent({
       );
     }
 
+    if (segment.kind === "image_reference") {
+      const fallbackSegment: Extract<TranscriptSegment, { kind: "file" }> = {
+        kind: "file",
+        key: `${segment.key}:fallback`,
+        path: segment.path,
+        label: segment.label,
+        mediaType: segment.mediaType,
+      };
+      return (
+        <MessagePathImageAttachmentFrame
+          alt={segment.label}
+          compact={layout === "media_above"}
+          fallback={
+            <MessageFileAttachmentCard
+              onLocalFileLinkClick={onLocalFileLinkClick}
+              segment={fallbackSegment}
+            />
+          }
+          imageKey={segment.key}
+          key={segment.key}
+          loadImagePreview={loadImagePreview}
+          path={segment.path}
+        />
+      );
+    }
+
     if (segment.kind === "file") {
       return (
         <MessageFileAttachmentCard
@@ -503,11 +627,12 @@ export const RichMessageContent = memo(function RichMessageContent({
 
   if (layout === "media_above") {
     const imageSegments = renderableSegments.filter(
-      (segment): segment is Extract<TranscriptSegment, { kind: "image" }> =>
-        segment.kind === "image",
+      (segment) =>
+        segment.kind === "image" || segment.kind === "image_reference",
     );
     const bodySegments = renderableSegments.filter(
-      (segment) => segment.kind !== "image",
+      (segment) =>
+        segment.kind !== "image" && segment.kind !== "image_reference",
     );
 
     return (

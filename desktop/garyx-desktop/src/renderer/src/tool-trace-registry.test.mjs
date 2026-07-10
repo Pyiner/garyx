@@ -131,3 +131,47 @@ test('imageless tool results keep their existing detail behavior', () => {
   assert.equal(merged.resultImages.length, 0);
   assert.ok((merged.resultDetail || merged.summary || '').length > 0);
 });
+
+test('Image view exposes one gateway path preview when use and result repeat the path', () => {
+  const imageView = {
+    id: 'exec-image-1',
+    path: '/tmp/screens/thread-runtime-expanded.png',
+    type: 'ImageView',
+  };
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: imageView,
+      toolUseId: 'tool:image-view',
+      toolName: 'imageView',
+    },
+    {
+      role: 'tool_result',
+      content: imageView,
+      toolUseId: 'tool:image-view',
+      toolName: 'imageView',
+    },
+  );
+
+  assert.deepEqual(merged.pathImages, [
+    {
+      key: 'image-view:/tmp/screens/thread-runtime-expanded.png',
+      path: '/tmp/screens/thread-runtime-expanded.png',
+      alt: 'thread-runtime-expanded.png',
+    },
+  ]);
+});
+
+test('ordinary path-bearing tools do not request gateway image previews', () => {
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: { tool: 'Read', input: { file_path: '/Users/test/notes.txt' } },
+      toolUseId: 'tool:read',
+      toolName: 'Read',
+    },
+    undefined,
+  );
+
+  assert.deepEqual(merged.pathImages, []);
+});

@@ -7,7 +7,11 @@ import {
   type MergedToolTrace,
   type ToolTraceMessage,
 } from './tool-trace-registry';
-import { MessageImageAttachmentFrame } from './message-rich-content';
+import {
+  MessageImageAttachmentFrame,
+  MessagePathImageAttachmentFrame,
+  type MessageImagePreviewLoader,
+} from './message-rich-content';
 import { useI18n, type AppLocale, type Translate } from './i18n';
 
 type ToolTraceEntry = {
@@ -259,15 +263,56 @@ function summarizeToolTraceEntries(
   return parts.join(locale === 'zh-CN' ? '，' : ', ');
 }
 
+type ToolTraceGroupImage =
+  | {
+      kind: 'embedded';
+      key: string;
+      image: MergedToolTrace['resultImages'][number];
+    }
+  | {
+      kind: 'path';
+      key: string;
+      image: MergedToolTrace['pathImages'][number];
+    };
+
+function collectToolTraceGroupImages(entries: ToolTraceEntry[]): ToolTraceGroupImage[] {
+  const images: ToolTraceGroupImage[] = [];
+  const seenSources = new Set<string>();
+  const seenPaths = new Set<string>();
+  for (const entry of entries) {
+    const merged = resolveMergedToolTrace(entry.toolUse, entry.toolResult);
+    for (const image of merged.resultImages) {
+      if (seenSources.has(image.src)) {
+        continue;
+      }
+      seenSources.add(image.src);
+      images.push({ kind: 'embedded', key: `${entry.key}:${image.key}`, image });
+    }
+    if (merged.resultImages.length > 0) {
+      continue;
+    }
+    for (const image of merged.pathImages) {
+      if (seenPaths.has(image.path)) {
+        continue;
+      }
+      seenPaths.add(image.path);
+      images.push({ kind: 'path', key: `${entry.key}:${image.key}`, image });
+    }
+  }
+  return images;
+}
+
 function ToolTraceGroupComponent({
   active = false,
   entries,
   defaultExpanded,
+  loadImagePreview,
   onThreadNavigate,
 }: {
   active?: boolean;
   entries: ToolTraceEntry[];
   defaultExpanded: boolean;
+  loadImagePreview?: MessageImagePreviewLoader;
   onThreadNavigate?: (threadId: string) => void;
 }) {
   const { locale, t } = useI18n();
@@ -278,6 +323,7 @@ function ToolTraceGroupComponent({
     [entries, locale, t],
   );
   const treeNodes = useMemo(() => buildToolTraceTree(entries), [entries]);
+  const groupImages = useMemo(() => collectToolTraceGroupImages(entries), [entries]);
 
   useEffect(() => {
     if (!userControlled) {
@@ -303,6 +349,31 @@ function ToolTraceGroupComponent({
         <span className="tool-trace-group-summary">{summary}</span>
         <ChevronDown aria-hidden className="tool-trace-group-chevron" size={15} strokeWidth={1.7} />
       </button>
+      {groupImages.length > 0 ? (
+        <div className="tool-trace-images tool-trace-group-images">
+          {groupImages.map((item) => {
+            if (item.kind === 'embedded') {
+              return (
+                <MessageImageAttachmentFrame
+                  compact
+                  key={item.key}
+                  segment={item.image}
+                />
+              );
+            }
+            return loadImagePreview ? (
+              <MessagePathImageAttachmentFrame
+                alt={item.image.alt}
+                compact
+                imageKey={item.image.key}
+                key={item.key}
+                loadImagePreview={loadImagePreview}
+                path={item.image.path}
+              />
+            ) : null;
+          })}
+        </div>
+      ) : null}
       <div
         aria-hidden={!expanded}
         className="tool-trace-group-panel"
@@ -310,7 +381,10 @@ function ToolTraceGroupComponent({
       >
         <div className="tool-trace-group-panel-inner">
           <div className="tool-trace-group-list">
-            <ToolTraceTree nodes={treeNodes} onThreadNavigate={onThreadNavigate} />
+            <ToolTraceTree
+              nodes={treeNodes}
+              onThreadNavigate={onThreadNavigate}
+            />
           </div>
         </div>
       </div>
@@ -323,7 +397,8 @@ export const ToolTraceGroup = memo(
   (previous, next) =>
     previous.active === next.active &&
     previous.defaultExpanded === next.defaultExpanded &&
-    previous.entries === next.entries,
+    previous.entries === next.entries &&
+    previous.loadImagePreview === next.loadImagePreview,
 );
 
 function extractTargetThreadId(toolResult?: ToolTraceMessage): string | null {
@@ -383,13 +458,6 @@ export function ToolTraceLine({
           >
             Open thread &rarr;
           </button>
-        </div>
-      ) : null}
-      {merged.resultImages.length > 0 ? (
-        <div className="tool-trace-images">
-          {merged.resultImages.map((segment) => (
-            <MessageImageAttachmentFrame compact key={segment.key} segment={segment} />
-          ))}
         </div>
       ) : null}
       {expanded && hasDetails ? (
