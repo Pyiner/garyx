@@ -589,6 +589,7 @@ export function ThreadPage({
       >
         {shouldShowThreadTaskTreePopover({
           inspectorOpen,
+          isSideChatSurface,
           selectedThreadId,
           threadLogsOpen,
         }) && selectedThreadId ? (
