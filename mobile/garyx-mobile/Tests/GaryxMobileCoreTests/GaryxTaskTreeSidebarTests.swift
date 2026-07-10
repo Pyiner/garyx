@@ -157,11 +157,11 @@ final class GaryxTaskTreeSidebarTests: XCTestCase {
           "tasks": [
             {
               "kind": "task",
-              "node_id": "task:thread::solo",
-              "thread_id": "thread::solo",
+              "node_id": "task:thread::standalone",
+              "thread_id": "thread::standalone",
               "task_id": "#TASK-7",
               "number": 7,
-              "title": "Solo",
+              "title": "Standalone",
               "status": "todo",
               "runtime_agent_id": "",
               "reply_count": 0,
@@ -170,7 +170,7 @@ final class GaryxTaskTreeSidebarTests: XCTestCase {
           ],
           "total": 1,
           "projection_current": true,
-          "root_thread_ids": ["thread::solo"],
+          "root_thread_ids": ["thread::standalone"],
           "skipped_pinned_thread_ids": []
         }
         """
@@ -372,17 +372,15 @@ final class GaryxTaskTreeSidebarTests: XCTestCase {
             guard case .task(var task) = node, task.nodeId == "task:thread::root-task" else {
                 return node
             }
-            task.task.executor = GaryxTaskExecutor(type: "team", teamId: "review-team")
+            task.task.executor = GaryxTaskExecutor(type: "agent", agentId: "reviewer")
             return .task(task)
         }
         let rows = GaryxTaskTreeSidebarPresentation.rows(page: page, currentThreadId: nil)
         let rootTask = rows.first { $0.id == "task:thread::root-task" }
-        XCTAssertEqual(rootTask?.identityAgentId, "review-team")
-        XCTAssertEqual(rootTask?.identityIsTeam, true)
+        XCTAssertEqual(rootTask?.identityAgentId, "reviewer")
 
         let assigneeBacked = rows.first { $0.id == "task:thread::done-leaf" }
         XCTAssertEqual(assigneeBacked?.identityAgentId, "test-agent")
-        XCTAssertEqual(assigneeBacked?.identityIsTeam, false)
 
         // No executor/assignee: falls back to the runtime agent.
         let runtimeBacked = rows.first { $0.id == "task:thread::review-child" }

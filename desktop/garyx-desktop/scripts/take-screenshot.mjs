@@ -14,8 +14,8 @@
  *   # Connect to running app on CDP port 9229
  *   node scripts/take-screenshot.mjs /tmp/screenshot.png --cdp 9229
  *
- *   # Launch fresh instance, navigate to team chat, wait for element
- *   node scripts/take-screenshot.mjs /tmp/team-chat.png --navigate /team-chat --wait .team-chat-view
+ *   # Launch fresh instance, navigate to a page, and wait for an element
+ *   node scripts/take-screenshot.mjs /tmp/tasks.png --navigate /tasks --wait .tasks-page
  *
  *   # Simple full-page screenshot with Playwright launch
  *   node scripts/take-screenshot.mjs /tmp/app.png

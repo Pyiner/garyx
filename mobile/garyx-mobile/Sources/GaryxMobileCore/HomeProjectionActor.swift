@@ -4,7 +4,6 @@ struct HomeProjectionCapture: Equatable, Sendable {
     var threads: [GaryxThreadSummary]
     var recentThreadIds: [String]
     var agents: [GaryxAgentSummary]
-    var teams: [GaryxTeamSummary]
     var automations: [GaryxAutomationSummary]
     var pinnedThreadIds: [String]
     var selectedThreadId: String?
@@ -17,7 +16,6 @@ struct HomeProjectionCapture: Equatable, Sendable {
         threads: [GaryxThreadSummary],
         recentThreadIds: [String],
         agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary],
         automations: [GaryxAutomationSummary],
         pinnedThreadIds: [String],
         selectedThreadId: String?,
@@ -29,7 +27,6 @@ struct HomeProjectionCapture: Equatable, Sendable {
         self.threads = threads
         self.recentThreadIds = recentThreadIds
         self.agents = agents
-        self.teams = teams
         self.automations = automations
         self.pinnedThreadIds = pinnedThreadIds
         self.selectedThreadId = selectedThreadId
@@ -48,7 +45,6 @@ struct HomeProjectionCapture: Equatable, Sendable {
             threads: input.sectionsInput.threads,
             recentThreadIds: input.sectionsInput.recentThreadIds,
             agents: input.sectionsInput.agents,
-            teams: input.sectionsInput.teams,
             automations: input.sectionsInput.automations,
             pinnedThreadIds: input.sectionsInput.pinnedThreadIds,
             selectedThreadId: input.sectionsInput.selectedThreadId,
@@ -63,7 +59,6 @@ struct HomeProjectionCapture: Equatable, Sendable {
         GaryxHomeThreadSectionsInput(
             threads: threads,
             agents: agents,
-            teams: teams,
             automations: automations,
             pinnedThreadIds: pinnedThreadIds,
             recentThreadIds: recentThreadIds,
@@ -78,7 +73,6 @@ struct HomeProjectionCapture: Equatable, Sendable {
                 threads: threads,
                 recentThreadIds: recentThreadIds,
                 agents: agents,
-                teams: teams,
                 automations: automations,
                 recentRunStateEpoch: epoch
             ))
@@ -106,7 +100,6 @@ struct HomeProjectionCapture: Equatable, Sendable {
             threads: threads,
             recentThreadIds: recentThreadIds,
             agents: agents,
-            teams: teams,
             automations: automations
         )
     }
@@ -526,6 +519,5 @@ private struct HomeProjectionDisplayPayload: Equatable, Sendable {
     var threads: [GaryxThreadSummary]
     var recentThreadIds: [String]
     var agents: [GaryxAgentSummary]
-    var teams: [GaryxTeamSummary]
     var automations: [GaryxAutomationSummary]
 }

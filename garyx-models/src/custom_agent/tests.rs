@@ -25,13 +25,13 @@ fn custom_agent_profile_defaults_standalone_to_true() {
     assert!(profile.avatar_data_url.is_none());
 
     let explicit = serde_json::json!({
-        "agent_id": "team-member",
-        "display_name": "Team Member",
+        "agent_id": "test-agent",
+        "display_name": "Test Agent",
         "provider_type": "claude_code",
         "model": "",
         "modelReasoningEffort": "high",
         "modelServiceTier": "priority",
-        "default_workspace_dir": "/tmp/team-member",
+        "default_workspace_dir": "/tmp/test-agent",
         "avatar_data_url": "data:image/png;base64,dGVzdA==",
         "system_prompt": "",
         "built_in": true,
@@ -46,7 +46,7 @@ fn custom_agent_profile_defaults_standalone_to_true() {
     assert_eq!(profile.model_service_tier, "priority");
     assert_eq!(
         profile.default_workspace_dir.as_deref(),
-        Some("/tmp/team-member")
+        Some("/tmp/test-agent")
     );
     assert_eq!(
         profile.avatar_data_url.as_deref(),

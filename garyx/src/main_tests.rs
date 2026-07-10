@@ -6,7 +6,7 @@ use crate::cli::{
     AgentAction, AutomationAction, AutomationDataTriggerAction, AutomationTriggerAction, BotAction,
     BotEndpointAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction, DbAction,
     DbRecordAction, DbTableAction, GatewayAction, LogsAction, ProviderAction, TaskAction,
-    TeamAction, ThreadAction, ToolAction,
+    ThreadAction, ToolAction,
 };
 use crate::commands::{
     OnboardCommandOptions, SearchStreamState, apply_search_stream_event, canonical_channel_id,
@@ -1131,95 +1131,6 @@ fn parse_db_trigger_is_not_a_cli_domain() {
 }
 
 #[test]
-fn parse_team_create() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "team",
-        "create",
-        "--team-id",
-        "product-ship",
-        "--display-name",
-        "Product Ship",
-        "--leader-agent-id",
-        "planner",
-        "--member-agent-id",
-        "planner",
-        "--member-agent-id",
-        "generator",
-        "--member-agent-id",
-        "reviewer",
-        "--workflow-text",
-        "Leader plans, generator implements, reviewer validates.",
-        "--json",
-    ]);
-    match cli.command {
-        Some(Commands::Team {
-            action:
-                TeamAction::Create {
-                    team_id,
-                    display_name,
-                    leader_agent_id,
-                    member_agent_ids,
-                    workflow_text,
-                    json,
-                    ..
-                },
-        }) => {
-            assert_eq!(team_id, "product-ship");
-            assert_eq!(display_name, "Product Ship");
-            assert_eq!(leader_agent_id, "planner");
-            assert_eq!(member_agent_ids, vec!["planner", "generator", "reviewer"]);
-            assert_eq!(
-                workflow_text,
-                "Leader plans, generator implements, reviewer validates."
-            );
-            assert!(json);
-        }
-        _ => panic!("expected Team::Create"),
-    }
-}
-
-#[test]
-fn parse_team_update() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "team",
-        "update",
-        "product-ship",
-        "--new-team-id",
-        "product-ship-v2",
-        "--display-name",
-        "Product Ship V2",
-        "--leader-agent-id",
-        "planner",
-        "--member-agent-id",
-        "planner",
-        "--member-agent-id",
-        "generator",
-        "--workflow-text",
-        "Leader plans, generator executes.",
-    ]);
-    match cli.command {
-        Some(Commands::Team {
-            action:
-                TeamAction::Update {
-                    team_id,
-                    new_team_id,
-                    display_name,
-                    member_agent_ids,
-                    ..
-                },
-        }) => {
-            assert_eq!(team_id, "product-ship");
-            assert_eq!(new_team_id.as_deref(), Some("product-ship-v2"));
-            assert_eq!(display_name.as_deref(), Some("Product Ship V2"));
-            assert_eq!(member_agent_ids, vec!["planner", "generator"]);
-        }
-        _ => panic!("expected Team::Update"),
-    }
-}
-
-#[test]
 fn json_failure_envelope_intent_follows_parsed_matches_not_argv() {
     // A real --json output flag anywhere on the matched command path.
     let matches = <Cli as CommandFactory>::command()
@@ -1277,40 +1188,6 @@ fn parse_thread_create_with_agent() {
             assert!(worktree);
             assert_eq!(agent_id.as_deref(), Some("product-ship"));
             assert!(json);
-        }
-        _ => panic!("expected Thread::Create"),
-    }
-}
-
-#[test]
-fn parse_thread_create_with_team_id_uses_same_flag() {
-    // A team id goes through the same `--agent-id` flag as a standalone agent
-    // id: the CLI layer does not care whether the id resolves to a team. The
-    // gateway's resolver (§4.2 of agent-team-provider.md) decides which
-    // provider to dispatch to.
-    let cli = Cli::parse_from([
-        "garyx",
-        "thread",
-        "create",
-        "--agent-id",
-        "product-ship-team",
-    ]);
-    match cli.command {
-        Some(Commands::Thread {
-            action:
-                ThreadAction::Create {
-                    agent_id,
-                    workspace_dir,
-                    title,
-                    worktree,
-                    json,
-                },
-        }) => {
-            assert_eq!(agent_id.as_deref(), Some("product-ship-team"));
-            assert!(workspace_dir.is_none());
-            assert!(title.is_none());
-            assert!(!worktree);
-            assert!(!json);
         }
         _ => panic!("expected Thread::Create"),
     }
@@ -1506,7 +1383,6 @@ fn parse_task_create_runtime_options() {
                     workspace_dir,
                     worktree,
                     agent,
-                    team,
                     workflow,
                     input,
                     notify,
@@ -1518,7 +1394,6 @@ fn parse_task_create_runtime_options() {
             assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx-task"));
             assert!(worktree);
             assert!(agent.is_none());
-            assert!(team.is_none());
             assert!(workflow.is_none());
             assert!(input.is_none());
             assert_eq!(notify, vec!["bot", "telegram:owner"]);
@@ -1538,13 +1413,11 @@ fn parse_task_create_agent_executor_options() {
             action:
                 TaskAction::Create {
                     agent,
-                    team,
                     workflow,
                     ..
                 },
         }) => {
             assert_eq!(agent.as_deref(), Some("claude"));
-            assert!(team.is_none());
             assert!(workflow.is_none());
         }
         _ => panic!("expected task create"),
@@ -2425,7 +2298,7 @@ fn parse_feishu_domain_accepts_common_synonyms() {
 
     // Unrecognized inputs fall through to None so the caller can fall back
     // to the default (Feishu) or prompt the user.
-    assert_eq!(parse_feishu_domain("teams"), None);
+    assert_eq!(parse_feishu_domain("invalid"), None);
     assert_eq!(parse_feishu_domain(""), None);
     assert_eq!(parse_feishu_domain("cn-feishu-old"), None);
 }

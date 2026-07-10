@@ -49,13 +49,7 @@ export type RenderTranscriptBlock =
       defaultExpanded: boolean;
       entries: Array<Extract<RenderTranscriptEntry, { kind: 'tool' }>>;
     }
-  // Server-derived Capsule cards, surfaced after a turn's activity in the team
-  // flatten path (solo threads carry them on `UserTurnRow.capsuleCards`).
-  | {
-      kind: 'capsule_cards';
-      key: string;
-      cards: RenderCapsuleCard[];
-    };
+  ;
 
 export interface TurnRow {
   kind: 'turn';
@@ -142,10 +136,6 @@ function collectBlockMessageIds(
   }
   if (block.kind === 'message') {
     ids.add(block.entry.message.id);
-    return;
-  }
-  // Capsule cards aren't messages: they never contribute visible message ids.
-  if (block.kind === 'capsule_cards') {
     return;
   }
   for (const entry of block.entries) {
@@ -302,7 +292,7 @@ function activityToRow(
 }
 
 /**
- * Map `render_state.rows` → top-level rows for solo threads. Rows/blocks whose
+ * Map `render_state.rows` → top-level rows for threads. Rows/blocks whose
  * referenced messages aren't in the loaded committed window are skipped, which
  * naturally renders the loaded suffix while older history pages in.
  */
@@ -379,54 +369,4 @@ export function buildThreadViewRowsWithLocalUsers(
     });
   }
   return localRows.length ? [...rows, ...localRows] : rows;
-}
-
-/**
- * Deterministic flatten of `render_state.rows` → ordered blocks for team mode,
- * which renders blocks linearly with per-agent speaker headers instead of
- * collapsing turns. Block order matches the old `buildRenderTranscriptBlocks`.
- */
-export function buildThreadViewBlocks(
-  renderState: RenderState | null | undefined,
-  messages: MessagesBySeq,
-): RenderTranscriptBlock[] {
-  if (!renderState) {
-    return [];
-  }
-  const blocks: RenderTranscriptBlock[] = [];
-  for (const row of renderState.rows) {
-    if (row.kind !== 'user_turn') {
-      continue;
-    }
-    const user = lookup(messages, row.user);
-    if (user) {
-      blocks.push(messageBlock(user));
-    }
-    for (const activity of row.activity) {
-      if (activity.kind === 'assistant_reply') {
-        const message = lookup(messages, activity.message);
-        if (message) {
-          blocks.push(messageBlock(message));
-        }
-        continue;
-      }
-      if (activity.kind === 'step') {
-        blocks.push(...stepBlocks(activity, messages));
-        const finalMessage = lookup(messages, activity.final_message);
-        if (finalMessage) {
-          blocks.push(messageBlock(finalMessage));
-        }
-      }
-    }
-    // Server Capsule cards render after this turn's activity in the flat list,
-    // structurally (no tool-result scan, no capsule list lookup).
-    if (row.capsule_cards?.length) {
-      blocks.push({
-        kind: 'capsule_cards',
-        key: `capsule-cards:${row.id}`,
-        cards: row.capsule_cards,
-      });
-    }
-  }
-  return blocks;
 }

@@ -10,8 +10,7 @@ Thread is the canonical execution object.
 
 Workflow has two product meanings:
 
-- `WorkflowDefinition`: a reusable workflow capability, parallel to an Agent or
-  Team.
+- `WorkflowDefinition`: a reusable workflow capability, parallel to an Agent.
 - `WorkflowExecutionThread`: one execution of a workflow definition. Its thread
   id is the workflow run id.
 
@@ -23,7 +22,7 @@ In product terms:
 
 ```text
 Thread
-  executor = Agent | Team | WorkflowDefinition
+  executor = Agent | WorkflowDefinition
 
 Task
   wraps Thread
@@ -61,7 +60,7 @@ observable execution primitives.
 
 `WorkflowDefinition` is the reusable template or capability.
 
-Definitions are global Garyx objects, like Agent and Team definitions. They are
+Definitions are global Garyx objects, like Agent definitions. They are
 not scoped to a workspace. A definition may carry default workspace metadata,
 and an execution may pass a workspace as input or runtime context, but workspace
 is execution context rather than definition identity.
@@ -125,7 +124,7 @@ Task owns product lifecycle:
 - task-list indexing
 - optional source metadata
 
-Task can wrap a workflow execution thread, an agent thread, or a team thread.
+Task can wrap a workflow execution thread or an agent thread.
 For a Workflow-backed Task, the Task's backing thread is the workflow execution
 thread itself.
 

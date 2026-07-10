@@ -2407,7 +2407,6 @@ async fn test_state() -> (Arc<AppState>, Arc<ThreadFileLogger>, TempDir) {
     let logger = Arc::new(ThreadFileLogger::new(dir.path()));
     let state = AppStateBuilder::new(test_config())
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
-        .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
         .with_thread_log_sink(logger.clone())
         .build();
     (state, logger, dir)
@@ -2577,7 +2576,6 @@ async fn create_thread_seeds_sdk_session_id() {
         state.threads.thread_store.clone(),
         state.integration.bridge.clone(),
         state.ops.custom_agents.clone(),
-        state.ops.agent_teams.clone(),
         ThreadEnsureOptions {
             label: Some("Resume Claude".to_owned()),
             workspace_dir: Some(workspace_dir),
@@ -2618,7 +2616,6 @@ async fn create_thread_forks_provider_session_without_importing_visible_history(
         state.threads.thread_store.clone(),
         state.integration.bridge.clone(),
         state.ops.custom_agents.clone(),
-        state.ops.agent_teams.clone(),
         ThreadEnsureOptions {
             label: Some("Main thread".to_owned()),
             workspace_dir: Some(workspace_dir.clone()),
@@ -2716,7 +2713,6 @@ async fn create_thread_rejects_fork_source_without_provider_session_id() {
         state.threads.thread_store.clone(),
         state.integration.bridge.clone(),
         state.ops.custom_agents.clone(),
-        state.ops.agent_teams.clone(),
         ThreadEnsureOptions {
             label: Some("Main thread".to_owned()),
             workspace_dir: Some(workspace_dir),
@@ -4045,7 +4041,6 @@ async fn thread_history_runtime_reports_provider_default_alias() {
     );
     let state = AppStateBuilder::new(config)
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
-        .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
         .build();
     let thread_id = "thread::runtime-provider-default";
     state
@@ -4107,7 +4102,6 @@ async fn thread_history_runtime_prefers_thread_snapshot_over_current_agent_profi
         .expect("custom agent");
     let state = AppStateBuilder::new(test_config())
         .with_custom_agent_store(custom_agents)
-        .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
         .build();
     let thread_id = "thread::runtime-snapshot-agent-profile";
     state
@@ -4272,7 +4266,6 @@ async fn seed_imported_thread_history_persists_transcript_and_thread_state() {
         state.threads.thread_store.clone(),
         state.integration.bridge.clone(),
         state.ops.custom_agents.clone(),
-        state.ops.agent_teams.clone(),
         ThreadEnsureOptions {
             label: Some("Recovered Session".to_owned()),
             workspace_dir: Some(workspace_dir),
@@ -4369,7 +4362,6 @@ async fn create_thread_without_workspace_uses_private_thread_workspace() {
     config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
     let state = AppStateBuilder::new(config)
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
-        .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
         .build();
     let router = build_router(state.clone());
 
@@ -6581,61 +6573,6 @@ async fn bot_consoles_route_ignores_unconfigured_endpoint_accounts() {
     assert!(bots.iter().all(|entry| entry["id"] != "api::main"));
 }
 
-// ---------------------------------------------------------------------
-// Team block in thread metadata response.
-// ---------------------------------------------------------------------
-
-async fn seed_product_ship_team(state: &Arc<AppState>) {
-    use crate::agent_teams::UpsertAgentTeamRequest;
-    state
-        .ops
-        .agent_teams
-        .upsert_team_for_test(UpsertAgentTeamRequest {
-            team_id: "product-ship".to_owned(),
-            display_name: "Product Ship".to_owned(),
-            leader_agent_id: "planner".to_owned(),
-            member_agent_ids: vec![
-                "planner".to_owned(),
-                "coder".to_owned(),
-                "reviewer".to_owned(),
-            ],
-            workflow_text: "Ship the product.".to_owned(),
-            avatar_data_url: None,
-        })
-        .await
-        .expect("team upsert");
-}
-
-#[tokio::test]
-async fn thread_metadata_omits_team_block_for_standalone_agent_thread() {
-    let (state, _logger, _dir) = test_state().await;
-    let thread_id = "thread::standalone-claude";
-    state
-        .threads
-        .thread_store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "agent_id": "claude",
-                "provider_type": "claude_code",
-            }),
-        )
-        .await;
-
-    let data = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .expect("thread data");
-    let response = thread_metadata_response(&state, thread_id, &data).await;
-    assert!(
-        response.get("team").is_none(),
-        "standalone-agent thread must not emit `team`, got: {response}"
-    );
-}
-
 #[tokio::test]
 async fn thread_metadata_preserves_workflow_thread_type() {
     let (state, _logger, _dir) = test_state().await;
@@ -6688,173 +6625,6 @@ async fn thread_metadata_defaults_missing_thread_kind_to_chat() {
         .expect("thread data");
     let response = thread_metadata_response(&state, thread_id, &data).await;
     assert_eq!(response["thread_type"], "chat");
-}
-
-#[tokio::test]
-async fn thread_metadata_emits_empty_child_map_when_group_never_persisted() {
-    let (state, _logger, _dir) = test_state().await;
-    seed_product_ship_team(&state).await;
-
-    let thread_id = "thread::team-fresh";
-    state
-        .threads
-        .thread_store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "agent_id": "product-ship",
-                "provider_type": "agent_team",
-            }),
-        )
-        .await;
-
-    let data = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .expect("thread data");
-    let response = thread_metadata_response(&state, thread_id, &data).await;
-    let team = response
-        .get("team")
-        .expect("team-bound thread emits `team`");
-    assert_eq!(team["team_id"], "product-ship");
-    assert_eq!(team["display_name"], "Product Ship");
-    assert_eq!(team["leader_agent_id"], "planner");
-    let members = team["member_agent_ids"].as_array().expect("members");
-    assert_eq!(members.len(), 3);
-    let child_map = team["child_thread_ids"]
-        .as_object()
-        .expect("child_thread_ids must be an object, not null");
-    assert!(
-        child_map.is_empty(),
-        "fresh team thread has no Group yet, expected {{}} got {:?}",
-        child_map
-    );
-}
-
-#[tokio::test]
-async fn thread_metadata_projects_known_child_thread_ids_from_group_store() {
-    use garyx_bridge::providers::agent_team::Group;
-    let (state, _logger, _dir) = test_state().await;
-    seed_product_ship_team(&state).await;
-
-    let thread_id = "thread::team-partial";
-    state
-        .threads
-        .thread_store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "agent_id": "product-ship",
-                "provider_type": "agent_team",
-            }),
-        )
-        .await;
-
-    // Seed a Group that has seen `coder` but not `reviewer`.
-    let mut group = Group::new(thread_id, "product-ship");
-    group.record_child_thread("coder", "th::child-coder-0001");
-    group.record_child_thread("ghost", "th::child-ghost-0001");
-    state.ops.agent_team_group_store.save(&group).await;
-
-    let data = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .expect("thread data");
-    let response = thread_metadata_response(&state, thread_id, &data).await;
-    let team = response.get("team").expect("team block present");
-    let child_map = team["child_thread_ids"]
-        .as_object()
-        .expect("child_thread_ids object");
-    assert_eq!(
-        child_map.get("coder").and_then(Value::as_str),
-        Some("th::child-coder-0001")
-    );
-    assert!(
-        !child_map.contains_key("reviewer"),
-        "reviewer has no child thread yet, should be absent from the map"
-    );
-    assert!(
-        !child_map.contains_key("ghost"),
-        "stale child thread from a removed team member should be filtered out"
-    );
-}
-
-#[tokio::test]
-async fn thread_summary_omits_team_block_for_team_bound_thread() {
-    // `/api/threads` summaries stay lightweight. Team metadata is available
-    // from the thread detail/history endpoints when a thread is opened.
-    use garyx_bridge::providers::agent_team::Group;
-    let (state, _logger, _dir) = test_state().await;
-    seed_product_ship_team(&state).await;
-
-    let thread_id = "thread::list-team-summary";
-    state
-        .threads
-        .thread_store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "agent_id": "product-ship",
-                "provider_type": "agent_team",
-            }),
-        )
-        .await;
-
-    let mut group = Group::new(thread_id, "product-ship");
-    group.record_child_thread("coder", "th::child-coder-42");
-    state.ops.agent_team_group_store.save(&group).await;
-
-    let data = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .expect("thread data");
-    let summary = thread_summary(thread_id, &data);
-    assert!(
-        summary.get("team").is_none(),
-        "list summary must not emit `team`, got: {summary}"
-    );
-}
-
-#[tokio::test]
-async fn thread_summary_omits_team_block_for_standalone_agent_thread() {
-    // Inverse of the test above: standalone-agent threads must not be
-    // decorated with a phantom `team` block just because the summary
-    // pipeline runs in the same function.
-    let (state, _logger, _dir) = test_state().await;
-    let thread_id = "thread::list-standalone-summary";
-    state
-        .threads
-        .thread_store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "agent_id": "claude",
-                "provider_type": "claude_code",
-            }),
-        )
-        .await;
-
-    let data = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .expect("thread data");
-    let summary = thread_summary(thread_id, &data);
-    assert!(
-        summary.get("team").is_none(),
-        "standalone-agent summary must not emit `team`, got: {summary}"
-    );
 }
 
 #[tokio::test]

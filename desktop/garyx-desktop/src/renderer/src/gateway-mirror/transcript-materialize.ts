@@ -601,7 +601,6 @@ export function committedMessageForwardPage(
       hasMoreAfter: false,
       nextAfterIndex: null,
     },
-    team: resolvedBase.team ?? null,
   });
 }
 
@@ -700,4 +699,3 @@ export function mergeRemoteTranscriptWithLocal(
     ...preservedLocalEntries,
   ];
 }
-

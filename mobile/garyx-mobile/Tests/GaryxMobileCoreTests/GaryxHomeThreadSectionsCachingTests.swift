@@ -52,7 +52,7 @@ final class GaryxHomeThreadSectionsCachingTests: XCTestCase {
             GaryxThreadSummary(
                 id: "thread-new", title: "Brand new", createdAt: nil, updatedAt: nil,
                 lastMessagePreview: "hi", workspacePath: nil, messageCount: 0,
-                agentId: "agent-0", teamId: nil, teamName: nil, providerType: "claude_code",
+                agentId: "agent-0", providerType: "claude_code",
                 recentRunId: nil, activeRunId: nil, runState: "idle", worktreePath: nil
             ),
             at: 0

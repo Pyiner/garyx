@@ -1,15 +1,11 @@
 import type {
   CreateCustomAgentInput,
-  CreateTeamInput,
   DeleteCustomAgentInput,
-  DeleteTeamInput,
   DesktopCustomAgent,
-  DesktopTeam,
   GenerateCustomAgentAvatarInput,
   GenerateCustomAgentAvatarResult,
   UpdateCustomAgentInput,
-  UpdateTeamInput,
-} from "./agent-team.ts";
+} from "./agent.ts";
 import type {
   CreateAutomationInput,
   DeleteAutomationInput,
@@ -321,10 +317,6 @@ export interface GaryxDesktopApi {
   generateCustomAgentAvatar: (
     input: GenerateCustomAgentAvatarInput,
   ) => Promise<GenerateCustomAgentAvatarResult>;
-  listTeams: () => Promise<DesktopTeam[]>;
-  createTeam: (input: CreateTeamInput) => Promise<DesktopTeam>;
-  updateTeam: (input: UpdateTeamInput) => Promise<DesktopTeam>;
-  deleteTeam: (input: DeleteTeamInput) => Promise<void>;
   createSkill: (input: CreateSkillInput) => Promise<DesktopSkillInfo>;
   updateSkill: (input: UpdateSkillInput) => Promise<DesktopSkillInfo>;
   toggleSkill: (input: ToggleSkillInput) => Promise<DesktopSkillInfo>;

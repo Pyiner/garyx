@@ -4,94 +4,39 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-private enum GaryxAgentCreationSheet: String, Identifiable {
-    case agent
-    case team
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .agent:
-            "New Agent"
-        case .team:
-            "New Team"
-        }
-    }
-}
-
-private enum GaryxAgentsTab: String, CaseIterable, Identifiable {
-    case agents = "Agents"
-    case teams = "Teams"
-
-    var id: String { rawValue }
-}
-
 struct GaryxAgentsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @State private var creationSheet: GaryxAgentCreationSheet?
-    @State private var selectedTab: GaryxAgentsTab = .agents
+    @State private var showsCreateAgent = false
 
     var body: some View {
         GaryxPanelScaffold(
             title: "Agents",
-            subtitle: "\(model.agents.count) agents / \(model.teams.count) teams",
+            subtitle: "\(model.agents.count) agents",
             onRefresh: { await model.refreshRemoteState() }
         ) {
             VStack(alignment: .leading, spacing: 18) {
-                Picker("Agent type", selection: $selectedTab) {
-                    ForEach(GaryxAgentsTab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                switch selectedTab {
-                case .agents:
-                    GaryxSectionBlock(title: "Agents") {
-                        GaryxCompactListGroup {
-                            ForEach(Array(model.agents.enumerated()), id: \.element.id) { index, agent in
-                                GaryxAgentCard(agent: agent)
-                                if index < model.agents.count - 1 {
-                                    GaryxCompactRowDivider()
-                                }
-                            }
-                        }
-                    }
-                case .teams:
-                    GaryxSectionBlock(title: "Teams") {
-                        GaryxCompactListGroup {
-                            ForEach(Array(model.teams.enumerated()), id: \.element.id) { index, team in
-                                GaryxTeamCard(team: team)
-                                if index < model.teams.count - 1 {
-                                    GaryxCompactRowDivider()
-                                }
+                GaryxSectionBlock(title: "Agents") {
+                    GaryxCompactListGroup {
+                        ForEach(Array(model.agents.enumerated()), id: \.element.id) { index, agent in
+                            GaryxAgentCard(agent: agent)
+                            if index < model.agents.count - 1 {
+                                GaryxCompactRowDivider()
                             }
                         }
                     }
                 }
             }
         } actions: {
-            GaryxAddToolbarButton(label: selectedTab == .agents ? "New Agent" : "New Team") {
-                creationSheet = selectedTab == .agents ? .agent : .team
+            GaryxAddToolbarButton(label: "New Agent") {
+                showsCreateAgent = true
             }
         }
-        .fullScreenCover(item: $creationSheet) { sheet in
-            switch sheet {
-            case .agent:
-                GaryxCreateAgentCard()
-            case .team:
-                GaryxCreateTeamCard()
-            }
+        .fullScreenCover(isPresented: $showsCreateAgent) {
+            GaryxCreateAgentCard()
         }
         .fullScreenCover(item: $model.selectedAgentDetail) { agent in
             GaryxFormSheet(title: "Agent Detail") {
                 GaryxAgentDetailCard(agent: agent)
-            }
-        }
-        .fullScreenCover(item: $model.selectedTeamDetail) { team in
-            GaryxFormSheet(title: "Team Detail") {
-                GaryxTeamDetailCard(team: team)
             }
         }
     }
@@ -143,45 +88,6 @@ struct GaryxAgentDetailCard: View {
     }
 }
 
-struct GaryxTeamDetailCard: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    let team: GaryxTeamSummary
-    @State private var showsEditForm = false
-
-    var body: some View {
-        Group {
-            GaryxTeamFormContent(
-                mode: .readOnly,
-                teamId: .constant(displayTeam.id),
-                displayName: .constant(displayTeam.displayName),
-                avatarDataUrl: .constant(displayTeam.avatarDataUrl),
-                leaderAgentId: .constant(displayTeam.leaderAgentId),
-                memberAgentIds: .constant(displayTeam.memberAgentIds.joined(separator: ", ")),
-                workflowText: .constant(displayTeam.workflowText),
-                agents: model.agents
-            )
-            .fullScreenCover(isPresented: $showsEditForm) {
-                GaryxTeamEditSheet(team: displayTeam) { updatedTeam in
-                    model.selectedTeamDetail = updatedTeam
-                }
-            }
-
-            Section {
-                Button {
-                    showsEditForm = true
-                } label: {
-                    Label("Edit Team", systemImage: "pencil")
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                }
-            }
-        }
-    }
-
-    private var displayTeam: GaryxTeamSummary {
-        model.teams.first(where: { $0.id == team.id }) ?? team
-    }
-}
 
 private enum GaryxAgentFormMode {
     case editable
@@ -209,7 +115,6 @@ private struct GaryxAgentReadOnlyTextRow: View {
 }
 
 private struct GaryxAgentAvatarPreviewSection: View {
-    let kind: GaryxAgentAvatarKind
     let identifier: String
     let displayName: String
     let providerType: String
@@ -221,13 +126,12 @@ private struct GaryxAgentAvatarPreviewSection: View {
             GaryxAgentAvatarView(
                 agentId: trimmedIdentifier,
                 avatarDataUrl: avatarDataUrl,
-                kind: kind == .team ? .team : .agent,
                 label: avatarLabel,
                 providerType: providerType,
                 builtIn: builtIn,
                 diameter: 76
             )
-            .accessibilityLabel("\(kind == .team ? "Team" : "Agent") avatar preview")
+            .accessibilityLabel("Agent avatar preview")
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .center)
         }
@@ -242,7 +146,7 @@ private struct GaryxAgentAvatarPreviewSection: View {
         if !name.isEmpty {
             return name
         }
-        return trimmedIdentifier.isEmpty ? (kind == .team ? "Team" : "Agent") : trimmedIdentifier
+        return trimmedIdentifier.isEmpty ? "Agent" : trimmedIdentifier
     }
 }
 
@@ -266,7 +170,6 @@ private struct GaryxAgentFormContent: View {
         Group {
             if mode.isEditable, let onGenerate, let onError {
                 GaryxAvatarEditorSection(
-                    kind: .agent,
                     identifier: agentId,
                     displayName: displayName,
                     providerType: providerType,
@@ -277,7 +180,6 @@ private struct GaryxAgentFormContent: View {
                 )
             } else {
                 GaryxAgentAvatarPreviewSection(
-                    kind: .agent,
                     identifier: agentId,
                     displayName: displayName,
                     providerType: providerType,
@@ -503,114 +405,6 @@ private struct GaryxAgentEnvEditorSection: View {
     }
 }
 
-private struct GaryxTeamFormContent: View {
-    let mode: GaryxAgentFormMode
-    @Binding var teamId: String
-    @Binding var displayName: String
-    @Binding var avatarDataUrl: String
-    @Binding var leaderAgentId: String
-    @Binding var memberAgentIds: String
-    @Binding var workflowText: String
-    let agents: [GaryxAgentSummary]
-    var onGenerate: ((String) async -> String?)?
-    var onError: ((String) -> Void)?
-
-    var body: some View {
-        Group {
-            if mode.isEditable, let onGenerate, let onError {
-                GaryxAvatarEditorSection(
-                    kind: .team,
-                    identifier: teamId,
-                    displayName: displayName,
-                    providerType: "",
-                    avatarDataUrl: $avatarDataUrl,
-                    onGenerate: onGenerate,
-                    onError: onError
-                )
-            } else {
-                GaryxAgentAvatarPreviewSection(
-                    kind: .team,
-                    identifier: teamId,
-                    displayName: displayName,
-                    providerType: "",
-                    avatarDataUrl: avatarDataUrl
-                )
-            }
-
-            GaryxFormGroupedSection(title: "Identity") {
-                if mode.isEditable {
-                    GaryxFormTextFieldRow(
-                        title: "Team ID",
-                        text: $teamId,
-                        valuePlacement: .below,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
-                    )
-                    GaryxFormTextFieldRow(
-                        title: "Display name",
-                        text: $displayName,
-                        placeholder: "Optional"
-                    )
-                } else {
-                    GaryxAgentReadOnlyTextRow(title: "Team ID", value: teamId)
-                    GaryxAgentReadOnlyTextRow(title: "Display name", value: displayName)
-                }
-            }
-
-            GaryxFormGroupedSection(title: "Members") {
-                if mode.isEditable {
-                    GaryxTeamLeaderSelectionRow(
-                        leaderAgentId: $leaderAgentId,
-                        memberAgentIds: $memberAgentIds,
-                        agents: agents
-                    )
-                    GaryxTeamMembersSelectionRow(
-                        leaderAgentId: $leaderAgentId,
-                        memberAgentIds: $memberAgentIds,
-                        agents: agents
-                    )
-                } else {
-                    GaryxFormReadOnlyRow(title: "Leader", value: agentLabel(for: leaderAgentId))
-                    GaryxFormReadOnlyMultilineRow(
-                        title: "Members",
-                        value: memberLabels,
-                        placeholder: "No members",
-                        minHeight: 52,
-                        valuePlacement: .below
-                    )
-                }
-            }
-
-            GaryxFormGroupedSection(title: "Workflow") {
-                if mode.isEditable {
-                    GaryxFormTextAreaRow(
-                        title: "Workflow",
-                        text: $workflowText,
-                        minHeight: 132,
-                        lineLimits: 2...6,
-                        offersFocusedEditor: true
-                    )
-                } else {
-                    GaryxFormReadOnlyMultilineRow(
-                        title: "Workflow",
-                        value: workflowText,
-                        placeholder: "None",
-                        minHeight: 132,
-                        valuePlacement: .below
-                    )
-                }
-            }
-        }
-    }
-
-    private var memberLabels: String {
-        GaryxTeamFormPresentation.memberDetailLabels(memberAgentIds: memberAgentIds, agents: agents)
-    }
-
-    private func agentLabel(for agentId: String) -> String {
-        GaryxTeamFormPresentation.memberDetailLabel(agentId: agentId, agents: agents)
-    }
-}
 
 struct GaryxCreateAgentCard: View {
     @Environment(\.dismiss) private var dismiss
@@ -645,7 +439,6 @@ struct GaryxCreateAgentCard: View {
                 workspacePaths: model.userWorkspacePaths
             ) { stylePrompt in
                 await model.generateAvatar(
-                    kind: .agent,
                     identifier: agentId,
                     displayName: displayName,
                     stylePrompt: stylePrompt
@@ -681,64 +474,6 @@ struct GaryxCreateAgentCard: View {
     }
 }
 
-struct GaryxCreateTeamCard: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var model: GaryxMobileModel
-    @State private var teamId = ""
-    @State private var displayName = ""
-    @State private var avatarDataUrl = ""
-    @State private var leaderAgentId = ""
-    @State private var memberAgentIds = ""
-    @State private var workflowText = ""
-
-    var body: some View {
-        GaryxFormSheet(
-            title: "New Team",
-            canSave: canCreate,
-            onSave: { Task { await createTeam() } }
-        ) {
-            GaryxTeamFormContent(
-                mode: .editable,
-                teamId: $teamId,
-                displayName: $displayName,
-                avatarDataUrl: $avatarDataUrl,
-                leaderAgentId: $leaderAgentId,
-                memberAgentIds: $memberAgentIds,
-                workflowText: $workflowText,
-                agents: model.agents
-            ) { stylePrompt in
-                await model.generateAvatar(
-                    kind: .team,
-                    identifier: teamId,
-                    displayName: displayName,
-                    stylePrompt: stylePrompt
-                )
-            } onError: { message in
-                model.lastError = message
-            }
-        }
-    }
-
-    private var canCreate: Bool {
-        !teamId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func createTeam() async {
-        guard canCreate else { return }
-        if await model.createTeam(
-            teamId: teamId,
-            displayName: displayName,
-            leaderAgentId: leaderAgentId,
-            memberAgentIds: memberAgentIds,
-            workflowText: workflowText,
-            avatarDataUrl: avatarDataUrl
-        ) {
-            dismiss()
-        }
-    }
-}
 
 private struct GaryxAgentEditSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -776,7 +511,6 @@ private struct GaryxAgentEditSheet: View {
                 workspacePaths: model.userWorkspacePaths
             ) { stylePrompt in
                 await model.generateAvatar(
-                    kind: .agent,
                     identifier: agentId,
                     displayName: displayName,
                     stylePrompt: stylePrompt
@@ -836,80 +570,8 @@ private struct GaryxAgentEditSheet: View {
     }
 }
 
-private struct GaryxTeamEditSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var model: GaryxMobileModel
-    let team: GaryxTeamSummary
-    var onSaved: ((GaryxTeamSummary) -> Void)?
-    @State private var teamId = ""
-    @State private var displayName = ""
-    @State private var avatarDataUrl = ""
-    @State private var leaderAgentId = ""
-    @State private var memberAgentIds = ""
-    @State private var workflowText = ""
-
-    var body: some View {
-        GaryxFormSheet(
-            title: "Edit Team",
-            canSave: canSaveTeam,
-            onSave: { Task { await saveTeam() } }
-        ) {
-            GaryxTeamFormContent(
-                mode: .editable,
-                teamId: $teamId,
-                displayName: $displayName,
-                avatarDataUrl: $avatarDataUrl,
-                leaderAgentId: $leaderAgentId,
-                memberAgentIds: $memberAgentIds,
-                workflowText: $workflowText,
-                agents: model.agents
-            ) { stylePrompt in
-                await model.generateAvatar(
-                    kind: .team,
-                    identifier: teamId,
-                    displayName: displayName,
-                    stylePrompt: stylePrompt
-                )
-            } onError: { message in
-                model.lastError = message
-            }
-        }
-        .onAppear(perform: fillDraft)
-    }
-
-    private var canSaveTeam: Bool {
-        !teamId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func fillDraft() {
-        teamId = team.id
-        displayName = team.displayName
-        avatarDataUrl = team.avatarDataUrl
-        leaderAgentId = team.leaderAgentId
-        memberAgentIds = team.memberAgentIds.joined(separator: ", ")
-        workflowText = team.workflowText
-    }
-
-    private func saveTeam() async {
-        guard canSaveTeam else { return }
-        guard let updated = await model.updateTeam(
-            team,
-            teamId: teamId,
-            displayName: displayName,
-            leaderAgentId: leaderAgentId,
-            memberAgentIds: memberAgentIds,
-            workflowText: workflowText,
-            avatarDataUrl: avatarDataUrl
-        ) else { return }
-        dismiss()
-        onSaved?(updated)
-    }
-}
 
 private struct GaryxAvatarEditorSection: View {
-    let kind: GaryxAgentAvatarKind
     let identifier: String
     let displayName: String
     let providerType: String
@@ -929,13 +591,12 @@ private struct GaryxAvatarEditorSection: View {
                 GaryxAgentAvatarView(
                     agentId: trimmedIdentifier,
                     avatarDataUrl: avatarDataUrl,
-                    kind: targetKind,
                     label: avatarLabel,
                     providerType: providerType,
                     builtIn: builtIn,
                     diameter: 76
                 )
-                .accessibilityLabel("\(kind == .team ? "Team" : "Agent") avatar preview")
+                .accessibilityLabel("Agent avatar preview")
 
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 10) {
@@ -1018,10 +679,6 @@ private struct GaryxAvatarEditorSection: View {
         editorState.reset()
     }
 
-    private var targetKind: GaryxMobileAgentTarget.Kind {
-        kind == .team ? .team : .agent
-    }
-
     private var trimmedIdentifier: String {
         identifier.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -1031,7 +688,7 @@ private struct GaryxAvatarEditorSection: View {
         if !name.isEmpty {
             return name
         }
-        return trimmedIdentifier.isEmpty ? (kind == .team ? "Team" : "Agent") : trimmedIdentifier
+        return trimmedIdentifier.isEmpty ? "Agent" : trimmedIdentifier
     }
 
     private var canGenerate: Bool {
@@ -1040,7 +697,7 @@ private struct GaryxAvatarEditorSection: View {
 
     private var generationFingerprint: String {
         [
-            kind.rawValue,
+            "agent",
             trimmedIdentifier,
             displayName.trimmingCharacters(in: .whitespacesAndNewlines),
             providerType.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -1052,7 +709,7 @@ private struct GaryxAvatarEditorSection: View {
 
     private var uploadFingerprint: String {
         [
-            kind.rawValue,
+            "agent",
             String(avatarDataUrl.count),
             String(avatarDataUrl.prefix(80)),
             String(avatarDataUrl.suffix(80)),
@@ -1358,7 +1015,6 @@ struct GaryxAgentCard: View {
                     id: agent.id,
                     title: agent.displayName,
                     subtitle: "",
-                    kind: .agent,
                     avatarDataUrl: agent.avatarDataUrl,
                     providerType: agent.providerType,
                     builtIn: agent.builtIn,
@@ -1406,60 +1062,6 @@ struct GaryxAgentCard: View {
     }
 }
 
-struct GaryxTeamCard: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    let team: GaryxTeamSummary
-    @State private var showsEditForm = false
-    @State private var showsDeleteConfirmation = false
-
-    var body: some View {
-        GaryxRowActionMenu(actions: teamSwipeActions) {
-            Button {
-                model.selectedTeamDetail = team
-            } label: {
-                GaryxAgentIdentityRow(
-                    id: team.id,
-                    title: team.displayName,
-                    subtitle: team.workflowText,
-                    kind: .team,
-                    avatarDataUrl: team.avatarDataUrl,
-                    providerType: "",
-                    selected: model.selectedAgentTargetId == team.id
-                )
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-        }
-        .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxTeamEditSheet(team: team)
-        }
-        .confirmationDialog("Delete team?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                Task { await model.deleteTeam(team) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes the team configuration.")
-        }
-    }
-
-    private var teamSwipeActions: [GaryxRowAction] {
-        [
-            GaryxRowAction(title: "Chat", systemImage: "message", tone: .accent) {
-                model.openAgentChatDraft(team.id)
-            },
-            GaryxRowAction(title: "Use", systemImage: "checkmark.circle") {
-                model.setSelectedAgentTarget(team.id)
-            },
-            GaryxRowAction(title: "Edit", systemImage: "pencil") {
-                showsEditForm = true
-            },
-            GaryxRowAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                showsDeleteConfirmation = true
-            }
-        ]
-    }
-}
 
 private struct GaryxAgentProviderSelectionRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
@@ -1793,33 +1395,6 @@ private struct GaryxAgentModelSelectionSheet: View {
     }
 }
 
-private struct GaryxTeamLeaderSelectionSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let selectedAgentId: String
-    let agents: [GaryxAgentSummary]
-    let onSelect: (String) -> Void
-
-    var body: some View {
-        GaryxAgentOptionSelectionSheet(title: "Leader", subtitle: "Choose team leader") {
-            if agents.isEmpty {
-                GaryxAgentOptionEmptyState(text: "No agents available.")
-            } else {
-                ForEach(Array(agents.enumerated()), id: \.element.id) { index, agent in
-                    GaryxAgentSummaryOptionRow(
-                        agent: agent,
-                        selected: selectedAgentId == agent.id
-                    ) {
-                        onSelect(agent.id)
-                        dismiss()
-                    }
-                    if index < agents.count - 1 {
-                        Divider().padding(.leading, 62)
-                    }
-                }
-            }
-        }
-    }
-}
 
 private struct GaryxAgentOptionSelectionSheet<Content: View>: View {
     @Environment(\.dismiss) private var dismiss
@@ -1946,7 +1521,6 @@ private struct GaryxAgentSummaryOptionRow: View {
                 GaryxAgentAvatarView(
                     agentId: agent.id,
                     avatarDataUrl: agent.avatarDataUrl,
-                    kind: .agent,
                     label: agent.displayName,
                     providerType: agent.providerType,
                     builtIn: agent.builtIn,
@@ -1977,246 +1551,5 @@ private struct GaryxAgentSummaryOptionRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-private struct GaryxTeamLeaderSelectionRow: View {
-    @Binding var leaderAgentId: String
-    @Binding var memberAgentIds: String
-    let agents: [GaryxAgentSummary]
-    @State private var showsLeaderSheet = false
-
-    var body: some View {
-        GaryxFormSelectionRow(
-            title: "Leader",
-            value: agentOptionsIncludingCurrent.isEmpty ? "" : leaderLabel,
-            placeholder: agentOptionsIncludingCurrent.isEmpty ? "No agents" : "Choose leader"
-        ) {
-            if !agentOptionsIncludingCurrent.isEmpty {
-                showsLeaderSheet = true
-            }
-        }
-        .disabled(agentOptionsIncludingCurrent.isEmpty)
-        .sheet(isPresented: $showsLeaderSheet) {
-            GaryxTeamLeaderSelectionSheet(
-                selectedAgentId: normalizedLeader,
-                agents: agentOptionsIncludingCurrent,
-                onSelect: selectLeader
-            )
-        }
-    }
-
-    private var normalizedLeader: String {
-        leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var agentOptionsIncludingCurrent: [GaryxAgentSummary] {
-        GaryxTeamFormPresentation.agentOptions(agents, preserving: [normalizedLeader])
-    }
-
-    private var leaderLabel: String {
-        GaryxTeamFormPresentation.leaderLabel(leaderAgentId: leaderAgentId, options: agentOptionsIncludingCurrent)
-    }
-
-    private func selectLeader(_ agentId: String) {
-        var draft = GaryxTeamMembershipDraft(leaderAgentId: leaderAgentId, memberAgentIds: memberAgentIds)
-        draft.selectLeader(agentId)
-        leaderAgentId = draft.leaderAgentId
-        memberAgentIds = draft.memberAgentIds
-    }
-}
-
-private struct GaryxTeamMembersSelectionRow: View {
-    @Binding var leaderAgentId: String
-    @Binding var memberAgentIds: String
-    let agents: [GaryxAgentSummary]
-    @State private var showsMembersSheet = false
-
-    var body: some View {
-        GaryxFormSelectionRow(
-            title: "Members",
-            value: membersLabel,
-            placeholder: "Choose members"
-        ) {
-            showsMembersSheet = true
-        }
-        .sheet(isPresented: $showsMembersSheet) {
-            GaryxTeamMembersSelectionSheet(
-                leaderAgentId: $leaderAgentId,
-                memberAgentIds: $memberAgentIds,
-                agents: agents
-            )
-        }
-    }
-
-    private var membersLabel: String {
-        GaryxTeamFormPresentation.membersLabel(
-            memberIds: GaryxTeamMembershipDraft.memberIds(from: memberAgentIds),
-            agents: agents
-        )
-    }
-}
-
-private struct GaryxTeamMembersSelectionSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Binding var leaderAgentId: String
-    @Binding var memberAgentIds: String
-    let agents: [GaryxAgentSummary]
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Team Members")
-                        .font(GaryxFont.callout(weight: .semibold))
-                        .foregroundStyle(.primary)
-                    Text("\(selectedIds.count) selected")
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                Button {
-                    dismiss()
-                } label: {
-                    GaryxCompactGlassIcon(systemName: "xmark")
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-            }
-            .padding(.horizontal, 22)
-            .padding(.top, 22)
-            .padding(.bottom, 14)
-
-            ScrollView {
-                GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-                    VStack(spacing: 0) {
-                        if agentOptionsIncludingCurrent.isEmpty {
-                            Text("No agents available.")
-                                .font(GaryxFont.subheadline())
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 28)
-                        } else {
-                            ForEach(Array(agentOptionsIncludingCurrent.enumerated()), id: \.element.id) { index, agent in
-                                teamMemberRow(agent)
-                                if index < agentOptionsIncludingCurrent.count - 1 {
-                                    Divider().padding(.leading, 62)
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 28)
-                .garyxVerticalScrollContentWidth()
-            }
-            .scrollIndicators(.hidden)
-        }
-        .background(Color(.systemBackground).opacity(0.98).ignoresSafeArea())
-        .presentationDetents([.fraction(0.86), .large])
-        .presentationDragIndicator(.hidden)
-        .presentationCornerRadius(34)
-    }
-
-    private var normalizedLeader: String {
-        leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var selectedIds: [String] {
-        GaryxTeamMembershipDraft.memberIds(from: memberAgentIds)
-    }
-
-    private var agentOptionsIncludingCurrent: [GaryxAgentSummary] {
-        GaryxTeamFormPresentation.agentOptions(agents, preserving: selectedIds + [normalizedLeader])
-    }
-
-    private func teamMemberRow(_ agent: GaryxAgentSummary) -> some View {
-        let selected = selectedIds.contains(agent.id)
-        let isLeader = normalizedLeader == agent.id
-        return HStack(spacing: 12) {
-            Button {
-                toggleMember(agent.id)
-            } label: {
-                HStack(spacing: 12) {
-                    GaryxAgentAvatarView(
-                        agentId: agent.id,
-                        avatarDataUrl: agent.avatarDataUrl,
-                        kind: .agent,
-                        label: agent.displayName,
-                        providerType: agent.providerType,
-                        builtIn: agent.builtIn,
-                        diameter: 32
-                    )
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text(agent.displayName)
-                                .font(GaryxFont.subheadline(weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            if isLeader {
-                                Text("TL")
-                                    .font(GaryxFont.caption(weight: .bold))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        Text(agent.id)
-                            .font(GaryxFont.caption())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if selected {
-                Button {
-                    selectLeader(agent.id)
-                } label: {
-                    Text(isLeader ? "Lead" : "Set TL")
-                        .font(GaryxFont.caption(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 8)
-                        .frame(height: 28)
-                        .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-
-            Button {
-                toggleMember(agent.id)
-            } label: {
-                if selected {
-                    GaryxSelectionCheckmark(size: 13)
-                        .frame(width: 22, height: 28)
-                } else {
-                    Image(systemName: "plus")
-                        .font(GaryxFont.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 22, height: 28)
-                }
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-    }
-
-    private func selectLeader(_ agentId: String) {
-        var draft = GaryxTeamMembershipDraft(leaderAgentId: leaderAgentId, memberAgentIds: memberAgentIds)
-        draft.selectLeader(agentId)
-        leaderAgentId = draft.leaderAgentId
-        memberAgentIds = draft.memberAgentIds
-    }
-
-    private func toggleMember(_ agentId: String) {
-        var draft = GaryxTeamMembershipDraft(leaderAgentId: leaderAgentId, memberAgentIds: memberAgentIds)
-        draft.toggleMember(agentId)
-        leaderAgentId = draft.leaderAgentId
-        memberAgentIds = draft.memberAgentIds
     }
 }

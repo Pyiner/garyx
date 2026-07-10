@@ -1975,34 +1975,34 @@
         ],
         "tailActivity": "none"
       },
-      "name": "team interleave flatten",
+      "name": "interleaved actor flatten",
       "records": [
         {
           "message": {
             "control": {
               "kind": "run_start",
-              "run_id": "run::fixture-team",
-              "thread_id": "thread::fixture-team"
+              "run_id": "run::fixture-interleave",
+              "thread_id": "thread::fixture-interleave"
             },
             "internal": true,
             "internal_kind": "control",
             "kind": "control",
             "role": "system"
           },
-          "run_id": "run::fixture-team",
+          "run_id": "run::fixture-interleave",
           "seq": 1,
-          "thread_id": "thread::fixture-team",
+          "thread_id": "thread::fixture-interleave",
           "timestamp": "2026-06-19T13:00:00Z"
         },
         {
           "message": {
             "role": "user",
-            "text": "Coordinate the team.",
+            "text": "Coordinate the work.",
             "timestamp": "2026-06-19T13:00:01Z"
           },
-          "run_id": "run::fixture-team",
+          "run_id": "run::fixture-interleave",
           "seq": 2,
-          "thread_id": "thread::fixture-team",
+          "thread_id": "thread::fixture-interleave",
           "timestamp": "2026-06-19T13:00:01Z"
         },
         {
@@ -2014,9 +2014,9 @@
             "text": "Delegating to beta.",
             "timestamp": "2026-06-19T13:00:02Z"
           },
-          "run_id": "run::fixture-team",
+          "run_id": "run::fixture-interleave",
           "seq": 3,
-          "thread_id": "thread::fixture-team",
+          "thread_id": "thread::fixture-interleave",
           "timestamp": "2026-06-19T13:00:02Z"
         },
         {
@@ -2028,9 +2028,9 @@
             "text": "On it.",
             "timestamp": "2026-06-19T13:00:03Z"
           },
-          "run_id": "run::fixture-team",
+          "run_id": "run::fixture-interleave",
           "seq": 4,
-          "thread_id": "thread::fixture-team",
+          "thread_id": "thread::fixture-interleave",
           "timestamp": "2026-06-19T13:00:03Z"
         },
         {
@@ -2042,27 +2042,27 @@
             "text": "Summary done.",
             "timestamp": "2026-06-19T13:00:04Z"
           },
-          "run_id": "run::fixture-team",
+          "run_id": "run::fixture-interleave",
           "seq": 5,
-          "thread_id": "thread::fixture-team",
+          "thread_id": "thread::fixture-interleave",
           "timestamp": "2026-06-19T13:00:04Z"
         },
         {
           "message": {
             "control": {
               "kind": "run_complete",
-              "run_id": "run::fixture-team",
+              "run_id": "run::fixture-interleave",
               "status": "completed",
-              "thread_id": "thread::fixture-team"
+              "thread_id": "thread::fixture-interleave"
             },
             "internal": true,
             "internal_kind": "control",
             "kind": "control",
             "role": "system"
           },
-          "run_id": "run::fixture-team",
+          "run_id": "run::fixture-interleave",
           "seq": 6,
-          "thread_id": "thread::fixture-team",
+          "thread_id": "thread::fixture-interleave",
           "timestamp": "2026-06-19T13:00:05Z"
         }
       ],

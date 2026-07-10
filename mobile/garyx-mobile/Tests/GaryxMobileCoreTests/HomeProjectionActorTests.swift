@@ -120,7 +120,6 @@ final class HomeProjectionActorTests: XCTestCase {
         let fixture = GaryxHomeListFixture.makeInputs(
             threadCount: 0,
             agentCount: 0,
-            teamCount: 0,
             automationCount: 0,
             pinnedCount: 0,
             runningCount: 0
@@ -174,7 +173,6 @@ private extension GaryxHomeThreadSectionsInput {
         self.init(
             threads: input.threads,
             agents: input.agents,
-            teams: input.teams,
             automations: input.automations,
             pinnedThreadIds: input.pinnedThreadIds,
             recentThreadIds: input.recentThreadIds,

@@ -471,9 +471,6 @@ fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
 }
 
 fn is_custom_standalone_agent(metadata: &HashMap<String, Value>) -> bool {
-    if metadata.get("agent_team_id").is_some() {
-        return false;
-    }
     metadata
         .get("agent_id")
         .and_then(Value::as_str)

@@ -14,7 +14,6 @@ import {
   type DesktopProviderModels,
   type DesktopProviderUsage,
   type DesktopWorkspace,
-  type DesktopTeam,
   type DesktopGatewayProfile,
   type DesktopSettings,
   type DesktopMcpServer,
@@ -73,7 +72,6 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { buildAgentTargetOptions, type AgentTargetOption } from './app-shell/agent-options';
 import { AddBotDialog } from './app-shell/components/AddBotDialog';
 import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
 import { GatewayHeadersEditor } from './GatewayHeadersEditor';
@@ -117,7 +115,6 @@ type GatewaySettingsPanelProps = {
   gatewayStatusMessage?: string | null;
   savingLocalSettings?: boolean;
   agents?: DesktopCustomAgent[];
-  teams?: DesktopTeam[];
   skills?: DesktopSkillInfo[];
   workspaces?: DesktopWorkspace[];
   onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
@@ -753,7 +750,6 @@ export function GatewaySettingsPanel({
   gatewayStatusMessage = null,
   savingLocalSettings = false,
   agents = [],
-  teams = [],
   skills = [],
   workspaces = [],
   onAddWorkspace,
@@ -1274,7 +1270,6 @@ export function GatewaySettingsPanel({
       tabContent = (
         <ChannelsSettingsPanel
           agents={agents}
-          teams={teams}
           workspaces={workspaces}
           gatewayDraft={gatewayDraft}
           gatewaySaving={gatewaySaving}

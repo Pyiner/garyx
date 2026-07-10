@@ -28,7 +28,7 @@ The current call graph is 13 call sites plus the function definition:
 
 - `GaryxMobileModel.swift`: `threads`, `selectedThread`, `isLoadingThreads`,
   `runTracker`, `runStateByThread`, `navigationState`, `pinnedThreadIds`,
-  `recentThreadIds`, `agents`, `teams`, `automations`, and init bootstrap.
+  `recentThreadIds`, `agents`, `automations`, and init bootstrap.
 - `GaryxMobileModel+Presentation.swift`: debug home-scroll fixture bootstrap.
 - `GaryxMobileModel+Presentation.swift`: the function definition.
 
@@ -49,7 +49,6 @@ The emitter builds a `HomeProjectionCapture` directly from model fields:
 - `threads`
 - `recentThreadIds`
 - `agents`
-- `teams`
 - `automations`
 - `pinnedThreadIds`
 - `selectedThread?.id`

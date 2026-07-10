@@ -606,7 +606,6 @@ function renderComposerProviderControl({
   if (onSelectAgent || onSelectWorkflow) {
     const grouped = groupAgentOptions(agentOptions ?? []);
     const hasAgents = grouped.agent.length > 0;
-    const hasTeams = grouped.team.length > 0;
     const workflows = workflowOptions ?? [];
     return (
       <DropdownMenu>
@@ -638,32 +637,12 @@ function renderComposerProviderControl({
               />
             </FloatingActionMenuItem>
           ))}
-          {hasAgents || hasTeams ? <DropdownMenuSeparator /> : null}
+          {hasAgents ? <DropdownMenuSeparator /> : null}
           {hasAgents ? (
             <DropdownMenuSub>
               <FloatingActionMenuSubTrigger>{t("Agents")}</FloatingActionMenuSubTrigger>
               <FloatingActionMenuSubContent>
                 {grouped.agent.map((option) => (
-                  <FloatingActionMenuItem
-                    data-active={
-                      !selectedWorkflow && option.id === selectedAgentId ? '' : undefined
-                    }
-                    key={option.id}
-                    onSelect={() => onSelectAgent?.(option.id)}
-                  >
-                    <AgentOptionRow
-                      option={option}
-                    />
-                  </FloatingActionMenuItem>
-                ))}
-              </FloatingActionMenuSubContent>
-            </DropdownMenuSub>
-          ) : null}
-          {hasTeams ? (
-            <DropdownMenuSub>
-              <FloatingActionMenuSubTrigger>{t("Agent Teams")}</FloatingActionMenuSubTrigger>
-              <FloatingActionMenuSubContent>
-                {grouped.team.map((option) => (
                   <FloatingActionMenuItem
                     data-active={
                       !selectedWorkflow && option.id === selectedAgentId ? '' : undefined

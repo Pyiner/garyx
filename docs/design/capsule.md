@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS capsules (
     thread_id     TEXT,            -- 归属快照：创建它的 thread（plain id）
     run_id        TEXT,            -- 归属快照：创建它的 agent run
     agent_id      TEXT,            -- 从 thread 记录推导（不信任工具参数）
-    provider_type TEXT,            -- 快照：claude / codex / gemini / team…
+    provider_type TEXT,            -- 快照：claude / codex / gemini…
     html_sha256   TEXT NOT NULL,   -- HTML 原文 bytes 的 sha256 hex（缓存 key + 完整性）
     byte_size     INTEGER NOT NULL DEFAULT 0,
     revision      INTEGER NOT NULL DEFAULT 1,   -- 每次 update +1；客户端缓存失效用

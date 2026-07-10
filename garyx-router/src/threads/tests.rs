@@ -424,9 +424,9 @@ async fn create_thread_record_persists_metadata_object() {
         &store,
         ThreadEnsureOptions {
             metadata: HashMap::from([(
-                "agent_team_child".to_owned(),
+                "workflow_child".to_owned(),
                 json!({
-                    "team_id": "product-ship-camel",
+                    "run_id": "run-camel",
                     "child_agent_id": "planner"
                 }),
             )]),
@@ -438,10 +438,10 @@ async fn create_thread_record_persists_metadata_object() {
 
     assert_eq!(
         thread_metadata_from_value(&created)
-            .get("agent_team_child")
+            .get("workflow_child")
             .cloned(),
         Some(json!({
-            "team_id": "product-ship-camel",
+            "run_id": "run-camel",
             "child_agent_id": "planner"
         }))
     );
@@ -449,10 +449,10 @@ async fn create_thread_record_persists_metadata_object() {
     let stored = store.get(&thread_id).await.unwrap();
     assert_eq!(
         thread_metadata_from_value(&stored)
-            .get("agent_team_child")
+            .get("workflow_child")
             .cloned(),
         Some(json!({
-            "team_id": "product-ship-camel",
+            "run_id": "run-camel",
             "child_agent_id": "planner"
         }))
     );

@@ -54,14 +54,6 @@ pub fn default_custom_agents_state_path() -> PathBuf {
     custom_agents_state_path_for_data_dir(&default_session_data_dir())
 }
 
-pub fn agent_teams_state_path_for_data_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("agent-teams.json")
-}
-
-pub fn default_agent_teams_state_path() -> PathBuf {
-    agent_teams_state_path_for_data_dir(&default_session_data_dir())
-}
-
 pub fn wikis_state_path_for_data_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("wikis.json")
 }
@@ -84,17 +76,6 @@ pub fn garyx_database_path_for_data_dir(data_dir: &Path) -> PathBuf {
 
 pub fn default_garyx_database_path() -> PathBuf {
     garyx_database_path_for_data_dir(&default_session_data_dir())
-}
-
-/// Directory holding one JSON file per `AgentTeam` group — orchestrator
-/// state owned by the AgentTeam provider (sub-agent thread mappings and
-/// per-member catch-up offsets, keyed by the group's thread_id).
-pub fn agent_team_groups_dir_for_data_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("agent-team-groups")
-}
-
-pub fn default_agent_team_groups_dir() -> PathBuf {
-    agent_team_groups_dir_for_data_dir(&default_session_data_dir())
 }
 
 pub fn run_terminal_dir_for_data_dir(data_dir: &Path) -> PathBuf {

@@ -27,7 +27,7 @@ reinterpreted in feature code.
 
 ## Thread Queries Go Through SQL
 
-- Every "find threads by condition" query — by channel binding, team, task
+- Every "find threads by condition" query — by channel binding, task
   number, recency, or a bare count — must be answered by a SQLite
   projection table. Projections derive inside the same transaction as
   every record write, so they are structurally current: there is no
@@ -84,11 +84,11 @@ reinterpreted in feature code.
   retry/reconnect behavior or local business gates defined in
   `docs/agents/conversation-state.md`.
 
-## Agent And Team Write Concurrency
+## Agent Write Concurrency
 
-- `POST /api/custom-agents` and `POST /api/teams` are strict creates: an
+- `POST /api/custom-agents` is a strict create: an
   existing id is a 409, never a silent overwrite.
-- `PUT /api/custom-agents/{id}` and `PUT /api/teams/{id}` are strict
+- `PUT /api/custom-agents/{id}` is a strict
   conditional updates: the request must carry `expected_updated_at` (the
   `updated_at` of the profile the edit was based on). A missing token is a
   400, a missing target is a 404 (deleted profiles are not resurrected), and
@@ -117,9 +117,9 @@ reinterpreted in feature code.
 ## Workflows
 
 - Task execution is selected by `ThreadTask.executor`, whose product-level
-  variants are Agent, Agent Team, and Workflow. New task creation paths should
+  variants are Agent and Workflow. New task creation paths should
   set `executor`; `assignee` remains a compatibility/ownership field and should
-  not be used as the execution selector for new Agent/Team/Workflow UI or CLI
+  not be used as the execution selector for new Agent/Workflow UI or CLI
   flows.
 - Workflow source code executes in the caller's process through SDKs such as
   `@garyx/workflow`; gateway must not own a workflow language runtime or parse

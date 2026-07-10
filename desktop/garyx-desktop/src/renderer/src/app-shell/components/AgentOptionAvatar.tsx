@@ -12,13 +12,12 @@ import {
 } from '@/components/ui/avatar';
 import { cn } from '@/lib/utils';
 
-import { AgentsIcon } from '../icons';
 import {
   ProviderAgentIcon,
   hasProviderAgentIcon,
 } from './ProviderAgentIcon';
 
-type AgentOptionKind = 'builtin' | 'agent' | 'team';
+type AgentOptionKind = 'builtin' | 'agent';
 
 type AgentOptionLike = {
   avatarDataUrl?: string | null;
@@ -75,7 +74,6 @@ export function AgentOptionAvatar({
     <Avatar
       className={cn(
         'agent-option-avatar',
-        kind === 'team' && 'agent-option-avatar--team',
         showProviderIcon && 'agent-option-avatar--provider',
         className,
       )}
@@ -90,8 +88,6 @@ export function AgentOptionAvatar({
             providerType={providerType}
             size="1em"
           />
-        ) : kind === 'team' ? (
-          <AgentsIcon />
         ) : (
           agentInitials(label, agentId)
         )}

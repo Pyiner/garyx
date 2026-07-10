@@ -503,23 +503,6 @@ public final class GaryxGatewayClient {
         try await delete("/api/custom-agents/\(agentId.urlPathEncoded)")
     }
 
-    public func listTeams() async throws -> [GaryxTeamSummary] {
-        let page: GaryxTeamsPage = try await get("/api/teams")
-        return page.teams
-    }
-
-    public func createTeam(_ request: GaryxTeamRequest) async throws -> GaryxTeamSummary {
-        try await post("/api/teams", body: request)
-    }
-
-    public func updateTeam(teamId: String, request: GaryxTeamRequest) async throws -> GaryxTeamSummary {
-        try await put("/api/teams/\(teamId.urlPathEncoded)", body: request)
-    }
-
-    public func deleteTeam(teamId: String) async throws -> GaryxEmptyResponse {
-        try await delete("/api/teams/\(teamId.urlPathEncoded)")
-    }
-
     public func listSkills() async throws -> [GaryxSkillSummary] {
         let page: GaryxSkillsPage = try await get("/api/skills")
         return page.skills

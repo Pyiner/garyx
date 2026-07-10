@@ -21,7 +21,7 @@ features:
   - title: Channel gateway
     details: Telegram, Feishu / Lark, WeChat, subprocess channel plugins, and a local API channel all share the same routing model.
   - title: Provider bridge
-    details: Route threads to Claude Code, Codex, Gemini, custom agents, or teams while keeping channel setup stable.
+    details: Route threads to Claude Code, Codex, Gemini, or custom agents while keeping channel setup stable.
   - title: Persistent threads
     details: Conversations keep transcript history, endpoint bindings, provider resume state, and workspace context across surfaces.
   - title: Scoped MCP
@@ -41,7 +41,7 @@ runtime.
 Telegram / Feishu / WeChat / CLI / Desktop / HTTP / WebSocket
   -> Garyx gateway
   -> Threads, transcripts, endpoint bindings, tasks, automations
-  -> Claude Code / Codex / Gemini / custom agents / teams
+  -> Claude Code / Codex / Gemini / custom agents
   -> Garyx MCP tools and configured upstream MCP servers
 ```
 

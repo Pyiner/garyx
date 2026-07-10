@@ -25,8 +25,8 @@ slice of `mergeRemoteDesktopState`:
 - Per-row server cost is structural: `list_threads` runs
   `attach_thread_runtime_summary` per row → `thread_store.get()` (deep
   clone + mtime stat on cache hit, disk JSON read on miss) **plus**
-  `current_agent_runtime_metadata`, which clones the full custom-agent and
-  team catalogs (`list_agents().await` + `list_teams().await`) — per row,
+  `current_agent_runtime_metadata`, which clones the full custom-agent
+  catalog (`list_agents().await`) — per row,
   per request.
 
 ## Why NOT a plain `limit=200` truncation
@@ -106,16 +106,16 @@ state like any hydrated state (threads.length > 0), which is correct.
 ### 2b — gateway: hoist catalog lookups out of the per-row loop
 
 In `list_threads` (and the shared summary path used by
-`list_recent_threads`), resolve the custom-agent and team catalogs once
+`list_recent_threads`), resolve the custom-agent catalog once
 per request:
 
 - add `build_thread_runtime_summary_with_catalog(state, thread_value,
-  agents: &[...], teams: &[...])`;
+  agents: &[...])`;
 - keep `build_thread_runtime_summary` as a thin wrapper resolving the
   catalogs itself (single-thread callers unchanged);
 - the list loops call the `_with_catalog` variant.
 
-This cuts 2×N catalog clones per request for every `/api/threads` client
+This cuts N catalog clones per request for every `/api/threads` client
 (desktop full fetch, mobile) independent of limit. The per-row
 `thread_store.get()` stays (runtime summary needs thread metadata that is
 not in the `thread_meta` projection); moving those fields into the

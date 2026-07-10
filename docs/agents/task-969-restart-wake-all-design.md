@@ -64,7 +64,7 @@ from `recent_threads` by projection rules (`exclude_from_recent`,
 `automation_thread_mode=generated_thread`, `source=workflow`, or
 `workflow_child_run_id`). Wake-all does not add a hidden-thread scan. Visible
 top-level agent/task threads are included even if their executor metadata later
-routes to an agent team or workflow-backed task. Interrupted workflow runs are
+routes to an agent or workflow-backed task. Interrupted workflow runs are
 already reconciled by the workflow lifecycle startup pass; waking hidden child
 threads would create a second recovery policy and is out of scope for this
 restart feature.

@@ -20,7 +20,7 @@ implementation:
 - Automations: list, create, edit, pause/enable, delete, activity, and run now.
 - Workspaces: path discovery from threads/automations/defaults, manual Mac path
   entry, gateway git-status check, directory browsing, and file preview.
-- Agents and teams: list/select, provider model discovery, create, edit, and
+- Agents: list/select, provider model discovery, create, edit, and
   delete. Provider secrets remain gateway-owned.
 - Skills: list, create, edit metadata, toggle, delete, editor tree, file
   read/save, and entry create/delete.
@@ -55,7 +55,7 @@ product contract:
   enter Mac workspace paths and browse them through the gateway.
 - Desktop-local gateway profile bookkeeping. Mobile stores only its active
   gateway URL/token pair.
-- Local memory document file helper. Agent/team execution still uses the
+- Local memory document file helper. Agent execution still uses the
   gateway-owned files; mobile does not directly edit host-local memory files.
 - Desktop-only deep-link subscriptions. Mobile handles its own
   `garyx://mobile/connect` links.

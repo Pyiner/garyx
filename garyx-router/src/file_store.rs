@@ -7,7 +7,6 @@ use serde_json::Value;
 use tokio::sync::{Mutex, Semaphore};
 use tracing::{debug, error};
 
-use crate::scrub::scrub_legacy_team_fields;
 use crate::store::{ThreadStore, ThreadStoreError};
 
 // Constants matching the Python implementation.
@@ -339,7 +338,7 @@ impl ThreadStore for FileThreadStore {
             if let Some(entry) = cache.get(thread_id) {
                 if entry.inserted_at.elapsed() <= self.cache_ttl {
                     // Quick TTL check passed, now validate mtime (needs fs access).
-                    let mut data = Self::deep_clone(&entry.data);
+                    let data = Self::deep_clone(&entry.data);
                     let mtime = entry.mtime;
                     drop(cache);
                     // Validate mtime.
@@ -347,11 +346,6 @@ impl ThreadStore for FileThreadStore {
                     if let Some(disk_mtime) = Self::file_mtime(&path).await
                         && disk_mtime == mtime
                     {
-                        // Defensive scrub on cache-hit: fresh inserts
-                        // are already scrubbed, but an older cached
-                        // entry from before this migration landed
-                        // could still carry fossils.
-                        let _ = scrub_legacy_team_fields(&mut data);
                         return Some(data);
                     }
                     // Invalidate stale cache entry.
@@ -377,81 +371,10 @@ impl ThreadStore for FileThreadStore {
         // concurrent history polling otherwise starves other readers
         // and thread-create paths into lock timeouts.
         let bytes = tokio::fs::read(&path).await.ok()?;
-        let mut data: Value = serde_json::from_slice(&bytes).ok()?;
+        let data: Value = serde_json::from_slice(&bytes).ok()?;
 
-        // One-shot migration: strip legacy team-chat fossils. Persisting
-        // the cleaned record is the only mutation `get` performs, so only
-        // this rare path takes the write lock, and it re-reads under the
-        // lock so it never clobbers a concurrent write.
-        if scrub_legacy_team_fields(&mut data) {
-            self.check_stale_lock(&path).await;
-            match self.acquire_lock(&path).await {
-                Err(e) => {
-                    // Serve the scrubbed in-memory record; the migration
-                    // retries on a later read.
-                    error!(thread_id, error = %e, "lock timeout on scrub write-back");
-                }
-                Ok(()) => {
-                    let persisted = async {
-                        let bytes = tokio::fs::read(&path).await.ok()?;
-                        let mut fresh: Value = serde_json::from_slice(&bytes).ok()?;
-                        if scrub_legacy_team_fields(&mut fresh) {
-                            // Write back to the canonical location. On a
-                            // legacy compat path the write still lands in
-                            // the canonical v2 directory, which matches
-                            // the migration semantics of `set()`.
-                            let canonical_path = self.thread_file(thread_id);
-                            match serde_json::to_vec_pretty(&fresh) {
-                                Ok(bytes) => {
-                                    if let Err(e) =
-                                        Self::atomic_write(&canonical_path, &bytes).await
-                                    {
-                                        error!(thread_id, error = %e, "failed to re-persist scrubbed thread");
-                                    } else {
-                                        // If we just migrated out of a legacy
-                                        // location, best-effort drop the old file so
-                                        // the resolver stops preferring it.
-                                        let legacy_path = self.legacy_thread_file(thread_id);
-                                        if legacy_path != canonical_path && legacy_path.exists() {
-                                            let _ = tokio::fs::remove_file(&legacy_path).await;
-                                            let _ = tokio::fs::remove_file(
-                                                Self::lock_file_for_path(&legacy_path),
-                                            )
-                                            .await;
-                                        }
-                                        let legacy_compat_path =
-                                            self.legacy_compat_thread_file(thread_id);
-                                        if legacy_compat_path != canonical_path
-                                            && legacy_compat_path.exists()
-                                        {
-                                            let _ =
-                                                tokio::fs::remove_file(&legacy_compat_path).await;
-                                            let _ = tokio::fs::remove_file(
-                                                Self::lock_file_for_path(&legacy_compat_path),
-                                            )
-                                            .await;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    error!(thread_id, error = %e, "failed to serialize scrubbed thread");
-                                }
-                            }
-                        }
-                        Some(fresh)
-                    }
-                    .await;
-                    self.release_lock(&path).await;
-                    if let Some(fresh) = persisted {
-                        data = fresh;
-                    }
-                }
-            }
-        }
-
-        // Use the canonical path for mtime / cache keying so a
-        // just-migrated record's cache entry matches what the next
-        // `get()` sees on disk.
+        // Prefer the canonical path for cache keying, while still accepting a
+        // record read from an older storage location.
         let cache_path = self.thread_file(thread_id);
         let mtime = Self::file_mtime(&cache_path)
             .await

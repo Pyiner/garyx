@@ -130,7 +130,6 @@ extension GaryxMobileModel {
         clearAllComposerDrafts()
         draftThreadTitle = ""
         agents = []
-        teams = []
         skills = []
         galleryFocusedCapsule = nil
         conversationCapsulePreview = nil
@@ -165,7 +164,6 @@ extension GaryxMobileModel {
         selectedSkillDocument = nil
         selectedAutomationEditor = nil
         selectedAgentDetail = nil
-        selectedTeamDetail = nil
         routeNotFoundStore.selection = nil
         isLoadingThreads = false
         remoteStateLoadPhase = .idle
@@ -482,22 +480,19 @@ extension GaryxMobileModel {
         }
         do {
             let gateway = try client()
-            async let agentsResult = garyxCaptureCatalog { try await gateway.listAgents() }
-            async let teamsResult = garyxCaptureCatalog { try await gateway.listTeams() }
-            let (agentsOutcome, teamsOutcome) = await (agentsResult, teamsResult)
+            let agentsOutcome = await garyxCaptureCatalog { try await gateway.listAgents() }
             guard isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             agentTargetsRefreshRequestId = nil
             if agentTargetsStateRequestId == requestId {
                 agentTargetsStateRequestId = nil
             }
             let nextAgents = agentsOutcome.successValue
-            let nextTeams = teamsOutcome.successValue
-            if nextAgents != nil || nextTeams != nil {
-                applyAgentTargets(agents: nextAgents, teams: nextTeams)
+            if let nextAgents {
+                applyAgentTargets(agents: nextAgents)
             }
-            if agentsOutcome.isFailure || teamsOutcome.isFailure {
+            if agentsOutcome.isFailure {
                 let message = catalogRefreshFailureMessage(
-                    from: [AnyCatalogResult(agentsOutcome), AnyCatalogResult(teamsOutcome)]
+                    from: [AnyCatalogResult(agentsOutcome)]
                 )
                     ?? "Agents could not be loaded."
                 agentTargetsLoadPhase = hadAgentTargetsBeforeRefresh ? .loaded : .failed(message)
@@ -538,7 +533,6 @@ extension GaryxMobileModel {
         do {
             let gateway = try client()
             async let agentsResult = garyxCaptureCatalog { try await gateway.listAgents() }
-            async let teamsResult = garyxCaptureCatalog { try await gateway.listTeams() }
             async let skillsResult = garyxCaptureCatalog { try await gateway.listSkills() }
             async let capsulesResult = garyxCaptureCatalog { try await gateway.listCapsules() }
             async let gatewaySettingsResult: [String: GaryxJSONValue]? = try? gateway.gatewaySettings()
@@ -565,11 +559,10 @@ extension GaryxMobileModel {
             }
 
             let nextAgents = await agentsResult
-            let nextTeams = await teamsResult
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             let ownsAgentTargetsState = agentTargetsStateRequestId == requestId
-            if ownsAgentTargetsState, (nextAgents.successValue != nil || nextTeams.successValue != nil) {
-                applyAgentTargets(agents: nextAgents.successValue, teams: nextTeams.successValue)
+            if ownsAgentTargetsState, let agents = nextAgents.successValue {
+                applyAgentTargets(agents: agents)
             }
 
             let nextSkills = await skillsResult
@@ -586,7 +579,6 @@ extension GaryxMobileModel {
 
             let cacheableResults: [AnyCatalogResult] = [
                 .init(nextAgents),
-                .init(nextTeams),
                 .init(nextSkills),
                 .init(nextCapsules),
                 .init(nextAutomations),
@@ -651,9 +643,9 @@ extension GaryxMobileModel {
                 persistCatalogCacheSnapshot()
                 catalogSnapshotRestored = false
             }
-            if stillOwnsAgentTargetsState, nextAgents.isFailure || nextTeams.isFailure {
+            if stillOwnsAgentTargetsState, nextAgents.isFailure {
                 let message = catalogRefreshFailureMessage(
-                    from: [AnyCatalogResult(nextAgents), AnyCatalogResult(nextTeams)]
+                    from: [AnyCatalogResult(nextAgents)]
                 )
                     ?? "Agents could not be loaded."
                 agentTargetsLoadPhase = hadAgentTargetsBeforeRefresh ? .loaded : .failed(message)

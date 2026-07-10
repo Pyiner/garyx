@@ -9,7 +9,6 @@ public enum GaryxMobileRoute: Equatable, Sendable {
     case automationThreads(String)
     case capsule(String)
     case agent(String)
-    case team(String)
     case skill(String)
     case skillFile(skillId: String, path: String)
     case workspace(String)
@@ -44,9 +43,6 @@ public enum GaryxMobileRouteLink {
             components.queryItems = [URLQueryItem(name: "id", value: normalized(id))]
         case let .agent(id):
             components.path = "/agent"
-            components.queryItems = [URLQueryItem(name: "id", value: normalized(id))]
-        case let .team(id):
-            components.path = "/team"
             components.queryItems = [URLQueryItem(name: "id", value: normalized(id))]
         case let .skill(id):
             components.path = "/skill"
@@ -126,8 +122,6 @@ public enum GaryxMobileRouteLink {
             return .panel(.agents)
         case "agent":
             return queryValue(components, "id", "agentId", "agent_id").map(GaryxMobileRoute.agent)
-        case "team":
-            return queryValue(components, "id", "teamId", "team_id").map(GaryxMobileRoute.team)
         case "skills":
             return .panel(.skills)
         case "skill":

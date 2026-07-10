@@ -1,6 +1,5 @@
 pub mod agent;
 pub mod agent_reference;
-pub mod agent_team;
 pub mod channel_outbound;
 pub mod codex_models;
 pub mod command_catalog;
@@ -30,9 +29,7 @@ pub use agent::RunState;
 pub use agent_reference::{
     AgentReference, agent_runtime_metadata, agent_runtime_snapshot_metadata,
     merge_thread_agent_runtime_snapshot, resolve_agent_reference,
-    validate_agent_team_registry_uniqueness,
 };
-pub use agent_team::AgentTeamProfile;
 pub use channel_outbound::ChannelOutboundContent;
 pub use command_catalog::{
     CommandCatalog, CommandCatalogEntry, CommandCatalogOptions, CommandDispatch, CommandKind,

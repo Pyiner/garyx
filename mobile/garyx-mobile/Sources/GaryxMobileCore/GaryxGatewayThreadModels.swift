@@ -93,8 +93,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var workspacePath: String?
     public var messageCount: Int?
     public var agentId: String?
-    public var teamId: String?
-    public var teamName: String?
     public var providerType: String?
     public var recentRunId: String?
     public var activeRunId: String?
@@ -116,8 +114,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         workspacePath: String?,
         messageCount: Int?,
         agentId: String?,
-        teamId: String?,
-        teamName: String?,
         providerType: String?,
         recentRunId: String?,
         activeRunId: String?,
@@ -138,8 +134,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         self.workspacePath = workspacePath
         self.messageCount = messageCount
         self.agentId = agentId
-        self.teamId = teamId
-        self.teamName = teamName
         self.providerType = providerType
         self.recentRunId = recentRunId
         self.activeRunId = activeRunId
@@ -179,9 +173,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         case messageCountCamel = "messageCount"
         case agentId = "agent_id"
         case agentIdCamel = "agentId"
-        case teamId = "team_id"
-        case teamDisplayName = "team_display_name"
-        case teamDisplayNameCamel = "teamDisplayName"
         case providerType = "provider_type"
         case providerTypeCamel = "providerType"
         case recentRunId = "recent_run_id"
@@ -225,8 +216,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         messageCount = try container.decodeIfPresent(Int.self, forKey: .messageCount)
             ?? container.decodeIfPresent(Int.self, forKey: .messageCountCamel)
         agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel)
-        teamId = try container.garyxDecodeFirstString(.teamId)
-        teamName = try container.garyxDecodeFirstString(.teamDisplayName, .teamDisplayNameCamel)
         providerType = try container.garyxDecodeFirstString(.providerType, .providerTypeCamel)
         recentRunId = try container.garyxDecodeFirstString(.recentRunId, .recentRunIdCamel)
         activeRunId = try container.garyxDecodeFirstString(.activeRunId, .activeRunIdCamel)

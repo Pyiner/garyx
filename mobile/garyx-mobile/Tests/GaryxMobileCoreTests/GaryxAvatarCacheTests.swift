@@ -29,7 +29,7 @@ final class GaryxAvatarCacheTests: XCTestCase {
     }
 
     func testResolutionPriorityUsesLiveThenStoredThenPlaceholder() throws {
-        let identity = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-1")
+        let identity = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-1")
         let live = try XCTUnwrap(GaryxAvatarDataURLParser.parse(pngDataURL))
         let storedPayload = try XCTUnwrap(GaryxAvatarDataURLParser.parse(secondPngDataURL))
         let stored = GaryxStoredAvatar(
@@ -51,7 +51,7 @@ final class GaryxAvatarCacheTests: XCTestCase {
     }
 
     func testWriteThroughPlanWritesOnlyValidChangedAvatars() throws {
-        let identity = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-1")
+        let identity = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-1")
         let existing = try XCTUnwrap(GaryxAvatarDataURLParser.parse(pngDataURL))
         let changed = try XCTUnwrap(GaryxAvatarDataURLParser.parse(secondPngDataURL))
         let current = [identity.storageKey: existing.contentFingerprint]
@@ -59,9 +59,9 @@ final class GaryxAvatarCacheTests: XCTestCase {
         let planned = GaryxAvatarWriteThroughPlan.upserts(
             incoming: [
                 GaryxAvatarUpsert(identity: identity, dataUrl: pngDataURL),
-                GaryxAvatarUpsert(identity: GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-2"), dataUrl: secondPngDataURL),
-                GaryxAvatarUpsert(identity: GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-3"), dataUrl: ""),
-                GaryxAvatarUpsert(identity: GaryxAvatarIdentity(scope: "gateway-a", kind: .team, id: "team-test-1"), dataUrl: "data:text/plain;base64,SGVsbG8="),
+                GaryxAvatarUpsert(identity: GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-2"), dataUrl: secondPngDataURL),
+                GaryxAvatarUpsert(identity: GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-3"), dataUrl: ""),
+                GaryxAvatarUpsert(identity: GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-4"), dataUrl: "data:text/plain;base64,SGVsbG8="),
             ],
             currentFingerprints: current,
             validator: GaryxAvatarAlwaysValidImageValidator()
@@ -72,7 +72,7 @@ final class GaryxAvatarCacheTests: XCTestCase {
     }
 
     func testValidatorDefinesLiveValidityBoundary() {
-        let identity = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-1")
+        let identity = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-1")
         let planned = GaryxAvatarWriteThroughPlan.upserts(
             incoming: [GaryxAvatarUpsert(identity: identity, dataUrl: pngDataURL)],
             currentFingerprints: [:],
@@ -83,7 +83,7 @@ final class GaryxAvatarCacheTests: XCTestCase {
 
     func testInMemoryStoreIsMembershipIndependentAndNoTombstoneOnEmptyRefresh() async throws {
         let store = GaryxInMemoryAvatarStore()
-        let identity = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-1")
+        let identity = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-1")
         let writeResult = await store.upsert(
             [GaryxAvatarUpsert(identity: identity, dataUrl: pngDataURL)],
             validator: GaryxAvatarAlwaysValidImageValidator(),
@@ -110,7 +110,7 @@ final class GaryxAvatarCacheTests: XCTestCase {
 
     func testExplicitClearAndDeleteRemoveRecords() async {
         let store = GaryxInMemoryAvatarStore()
-        let identity = GaryxAvatarIdentity(scope: "gateway-a", kind: .team, id: "team-test-1")
+        let identity = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-1")
         await store.upsert(
             [GaryxAvatarUpsert(identity: identity, dataUrl: pngDataURL)],
             validator: GaryxAvatarAlwaysValidImageValidator(),
@@ -126,8 +126,8 @@ final class GaryxAvatarCacheTests: XCTestCase {
 
     func testIdChangeStoresNewIdentityThenRemovesOldWithoutMigratingBytes() async throws {
         let store = GaryxInMemoryAvatarStore()
-        let oldIdentity = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-old")
-        let newIdentity = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-new")
+        let oldIdentity = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-old")
+        let newIdentity = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-new")
         await store.upsert(
             [GaryxAvatarUpsert(identity: oldIdentity, dataUrl: pngDataURL)],
             validator: GaryxAvatarAlwaysValidImageValidator(),
@@ -148,16 +148,14 @@ final class GaryxAvatarCacheTests: XCTestCase {
         XCTAssertEqual(stored.payload.contentFingerprint, expected.contentFingerprint)
     }
 
-    func testScopeAndKindIsolation() async throws {
+    func testScopeIsolation() async throws {
         let store = GaryxInMemoryAvatarStore()
-        let agentA = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "shared-id")
-        let agentB = GaryxAvatarIdentity(scope: "gateway-b", kind: .agent, id: "shared-id")
-        let teamA = GaryxAvatarIdentity(scope: "gateway-a", kind: .team, id: "shared-id")
+        let agentA = GaryxAvatarIdentity(scope: "gateway-a", id: "shared-id")
+        let agentB = GaryxAvatarIdentity(scope: "gateway-b", id: "shared-id")
         await store.upsert(
             [
                 GaryxAvatarUpsert(identity: agentA, dataUrl: pngDataURL),
                 GaryxAvatarUpsert(identity: agentB, dataUrl: secondPngDataURL),
-                GaryxAvatarUpsert(identity: teamA, dataUrl: secondPngDataURL),
             ],
             validator: GaryxAvatarAlwaysValidImageValidator(),
             now: Date(timeIntervalSince1970: 10)
@@ -165,20 +163,17 @@ final class GaryxAvatarCacheTests: XCTestCase {
 
         let maybeStoredAgentA = await store.storedAvatar(for: agentA, now: Date(timeIntervalSince1970: 11))
         let maybeStoredAgentB = await store.storedAvatar(for: agentB, now: Date(timeIntervalSince1970: 12))
-        let maybeStoredTeamA = await store.storedAvatar(for: teamA, now: Date(timeIntervalSince1970: 13))
         let storedAgentA = try XCTUnwrap(maybeStoredAgentA)
         let storedAgentB = try XCTUnwrap(maybeStoredAgentB)
-        let storedTeamA = try XCTUnwrap(maybeStoredTeamA)
         XCTAssertNotEqual(storedAgentA.payload.contentFingerprint, storedAgentB.payload.contentFingerprint)
-        XCTAssertEqual(storedAgentB.payload.contentFingerprint, storedTeamA.payload.contentFingerprint)
-        XCTAssertNotEqual(agentA.storageKey, teamA.storageKey)
+        XCTAssertNotEqual(agentA.storageKey, agentB.storageKey)
     }
 
     func testLRUPruneUsesLastAccessNotMembership() async {
         let store = GaryxInMemoryAvatarStore()
-        let first = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-1")
-        let second = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-2")
-        let third = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-3")
+        let first = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-1")
+        let second = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-2")
+        let third = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-3")
         await store.upsert([GaryxAvatarUpsert(identity: first, dataUrl: pngDataURL)], validator: GaryxAvatarAlwaysValidImageValidator(), now: Date(timeIntervalSince1970: 1))
         await store.upsert([GaryxAvatarUpsert(identity: second, dataUrl: pngDataURL)], validator: GaryxAvatarAlwaysValidImageValidator(), now: Date(timeIntervalSince1970: 2))
         _ = await store.storedAvatar(for: first, now: Date(timeIntervalSince1970: 10))
@@ -197,7 +192,7 @@ final class GaryxAvatarCacheTests: XCTestCase {
     }
 
     func testIndexRoundTripAndVersionGuard() throws {
-        let identity = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent/test:1")
+        let identity = GaryxAvatarIdentity(scope: "gateway-a", id: "agent/test:1")
         let entry = GaryxAvatarStoreEntry(
             identity: identity,
             fingerprint: "fnv1a64:1234",
@@ -228,8 +223,6 @@ final class GaryxAvatarCacheTests: XCTestCase {
             workspacePath: "/Users/test/project",
             messageCount: 1,
             agentId: "agent-test-1",
-            teamId: nil,
-            teamName: nil,
             providerType: "codex",
             recentRunId: nil,
             activeRunId: nil,
@@ -239,12 +232,11 @@ final class GaryxAvatarCacheTests: XCTestCase {
         let input = GaryxRecentThreadsWidgetSnapshotInput(
             threads: [thread],
             agents: [],
-            teams: [],
             pinnedThreadIds: [],
             recentThreadIds: ["thread-test-1"],
             gatewayScopeId: "gateway-a"
         )
-        let identity = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-1")
+        let identity = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-1")
 
         let withoutFallback = GaryxRecentThreadsWidgetSnapshotProjector.widgetThreads(from: input)
         XCTAssertEqual(withoutFallback.first?.agentId, "agent-test-1")
@@ -272,8 +264,6 @@ final class GaryxAvatarCacheTests: XCTestCase {
             workspacePath: "/Users/test/project",
             messageCount: 1,
             agentId: "agent-test-1",
-            teamId: nil,
-            teamName: nil,
             providerType: "codex",
             recentRunId: nil,
             activeRunId: nil,
@@ -290,12 +280,11 @@ final class GaryxAvatarCacheTests: XCTestCase {
         let input = GaryxRecentThreadsWidgetSnapshotInput(
             threads: [thread],
             agents: [agent],
-            teams: [],
             pinnedThreadIds: [],
             recentThreadIds: ["thread-test-1"],
             gatewayScopeId: "gateway-a"
         )
-        let identity = GaryxAvatarIdentity(scope: "gateway-a", kind: .agent, id: "agent-test-1")
+        let identity = GaryxAvatarIdentity(scope: "gateway-a", id: "agent-test-1")
 
         let projected = GaryxRecentThreadsWidgetSnapshotProjector.widgetThreads(
             from: input,

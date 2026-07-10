@@ -363,7 +363,6 @@ async fn make_state_with_recording_provider(provider: Arc<RecordingProvider>) ->
             state.ops.thread_logs.clone(),
             HashMap::new(),
             state.ops.custom_agents.clone(),
-            state.ops.agent_teams.clone(),
         )
         .await;
     state

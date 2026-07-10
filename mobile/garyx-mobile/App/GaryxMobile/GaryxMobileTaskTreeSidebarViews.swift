@@ -483,7 +483,6 @@ private struct GaryxTaskTreeSidebarRowView: View {
         return GaryxAgentAvatarView(
             agentId: identity.agentId,
             avatarDataUrl: identity.avatarDataUrl,
-            kind: identity.kind,
             label: identity.label,
             providerType: identity.providerType,
             builtIn: identity.builtIn,

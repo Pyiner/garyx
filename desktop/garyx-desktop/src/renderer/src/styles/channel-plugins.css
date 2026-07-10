@@ -251,13 +251,8 @@
 
 /* ── Reduced Motion ── */
 @media (prefers-reduced-motion: reduce) {
-  .team-msg-enter,
-  .team-timeline-status-change,
   .agent-avatar--active,
-  .team-typing-dots span,
   .message-loading-label--thinking,
-  .team-skeleton-avatar,
-  .team-skeleton-line,
   .tool-trace-group.is-active .tool-trace-group-summary,
   .turn-summary.is-running .turn-summary-label,
   .add-bot-step-panel,

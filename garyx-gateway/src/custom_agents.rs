@@ -120,10 +120,8 @@ impl CustomAgentStore {
 
     /// Snapshot the agent list without entering async context.
     ///
-    /// Intended for boot-time invariant checks (see
-    /// [`garyx_models::validate_agent_team_registry_uniqueness`]). Returns an
-    /// empty vec if the lock is contested, which during startup should never
-    /// happen.
+    /// Intended for boot-time snapshots. Returns an empty vec if the lock is
+    /// contested, which during startup should never happen.
     pub fn list_agents_blocking(&self) -> Vec<CustomAgentProfile> {
         let Ok(guard) = self.inner.try_read() else {
             return Vec::new();

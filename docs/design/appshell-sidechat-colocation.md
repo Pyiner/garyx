@@ -32,7 +32,7 @@ four layers:
    `side-chat:${threadId}`; lifecycle deps).
 3. **Render derivations:** ~20 useMemo/consts over mirror maps
    (messages, renderState, pagination, pending inputs, live stream,
-   queue, provider type, agent label, team view, composer gates).
+   queue, provider type, agent label, composer gates).
 4. **Behavior:** `ensureSideChatThread` (create + bind + persist +
    stream start), `handleSideComposerSubmit`, attachment pipeline,
    `openTaskThreadInSidePanel`, the transcript-load effect (fetch +

@@ -211,7 +211,7 @@ struct GaryxSettingsPanelLinkRow: View {
         case .workspaceBots:
             "\(model.mobileBotGroups.count) bots / \(visibleWorkspaceCount) workspaces"
         case .agents:
-            "\(model.agents.count) agents / \(model.teams.count) teams"
+            "\(model.agents.count) agents"
         case .skills:
             "\(model.skills.filter(\.enabled).count) enabled / \(model.skills.count) total"
         default:

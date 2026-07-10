@@ -1,4 +1,4 @@
-//! Optimistic-concurrency primitives for the agent / team stores.
+//! Optimistic-concurrency primitives for mutable gateway stores.
 //!
 //! Every profile carries an `updated_at` timestamp that changes on each
 //! successful write, so it doubles as a concurrency token: a client that
@@ -58,7 +58,7 @@ impl StoreWriteError {
 
 /// Check `expectation` against the currently stored `updated_at` (if any)
 /// while the caller holds the store's write lock. `what` names the entity for
-/// error messages ("custom agent" / "agent team").
+/// error messages (for example, "custom agent").
 pub fn check_write_expectation(
     expectation: &WriteExpectation,
     stored_updated_at: Option<&str>,
@@ -106,14 +106,14 @@ mod tests {
     fn updated_at_requires_matching_token() {
         let expectation = WriteExpectation::UpdatedAt("2026-01-01T00:00:00Z".to_owned());
         assert!(
-            check_write_expectation(&expectation, Some("2026-01-01T00:00:00Z"), "agent team")
+            check_write_expectation(&expectation, Some("2026-01-01T00:00:00Z"), "custom agent")
                 .is_ok()
         );
-        let missing = check_write_expectation(&expectation, None, "agent team")
+        let missing = check_write_expectation(&expectation, None, "custom agent")
             .expect_err("missing id must be not-found");
         assert!(matches!(missing, StoreWriteError::NotFound(_)));
         let stale =
-            check_write_expectation(&expectation, Some("2026-02-02T00:00:00Z"), "agent team")
+            check_write_expectation(&expectation, Some("2026-02-02T00:00:00Z"), "custom agent")
                 .expect_err("moved token must conflict");
         match stale {
             StoreWriteError::Conflict {

@@ -64,7 +64,6 @@ struct GaryxThreadRuntimeCompactRow: View {
             GaryxAgentAvatarView(
                 agentId: target.id,
                 avatarDataUrl: target.avatarDataUrl,
-                kind: target.kind,
                 label: target.title,
                 providerType: target.providerType,
                 builtIn: target.builtIn,
@@ -800,7 +799,6 @@ struct GaryxThreadRuntimeSettingsPanel: View {
             GaryxAgentAvatarView(
                 agentId: target.id,
                 avatarDataUrl: target.avatarDataUrl,
-                kind: target.kind,
                 label: target.title,
                 providerType: target.providerType,
                 builtIn: target.builtIn,

@@ -1,11 +1,9 @@
 pub mod file_store;
-pub mod group_transcript;
 pub mod memory_store;
 pub mod message_ledger;
 pub mod message_routing;
 pub mod router;
 pub mod runtime_context;
-pub mod scrub;
 pub mod store;
 pub mod task_counter;
 pub mod tasks;
@@ -34,7 +32,6 @@ pub mod storage {
     pub use crate::message_routing::{
         MessageRoutingIndex, MessageRoutingStats, OutboundMessageRecord,
     };
-    pub use crate::scrub::{cleanup_legacy_team_runs_dir, scrub_legacy_team_fields};
     pub use crate::store::{ThreadStore, ThreadStoreError};
     pub use crate::thread_history::{
         DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
@@ -60,10 +57,6 @@ pub mod threading {
 }
 
 pub use file_store::FileThreadStore;
-pub use group_transcript::{
-    GROUP_TRANSCRIPT_SNAPSHOT_LIMIT, build_group_transcript_snapshot,
-    build_group_transcript_snapshot_from_history, group_transcript_snapshot_from_messages,
-};
 pub use memory_store::InMemoryThreadStore;
 pub use message_ledger::{MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore};
 pub use message_routing::{MessageRoutingIndex, MessageRoutingStats, OutboundMessageRecord};
@@ -73,7 +66,6 @@ pub use router::{
     command_catalog_for_config, is_native_command_text, reserved_command_names,
 };
 pub use runtime_context::build_runtime_context_metadata;
-pub use scrub::{cleanup_legacy_team_runs_dir, scrub_legacy_team_fields};
 pub use store::{ThreadStore, ThreadStoreError};
 pub use task_counter::{
     FileTaskCounterStore, InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore,

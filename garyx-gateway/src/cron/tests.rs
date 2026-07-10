@@ -1052,7 +1052,6 @@ async fn test_dispatch_agent_turn_recovers_thread_target_delivery_from_store() {
         thread_logs: Arc::new(NoopThreadLogSink),
         managed_mcp_servers: HashMap::new(),
         custom_agents: Arc::new(crate::custom_agents::CustomAgentStore::new()),
-        agent_teams: Arc::new(crate::agent_teams::AgentTeamStore::new()),
     })));
     let job = CronJob {
         id: "recover-delivery".to_owned(),
@@ -1125,7 +1124,6 @@ async fn test_successful_automation_run_persists_thread_id() {
         Arc::new(NoopThreadLogSink),
         HashMap::new(),
         Arc::new(crate::custom_agents::CustomAgentStore::new()),
-        Arc::new(crate::agent_teams::AgentTeamStore::new()),
     )
     .await;
 
@@ -1196,7 +1194,6 @@ async fn test_bound_automation_run_reuses_existing_thread() {
         Arc::new(NoopThreadLogSink),
         HashMap::new(),
         Arc::new(crate::custom_agents::CustomAgentStore::new()),
-        Arc::new(crate::agent_teams::AgentTeamStore::new()),
     )
     .await;
 
@@ -1253,7 +1250,6 @@ async fn test_bound_automation_missing_target_thread_fails_without_cleanup() {
         Arc::new(NoopThreadLogSink),
         HashMap::new(),
         Arc::new(crate::custom_agents::CustomAgentStore::new()),
-        Arc::new(crate::agent_teams::AgentTeamStore::new()),
     )
     .await;
 
@@ -1313,7 +1309,6 @@ async fn test_failed_automation_run_now_cleans_up_failed_thread() {
         Arc::new(NoopThreadLogSink),
         HashMap::new(),
         Arc::new(crate::custom_agents::CustomAgentStore::new()),
-        Arc::new(crate::agent_teams::AgentTeamStore::new()),
     )
     .await;
 
@@ -1792,7 +1787,6 @@ async fn test_stop_waits_for_inflight_cron_tick() {
         Arc::new(NoopThreadLogSink),
         HashMap::new(),
         Arc::new(crate::custom_agents::CustomAgentStore::new()),
-        Arc::new(crate::agent_teams::AgentTeamStore::new()),
     )
     .await;
 
@@ -1857,7 +1851,6 @@ async fn test_tick_and_run_now_do_not_execute_same_job_twice() {
         Arc::new(NoopThreadLogSink),
         HashMap::new(),
         Arc::new(crate::custom_agents::CustomAgentStore::new()),
-        Arc::new(crate::agent_teams::AgentTeamStore::new()),
     )
     .await;
 
@@ -2195,7 +2188,6 @@ async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn()
     let state = AppStateBuilder::new(GaryxConfig::default())
         .with_bridge(bridge.clone())
         .with_cron_service(cron.clone())
-        .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
         .build();
     bridge
@@ -2438,7 +2430,6 @@ async fn test_internal_dispatch_drops_when_thread_missing() {
     let state = crate::server::AppStateBuilder::new(GaryxConfig::default())
         .with_bridge(bridge.clone())
         .with_cron_service(cron.clone())
-        .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
         .build();
     // Keep the builder result alive for the duration of the tick so the cron

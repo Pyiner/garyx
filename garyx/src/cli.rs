@@ -11,7 +11,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
     name = "garyx",
     version = VERSION,
     about = "Garyx – AI chat gateway",
-    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, team, provider, channels, commands, automation, workflow, db\n  Work with threads   task, thread, message, bot, usage, tool\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
+    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, provider, channels, commands, automation, workflow, db\n  Work with threads   task, thread, message, bot, usage, tool\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -179,12 +179,6 @@ pub(crate) enum Commands {
     Tool {
         #[command(subcommand)]
         action: ToolAction,
-    },
-    /// Team asset management
-    #[command(display_order = 21, name = "team", alias = "teams")]
-    Team {
-        #[command(subcommand)]
-        action: TeamAction,
     },
     /// Thread utilities
     #[command(display_order = 41, alias = "threads")]
@@ -601,7 +595,7 @@ pub(crate) enum ChannelsAction {
         /// Workspace mode for new bot threads: local or worktree
         #[arg(long)]
         workspace_mode: Option<String>,
-        /// Agent or team id to bind this channel account to
+        /// Agent id to bind this channel account to
         #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
         /// Telegram or Discord bot token (for plugin-owned channels, prefer the
@@ -658,7 +652,7 @@ pub(crate) enum ChannelsAction {
         /// Workspace mode for new bot threads: local or worktree
         #[arg(long)]
         workspace_mode: Option<String>,
-        /// Agent or team id to bind this channel account to
+        /// Agent id to bind this channel account to
         #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
         /// Weixin UIN (optional; inherited from --reauthorize when omitted)
@@ -813,7 +807,7 @@ pub(crate) enum AutomationAction {
         /// Prompt text. If omitted, reads from stdin.
         #[arg(long)]
         prompt: Option<String>,
-        /// Agent or team id to run
+        /// Agent id to run
         #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
         /// Workspace directory for the automation thread; defaults to the current directory
@@ -841,7 +835,7 @@ pub(crate) enum AutomationAction {
         /// Prompt text
         #[arg(long)]
         prompt: Option<String>,
-        /// Agent or team id to run
+        /// Agent id to run
         #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
         /// Workspace directory for the automation thread
@@ -1344,77 +1338,6 @@ pub(crate) enum AgentAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum TeamAction {
-    /// List teams
-    List {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Get one team
-    Get {
-        /// Team id
-        team_id: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Create a team
-    Create {
-        /// Team id (slug, e.g. release-crew)
-        #[arg(long)]
-        team_id: String,
-        /// Display name
-        #[arg(long, alias = "name")]
-        display_name: String,
-        /// Agent id that leads the team
-        #[arg(long)]
-        leader_agent_id: String,
-        /// Member agent id. Repeat the flag to add multiple members.
-        #[arg(long = "member-agent-id", required = true)]
-        member_agent_ids: Vec<String>,
-        /// Team workflow description handed to the leader agent
-        #[arg(long)]
-        workflow_text: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Update a team. Fields you omit keep their current values.
-    Update {
-        /// Team id
-        team_id: String,
-        /// Rename the team to this id
-        #[arg(long)]
-        new_team_id: Option<String>,
-        /// Display name. Omit to keep the current value.
-        #[arg(long, alias = "name")]
-        display_name: Option<String>,
-        /// Agent id that leads the team. Omit to keep the current value.
-        #[arg(long)]
-        leader_agent_id: Option<String>,
-        /// Member agent id. Repeat to replace the member list; omit to keep the current members.
-        #[arg(long = "member-agent-id")]
-        member_agent_ids: Vec<String>,
-        /// Team workflow description. Omit to keep the current value.
-        #[arg(long)]
-        workflow_text: Option<String>,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Delete a team
-    #[command(visible_alias = "remove", visible_alias = "rm")]
-    Delete {
-        /// Team id
-        team_id: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
 pub(crate) enum ThreadAction {
     /// List threads
     List {
@@ -1487,10 +1410,7 @@ pub(crate) enum ThreadAction {
         /// Create a managed git worktree for this thread. Requires workspace-dir to be a git repo root.
         #[arg(long)]
         worktree: bool,
-        /// Agent or team id to bind the new thread to. Team ids and standalone
-        /// agent ids share one namespace; passing a team id binds the thread to
-        /// the whole team (meta-provider: `agent_team`). Omit for the default
-        /// single-agent mode.
+        /// Agent id to bind the new thread to. Omit for the default agent.
         #[arg(long = "agent", alias = "agent-id")]
         agent_id: Option<String>,
         /// Output as JSON
@@ -1626,13 +1546,10 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         worktree: bool,
         /// Run this task with an agent executor
-        #[arg(long, conflicts_with_all = ["team", "workflow"])]
+        #[arg(long, conflicts_with = "workflow")]
         agent: Option<String>,
-        /// Run this task with an Agent Team executor
-        #[arg(long, conflicts_with_all = ["agent", "workflow"])]
-        team: Option<String>,
         /// Run this task with a reusable workflow definition instead of an agent
-        #[arg(long, conflicts_with_all = ["agent", "team"])]
+        #[arg(long, conflicts_with = "agent")]
         workflow: Option<String>,
         /// Plain-text input passed to the workflow entrypoint (a workflow that needs structured data parses this text in its first step)
         #[arg(long, requires = "workflow")]

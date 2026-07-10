@@ -21,7 +21,6 @@ enum HomeProjectionEvent: Sendable {
         threads: [GaryxThreadSummary],
         recentThreadIds: [String],
         agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary],
         automations: [GaryxAutomationSummary],
         recentRunStateEpoch: Int
     )
@@ -74,7 +73,6 @@ struct HomeSnapshot: Equatable, Sendable {
 struct HomeProjectionState: Equatable, Sendable {
     var threads: [GaryxThreadSummary] = []
     var agents: [GaryxAgentSummary] = []
-    var teams: [GaryxTeamSummary] = []
     var automations: [GaryxAutomationSummary] = []
     var pinnedThreadIds: [String] = []
     var recentThreadIds: [String] = []
@@ -121,7 +119,6 @@ struct HomeProjectionState: Equatable, Sendable {
         GaryxHomeThreadSectionsInput(
             threads: threads,
             agents: agents,
-            teams: teams,
             automations: automations,
             pinnedThreadIds: pinnedThreadIds,
             recentThreadIds: recentThreadIds,
@@ -157,11 +154,10 @@ enum HomeProjectionReducer {
         var evaluatesRowDifference = false
 
         switch event {
-        case let .recentThreadsIngested(threads, recentThreadIds, agents, teams, automations, recentRunStateEpoch):
+        case let .recentThreadsIngested(threads, recentThreadIds, agents, automations, recentRunStateEpoch):
             next.threads = threads
             next.recentThreadIds = normalizedThreadIds(recentThreadIds)
             next.agents = agents
-            next.teams = teams
             next.automations = automations
             applyRecentRunStateSlots(to: &next, threads: threads, epoch: recentRunStateEpoch)
             rebuildBaseSectionsIfNeeded(&next)
@@ -421,7 +417,6 @@ private struct HomeProjectionRowLocation: Equatable, Sendable {
 private struct HomeProjectionDisplaySignature: Equatable, Sendable {
     var threads: [GaryxThreadSummary]
     var agents: [GaryxAgentSummary]
-    var teams: [GaryxTeamSummary]
     var automationThreadIds: Set<String>
     var pinnedThreadIds: [String]
     var recentThreadIds: [String]
@@ -430,7 +425,6 @@ private struct HomeProjectionDisplaySignature: Equatable, Sendable {
     init(input: GaryxHomeThreadSectionsInput) {
         threads = input.threads.map(Self.displayThread)
         agents = input.agents
-        teams = input.teams
         automationThreadIds = GaryxHomeThreadSectionsBuilder.automationThreadIds(input.automations)
         pinnedThreadIds = GaryxHomeThreadSectionsBuilder.normalizedPinnedThreadIds(input.pinnedThreadIds)
         recentThreadIds = input.recentThreadIds

@@ -1413,14 +1413,12 @@ private struct GaryxSidebarThreadButton: View {
         canArchive ?? model.canArchiveThread(thread)
     }
 
-    // Same identity resolution as the recent-threads widget so sidebar rows
-    // and widget rows show the same agent/team avatar for a thread.
+    // Same identity resolution as the recent-threads widget.
     private var rowAvatar: GaryxSidebarThreadRowAvatar {
         let identity = model.widgetAgentIdentity(for: thread)
         return GaryxSidebarThreadRowAvatar(
             agentId: identity.id ?? "",
             avatarDataUrl: identity.avatarDataUrl ?? "",
-            kind: identity.isTeam ? .team : .agent,
             label: identity.name ?? thread.title,
             providerType: identity.providerType ?? "",
             builtIn: identity.builtIn
@@ -1539,7 +1537,6 @@ struct GaryxSidebarThreadRowView: View {
                 GaryxAgentAvatarView(
                     agentId: avatar.agentId,
                     avatarDataUrl: avatar.avatarDataUrl,
-                    kind: avatar.kind,
                     label: avatar.label,
                     providerType: avatar.providerType,
                     builtIn: avatar.builtIn,

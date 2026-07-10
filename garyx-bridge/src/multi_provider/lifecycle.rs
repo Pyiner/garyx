@@ -256,25 +256,6 @@ impl MultiProviderBridge {
             desired_provider_keys.insert(key.clone());
         }
         desired_provider_keys.extend(configured_agent_provider_keys);
-        // Preserve the AgentTeam meta-provider across reloads: it is not owned
-        // by a channel account route, so the
-        // "desired set from config" reconciliation above would otherwise drop
-        // it. The AgentTeam provider is registered once at boot via
-        // `AppStateBuilder::build` (see `AGENT_TEAM_PROVIDER_KEY` in
-        // `garyx-gateway`) and must survive subsequent
-        // `reload_from_config` calls triggered by runtime config edits, or
-        // team-bound threads break with "provider not found" on the next run.
-        let existing_agent_team_keys = {
-            let topology = self.inner.topology.read().await;
-            topology
-                .provider_pool
-                .iter()
-                .filter(|(_, provider)| provider.provider_type() == ProviderType::AgentTeam)
-                .map(|(key, _)| key.clone())
-                .collect::<HashSet<_>>()
-        };
-        desired_provider_keys.extend(existing_agent_team_keys);
-
         // Keep providers backing active runs until they naturally drain.
         let run_index = self.inner.run_index.read().await;
         let active_run_provider_keys: HashSet<String> =
@@ -418,26 +399,16 @@ impl MultiProviderBridge {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        let team_profiles = self
-            .inner
-            .team_profiles
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        if let Ok(reference) = resolve_agent_reference(normalized, &agent_profiles, &team_profiles)
+        if let Ok(garyx_models::AgentReference::Standalone { profile, .. }) =
+            resolve_agent_reference(normalized, &agent_profiles)
         {
-            if let garyx_models::AgentReference::Standalone { profile, .. } = reference {
-                if !profile.built_in {
-                    return Some(profile.to_provider_config());
-                }
-                return Some(
-                    self.default_provider_config_for_type(profile.provider_type)
-                        .await,
-                );
+            if !profile.built_in {
+                return Some(profile.to_provider_config());
             }
-            return Some(default_provider_config(ProviderType::AgentTeam));
+            return Some(
+                self.default_provider_config_for_type(profile.provider_type)
+                    .await,
+            );
         }
         match normalized {
             "codex" => Some(
@@ -567,16 +538,7 @@ impl MultiProviderBridge {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        let team_profiles = self
-            .inner
-            .team_profiles
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        let Ok(reference) = resolve_agent_reference(&agent_id, &agent_profiles, &team_profiles)
-        else {
+        let Ok(reference) = resolve_agent_reference(&agent_id, &agent_profiles) else {
             return;
         };
         let snapshot = agent_runtime_snapshot_metadata(&reference);
@@ -625,12 +587,10 @@ impl MultiProviderBridge {
         let Some(agent_cfg) = self.provider_config_for_agent(agent_id).await else {
             return Ok(None);
         };
-        let Some(provider_type) = ProviderType::from_slug(&agent_cfg.provider_type) else {
+        if ProviderType::from_slug(&agent_cfg.provider_type).is_none() {
             return Ok(None);
-        };
-        if matches!(provider_type, ProviderType::AgentTeam)
-            || !agent_provider_requires_dedicated_key(&agent_cfg)
-        {
+        }
+        if !agent_provider_requires_dedicated_key(&agent_cfg) {
             return Ok(None);
         }
         let default_workspace = None;
@@ -698,16 +658,7 @@ impl MultiProviderBridge {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        let team_profiles = self
-            .inner
-            .team_profiles
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        if let Ok(reference) = resolve_agent_reference(normalized, &agent_profiles, &team_profiles)
-        {
+        if let Ok(reference) = resolve_agent_reference(normalized, &agent_profiles) {
             return Some(reference.provider_type());
         }
         match normalized {

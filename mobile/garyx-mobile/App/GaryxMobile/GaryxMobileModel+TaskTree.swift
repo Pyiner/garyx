@@ -178,7 +178,6 @@ extension GaryxMobileModel {
             return GaryxSidebarThreadRowAvatar(
                 agentId: target.id,
                 avatarDataUrl: target.avatarDataUrl,
-                kind: target.kind,
                 label: target.title,
                 providerType: target.providerType,
                 builtIn: target.builtIn
@@ -187,7 +186,6 @@ extension GaryxMobileModel {
         return GaryxSidebarThreadRowAvatar(
             agentId: identityId,
             avatarDataUrl: "",
-            kind: row.identityIsTeam ? .team : .agent,
             label: identityId.isEmpty ? row.title : identityId,
             providerType: row.providerType,
             builtIn: false

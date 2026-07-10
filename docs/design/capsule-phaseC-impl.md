@@ -189,7 +189,7 @@ New `App/GaryxMobile/GaryxMobileCapsuleViews.swift`
   - empty => “No capsules yet.”
 - Row tap calls `model.openCapsule(capsule)`.
 - Row trailing ellipsis uses `GaryxRowActionMenu` with destructive Delete, no left-swipe actions.
-- Metadata line: relative updated timestamp, byte size, revision, and owner badge. The owner badge is derived through `GaryxProviderPresentation.make(agentId:providerType:fallbackName:)` or local agent/team lookup; no local provider switch table.
+- Metadata line: relative updated timestamp, byte size, revision, and owner badge. The owner badge is derived through `GaryxProviderPresentation.make(agentId:providerType:fallbackName:)` or local agent lookup; no local provider switch table.
 
 `GaryxCapsuleDetailView`
 

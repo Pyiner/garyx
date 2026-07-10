@@ -344,7 +344,6 @@ final class HomeProjectionReducerTests: XCTestCase {
             threads: input.threads,
             recentThreadIds: input.recentThreadIds,
             agents: input.agents,
-            teams: input.teams,
             automations: input.automations,
             recentRunStateEpoch: epoch
         )

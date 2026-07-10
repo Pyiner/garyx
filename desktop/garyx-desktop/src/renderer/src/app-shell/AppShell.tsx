@@ -22,7 +22,6 @@ import {
   type DesktopAutomationSchedule,
   type DesktopBotConsoleSummary,
   type DesktopCustomAgent,
-  type DesktopTeam,
   type GatewaySettingsPayload,
   type GatewaySettingsSource,
   type ConfiguredBot,
@@ -126,7 +125,6 @@ import {
   primaryBotEndpoint,
 } from "../bot-console-model";
 import {
-  deriveThreadTeamView,
   automationForLatestThread,
   buildWorkspaceThreadGroups,
   endpointThreadTitle,
@@ -569,7 +567,6 @@ export function AppShell() {
       new GatewayMirror({
         getState: () => window.garyxDesktop.getState(),
         listCustomAgents: () => window.garyxDesktop.listCustomAgents(),
-        listTeams: () => window.garyxDesktop.listTeams(),
         listWorkflowDefinitions: () =>
           window.garyxDesktop.listWorkflowDefinitions(),
         getThreadHistory: (input) => window.garyxDesktop.getThreadHistory(input),
@@ -597,7 +594,6 @@ export function AppShell() {
   const [sideChatSessions] = useState(() => new SideChatSessions());
   const [desktopState, setDesktopState] = useState<DesktopState | null>(null);
   const [desktopAgents, setDesktopAgents] = useState<DesktopCustomAgent[]>([]);
-  const [desktopTeams, setDesktopTeams] = useState<DesktopTeam[]>([]);
   const [desktopWorkflows, setDesktopWorkflows] = useState<
     DesktopWorkflowDefinition[]
   >([]);
@@ -841,7 +837,6 @@ export function AppShell() {
     contentView,
     desktopState,
     desktopAgents,
-    desktopTeams,
     getRouteVersion: () => desktopRouteStore.getSnapshot().version,
     navigateRoute: (route) => {
       desktopRouteStore.navigate(route, { replace: true });
@@ -942,7 +937,6 @@ export function AppShell() {
     setConnection,
     setDesktopAgents,
     setDesktopState,
-    setDesktopTeams,
     setDesktopWorkflows,
     setError,
     setGatewaySettingsStatus,
@@ -1045,23 +1039,12 @@ export function AppShell() {
   const selectedThreadPinned = selectedThreadId
     ? pinnedThreadIdSet.has(selectedThreadId)
     : false;
-  const activeThreadTeamView = deriveThreadTeamView(activeThread);
   const desktopAgentMap = new Map(
     desktopAgents.map((agent) => [agent.agentId, agent] as const),
   );
-  const teamAgentDisplayNamesById = useMemo(
-    () =>
-      Object.fromEntries(
-        desktopAgents.map((agent) => [agent.agentId, agent.displayName]),
-      ),
-    [desktopAgents],
-  );
-  const desktopTeamMap = new Map(
-    desktopTeams.map((team) => [team.teamId, team] as const),
-  );
   const threadAvatarCatalog = useMemo(
-    () => buildThreadAvatarCatalog(desktopAgents, desktopTeams),
-    [desktopAgents, desktopTeams],
+    () => buildThreadAvatarCatalog(desktopAgents),
+    [desktopAgents],
   );
   const activeAgentId = activeThread?.agentId || null;
   const activeThreadInfo = selectedThreadId
@@ -1082,10 +1065,7 @@ export function AppShell() {
     ? providerModelsByType[activeThreadProviderType] || null
     : null;
   const pendingAgent = desktopAgentMap.get(pendingAgentId) || null;
-  const pendingTeam = desktopTeamMap.get(pendingAgentId) || null;
-  const pendingAgentProviderType = pendingTeam
-    ? null
-    : pendingAgent?.providerType || null;
+  const pendingAgentProviderType = pendingAgent?.providerType || null;
   const pendingProviderModels = pendingAgentProviderType
     ? providerModelsByType[pendingAgentProviderType] || null
     : null;
@@ -1160,98 +1140,10 @@ export function AppShell() {
   const activeAgent = activeAgentId
     ? desktopAgentMap.get(activeAgentId) || null
     : null;
-  const pendingTeamLeader = pendingTeam
-    ? desktopAgentMap.get(pendingTeam.leaderAgentId) || null
-    : null;
-  const activeThreadTeamId =
-    activeThread?.team?.team_id?.trim() || activeThread?.teamId?.trim() || "";
-  const activeSourceTeam = activeThreadTeamId
-    ? desktopTeamMap.get(activeThreadTeamId) || null
-    : null;
-  const activeTeamLeaderId =
-    activeThread?.team?.leader_agent_id?.trim() ||
-    activeSourceTeam?.leaderAgentId?.trim() ||
-    "";
-  const activeTeamLeader = activeTeamLeaderId
-    ? desktopAgentMap.get(activeTeamLeaderId) || null
-    : null;
-  const activeTeamSummary = (() => {
-    const teamBlock = activeThread?.team || null;
-    const teamId = teamBlock?.team_id?.trim() || activeThread?.teamId?.trim() || "";
-    if (!teamId) {
-      return null;
-    }
-
-    const sourceTeam = desktopTeamMap.get(teamId) || null;
-    const leaderAgentId =
-      teamBlock?.leader_agent_id?.trim() ||
-      sourceTeam?.leaderAgentId?.trim() ||
-      activeThread?.agentId?.trim() ||
-      "";
-    const memberAgentIds = teamBlock?.member_agent_ids?.length
-      ? teamBlock.member_agent_ids
-      : sourceTeam?.memberAgentIds?.length
-        ? sourceTeam.memberAgentIds
-        : leaderAgentId
-          ? [leaderAgentId]
-          : [];
-    const childThreadIds = teamBlock?.child_thread_ids || {};
-    const orderedAgentIds = Array.from(
-      new Set([...(leaderAgentId ? [leaderAgentId] : []), ...memberAgentIds]),
-    );
-
-    if (!orderedAgentIds.length) {
-      return null;
-    }
-
-    return {
-      teamId,
-      teamName:
-        sourceTeam?.displayName?.trim() ||
-        activeThread?.teamName?.trim() ||
-        activeThread?.title ||
-        teamId,
-      members: orderedAgentIds.map((agentId) => ({
-        agentId,
-        displayName: desktopAgentMap.get(agentId)?.displayName || agentId,
-        role:
-          agentId === leaderAgentId ? ("leader" as const) : ("member" as const),
-        isCurrentAgent: agentId === leaderAgentId,
-        threadId:
-          childThreadIds[agentId] ||
-          (agentId === leaderAgentId ? activeThread?.id || null : null),
-      })),
-    };
-  })();
-
-  useEffect(() => {
-    const teamId =
-      activeThread?.team?.team_id?.trim() || activeThread?.teamId?.trim() || "";
-    if (!teamId || desktopTeamMap.has(teamId)) {
-      return undefined;
-    }
-
-    let cancelled = false;
-    void window.garyxDesktop
-      .listTeams()
-      .then((teams) => {
-        if (cancelled || !teams.some((team) => team.teamId === teamId)) {
-          return;
-        }
-        startTransition(() => {
-          setDesktopTeams(teams);
-        });
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeThread?.teamId, desktopTeams]);
 
   const composerAgentOptions = useMemo(
-    () => buildAgentOptions(desktopAgents, desktopTeams),
-    [desktopAgents, desktopTeams],
+    () => buildAgentOptions(desktopAgents),
+    [desktopAgents],
   );
   const composerWorkflowOptions = useMemo(
     () => buildComposerWorkflowOptions(desktopWorkflows),
@@ -1290,13 +1182,12 @@ export function AppShell() {
     };
   }, [newThreadDraftActive]);
   const addBotAgentTargets = useMemo(() => {
-    const options = buildAgentTargetOptions(desktopAgents, desktopTeams);
+    const options = buildAgentTargetOptions(desktopAgents);
     return options.length
       ? options
       : [{ id: "claude", value: "claude", label: "Claude", kind: "builtin" as const, providerType: "claude_code" as const }];
-  }, [desktopAgents, desktopTeams]);
+  }, [desktopAgents]);
   const pendingAgentLabel =
-    pendingTeam?.displayName?.trim() ||
     pendingAgent?.displayName?.trim() ||
     pendingAgentId ||
     null;
@@ -1304,19 +1195,12 @@ export function AppShell() {
     composerWorkflowOptions.find((workflow) => workflow.id === pendingWorkflowId) ||
     null;
   const activeAgentLabel =
-    activeThreadTeamView.teamDisplayName ||
-    activeSourceTeam?.displayName?.trim() ||
     activeAgent?.displayName ||
     activeThread?.agentId ||
-    activeThread?.teamId ||
     null;
   const composerProviderType: DesktopApiProviderType = selectedThreadId
-    ? activeThreadTeamView.isTeam
-      ? activeTeamLeader?.providerType || "claude_code"
-      : activeAgent?.providerType || "claude_code"
-    : pendingTeam
-      ? pendingTeamLeader?.providerType || "claude_code"
-      : pendingAgent?.providerType || "claude_code";
+    ? activeAgent?.providerType || "claude_code"
+    : pendingAgent?.providerType || "claude_code";
   const composerAgentLabel = selectedThreadId
     ? activeAgentLabel
     : pendingWorkflow?.label || pendingAgentLabel;
@@ -1881,7 +1765,6 @@ export function AppShell() {
   const isAutomationView = contentView === "automation";
   const isCapsulesView = contentView === "capsules";
   const isAgentsView = contentView === "agents";
-  const isTeamsView = contentView === "teams";
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
   const isWorkflowView = contentView === "workflow";
@@ -2083,7 +1966,6 @@ export function AppShell() {
     isAutomationView ||
     isCapsulesView ||
     isAgentsView ||
-    isTeamsView ||
     isSkillsView;
   const canEditThreadTitle = Boolean(
     activeThread &&
@@ -2094,8 +1976,7 @@ export function AppShell() {
     !isTasksView &&
     !isWorkflowView &&
     !isBotsView &&
-    !isAgentsView &&
-    !isTeamsView,
+    !isAgentsView,
   );
   const composerPlaceholder =
     isActiveSendingThread || isDraftSendingThread || activeQueue.length > 0
@@ -2512,8 +2393,8 @@ export function AppShell() {
         ? "Global task board"
       : isWorkflowView
         ? "Workflow run detail"
-      : isAgentsView || isTeamsView
-        ? "Agents and reusable teams"
+      : isAgentsView
+        ? "Reusable agents"
         : isBotsView
           ? `${desktopState?.endpoints.length || 0} connected endpoints`
           : null;
@@ -2562,15 +2443,11 @@ export function AppShell() {
   }
 
   async function refreshAgentTargets() {
-    const [nextAgents, nextTeams] = await Promise.all([
-      window.garyxDesktop
-        .listCustomAgents()
-        .catch(() => [] as DesktopCustomAgent[]),
-      window.garyxDesktop.listTeams().catch(() => [] as DesktopTeam[]),
-    ]);
+    const nextAgents = await window.garyxDesktop
+      .listCustomAgents()
+      .catch(() => [] as DesktopCustomAgent[]);
     startTransition(() => {
       setDesktopAgents(nextAgents);
-      setDesktopTeams(nextTeams);
     });
   }
 
@@ -2848,14 +2725,13 @@ export function AppShell() {
 
           // Fast hydration: the threads slice is a recent page (pinned ids
           // repaired by id). The full set follows below, off the paint path.
-          const [nextState, nextStatus, nextAgents, nextTeams, nextWorkflows] =
+          const [nextState, nextStatus, nextAgents, nextWorkflows] =
             await Promise.all([
               window.garyxDesktop.getStateFast(),
               window.garyxDesktop.checkConnection(),
               window.garyxDesktop
                 .listCustomAgents()
                 .catch(() => [] as DesktopCustomAgent[]),
-              window.garyxDesktop.listTeams().catch(() => [] as DesktopTeam[]),
               window.garyxDesktop
                 .listWorkflowDefinitions()
                 .catch(() => [] as DesktopWorkflowDefinition[]),
@@ -2869,7 +2745,6 @@ export function AppShell() {
           startTransition(() => {
             setDesktopState(nextState);
             setDesktopAgents(nextAgents);
-            setDesktopTeams(nextTeams);
             setDesktopWorkflows(nextWorkflows);
             setSettingsDraft(nextState.settings);
             setConnection(nextStatus);
@@ -4019,7 +3894,6 @@ export function AppShell() {
       preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
       selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
       threadAvatarCatalog={threadAvatarCatalog}
-      teamAgentDisplayNamesById={teamAgentDisplayNamesById}
       botGroups={botGroups}
       botBindingDisabled={bindingMutation === "bot-binding"}
       workspaceMutation={workspaceMutation}
@@ -4142,7 +4016,7 @@ export function AppShell() {
     isSettingsView ? "settings-view" : null,
     isCapsulesView ? "capsules-view" : null,
     isAutomationView ? "automation-view" : null,
-    isAgentsView || isTeamsView ? "agents-view" : null,
+    isAgentsView ? "agents-view" : null,
     isSkillsView ? "skills-view" : null,
     isTasksView ? "tasks-view" : null,
     isWorkflowView ? "workflow-view" : null,
@@ -4390,7 +4264,6 @@ export function AppShell() {
         threadLogsPanelWidth={embedded ? 0 : threadLogsPanelWidth}
         threadLogsResizing={embedded ? false : threadLogsResizing}
         threadAvatarCatalog={threadAvatarCatalog}
-        teamAgentDisplayNamesById={teamAgentDisplayNamesById}
         visibleRemoteAwaitingAckInputs={visibleRemoteAwaitingAckInputs}
         visibleRemotePendingInputs={visibleRemotePendingInputs}
         workflowRunContent={
@@ -4643,7 +4516,6 @@ export function AppShell() {
         isCapsulesView={isCapsulesView}
         isAgentsView={isAgentsView}
         isBrowserView={isBrowserView}
-        isTeamsView={isTeamsView}
         isSettingsView={isSettingsView}
         isSkillsView={isSkillsView}
         isTasksView={isTasksView || isWorkflowView}
@@ -4920,16 +4792,12 @@ export function AppShell() {
                 isBotsView={isBotsView}
                 isSkillsView={isSkillsView}
                 selectedThreadId={selectedThreadId}
-                teamSummary={activeTeamSummary}
                 threadInfo={activeThreadInfo}
                 threadInfoLoaded={activeThreadInfoLoaded}
                 threadLogsHasUnread={threadLogsHasUnread}
                 threadLogsOpen={threadLogsOpen}
                 onCreateAutomation={() => {
                   openAutomationDialog("create");
-                }}
-                onOpenThread={(threadId) => {
-                  void openExistingThread(threadId);
                 }}
                 onOpenThreads={() => {
                   desktopRouteStore.navigate({ kind: "thread-home" }, { replace: true });
@@ -4968,7 +4836,6 @@ export function AppShell() {
                   <GatewaySettingsPanel
                     activeTab={settingsActiveTab}
                     agents={desktopAgents}
-                    teams={desktopTeams}
                     commands={commands}
                     commandsLoading={commandsLoading}
                     commandsSaving={commandsSaving}
@@ -5084,22 +4951,6 @@ export function AppShell() {
             ) : isAgentsView ? (
               <AgentsHubPanel
                 initialTab="agents"
-                workspaces={workspacePickerWorkspaces}
-                onAddWorkspace={addWorkspacePathFromPicker}
-                onOpenMemory={(agent) => {
-                  memoryDialogRef.current?.open({
-                    scope: "agent",
-                    agentId: agent.agentId,
-                    title: `${agent.displayName || agent.agentId} memory.md`,
-                  });
-                }}
-                onStartThread={handleStartDraftForAgent}
-                onRefreshAgentTargets={refreshAgentTargets}
-                onToast={pushToast}
-              />
-            ) : isTeamsView ? (
-              <AgentsHubPanel
-                initialTab="teams"
                 workspaces={workspacePickerWorkspaces}
                 onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenMemory={(agent) => {

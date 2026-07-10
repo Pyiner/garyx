@@ -636,21 +636,12 @@ impl StreamingRunSnapshot {
                 if text.is_empty() {
                     return false;
                 }
-                let (speaker_metadata, clean_text) = parse_agent_team_delta_prefix(text);
-                let speaker_changed = speaker_metadata.is_some()
-                    && speaker_metadata != self.current_assistant_metadata;
-                if speaker_changed && !self.start_new_assistant_segment {
-                    self.start_new_assistant_segment = true;
-                }
                 if self.start_new_assistant_segment && !self.assistant_response.is_empty() {
                     self.assistant_response.push_str("\n\n");
                 }
-                if let Some(metadata) = speaker_metadata {
-                    self.current_assistant_metadata = Some(metadata);
-                }
-                self.assistant_response.push_str(&clean_text);
+                self.assistant_response.push_str(text);
                 let current_metadata = self.current_assistant_metadata.clone();
-                self.append_assistant_text(&clean_text, current_metadata.as_ref());
+                self.append_assistant_text(text, current_metadata.as_ref());
                 self.start_new_assistant_segment = false;
                 true
             }
@@ -781,29 +772,6 @@ impl StreamingRunSnapshot {
             );
         self.session_messages.len() - usize::from(in_flight)
     }
-}
-
-fn parse_agent_team_delta_prefix(text: &str) -> (Option<HashMap<String, Value>>, String) {
-    let Some(stripped) = text.strip_prefix('[') else {
-        return (None, text.to_owned());
-    };
-    let Some(close_index) = stripped.find(']') else {
-        return (None, text.to_owned());
-    };
-    let agent_id = stripped[..close_index].trim();
-    if agent_id.is_empty() {
-        return (None, text.to_owned());
-    }
-    let mut metadata = HashMap::new();
-    metadata.insert("agent_id".to_owned(), Value::String(agent_id.to_owned()));
-    metadata.insert(
-        "agent_display_name".to_owned(),
-        Value::String(agent_id.to_owned()),
-    );
-    (
-        Some(metadata),
-        stripped[close_index + 1..].trim_start().to_owned(),
-    )
 }
 
 pub(super) struct PersistedRun<'a> {

@@ -245,7 +245,6 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
         let base = GaryxHomeListFixture.makeInputs(threadCount: 10)
         let model = GaryxHomeCatalogPublicationProbe(
             agents: base.agents,
-            teams: base.teams,
             automations: base.automations
         )
         var publishes = 0
@@ -253,7 +252,6 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
         defer { cancellable.cancel() }
 
         XCTAssertFalse(model.apply(agents: base.agents))
-        XCTAssertFalse(model.apply(teams: base.teams))
         XCTAssertFalse(model.apply(automations: base.automations))
         XCTAssertEqual(publishes, 0)
 
@@ -268,7 +266,6 @@ final class GaryxHomeProductionAcceptanceTests: XCTestCase {
         let input = GaryxRecentThreadsWidgetSnapshotInput(
             threads: base.threads,
             agents: base.agents,
-            teams: base.teams,
             pinnedThreadIds: base.pinnedThreadIds,
             recentThreadIds: base.recentThreadIds
         )
@@ -409,7 +406,6 @@ private extension GaryxHomeThreadSectionsInput {
         self.init(
             threads: input.threads,
             agents: input.agents,
-            teams: input.teams,
             automations: input.automations,
             pinnedThreadIds: input.pinnedThreadIds,
             recentThreadIds: input.recentThreadIds,
@@ -435,25 +431,18 @@ private extension GaryxHomeThreadListInput {
 
 private final class GaryxHomeCatalogPublicationProbe: ObservableObject {
     @Published var agents: [GaryxAgentSummary]
-    @Published var teams: [GaryxTeamSummary]
     @Published var automations: [GaryxAutomationSummary]
 
     init(
         agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary],
         automations: [GaryxAutomationSummary]
     ) {
         self.agents = agents
-        self.teams = teams
         self.automations = automations
     }
 
     func apply(agents next: [GaryxAgentSummary]) -> Bool {
         GaryxEquatableAssignment.assignIfChanged(current: agents, next: next) { agents = $0 }
-    }
-
-    func apply(teams next: [GaryxTeamSummary]) -> Bool {
-        GaryxEquatableAssignment.assignIfChanged(current: teams, next: next) { teams = $0 }
     }
 
     func apply(automations next: [GaryxAutomationSummary]) -> Bool {

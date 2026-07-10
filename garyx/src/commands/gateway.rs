@@ -102,9 +102,6 @@ async fn initialize_bridge_runtime(
         .replace_agent_profiles(state.ops.custom_agents.list_agents().await)
         .await;
     bridge
-        .replace_team_profiles(state.ops.agent_teams.list_teams().await)
-        .await;
-    bridge
         .reload_from_config(config)
         .await
         .map_err(|error| error.to_string())?;

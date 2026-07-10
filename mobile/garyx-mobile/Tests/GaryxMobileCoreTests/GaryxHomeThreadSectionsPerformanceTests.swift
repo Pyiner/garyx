@@ -10,9 +10,9 @@ import XCTest
 final class GaryxHomeThreadSectionsPerformanceTests: XCTestCase {
 
     func testDerivationCostAtRealisticScale() {
-        // ~30-50 threads, ~20-100 agents/teams, ~10-30 automations (task spec).
+        // ~30-50 threads, ~20-100 agents, ~10-30 automations (task spec).
         let input = GaryxHomeListFixture.makeInputs(
-            threadCount: 50, agentCount: 80, teamCount: 25, automationCount: 25,
+            threadCount: 50, agentCount: 80, automationCount: 25,
             pinnedCount: 6, runningCount: 4
         )
 
@@ -22,7 +22,7 @@ final class GaryxHomeThreadSectionsPerformanceTests: XCTestCase {
         let ms = GaryxBench.medianMillis(iterations: 200) {
             _ = HomeThreadSectionsReference.build(input)
         }
-        print("[TASK-1037] homeThreadSections derivation @ 50 threads / 80 agents / 25 teams / 25 automations: \(String(format: "%.3f", ms)) ms / recompute")
+        print("[TASK-1037] homeThreadSections derivation @ 50 threads / 80 agents / 25 automations: \(String(format: "%.3f", ms)) ms / recompute")
 
         let sections = HomeThreadSectionsReference.build(input)
         XCTAssertEqual(sections.pinned.count, 6)
@@ -37,7 +37,7 @@ final class GaryxHomeThreadSectionsPerformanceTests: XCTestCase {
     func testDerivationCostScalesLinearlyWithThreadCount() {
         func cost(_ threadCount: Int) -> Double {
             let input = GaryxHomeListFixture.makeInputs(
-                threadCount: threadCount, agentCount: 80, teamCount: 25, automationCount: 25,
+                threadCount: threadCount, agentCount: 80, automationCount: 25,
                 pinnedCount: 6, runningCount: 4
             )
             _ = HomeThreadSectionsReference.build(input)

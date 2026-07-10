@@ -36,11 +36,10 @@ state, and bridge profiles. No gateway resurrection path was reproduced.
 
 - Add a narrow `onRefreshAgentTargets?: () => Promise<void>` callback to
   `AgentsHubPanel`.
-- Pass `refreshAgentTargets` from `AppShell` when rendering the Agents and Teams
-  hub.
+- Pass `refreshAgentTargets` from `AppShell` when rendering the Agents hub.
 - After a successful custom-agent delete, close any agent dialog, refresh the
   hub-local data, then invoke `onRefreshAgentTargets` so `desktopAgents` and
-  `desktopTeams` are reloaded from the gateway.
+  the agent catalog is reloaded from the gateway.
 - Keep errors scoped: if the API delete fails, do not mutate either local or
   parent catalog. If the parent refresh fails, keep the delete success visible
   and surface the existing toast/error behavior only if the callback throws.

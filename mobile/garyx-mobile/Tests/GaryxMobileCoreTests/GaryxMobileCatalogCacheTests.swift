@@ -16,7 +16,6 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [agent],
-            teams: [],
             workspacePaths: ["/Users/test/project-alpha"],
             skills: [],
             automations: [],
@@ -81,7 +80,6 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [],
-            teams: [],
             workspacePaths: [],
             skills: [],
             automations: [],
@@ -134,7 +132,6 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [],
-            teams: [],
             workspacePaths: [],
             skills: [],
             automations: [],
@@ -175,7 +172,6 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [],
-            teams: [],
             workspacePaths: [],
             skills: [],
             capsules: [capsule],

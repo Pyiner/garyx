@@ -6,7 +6,6 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
     var version: Int
     var savedAt: Date
     var agents: [GaryxCachedAgent]
-    var teams: [GaryxCachedTeam]
     var workspacePaths: [String]
     var skills: [GaryxCachedSkill]
     var capsules: [GaryxCachedCapsule]
@@ -23,7 +22,6 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         version: Int = Self.currentVersion,
         savedAt: Date = Date(),
         agents: [GaryxCachedAgent],
-        teams: [GaryxCachedTeam],
         workspacePaths: [String],
         skills: [GaryxCachedSkill],
         capsules: [GaryxCachedCapsule] = [],
@@ -39,7 +37,6 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         self.version = version
         self.savedAt = savedAt
         self.agents = agents
-        self.teams = teams
         self.workspacePaths = workspacePaths
         self.skills = skills
         self.capsules = capsules
@@ -55,7 +52,6 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
 
     init(
         agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary],
         workspacePaths: [String],
         skills: [GaryxSkillSummary],
         capsules: [GaryxCapsuleSummary] = [],
@@ -72,7 +68,6 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         self.init(
             savedAt: savedAt,
             agents: agents.map(GaryxCachedAgent.init),
-            teams: teams.map(GaryxCachedTeam.init),
             workspacePaths: workspacePaths,
             skills: skills.map(GaryxCachedSkill.init),
             capsules: capsules.map(GaryxCachedCapsule.init),
@@ -123,41 +118,6 @@ struct GaryxCachedAgent: Codable, Equatable {
             avatarDataUrl: avatarDataUrl,
             builtIn: builtIn,
             standalone: standalone,
-            createdAt: createdAt,
-            updatedAt: updatedAt
-        )
-    }
-}
-
-struct GaryxCachedTeam: Codable, Equatable {
-    var id: String
-    var displayName: String
-    var leaderAgentId: String
-    var memberAgentIds: [String]
-    var workflowText: String
-    var avatarDataUrl: String
-    var createdAt: String?
-    var updatedAt: String?
-
-    init(_ team: GaryxTeamSummary) {
-        id = team.id
-        displayName = team.displayName
-        leaderAgentId = team.leaderAgentId
-        memberAgentIds = team.memberAgentIds
-        workflowText = team.workflowText
-        avatarDataUrl = team.avatarDataUrl
-        createdAt = team.createdAt
-        updatedAt = team.updatedAt
-    }
-
-    var model: GaryxTeamSummary {
-        GaryxTeamSummary(
-            id: id,
-            displayName: displayName,
-            leaderAgentId: leaderAgentId,
-            memberAgentIds: memberAgentIds,
-            workflowText: workflowText,
-            avatarDataUrl: avatarDataUrl,
             createdAt: createdAt,
             updatedAt: updatedAt
         )

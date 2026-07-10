@@ -75,7 +75,6 @@ final class GaryxMobileModel: ObservableObject {
         var name: String?
         var avatarDataUrl: String?
         var providerType: String?
-        var isTeam: Bool
         var builtIn: Bool
     }
 
@@ -231,12 +230,6 @@ final class GaryxMobileModel: ObservableObject {
             emitHomeProjectionSnapshot()
         }
     }
-    @Published var teams: [GaryxTeamSummary] = [] {
-        didSet {
-            predecodeAgentAvatarImages()
-            emitHomeProjectionSnapshot()
-        }
-    }
     @Published var skills: [GaryxSkillSummary] = []
     /// Any capsules-list update (central catalog refresh, gallery refresh, local
     /// delete, gateway reset) prunes stale preview HTML so a remotely-deleted
@@ -347,7 +340,6 @@ final class GaryxMobileModel: ObservableObject {
     @Published var selectedSkillDocument: GaryxSkillFileDocument?
     @Published var selectedAutomationEditor: GaryxAutomationSummary?
     @Published var selectedAgentDetail: GaryxAgentSummary?
-    @Published var selectedTeamDetail: GaryxTeamSummary?
     var skillEditorLoadRequestId: UUID?
     var skillFileLoadRequestId: UUID?
     @Published var draftThreadTitle = ""

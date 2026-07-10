@@ -708,7 +708,6 @@ fn provider_hint_label(value: &ProviderType) -> &'static str {
         ProviderType::Gpt => "GPT",
         ProviderType::ClaudeLlm => "Claude",
         ProviderType::GeminiLlm => "Gemini",
-        ProviderType::AgentTeam => "Team",
     }
 }
 
@@ -877,7 +876,7 @@ pub struct CreateThreadBody {
     pub workspace_mode: WorkspaceMode,
     #[serde(default)]
     pub metadata: HashMap<String, Value>,
-    /// Agent or team ID. Backend resolves whether it's a team or custom agent.
+    /// Agent ID.
     #[serde(default)]
     pub agent_id: Option<String>,
     /// Optional per-thread model override; wins over the agent's configured model.
@@ -1502,64 +1501,8 @@ fn garyx_db_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {
     )
 }
 
-/// Build the read-only `team` block for a thread metadata response when the
-/// thread's `agent_id` resolves to an AgentTeam. Returns `None` for
-/// standalone-agent threads (including threads without an `agent_id`).
-///
-/// This is the projection the desktop client consumes to render team branding
-/// and the per-sub-agent "peek" tabs. It is a pure projection of the Group
-/// store's current state; no side effects.
-pub(crate) async fn team_block_for_thread(
-    state: &Arc<AppState>,
-    thread_id: &str,
-    data: &Value,
-) -> Option<Value> {
-    let agent_id = data
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-
-    // `get_team` returns `None` for non-team agent_ids — that's the
-    // standalone-agent case, and we emit nothing.
-    let team = state.ops.agent_teams.get_team(agent_id).await?;
-    let valid_members = team
-        .member_agent_ids
-        .iter()
-        .cloned()
-        .chain(std::iter::once(team.leader_agent_id.clone()))
-        .collect::<std::collections::HashSet<_>>();
-
-    // The Group only exists once the provider has dispatched at least one
-    // turn; before that, `child_thread_ids` is simply empty.
-    let child_thread_ids: serde_json::Map<String, Value> =
-        match state.ops.agent_team_group_store.load(thread_id).await {
-            Some(group) => group
-                .child_threads
-                .into_iter()
-                .filter(|(agent, _)| valid_members.contains(agent))
-                .map(|(agent, tid)| (agent, Value::String(tid)))
-                .collect(),
-            None => serde_json::Map::new(),
-        };
-
-    Some(json!({
-        "team_id": team.team_id,
-        "display_name": team.display_name,
-        "leader_agent_id": team.leader_agent_id,
-        "member_agent_ids": team.member_agent_ids,
-        "child_thread_ids": Value::Object(child_thread_ids),
-    }))
-}
-
 async fn thread_metadata_response(state: &Arc<AppState>, thread_id: &str, data: &Value) -> Value {
     let mut value = data.clone();
-    // `get_thread` returns the thread object itself — nest `team` inside
-    // alongside `thread_id` so the desktop client sees it as part of the
-    // thread shape. `api::thread_history_for_key` uses a different envelope
-    // and attaches `team` at the response root instead (see the comment
-    // there). This asymmetry is intentional.
-    let team_block = team_block_for_thread(state, thread_id, data).await;
     if let Some(obj) = value.as_object_mut() {
         obj.remove("thread_mode");
         obj.entry("thread_id".to_owned())
@@ -1570,9 +1513,6 @@ async fn thread_metadata_response(state: &Arc<AppState>, thread_id: &str, data: 
             "thread_type".to_owned(),
             Value::String(thread_summary_type_from_record(data)),
         );
-        if let Some(block) = team_block {
-            obj.insert("team".to_owned(), block);
-        }
         obj.insert(
             "thread_runtime".to_owned(),
             build_thread_runtime_summary(state, Some(data)).await,
@@ -2768,7 +2708,6 @@ pub async fn create_thread(
         state.threads.thread_store.clone(),
         state.integration.bridge.clone(),
         state.ops.custom_agents.clone(),
-        state.ops.agent_teams.clone(),
         options,
     )
     .await
@@ -2843,7 +2782,6 @@ pub async fn create_thread(
         Err(error)
             if error.starts_with("unknown agent_id:")
                 || error.starts_with("agent_id is not standalone:")
-                || error.starts_with("team '")
                 || error.starts_with("workspace_mode=worktree") =>
         {
             (StatusCode::BAD_REQUEST, Json(json!({ "error": error })))

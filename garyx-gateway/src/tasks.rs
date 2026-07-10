@@ -69,10 +69,6 @@ pub enum TaskExecutorBody {
         #[serde(alias = "agentId")]
         agent_id: String,
     },
-    Team {
-        #[serde(alias = "teamId")]
-        team_id: String,
-    },
     Workflow {
         #[serde(alias = "workflowId")]
         workflow_id: String,
@@ -243,22 +239,6 @@ pub async fn create_task(
             executor_agent_id = Some(bound_agent_id.clone());
             task_executor = Some(TaskExecutor::Agent {
                 agent_id: bound_agent_id,
-            });
-            None
-        }
-        Some(TaskExecutorBody::Team { team_id }) => {
-            let reference = match resolve_task_executor_team(&state, &team_id).await {
-                Ok(reference) => reference,
-                Err(error) => return task_error_response(error),
-            };
-            let bound_team_id = reference.bound_agent_id().to_owned();
-            runtime = match task_runtime_for_executor(runtime, &bound_team_id) {
-                Ok(runtime) => runtime,
-                Err(error) => return task_error_response(error),
-            };
-            executor_agent_id = Some(bound_team_id.clone());
-            task_executor = Some(TaskExecutor::Team {
-                team_id: bound_team_id,
             });
             None
         }
@@ -1058,7 +1038,6 @@ async fn default_workspace_dir_for_agent(
 ) -> Result<Option<String>, TaskServiceError> {
     resolve_agent_reference_from_stores(
         state.ops.custom_agents.as_ref(),
-        state.ops.agent_teams.as_ref(),
         agent_id,
     )
     .await
@@ -1099,36 +1078,11 @@ async fn resolve_task_executor_agent(
 ) -> Result<AgentReference, TaskServiceError> {
     let reference = resolve_agent_reference_from_stores(
         state.ops.custom_agents.as_ref(),
-        state.ops.agent_teams.as_ref(),
         agent_id,
     )
     .await
     .map_err(TaskServiceError::UnknownAgent)?;
-    match reference {
-        AgentReference::Standalone { .. } => Ok(reference),
-        AgentReference::Team { .. } => Err(TaskServiceError::BadRequest(format!(
-            "executor.type=agent requires a standalone agent; '{agent_id}' is an agent team"
-        ))),
-    }
-}
-
-async fn resolve_task_executor_team(
-    state: &Arc<AppState>,
-    team_id: &str,
-) -> Result<AgentReference, TaskServiceError> {
-    let reference = resolve_agent_reference_from_stores(
-        state.ops.custom_agents.as_ref(),
-        state.ops.agent_teams.as_ref(),
-        team_id,
-    )
-    .await
-    .map_err(TaskServiceError::UnknownAgent)?;
-    match reference {
-        AgentReference::Team { .. } => Ok(reference),
-        AgentReference::Standalone { .. } => Err(TaskServiceError::BadRequest(format!(
-            "executor.type=team requires an agent team; '{team_id}' is a standalone agent"
-        ))),
-    }
+    Ok(reference)
 }
 
 fn task_runtime_for_executor(
@@ -1165,7 +1119,6 @@ async fn validate_thread_runtime_allows_assignee(
     };
     let reference = resolve_agent_reference_from_stores(
         state.ops.custom_agents.as_ref(),
-        state.ops.agent_teams.as_ref(),
         agent_id,
     )
     .await
@@ -1216,7 +1169,6 @@ async fn ensure_thread_workspace_from_assignee_default(
     };
     let reference = resolve_agent_reference_from_stores(
         state.ops.custom_agents.as_ref(),
-        state.ops.agent_teams.as_ref(),
         agent_id,
     )
     .await
@@ -1289,7 +1241,6 @@ pub(crate) async fn ensure_created_task_thread_provider_from_bound_agent(
     };
     let reference = resolve_agent_reference_from_stores(
         state.ops.custom_agents.as_ref(),
-        state.ops.agent_teams.as_ref(),
         &agent_id,
     )
     .await
@@ -1398,7 +1349,6 @@ pub(crate) fn spawn_task_auto_dispatch(
 fn task_dispatch_agent_id(task: &ThreadTask) -> Option<String> {
     match task.executor.as_ref() {
         Some(TaskExecutor::Agent { agent_id }) => Some(agent_id.clone()),
-        Some(TaskExecutor::Team { team_id }) => Some(team_id.clone()),
         Some(TaskExecutor::Workflow { .. }) => None,
         None => match task.assignee.as_ref() {
             Some(Principal::Agent { agent_id }) => Some(agent_id.clone()),
@@ -1489,7 +1439,6 @@ async fn validate_runtime_agent(
     };
     resolve_agent_reference_from_stores(
         state.ops.custom_agents.as_ref(),
-        state.ops.agent_teams.as_ref(),
         agent_id,
     )
     .await
@@ -1506,7 +1455,6 @@ async fn validate_task_assignee_agent(
     };
     resolve_agent_reference_from_stores(
         state.ops.custom_agents.as_ref(),
-        state.ops.agent_teams.as_ref(),
         agent_id,
     )
     .await

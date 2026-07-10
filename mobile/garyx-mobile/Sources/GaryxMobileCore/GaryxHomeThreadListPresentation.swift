@@ -17,72 +17,42 @@ enum GaryxThreadSummaryRunStateResolver {
     }
 }
 
-/// Agent-or-team identity projected from a thread summary for list rows and
-/// widget snapshots.
+/// Agent identity projected from a thread summary for list rows and widgets.
 struct GaryxWidgetAgentIdentity: Equatable, Sendable {
     var id: String?
     var name: String?
     var avatarDataUrl: String?
     var providerType: String?
-    var isTeam: Bool
     var builtIn: Bool
 }
 
-/// Single source of truth for resolving a thread's display identity: team
-/// first (catalog hit, then thread fallback), then agent (catalog hit, then
-/// thread fallback), then provider-only.
+/// Single source of truth for resolving a thread's display identity: catalog
+/// agent, thread fallback, then provider-only.
 enum GaryxWidgetAgentIdentityProjector {
     static func identity(
         for thread: GaryxThreadSummary,
-        agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary]
+        agents: [GaryxAgentSummary]
     ) -> GaryxWidgetAgentIdentity {
         identity(
             for: thread,
-            team: { teamId in teams.first { $0.id == teamId } },
             agent: { agentId in agents.first { $0.id == agentId } }
         )
     }
 
     static func identity(
         for thread: GaryxThreadSummary,
-        agentsById: [String: GaryxAgentSummary],
-        teamsById: [String: GaryxTeamSummary]
+        agentsById: [String: GaryxAgentSummary]
     ) -> GaryxWidgetAgentIdentity {
         identity(
             for: thread,
-            team: { teamsById[$0] },
             agent: { agentsById[$0] }
         )
     }
 
     private static func identity(
         for thread: GaryxThreadSummary,
-        team teamById: (String) -> GaryxTeamSummary?,
         agent agentById: (String) -> GaryxAgentSummary?
     ) -> GaryxWidgetAgentIdentity {
-        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !teamId.isEmpty {
-            if let team = teamById(teamId) {
-                return GaryxWidgetAgentIdentity(
-                    id: team.id,
-                    name: team.displayName,
-                    avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl,
-                    providerType: nil,
-                    isTeam: true,
-                    builtIn: false
-                )
-            }
-            return GaryxWidgetAgentIdentity(
-                id: teamId,
-                name: thread.teamName,
-                avatarDataUrl: nil,
-                providerType: nil,
-                isTeam: true,
-                builtIn: false
-            )
-        }
-
         let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !agentId.isEmpty {
             if let agent = agentById(agentId) {
@@ -91,7 +61,6 @@ enum GaryxWidgetAgentIdentityProjector {
                     name: agent.displayName,
                     avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
                     providerType: agent.providerType,
-                    isTeam: false,
                     builtIn: agent.builtIn
                 )
             }
@@ -100,7 +69,6 @@ enum GaryxWidgetAgentIdentityProjector {
                 name: nil,
                 avatarDataUrl: nil,
                 providerType: thread.providerType,
-                isTeam: false,
                 builtIn: false
             )
         }
@@ -110,7 +78,6 @@ enum GaryxWidgetAgentIdentityProjector {
             name: nil,
             avatarDataUrl: nil,
             providerType: thread.providerType,
-            isTeam: false,
             builtIn: false
         )
     }
@@ -119,7 +86,6 @@ enum GaryxWidgetAgentIdentityProjector {
 struct GaryxSidebarThreadRowAvatar: Equatable, Sendable {
     let agentId: String
     let avatarDataUrl: String
-    let kind: GaryxMobileAgentTarget.Kind
     let label: String
     let providerType: String
     let builtIn: Bool
@@ -191,9 +157,6 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
             if let workspacePath = thread.workspacePath, !workspacePath.isEmpty {
                 return workspacePath.garyxLastPathComponent
             }
-            if let teamName = thread.teamName, !teamName.isEmpty {
-                return teamName
-            }
             return thread.agentId
         }()
         let parts = [context, compactedPreview(thread.lastMessagePreview)].compactMap { part -> String? in
@@ -220,7 +183,6 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
 struct GaryxHomeThreadSectionsInput: Equatable, Sendable {
     var threads: [GaryxThreadSummary]
     var agents: [GaryxAgentSummary]
-    var teams: [GaryxTeamSummary]
     var automations: [GaryxAutomationSummary]
     var pinnedThreadIds: [String]
     var recentThreadIds: [String]
@@ -229,7 +191,6 @@ struct GaryxHomeThreadSectionsInput: Equatable, Sendable {
     init(
         threads: [GaryxThreadSummary],
         agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary],
         automations: [GaryxAutomationSummary],
         pinnedThreadIds: [String],
         recentThreadIds: [String],
@@ -237,7 +198,6 @@ struct GaryxHomeThreadSectionsInput: Equatable, Sendable {
     ) {
         self.threads = threads
         self.agents = agents
-        self.teams = teams
         self.automations = automations
         self.pinnedThreadIds = pinnedThreadIds
         self.recentThreadIds = recentThreadIds
@@ -334,10 +294,6 @@ enum GaryxHomeThreadSectionsBuilder {
         let pinnedIds = normalizedPinnedThreadIds(input.pinnedThreadIds)
         let pinnedIdSet = Set(pinnedIds)
         let selectedThreadId = input.selectedThreadId
-        var teamsById: [String: GaryxTeamSummary] = [:]
-        for team in input.teams where teamsById[team.id] == nil {
-            teamsById[team.id] = team
-        }
         var agentsById: [String: GaryxAgentSummary] = [:]
         for agent in input.agents where agentsById[agent.id] == nil {
             agentsById[agent.id] = agent
@@ -353,7 +309,6 @@ enum GaryxHomeThreadSectionsBuilder {
                     isSelected: selectedThreadId == thread.id,
                     isPinned: true,
                     showsDivider: index > 0,
-                    teamsById: teamsById,
                     agentsById: agentsById,
                     automationThreadIds: automationThreadIds
                 )
@@ -369,7 +324,6 @@ enum GaryxHomeThreadSectionsBuilder {
                     isSelected: selectedThreadId == thread.id,
                     isPinned: false,
                     showsDivider: index > 0,
-                    teamsById: teamsById,
                     agentsById: agentsById,
                     automationThreadIds: automationThreadIds
                 )
@@ -401,11 +355,10 @@ enum GaryxHomeThreadSectionsBuilder {
         isSelected: Bool,
         isPinned: Bool,
         showsDivider: Bool,
-        teamsById: [String: GaryxTeamSummary],
         agentsById: [String: GaryxAgentSummary],
         automationThreadIds: Set<String>
     ) -> GaryxHomeThreadRow {
-        let identity = self.identity(for: thread, teamsById: teamsById, agentsById: agentsById)
+        let identity = self.identity(for: thread, agentsById: agentsById)
         return GaryxHomeThreadRow(
             id: thread.id,
             thread: thread,
@@ -419,7 +372,6 @@ enum GaryxHomeThreadSectionsBuilder {
             avatar: GaryxSidebarThreadRowAvatar(
                 agentId: identity.id ?? "",
                 avatarDataUrl: identity.avatarDataUrl ?? "",
-                kind: identity.isTeam ? .team : .agent,
                 label: identity.name ?? thread.title,
                 providerType: identity.providerType ?? "",
                 builtIn: identity.builtIn
@@ -432,13 +384,11 @@ enum GaryxHomeThreadSectionsBuilder {
 
     private static func identity(
         for thread: GaryxThreadSummary,
-        teamsById: [String: GaryxTeamSummary],
         agentsById: [String: GaryxAgentSummary]
     ) -> GaryxWidgetAgentIdentity {
         GaryxWidgetAgentIdentityProjector.identity(
             for: thread,
-            agentsById: agentsById,
-            teamsById: teamsById
+            agentsById: agentsById
         )
     }
 }
@@ -463,7 +413,6 @@ final class GaryxHomeThreadSectionsCache {
 struct GaryxHomeThreadSectionsIdentityKey: Equatable {
     var threads: [GaryxThreadSummary]
     var agents: [GaryxAgentSummary]
-    var teams: [GaryxTeamSummary]
     var automationThreadIds: Set<String>
     var pinnedThreadIds: [String]
     var recentThreadIds: [String]
@@ -472,7 +421,6 @@ struct GaryxHomeThreadSectionsIdentityKey: Equatable {
     init(_ input: GaryxHomeThreadSectionsInput) {
         threads = input.threads.map(Self.displayThread)
         agents = input.agents
-        teams = input.teams
         automationThreadIds = GaryxHomeThreadSectionsBuilder.automationThreadIds(input.automations)
         pinnedThreadIds = GaryxHomeThreadSectionsBuilder.normalizedPinnedThreadIds(input.pinnedThreadIds)
         recentThreadIds = input.recentThreadIds
@@ -585,7 +533,6 @@ final class GaryxHomeThreadListStore: ObservableObject {
 struct GaryxRecentThreadsWidgetSnapshotInput: Equatable, Sendable {
     var threads: [GaryxThreadSummary]
     var agents: [GaryxAgentSummary]
-    var teams: [GaryxTeamSummary]
     var pinnedThreadIds: [String]
     var recentThreadIds: [String]
     var gatewayScopeId: String
@@ -593,14 +540,12 @@ struct GaryxRecentThreadsWidgetSnapshotInput: Equatable, Sendable {
     init(
         threads: [GaryxThreadSummary],
         agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary],
         pinnedThreadIds: [String],
         recentThreadIds: [String],
         gatewayScopeId: String = ""
     ) {
         self.threads = threads
         self.agents = agents
-        self.teams = teams
         self.pinnedThreadIds = pinnedThreadIds
         self.recentThreadIds = recentThreadIds
         self.gatewayScopeId = gatewayScopeId
@@ -620,17 +565,12 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
         for agent in input.agents where agentsById[agent.id] == nil {
             agentsById[agent.id] = agent
         }
-        var teamsById: [String: GaryxTeamSummary] = [:]
-        for team in input.teams where teamsById[team.id] == nil {
-            teamsById[team.id] = team
-        }
-
         return normalizedThreadIds(input.pinnedThreadIds + input.recentThreadIds).compactMap { threadId in
             guard let thread = summariesById[threadId] else { return nil }
             let workspaceName = thread.workspacePath?
                 .garyxLastPathComponent
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let identity = widgetAgentIdentity(for: thread, agentsById: agentsById, teamsById: teamsById)
+            let identity = widgetAgentIdentity(for: thread, agentsById: agentsById)
             return GaryxMobileWidgetThread(
                 id: thread.id,
                 title: thread.title,
@@ -656,7 +596,6 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
                     avatarFallback: avatarFallback
                 ),
                 providerType: identity.providerType,
-                isTeam: identity.isTeam,
                 builtIn: identity.builtIn
             )
         }
@@ -732,13 +671,9 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
     }
 
     private static func avatarIdentity(for thread: GaryxThreadSummary, scope: String) -> GaryxAvatarIdentity? {
-        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !teamId.isEmpty {
-            return GaryxAvatarIdentity(scope: scope, kind: .team, id: teamId)
-        }
         let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !agentId.isEmpty else { return nil }
-        return GaryxAvatarIdentity(scope: scope, kind: .agent, id: agentId)
+        return GaryxAvatarIdentity(scope: scope, id: agentId)
     }
 
     private static func avatarIdentity(identity: GaryxWidgetAgentIdentity, scope: String) -> GaryxAvatarIdentity? {
@@ -748,18 +683,16 @@ enum GaryxRecentThreadsWidgetSnapshotProjector {
               !id.isEmpty else {
             return nil
         }
-        return GaryxAvatarIdentity(scope: scope, kind: identity.isTeam ? .team : .agent, id: id)
+        return GaryxAvatarIdentity(scope: scope, id: id)
     }
 
     private static func widgetAgentIdentity(
         for thread: GaryxThreadSummary,
-        agentsById: [String: GaryxAgentSummary],
-        teamsById: [String: GaryxTeamSummary]
+        agentsById: [String: GaryxAgentSummary]
     ) -> GaryxWidgetAgentIdentity {
         GaryxWidgetAgentIdentityProjector.identity(
             for: thread,
-            agentsById: agentsById,
-            teamsById: teamsById
+            agentsById: agentsById
         )
     }
 }

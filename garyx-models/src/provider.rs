@@ -45,10 +45,6 @@ pub enum ProviderType {
         alias = "gemini_model"
     )]
     GeminiLlm,
-    /// Meta-provider that orchestrates a Team as a group chat over regular
-    /// per-sub-agent threads. Selected when a thread's `agent_id` resolves to
-    /// an `AgentTeamProfile` rather than a `CustomAgentProfile`.
-    AgentTeam,
 }
 
 impl ProviderType {
@@ -62,7 +58,6 @@ impl ProviderType {
             Self::Gpt => "gpt",
             Self::ClaudeLlm => "anthropic",
             Self::GeminiLlm => "google",
-            Self::AgentTeam => "agent_team",
         }
     }
 
@@ -78,7 +73,6 @@ impl ProviderType {
             }
             "anthropic" | "claude_llm" | "claude_model" => Some(Self::ClaudeLlm),
             "google" | "gemini_llm" | "google_gemini" | "gemini_model" => Some(Self::GeminiLlm),
-            "agent_team" => Some(Self::AgentTeam),
             _ => None,
         }
     }

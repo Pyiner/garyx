@@ -37,9 +37,8 @@ struct GaryxRecentThreadsProvider: TimelineProvider {
                         id: "thread::sample-3",
                         title: "Agent handoff",
                         workspaceName: "Demo bot",
-                        agentId: "demo-team",
-                        agentName: "Demo Team",
-                        isTeam: true
+                        agentId: "demo-agent",
+                        agentName: "Demo Agent"
                     ),
                     GaryxMobileWidgetThread(id: "thread::sample-4", title: "Release notes", workspaceName: "Garyx"),
                     GaryxMobileWidgetThread(id: "thread::sample-5", title: "Gateway runtime check", workspaceName: "Garyx"),
@@ -274,10 +273,6 @@ private struct GaryxWidgetAgentAvatar: View {
                     .scaledToFill()
                     .frame(width: metrics.avatarSize, height: metrics.avatarSize)
                     .clipShape(Circle())
-            } else if thread.isTeam {
-                Image(systemName: "person.2.fill")
-                    .font(.system(size: metrics.avatarIconSize, weight: .semibold))
-                    .foregroundStyle(.secondary)
             } else if let symbol = providerPresentation.symbolName {
                 Image(systemName: symbol)
                     .font(.system(size: metrics.avatarIconSize, weight: .semibold))
@@ -372,7 +367,7 @@ private enum GaryxWidgetAvatarPayloadLoader {
               !fingerprint.isEmpty else {
             return nil
         }
-        let identity = GaryxAvatarIdentity(scope: scope, kind: thread.isTeam ? .team : .agent, id: id)
+        let identity = GaryxAvatarIdentity(scope: scope, id: id)
         guard let entry = index.entries[identity.storageKey],
               entry.fingerprint == fingerprint else {
             return nil

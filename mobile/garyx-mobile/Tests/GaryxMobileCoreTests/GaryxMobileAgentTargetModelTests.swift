@@ -2,159 +2,21 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobileAgentTargetModelTests: XCTestCase {
-    func testMakeTargetsKeepsStandaloneAgentsAndTeams() throws {
-        let agents = try decodeAgents(
-            """
-            {
-              "agents": [
-                {
-                  "agent_id": "codex",
-                  "display_name": "Codex",
-                  "provider_type": "codex",
-                  "avatar_data_url": "data:image/png;base64,Y29kZXg=",
-                  "built_in": true,
-                  "standalone": true
-                },
-                {
-                  "agent_id": "embedded",
-                  "display_name": "Embedded",
-                  "standalone": false
-                }
-              ]
-            }
-            """
-        )
-        let teams = try decodeTeams(
-            """
-            {
-              "teams": [
-                {
-                  "team_id": "review-team",
-                  "display_name": "Review Team",
-                  "member_agent_ids": ["codex", "claude"],
-                  "avatar_data_url": "data:image/png;base64,dGVhbQ=="
-                }
-              ]
-            }
-            """
-        )
-
-        let targets = GaryxMobileAgentTargetMapper.makeTargets(agents: agents, teams: teams)
-
-        XCTAssertEqual(targets.map(\.id), ["codex", "review-team"])
-        XCTAssertEqual(targets[0].kind, .agent)
-        XCTAssertEqual(targets[0].title, "Codex")
-        XCTAssertEqual(targets[0].providerType, "codex")
-        XCTAssertTrue(targets[0].builtIn)
-        XCTAssertEqual(targets[1].kind, .team)
-        XCTAssertEqual(targets[1].subtitle, "2 agents")
+    func testTargetsIncludeOnlyStandaloneAgents() throws {
+        let agents = try JSONDecoder().decode(GaryxAgentsPage.self, from: Data(#"{"agents":[{"agent_id":"codex","display_name":"Codex","provider_type":"codex","built_in":true,"standalone":true},{"agent_id":"embedded","display_name":"Embedded","standalone":false}]}"#.utf8)).agents
+        let targets = GaryxMobileAgentTargetMapper.makeTargets(agents: agents)
+        XCTAssertEqual(targets.map(\.id), ["codex"])
+        XCTAssertEqual(targets.first?.title, "Codex")
+        XCTAssertTrue(targets.first?.builtIn == true)
     }
 
-    func testSelectedThreadTargetPrefersTeamOverAgent() throws {
-        let agents = try decodeAgents(
-            """
-            {
-              "agents": [
-                { "agent_id": "codex", "display_name": "Codex", "standalone": true }
-              ]
-            }
-            """
-        )
-        let teams = try decodeTeams(
-            """
-            {
-              "teams": [
-                { "team_id": "review-team", "display_name": "Review Team", "member_agent_ids": ["codex"] }
-              ]
-            }
-            """
-        )
-        let thread = try decodeThread(
-            """
-            {
-              "id": "thread-1",
-              "title": "Architecture review",
-              "agent_id": "codex",
-              "team_id": "review-team"
-            }
-            """
-        )
-        let targets = GaryxMobileAgentTargetMapper.makeTargets(agents: agents, teams: teams)
-
-        let target = GaryxMobileAgentTargetMapper.selectedThreadTarget(
-            thread: thread,
-            selectedAgentTargetId: "codex",
-            targets: targets
-        )
-
-        XCTAssertEqual(target?.id, "review-team")
-        XCTAssertEqual(
-            GaryxMobileAgentTargetMapper.selectedThreadAgentLabel(
-                thread: thread,
-                target: target,
-                fallbackSelectedAgentLabel: "Codex"
-            ),
-            "Review Team"
-        )
-    }
-
-    func testSelectedThreadLabelFallsBackToThreadMetadata() throws {
-        let threadWithTeamName = try decodeThread(
-            """
-            {
-              "id": "thread-2",
-              "title": "Planning",
-              "team_display_name": "Planning Team",
-              "agent_id": "missing-agent"
-            }
-            """
-        )
-        let threadWithAgent = try decodeThread(
-            """
-            {
-              "id": "thread-3",
-              "title": "Follow up",
-              "agent_id": "missing-agent"
-            }
-            """
-        )
-
-        XCTAssertEqual(
-            GaryxMobileAgentTargetMapper.selectedThreadAgentLabel(
-                thread: threadWithTeamName,
-                target: nil,
-                fallbackSelectedAgentLabel: "Codex"
-            ),
-            "Planning Team"
-        )
-        XCTAssertEqual(
-            GaryxMobileAgentTargetMapper.selectedThreadAgentLabel(
-                thread: threadWithAgent,
-                target: nil,
-                fallbackSelectedAgentLabel: "Codex"
-            ),
-            "missing-agent"
-        )
-        XCTAssertEqual(
-            GaryxMobileAgentTargetMapper.selectedThreadAgentLabel(
-                thread: nil,
-                target: nil,
-                fallbackSelectedAgentLabel: "Codex"
-            ),
-            "Codex"
-        )
-    }
-
-    private func decodeAgents(_ json: String) throws -> [GaryxAgentSummary] {
-        try JSONDecoder().decode(GaryxAgentsPage.self, from: Data(json.utf8)).agents
-    }
-
-    private func decodeTeams(_ json: String) throws -> [GaryxTeamSummary] {
-        try JSONDecoder().decode(GaryxTeamsPage.self, from: Data(json.utf8)).teams
-    }
-
-    private func decodeThread(_ json: String) throws -> GaryxThreadSummary {
-        try JSONDecoder().decode(GaryxThreadSummary.self, from: Data(json.utf8))
+    func testSelectedThreadUsesAgentIdentityAndFallback() throws {
+        let agent = GaryxAgentSummary(id: "codex", displayName: "Codex", providerType: "codex", model: "")
+        let thread = try JSONDecoder().decode(GaryxThreadSummary.self, from: Data(#"{"id":"thread-1","title":"Review","agent_id":"codex"}"#.utf8))
+        let targets = GaryxMobileAgentTargetMapper.makeTargets(agents: [agent])
+        let target = GaryxMobileAgentTargetMapper.selectedThreadTarget(thread: thread, selectedAgentTargetId: "", targets: targets)
+        XCTAssertEqual(target?.id, "codex")
+        XCTAssertEqual(GaryxMobileAgentTargetMapper.selectedThreadAgentLabel(thread: thread, target: target, fallbackSelectedAgentLabel: "Agent"), "Codex")
     }
 }
 

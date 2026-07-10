@@ -529,7 +529,7 @@
         <section id="summary">
           <h2>1. 结论摘要</h2>
           <div class="callout ok">
-            <strong>核心结论：</strong>Garyx Workflow 应被建模为一种可复用执行能力，和 Agent、Agent Team 同级；一次 Workflow 执行则表现为一个普通 Task。Workflow 内部节点不是 Task，而是由 SDK 驱动的隐藏 child threads，用于保留 transcript、工具调用、结构化结果和执行证据。
+            <strong>核心结论：</strong>Garyx Workflow 应被建模为一种可复用执行能力，和 Agent 同级；一次 Workflow 执行则表现为一个普通 Task。Workflow 内部节点不是 Task，而是由 SDK 驱动的隐藏 child threads，用于保留 transcript、工具调用、结构化结果和执行证据。
           </div>
 
           <div class="grid-2">
@@ -537,7 +537,7 @@
               <h3>已经确定的架构方向</h3>
               <ul>
                 <li><code>WorkflowDefinition</code> 是全局 file-backed package，不进数据库作为源数据。</li>
-                <li><code>Task.executor</code> 支持 <code>agent</code>、<code>team</code>、<code>workflow</code> 三类执行器。</li>
+                <li><code>Task.executor</code> 支持 <code>agent</code>、<code>workflow</code> 两类执行器。</li>
                 <li><code>WorkflowRun</code> 是一次执行实例，绑定外层 Task。</li>
                 <li>Workflow 控制流由用户 TypeScript 和 <code>@garyx/workflow</code> SDK 执行，Gateway 不解释 workflow 脚本。</li>
                 <li>子执行默认继承 Task workspace，除非调用方显式覆盖。</li>
@@ -560,7 +560,7 @@
           <h2>2. 目标和非目标</h2>
           <h3>2.1 产品目标</h3>
           <ul>
-            <li>让 Workflow 成为 Agent / Agent Team 之后的第三类执行能力。</li>
+            <li>让 Workflow 成为 Agent 之外的另一类执行能力。</li>
             <li>用户创建 Task 时可以选择 Workflow；Task 仍然是产品上的执行入口和 review 单元。</li>
             <li>Workflow 内部调用 agent 时保留完整观测：阶段、节点、child thread、结构化结果、事件流和最终结果。</li>
             <li>Workflow 定义可复用、可复制、可版本化，并以文件包形式存在。</li>
@@ -635,7 +635,7 @@
 
           <h3>3.1 WorkflowDefinition</h3>
           <p>
-            <code>WorkflowDefinition</code> 是可复用能力，和 Agent、Agent Team 同级。它是全局对象，不绑定 workspace。workspace 是一次 Task 执行的上下文，而不是 definition identity。
+            <code>WorkflowDefinition</code> 是可复用能力，和 Agent 同级。它是全局对象，不绑定 workspace。workspace 是一次 Task 执行的上下文，而不是 definition identity。
           </p>
           <table>
             <thead>
@@ -653,7 +653,7 @@
 
           <h3>3.2 Task</h3>
           <p>
-            Task 是用户可见的执行单元和 review 单元。Workflow-backed Task 只是把 executor 从 Agent/Team 换成 WorkflowDefinition；Task 生命周期继续使用现有 <code>in_progress</code> 到 <code>in_review</code> 的产品语义。
+            Task 是用户可见的执行单元和 review 单元。Workflow-backed Task 只是把 executor 从 Agent 换成 WorkflowDefinition；Task 生命周期继续使用现有 <code>in_progress</code> 到 <code>in_review</code> 的产品语义。
           </p>
 <pre><code>{
   "title": "Implement Mac workflow UI",
@@ -684,7 +684,6 @@
           <h3>3.5 模型定义摘要</h3>
           <pre><code>type TaskExecutor =
   | { type: "agent"; agentId: string }
-  | { type: "team"; teamId: string }
   | { type: "workflow"; workflowId: string; workflowVersion?: number };
 
 type WorkflowDefinition = {
@@ -1000,7 +999,7 @@ await pipeline(items, stageA, stageB) // user TypeScript pipeline</code></pre>
 
           <h3>9.2 Mac UI 信息架构</h3>
           <ul>
-            <li>Task 创建时的执行器选择应是三个同级 tab：Agent、Agent Team、Workflow。</li>
+            <li>Task 创建时的执行器选择应是两个同级 tab：Agent、Workflow。</li>
             <li>Workflow tab 只展示 file-backed definition 列表；Workflow input 复用 Task 正文。</li>
             <li>Task detail 展示 WorkflowRunsPanel：run 状态、children、events、错误和 child thread 链接。</li>
             <li>Mac UI 只做管理和观测，不发明新执行概念。</li>

@@ -124,13 +124,6 @@ test('threadSummariesEquivalent treats re-fetched identical summaries as equal',
       agentId: 'claude',
       recentRunId: null,
       worktree: { branch: 'main', path: '/Users/test/project' },
-      team: {
-        team_id: 'team-1',
-        display_name: 'Team One',
-        leader_agent_id: 'claude',
-        member_agent_ids: ['claude', 'codex'],
-        child_thread_ids: { codex: 'thread-child' },
-      },
     });
 
   assert.equal(threadSummariesEquivalent(makeSummary(), makeSummary()), true);
@@ -142,7 +135,6 @@ test('threadSummariesEquivalent normalizes missing optional fields to null', () 
     agentId: null,
     recentRunId: null,
     worktree: null,
-    team: null,
   });
 
   assert.equal(threadSummariesEquivalent(left, right), true);

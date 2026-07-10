@@ -1038,7 +1038,6 @@ fn provider_type_label(provider_type: &ProviderType) -> &'static str {
         ProviderType::Gpt => "GPT",
         ProviderType::ClaudeLlm => "Claude",
         ProviderType::GeminiLlm => "Gemini",
-        ProviderType::AgentTeam => "Team",
         ProviderType::ClaudeCode => "Claude",
     }
 }
@@ -1074,31 +1073,6 @@ fn load_cli_agent_profiles() -> Vec<CustomAgentProfile> {
     profiles
 }
 
-fn load_cli_team_profiles() -> Vec<AgentTeamProfile> {
-    let path = default_agent_teams_state_path();
-    let mut teams = if path.exists() {
-        fs::read_to_string(&path)
-            .ok()
-            .filter(|content| !content.trim().is_empty())
-            .and_then(|content| {
-                serde_json::from_str::<std::collections::HashMap<String, AgentTeamProfile>>(
-                    &content,
-                )
-                .ok()
-            })
-            .map(|persisted| persisted.into_values().collect::<Vec<_>>())
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    teams.sort_by(|left, right| {
-        left.display_name
-            .cmp(&right.display_name)
-            .then_with(|| left.team_id.cmp(&right.team_id))
-    });
-    teams
-}
-
 fn format_cli_agent_label(agent: &CustomAgentProfile) -> String {
     let display = if agent.display_name.trim() == agent.agent_id.trim() {
         agent.display_name.clone()
@@ -1116,19 +1090,8 @@ fn format_cli_agent_label(agent: &CustomAgentProfile) -> String {
     )
 }
 
-fn format_cli_team_label(team: &AgentTeamProfile) -> String {
-    if team.display_name.trim() == team.team_id.trim() {
-        format!("Agent Team · {} (team)", team.display_name)
-    } else {
-        format!(
-            "Agent Team · {} ({}, team)",
-            team.display_name, team.team_id
-        )
-    }
-}
-
 fn available_agent_reference_options() -> Vec<AgentReferenceOption> {
-    let mut options = load_cli_agent_profiles()
+    load_cli_agent_profiles()
         .into_iter()
         .map(|agent| {
             let label = format_cli_agent_label(&agent);
@@ -1137,15 +1100,7 @@ fn available_agent_reference_options() -> Vec<AgentReferenceOption> {
                 label,
             }
         })
-        .collect::<Vec<_>>();
-    options.extend(load_cli_team_profiles().into_iter().map(|team| {
-        let label = format_cli_team_label(&team);
-        AgentReferenceOption {
-            id: team.team_id,
-            label,
-        }
-    }));
-    options
+        .collect()
 }
 
 fn prompt_agent_reference_choice(

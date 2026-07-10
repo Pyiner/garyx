@@ -297,14 +297,9 @@ selectedCapsuleIdFromRoute != null  → <CapsulePreviewPage capsuleId=...>
 
 ## 7. 聊天 final 后 capsule 卡片（哑渲染）
 
-### 7.1 `render-view-model.ts`（纯结构翻译，**solo 与 team 双通道都摆卡**，守文件头契约）
+### 7.1 `render-view-model.ts`（纯结构翻译，守文件头契约）
 
-> R1-B2 评审采纳：team 线程走 `buildThreadViewBlocks`（ThreadPage:556），与 solo 的 `buildThreadViewRowsWithLocalUsers`
-> 互斥。若只在 solo 通道摆卡，team 线程会**丢掉 server 已派生的 capsule 卡**（违父契约 §1.3「某 run create/update 过
-> capsule → final 后由 server render_state 加卡」）。修法：两通道都**结构性**把 `row.capsule_cards` 摆在该 turn activity
-> 之后——solo 用字段，team 用新增 block kind。零分组/配对/插位（位置 server reducer 已定，排 final 后）。
-
-**(a) solo 通道（`buildThreadViewRows`，:272）**：
+`buildThreadViewRows`：
 
 - `UserTurnRow`（:73-78）加 `capsuleCards: RenderCapsuleCard[]`（import 类型）。
 - user 解析到时 `rows.push({ kind:'user_turn', key, userBlock, activityRows, capsuleCards: row.capsule_cards ?? [] })`。
@@ -315,27 +310,12 @@ selectedCapsuleIdFromRoute != null  → <CapsulePreviewPage capsuleId=...>
 - `capsuleCards`/`capsule_only` **不计入** `collectBlockMessageIds`/`representedMessageIds`（:113-165）——卡片不是消息，
   否则 represented 判定 / visible id 被污染。`representedMessageIdsForRows`（:148）的 row switch 对 `capsule_only` 直接跳过。
 
-**(b) team 通道（`buildThreadViewBlocks`，:340）——新增 `capsule_cards` block kind**：
-
-- `RenderTranscriptBlock` union（:37-48）加 `| { kind:'capsule_cards'; key:string; cards: RenderCapsuleCard[] }`。
-- `buildThreadViewBlocks` 每个 `user_turn` row 渲完其 activity blocks 后，若 `row.capsule_cards?.length`，push
-  `{ kind:'capsule_cards', key:`capsule-cards:${row.id}`, cards: row.capsule_cards }`（结构性接在该 turn 之后，
-  不扫 tool result、不查 capsule list）。
-- `collectBlockMessageIds`（:113）加 guard：`if (block.kind === 'capsule_cards') return;`（无 message id；否则
-  现有 `for (const entry of block.entries)` 会因 `entries` undefined 崩）。
-- 三端 TS 穷尽：新 block kind 触及的 `block.kind` 分发点见 §7.2（`renderBlockBody`/`speakerForTranscriptBlock`）。
-
-### 7.2 `ThreadPage.tsx`（solo 行 + team block 都渲卡）
+### 7.2 `ThreadPage.tsx`
 
 - `ThreadPageProps`（:245）加 `onOpenCapsule?: (capsuleId: string) => void`（仿 `onOpenThreadById`:378）。
-- **solo**：user_turn 渲染分支（:928-937）在 `activityRows.map(...)` **之后**追加
+- user_turn 渲染分支（:928-937）在 `activityRows.map(...)` **之后**追加
   `{row.capsuleCards.length ? <CapsuleChatCardList cards={row.capsuleCards} onOpenCapsule={onOpenCapsule}/> : null}`；
   顶层 row 渲染加 `case 'capsule_only'` → `<CapsuleChatCardList>`。
-- **team**：`renderBlockBody`（:742，现 `if tool_group … else message`）**首部**加
-  `if (block.kind === 'capsule_cards') return <CapsuleChatCardList cards={block.cards} onOpenCapsule={onOpenCapsule}/>;`
-  （否则会落进 message 分支 `const entry = block.entry` 而 entry undefined 崩）；
-  `speakerForTranscriptBlock`（:132，现 `if message … else for entries`）**首部**加
-  `if (block.kind === 'capsule_cards') return null;`（无 speaker → team loop `if (!speaker) return blockBody`，无 speaker header）。
 - 新 `src/renderer/src/app-shell/components/CapsuleChatCard.tsx`：
   - `CapsuleChatCardList`：单列 compact（首版卡宽上限 ~360px）。
   - 每卡 `<button onClick={()=>onOpenCapsule?.(card.capsule_id)}>`：上半 `<CapsuleLivePreviewFrame mode="card" active={visible}>`（`visible` 由 IntersectionObserver；**聊天卡更保守**：同时 active ≤ 2，由 store 并发上限 + 可视区门控共同保证），下半 title + `action`（Created/Updated）小标。
@@ -345,11 +325,9 @@ selectedCapsuleIdFromRoute != null  → <CapsulePreviewPage capsuleId=...>
 
 ### 7.3 `render-view-model.test.mjs`：改 T1 断言（:472）+ 新增
 
-- 改 :472「tolerated but not rendered」→ 断言 solo `rows[0].capsuleCards` 长度 1、`capsule_id` 对、**且** `visibleMessageIds`/
+- 改 :472「tolerated but not rendered」→ 断言 `rows[0].capsuleCards` 长度 1、`capsule_id` 对、**且** `visibleMessageIds`/
   `blockMessageIds(blocks)` 仍只含 `seq:1,seq:2`（卡片不入 visible/blocks）。这是**加强**断言非放松。
-- 新增：orphan（user 解析不到）+ `capsule_cards` → 顶层 `capsule_only` 行；
-  **team** fixture（带 capsule_cards 的 user_turn）→ `buildThreadViewBlocks` 末尾出 `{kind:'capsule_cards'}` block 且
-  `blockMessageIds` 不含卡片（守 B2 修复）。
+- 新增：orphan（user 解析不到）+ `capsule_cards` → 顶层 `capsule_only` 行。
 
 ---
 
@@ -381,8 +359,8 @@ soft border、subtle shadow，守 desktop `CLAUDE.md` 审美。Delete 用 `--col
    `buildDesktopRouteHash({kind:'capsule'})==='#/capsules/<encoded>'`；`#/capsules`（无 id）仍 `view:'capsules'`（回归保护）；
    **冷启动 round-trip（修 R1-B1）**：`currentDesktopRoute({contentView:'capsules', capsulePreviewId:'X', …})==={kind:'capsule',capsuleId:'X'}`、
    `capsulePreviewId:null` 时回 `{kind:'view',view:'capsules'}`（即 `currentDesktopRoute` 已迁 desktop-route.ts，可直接 import 测）。
-2. `render-view-model.test.mjs`（改 :472 + 新增）：solo capsuleCards 透传、不入 visible/blocks；orphan→`capsule_only`；
-   本地乐观 user 行 capsuleCards=[]；**team `buildThreadViewBlocks` 末尾出 `capsule_cards` block 且 blockMessageIds 不含卡片（修 R1-B2）**。
+2. `render-view-model.test.mjs`（改 :472 + 新增）：capsuleCards 透传、不入 visible/blocks；orphan→`capsule_only`；
+   本地乐观 user 行 capsuleCards=[]。
 3. **新** `src/main/deep-link.test.mjs`：`garyx://capsules/<id>`→`{type:'open-capsule',capsuleId}`；带 query / 多段报错；
    顺带覆盖既有 thread/new/resume（补 deep-link 现无测试的缺口，最小）。
 4. **新** `src/renderer/src/app-shell/capsule-html-store.test.mjs`：注入受控 fetcher 验
@@ -432,7 +410,6 @@ Copy link 用 `garyx://capsules/<id>`（不带 token）；title/meta 是 native 
 | D6 | 聊天卡导致 thread 上下文丢失（点卡跳走） | 父稿 §3.4 已批准：首版 Back 统一回 gallery，不维护跨-view return stack |
 | D7 | 改 `render-view-model.test.mjs:472` 被当“放松测试” | 改后断言更强（透传 + 仍不入 visible/blocks），非删除；保留 unknown-kind 容错用例 |
 | **R1-B1** | 冷启动 `#/capsules/<id>` 被抹成 gallery | `capsulePreviewId` 从 `initialRouteValue` seed（§3.2）+ `currentDesktopRoute` 迁 desktop-route.ts 加 round-trip 测 + CDP 冷启动复核 |
-| **R1-B2** | team 线程丢 server capsule 卡 | team `buildThreadViewBlocks` 加 `capsule_cards` block kind 结构性接在 turn 后（§7.1b）；3 处 `block.kind` guard + team block 测 |
 | **R1-B3** | 删除时同 id in-flight fetch 把已删 HTML 写回 | store per-id generation 守卫 + `invalidateCapsule` 清队列/置 deleted（§4）+ delete-while-inflight 测 |
 
 ---
@@ -443,6 +420,6 @@ Copy link 用 `garyx://capsules/<id>`（不带 token）；title/meta 是 native 
 2. `desktop-route.ts`(迁入 currentDesktopRoute + capsule 路由 + test) → AppShell route/deeplink/lifted state 接线（含冷启动 seed）。
 3. `capsule-html-store.ts`(+test，含 gen 守卫) → `CapsuleLivePreviewFrame.tsx`。
 4. `CapsulesPanel.tsx` 重写（gallery + preview）+ CSS。
-5. `render-view-model.ts`(solo 字段 + team `capsule_cards` block + test) → `CapsuleChatCard.tsx` → `ThreadPage.tsx`(solo 行 + team block 渲染 + onOpenCapsule) → AppShell 传 `onOpenCapsule`。
+5. `render-view-model.ts`(capsule 字段 + test) → `CapsuleChatCard.tsx` → `ThreadPage.tsx`(行渲染 + onOpenCapsule) → AppShell 传 `onOpenCapsule`。
 6. i18n 补串 → `build:ui` + `test:unit` 绿 → `dist:dir` + CDP 实测（含冷启动）。
 7. 自开 code review 给 codex 到 100% PASS → 合 main。

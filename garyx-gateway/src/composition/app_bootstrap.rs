@@ -1,21 +1,14 @@
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::AgentLoopProvider;
-use garyx_bridge::providers::agent_team::{
-    AgentTeamProvider, FileGroupStore, GroupStore, SubAgentDispatcher, TeamProfileResolver,
-};
 use garyx_channels::plugin::PluginDiscoverer;
 use garyx_channels::{
     BuiltInPluginDiscoverer, ChannelDispatcher, ChannelDispatcherImpl, ChannelPluginManager,
     SwappableDispatcher,
 };
 use garyx_models::config::GaryxConfig;
-use garyx_models::local_paths::default_agent_team_groups_dir;
-use garyx_models::local_paths::default_agent_teams_state_path;
 use garyx_models::local_paths::default_app_database_path;
 use garyx_models::local_paths::default_custom_agents_state_path;
 use garyx_models::local_paths::default_wikis_state_path;
 use garyx_models::thread_logs::{NoopThreadLogSink, ThreadLogSink};
-use garyx_models::validate_agent_team_registry_uniqueness;
 use garyx_router::{
     InMemoryThreadStore, MessageLedgerStore, MessageRouter, ThreadCreator, ThreadHistoryRepository,
     ThreadStore, ThreadTranscriptStore,
@@ -28,10 +21,6 @@ use tokio::sync::{Mutex, Notify, broadcast};
 use tracing::warn;
 
 use crate::agent_identity::GatewayThreadCreator;
-use crate::agent_team_provider::{
-    AGENT_TEAM_PROVIDER_KEY, GatewaySubAgentDispatcher, GatewayTeamProfileResolver,
-};
-use crate::agent_teams::AgentTeamStore;
 use crate::api::RestartTracker;
 use crate::app_db::AppDbService;
 use crate::app_state::{AppState, IntegrationState, OpsState, RuntimeState, ThreadState};
@@ -56,7 +45,7 @@ use crate::workflows::WorkflowScheduler;
 ///
 /// This replaces the old `Store::file(path).unwrap_or_else(|_| Store::new())`
 /// pattern which swallowed parse errors and left operators wondering why their
-/// teams / agents / wikis had disappeared.
+/// agents / wikis had disappeared.
 fn load_store_or_warn<T>(
     store_name: &'static str,
     path: PathBuf,
@@ -95,7 +84,6 @@ pub struct AppStateBuilder {
     thread_logs: Arc<dyn ThreadLogSink>,
     skills: Arc<SkillsService>,
     custom_agents: Arc<CustomAgentStore>,
-    agent_teams: Arc<AgentTeamStore>,
     wikis: Arc<WikiStore>,
     app_db: Arc<AppDbService>,
     garyx_db: Arc<GaryxDbService>,
@@ -158,7 +146,6 @@ impl AppStateBuilder {
             thread_logs: Arc::new(NoopThreadLogSink),
             skills,
             custom_agents: Arc::new(CustomAgentStore::new()),
-            agent_teams: Arc::new(AgentTeamStore::new()),
             wikis: Arc::new(WikiStore::new()),
             app_db: Arc::new(
                 AppDbService::memory()
@@ -170,8 +157,8 @@ impl AppStateBuilder {
         }
     }
 
-    /// Bind the real on-disk `~/.garyx` state: persistent custom-agent /
-    /// agent-team / wiki stores, the app and garyx databases, and built-in
+    /// Bind the real on-disk `~/.garyx` state: persistent custom-agent and
+    /// wiki stores, the app and garyx databases, and built-in
     /// skill seeding.
     ///
     /// This is the production boot path's explicit opt-in. `new()`
@@ -192,12 +179,6 @@ impl AppStateBuilder {
             default_custom_agents_state_path(),
             CustomAgentStore::file,
             CustomAgentStore::new,
-        ));
-        self.agent_teams = Arc::new(load_store_or_warn(
-            "agent_teams",
-            default_agent_teams_state_path(),
-            AgentTeamStore::file,
-            AgentTeamStore::new,
         ));
         self.wikis = Arc::new(load_store_or_warn(
             "wikis",
@@ -319,11 +300,6 @@ impl AppStateBuilder {
         self
     }
 
-    pub fn with_agent_team_store(mut self, agent_teams: Arc<AgentTeamStore>) -> Self {
-        self.agent_teams = agent_teams;
-        self
-    }
-
     pub fn with_wiki_store(mut self, wikis: Arc<WikiStore>) -> Self {
         self.wikis = wikis;
         self
@@ -340,15 +316,6 @@ impl AppStateBuilder {
     }
 
     pub fn build(self) -> Arc<AppState> {
-        // Teams and standalone agents share one agent_id namespace — a team_id
-        // collision with an existing agent_id would make `agent_id` ambiguous
-        // on threads. Surface the conflict fatally at boot instead of silently
-        // picking one resolution at runtime.
-        let boot_agents = self.custom_agents.list_agents_blocking();
-        let boot_teams = self.agent_teams.list_teams_blocking();
-        if let Err(error) = validate_agent_team_registry_uniqueness(&boot_agents, &boot_teams) {
-            panic!("agent_team registry uniqueness check failed during startup: {error}");
-        }
         let start_time = Instant::now();
         let active_run_probe: Arc<dyn ActiveRunProbe> = self
             .active_run_probe
@@ -376,7 +343,6 @@ impl AppStateBuilder {
         let thread_creator: Arc<dyn ThreadCreator> = Arc::new(GatewayThreadCreator::new(
             self.bridge.clone(),
             self.custom_agents.clone(),
-            self.agent_teams.clone(),
         ));
         router.set_thread_creator(thread_creator.clone());
         router.set_thread_history_repository(thread_history.clone());
@@ -386,80 +352,20 @@ impl AppStateBuilder {
         self.bridge.set_thread_store_blocking(thread_store.clone());
         self.bridge.set_thread_history(thread_history.clone());
 
-        // Wire the AgentTeam meta-provider into the bridge. This is the
-        // production implementation of the two DI traits the provider needs:
-        //   - `GatewayTeamProfileResolver` reads from the gateway's
-        //     `AgentTeamStore` so teams loaded at boot are visible to the
-        //     provider.
-        //   - `GatewaySubAgentDispatcher` holds a `Weak<MultiProviderBridge>`
-        //     (avoiding the Bridge → Provider → Dispatcher → Bridge cycle)
-        //     plus the thread store and `ThreadCreator` so it can lazily
-        //     spawn per-sub-agent threads and drive their runs via whichever
-        //     concrete provider is registered for the child's provider_type.
-        //
-        // Registration goes through `register_provider_blocking` because
-        // `AppStateBuilder::build` is synchronous (see the same pattern used
-        // by `MultiProviderBridge::set_thread_history` in `multi_provider.rs`).
-        // At boot the topology lock is uncontended; any contention here
-        // indicates a wiring bug and should be surfaced loudly.
-        // Share ONE Group store instance between the AgentTeam provider
-        // (which writes as sub-agents get dispatched) and the gateway read
-        // path (which surfaces `child_thread_ids` in the thread metadata
-        // response — see `routes.rs::team_block_for_thread`). Constructing
-        // a second `FileGroupStore` here would give the gateway a cold
-        // cache that lags behind the provider's writes until the next file
-        // read, producing stale UI state.
-        let group_store: Arc<dyn GroupStore> =
-            Arc::new(FileGroupStore::new(default_agent_team_groups_dir()));
-        let provider_group_store = group_store.clone();
-        let team_resolver: Arc<dyn TeamProfileResolver> =
-            Arc::new(GatewayTeamProfileResolver::new(self.agent_teams.clone()));
-        let sub_agent_dispatcher: Arc<dyn SubAgentDispatcher> =
-            Arc::new(GatewaySubAgentDispatcher::new(
-                Arc::downgrade(&self.bridge),
-                thread_store.clone(),
-                thread_creator.clone(),
-                self.custom_agents.clone(),
-            ));
-        let agent_team_provider: Arc<dyn AgentLoopProvider> = Arc::new(AgentTeamProvider::new(
-            provider_group_store,
-            team_resolver,
-            sub_agent_dispatcher,
-        ));
-        if let Err(error) = self
-            .bridge
-            .register_provider_blocking(AGENT_TEAM_PROVIDER_KEY, agent_team_provider)
-        {
-            panic!("failed to register AgentTeam provider during startup: {error}");
-        }
-
-        // The bridge needs the current Team registry snapshot so dispatch can
-        // resolve `agent_id -> team` for thread routing. `apply_runtime_config`
-        // also does this on config reload; we mirror it here so the very first
-        // `build()` already has teams loaded before any request arrives.
-        // Use `list_teams_blocking`/`list_agents_blocking` and reuse the
-        // bridge's existing async `replace_*` helpers via `try_write` inside
-        // their impls — those helpers hold their own tokio RwLock so we call
-        // them from a synchronous context via a tiny block_on escape hatch.
-        // This mirrors the intent of `apply_runtime_config` but is safe in
-        // sync-build paths because `replace_*_profiles` only acquires a
-        // tokio::sync::RwLock::write for a trivial map swap.
+        // Seed the bridge with the current agent registry before the first
+        // request. Runtime config reloads refresh the same snapshot.
         let boot_agent_profiles = self.custom_agents.list_agents_blocking();
-        let boot_team_profiles = self.agent_teams.list_teams_blocking();
         let bridge_for_profiles = self.bridge.clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 bridge_for_profiles
                     .replace_agent_profiles(boot_agent_profiles)
                     .await;
-                bridge_for_profiles
-                    .replace_team_profiles(boot_team_profiles)
-                    .await;
             });
         } else {
             warn!(
                 "AppStateBuilder::build invoked outside a tokio runtime; \
-                 agent/team profiles will be pushed to bridge on first apply_runtime_config"
+                 agent profiles will be pushed to bridge on first apply_runtime_config"
             );
         }
 
@@ -520,8 +426,6 @@ impl AppStateBuilder {
                 thread_logs: self.thread_logs,
                 skills: self.skills,
                 custom_agents: self.custom_agents,
-                agent_teams: self.agent_teams,
-                agent_team_group_store: group_store,
                 wikis: self.wikis,
                 app_db: self.app_db,
                 garyx_db: self.garyx_db,
@@ -568,7 +472,7 @@ mod tests {
     use super::*;
 
     /// Regression guard for the 2026-07-06 gary incident: the builder used to
-    /// bind the real `~/.garyx` stores (custom agents / teams / wikis / app
+    /// bind the real `~/.garyx` stores (custom agents / wikis / app
     /// db) by default, so every test constructing an `AppState` read and
     /// *wrote* live user data — a workflow test's whole-file persist
     /// overwrote `custom-agents.json` and vaporized a real agent definition.
@@ -581,10 +485,6 @@ mod tests {
         assert!(
             builder.custom_agents.persistence_path().is_none(),
             "default custom-agent store must not persist to real user files"
-        );
-        assert!(
-            builder.agent_teams.persistence_path().is_none(),
-            "default agent-team store must not persist to real user files"
         );
         assert!(
             builder.wikis.persistence_path().is_none(),

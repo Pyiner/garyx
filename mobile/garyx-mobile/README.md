@@ -35,8 +35,7 @@ The package currently covers:
 - `GET /api/threads/history`, `GET /api/threads/:id/logs`, and
   `POST /api/chat/interrupt`.
 - `GET /api/custom-agents`, `GET /api/custom-agents/models`, generated avatar
-  helper support, `GET /api/teams`, custom agent/team create, update, and
-  delete helpers.
+  helper support, and custom-agent create, update, and delete helpers.
 - `GET /api/skills` plus create, update, toggle, delete, tree, file read/save,
   and entry create/delete helpers.
 - `GET /api/tasks`, `POST /api/tasks`, assign/unassign, title/status

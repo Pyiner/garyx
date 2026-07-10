@@ -4,7 +4,6 @@ import { Plus, Trash } from 'lucide-react';
 import type {
   ChannelPluginCatalogEntry,
   DesktopCustomAgent,
-  DesktopTeam,
   DesktopWorkspace,
   GatewaySettingsSource,
   PollFeishuChannelAuthInput,
@@ -76,9 +75,8 @@ function sortedStandaloneAgents(agents: DesktopCustomAgent[]): DesktopCustomAgen
 
 function sortedAgentTargets(
   agents: DesktopCustomAgent[],
-  teams: DesktopTeam[],
 ): AgentTargetOption[] {
-  return buildAgentTargetOptions(agents, teams, { teamsFirst: true });
+  return buildAgentTargetOptions(agents);
 }
 
 function resolveChannelAgentId(
@@ -99,8 +97,7 @@ function compactAgentTargetLabel(target: AgentTargetOption | null, fallback: str
   const withoutProvider = target.label.split(' · ')[0]?.trim() || target.label;
   const valuePattern = escapeRegExp(target.value);
   return withoutProvider
-    .replace(new RegExp(`\\s*\\(${valuePattern}(?:, team)?\\)$`), '')
-    .replace(/\s+\(team\)$/, '')
+    .replace(new RegExp(`\\s*\\(${valuePattern}\\)$`), '')
     .trim()
     || withoutProvider;
 }
@@ -170,7 +167,6 @@ function compactPathLabel(value: unknown): string | null {
 
 type ChannelsSettingsPanelProps = {
   agents?: DesktopCustomAgent[];
-  teams?: DesktopTeam[];
   workspaces?: DesktopWorkspace[];
   gatewayDraft?: any;
   gatewaySaving?: boolean;
@@ -210,7 +206,6 @@ type ChannelsSettingsPanelProps = {
 
 export function ChannelsSettingsPanel({
   agents = [],
-  teams = [],
   workspaces = [],
   gatewayDraft,
   gatewaySaving = false,
@@ -230,7 +225,7 @@ export function ChannelsSettingsPanel({
   const [isAddingChannel, setIsAddingChannel] = useState(false);
   const [editingBot, setEditingBot] = useState<EditBotDialogContext | null>(null);
   const standaloneAgents = sortedStandaloneAgents(agents);
-  const agentTargets = sortedAgentTargets(agents, teams);
+  const agentTargets = sortedAgentTargets(agents);
   // channel. Degrades gracefully to an empty list before the first
   // fetch returns (all hardcoded logic still works).
   const { entries: pluginCatalog } = useChannelPluginCatalog();

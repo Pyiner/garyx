@@ -68,7 +68,6 @@ final class GaryxLastOpenedThreadRestorationPolicyTests: XCTestCase {
             sectionsInput: GaryxHomeThreadSectionsInput(
                 threads: [],
                 agents: [],
-                teams: [],
                 automations: [],
                 pinnedThreadIds: [],
                 recentThreadIds: [],
@@ -90,7 +89,6 @@ final class GaryxLastOpenedThreadRestorationPolicyTests: XCTestCase {
             sectionsInput: GaryxHomeThreadSectionsInput(
                 threads: fixture.threads,
                 agents: fixture.agents,
-                teams: fixture.teams,
                 automations: fixture.automations,
                 pinnedThreadIds: fixture.pinnedThreadIds,
                 recentThreadIds: fixture.recentThreadIds,
@@ -183,8 +181,6 @@ private struct CapturedThreadSummary: Decodable {
     var workspacePath: String?
     var messageCount: Int?
     var agentId: String?
-    var teamId: String?
-    var teamName: String?
     var providerType: String?
     var recentRunId: String?
     var activeRunId: String?
@@ -203,8 +199,6 @@ private struct CapturedThreadSummary: Decodable {
             workspacePath: workspacePath,
             messageCount: messageCount,
             agentId: agentId,
-            teamId: teamId,
-            teamName: teamName,
             providerType: providerType,
             recentRunId: recentRunId,
             activeRunId: activeRunId,

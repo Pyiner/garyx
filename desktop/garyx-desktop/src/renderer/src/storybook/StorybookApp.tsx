@@ -7,7 +7,7 @@ import { buildThreadAvatarCatalog } from '../thread-avatar';
 import { buildStories, type Story, type StoryStep } from './scenarios';
 
 const PLAY_INTERVAL_MS = 1600;
-const EMPTY_THREAD_AVATAR_CATALOG = buildThreadAvatarCatalog([], []);
+const EMPTY_THREAD_AVATAR_CATALOG = buildThreadAvatarCatalog([]);
 
 function noop() {}
 
@@ -121,7 +121,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       threadLogsPanelWidth={0}
       threadLogsResizing={false}
       threadAvatarCatalog={EMPTY_THREAD_AVATAR_CATALOG}
-      teamAgentDisplayNamesById={{}}
       visibleRemoteAwaitingAckInputs={[]}
       visibleRemotePendingInputs={[]}
       workflowRunContent={null}

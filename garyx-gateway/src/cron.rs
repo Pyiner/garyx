@@ -26,7 +26,6 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::agent_identity::create_thread_for_agent_reference;
-use crate::agent_teams::AgentTeamStore;
 use crate::custom_agents::CustomAgentStore;
 use crate::delivery_target::resolve_delivery_target_with_recovery;
 use crate::garyx_db::{AutomationThreadRunDraft, GaryxDbService};
@@ -622,7 +621,6 @@ struct CronDispatchRuntime {
     thread_logs: Arc<dyn ThreadLogSink>,
     managed_mcp_servers: HashMap<String, McpServerConfig>,
     custom_agents: Arc<CustomAgentStore>,
-    agent_teams: Arc<AgentTeamStore>,
 }
 
 /// Cron scheduler service.
@@ -685,7 +683,6 @@ impl CronService {
     }
 
     /// Attach bridge+router runtime for agent-turn/system-event dispatch.
-    #[allow(clippy::too_many_arguments)]
     pub async fn set_dispatch_runtime(
         &self,
         thread_store: Arc<dyn ThreadStore>,
@@ -695,7 +692,6 @@ impl CronService {
         thread_logs: Arc<dyn ThreadLogSink>,
         managed_mcp_servers: HashMap<String, McpServerConfig>,
         custom_agents: Arc<CustomAgentStore>,
-        agent_teams: Arc<AgentTeamStore>,
     ) {
         *self.dispatch_runtime.write().await = Some(CronDispatchRuntime {
             thread_store,
@@ -705,7 +701,6 @@ impl CronService {
             thread_logs,
             managed_mcp_servers,
             custom_agents,
-            agent_teams,
         });
     }
 
@@ -1272,7 +1267,6 @@ impl CronService {
             runtime.thread_store.clone(),
             runtime.bridge.clone(),
             runtime.custom_agents.clone(),
-            runtime.agent_teams.clone(),
             Self::automation_thread_options(
                 &current.id,
                 &label,

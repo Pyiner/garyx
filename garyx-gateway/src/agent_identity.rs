@@ -8,7 +8,6 @@ use garyx_router::{
 };
 use serde_json::Value;
 
-use crate::agent_teams::AgentTeamStore;
 use crate::custom_agents::CustomAgentStore;
 
 pub(crate) const DEFAULT_AGENT_REFERENCE_ID: &str = "claude";
@@ -27,12 +26,10 @@ pub(crate) fn selected_agent_reference_id(
 
 pub(crate) async fn resolve_agent_reference_from_stores(
     custom_agents: &CustomAgentStore,
-    agent_teams: &AgentTeamStore,
     requested_id: &str,
 ) -> Result<AgentReference, String> {
     let agents = custom_agents.list_agents().await;
-    let teams = agent_teams.list_teams().await;
-    resolve_agent_reference(requested_id, &agents, &teams)
+    resolve_agent_reference(requested_id, &agents)
 }
 
 pub(crate) fn default_workspace_dir_from_agent_reference(
@@ -45,7 +42,6 @@ pub(crate) fn default_workspace_dir_from_agent_reference(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
-        AgentReference::Team { .. } => None,
     }
 }
 
@@ -95,16 +91,11 @@ pub(crate) async fn create_thread_for_agent_reference(
     thread_store: Arc<dyn ThreadStore>,
     bridge: Arc<MultiProviderBridge>,
     custom_agents: Arc<CustomAgentStore>,
-    agent_teams: Arc<AgentTeamStore>,
     options: ThreadEnsureOptions,
 ) -> Result<(String, Value, AgentReference), String> {
     let requested_agent_id = selected_agent_reference_id(options.agent_id.as_deref(), None);
-    let resolved = resolve_agent_reference_from_stores(
-        custom_agents.as_ref(),
-        agent_teams.as_ref(),
-        &requested_agent_id,
-    )
-    .await?;
+    let resolved =
+        resolve_agent_reference_from_stores(custom_agents.as_ref(), &requested_agent_id).await?;
 
     let mut canonical_options = options;
     canonical_options.agent_id = Some(resolved.bound_agent_id().to_owned());
@@ -141,19 +132,16 @@ pub(crate) async fn create_thread_for_agent_reference(
 pub(crate) struct GatewayThreadCreator {
     bridge: Arc<MultiProviderBridge>,
     custom_agents: Arc<CustomAgentStore>,
-    agent_teams: Arc<AgentTeamStore>,
 }
 
 impl GatewayThreadCreator {
     pub(crate) fn new(
         bridge: Arc<MultiProviderBridge>,
         custom_agents: Arc<CustomAgentStore>,
-        agent_teams: Arc<AgentTeamStore>,
     ) -> Self {
         Self {
             bridge,
             custom_agents,
-            agent_teams,
         }
     }
 }
@@ -169,7 +157,6 @@ impl ThreadCreator for GatewayThreadCreator {
             thread_store,
             self.bridge.clone(),
             self.custom_agents.clone(),
-            self.agent_teams.clone(),
             options,
         )
         .await?;
@@ -218,12 +205,10 @@ mod tests {
     async fn create_thread_uses_agent_default_workspace_when_unset() {
         let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let custom_agents = custom_agent_store_with_default_workspace().await;
-        let agent_teams = Arc::new(AgentTeamStore::new());
         let (thread_id, data, _) = create_thread_for_agent_reference(
             thread_store,
             Arc::new(MultiProviderBridge::new()),
             custom_agents,
-            agent_teams,
             ThreadEnsureOptions {
                 agent_id: Some("reviewer".to_owned()),
                 ..ThreadEnsureOptions::default()
@@ -243,12 +228,10 @@ mod tests {
     async fn create_thread_explicit_workspace_overrides_agent_default() {
         let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let custom_agents = custom_agent_store_with_default_workspace().await;
-        let agent_teams = Arc::new(AgentTeamStore::new());
         let (_, data, _) = create_thread_for_agent_reference(
             thread_store,
             Arc::new(MultiProviderBridge::new()),
             custom_agents,
-            agent_teams,
             ThreadEnsureOptions {
                 agent_id: Some("reviewer".to_owned()),
                 workspace_dir: Some("/tmp/bot-workspace".to_owned()),
@@ -268,12 +251,10 @@ mod tests {
     async fn create_thread_persists_expanded_agent_runtime_metadata() {
         let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let custom_agents = custom_agent_store_with_default_workspace().await;
-        let agent_teams = Arc::new(AgentTeamStore::new());
         let (_, data, _) = create_thread_for_agent_reference(
             thread_store,
             Arc::new(MultiProviderBridge::new()),
             custom_agents,
-            agent_teams,
             ThreadEnsureOptions {
                 agent_id: Some("reviewer".to_owned()),
                 ..ThreadEnsureOptions::default()

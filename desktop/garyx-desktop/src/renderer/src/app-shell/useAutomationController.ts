@@ -6,11 +6,10 @@ import type {
   DesktopAutomationSummary,
   DesktopCustomAgent,
   DesktopState,
-  DesktopTeam,
 } from '@shared/contracts';
 
 import { selectedAutomation } from '../thread-model';
-import { buildAgentAndTeamOptions } from './agent-options';
+import { buildStandaloneAgentOptions } from './agent-options';
 import type { DesktopRoute } from './desktop-route';
 import type {
   AutomationDraft,
@@ -61,7 +60,6 @@ type UseAutomationControllerArgs = {
   contentView: ContentView;
   desktopState: DesktopState | null;
   desktopAgents: DesktopCustomAgent[];
-  desktopTeams: DesktopTeam[];
   /**
    * Route-store version probe for the async guard (6c-2a): selections
    * capture it before awaiting the IPC and drop the landing when a newer
@@ -91,7 +89,6 @@ export function useAutomationController({
   contentView,
   desktopState,
   desktopAgents,
-  desktopTeams,
   getRouteVersion,
   navigateRoute,
   syncAutomationRoute,
@@ -118,11 +115,8 @@ export function useAutomationController({
   const automations = desktopState?.automations || [];
   const selectedAutomationId = desktopState?.selectedAutomationId || null;
   const activeAutomation = selectedAutomation(desktopState, selectedAutomationId);
-  const automationAgentOptions = buildAgentAndTeamOptions(desktopAgents, desktopTeams, {
-    agentLabelStyle: 'target',
-    teamDetail: 'Team',
-    teamLabelStyle: 'target',
-    teamsFirst: true,
+  const automationAgentOptions = buildStandaloneAgentOptions(desktopAgents, {
+    labelStyle: 'target',
   });
   const automationWorkspaces = (desktopState?.workspaces || []).filter((workspace) => {
     return Boolean(workspace.path) && workspace.available;
@@ -174,7 +168,7 @@ export function useAutomationController({
     automation?: DesktopAutomationSummary | null,
   ) {
     if (!automationAgentOptions.length && mode === 'create') {
-      setError('Add or restore an agent or team before creating an automation.');
+      setError('Add or restore an agent before creating an automation.');
       return;
     }
 
@@ -215,7 +209,7 @@ export function useAutomationController({
       return;
     }
     if (!automationDialog.draft.agentId.trim()) {
-      setError('Choose an agent or team for this automation.');
+      setError('Choose an agent for this automation.');
       return;
     }
     const targetThreadId = automationDialog.draft.targetMode === 'existing_thread'

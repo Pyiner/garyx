@@ -48,11 +48,6 @@ fn test_provider_type_serde() {
     let alias: ProviderType = serde_json::from_str("\"gemini_llm\"").unwrap();
     assert_eq!(alias, ProviderType::GeminiLlm);
 
-    let pt = ProviderType::AgentTeam;
-    let json = serde_json::to_string(&pt).unwrap();
-    assert_eq!(json, "\"agent_team\"");
-    let back: ProviderType = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, ProviderType::AgentTeam);
 }
 
 #[test]
@@ -66,7 +61,6 @@ fn test_provider_type_slug_round_trip() {
         ProviderType::Gpt,
         ProviderType::ClaudeLlm,
         ProviderType::GeminiLlm,
-        ProviderType::AgentTeam,
     ] {
         assert_eq!(
             ProviderType::from_slug(provider_type.as_slug()),

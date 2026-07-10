@@ -213,8 +213,6 @@ extension GaryxMobileModel {
             await openCapsuleRoute(id, source: source)
         case let .agent(id):
             await openAgentRoute(id, source: source)
-        case let .team(id):
-            await openTeamRoute(id, source: source)
         case let .skill(id):
             await openSkillRoute(id, source: source)
         case let .skillFile(skillId, path):
@@ -282,18 +280,6 @@ extension GaryxMobileModel {
         selectedAgentDetail = agent
     }
 
-    private func openTeamRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
-        let teamId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !teamId.isEmpty else { return }
-        openPanel(.agents, source: source)
-        await refreshRemoteState()
-        guard let team = teams.first(where: { $0.id == teamId }) else {
-            showRouteNotFound(kind: "Team", id: teamId)
-            return
-        }
-        selectedTeamDetail = team
-    }
-
     private func openSkillRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
         let skillId = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !skillId.isEmpty else { return }
@@ -349,7 +335,6 @@ extension GaryxMobileModel {
     private func clearRouteDrivenDetailState() {
         selectedAutomationEditor = nil
         selectedAgentDetail = nil
-        selectedTeamDetail = nil
         galleryFocusedCapsule = nil
         conversationCapsulePreview = nil
         routeNotFoundStore.selection = nil
@@ -718,20 +703,6 @@ extension GaryxMobileModel {
           ]
         }
         """)?.agents ?? []
-        teams = Self.decodeDebugFixture(GaryxTeamsPage.self, from: """
-        {
-          "teams": [
-            {
-              "team_id": "qa-review",
-              "display_name": "QA Review",
-              "leader_agent_id": "codex",
-              "member_agent_ids": ["codex", "reviewer"],
-              "workflow_text": "Implement, review screenshots, then verify tests.",
-              "avatar_data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mOUaYn5z4AHMDEQAMNDAQAOCgILqEOeygAAAABJRU5ErkJggg=="
-            }
-          ]
-        }
-        """)?.teams ?? []
         skills = Self.decodeDebugFixture([GaryxSkillSummary].self, from: """
         [
           {

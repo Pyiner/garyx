@@ -154,7 +154,6 @@ pub(crate) async fn prepare_chat_request(
         Some(agent_id) => {
             match resolve_agent_reference_from_stores(
                 state.ops.custom_agents.as_ref(),
-                state.ops.agent_teams.as_ref(),
                 &agent_id,
             )
             .await
@@ -176,19 +175,6 @@ pub(crate) async fn prepare_chat_request(
     if let Some(reference) = agent_reference.as_ref() {
         for (key, value) in agent_runtime_metadata(reference) {
             req.metadata.entry(key).or_insert(value);
-        }
-        if reference.team().is_some()
-            && let Some(thread_data) = thread_data.as_ref()
-            && !req.metadata.contains_key("group_transcript_snapshot")
-        {
-            let _ = thread_data;
-            let snapshot = garyx_router::build_group_transcript_snapshot_from_history(
-                state.threads.history.as_ref(),
-                &thread_id,
-            )
-            .await;
-            req.metadata
-                .insert("group_transcript_snapshot".to_owned(), snapshot);
         }
     }
     req.provider_type = thread_provider_type.or_else(|| {

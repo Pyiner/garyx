@@ -22,7 +22,6 @@ const SIMPLE_VIEW_SEGMENTS: Record<string, Exclude<ContentView, 'thread' | 'work
   bots: 'bots',
   capsules: 'capsules',
   agents: 'agents',
-  teams: 'teams',
   skills: 'skills',
   tasks: 'tasks',
 };

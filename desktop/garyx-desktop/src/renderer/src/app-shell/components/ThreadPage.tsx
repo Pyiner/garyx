@@ -14,12 +14,6 @@ import { ArrowDown, CircleAlert, GitBranch, Repeat2 } from 'lucide-react';
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import {
-  Message,
-  MessageAvatar,
-  MessageContent,
-  MessageHeader,
-} from "@/components/ui/message";
-import {
   MessageScroller,
   MessageScrollerButton,
   MessageScrollerContent,
@@ -70,10 +64,8 @@ import {
 } from "../../message-rich-content";
 import { parseTaskNotificationText } from "../../task-notification";
 import { parseRestartNoticeText } from "../../restart-notice";
-import { deriveThreadTeamView } from "../../thread-model";
 import type { ThreadAvatarCatalog } from "../../thread-avatar";
 import {
-  buildThreadViewBlocks,
   buildThreadViewRowsWithLocalUsers,
   type MessagesBySeq,
   type RenderTranscriptBlock,
@@ -82,7 +74,6 @@ import {
 } from "../../render-view-model";
 import { TurnSummary } from "../../turn-summary";
 import { ToolTraceGroup } from "../../tool-trace";
-import { AgentAvatar } from "./AgentAvatar";
 import { CapsuleChatCardList } from "./CapsuleChatCard";
 import { ThreadLogDock } from "./ThreadLogDock";
 import { ThreadTaskTreePopover } from "./ThreadTaskTreePopover";
@@ -99,12 +90,6 @@ function normalizeMessageText(value: string | undefined): string {
   return value?.trim() || "";
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 const LOOP_CONTINUATION_SUMMARY = "In loop, continue.";
 
 function isLoopContinuationMessage(message: TranscriptMessage): boolean {
@@ -118,71 +103,6 @@ function displayTranscriptMessageText(message: UiTranscriptMessage): string {
     return LOOP_CONTINUATION_SUMMARY;
   }
   return message.text;
-}
-
-type TeamSpeaker = {
-  agentId: string;
-  displayName: string;
-  role: "leader" | "member";
-  threadId: string | null;
-};
-
-function resolveTeamSpeaker(
-  metadata: Record<string, unknown> | null | undefined,
-  options: {
-    leaderAgentId?: string | null;
-    agentDisplayNamesById: Record<string, string>;
-    childThreadIds: Record<string, string>;
-  },
-): TeamSpeaker | null {
-  const record = asRecord(metadata);
-  if (!record) {
-    return null;
-  }
-  const agentId =
-    typeof record.agent_id === "string" ? record.agent_id.trim() : "";
-  if (!agentId) {
-    return null;
-  }
-  const metadataDisplayName =
-    typeof record.agent_display_name === "string"
-      ? record.agent_display_name.trim()
-      : "";
-  return {
-    agentId,
-    displayName:
-      options.agentDisplayNamesById[agentId] || metadataDisplayName || agentId,
-    role: agentId === options.leaderAgentId ? "leader" : "member",
-    threadId: options.childThreadIds[agentId] || null,
-  };
-}
-
-function speakerForTranscriptBlock(
-  block: RenderTranscriptBlock,
-  options: {
-    leaderAgentId?: string | null;
-    agentDisplayNamesById: Record<string, string>;
-    childThreadIds: Record<string, string>;
-  },
-): TeamSpeaker | null {
-  if (block.kind === "capsule_cards") {
-    return null;
-  }
-  if (block.kind === "message") {
-    if (block.entry.message.role !== "assistant") {
-      return null;
-    }
-    return resolveTeamSpeaker(block.entry.message.metadata, options);
-  }
-
-  for (const entry of block.entries) {
-    const message = entry.toolUse || entry.toolResult;
-    const speaker = resolveTeamSpeaker(message?.metadata, options);
-    if (speaker) {
-      return speaker;
-    }
-  }
-  return null;
 }
 
 function renderUserMessageBubbleParts({
@@ -372,7 +292,6 @@ type ThreadPageProps = {
   threadLogsPanelWidth: number;
   threadLogsResizing: boolean;
   threadAvatarCatalog: ThreadAvatarCatalog;
-  teamAgentDisplayNamesById: Record<string, string>;
   visibleRemoteAwaitingAckInputs: PendingThreadInput[];
   visibleRemotePendingInputs: PendingThreadInput[];
   workflowRunContent?: ReactNode;
@@ -553,7 +472,6 @@ export function ThreadPage({
   threadLogsPanelWidth,
   threadLogsResizing,
   threadAvatarCatalog,
-  teamAgentDisplayNamesById,
   visibleRemoteAwaitingAckInputs,
   visibleRemotePendingInputs,
   workflowRunContent,
@@ -601,22 +519,6 @@ export function ThreadPage({
   const composerShellWrapRef = useRef<HTMLDivElement | null>(null);
   const threadMainRef = useRef<HTMLDivElement | null>(null);
   const isSideChatSurface = surfaceVariant === "side-chat";
-  const teamView = useMemo(
-    () => deriveThreadTeamView(activeThreadSummary),
-    [activeThreadSummary],
-  );
-  const teamSpeakerOptions = useMemo(
-    () => ({
-      leaderAgentId: activeThreadSummary?.team?.leader_agent_id || null,
-      agentDisplayNamesById: teamAgentDisplayNamesById,
-      childThreadIds: activeThreadSummary?.team?.child_thread_ids || {},
-    }),
-    [
-      activeThreadSummary?.team?.child_thread_ids,
-      activeThreadSummary?.team?.leader_agent_id,
-      teamAgentDisplayNamesById,
-    ],
-  );
   // Resolve render_state seq refs against committed bodies by the raw record
   // seq stamped at the wire boundary (TranscriptMessage.seq). The message id is
   // unreliable here — optimistic reconciliation rewrites it to a stable id.
@@ -629,40 +531,16 @@ export function ThreadPage({
     }
     return map;
   }, [activeMessages]);
-  // Solo threads render server-folded turns; team threads render the flattened
-  // block list so per-agent speaker headers can be interleaved.
   const turnRows = useMemo(
-    () =>
-      teamView.isTeam
-        ? []
-        : buildThreadViewRowsWithLocalUsers(
-            renderState,
-            messagesBySeq,
-            activeMessages,
-          ),
-    [renderState, messagesBySeq, activeMessages, teamView.isTeam],
-  );
-  const teamBlocks = useMemo(
-    () =>
-      teamView.isTeam ? buildThreadViewBlocks(renderState, messagesBySeq) : [],
-    [renderState, messagesBySeq, teamView.isTeam],
-  );
-  const teamBlockSpeakers = useMemo(
-    () =>
-      teamView.isTeam
-        ? teamBlocks.map((block) =>
-            speakerForTranscriptBlock(block, teamSpeakerOptions),
-          )
-        : [],
-    [teamBlocks, teamSpeakerOptions, teamView.isTeam],
+    () => buildThreadViewRowsWithLocalUsers(
+      renderState,
+      messagesBySeq,
+      activeMessages,
+    ),
+    [renderState, messagesBySeq, activeMessages],
   );
   const composerSelectedAgentId = selectedThreadId
-    ? teamView.isTeam
-      ? activeThreadSummary?.team?.team_id?.trim() ||
-        activeThreadSummary?.teamId?.trim() ||
-        activeThreadSummary?.agentId?.trim() ||
-        undefined
-      : activeThreadSummary?.agentId?.trim() || undefined
+    ? activeThreadSummary?.agentId?.trim() || undefined
     : newThreadSelectedAgentId;
   const emptyNewThread =
     !selectedThreadId &&
@@ -860,15 +738,6 @@ export function ThreadPage({
               block: RenderTranscriptBlock,
               options: { markUserTurnStart?: boolean } = {},
             ): ReactNode => {
-              if (block.kind === "capsule_cards") {
-                return (
-                  <CapsuleChatCardList
-                    cards={block.cards}
-                    key={`${block.key}:body`}
-                    onOpenCapsule={onOpenCapsule}
-                  />
-                );
-              }
               if (block.kind === "tool_group") {
                 return (
                   <article
@@ -984,104 +853,6 @@ export function ThreadPage({
                 </article>
               );
             };
-
-            // Team mode keeps the per-block iteration so we can still emit
-            // speaker headers between consecutive agents. Solo threads route
-            // server render_state rows through `buildThreadViewRows`, keeping
-            // multi-step assistant turns behind a Codex-style "Worked for X"
-            // collapsible without client-side regrouping.
-            if (teamView.isTeam) {
-              return teamBlocks.map((block, index) => {
-                const speaker = teamBlockSpeakers[index] || null;
-                const previousSpeaker = index > 0
-                  ? teamBlockSpeakers[index - 1] || null
-                  : null;
-                const showSpeakerHeader =
-                  Boolean(speaker) &&
-                  speaker!.agentId !== previousSpeaker?.agentId;
-                const blockBody = renderBlockBody(block);
-                if (!speaker) {
-                  return (
-                    <MessageScrollerItem
-                      className="messages-item"
-                      key={block.key}
-                      messageId={block.key}
-                    >
-                      {blockBody}
-                    </MessageScrollerItem>
-                  );
-                }
-                const avatar = (
-                  <AgentAvatar
-                    agentId={speaker.agentId}
-                    displayName={speaker.displayName}
-                    role={speaker.role}
-                    size={28}
-                  />
-                );
-                return (
-                  <MessageScrollerItem
-                    className="messages-item"
-                    key={block.key}
-                    messageId={block.key}
-                  >
-                  <Message
-                    className={`w-[min(100%,760px)] self-stretch ${showSpeakerHeader ? "with-speaker-header" : "continued-speaker"}`}
-                  >
-                    <MessageAvatar
-                      aria-hidden={!showSpeakerHeader}
-                      className="min-w-7 self-start bg-transparent"
-                    >
-                      {showSpeakerHeader ? (
-                        speaker.threadId ? (
-                          <button
-                            aria-label={t("Open {name} thread", {
-                              name: speaker.displayName,
-                            })}
-                            className="team-agent-speaker"
-                            onClick={() => onOpenThreadById(speaker.threadId!)}
-                            title={t("Open {name} thread", {
-                              name: speaker.displayName,
-                            })}
-                            type="button"
-                          >
-                            {avatar}
-                          </button>
-                        ) : (
-                          avatar
-                        )
-                      ) : null}
-                    </MessageAvatar>
-                    <MessageContent className="min-w-0 gap-2">
-                      {showSpeakerHeader ? (
-                        <MessageHeader className="px-0 pt-1.5">
-                          {speaker.threadId ? (
-                            <button
-                              className="team-agent-speaker"
-                              onClick={() => onOpenThreadById(speaker.threadId!)}
-                              title={t("Open {name} thread", {
-                                name: speaker.displayName,
-                              })}
-                              type="button"
-                            >
-                              <span className="team-agent-speaker-name">
-                                {speaker.displayName}
-                              </span>
-                            </button>
-                          ) : (
-                            <span className="team-agent-speaker-name">
-                              {speaker.displayName}
-                            </span>
-                          )}
-                        </MessageHeader>
-                      ) : null}
-                      {blockBody}
-                    </MessageContent>
-                  </Message>
-                  </MessageScrollerItem>
-                );
-              });
-            }
 
             // Running/elapsed state comes from render_state (`step.running`,
             // which already defers the final answer while the run is busy), so

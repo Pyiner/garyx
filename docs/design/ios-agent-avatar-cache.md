@@ -1,4 +1,4 @@
-# iOS Agent/Team Avatar Persistent Cache
+# iOS Agent Avatar Persistent Cache
 
 Task: `#TASK-1345`
 
@@ -15,7 +15,7 @@ memory pressure, or eviction, the view immediately shows fallback content and
 does not self-invalidate when the async predecode later succeeds.
 
 The second failure path is structural: thread, task, and widget rows often only
-know `agentId` or `teamId`. If the in-memory catalog does not currently contain
+know `agentId`. If the in-memory catalog does not currently contain
 that id, the projector passes no `avatarDataUrl`, so the row falls directly to
 the placeholder even if the app previously rendered a real avatar for that id.
 
@@ -31,7 +31,7 @@ The cache has three one-way layers:
 1. `GaryxMobileCatalogCache` remains the gateway-scoped catalog snapshot. It
    owns current catalog membership and current row fields.
 2. `GaryxAvatarStore` is the new membership-independent persistent fallback
-   truth source. Its identity is gateway scope + kind (`agent` or `team`) + id.
+   truth source. Its identity is gateway scope + agent id.
    It stores raw decoded image bytes and a small index, never base64.
 3. `GaryxDataURLImageCache` stays a volatile decoded-image accelerator.
 
@@ -43,13 +43,12 @@ persistent store and never performs disk I/O or base64/JSON work.
 
 Core defines:
 
-- `GaryxAvatarKind`: `agent` or `team`
-- `GaryxAvatarIdentity`: `scope`, `kind`, `id`
+- `GaryxAvatarIdentity`: `scope`, `id`
 - `GaryxAvatarStoreEntry` and `GaryxAvatarStoreIndex`
 
 The app supplies the same gateway scope token used by `scopedSettingsKey(_:)`
 and `currentGatewayScopeId`, so a shared agent id on two gateways cannot
-collide. Agent and team ids are separate namespaces.
+collide.
 
 Filesystem keys must be stable and safe for ids containing `/`, `:`, spaces,
 or other path-hostile characters. Hash the full storage key for file names.
@@ -98,10 +97,10 @@ apply, not once per entry.
 
 There is one normal write path: catalog apply.
 
-The existing `agents` and `teams` didSet hooks in `GaryxMobileModel.swift`
-already call `predecodeAgentAvatarImages()`. The new write-through runs from
+The existing `agents` update path in `GaryxMobileModel.swift` already calls
+`predecodeAgentAvatarImages()`. The new write-through runs from
 that same area: the main actor assembles lightweight candidates containing
-scope, id, kind, and the Swift `String` data-url reference, then hands them to
+scope, id, and the Swift `String` data-url reference, then hands them to
 the store actor. The actor computes fingerprints, validates bytes, diffs the
 index, writes changed blobs, and prunes.
 
@@ -123,7 +122,7 @@ Explicit mutation rules:
 
 `GaryxAgentAvatarView` becomes a thin SwiftUI renderer:
 
-- It builds a `GaryxAvatarIdentity` from environment scope + kind + id.
+- It builds a `GaryxAvatarIdentity` from environment scope + id.
 - It asks an environment-injected singleton `GaryxAvatarImageProvider` for a
   synchronous `NSCache` hit.
 - On a miss it shows placeholder for that single view, then runs `.task(id:)`
@@ -197,7 +196,7 @@ Primary validation is headless `GaryxMobileCore` SwiftPM tests:
 - Ordinary empty/invalid refresh rows do not tombstone records.
 - Explicit clear and successful delete remove records.
 - Id changes store or clear the new identity before removing the old one.
-- Agent/team kinds and gateway scopes do not collide.
+- Gateway scopes do not collide.
 - LRU pruning obeys 256 records / 16 MB / 512 KB record bounds and bumps
   `lastAccessAt` on reads. It never prunes by catalog membership.
 - Index encode/decode round-trips and version mismatch is discarded.

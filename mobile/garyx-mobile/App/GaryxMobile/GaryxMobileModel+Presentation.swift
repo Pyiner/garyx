@@ -48,7 +48,7 @@ extension GaryxMobileModel {
 
     func predecodeAgentAvatarImages() {
         GaryxDataURLImageCache.predecodeAgentAvatars(
-            from: agents.map { Optional($0.avatarDataUrl) } + teams.map { Optional($0.avatarDataUrl) }
+            from: agents.map { Optional($0.avatarDataUrl) }
         )
         writeThroughAgentAvatarImages()
     }
@@ -56,8 +56,7 @@ extension GaryxMobileModel {
     func writeThroughAgentAvatarImages() {
         let upserts = GaryxAvatarWriteThroughPlan.candidates(
             scope: currentGatewayScopeId,
-            agents: agents,
-            teams: teams
+            agents: agents
         )
         guard !upserts.isEmpty else { return }
         let store = avatarStore
@@ -136,7 +135,6 @@ extension GaryxMobileModel {
             threads: threads,
             recentThreadIds: recentThreadIds,
             agents: agents,
-            teams: teams,
             automations: automations,
             pinnedThreadIds: pinnedThreadIds,
             selectedThreadId: selectedThread?.id,
@@ -161,7 +159,6 @@ extension GaryxMobileModel {
             sectionsInput: GaryxHomeThreadSectionsInput(
                 threads: threads,
                 agents: agents,
-                teams: teams,
                 automations: automations,
                 pinnedThreadIds: pinnedThreadIds,
                 recentThreadIds: recentThreadIds,
@@ -415,8 +412,6 @@ extension GaryxMobileModel {
                 workspacePath: "/Users/test/workspaces/project-\(index % 6)",
                 messageCount: 10 + index,
                 agentId: "agent-\(index % 4)",
-                teamId: nil,
-                teamName: nil,
                 providerType: "codex",
                 recentRunId: "run-\(index)",
                 activeRunId: index == 0 ? "run-\(index)" : nil,
@@ -450,7 +445,7 @@ extension GaryxMobileModel {
     }
 
     var agentTargets: [GaryxMobileAgentTarget] {
-        GaryxMobileAgentTargetMapper.makeTargets(agents: agents, teams: teams)
+        GaryxMobileAgentTargetMapper.makeTargets(agents: agents)
     }
 
     var isLoadingRemoteState: Bool {

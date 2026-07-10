@@ -77,9 +77,7 @@ export interface DesktopCodingUsage {
   refreshedAt?: string | null;
 }
 
-export type DesktopThreadProviderType =
-  | DesktopApiProviderType
-  | "agent_team";
+export type DesktopThreadProviderType = DesktopApiProviderType;
 
 export type DesktopSessionProviderHint = "claude" | "codex" | "gemini";
 

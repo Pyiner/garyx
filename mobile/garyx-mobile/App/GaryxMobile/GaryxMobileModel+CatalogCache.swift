@@ -44,8 +44,6 @@ extension GaryxMobileModel {
         catalogSnapshotRestored = true
         let cachedAgents = snapshot.agents.map(\.model)
         GaryxEquatableAssignment.assignIfChanged(current: agents, next: cachedAgents) { agents = $0 }
-        let cachedTeams = snapshot.teams.map(\.model)
-        GaryxEquatableAssignment.assignIfChanged(current: teams, next: cachedTeams) { teams = $0 }
         skills = snapshot.skills.map(\.model)
         capsules = snapshot.capsules.map(\.model)
         let cachedAutomations = snapshot.automations.map(\.model)
@@ -61,7 +59,7 @@ extension GaryxMobileModel {
         botConsoles = snapshot.botConsoles.map(\.model)
         channelPlugins = snapshot.channelPlugins.map(\.model)
         restoreWorkspaceCatalogPaths(snapshot.workspacePaths)
-        if !agents.isEmpty || !teams.isEmpty {
+        if !agents.isEmpty {
             agentTargetsLoadPhase = .loaded
             ensureSelectedAgentTarget()
         }
@@ -74,7 +72,6 @@ extension GaryxMobileModel {
     func persistCatalogCacheSnapshot() {
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: agents,
-            teams: teams,
             workspacePaths: userWorkspacePaths,
             skills: skills,
             capsules: capsules,

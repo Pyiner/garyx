@@ -2395,7 +2395,6 @@ fn test_server_info() {
     assert!(!instructions.contains("garyx automation"));
     assert!(!instructions.contains("restart"));
     assert!(!instructions.contains("speak_to_agent"));
-    assert!(!instructions.contains("update_team_status"));
 }
 
 // -- factory --

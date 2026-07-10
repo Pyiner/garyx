@@ -230,8 +230,6 @@ final class GaryxMobilePresentationModelsTests: XCTestCase {
             workspacePath: workspacePath,
             messageCount: nil,
             agentId: nil,
-            teamId: nil,
-            teamName: nil,
             providerType: nil,
             recentRunId: nil,
             activeRunId: activeRunId,

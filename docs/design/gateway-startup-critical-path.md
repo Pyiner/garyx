@@ -29,7 +29,7 @@ RuntimeAssembler::assemble()
   initialize MultiProviderBridge from config
   load and start cron
   build AppState
-  reload bridge after agent/team profile sync
+  reload bridge after agent profile sync
 start config hot reload
 register built-in channel plugins
 register subprocess channel plugins

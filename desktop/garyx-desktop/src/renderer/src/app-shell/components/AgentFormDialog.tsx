@@ -65,14 +65,12 @@ type AgentFormDialogProps = {
   envViewMode: 'form' | 'text';
   handleAvatarFileChange: (
     event: React.ChangeEvent<HTMLInputElement>,
-    target: 'agent' | 'team',
   ) => Promise<void>;
   loadData: () => Promise<void>;
   onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
   onOpenMemory?: (agent: DesktopCustomAgent) => void;
-  onStartThread?: (agentOrTeamId: string) => void;
+  onStartThread?: (agentId: string) => void;
   onToast?: (message: string, tone?: 'success' | 'error' | 'info', durationMs?: number) => void;
-  openCreateTeamDialog: (seedAgentId?: string) => void;
   openEditAgentDialog: (agent: DesktopCustomAgent) => void;
   providerModelsByType: Partial<Record<ProviderType, DesktopProviderModels>>;
   providerModelsLoading: Partial<Record<ProviderType, boolean>>;
@@ -81,7 +79,6 @@ type AgentFormDialogProps = {
   setAgentDraft: React.Dispatch<React.SetStateAction<AgentDraft>>;
   setAgentIdTouched: React.Dispatch<React.SetStateAction<boolean>>;
   setAvatarStyleDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setAvatarStyleTarget: React.Dispatch<React.SetStateAction<'agent' | 'team'>>;
   setEnvText: React.Dispatch<React.SetStateAction<string>>;
   setEnvViewMode: React.Dispatch<React.SetStateAction<'form' | 'text'>>;
   setSaving: React.Dispatch<React.SetStateAction<boolean>>;
@@ -102,7 +99,6 @@ export function AgentFormDialog({
   onOpenMemory,
   onStartThread,
   onToast,
-  openCreateTeamDialog,
   openEditAgentDialog,
   providerModelsByType,
   providerModelsLoading,
@@ -111,7 +107,6 @@ export function AgentFormDialog({
   setAgentDraft,
   setAgentIdTouched,
   setAvatarStyleDialogOpen,
-  setAvatarStyleTarget,
   setEnvText,
   setEnvViewMode,
   setSaving,
@@ -262,7 +257,7 @@ export function AgentFormDialog({
                   accept={AGENT_AVATAR_ACCEPT}
                   className="sr-only"
                   onChange={(event) => {
-                    void handleAvatarFileChange(event, 'agent');
+                    void handleAvatarFileChange(event);
                   }}
                   ref={avatarFileInputRef}
                   type="file"
@@ -278,7 +273,6 @@ export function AgentFormDialog({
                 <Button
                   disabled={avatarGenerating}
                   onClick={() => {
-                    setAvatarStyleTarget('agent');
                     setAvatarStyleDialogOpen(true);
                   }}
                   type="button"
@@ -810,18 +804,6 @@ export function AgentFormDialog({
                   variant="outline"
                 >
                   {t('Chat')}
-                </Button>
-              ) : null}
-              {selectedAgent ? (
-                <Button
-                  onClick={() => {
-                    closeAgentDialog();
-                    openCreateTeamDialog(selectedAgent.agentId);
-                  }}
-                  type="button"
-                  variant="outline"
-                >
-                  {t('Create Team')}
                 </Button>
               ) : null}
               {selectedAgent && !selectedAgent.builtIn ? (

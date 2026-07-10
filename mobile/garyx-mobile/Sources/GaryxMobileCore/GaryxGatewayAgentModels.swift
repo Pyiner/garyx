@@ -150,81 +150,6 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
 }
 
 
-public struct GaryxTeamsPage: Decodable, Equatable, Sendable {
-    public var teams: [GaryxTeamSummary]
-}
-
-
-public struct GaryxTeamSummary: Decodable, Identifiable, Equatable, Sendable {
-    public var id: String
-    public var displayName: String
-    public var leaderAgentId: String
-    public var memberAgentIds: [String]
-    public var workflowText: String
-    public var avatarDataUrl: String
-    public var createdAt: String?
-    public var updatedAt: String?
-
-    public init(
-        id: String,
-        displayName: String,
-        leaderAgentId: String,
-        memberAgentIds: [String],
-        workflowText: String = "",
-        avatarDataUrl: String = "",
-        createdAt: String? = nil,
-        updatedAt: String? = nil
-    ) {
-        self.id = id
-        self.displayName = displayName
-        self.leaderAgentId = leaderAgentId
-        self.memberAgentIds = memberAgentIds
-        self.workflowText = workflowText
-        self.avatarDataUrl = avatarDataUrl
-        self.createdAt = createdAt
-        self.updatedAt = updatedAt
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case teamId = "team_id"
-        case teamIdCamel = "teamId"
-        case displayName = "display_name"
-        case displayNameCamel = "displayName"
-        case leaderAgentId = "leader_agent_id"
-        case leaderAgentIdCamel = "leaderAgentId"
-        case memberAgentIds = "member_agent_ids"
-        case memberAgentIdsCamel = "memberAgentIds"
-        case workflowText = "workflow_text"
-        case workflowTextCamel = "workflowText"
-        case avatarDataUrl = "avatar_data_url"
-        case avatarDataUrlCamel = "avatarDataUrl"
-        case avatarURL
-        case avatarUrl = "avatar_url"
-        case createdAt = "created_at"
-        case createdAtCamel = "createdAt"
-        case updatedAt = "updated_at"
-        case updatedAtCamel = "updatedAt"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.garyxDecodeFirstString(.teamId, .teamIdCamel) ?? ""
-        displayName = try container.garyxDecodeFirstString(.displayName, .displayNameCamel) ?? id
-        leaderAgentId = try container.garyxDecodeFirstString(.leaderAgentId, .leaderAgentIdCamel) ?? ""
-        memberAgentIds = try container.garyxDecodeFirstStringArray(.memberAgentIds, .memberAgentIdsCamel) ?? []
-        workflowText = try container.garyxDecodeFirstString(.workflowText, .workflowTextCamel) ?? ""
-        avatarDataUrl = try container.garyxDecodeFirstString(
-            .avatarDataUrl,
-            .avatarDataUrlCamel,
-            .avatarURL,
-            .avatarUrl
-        ) ?? ""
-        createdAt = try container.garyxDecodeFirstString(.createdAt, .createdAtCamel)
-        updatedAt = try container.garyxDecodeFirstString(.updatedAt, .updatedAtCamel)
-    }
-}
-
-
 public struct GaryxProviderModelOption: Decodable, Identifiable, Equatable, Sendable {
     public var id: String
     public var label: String
@@ -382,11 +307,6 @@ public struct GaryxGenerateAvatarRequest: Encodable, Equatable, Sendable {
     }
 }
 
-public enum GaryxAgentAvatarKind: String, Equatable, Sendable {
-    case agent
-    case team
-}
-
 public struct GaryxAvatarStyleOption: Identifiable, Equatable, Sendable {
     public var id: String
     public var label: String
@@ -448,18 +368,16 @@ public enum GaryxAvatarPromptBuilder {
     public static func prompt(
         displayName: String,
         identifier: String? = nil,
-        kind: GaryxAgentAvatarKind,
         stylePrompt: String? = nil
     ) -> String {
         let name = avatarName(displayName: displayName, identifier: identifier)
         let quotedName = jsonQuoted(name)
-        let isTeam = kind == .team
         let style = stylePrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
             ?? "minimal vector glyph, simple geometry, balanced negative space, one confident accent color"
         return [
-            "Create a square app avatar for an AI \(isTeam ? "agent team" : "agent") named \(quotedName).",
+            "Create a square app avatar for an AI agent named \(quotedName).",
             "Visual style: \(style).",
-            "Composition: one centered abstract \(isTeam ? "team" : "agent") mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.",
+            "Composition: one centered abstract agent mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.",
             "Do not include text, letters, watermarks, screenshots, people, or UI chrome.",
         ].joined(separator: "\n")
     }
@@ -621,36 +539,5 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
         case avatarDataUrl = "avatar_data_url"
         case systemPrompt = "system_prompt"
         case expectedUpdatedAt = "expected_updated_at"
-    }
-}
-
-
-public struct GaryxTeamRequest: Encodable, Equatable, Sendable {
-    public var teamId: String
-    public var displayName: String
-    public var leaderAgentId: String
-    public var memberAgentIds: [String]
-    public var workflowText: String
-    public var avatarDataUrl: String?
-    /// Concurrency token for updates: the `updatedAt` of the team this edit
-    /// was based on. Required by the gateway on PUT; omitted on POST.
-    public var expectedUpdatedAt: String?
-
-    public init(
-        teamId: String,
-        displayName: String,
-        leaderAgentId: String,
-        memberAgentIds: [String],
-        workflowText: String,
-        avatarDataUrl: String? = nil,
-        expectedUpdatedAt: String? = nil
-    ) {
-        self.teamId = teamId
-        self.displayName = displayName
-        self.leaderAgentId = leaderAgentId
-        self.memberAgentIds = memberAgentIds
-        self.workflowText = workflowText
-        self.avatarDataUrl = avatarDataUrl
-        self.expectedUpdatedAt = expectedUpdatedAt
     }
 }

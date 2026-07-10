@@ -804,7 +804,7 @@ impl WorkflowRuntime {
             .state
             .integration
             .bridge
-            .run_subagent_streaming(
+            .run_inline_streaming(
                 &thread_id,
                 &child_prompt,
                 metadata,

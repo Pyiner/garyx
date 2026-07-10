@@ -110,7 +110,6 @@ struct GaryxBotGroupMenuValueLabel: View {
 struct GaryxAgentAvatarView: View {
     let agentId: String
     let avatarDataUrl: String
-    let kind: GaryxMobileAgentTarget.Kind
     let label: String
     let providerType: String
     var builtIn: Bool = false
@@ -191,7 +190,6 @@ struct GaryxAgentAvatarView: View {
         guard !scope.isEmpty, !id.isEmpty else { return nil }
         return GaryxAvatarIdentity(
             scope: scope,
-            kind: kind == .team ? .team : .agent,
             id: id
         )
     }
@@ -217,11 +215,7 @@ struct GaryxAgentAvatarView: View {
 
     @ViewBuilder
     private var fallbackContent: some View {
-        if kind == .team {
-            Image(systemName: "person.2.fill")
-                .font(GaryxFont.system(size: diameter * 0.36, weight: .semibold))
-                .foregroundStyle(fallbackForeground)
-        } else if let symbol = providerPresentation.symbolName {
+        if let symbol = providerPresentation.symbolName {
             Image(systemName: symbol)
                 .font(GaryxFont.system(size: providerIconSize, weight: .semibold))
                 .foregroundStyle(fallbackForeground)
@@ -241,7 +235,7 @@ struct GaryxAgentAvatarView: View {
     }
 
     private var fallbackBackground: Color {
-        if builtIn, kind == .agent {
+        if builtIn {
             return providerBackground
         }
 
@@ -256,9 +250,6 @@ struct GaryxAgentAvatarView: View {
     }
 
     private var fallbackForeground: Color {
-        if kind == .team {
-            return Color(.systemGray)
-        }
         if builtIn {
             return providerPresentation.prefersLightFallbackForeground ? Color.white : Color(.secondaryLabel)
         }
@@ -293,7 +284,6 @@ struct GaryxAgentPickerLabel: View {
                 GaryxAgentAvatarView(
                     agentId: target.id,
                     avatarDataUrl: target.avatarDataUrl,
-                    kind: target.kind,
                     label: target.title,
                     providerType: target.providerType,
                     builtIn: target.builtIn,
@@ -542,26 +532,8 @@ struct GaryxAgentTargetPickerPopover: View {
                             .padding(.top, 16)
                             .padding(.bottom, 8)
 
-                        if model.agentTargets.count <= 5 {
-                            ForEach(model.agentTargets) { target in
-                                agentRow(for: target)
-                            }
-                        } else {
-                            if !agentTargets.isEmpty {
-                                ForEach(agentTargets) { target in
-                                    agentRow(for: target)
-                                }
-                            }
-
-                            if !teamTargets.isEmpty {
-                                Divider()
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 8)
-
-                                ForEach(teamTargets) { target in
-                                    agentRow(for: target)
-                                }
-                            }
+                        ForEach(model.agentTargets) { target in
+                            agentRow(for: target)
                         }
                     }
                     .garyxVerticalScrollContentWidth()
@@ -601,14 +573,6 @@ struct GaryxAgentTargetPickerPopover: View {
         .background(.regularMaterial)
     }
 
-    private var agentTargets: [GaryxMobileAgentTarget] {
-        model.agentTargets.filter { $0.kind == .agent }
-    }
-
-    private var teamTargets: [GaryxMobileAgentTarget] {
-        model.agentTargets.filter { $0.kind == .team }
-    }
-
     private func agentRow(for target: GaryxMobileAgentTarget) -> some View {
         Button {
             selectedAgentTargetId = target.id
@@ -627,7 +591,6 @@ struct GaryxAgentTargetPickerPopover: View {
                 GaryxAgentAvatarView(
                     agentId: target.id,
                     avatarDataUrl: target.avatarDataUrl,
-                    kind: target.kind,
                     label: target.title,
                     providerType: target.providerType,
                     builtIn: target.builtIn,
@@ -854,7 +817,6 @@ struct GaryxNewThreadAgentSheet: View {
                 GaryxAgentAvatarView(
                     agentId: target.id,
                     avatarDataUrl: target.avatarDataUrl,
-                    kind: target.kind,
                     label: target.title,
                     providerType: target.providerType,
                     builtIn: target.builtIn,
@@ -1076,7 +1038,6 @@ struct GaryxAgentIdentityRow: View {
     let id: String
     let title: String
     let subtitle: String
-    let kind: GaryxMobileAgentTarget.Kind
     let avatarDataUrl: String
     let providerType: String
     var builtIn: Bool = false
@@ -1087,7 +1048,6 @@ struct GaryxAgentIdentityRow: View {
             GaryxAgentAvatarView(
                 agentId: id,
                 avatarDataUrl: avatarDataUrl,
-                kind: kind,
                 label: title,
                 providerType: providerType,
                 builtIn: builtIn

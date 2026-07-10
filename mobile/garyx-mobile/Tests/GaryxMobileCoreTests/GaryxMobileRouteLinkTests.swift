@@ -19,7 +19,6 @@ final class GaryxMobileRouteLinkTests: XCTestCase {
             .automationThreads("automation-1"),
             .panel(.agents),
             .agent("agent-1"),
-            .team("team-1"),
             .panel(.skills),
             .skill("skill-1"),
             .skillFile(skillId: "skill-1", path: "SKILL.md"),

@@ -20,7 +20,6 @@ import type {
   DesktopChatStreamEvent,
   DesktopCustomAgent,
   DesktopState,
-  DesktopTeam,
   DesktopWorkflowDefinition,
   GetThreadHistoryInput,
   PendingThreadInput,
@@ -83,7 +82,6 @@ function connectionEquals(
 export interface GatewayMirrorServices {
   getState(): Promise<DesktopState>;
   listCustomAgents(): Promise<DesktopCustomAgent[]>;
-  listTeams(): Promise<DesktopTeam[]>;
   listWorkflowDefinitions(): Promise<DesktopWorkflowDefinition[]>;
   /** Paged history fetch (older pages and the forward incremental fetch). */
   getThreadHistory(input: GetThreadHistoryInput): Promise<ThreadTranscript>;
@@ -124,7 +122,6 @@ export interface GatewayRootSnapshot {
 export interface CatalogSnapshot {
   readonly version: number;
   readonly agents: readonly DesktopCustomAgent[];
-  readonly teams: readonly DesktopTeam[];
   readonly workflows: readonly DesktopWorkflowDefinition[];
 }
 
@@ -210,9 +207,8 @@ export class GatewayMirror {
   private rootSnapshot: GatewayRootSnapshot | null = null;
   private rootListeners = new Set<() => void>();
 
-  // Catalog domain: agents / teams / workflow definitions.
+  // Catalog domain: agents / workflow definitions.
   private agents: readonly DesktopCustomAgent[] = [];
-  private teams: readonly DesktopTeam[] = [];
   private workflows: readonly DesktopWorkflowDefinition[] = [];
   private catalogVersion = 0;
   private catalogSnapshot: CatalogSnapshot | null = null;
@@ -284,7 +280,6 @@ export class GatewayMirror {
       this.catalogSnapshot = {
         version: this.catalogVersion,
         agents: this.agents,
-        teams: this.teams,
         workflows: this.workflows,
       };
     }
@@ -304,7 +299,7 @@ export class GatewayMirror {
   }
 
   /**
-   * Fetch the desktop root state plus the agent/team/workflow catalogs in
+   * Fetch the desktop root state plus the agent/workflow catalogs in
    * one round (the legacy refreshDesktopState behavior: catalog fetches are
    * individually best-effort). Updates root/catalog snapshots atomically
    * per domain and returns the fresh DesktopState for callers that need it.
@@ -313,10 +308,9 @@ export class GatewayMirror {
     if (!this.services) {
       throw new Error("GatewayMirror constructed without services");
     }
-    const [nextState, nextAgents, nextTeams, nextWorkflows] = await Promise.all([
+    const [nextState, nextAgents, nextWorkflows] = await Promise.all([
       this.services.getState(),
       this.services.listCustomAgents().catch(() => [] as DesktopCustomAgent[]),
-      this.services.listTeams().catch(() => [] as DesktopTeam[]),
       this.services
         .listWorkflowDefinitions()
         .catch(() => [] as DesktopWorkflowDefinition[]),
@@ -324,7 +318,6 @@ export class GatewayMirror {
     this.desktopState = nextState;
     this.bumpRoot();
     this.agents = nextAgents;
-    this.teams = nextTeams;
     this.workflows = nextWorkflows;
     this.bumpCatalog();
     return nextState;

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use garyx_models::provider::{AgentRunRequest, StreamEvent};
 use garyx_models::thread_logs::ThreadLogSink;
-use garyx_models::{AgentTeamProfile, CustomAgentProfile};
+use garyx_models::CustomAgentProfile;
 use garyx_router::{AgentDispatcher, ThreadHistoryRepository, ThreadStore};
 use tokio::sync::broadcast;
 
@@ -123,14 +123,6 @@ impl MultiProviderBridge {
         *self.inner.agent_profiles.write().await = next;
     }
 
-    pub async fn replace_team_profiles(&self, profiles: Vec<AgentTeamProfile>) {
-        let mut next = HashMap::new();
-        for profile in profiles {
-            next.insert(profile.team_id.clone(), profile);
-        }
-        *self.inner.team_profiles.write().await = next;
-    }
-
     pub async fn agent_profile(&self, agent_id: &str) -> Option<CustomAgentProfile> {
         self.inner
             .agent_profiles
@@ -138,10 +130,6 @@ impl MultiProviderBridge {
             .await
             .get(agent_id)
             .cloned()
-    }
-
-    pub async fn team_profile(&self, team_id: &str) -> Option<AgentTeamProfile> {
-        self.inner.team_profiles.read().await.get(team_id).cloned()
     }
 
     pub async fn set_thread_workspace_binding(

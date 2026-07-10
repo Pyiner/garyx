@@ -1,9 +1,5 @@
 import { Plug } from 'lucide-react';
 
-import {
-  ConversationTeamMembers,
-  type ConversationTeamSummary,
-} from './ConversationTeamMembers';
 import { ThreadInfoPopover } from './ThreadInfoPopover';
 import { PanelIcon } from './app-shell/icons';
 import type { ThreadRuntimeInfo } from '@shared/contracts';
@@ -18,13 +14,11 @@ type ConversationHeaderActionsProps = {
   isBotsView: boolean;
   isSkillsView: boolean;
   selectedThreadId: string | null;
-  teamSummary: ConversationTeamSummary | null;
   threadInfo: ThreadRuntimeInfo | null;
   threadInfoLoaded: boolean;
   threadLogsHasUnread: boolean;
   threadLogsOpen: boolean;
   onCreateAutomation: () => void;
-  onOpenThread: (threadId: string) => void;
   onOpenThreads: () => void;
   onToggleInspector: () => void;
   onToggleThreadLogs: () => void;
@@ -47,13 +41,11 @@ export function ConversationHeaderActions({
   isBotsView,
   isSkillsView,
   selectedThreadId,
-  teamSummary,
   threadInfo,
   threadInfoLoaded,
   threadLogsHasUnread,
   threadLogsOpen,
   onCreateAutomation,
-  onOpenThread,
   onOpenThreads,
   onToggleInspector,
   onToggleThreadLogs,
@@ -79,12 +71,6 @@ export function ConversationHeaderActions({
         </button>
       ) : isSkillsView ? null : (
         <>
-          {teamSummary ? (
-            <ConversationTeamMembers
-              onOpenThread={onOpenThread}
-              teamSummary={teamSummary}
-            />
-          ) : null}
           {gatewayStatusTone && gatewayStatusLabel ? (
             <div
               aria-live="polite"

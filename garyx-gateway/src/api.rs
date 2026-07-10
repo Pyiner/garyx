@@ -30,7 +30,6 @@ use garyx_router::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::agent_teams::UpsertAgentTeamRequest;
 use crate::custom_agents::UpsertCustomAgentRequest;
 use crate::optimistic_write::{StoreWriteError, WriteExpectation};
 use crate::server::AppState;
@@ -78,7 +77,7 @@ fn provider_icon_descriptor(provider_type: &ProviderType) -> Option<Value> {
         ProviderType::Traex => ("traex", "Traex"),
         ProviderType::GeminiCli | ProviderType::GeminiLlm => ("gemini", "Gemini"),
         ProviderType::AntigravityCli => ("gemini", "Antigravity"),
-        ProviderType::Gpt | ProviderType::AgentTeam => return None,
+        ProviderType::Gpt => return None,
     };
     Some(json!({
         "key": key,
@@ -99,133 +98,6 @@ fn custom_agent_response(agent: &CustomAgentProfile) -> Value {
         );
     }
     value
-}
-
-async fn team_bound_thread_ids(state: &Arc<AppState>, team_id: &str) -> Vec<String> {
-    let keys = state.threads.thread_store.list_keys(None).await;
-    let mut thread_ids = Vec::new();
-
-    for key in keys {
-        if !is_thread_key(&key) {
-            continue;
-        }
-        let Some(data) = state.threads.thread_store.get(&key).await else {
-            continue;
-        };
-        let is_team_thread = data
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .is_some_and(|agent_id| agent_id == team_id);
-        let is_deleted_team_thread = data
-            .get("team_deleted_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .is_some_and(|deleted_id| deleted_id == team_id);
-        if is_team_thread || is_deleted_team_thread {
-            thread_ids.push(key);
-        }
-    }
-
-    thread_ids
-}
-
-async fn reconcile_team_group_state(
-    state: &Arc<AppState>,
-    team: &garyx_models::AgentTeamProfile,
-) -> Result<(), String> {
-    let valid_members = team
-        .member_agent_ids
-        .iter()
-        .cloned()
-        .chain(std::iter::once(team.leader_agent_id.clone()))
-        .collect::<HashSet<_>>();
-
-    for thread_id in team_bound_thread_ids(state, &team.team_id).await {
-        let Some(mut group) = state.ops.agent_team_group_store.load(&thread_id).await else {
-            continue;
-        };
-
-        let before_child_count = group.child_threads.len();
-        let before_offset_count = group.catch_up_offsets.len();
-        group
-            .child_threads
-            .retain(|agent_id, _| valid_members.contains(agent_id));
-        group
-            .catch_up_offsets
-            .retain(|agent_id, _| valid_members.contains(agent_id));
-
-        if before_child_count != group.child_threads.len()
-            || before_offset_count != group.catch_up_offsets.len()
-        {
-            state.ops.agent_team_group_store.save(&group).await;
-        }
-    }
-
-    Ok(())
-}
-
-async fn clear_team_deleted_markers(state: &Arc<AppState>, team_id: &str) -> Result<(), String> {
-    for thread_id in team_bound_thread_ids(state, team_id).await {
-        let Some(mut data) = state.threads.thread_store.get(&thread_id).await else {
-            continue;
-        };
-        let Some(obj) = data.as_object_mut() else {
-            continue;
-        };
-        let mut changed = false;
-        for key in ["team_deleted", "team_deleted_at", "team_deleted_id"] {
-            changed |= obj.remove(key).is_some();
-        }
-        if changed {
-            obj.insert(
-                "updated_at".to_owned(),
-                Value::String(Utc::now().to_rfc3339()),
-            );
-            state.threads.thread_store.set(&thread_id, data).await;
-        }
-    }
-    Ok(())
-}
-
-async fn mark_deleted_team_threads(state: &Arc<AppState>, team_id: &str) -> Result<(), String> {
-    let deleted_at = Utc::now().to_rfc3339();
-    for thread_id in team_bound_thread_ids(state, team_id).await {
-        let Some(mut data) = state.threads.thread_store.get(&thread_id).await else {
-            continue;
-        };
-        if let Some(obj) = data.as_object_mut() {
-            obj.insert("team_deleted".to_owned(), Value::Bool(true));
-            obj.insert(
-                "team_deleted_id".to_owned(),
-                Value::String(team_id.to_owned()),
-            );
-            obj.insert(
-                "team_deleted_at".to_owned(),
-                Value::String(deleted_at.clone()),
-            );
-            obj.insert("updated_at".to_owned(), Value::String(deleted_at.clone()));
-            state.threads.thread_store.set(&thread_id, data).await;
-        }
-        state.ops.agent_team_group_store.delete(&thread_id).await;
-    }
-    Ok(())
-}
-
-async fn reload_team_registry(state: &Arc<AppState>) -> Result<(), String> {
-    let profiles = state.ops.agent_teams.list_teams().await;
-    state
-        .integration
-        .bridge
-        .replace_team_profiles(profiles)
-        .await;
-    let config = state.config_snapshot();
-    state
-        .integration
-        .bridge
-        .reload_from_config(config.as_ref())
-        .await
-        .map_err(|error| error.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -338,28 +210,6 @@ pub struct CustomAgentUpsertPayload {
     /// Concurrency token for updates: the `updated_at` of the profile the
     /// client based its edit on. Required on PUT; ignored on POST.
     #[serde(default, alias = "expectedUpdatedAt")]
-    pub expected_updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentTeamUpsertPayload {
-    #[serde(alias = "team_id")]
-    pub team_id: String,
-    #[serde(alias = "display_name")]
-    pub display_name: String,
-    #[serde(alias = "leader_agent_id")]
-    pub leader_agent_id: String,
-    #[serde(default)]
-    #[serde(alias = "member_agent_ids")]
-    pub member_agent_ids: Vec<String>,
-    #[serde(alias = "workflow_text")]
-    pub workflow_text: String,
-    #[serde(default, alias = "avatar_data_url")]
-    pub avatar_data_url: Option<String>,
-    /// Concurrency token for updates: the `updated_at` of the team the client
-    /// based its edit on. Required on PUT; ignored on POST.
-    #[serde(default, alias = "expected_updated_at")]
     pub expected_updated_at: Option<String>,
 }
 
@@ -876,7 +726,6 @@ pub(crate) async fn thread_history_for_key(
             "reason": "missing-thread-id",
             "thread": thread,
             "session": thread,
-            "team": Value::Null,
             "thread_runtime": Value::Null,
             "messages": [],
             "pending_user_inputs": [],
@@ -944,7 +793,6 @@ pub(crate) async fn thread_history_for_key(
                 "reason": "thread-not-found",
                 "thread": thread,
                 "session": thread,
-                "team": Value::Null,
                 "thread_runtime": Value::Null,
                 "messages": [],
                 "pending_user_inputs": [],
@@ -959,7 +807,6 @@ pub(crate) async fn thread_history_for_key(
                 "reason": "thread-transcript-missing",
                 "thread": thread,
                 "session": thread,
-                "team": Value::Null,
                 "thread_runtime": Value::Null,
                 "messages": [],
                 "pending_user_inputs": [],
@@ -974,7 +821,6 @@ pub(crate) async fn thread_history_for_key(
                 "reason": format!("thread-history-error:{error}"),
                 "thread": thread,
                 "session": thread,
-                "team": Value::Null,
                 "thread_runtime": Value::Null,
                 "messages": [],
                 "pending_user_inputs": [],
@@ -1192,21 +1038,10 @@ pub(crate) async fn thread_history_for_key(
         state.threads.thread_store.set(key, data_raw.clone()).await;
     }
     let thread = summarize_thread(key, &data_raw, &messages);
-    // Unlike `routes::thread_metadata_response` (which nests `team` inside
-    // the thread object because the response IS the thread), this envelope
-    // wraps `thread`/`session`/`messages` etc. so `team` rides alongside
-    // them at the top level. Emit `Value::Null` for non-team threads so
-    // the desktop client can probe a single field without checking for
-    // presence.
-    let team = crate::routes::team_block_for_thread(state, key, &data_raw)
-        .await
-        .unwrap_or(Value::Null);
-
     json!({
         "ok": true,
         "thread": thread,
         "session": thread,
-        "team": team,
         "thread_runtime": build_thread_runtime_summary(state, Some(&data_raw)).await,
         "messages": history_messages,
         "pending_user_inputs": pending_user_inputs,
@@ -3175,162 +3010,6 @@ pub async fn delete_wiki(
 ) -> impl IntoResponse {
     match state.ops.wikis.delete_wiki(&wiki_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
-    }
-}
-
-pub async fn list_agent_teams(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(json!({
-        "teams": state.ops.agent_teams.list_teams().await,
-    }))
-}
-
-pub async fn get_agent_team(
-    State(state): State<Arc<AppState>>,
-    Path(team_id): Path<String>,
-) -> impl IntoResponse {
-    match state.ops.agent_teams.get_team(&team_id).await {
-        Some(team) => (StatusCode::OK, Json(json!(team))).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "agent team not found" })),
-        )
-            .into_response(),
-    }
-}
-
-pub async fn create_agent_team(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<AgentTeamUpsertPayload>,
-) -> impl IntoResponse {
-    // Hold the mutation guard across the write and its side effects so a
-    // concurrent delete cannot interleave (see AgentTeamStore::lock_mutations).
-    let _mutations = state.ops.agent_teams.lock_mutations().await;
-    match state
-        .ops
-        .agent_teams
-        .upsert_team(
-            UpsertAgentTeamRequest {
-                team_id: payload.team_id,
-                display_name: payload.display_name,
-                leader_agent_id: payload.leader_agent_id,
-                member_agent_ids: payload.member_agent_ids,
-                workflow_text: payload.workflow_text,
-                avatar_data_url: payload.avatar_data_url,
-            },
-            WriteExpectation::Create,
-        )
-        .await
-    {
-        Ok(team) => {
-            if let Err(error) = clear_team_deleted_markers(&state, &team.team_id).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": error })),
-                )
-                    .into_response();
-            }
-            if let Err(error) = reconcile_team_group_state(&state, &team).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": error })),
-                )
-                    .into_response();
-            }
-            if let Err(error) = reload_team_registry(&state).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": error })),
-                )
-                    .into_response();
-            }
-            (StatusCode::CREATED, Json(json!(team))).into_response()
-        }
-        Err(error) => store_write_error_response(error),
-    }
-}
-
-pub async fn update_agent_team(
-    State(state): State<Arc<AppState>>,
-    Path(team_id): Path<String>,
-    Json(payload): Json<AgentTeamUpsertPayload>,
-) -> impl IntoResponse {
-    let expectation = match require_expected_updated_at(payload.expected_updated_at, "agent team") {
-        Ok(expectation) => expectation,
-        Err(response) => return response,
-    };
-    // Hold the mutation guard across the write and its side effects so a
-    // concurrent delete cannot interleave (see AgentTeamStore::lock_mutations).
-    let _mutations = state.ops.agent_teams.lock_mutations().await;
-    match state
-        .ops
-        .agent_teams
-        .upsert_team(
-            UpsertAgentTeamRequest {
-                team_id,
-                display_name: payload.display_name,
-                leader_agent_id: payload.leader_agent_id,
-                member_agent_ids: payload.member_agent_ids,
-                workflow_text: payload.workflow_text,
-                avatar_data_url: payload.avatar_data_url,
-            },
-            expectation,
-        )
-        .await
-    {
-        Ok(team) => {
-            if let Err(error) = clear_team_deleted_markers(&state, &team.team_id).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": error })),
-                )
-                    .into_response();
-            }
-            if let Err(error) = reconcile_team_group_state(&state, &team).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": error })),
-                )
-                    .into_response();
-            }
-            if let Err(error) = reload_team_registry(&state).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": error })),
-                )
-                    .into_response();
-            }
-            (StatusCode::OK, Json(json!(team))).into_response()
-        }
-        Err(error) => store_write_error_response(error),
-    }
-}
-
-pub async fn delete_agent_team(
-    State(state): State<Arc<AppState>>,
-    Path(team_id): Path<String>,
-) -> impl IntoResponse {
-    // Hold the mutation guard across the delete and its thread tombstoning so
-    // a concurrent update cannot clear the markers this delete writes.
-    let _mutations = state.ops.agent_teams.lock_mutations().await;
-    match state.ops.agent_teams.delete_team(&team_id).await {
-        Ok(()) => {
-            if let Err(error) = mark_deleted_team_threads(&state, &team_id).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": error })),
-                )
-                    .into_response();
-            }
-            if let Err(error) = reload_team_registry(&state).await {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": error })),
-                )
-                    .into_response();
-            }
-            StatusCode::NO_CONTENT.into_response()
-        }
         Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
     }
 }

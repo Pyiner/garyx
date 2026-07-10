@@ -14,11 +14,9 @@ public struct GaryxTaskTreeRow: Equatable, Identifiable, Sendable {
     /// "#TASK-n" for task rows; nil on the source-thread root row.
     public var taskDisplayId: String?
     public var status: GaryxTaskStatus?
-    /// Identity hint for the shared avatar helpers: executor team/agent,
-    /// else agent assignee, else runtime agent (task rows); thread agent id
-    /// on the root row. Empty when unknown.
+    /// Identity hint for the shared avatar helpers: executor agent, else agent
+    /// assignee, else runtime agent (task rows); thread agent id on the root row.
     public var identityAgentId: String
-    public var identityIsTeam: Bool
     public var providerType: String
     /// Visual indent level, clamped at 4 like the Mac popover.
     public var indentLevel: Int
@@ -96,7 +94,6 @@ public enum GaryxTaskTreeSidebarPresentation {
                 taskDisplayId: nil,
                 status: nil,
                 identityAgentId: thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-                identityIsTeam: false,
                 providerType: thread.providerType ?? "",
                 indentLevel: indent,
                 isCurrent: isCurrent,
@@ -113,8 +110,7 @@ public enum GaryxTaskTreeSidebarPresentation {
                 title: task.title,
                 taskDisplayId: task.id.isEmpty ? "#TASK-\(task.number)" : task.id,
                 status: task.status,
-                identityAgentId: identity.agentId,
-                identityIsTeam: identity.isTeam,
+                identityAgentId: identity,
                 providerType: "",
                 indentLevel: indent,
                 isCurrent: isCurrent,
@@ -209,24 +205,20 @@ public enum GaryxTaskTreeSidebarPresentation {
         runState.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "running"
     }
 
-    private static func taskIdentity(_ task: GaryxTaskSummary) -> (agentId: String, isTeam: Bool) {
+    private static func taskIdentity(_ task: GaryxTaskSummary) -> String {
         if let executor = task.executor {
-            if let teamId = executor.teamId?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !teamId.isEmpty {
-                return (teamId, true)
-            }
             if let agentId = executor.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
                !agentId.isEmpty {
-                return (agentId, false)
+                return agentId
             }
         }
         if let assignee = task.assignee, assignee.kind == "agent",
            let agentId = assignee.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !agentId.isEmpty {
-            return (agentId, false)
+            return agentId
         }
         let runtimeAgentId = task.runtimeAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (runtimeAgentId, false)
+        return runtimeAgentId
     }
 }
 

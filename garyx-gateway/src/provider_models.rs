@@ -327,7 +327,6 @@ pub(crate) async fn list_provider_models(
                 configured_default_reasoning_effort(config, ProviderType::GeminiLlm, aliases),
             )
         }
-        ProviderType::AgentTeam => unsupported(provider_type, "provider", None),
     }
 }
 
@@ -379,8 +378,7 @@ pub(crate) fn builtin_provider_catalog_default(
         ProviderType::ClaudeCode
         | ProviderType::CodexAppServer
         | ProviderType::Traex
-        | ProviderType::GeminiCli
-        | ProviderType::AgentTeam => ProviderCatalogDefault::default(),
+        | ProviderType::GeminiCli => ProviderCatalogDefault::default(),
     }
 }
 

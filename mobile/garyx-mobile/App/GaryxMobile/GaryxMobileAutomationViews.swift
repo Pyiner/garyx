@@ -947,7 +947,6 @@ struct GaryxAutomationThreadPickerSheet: View {
                 thread.title,
                 thread.workspacePath ?? "",
                 thread.agentId ?? "",
-                thread.teamName ?? "",
                 thread.lastMessagePreview,
             ]
             .contains { $0.lowercased().contains(query) }

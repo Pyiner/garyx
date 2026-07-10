@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock as StdRwLock};
 
 use garyx_models::config::AgentProviderConfig;
 use garyx_models::thread_logs::ThreadLogSink;
-use garyx_models::{AgentTeamProfile, CustomAgentProfile, ProviderType};
+use garyx_models::{CustomAgentProfile, ProviderType};
 use garyx_router::{ThreadHistoryRepository, ThreadStore};
 use tokio::sync::{Mutex, RwLock, Semaphore, broadcast, mpsc};
 use tokio::task::JoinHandle;
@@ -28,8 +28,6 @@ pub(super) struct Inner {
     pub(super) thread_workspace_bindings: Arc<RwLock<HashMap<String, String>>>,
     /// Known standalone agent profiles (`agent_id -> profile`).
     pub(super) agent_profiles: Arc<RwLock<HashMap<String, CustomAgentProfile>>>,
-    /// Known team profiles (`team_id -> profile`).
-    pub(super) team_profiles: Arc<RwLock<HashMap<String, AgentTeamProfile>>>,
     /// Current runtime config for built-in/default providers.
     pub(super) default_provider_configs: Arc<RwLock<HashMap<ProviderType, AgentProviderConfig>>>,
     /// Run lifecycle indexes.
@@ -61,7 +59,6 @@ impl Inner {
             thread_affinity: Arc::new(RwLock::new(HashMap::new())),
             thread_workspace_bindings: Arc::new(RwLock::new(HashMap::new())),
             agent_profiles: Arc::new(RwLock::new(HashMap::new())),
-            team_profiles: Arc::new(RwLock::new(HashMap::new())),
             default_provider_configs: Arc::new(RwLock::new(HashMap::new())),
             run_index: Arc::new(RwLock::new(BridgeRunIndex::default())),
             active_tasks: Arc::new(Mutex::new(HashMap::new())),

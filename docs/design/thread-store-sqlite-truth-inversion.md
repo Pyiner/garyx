@@ -109,7 +109,7 @@ Trait 面(store.rs:9-43):`get/set/delete/list_keys/exists/update`,
 | 每出站消息 | `persist_outbound_message_id`(routing.rs:272) | 整档案重写 |
 | 每次投递 | `persist_delivery_context`(delivery.rs:152)+ `sync_endpoint_delivery_timestamp` | 整档案重写 + 全库扫描 fan-out |
 | 每 run 起止 | 终局持久化、runtime snapshot、task 状态翻转、trim | 整档案重写 ×N |
-| 低频 | create/label/binding/task CRUD/team/workflow 标记 | 整档案重写 |
+| 低频 | create/label/binding/task CRUD/workflow 标记 | 整档案重写 |
 | 扫描型 | bind/detach/sync-delivery、`list_user_threads`、`rebuild_from_store`、counts(routes.rs:3442、dashboard.rs:29、api.rs:105/388、mcp/helpers.rs:426) | `list_keys`+逐个 `get` 物化全库 |
 
 锁模型:四层(§1.3-4);投影 store 的 per-thread 锁只包住
@@ -165,7 +165,6 @@ navigation.rs:681 / threads.rs:443 三处 `messages: []` 初始化。
 | 读方 | 读什么 | 裁决 | 换源 |
 |---|---|---|---|
 | bridge `persisted_provider_messages_from_thread`(session_resolve.rs:148-184)→ `garyx_native_provider.rs:709` 冷启动播种 | 整个快照 → `ProviderMessage`,原生 LLM provider(Gpt/ClaudeLlm/GeminiLlm)每 run 附带、agent-loop 会话为空时(gateway 重启后)重建 ≤100 轮上下文 | **真需要内容**(最高优先;Claude Code/Codex 走 `sdk_session_id` 自有会话,不经此路) | 读 transcript 尾窗 `type=message` 记录,同构解析,字节级等价 |
-| router `build_group_transcript_snapshot`(execution.rs:57-86) | 全条目 actor/text/timestamp → `group_transcript_snapshot` 注入团队 prompt | **真需要内容**(仅 `agent_team_id` 线程) | transcript 尾窗映射 |
 | gateway 同名**重复实现**(agent_identity.rs:126-145,prepare.rs:183 调用) | 同上 | 同上;顺带消重 | 与上共用一个 transcript 实现 |
 | bridge 快照重建读回(persistence.rs:1428) | 旧快照做 run-id 去重 | 写方自读,随写方退役 | —— |
 | thread_meta 投影 `last_message_preview_for_role`(thread_meta_projection.rs:333-357) | 尾部 user/assistant 预览 ≤160 字符 → 3 个列 | 惯性——写时可派生 | 写点维护 `last_user_preview`/`last_assistant_preview` 小字段 |
@@ -215,7 +214,7 @@ task_projection 只是它的影子)**、`history`(transcript 检查点状态)、
 `outbound_message_ids`、origin 四件套(channel/account_id/from_id/
 is_group)、thread_title_source、provider_thread_title、source/hidden/
 exclude_from_recent/automation_*/workflow_*(6 个镜像字段)、
-team_id/team_status、thread_mode、loop_*、worktree 全量、若干一次性
+thread_mode、loop_*、worktree 全量、若干一次性
 legacy 字段。**结论:字段面是开放 schema(55+ 个观测键,含双格式
 legacy),逐列归一化不可行,必须整 body 作为文档列搬迁(D1)。**
 

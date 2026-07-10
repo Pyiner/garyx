@@ -258,8 +258,6 @@ extension GaryxMobileModel {
                 workspacePath: thread.workspacePath,
                 messageCount: thread.messageCount,
                 agentId: thread.agentId,
-                teamId: thread.teamId,
-                teamName: thread.teamName,
                 providerType: thread.providerType,
                 recentRunId: thread.recentRunId,
                 activeRunId: thread.activeRunId,
@@ -370,8 +368,6 @@ extension GaryxMobileModel {
             workspacePath: nil,
             messageCount: nil,
             agentId: nil,
-            teamId: nil,
-            teamName: nil,
             providerType: nil,
             recentRunId: nil,
             activeRunId: nil,
@@ -428,7 +424,7 @@ extension GaryxMobileModel {
     }
 
     var newThreadProviderModels: GaryxProviderModels? {
-        guard let target = newThreadAgentTarget, target.kind == .agent else { return nil }
+        guard let target = newThreadAgentTarget else { return nil }
         let providerType = target.providerType.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !providerType.isEmpty else { return nil }
         return providerModelsByType[providerType]
@@ -473,7 +469,7 @@ extension GaryxMobileModel {
     }
 
     func ensureNewThreadProviderModelsLoaded() async {
-        guard let target = newThreadAgentTarget, target.kind == .agent else { return }
+        guard let target = newThreadAgentTarget else { return }
         let providerType = target.providerType.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !providerType.isEmpty, providerModelsByType[providerType] == nil else { return }
         await loadProviderModels(providerType: providerType)
@@ -604,7 +600,6 @@ extension GaryxMobileModel {
     }
 
     func generateAvatar(
-        kind: GaryxAgentAvatarKind,
         identifier: String,
         displayName: String,
         stylePrompt: String
@@ -612,13 +607,12 @@ extension GaryxMobileModel {
         let trimmedId = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedId.isEmpty || !trimmedName.isEmpty else {
-            lastError = kind == .team ? "Team name is required" : "Agent name is required"
+            lastError = "Agent name is required"
             return nil
         }
         let prompt = GaryxAvatarPromptBuilder.prompt(
             displayName: trimmedName,
             identifier: trimmedId,
-            kind: kind,
             stylePrompt: stylePrompt
         )
         let runtimeGeneration = gatewayRuntimeGeneration
@@ -679,7 +673,7 @@ extension GaryxMobileModel {
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
-            await storeAvatarIfPresent(kind: .agent, id: agent.id, dataUrl: agent.avatarDataUrl.isEmpty ? avatarDataUrl : agent.avatarDataUrl, sourceUpdatedAt: agent.updatedAt)
+            await storeAvatarIfPresent(id: agent.id, dataUrl: agent.avatarDataUrl.isEmpty ? avatarDataUrl : agent.avatarDataUrl, sourceUpdatedAt: agent.updatedAt)
             replaceAgent(agent)
             setSelectedAgentTarget(agent.id)
             return true
@@ -788,13 +782,13 @@ extension GaryxMobileModel {
             let didClearAvatar = clearsAvatar && nextAvatarDataUrl.isEmpty
             let didStoreAvatar: Bool
             if didClearAvatar {
-                await removeAvatar(kind: .agent, id: updated.id)
+                await removeAvatar(id: updated.id)
                 didStoreAvatar = false
             } else {
-                didStoreAvatar = await storeAvatarIfPresent(kind: .agent, id: updated.id, dataUrl: updated.avatarDataUrl.isEmpty ? nextAvatarDataUrl : updated.avatarDataUrl, sourceUpdatedAt: updated.updatedAt)
+                didStoreAvatar = await storeAvatarIfPresent(id: updated.id, dataUrl: updated.avatarDataUrl.isEmpty ? nextAvatarDataUrl : updated.avatarDataUrl, sourceUpdatedAt: updated.updatedAt)
             }
             if updated.id != agent.id, didClearAvatar || didStoreAvatar {
-                await removeAvatar(kind: .agent, id: agent.id)
+                await removeAvatar(id: agent.id)
             }
             replaceAgent(updated, replacing: agent.id)
             setSelectedAgentTarget(updated.id)
@@ -806,76 +800,6 @@ extension GaryxMobileModel {
         }
     }
 
-    func updateTeam(
-        _ team: GaryxTeamSummary,
-        teamId: String,
-        displayName: String,
-        leaderAgentId: String,
-        memberAgentIds: String,
-        workflowText: String,
-        avatarDataUrl: String,
-        clearsAvatar: Bool = false
-    ) async -> GaryxTeamSummary? {
-        let nextTeamId = teamId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextLeader = leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextMembers = GaryxTeamMembershipDraft.normalizedMemberIds(from: memberAgentIds, leaderAgentId: nextLeader)
-        let nextWorkflow = workflowText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextAvatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !nextTeamId.isEmpty, !nextDisplayName.isEmpty, !nextLeader.isEmpty else { return nil }
-        let runtimeGeneration = gatewayRuntimeGeneration
-        do {
-            var baseTeam = team
-            // Same rule as agents: restored projections (or rows without an
-            // updatedAt) must re-fetch before building a conditional update.
-            if catalogSnapshotRestored || team.updatedAt == nil {
-                let latestTeams = try await client().listTeams()
-                guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-                guard let latestTeam = latestTeams.first(where: { $0.id == team.id }) else {
-                    lastError = "Team details are still loading. Try again after refresh."
-                    return nil
-                }
-                baseTeam = latestTeam
-            }
-            let requestAvatarDataUrl: String?
-            if nextAvatarDataUrl.isEmpty {
-                requestAvatarDataUrl = clearsAvatar ? "" : nil
-            } else {
-                requestAvatarDataUrl = nextAvatarDataUrl
-            }
-            let updated = try await client().updateTeam(
-                teamId: team.id,
-                request: GaryxTeamRequest(
-                    teamId: nextTeamId,
-                    displayName: nextDisplayName,
-                    leaderAgentId: nextLeader,
-                    memberAgentIds: nextMembers,
-                    workflowText: nextWorkflow,
-                    avatarDataUrl: requestAvatarDataUrl,
-                    expectedUpdatedAt: baseTeam.updatedAt
-                )
-            )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-            let didClearAvatar = clearsAvatar && nextAvatarDataUrl.isEmpty
-            let didStoreAvatar: Bool
-            if didClearAvatar {
-                await removeAvatar(kind: .team, id: updated.id)
-                didStoreAvatar = false
-            } else {
-                didStoreAvatar = await storeAvatarIfPresent(kind: .team, id: updated.id, dataUrl: updated.avatarDataUrl.isEmpty ? nextAvatarDataUrl : updated.avatarDataUrl)
-            }
-            if updated.id != team.id, didClearAvatar || didStoreAvatar {
-                await removeAvatar(kind: .team, id: team.id)
-            }
-            replaceTeam(updated, replacing: team.id)
-            setSelectedAgentTarget(updated.id)
-            return updated
-        } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-            lastError = displayMessage(for: error)
-            return nil
-        }
-    }
 
     func deleteAgent(_ agent: GaryxAgentSummary) async {
         guard !agent.builtIn else { return }
@@ -883,7 +807,7 @@ extension GaryxMobileModel {
         do {
             _ = try await client().deleteAgent(agentId: agent.id)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            await removeAvatar(kind: .agent, id: agent.id)
+            await removeAvatar(id: agent.id)
             agents.removeAll { $0.id == agent.id }
             ensureSelectedAgentTarget()
             persistCatalogCacheSnapshot()
@@ -977,59 +901,6 @@ extension GaryxMobileModel {
         }
     }
 
-    func createTeam(
-        teamId: String,
-        displayName: String,
-        leaderAgentId: String,
-        memberAgentIds: String,
-        workflowText: String,
-        avatarDataUrl: String
-    ) async -> Bool {
-        let teamId = teamId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let leader = leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let members = GaryxTeamMembershipDraft.normalizedMemberIds(from: memberAgentIds, leaderAgentId: leader)
-        let workflow = workflowText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let avatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !teamId.isEmpty, !name.isEmpty, !leader.isEmpty else { return false }
-        let runtimeGeneration = gatewayRuntimeGeneration
-        do {
-            let team = try await client().createTeam(
-                GaryxTeamRequest(
-                    teamId: teamId,
-                    displayName: name,
-                    leaderAgentId: leader,
-                    memberAgentIds: members,
-                    workflowText: workflow,
-                    avatarDataUrl: avatarDataUrl.isEmpty ? nil : avatarDataUrl
-                )
-            )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
-            await storeAvatarIfPresent(kind: .team, id: team.id, dataUrl: team.avatarDataUrl.isEmpty ? avatarDataUrl : team.avatarDataUrl)
-            replaceTeam(team)
-            setSelectedAgentTarget(team.id)
-            return true
-        } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
-            lastError = displayMessage(for: error)
-            return false
-        }
-    }
-
-    func deleteTeam(_ team: GaryxTeamSummary) async {
-        let runtimeGeneration = gatewayRuntimeGeneration
-        do {
-            _ = try await client().deleteTeam(teamId: team.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            await removeAvatar(kind: .team, id: team.id)
-            teams.removeAll { $0.id == team.id }
-            ensureSelectedAgentTarget()
-            persistCatalogCacheSnapshot()
-        } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            lastError = displayMessage(for: error)
-        }
-    }
 
     func selectWorkspace(_ path: String) async {
         selectedWorkspacePath = path
@@ -1398,35 +1269,13 @@ extension GaryxMobileModel {
         persistCatalogCacheSnapshot()
     }
 
-    func replaceTeam(_ team: GaryxTeamSummary, replacing oldId: String? = nil) {
-        var next = teams
-        if let oldId = oldId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !oldId.isEmpty,
-           oldId != team.id {
-            next.removeAll { $0.id == oldId }
-        }
-        if let index = next.firstIndex(where: { $0.id == team.id }) {
-            next[index] = team
-        } else {
-            next.insert(team, at: 0)
-        }
-        if next != teams {
-            teams = next
-        }
-        if !threads.isEmpty {
-            persistRecentThreadsWidgetSnapshot()
-        }
-        persistCatalogCacheSnapshot()
-    }
-
     @discardableResult
     func storeAvatarIfPresent(
-        kind: GaryxAvatarKind,
         id: String,
         dataUrl: String,
         sourceUpdatedAt: String? = nil
     ) async -> Bool {
-        let identity = GaryxAvatarIdentity(scope: currentGatewayScopeId, kind: kind, id: id)
+        let identity = GaryxAvatarIdentity(scope: currentGatewayScopeId, id: id)
         guard identity.isUsable else { return false }
         let dataUrl = dataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !dataUrl.isEmpty else { return false }
@@ -1438,8 +1287,8 @@ extension GaryxMobileModel {
         return !(await avatarStore.avatarFingerprints(for: [identity], now: Date())).isEmpty
     }
 
-    func removeAvatar(kind: GaryxAvatarKind, id: String) async {
-        let identity = GaryxAvatarIdentity(scope: currentGatewayScopeId, kind: kind, id: id)
+    func removeAvatar(id: String) async {
+        let identity = GaryxAvatarIdentity(scope: currentGatewayScopeId, id: id)
         guard identity.isUsable else { return }
         await avatarStore.remove(identity)
         avatarImageProvider.invalidate(identity: identity)

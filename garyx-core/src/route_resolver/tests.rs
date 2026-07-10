@@ -221,7 +221,7 @@ fn test_team_id_binding() {
     let config = make_config(json!({
         "bindings": [
             {
-                "agentId": "team-agent",
+                "agentId": "slack-routed-agent",
                 "match": { "teamId": "T123" }
             }
         ]
@@ -229,7 +229,7 @@ fn test_team_id_binding() {
     let mut resolver = RouteResolver::new(config);
 
     let route = resolver.resolve("slack", None, None, None, None, Some("T123"));
-    assert_eq!(route.agent_id, "team-agent");
+    assert_eq!(route.agent_id, "slack-routed-agent");
 
     let route = resolver.resolve("slack", None, None, None, None, Some("T999"));
     assert_eq!(route.agent_id, "main");

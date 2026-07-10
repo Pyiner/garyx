@@ -13,7 +13,6 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
     public var avatarScope: String?
     public var avatarFingerprint: String?
     public var providerType: String?
-    public var isTeam: Bool
     public var builtIn: Bool
     public var avatarPayloadData: Data?
 
@@ -30,7 +29,6 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
         avatarScope: String? = nil,
         avatarFingerprint: String? = nil,
         providerType: String? = nil,
-        isTeam: Bool = false,
         builtIn: Bool = false,
         avatarPayloadData: Data? = nil
     ) {
@@ -46,7 +44,6 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
         self.avatarScope = avatarScope
         self.avatarFingerprint = avatarFingerprint
         self.providerType = providerType
-        self.isTeam = isTeam
         self.builtIn = builtIn
         self.avatarPayloadData = avatarPayloadData
     }
@@ -64,7 +61,6 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
         case avatarScope
         case avatarFingerprint
         case providerType
-        case isTeam
         case builtIn
     }
 
@@ -82,7 +78,6 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
         avatarScope = try container.decodeIfPresent(String.self, forKey: .avatarScope)
         avatarFingerprint = try container.decodeIfPresent(String.self, forKey: .avatarFingerprint)
         providerType = try container.decodeIfPresent(String.self, forKey: .providerType)
-        isTeam = try container.decodeIfPresent(Bool.self, forKey: .isTeam) ?? false
         builtIn = try container.decodeIfPresent(Bool.self, forKey: .builtIn) ?? false
         avatarPayloadData = nil
     }
@@ -101,7 +96,6 @@ public struct GaryxMobileWidgetThread: Codable, Equatable, Identifiable, Sendabl
         try container.encodeIfPresent(avatarScope, forKey: .avatarScope)
         try container.encodeIfPresent(avatarFingerprint, forKey: .avatarFingerprint)
         try container.encodeIfPresent(providerType, forKey: .providerType)
-        try container.encode(isTeam, forKey: .isTeam)
         try container.encode(builtIn, forKey: .builtIn)
     }
 }

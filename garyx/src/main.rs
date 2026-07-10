@@ -25,13 +25,12 @@ use cli::{
     AgentAction, AutoUpdateAction, AutomationAction, AutomationDataTriggerAction,
     AutomationTriggerAction, BotAction, BotEndpointAction, ChannelsAction, Cli, CommandAction,
     Commands, ConfigAction, DbAction, DbFieldAction, DbRecordAction, DbTableAction, GatewayAction,
-    LogsAction, PluginsAction, ProviderAction, TaskAction, TeamAction, ThreadAction, ToolAction,
+    LogsAction, PluginsAction, ProviderAction, TaskAction, ThreadAction, ToolAction,
     WorkflowAction, WorkflowDefinitionAction,
 };
 use commands::{
     ProviderSetOptions, cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list,
-    cmd_agent_team_create, cmd_agent_team_delete, cmd_agent_team_get, cmd_agent_team_list,
-    cmd_agent_team_update, cmd_agent_update, cmd_agent_upsert, cmd_automation_activity,
+    cmd_agent_update, cmd_agent_upsert, cmd_automation_activity,
     cmd_automation_create, cmd_automation_data_trigger_create, cmd_automation_data_trigger_delete,
     cmd_automation_data_trigger_list, cmd_automation_data_trigger_set_enabled,
     cmd_automation_delete, cmd_automation_get, cmd_automation_list, cmd_automation_pause,
@@ -1082,55 +1081,6 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 cmd_agent_delete(config_path, &agent_id, json).await
             }
         },
-        Some(Commands::Team { action }) => match action {
-            TeamAction::List { json } => cmd_agent_team_list(config_path, json).await,
-            TeamAction::Get { team_id, json } => {
-                cmd_agent_team_get(config_path, &team_id, json).await
-            }
-            TeamAction::Create {
-                team_id,
-                display_name,
-                leader_agent_id,
-                member_agent_ids,
-                workflow_text,
-                json,
-            } => {
-                cmd_agent_team_create(
-                    config_path,
-                    team_id,
-                    display_name,
-                    leader_agent_id,
-                    member_agent_ids,
-                    workflow_text,
-                    json,
-                )
-                .await
-            }
-            TeamAction::Update {
-                team_id,
-                new_team_id,
-                display_name,
-                leader_agent_id,
-                member_agent_ids,
-                workflow_text,
-                json,
-            } => {
-                cmd_agent_team_update(
-                    config_path,
-                    team_id,
-                    new_team_id,
-                    display_name,
-                    leader_agent_id,
-                    member_agent_ids,
-                    workflow_text,
-                    json,
-                )
-                .await
-            }
-            TeamAction::Delete { team_id, json } => {
-                cmd_agent_team_delete(config_path, &team_id, json).await
-            }
-        },
         Some(Commands::Tool { action }) => match action {
             ToolAction::Image {
                 prompt,
@@ -1239,7 +1189,6 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 workspace_dir,
                 worktree,
                 agent,
-                team,
                 workflow,
                 input,
                 notify,
@@ -1252,7 +1201,6 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                     workspace_dir,
                     worktree,
                     agent,
-                    team,
                     workflow,
                     input,
                     notify,

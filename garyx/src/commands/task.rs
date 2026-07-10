@@ -128,14 +128,13 @@ pub(crate) async fn cmd_task_create(
     workspace_dir: Option<String>,
     worktree: bool,
     agent: Option<String>,
-    team: Option<String>,
     workflow: Option<String>,
     input: Option<String>,
     notify: Vec<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let executor = task_executor_payload(agent, team, workflow, input)?;
-    // Picking an executor (agent/team/workflow) starts the task immediately; a
+    let executor = task_executor_payload(agent, workflow, input)?;
+    // Picking an executor starts the task immediately; a
     // bare task with no executor is created as a `todo` placeholder.
     let start = executor.is_some();
     let notification_target = task_notification_target_payload(notify)?;
@@ -196,35 +195,23 @@ fn notification_targets_current_thread(target: &Value) -> bool {
 
 fn task_executor_payload(
     agent: Option<String>,
-    team: Option<String>,
     workflow: Option<String>,
     input: Option<String>,
 ) -> Result<Option<Value>, Box<dyn std::error::Error>> {
     let agent_id = agent
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
-    let team_id = team
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
     let workflow_id = workflow
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
-    let executor_count = usize::from(agent_id.is_some())
-        + usize::from(team_id.is_some())
-        + usize::from(workflow_id.is_some());
+    let executor_count = usize::from(agent_id.is_some()) + usize::from(workflow_id.is_some());
     if executor_count > 1 {
-        return Err("choose only one task executor: --agent, --team, or --workflow".into());
+        return Err("choose only one task executor: --agent or --workflow".into());
     }
     if let Some(agent_id) = agent_id {
         return Ok(Some(json!({
             "type": "agent",
             "agentId": agent_id,
-        })));
-    }
-    if let Some(team_id) = team_id {
-        return Ok(Some(json!({
-            "type": "team",
-            "teamId": team_id,
         })));
     }
     let Some(workflow_id) = workflow_id else {
@@ -1112,7 +1099,6 @@ mod tests {
             Some("claude".to_owned()),
             None,
             None,
-            None,
             vec!["none".to_owned()],
             true,
         )
@@ -1149,7 +1135,6 @@ mod tests {
             Some("claude".to_owned()),
             None,
             None,
-            None,
             vec!["none".to_owned()],
             true,
         )
@@ -1171,39 +1156,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cmd_task_create_posts_team_executor() {
-        let requests = StdArc::new(Mutex::new(Vec::new()));
-        let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
-        let dir = tempdir().expect("tempdir");
-        let config_path = write_test_gateway_config(&dir, &base_url);
-
-        cmd_task_create(
-            config_path.to_str().expect("config path"),
-            Some("Team task".to_owned()),
-            None,
-            None,
-            false,
-            None,
-            Some("product-ship".to_owned()),
-            None,
-            None,
-            vec!["none".to_owned()],
-            true,
-        )
-        .await
-        .expect("task create should succeed");
-
-        handle.abort();
-
-        let records = requests.lock().expect("request lock");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].body["executor"]["type"], "team");
-        assert_eq!(records[0].body["executor"]["teamId"], "product-ship");
-        assert_eq!(records[0].body["assignee"], Value::Null);
-        assert_eq!(records[0].body["start"], true);
-    }
-
-    #[tokio::test]
     async fn cmd_task_create_posts_workflow_workspace_at_top_level() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
@@ -1216,7 +1168,6 @@ mod tests {
             None,
             Some("/tmp/garyx-workflow".to_owned()),
             false,
-            None,
             None,
             Some("smoke".to_owned()),
             Some("smoke question".to_owned()),
@@ -1255,7 +1206,6 @@ mod tests {
             None,
             None,
             false,
-            None,
             None,
             Some("smoke".to_owned()),
             Some("Summarize this bug report".to_owned()),

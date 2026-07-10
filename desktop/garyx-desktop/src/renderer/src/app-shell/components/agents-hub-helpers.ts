@@ -1,13 +1,11 @@
 import type {
   DesktopCustomAgent,
   DesktopProviderModels,
-  DesktopTeam,
   DesktopWorkflowDefinition,
 } from '@shared/contracts';
 
 export type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex' | 'gemini_cli' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
 export type AgentDialogMode = 'create' | 'edit' | 'view' | null;
-export type TeamDialogMode = 'create' | 'edit' | 'view' | null;
 export type WorkflowDialogMode = 'view' | null;
 export type AvatarStyleId = 'clean_glyph' | 'soft_3d' | 'glass_icon' | 'pixel_badge' | 'ink_line' | 'paper_cut' | 'blueprint' | 'enamel_sticker' | 'custom';
 
@@ -91,15 +89,6 @@ export const AVATAR_STYLE_OPTIONS: Array<{
   },
 ];
 
-export type TeamDraft = {
-  teamId: string;
-  displayName: string;
-  avatarDataUrl: string;
-  leaderAgentId: string;
-  memberAgentIds: string[];
-  workflowText: string;
-};
-
 export function emptyAgentDraft(): AgentDraft {
   return {
     agentId: '',
@@ -114,17 +103,6 @@ export function emptyAgentDraft(): AgentDraft {
     avatarDataUrl: '',
     env: [],
     systemPrompt: '',
-  };
-}
-
-export function emptyTeamDraft(): TeamDraft {
-  return {
-    teamId: '',
-    displayName: '',
-    avatarDataUrl: '',
-    leaderAgentId: '',
-    memberAgentIds: [],
-    workflowText: '',
   };
 }
 
@@ -305,28 +283,6 @@ export async function normalizeAvatarFile(file: File): Promise<string> {
   throw new Error('Avatar image is too large.');
 }
 
-export function buildSuggestedWorkflow(
-  agents: DesktopCustomAgent[],
-  leaderAgentId: string,
-  memberAgentIds: string[],
-): string {
-  const nameById = new Map(agents.map((agent) => [agent.agentId, agent.displayName] as const));
-  const leaderName = nameById.get(leaderAgentId) || leaderAgentId || 'Leader';
-  const memberNames = memberAgentIds
-    .map((agentId) => nameById.get(agentId) || agentId)
-    .filter(Boolean);
-
-  return [
-    `${leaderName} receives the brief first, breaks the work into clear subtasks, and coordinates the team response.`,
-    '',
-    memberNames.length
-      ? `Selected members: ${memberNames.join(', ')}.`
-      : 'Selected members should explore focused slices of the task in parallel.',
-    '',
-    'Have members surface tradeoffs early, then merge the strongest ideas into one final answer with clear acceptance checks.',
-  ].join('\n');
-}
-
 export function sortedAgents(value: DesktopCustomAgent[]): DesktopCustomAgent[] {
   return [...value]
     .filter((agent) => agent.standalone)
@@ -336,12 +292,6 @@ export function sortedAgents(value: DesktopCustomAgent[]): DesktopCustomAgent[] 
       }
       return left.displayName.localeCompare(right.displayName) || left.agentId.localeCompare(right.agentId);
     });
-}
-
-export function sortedTeams(value: DesktopTeam[]): DesktopTeam[] {
-  return [...value].sort((left, right) => {
-    return left.displayName.localeCompare(right.displayName) || left.teamId.localeCompare(right.teamId);
-  });
 }
 
 export function sortedWorkflows(value: DesktopWorkflowDefinition[]): DesktopWorkflowDefinition[] {

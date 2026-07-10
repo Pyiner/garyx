@@ -180,8 +180,7 @@ private struct GaryxCapsuleGalleryCard: View {
         let creator = GaryxCapsuleGalleryCardPresentation.creatorName(
             agentId: capsule.agentId,
             providerType: capsule.providerType,
-            agents: model.agents,
-            teams: model.teams
+            agents: model.agents
         )
         return GaryxCapsuleGalleryCardPresentation.subline(
             timeDisplay: capsule.formattedUpdatedAt,

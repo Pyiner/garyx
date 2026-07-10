@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use crate::scrub::scrub_legacy_team_fields;
 use crate::store::{ThreadStore, ThreadStoreError};
 
 /// In-memory thread storage using a `HashMap` behind a [`RwLock`].
@@ -41,18 +40,10 @@ impl Default for InMemoryThreadStore {
 #[async_trait]
 impl ThreadStore for InMemoryThreadStore {
     async fn get(&self, thread_id: &str) -> Option<Value> {
-        // Defensive: if anything set-before-the-migration slipped into
-        // the map (or a test seeds a fossil-bearing record directly),
-        // scrub on the way out too. `set()` already scrubs on entry, so
-        // this is normally a no-op.
-        let mut guard = self.store.write().await;
-        let entry = guard.get_mut(thread_id)?;
-        scrub_legacy_team_fields(entry);
-        Some(entry.clone())
+        self.store.read().await.get(thread_id).cloned()
     }
 
-    async fn set(&self, thread_id: &str, mut data: Value) {
-        scrub_legacy_team_fields(&mut data);
+    async fn set(&self, thread_id: &str, data: Value) {
         self.store.write().await.insert(thread_id.to_owned(), data);
     }
 

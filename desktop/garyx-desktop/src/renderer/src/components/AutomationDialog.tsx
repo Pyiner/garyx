@@ -137,11 +137,6 @@ function threadAgentOption(
   agentOptions: AutomationAgentOption[],
 ): AutomationAgentOption | null {
   if (!thread) return null;
-  const teamId = thread.teamId?.trim();
-  if (teamId) {
-    const team = agentOptions.find((option) => option.kind === 'team' && option.id === teamId);
-    if (team) return team;
-  }
   const agentId = thread.agentId?.trim();
   if (agentId) {
     const agent = agentOptions.find((option) => option.id === agentId);
@@ -186,7 +181,6 @@ function AutomationThreadPicker({
                   ? t('Thread not loaded')
                   : t('Recent threads')
             }
-            teamId={selectedThread?.teamId}
             title={selectedThread ? threadTitle(selectedThread) : missingThreadId || t('Choose thread')}
           />
           <ChevronDown
@@ -250,23 +244,21 @@ function ThreadPickerText({
   agentOption,
   fallbackLabel,
   subtitle,
-  teamId,
   title,
 }: {
   agentId?: string | null;
   agentOption?: AutomationAgentOption | null;
   fallbackLabel: string;
   subtitle: string;
-  teamId?: string | null;
   title: string;
 }) {
   return (
     <span className="min-w-0 flex-1">
       <span className="flex min-w-0 items-center gap-2">
         <AgentOptionAvatar
-          agentId={agentOption?.id ?? agentId ?? teamId}
+          agentId={agentOption?.id ?? agentId}
           avatarDataUrl={agentOption?.avatarDataUrl}
-          kind={agentOption?.kind ?? (teamId ? 'team' : 'agent')}
+          kind={agentOption?.kind ?? 'agent'}
           label={agentOption?.label ?? fallbackLabel}
           providerIcon={agentOption?.providerIcon}
           providerType={agentOption?.providerType}
@@ -307,7 +299,6 @@ function ThreadPickerRow({
         agentOption={option}
         fallbackLabel={title}
         subtitle={subtitle}
-        teamId={thread?.teamId}
         title={title}
       />
       <span className="mt-1 flex size-4 shrink-0 items-center justify-center text-foreground">
@@ -368,7 +359,7 @@ export function AutomationDialog({
           </Field>
 
           <Field>
-            <FieldLabel>{t('Agent or Team')}</FieldLabel>
+            <FieldLabel>{t('Agent')}</FieldLabel>
             <Select
               value={draft.agentId || undefined}
               onValueChange={(value) =>

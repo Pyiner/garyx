@@ -72,8 +72,6 @@ final class GaryxThreadSummaryCommittedRunStateProjectorTests: XCTestCase {
             workspacePath: nil,
             messageCount: nil,
             agentId: nil,
-            teamId: nil,
-            teamName: nil,
             providerType: nil,
             recentRunId: "recent-run",
             activeRunId: activeRunId,

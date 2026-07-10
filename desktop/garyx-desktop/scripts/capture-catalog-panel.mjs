@@ -2,7 +2,7 @@
 /**
  * Take a screenshot of the ChannelPluginCatalogPanel.
  *
- * Workflow the team uses:
+ * Capture workflow:
  *   1. Start a mock gateway answering `GET /api/channels/plugins`.
  *   2. Launch Electron via Playwright's `_electron.launch()` — it
  *      handles the CJS/ESM bootstrap headaches a raw `spawn(electron)`

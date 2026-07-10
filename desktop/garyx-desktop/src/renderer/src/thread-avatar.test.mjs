@@ -19,18 +19,6 @@ function agent(overrides) {
   };
 }
 
-function team(overrides) {
-  return {
-    teamId: "product-team",
-    displayName: "Product Team",
-    description: "",
-    leaderAgentId: null,
-    agents: [],
-    avatarDataUrl: null,
-    ...overrides,
-  };
-}
-
 function task(overrides) {
   return {
     assignee: null,
@@ -49,7 +37,6 @@ test("task executor avatar uses catalog display name and image", () => {
         avatarDataUrl: "data:image/png;base64,cmV2aWV3ZXI=",
       }),
     ],
-    [],
   );
 
   assert.deepEqual(
@@ -64,33 +51,6 @@ test("task executor avatar uses catalog display name and image", () => {
       label: "Reviewer",
       providerIcon: null,
       providerType: "claude",
-    },
-  );
-});
-test("task team executor avatar uses team identity", () => {
-  const catalog = buildThreadAvatarCatalog(
-    [],
-    [
-      team({
-        teamId: "product-team",
-        displayName: "Product Team",
-        avatarDataUrl: "data:image/png;base64,dGVhbQ==",
-      }),
-    ],
-  );
-
-  assert.deepEqual(
-    resolveTaskAvatarIdentity(
-      task({ executor: { type: "team", teamId: "product-team" } }),
-      catalog,
-    ),
-    {
-      agentId: "product-team",
-      avatarDataUrl: "data:image/png;base64,dGVhbQ==",
-      kind: "team",
-      label: "Product Team",
-      providerIcon: null,
-      providerType: null,
     },
   );
 });

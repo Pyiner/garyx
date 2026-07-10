@@ -57,7 +57,6 @@ property:
 - `pinnedThreadIds`
 - `recentThreadIds`
 - `agents`
-- `teams`
 - `automations`
 
 The gateway stores the last captured legacy state and emits only deltas:

@@ -55,8 +55,6 @@ interface TaskExecutorPayload {
   type?: string | null;
   agent_id?: string | null;
   agentId?: string | null;
-  team_id?: string | null;
-  teamId?: string | null;
   workflow_id?: string | null;
   workflowId?: string | null;
   workflow_version?: number | null;
@@ -184,10 +182,6 @@ function mapTaskExecutor(value: unknown): DesktopTaskSummary["executor"] {
   if (type === "agent") {
     const agentId = asString(record.agent_id) || asString(record.agentId);
     return agentId ? { type: "agent", agentId } : null;
-  }
-  if (type === "team") {
-    const teamId = asString(record.team_id) || asString(record.teamId);
-    return teamId ? { type: "team", teamId } : null;
   }
   if (type === "workflow") {
     const workflowId =
@@ -467,16 +461,14 @@ export async function createTask(
   const executorPayload =
     input.executor?.type === "agent" && input.executor.agentId.trim()
       ? { type: "agent", agent_id: input.executor.agentId.trim() }
-      : input.executor?.type === "team" && input.executor.teamId.trim()
-        ? { type: "team", team_id: input.executor.teamId.trim() }
-        : input.executor?.type === "workflow" && input.executor.workflowId.trim()
-          ? {
-              type: "workflow",
-              workflow_id: input.executor.workflowId.trim(),
-              ...(input.executor.input === undefined
-                ? {}
-                : { input: input.executor.input ?? null }),
-            }
+      : input.executor?.type === "workflow" && input.executor.workflowId.trim()
+        ? {
+            type: "workflow",
+            workflow_id: input.executor.workflowId.trim(),
+            ...(input.executor.input === undefined
+              ? {}
+              : { input: input.executor.input ?? null }),
+          }
         : null;
   const isWorkflowExecutor = executorPayload?.type === "workflow";
   const assignee = input.assignee?.trim()
@@ -485,11 +477,9 @@ export async function createTask(
   const runtimeAgentId =
     executorPayload?.type === "agent"
       ? executorPayload.agent_id
-      : executorPayload?.type === "team"
-        ? executorPayload.team_id
-        : assignee?.kind === "agent"
-          ? assignee.agent_id
-          : "";
+      : assignee?.kind === "agent"
+        ? assignee.agent_id
+        : "";
   const workspaceDir = input.workspaceDir?.trim() || "";
   const source = taskSourcePayload(input.source);
   const payload = await requestJson<TaskSummaryPayload>(settings, "/api/tasks", {

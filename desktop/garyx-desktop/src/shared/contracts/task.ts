@@ -64,7 +64,6 @@ export type DesktopTaskForestNode =
 
 export type DesktopTaskExecutor =
   | { type: 'agent'; agentId: string }
-  | { type: 'team'; teamId: string }
   | { type: 'workflow'; workflowId: string; workflowVersion?: number | null };
 
 export interface DesktopTaskSource {
@@ -133,7 +132,6 @@ export interface CreateTaskInput {
 
 export type CreateTaskExecutorInput =
   | { type: 'agent'; agentId: string }
-  | { type: 'team'; teamId: string }
   | { type: 'workflow'; workflowId: string; input?: unknown };
 
 export interface UpdateTaskStatusInput {

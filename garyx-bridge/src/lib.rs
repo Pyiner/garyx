@@ -10,9 +10,6 @@ pub mod multi_provider;
 mod native_capabilities;
 mod native_slash;
 pub mod provider_trait;
-pub mod providers {
-    pub mod agent_team;
-}
 pub mod run_graph;
 
 pub use multi_provider::MultiProviderBridge;

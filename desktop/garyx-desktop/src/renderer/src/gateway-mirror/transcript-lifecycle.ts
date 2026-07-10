@@ -2,7 +2,7 @@
 // live in useTranscriptController (endgame architecture batch 6b-2,
 // docs/design/appshell-transcript-dissolve.md). Slice 2a moves the machine
 // bookkeeping and the run-state chain; slice 2b moves the apply chain
-// (persist, session cache, title/team propagation, intent marking) behind
+// (persist, session cache, title propagation, intent marking) behind
 // the accept* high-level entries; the fetch/stream lifecycle follows in 2c.
 //
 // Pattern: dispatch-orchestrator's — a class whose React seams arrive
@@ -61,7 +61,6 @@ import type {
 import {
   isKnownThreadId,
   mergeThread,
-  teamBlocksEqual,
   threadSummariesEquivalent,
 } from "../thread-model.ts";
 import {
@@ -659,7 +658,6 @@ export class TranscriptLifecycle {
           null,
         worktree:
           transcript.thread.worktree ?? transcript.threadInfo?.worktree ?? null,
-        team: transcript.thread.team ?? transcript.team ?? null,
       };
     }
 
@@ -684,7 +682,6 @@ export class TranscriptLifecycle {
       agentId: transcript.threadInfo?.agentId ?? null,
       recentRunId: transcript.threadInfo?.activeRun?.runId ?? null,
       worktree: transcript.threadInfo?.worktree ?? null,
-      team: transcript.team ?? null,
     };
   }
 
@@ -718,7 +715,7 @@ export class TranscriptLifecycle {
   /**
    * Remote-apply high-level entry: runs the pure cache commit plus the
    * ride-alongs (run-state sync, cache persistence, desktopState session
-   * cache, team propagation, intent marking).
+   * cache, and intent marking).
    */
   acceptRemoteTranscript(
     threadId: string,
@@ -746,42 +743,6 @@ export class TranscriptLifecycle {
       options?.syncRunState ?? true,
     );
     this.cacheOpenableTranscriptThread(threadId, resolvedTranscript);
-    // Propagate the transcript's `team` block into `desktopState.threads[i]`
-    // so team-bound threads render the team badge + sub-agent peek tabs as
-    // soon as the thread metadata endpoint has confirmed the binding. Without
-    // this merge, a list summary (which may have been fetched before the
-    // first turn) could shadow the richer detail payload, leaving the UI
-    // stuck on the plain agent label. Only write when the block is present
-    // and different from what's already cached — idempotent updates must
-    // not churn React identity and re-trigger dependent effects.
-    if (resolvedTranscript.team !== undefined) {
-      setDesktopState((current) => {
-        if (!current) {
-          return current;
-        }
-        const nextTeam = resolvedTranscript.team ?? null;
-        let changed = false;
-        const mapThreadTeam = (
-          thread: (typeof current.threads)[number],
-        ): (typeof current.threads)[number] => {
-          if (thread.id !== threadId) {
-            return thread;
-          }
-          const prev = thread.team ?? null;
-          if (teamBlocksEqual(prev, nextTeam)) {
-            return thread;
-          }
-          changed = true;
-          return { ...thread, team: nextTeam };
-        };
-        const nextThreads = current.threads.map(mapThreadTeam);
-        const nextSessions = current.sessions.map(mapThreadTeam);
-        if (!changed) {
-          return current;
-        }
-        return { ...current, threads: nextThreads, sessions: nextSessions };
-      });
-    }
     this.markIntentsFromHistory(
       threadId,
       visibleTranscriptMessages(resolvedTranscript.messages),

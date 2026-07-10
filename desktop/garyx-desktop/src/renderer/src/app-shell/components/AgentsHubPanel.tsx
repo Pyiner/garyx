@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   DesktopCustomAgent,
   DesktopProviderModels,
-  DesktopTeam,
   DesktopWorkflowDefinition,
   DesktopWorkflowSourceDocument,
   DesktopWorkspace,
@@ -45,21 +44,17 @@ import {
   type CustomAgentDeleteConfirmation,
 } from './agents-hub-delete-model';
 import { AgentFormDialog } from './AgentFormDialog';
-import { TeamFormDialog } from './TeamFormDialog';
 import { WorkflowViewDialog } from './WorkflowViewDialog';
 import {
   AGENT_AVATAR_MAX_BYTES,
   DEFAULT_AVATAR_STYLE_ID,
-  buildSuggestedWorkflow,
   defaultAuthSource,
   deriveId,
   emptyAgentDraft,
-  emptyTeamDraft,
   normalizeAvatarFile,
   previewText,
   providerLabel,
   sortedAgents,
-  sortedTeams,
   sortedWorkflows,
   stopEvent,
   workflowDefaultWorkspace,
@@ -69,19 +64,17 @@ import type {
   AgentDraft,
   AvatarStyleId,
   ProviderType,
-  TeamDialogMode,
-  TeamDraft,
   WorkflowDialogMode,
 } from './agents-hub-helpers';
 
-type HubTab = 'agents' | 'teams' | 'workflows';
+type HubTab = 'agents' | 'workflows';
 
 type AgentsHubPanelProps = {
   initialTab?: HubTab;
   workspaces?: DesktopWorkspace[];
   onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
   onRefreshAgentTargets?: () => Promise<void>;
-  onStartThread?: (agentOrTeamId: string) => void;
+  onStartThread?: (agentId: string) => void;
   onOpenMemory?: (agent: DesktopCustomAgent) => void;
   onToast?: (message: string, tone?: 'success' | 'error' | 'info', durationMs?: number) => void;
 };
@@ -99,7 +92,6 @@ export function AgentsHubPanel({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [agents, setAgents] = useState<DesktopCustomAgent[]>([]);
-  const [teams, setTeams] = useState<DesktopTeam[]>([]);
   const [workflows, setWorkflows] = useState<DesktopWorkflowDefinition[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -115,7 +107,6 @@ export function AgentsHubPanel({
   const [agentIdTouched, setAgentIdTouched] = useState(false);
   const [avatarGenerating, setAvatarGenerating] = useState(false);
   const [avatarStyleDialogOpen, setAvatarStyleDialogOpen] = useState(false);
-  const [avatarStyleTarget, setAvatarStyleTarget] = useState<'agent' | 'team'>('agent');
   const [avatarStyleId, setAvatarStyleId] = useState<AvatarStyleId>(DEFAULT_AVATAR_STYLE_ID);
   const [customAvatarStyle, setCustomAvatarStyle] = useState('');
   const workflowSourceRequestId = useRef(0);
@@ -126,10 +117,6 @@ export function AgentsHubPanel({
     Partial<Record<ProviderType, boolean>>
   >({});
 
-  const [teamDialogMode, setTeamDialogMode] = useState<TeamDialogMode>(null);
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
-  const [teamDraft, setTeamDraft] = useState<TeamDraft>(() => emptyTeamDraft());
-  const [teamIdTouched, setTeamIdTouched] = useState(false);
   const [workflowDialogMode, setWorkflowDialogMode] = useState<WorkflowDialogMode>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [workflowSource, setWorkflowSource] = useState<DesktopWorkflowSourceDocument | null>(null);
@@ -151,9 +138,8 @@ export function AgentsHubPanel({
       setLoadError(null);
     }
     try {
-      const [agentsResult, teamsResult, workflowsResult] = await Promise.allSettled([
+      const [agentsResult, workflowsResult] = await Promise.allSettled([
         window.garyxDesktop.listCustomAgents(),
-        window.garyxDesktop.listTeams(),
         window.garyxDesktop.listWorkflowDefinitions(),
       ]);
 
@@ -161,11 +147,6 @@ export function AgentsHubPanel({
         setAgents(sortedAgents(agentsResult.value));
       } else if (!silent) {
         setAgents([]);
-      }
-      if (teamsResult.status === 'fulfilled') {
-        setTeams(sortedTeams(teamsResult.value));
-      } else if (!silent) {
-        setTeams([]);
       }
       if (workflowsResult.status === 'fulfilled') {
         setWorkflows(sortedWorkflows(workflowsResult.value));
@@ -175,7 +156,6 @@ export function AgentsHubPanel({
 
       const failures = [
         agentsResult.status === 'rejected' ? 'agents' : null,
-        teamsResult.status === 'rejected' ? 'teams' : null,
         workflowsResult.status === 'rejected' ? 'workflows' : null,
       ].filter(Boolean);
 
@@ -268,25 +248,9 @@ export function AgentsHubPanel({
     setAgentDraft((current) => (current.agentId === nextId ? current : { ...current, agentId: nextId }));
   }, [agentDialogMode, agentDraft.displayName, agentIdTouched]);
 
-  useEffect(() => {
-    if (teamDialogMode !== 'create' || teamIdTouched) {
-      return;
-    }
-    const nextId = deriveId(teamDraft.displayName);
-    setTeamDraft((current) => (current.teamId === nextId ? current : { ...current, teamId: nextId }));
-  }, [teamDialogMode, teamDraft.displayName, teamIdTouched]);
-
-  const agentMap = useMemo(() => {
-    return new Map(agents.map((agent) => [agent.agentId, agent] as const));
-  }, [agents]);
-
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.agentId === selectedAgentId) || null,
     [agents, selectedAgentId],
-  );
-  const selectedTeam = useMemo(
-    () => teams.find((team) => team.teamId === selectedTeamId) || null,
-    [teams, selectedTeamId],
   );
   const selectedWorkflow = useMemo(
     () => workflows.find((workflow) => workflow.workflowId === selectedWorkflowId) || null,
@@ -309,25 +273,6 @@ export function AgentsHubPanel({
     });
   }, [agents, search]);
 
-  const filteredTeams = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    if (!needle) {
-      return teams;
-    }
-    return teams.filter((team) => {
-      const memberLabels = team.memberAgentIds
-        .map((agentId) => agentMap.get(agentId)?.displayName || agentId)
-        .join(' ');
-      return [
-        team.displayName,
-        team.teamId,
-        team.workflowText,
-        agentMap.get(team.leaderAgentId)?.displayName || team.leaderAgentId,
-        memberLabels,
-      ].some((value) => value.toLowerCase().includes(needle));
-    });
-  }, [agentMap, search, teams]);
-
   const filteredWorkflows = useMemo(() => {
     const needle = search.trim().toLowerCase();
     if (!needle) {
@@ -344,35 +289,12 @@ export function AgentsHubPanel({
     });
   }, [search, workflows]);
 
-  const teamSelectionCount = useMemo(() => {
-    return agents.filter((agent) => teamDraft.memberAgentIds.includes(agent.agentId)).length;
-  }, [agents, teamDraft.memberAgentIds]);
-
-  const allAgentsSelected = agents.length > 0 && teamSelectionCount === agents.length;
-  const teamMemberSelectionState = allAgentsSelected
-    ? true
-    : teamSelectionCount > 0
-      ? 'indeterminate'
-      : false;
-
   function closeAgentDialog() {
     setAgentDialogMode(null);
     setSelectedAgentId(null);
     setAgentDraft(emptyAgentDraft());
     setAgentIdTouched(false);
     setAvatarStyleDialogOpen(false);
-    setAvatarStyleTarget('agent');
-    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
-    setCustomAvatarStyle('');
-  }
-
-  function closeTeamDialog() {
-    setTeamDialogMode(null);
-    setSelectedTeamId(null);
-    setTeamDraft(emptyTeamDraft());
-    setTeamIdTouched(false);
-    setAvatarStyleDialogOpen(false);
-    setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
   }
@@ -415,7 +337,6 @@ export function AgentsHubPanel({
     setEnvViewMode('form');
     setEnvText('');
     setAgentIdTouched(false);
-    setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
   }
@@ -440,7 +361,6 @@ export function AgentsHubPanel({
     setEnvViewMode('form');
     setEnvText('');
     setAgentIdTouched(true);
-    setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
   }
@@ -469,66 +389,8 @@ export function AgentsHubPanel({
     setEnvViewMode('form');
     setEnvText('');
     setAgentIdTouched(true);
-    setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
-  }
-
-  function openCreateTeamDialog(seedAgentId?: string) {
-    const seedAgent = seedAgentId ? agentMap.get(seedAgentId) || null : null;
-    const nextDisplayName = seedAgent ? `${seedAgent.displayName} Team` : '';
-    const nextLeaderAgentId = seedAgent?.agentId || '';
-    const nextMemberAgentIds = seedAgent ? [seedAgent.agentId] : [];
-    setTeamDialogMode('create');
-    setSelectedTeamId(null);
-    setTeamDraft({
-      teamId: '',
-      displayName: nextDisplayName,
-      avatarDataUrl: '',
-      leaderAgentId: nextLeaderAgentId,
-      memberAgentIds: nextMemberAgentIds,
-      workflowText: buildSuggestedWorkflow(agents, nextLeaderAgentId, nextMemberAgentIds),
-    });
-    setTeamIdTouched(false);
-    setAvatarStyleTarget('team');
-    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
-    setCustomAvatarStyle('');
-    setActiveTab('teams');
-  }
-
-  function openViewTeamDialog(team: DesktopTeam) {
-    setTeamDialogMode('view');
-    setSelectedTeamId(team.teamId);
-    setTeamDraft({
-      teamId: team.teamId,
-      displayName: team.displayName,
-      avatarDataUrl: team.avatarDataUrl,
-      leaderAgentId: team.leaderAgentId,
-      memberAgentIds: [...team.memberAgentIds],
-      workflowText: team.workflowText,
-    });
-    setTeamIdTouched(true);
-    setAvatarStyleTarget('team');
-    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
-    setCustomAvatarStyle('');
-  }
-
-  function openEditTeamDialog(team: DesktopTeam) {
-    setTeamDialogMode('edit');
-    setSelectedTeamId(team.teamId);
-    setTeamDraft({
-      teamId: team.teamId,
-      displayName: team.displayName,
-      avatarDataUrl: team.avatarDataUrl,
-      leaderAgentId: team.leaderAgentId,
-      memberAgentIds: [...team.memberAgentIds],
-      workflowText: team.workflowText,
-    });
-    setTeamIdTouched(true);
-    setAvatarStyleTarget('team');
-    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
-    setCustomAvatarStyle('');
-    setActiveTab('teams');
   }
 
   function openViewWorkflowDialog(workflow: DesktopWorkflowDefinition) {
@@ -537,21 +399,8 @@ export function AgentsHubPanel({
     void loadWorkflowSource(workflow.workflowId);
   }
 
-  function selectAllTeamMembers(nextChecked: boolean) {
-    setTeamDraft((current) => {
-      const preservedLeaderIds = current.leaderAgentId ? [current.leaderAgentId] : [];
-      return {
-        ...current,
-        memberAgentIds: nextChecked
-          ? Array.from(new Set([...preservedLeaderIds, ...agents.map((agent) => agent.agentId)]))
-          : preservedLeaderIds,
-      };
-    });
-  }
-
   async function handleAvatarFileChange(
     event: React.ChangeEvent<HTMLInputElement>,
-    target: 'agent' | 'team' = 'agent',
   ) {
     const file = event.target.files?.[0] || null;
     event.target.value = '';
@@ -568,11 +417,7 @@ export function AgentsHubPanel({
     }
     try {
       const avatarDataUrl = await normalizeAvatarFile(file);
-      if (target === 'team') {
-        setTeamDraft((current) => ({ ...current, avatarDataUrl }));
-      } else {
-        setAgentDraft((current) => ({ ...current, avatarDataUrl }));
-      }
+      setAgentDraft((current) => ({ ...current, avatarDataUrl }));
     } catch (error) {
       const message = error instanceof Error && error.message === 'Avatar image is too large.'
         ? error.message
@@ -582,13 +427,8 @@ export function AgentsHubPanel({
   }
 
   async function handleGenerateAvatar(stylePrompt: string) {
-    const target = avatarStyleTarget;
-    const displayName = target === 'team'
-      ? teamDraft.displayName.trim()
-      : agentDraft.displayName.trim();
-    const agentId = target === 'team'
-      ? teamDraft.teamId.trim()
-      : agentDraft.agentId.trim();
+    const displayName = agentDraft.displayName.trim();
+    const agentId = agentDraft.agentId.trim();
     if (!displayName && !agentId) {
       onToast?.(t('Name is required.'), 'error');
       return;
@@ -598,20 +438,12 @@ export function AgentsHubPanel({
       const result = await window.garyxDesktop.generateCustomAgentAvatar({
         agentId,
         displayName: displayName || agentId,
-        kind: target,
         stylePrompt,
       });
-      if (target === 'team') {
-        setTeamDraft((current) => ({
-          ...current,
-          avatarDataUrl: result.avatarDataUrl,
-        }));
-      } else {
-        setAgentDraft((current) => ({
-          ...current,
-          avatarDataUrl: result.avatarDataUrl,
-        }));
-      }
+      setAgentDraft((current) => ({
+        ...current,
+        avatarDataUrl: result.avatarDataUrl,
+      }));
       setAvatarStyleDialogOpen(false);
       onToast?.(t('Avatar generated'), 'success');
     } catch {
@@ -652,26 +484,9 @@ export function AgentsHubPanel({
     }
   }
 
-  async function handleDeleteTeam(team: DesktopTeam) {
-    setSaving(true);
-    try {
-      await window.garyxDesktop.deleteTeam({ teamId: team.teamId });
-      onToast?.(t('Agent team deleted'), 'success');
-      closeTeamDialog();
-      await loadData();
-      await onRefreshAgentTargets?.();
-    } catch (error) {
-      onToast?.(error instanceof Error ? error.message : t('Failed to delete team'), 'error');
-    } finally {
-      setSaving(false);
-    }
-  }
-
   const showingAgents = activeTab === 'agents';
-  const showingTeams = activeTab === 'teams';
   const showingWorkflows = activeTab === 'workflows';
   const visibleAgents = filteredAgents;
-  const visibleTeams = filteredTeams;
   const visibleWorkflows = filteredWorkflows;
 
   return (
@@ -681,7 +496,7 @@ export function AgentsHubPanel({
           <h1 className="mgmt-page-title">{t('Agents')}</h1>
           <p className="mgmt-page-subtitle">
             {t('{count} total', {
-              count: showingAgents ? agents.length : showingTeams ? teams.length : workflows.length,
+              count: showingAgents ? agents.length : workflows.length,
             })}
           </p>
         </div>
@@ -689,11 +504,11 @@ export function AgentsHubPanel({
           <div className="mgmt-page-actions">
             <button
               className="mgmt-primary-button"
-              onClick={showingAgents ? openCreateAgentDialog : () => openCreateTeamDialog()}
+              onClick={openCreateAgentDialog}
               type="button"
             >
               <Plus aria-hidden size={15} strokeWidth={2} />
-              {showingAgents ? t('New Agent') : t('New Team')}
+              {t('New Agent')}
             </button>
           </div>
         ) : null}
@@ -710,17 +525,6 @@ export function AgentsHubPanel({
           >
             <span>{t("Agent")}</span>
             <Badge className="agents-hub-tab-badge" variant="outline">{agents.length}</Badge>
-          </button>
-          <button
-            className={`agents-hub-tab ${showingTeams ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('teams');
-            }}
-            role="tab"
-            type="button"
-          >
-            <span>{t("Agent Team")}</span>
-            <Badge className="agents-hub-tab-badge" variant="outline">{teams.length}</Badge>
           </button>
           <button
             className={`agents-hub-tab ${showingWorkflows ? 'active' : ''}`}
@@ -763,10 +567,10 @@ export function AgentsHubPanel({
             <TableRow>
               <TableHead style={{ width: '40%' }}>{t('Name')}</TableHead>
               <TableHead style={{ width: '20%' }}>
-                {showingAgents ? t('Provider') : showingTeams ? t('Leader') : t('Version')}
+                {showingAgents ? t('Provider') : t('Version')}
               </TableHead>
               <TableHead style={{ width: '20%' }}>
-                {showingAgents ? t('Type') : showingTeams ? t('Members') : t('Workspace')}
+                {showingAgents ? t('Type') : t('Workspace')}
               </TableHead>
               <TableHead style={{ width: '20%' }} className="text-right">
                 {showingWorkflows ? t('Package') : t('Actions')}
@@ -830,13 +634,6 @@ export function AgentsHubPanel({
                             {t('Memory')}
                           </Button>
                         ) : null}
-                        <Button
-                          onClick={(e) => { stopEvent(e); openCreateTeamDialog(agent.agentId); }}
-                          size="sm"
-                          variant="ghost"
-                        >
-                          {t('Create Team')}
-                        </Button>
                         {!agent.builtIn ? (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -875,88 +672,6 @@ export function AgentsHubPanel({
                 <TableRow>
                   <TableCell className="text-center text-muted-foreground" colSpan={4}>
                     {t('No agents matching "{query}"', { query: search.trim() })}
-                  </TableCell>
-                </TableRow>
-              ) : null
-            ) : showingTeams ? (
-              visibleTeams.length ? (
-                visibleTeams.map((team) => {
-                  const leaderLabel = agentMap.get(team.leaderAgentId)?.displayName || team.leaderAgentId;
-                  return (
-                    <TableRow
-                      className="cursor-pointer"
-                      key={team.teamId}
-                      onClick={() => openViewTeamDialog(team)}
-                    >
-                      <TableCell>
-                        <div className="agents-hub-name-cell">
-                          <AgentAvatarEditor
-                            avatarDataUrl={team.avatarDataUrl}
-                            className="agents-hub-avatar-sm"
-                            label={team.displayName || team.teamId}
-                            team
-                          />
-                          <div>
-                            <div className="agents-hub-cell-name">{team.displayName}</div>
-                            <div className="agents-hub-cell-id">{team.teamId}</div>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell>{leaderLabel}</TableCell>
-                      <TableCell>
-                        {team.memberAgentIds
-                          .slice(0, 3)
-                          .map((id) => agentMap.get(id)?.displayName || id)
-                          .join(', ')}
-                        {team.memberAgentIds.length > 3 ? ` +${team.memberAgentIds.length - 3}` : ''}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="agents-hub-row-actions">
-                          <Button
-                            onClick={(e) => { stopEvent(e); onStartThread?.(team.teamId); }}
-                            size="sm"
-                            variant="outline"
-                          >
-                            {t('Chat')}
-                          </Button>
-                          <Button
-                            onClick={(e) => { stopEvent(e); openEditTeamDialog(team); }}
-                            size="sm"
-                            variant="ghost"
-                          >
-                            {t('Edit')}
-                          </Button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                aria-label={t('More actions for {name}', { name: team.displayName || team.teamId })}
-                                className="bot-table-action-button"
-                                onClick={stopEvent}
-                                type="button"
-                              >
-                                <MoreDotsIcon size={14} />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" sideOffset={4}>
-                              <DropdownMenuItem
-                                disabled={saving}
-                                onSelect={() => { void handleDeleteTeam(team); }}
-                                variant="destructive"
-                              >
-                                <Trash aria-hidden />
-                                {t('Delete')}
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              ) : search.trim() ? (
-                <TableRow>
-                  <TableCell className="text-center text-muted-foreground" colSpan={4}>
-                    {t('No teams matching "{query}"', { query: search.trim() })}
                   </TableCell>
                 </TableRow>
               ) : null
@@ -1081,7 +796,6 @@ export function AgentsHubPanel({
         onOpenMemory={onOpenMemory}
         onStartThread={onStartThread}
         onToast={onToast}
-        openCreateTeamDialog={openCreateTeamDialog}
         openEditAgentDialog={openEditAgentDialog}
         providerModelsByType={providerModelsByType}
         providerModelsLoading={providerModelsLoading}
@@ -1090,7 +804,6 @@ export function AgentsHubPanel({
         setAgentDraft={setAgentDraft}
         setAgentIdTouched={setAgentIdTouched}
         setAvatarStyleDialogOpen={setAvatarStyleDialogOpen}
-        setAvatarStyleTarget={setAvatarStyleTarget}
         setEnvText={setEnvText}
         setEnvViewMode={setEnvViewMode}
         setSaving={setSaving}
@@ -1106,26 +819,6 @@ export function AgentsHubPanel({
         setAvatarStyleDialogOpen={setAvatarStyleDialogOpen}
         setAvatarStyleId={setAvatarStyleId}
         setCustomAvatarStyle={setCustomAvatarStyle}
-      />
-
-      <TeamFormDialog
-        agentMap={agentMap}
-        agents={agents}
-        avatarGenerating={avatarGenerating}
-        closeTeamDialog={closeTeamDialog}
-        handleAvatarFileChange={handleAvatarFileChange}
-        loadData={loadData}
-        onStartThread={onStartThread}
-        onToast={onToast}
-        openEditTeamDialog={openEditTeamDialog}
-        saving={saving}
-        selectedTeam={selectedTeam}
-        setAvatarStyleDialogOpen={setAvatarStyleDialogOpen}
-        setAvatarStyleTarget={setAvatarStyleTarget}
-        setSaving={setSaving}
-        setTeamDraft={setTeamDraft}
-        teamDialogMode={teamDialogMode}
-        teamDraft={teamDraft}
       />
 
       <WorkflowViewDialog

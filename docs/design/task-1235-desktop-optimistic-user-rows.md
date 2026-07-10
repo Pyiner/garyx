@@ -4,7 +4,7 @@ Task: `#TASK-1235`
 
 ## Problem
 
-Desktop solo thread rendering now maps only `render_state.rows` plus seq-backed
+Desktop thread rendering now maps only `render_state.rows` plus seq-backed
 message bodies. A sync send still seeds a local user message with a stable
 `origin:<intentId>` id, but the message has no `seq` until the gateway commits
 it. Because `buildThreadViewRows` resolves user rows only through
@@ -31,7 +31,7 @@ and merge reconciliation already line up with the server and iOS behavior.
 ## Proposed Change
 
 Add a pure render-view-model helper that appends unresolved local user messages
-after the server-derived solo rows:
+after the server-derived rows:
 
 ```ts
 buildThreadViewRowsWithLocalUsers(renderState, messagesBySeq, activeMessages)
@@ -61,11 +61,10 @@ The appended row shape will reuse the existing user-message rendering path:
 }
 ```
 
-`ThreadPage` will use the new helper for solo threads only. Team-mode flattening
-continues to use `buildThreadViewBlocks` unchanged. The existing
+`ThreadPage` will use the new helper for turn rows. The existing
 `activePendingAckIntents` and `visibleRemotePendingInputs` overlays stay where
 they are; sync sends do not use `activePendingAckIntents`, so the local row
-fills only the missing solo-thread sync-send case.
+fills only the missing thread sync-send case.
 
 ## Dedupe
 
@@ -138,9 +137,8 @@ Focused validation:
 
 ## Risks
 
-- Appending local rows at the wrong layer could accidentally apply to team mode
-  or duplicate pending-ack/remote-pending overlays. Keep the helper wired only
-  to solo `turnRows`.
+- Appending local rows at the wrong layer could duplicate pending-ack or
+  remote-pending overlays. Keep the helper wired only to `turnRows`.
 - Filtering only by `representedMessageIds` could leave a transient duplicate
   if committed bodies arrive before rows. Include committed ids as a second
   guard.

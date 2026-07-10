@@ -15,37 +15,16 @@ final class GaryxCapsuleCardPresentationTests: XCTestCase {
         GaryxAgentSummary(id: id, displayName: displayName, providerType: "claude_code", model: "")
     }
 
-    private func makeTeam(id: String, displayName: String) -> GaryxTeamSummary {
-        GaryxTeamSummary(id: id, displayName: displayName, leaderAgentId: "", memberAgentIds: [])
-    }
-
-    func testCreatorPrefersAgentDisplayName() {
+    func testCreatorUsesAgentDisplayName() {
         let agents = [makeAgent(id: "agent-1000000001", displayName: "Test Agent")]
-        let teams = [makeTeam(id: "agent-1000000001", displayName: "Test Team")]
         XCTAssertEqual(
             GaryxCapsuleGalleryCardPresentation.creatorName(
                 agentId: "agent-1000000001",
                 providerType: "claude_code",
-                agents: agents,
-                teams: teams
+                agents: agents
             ),
             "Test Agent",
-            "agent display name wins over team and provider"
-        )
-    }
-
-    func testCreatorFallsBackToTeamWhenAgentMisses() {
-        // The team tier is the iOS-only fallback that desktop describeCreator lacks.
-        let teams = [makeTeam(id: "team-1000000002", displayName: "Test Team")]
-        XCTAssertEqual(
-            GaryxCapsuleGalleryCardPresentation.creatorName(
-                agentId: "team-1000000002",
-                providerType: "claude_code",
-                agents: [],
-                teams: teams
-            ),
-            "Test Team",
-            "team display name resolves when no agent matches"
+            "agent display name wins over provider"
         )
     }
 
@@ -54,11 +33,10 @@ final class GaryxCapsuleCardPresentationTests: XCTestCase {
             GaryxCapsuleGalleryCardPresentation.creatorName(
                 agentId: "agent-1000000003",
                 providerType: "claude_code",
-                agents: [],
-                teams: []
+                agents: []
             ),
             "agent-1000000003",
-            "a present agentId is shown raw when neither catalog resolves it"
+            "a present agentId is shown raw when the catalog misses it"
         )
     }
 
@@ -68,8 +46,7 @@ final class GaryxCapsuleCardPresentationTests: XCTestCase {
             GaryxCapsuleGalleryCardPresentation.creatorName(
                 agentId: nil,
                 providerType: "claude_code",
-                agents: [],
-                teams: []
+                agents: []
             ),
             "Claude Code"
         )
@@ -77,8 +54,7 @@ final class GaryxCapsuleCardPresentationTests: XCTestCase {
             GaryxCapsuleGalleryCardPresentation.creatorName(
                 agentId: "   ",
                 providerType: "codex_app_server",
-                agents: [],
-                teams: []
+                agents: []
             ),
             "Codex",
             "blank agentId is treated as absent"
@@ -90,8 +66,7 @@ final class GaryxCapsuleCardPresentationTests: XCTestCase {
             GaryxCapsuleGalleryCardPresentation.creatorName(
                 agentId: nil,
                 providerType: nil,
-                agents: [],
-                teams: []
+                agents: []
             ),
             "Agent"
         )
@@ -99,16 +74,14 @@ final class GaryxCapsuleCardPresentationTests: XCTestCase {
 
     func testCreatorSkipsBlankAgentDisplayName() {
         let agents = [makeAgent(id: "agent-1000000004", displayName: "   ")]
-        let teams = [makeTeam(id: "agent-1000000004", displayName: "Test Team")]
         XCTAssertEqual(
             GaryxCapsuleGalleryCardPresentation.creatorName(
                 agentId: "agent-1000000004",
                 providerType: "claude_code",
-                agents: agents,
-                teams: teams
+                agents: agents
             ),
-            "Test Team",
-            "a blank agent display name falls through to the team tier"
+            "agent-1000000004",
+            "a blank agent display name falls through to the raw agent ID"
         )
     }
 

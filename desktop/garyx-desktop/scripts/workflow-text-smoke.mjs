@@ -175,11 +175,11 @@ async function runDesktopFlow(userDataDir, homeDir) {
     const executorTabs = await page.locator('.tasks-executor-tabs button').allTextContents();
     assert.deepEqual(
       executorTabs.map((value) => value.replace(/\s+/g, ' ').trim()),
-      ['Agent', 'Agent Team', 'Workflow'],
+      ['Agent', 'Workflow'],
     );
 
     await page.locator('input[placeholder="Task title"]').fill(title);
-    await page.locator('.tasks-executor-tabs button').nth(2).click();
+    await page.locator('.tasks-executor-tabs button').nth(1).click();
     await page.waitForFunction(
       (id) =>
         [...document.querySelectorAll('.tasks-executor-panel select option')].some(

@@ -29,7 +29,6 @@ type AppLeftRailProps = {
   isAutomationView: boolean;
   isCapsulesView: boolean;
   isAgentsView: boolean;
-  isTeamsView: boolean;
   isSkillsView: boolean;
   isTasksView: boolean;
   isBrowserView: boolean;
@@ -76,7 +75,6 @@ export function AppLeftRail({
   isAutomationView,
   isCapsulesView,
   isAgentsView,
-  isTeamsView,
   isSkillsView,
   isTasksView,
   isBrowserView,
@@ -117,7 +115,7 @@ export function AppLeftRail({
   formatThreadTimestamp,
 }: AppLeftRailProps) {
   const { t } = useI18n();
-  const isThreadView = !isSettingsView && !isAutomationView && !isCapsulesView && !isAgentsView && !isTeamsView && !isSkillsView && !isTasksView && !isBrowserView;
+  const isThreadView = !isSettingsView && !isAutomationView && !isCapsulesView && !isAgentsView && !isSkillsView && !isTasksView && !isBrowserView;
   const visibleSelectedThreadId = isThreadView ? selectedThreadId : null;
   return (
     <aside className={`left-rail ${isSettingsView ? 'settings-rail-shell' : ''}`}>
@@ -197,7 +195,7 @@ export function AppLeftRail({
               <span>{t('Tasks')}</span>
             </button>
             <button
-              className={`sidebar-action ${isAgentsView || isTeamsView ? 'active' : ''}`}
+              className={`sidebar-action ${isAgentsView ? 'active' : ''}`}
               onClick={onOpenAgents}
               type="button"
             >

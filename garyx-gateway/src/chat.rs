@@ -28,7 +28,6 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
-use crate::agent_team_provider::AGENT_TEAM_PROVIDER_KEY;
 use crate::server::AppState;
 
 // ---------------------------------------------------------------------------
@@ -37,18 +36,7 @@ use crate::server::AppState;
 
 /// GET /api/chat/health - API channel health check.
 pub async fn chat_health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // `bridge_ready` reports whether any *user-visible* provider is wired
-    // up; the AgentTeam meta-provider is registered unconditionally at boot
-    // and is an internal dispatch target, not a user-facing provider — so
-    // exclude it here so "no providers configured" still reports as not
-    // ready. See `agent_team_provider::AGENT_TEAM_PROVIDER_KEY`.
-    let bridge_ready = state
-        .integration
-        .bridge
-        .provider_keys()
-        .await
-        .iter()
-        .any(|key| key != AGENT_TEAM_PROVIDER_KEY);
+    let bridge_ready = !state.integration.bridge.provider_keys().await.is_empty();
     Json(json!({
         "status": "ok",
         "channel": "api",

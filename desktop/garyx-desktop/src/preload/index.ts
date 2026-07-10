@@ -133,10 +133,6 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:delete-custom-agent", input),
   generateCustomAgentAvatar: (input) =>
     ipcRenderer.invoke("garyx:generate-custom-agent-avatar", input),
-  listTeams: () => ipcRenderer.invoke("garyx:list-teams"),
-  createTeam: (input) => ipcRenderer.invoke("garyx:create-team", input),
-  updateTeam: (input) => ipcRenderer.invoke("garyx:update-team", input),
-  deleteTeam: (input) => ipcRenderer.invoke("garyx:delete-team", input),
   createSkill: (input) => ipcRenderer.invoke("garyx:create-skill", input),
   updateSkill: (input) => ipcRenderer.invoke("garyx:update-skill", input),
   toggleSkill: (input) => ipcRenderer.invoke("garyx:toggle-skill", input),

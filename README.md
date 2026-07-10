@@ -118,7 +118,7 @@ Humans and systems
   -> Telegram / Feishu / WeChat / CLI / Desktop / HTTP / WebSocket
   -> Garyx gateway
   -> Router, transcripts, endpoint bindings, tasks, automations
-  -> Provider bridge: Claude Code / Codex / Gemini / agent teams
+  -> Provider bridge: Claude Code / Codex / Gemini
   -> Scoped MCP endpoint and configured upstream MCP servers
 ```
 
@@ -234,7 +234,7 @@ garyx/                  CLI binary and gateway runtime assembly
 garyx-models/           Shared config, provider, and thread data types
 garyx-core/             Pure routing, key, label, and slash-command logic
 garyx-router/           Thread records, transcripts, endpoint routing
-garyx-bridge/           Claude Code, Codex, Gemini, and team orchestration
+garyx-bridge/           Claude Code, Codex, and Gemini orchestration
 garyx-channels/         Built-in channel runtimes and plugin host protocol
 garyx-gateway/          HTTP API, MCP server, automations, skills, desktop API
 desktop/garyx-desktop/  macOS Electron desktop app

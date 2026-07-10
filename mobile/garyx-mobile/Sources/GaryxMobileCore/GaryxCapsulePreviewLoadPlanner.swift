@@ -23,24 +23,16 @@ public enum GaryxCapsuleChatCardPresentation {
 /// creator precedence and the join in Core lets the SwiftUI card stay a dumb
 /// renderer (no pill chips, no local switch tables).
 public enum GaryxCapsuleGalleryCardPresentation {
-    /// Creator name precedence — an iOS superset of desktop `describeCreator`
-    /// (which lacks the team lookup): agent name → team name → agentId →
-    /// prettified provider → "Agent". The team tier preserves the resolution the
-    /// current owner badge already performs, so a team-created capsule shows the
-    /// team's display name instead of a raw id.
+    /// Creator name precedence: agent name → agentId → prettified provider →
+    /// "Agent".
     public static func creatorName(
         agentId: String?,
         providerType: String?,
-        agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary]
+        agents: [GaryxAgentSummary]
     ) -> String {
         let trimmedAgentId = agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedAgentId.isEmpty {
             if let name = agents.first(where: { $0.id == trimmedAgentId })?.displayName
-                .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
-                return name
-            }
-            if let name = teams.first(where: { $0.id == trimmedAgentId })?.displayName
                 .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
                 return name
             }

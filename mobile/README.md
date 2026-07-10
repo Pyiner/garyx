@@ -12,7 +12,7 @@ works from the iOS simulator on the Mac itself.
 
 The iOS app is not a shrunken Mac window. It is the mobile control surface for
 the same Garyx gateway: chat threads, thread history, run interruption, active
-agent/team selection, task creation and status changes, automation run control,
+agent selection, task creation and status changes, automation run control,
 skills visibility, and gateway settings are available as touch-first panels.
 Deeper desktop-only editing surfaces still remain on the Mac app.
 

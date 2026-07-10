@@ -445,49 +445,6 @@ async fn test_deep_clone_isolation() {
 // Update merges only top-level keys
 // ---------------------------------------------------------------
 
-// ---------------------------------------------------------------
-// Legacy team-chat scrub on load
-// ---------------------------------------------------------------
-
-#[tokio::test]
-async fn test_get_scrubs_legacy_team_fields_and_repersists() {
-    let (store, _tmp) = make_store().await;
-    let key = "main::main::scrub-me";
-    let path = store.thread_file(key);
-    // Write a fossil-bearing file directly to disk so `set()`'s own
-    // scrub path doesn't interfere with the test.
-    let fossil = serde_json::to_vec_pretty(&json!({
-        "thread_id": key,
-        "team_run_id": "run-xyz",
-        "team_chat_messages": [
-            {"role": "user", "content": "a"},
-            {"role": "assistant", "content": "b"},
-        ],
-        "messages": [ {"role": "user", "content": "x"} ],
-    }))
-    .unwrap();
-    tokio::fs::write(&path, &fossil).await.unwrap();
-
-    // First read: scrub + re-persist.
-    let v = store.get(key).await.unwrap();
-    let obj = v.as_object().unwrap();
-    assert!(!obj.contains_key("team_run_id"));
-    assert!(!obj.contains_key("team_chat_messages"));
-    let msgs = obj.get("messages").and_then(|v| v.as_array()).unwrap();
-    assert_eq!(msgs.len(), 3);
-    assert_eq!(msgs[0]["content"], "x");
-    assert_eq!(msgs[1]["content"], "a");
-    assert_eq!(msgs[2]["content"], "b");
-
-    // Disk should now be clean; read raw bytes to confirm scrub was
-    // re-persisted rather than only applied in memory.
-    let disk_bytes = tokio::fs::read(&path).await.unwrap();
-    let disk: serde_json::Value = serde_json::from_slice(&disk_bytes).unwrap();
-    let disk_obj = disk.as_object().unwrap();
-    assert!(!disk_obj.contains_key("team_run_id"));
-    assert!(!disk_obj.contains_key("team_chat_messages"));
-}
-
 #[tokio::test]
 async fn test_update_preserves_existing_keys() {
     let (store, _tmp) = make_store().await;

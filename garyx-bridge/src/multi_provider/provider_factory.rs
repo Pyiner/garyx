@@ -188,9 +188,6 @@ pub(super) fn agent_provider_requires_dedicated_key(agent_cfg: &AgentProviderCon
     let Some(provider_type) = ProviderType::from_slug(&agent_cfg.provider_type) else {
         return false;
     };
-    if matches!(provider_type, ProviderType::AgentTeam) {
-        return false;
-    }
     if matches!(
         provider_type,
         ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm
@@ -305,10 +302,6 @@ pub(super) async fn create_provider(
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }
-        ProviderType::AgentTeam => Err(BridgeError::Internal(
-            "agent_team is a meta-provider and cannot be created from AgentProviderConfig"
-                .to_owned(),
-        )),
     }
 }
 

@@ -535,38 +535,6 @@ async fn task_create_binds_agent_executor_to_thread() {
 }
 
 #[tokio::test]
-async fn task_create_binds_team_executor_to_thread() {
-    let service = service();
-    let (thread_id, task) = service
-        .create_task(CreateTaskInput {
-            title: Some("Run team".to_owned()),
-            body: None,
-            assignee: None,
-            notification_target: None,
-            source: None,
-            executor: Some(TaskExecutor::Team {
-                team_id: "team::product".to_owned(),
-            }),
-            start: false,
-            actor: None,
-            agent_id: None,
-            workspace_dir: None,
-            runtime: None,
-        })
-        .await
-        .unwrap();
-    let record = service.thread_store.get(&thread_id).await.unwrap();
-    assert_eq!(record["agent_id"], "team::product");
-    assert_eq!(
-        task.executor,
-        Some(TaskExecutor::Team {
-            team_id: "team::product".to_owned(),
-        })
-    );
-    assert_eq!(task.status, TaskStatus::InProgress);
-}
-
-#[tokio::test]
 async fn status_machine_rejects_illegal_transition() {
     let service = service();
     let (_thread_id, task) = service

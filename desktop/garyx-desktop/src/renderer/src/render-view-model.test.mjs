@@ -5,7 +5,6 @@ import { readFileSync } from 'node:fs';
 import * as renderViewModel from './render-view-model.ts';
 
 const {
-  buildThreadViewBlocks,
   buildThreadViewRows,
   buildThreadViewRowsWithLocalUsers,
 } = renderViewModel;
@@ -81,9 +80,6 @@ function blockMessageIds(blocks) {
       ids.push(block.entry.message.id);
       continue;
     }
-    if (block.kind === 'capsule_cards') {
-      continue;
-    }
     for (const entry of block.entries) {
       if (entry.toolUse) ids.push(entry.toolUse.id);
       if (entry.toolResult) ids.push(entry.toolResult.id);
@@ -92,11 +88,34 @@ function blockMessageIds(blocks) {
   return ids;
 }
 
+function blocksForRows(rows) {
+  const blocks = [];
+  const appendActivity = (row) => {
+    if (row.kind === 'flat') {
+      blocks.push(row.block);
+      return;
+    }
+    blocks.push(...row.steps);
+    if (row.finalBlock) blocks.push(row.finalBlock);
+  };
+  for (const row of rows) {
+    if (row.kind === 'flat' || row.kind === 'turn') {
+      appendActivity(row);
+      continue;
+    }
+    if (row.kind === 'user_turn') {
+      blocks.push(row.userBlock);
+      row.activityRows.forEach(appendActivity);
+    }
+  }
+  return blocks;
+}
+
 test('every fixture render_state maps to exactly its visible messages', () => {
   for (const fixtureCase of renderFixture.cases) {
     const renderState = fixtureCase.expected;
     const messages = messagesBySeqFor(renderState);
-    const blocks = buildThreadViewBlocks(renderState, messages);
+    const blocks = blocksForRows(buildThreadViewRows(renderState, messages));
     const ids = blockMessageIds(blocks);
     // No drops, no duplicates: flattened blocks resolve exactly the message
     // refs the row tree references.
@@ -408,82 +427,6 @@ test('unloaded committed window: rows whose bodies are absent are skipped', () =
   );
   // Dropping everything yields no rows at all (no empty shells).
   assert.equal(buildThreadViewRows(renderState, new Map()).length, 0);
-  assert.equal(buildThreadViewBlocks(renderState, new Map()).length, 0);
-});
-
-test('team flatten preserves block order and per-message metadata', () => {
-  // Two user turns, each a step whose assistant carries a distinct agent_id, so
-  // the team speaker headers (resolved from metadata) can group correctly.
-  const renderState = {
-    based_on_seq: 6,
-    rows: [
-      {
-        kind: 'user_turn',
-        id: 'user_turn:seq:1',
-        user: { id: 'seq:1', seq: 1, role: 'user' },
-        activity: [
-          {
-            kind: 'step',
-            id: 'step:assistant_step:seq:2',
-            steps: [
-              {
-                kind: 'assistant_message',
-                id: 'assistant_step:seq:2',
-                message: { id: 'seq:2', seq: 2, role: 'assistant' },
-                streaming: false,
-              },
-            ],
-            final_message: { id: 'seq:3', seq: 3, role: 'assistant' },
-            running: false,
-            started_at: null,
-            finished_at: null,
-          },
-        ],
-        started_at: null,
-        finished_at: null,
-      },
-      {
-        kind: 'user_turn',
-        id: 'user_turn:seq:4',
-        user: { id: 'seq:4', seq: 4, role: 'user' },
-        activity: [
-          {
-            kind: 'assistant_reply',
-            id: 'assistant_reply:seq:5',
-            message: { id: 'seq:5', seq: 5, role: 'assistant' },
-            streaming: false,
-          },
-        ],
-        started_at: null,
-        finished_at: null,
-      },
-    ],
-    tailActivity: 'none',
-    activeToolGroupId: null,
-    progress_locus: 'none',
-    filtered_placeholders: [],
-  };
-  const messages = messagesBySeqFor(renderState, {
-    metadataBySeq: {
-      2: { agent_id: 'alpha' },
-      3: { agent_id: 'alpha' },
-      5: { agent_id: 'beta' },
-    },
-  });
-  const blocks = buildThreadViewBlocks(renderState, messages);
-  // Deterministic flatten: user, intermediate assistant, final assistant, user,
-  // reply — in transcript order.
-  assert.deepEqual(blockMessageIds(blocks), [
-    'seq:1',
-    'seq:2',
-    'seq:3',
-    'seq:4',
-    'seq:5',
-  ]);
-  const agentIds = blocks.map(
-    (block) => block.entry.message.metadata?.agent_id ?? null,
-  );
-  assert.deepEqual(agentIds, [null, 'alpha', 'alpha', null, 'beta']);
 });
 
 const capsuleCardFixture = {
@@ -494,7 +437,7 @@ const capsuleCardFixture = {
   action: 'updated',
 };
 
-test('solo capsule_cards pass through the turn without entering visible ids/blocks', () => {
+test('capsule_cards pass through the turn without entering visible ids/blocks', () => {
   const renderState = {
     based_on_seq: 2,
     rows: [
@@ -523,15 +466,14 @@ test('solo capsule_cards pass through the turn without entering visible ids/bloc
   const messages = messagesBySeqFor(renderState);
 
   const rows = buildThreadViewRows(renderState, messages);
-  const blocks = buildThreadViewBlocks(renderState, messages);
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].kind, 'user_turn');
   assert.equal(rows[0].activityRows.length, 1);
   // The cards pass through on the turn...
   assert.deepEqual(rows[0].capsuleCards, [capsuleCardFixture]);
-  // ...but are never messages: visible ids and the team flatten stay clean.
-  assert.deepEqual(blockMessageIds(blocks), ['seq:1', 'seq:2']);
+  // ...but are never transcript messages.
+  assert.deepEqual(blockMessageIds(blocksForRows(rows)), ['seq:1', 'seq:2']);
 });
 
 test('orphan turn with capsule_cards surfaces a top-level capsule_only row', () => {
@@ -570,43 +512,6 @@ test('orphan turn with capsule_cards surfaces a top-level capsule_only row', () 
   const capsuleOnly = rows.find((row) => row.kind === 'capsule_only');
   assert.ok(capsuleOnly, 'orphan cards should produce a capsule_only row');
   assert.deepEqual(capsuleOnly.capsuleCards, [capsuleCardFixture]);
-});
-
-test('team flatten emits a capsule_cards block after the turn, not a message', () => {
-  const renderState = {
-    based_on_seq: 2,
-    rows: [
-      {
-        kind: 'user_turn',
-        id: 'user_turn:seq:1',
-        user: { id: 'seq:1', seq: 1, role: 'user' },
-        activity: [
-          {
-            kind: 'assistant_reply',
-            id: 'assistant_reply:seq:2',
-            message: { id: 'seq:2', seq: 2, role: 'assistant' },
-            streaming: false,
-          },
-        ],
-        started_at: null,
-        finished_at: null,
-        capsule_cards: [capsuleCardFixture],
-      },
-    ],
-    tailActivity: 'none',
-    activeToolGroupId: null,
-    progress_locus: 'none',
-    filtered_placeholders: [],
-  };
-  const messages = messagesBySeqFor(renderState);
-
-  const blocks = buildThreadViewBlocks(renderState, messages);
-  const capsuleBlock = blocks.find((block) => block.kind === 'capsule_cards');
-  assert.ok(capsuleBlock, 'team flatten should emit a capsule_cards block');
-  assert.deepEqual(capsuleBlock.cards, [capsuleCardFixture]);
-  // The block sits after the turn's message blocks and contributes no ids.
-  assert.deepEqual(blockMessageIds(blocks), ['seq:1', 'seq:2']);
-  assert.equal(blocks[blocks.length - 1].kind, 'capsule_cards');
 });
 
 test('unknown render activity and step item kinds are skipped', () => {
@@ -661,7 +566,7 @@ test('unknown render activity and step item kinds are skipped', () => {
   const messages = messagesBySeqFor(renderState);
 
   const rows = buildThreadViewRows(renderState, messages);
-  const blocks = buildThreadViewBlocks(renderState, messages);
+  const blocks = blocksForRows(rows);
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].kind, 'user_turn');

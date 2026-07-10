@@ -15,8 +15,7 @@ actor GaryxRecentThreadsWidgetPersistenceQueue {
         guard generation == latestGeneration else { return }
         let upserts = GaryxAvatarWriteThroughPlan.candidates(
             scope: input.gatewayScopeId,
-            agents: input.agents,
-            teams: input.teams
+            agents: input.agents
         )
         if !upserts.isEmpty {
             await avatarStore.upsert(upserts, validator: validator, now: Date())

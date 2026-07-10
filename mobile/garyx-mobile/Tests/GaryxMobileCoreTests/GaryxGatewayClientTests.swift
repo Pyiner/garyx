@@ -95,17 +95,16 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertTrue(styles.allSatisfy { !$0.label.isEmpty && !$0.prompt.isEmpty })
     }
 
-    func testAvatarPromptBuilderMatchesAgentTeamShape() {
+    func testAvatarPromptBuilderMatchesAgentShape() {
         let prompt = GaryxAvatarPromptBuilder.prompt(
-            displayName: "Planning Team",
-            identifier: "planning-team",
-            kind: .team,
+            displayName: "Planning Agent",
+            identifier: "planning-agent",
             stylePrompt: "layered paper-cut icon"
         )
 
-        XCTAssertTrue(prompt.contains(#"AI agent team named "Planning Team""#))
+        XCTAssertTrue(prompt.contains(#"AI agent named "Planning Agent""#))
         XCTAssertTrue(prompt.contains("Visual style: layered paper-cut icon."))
-        XCTAssertTrue(prompt.contains("one centered abstract team mark"))
+        XCTAssertTrue(prompt.contains("one centered abstract agent mark"))
         XCTAssertTrue(prompt.contains("Do not include text"))
     }
 
@@ -177,7 +176,7 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(attachments.first?["path"] as? String, "/workspace/project/note.md")
     }
 
-    func testAgentAndTeamRequestsEncodeExpectedUpdatedAtToken() throws {
+    func testAgentRequestEncodesExpectedUpdatedAtToken() throws {
         let agentRequest = GaryxCustomAgentRequest(
             agentId: "agent-test",
             displayName: "Agent Test",
@@ -187,18 +186,6 @@ final class GaryxGatewayClientTests: XCTestCase {
         let agentObject = try JSONSerialization.jsonObject(
             with: JSONEncoder().encode(agentRequest)) as? [String: Any]
         XCTAssertEqual(agentObject?["expected_updated_at"] as? String, "2026-01-01T00:00:00Z")
-
-        let teamRequest = GaryxTeamRequest(
-            teamId: "team-test",
-            displayName: "Team Test",
-            leaderAgentId: "leader",
-            memberAgentIds: ["leader"],
-            workflowText: "ship",
-            expectedUpdatedAt: "2026-01-01T00:00:00Z"
-        )
-        let teamObject = try JSONSerialization.jsonObject(
-            with: JSONEncoder().encode(teamRequest)) as? [String: Any]
-        XCTAssertEqual(teamObject?["expectedUpdatedAt"] as? String, "2026-01-01T00:00:00Z")
 
         // Create requests omit the token entirely instead of sending null.
         let createRequest = GaryxCustomAgentRequest(
@@ -364,26 +351,6 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         XCTAssertEqual(summary.id, "thread::unlabeled")
         XCTAssertEqual(summary.title, "New Thread")
-    }
-
-    func testThreadSummaryDecodesTeamHints() throws {
-        let data = Data(
-            """
-            {
-              "thread_id": "thread::team",
-              "team_id": "team-alpha",
-              "team_display_name": "Alpha Team",
-              "last_assistant_message": "ready"
-            }
-            """.utf8
-        )
-
-        let summary = try JSONDecoder().decode(GaryxThreadSummary.self, from: data)
-
-        XCTAssertEqual(summary.id, "thread::team")
-        XCTAssertEqual(summary.teamId, "team-alpha")
-        XCTAssertEqual(summary.teamName, "Alpha Team")
-        XCTAssertEqual(summary.lastMessagePreview, "ready")
     }
 
     func testThreadPinsPageDecodesGatewayShape() throws {
@@ -761,24 +728,6 @@ final class GaryxGatewayClientTests: XCTestCase {
                 """.utf8
             )
         )
-        let teams = try JSONDecoder().decode(
-            GaryxTeamsPage.self,
-            from: Data(
-                """
-                {
-                  "teams": [
-                    {
-                      "team_id": "team-alpha",
-                      "display_name": "Alpha Team",
-                      "leader_agent_id": "codex",
-                      "member_agent_ids": ["codex", "claude"],
-                      "workflow_text": "Plan, implement, review."
-                    }
-                  ]
-                }
-                """.utf8
-            )
-        )
         let automations = try JSONDecoder().decode(
             GaryxAutomationsPage.self,
             from: Data(
@@ -823,7 +772,6 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
 
         XCTAssertEqual(agents.agents.first?.id, "codex")
-        XCTAssertEqual(teams.teams.first?.memberAgentIds, ["codex", "claude"])
         XCTAssertEqual(automations.automations.first?.workspacePath, "/workspace/project")
         XCTAssertEqual(automations.automations.first?.targetThreadId, "thread::target")
         XCTAssertEqual(skills.skills.first?.name, "Mobile Skill")
@@ -1670,7 +1618,7 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(page.items.first?.thread?.excludeFromRecent, true)
     }
 
-    func testMacParityAgentTeamAndChannelPayloadsDecodeGatewayShapes() throws {
+    func testMacParityAgentAndChannelPayloadsDecodeGatewayShapes() throws {
         let agents = try JSONDecoder().decode(
             GaryxAgentsPage.self,
             from: Data(
@@ -1703,26 +1651,6 @@ final class GaryxGatewayClientTests: XCTestCase {
                       "displayName": "Remote Avatar Agent",
                       "providerType": "codex_app_server",
                       "avatarURL": "https://example.test/avatar.png"
-                    }
-                  ]
-                }
-                """.utf8
-            )
-        )
-        let teams = try JSONDecoder().decode(
-            GaryxTeamsPage.self,
-            from: Data(
-                """
-                {
-                  "teams": [
-                    {
-                      "team_id": "team-test",
-                      "display_name": "Test Team",
-                      "leader_agent_id": "agent-test",
-                      "member_agent_ids": ["agent-test", "codex"],
-                      "workflow_text": "Plan then verify.",
-                      "avatar_url": "https://example.test/team-avatar.png",
-                      "created_at": "2026-03-01T09:00:00Z"
                     }
                   ]
                 }
@@ -1841,7 +1769,6 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(agents.agents.first?.providerEnv["TOKEN"], "${TOKEN}")
         XCTAssertEqual(agents.agents.first?.systemPrompt, "Help with test work.")
         XCTAssertEqual(agents.agents.last?.avatarDataUrl, "https://example.test/avatar.png")
-        XCTAssertEqual(teams.teams.first?.avatarDataUrl, "https://example.test/team-avatar.png")
         XCTAssertEqual(plugins.plugins.first?.iconDataUrl, "data:image/png;base64,dGVzdA==")
         XCTAssertEqual(plugins.plugins.first?.configMethods.first?.kind, "auth_flow")
         XCTAssertEqual(configuredBots.bots.first?.agentId, "agent-test")

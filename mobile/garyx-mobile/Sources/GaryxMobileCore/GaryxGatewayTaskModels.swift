@@ -123,20 +123,17 @@ public struct GaryxTaskSummary: Decodable, Identifiable, Equatable, Sendable {
 public struct GaryxTaskExecutor: Decodable, Equatable, Sendable {
     public var type: String
     public var agentId: String?
-    public var teamId: String?
     public var workflowId: String?
     public var workflowVersion: Int?
 
     public init(
         type: String,
         agentId: String? = nil,
-        teamId: String? = nil,
         workflowId: String? = nil,
         workflowVersion: Int? = nil
     ) {
         self.type = type
         self.agentId = agentId
-        self.teamId = teamId
         self.workflowId = workflowId
         self.workflowVersion = workflowVersion
     }
@@ -149,8 +146,6 @@ public struct GaryxTaskExecutor: Decodable, Equatable, Sendable {
         case type
         case agentId = "agent_id"
         case agentIdCamel = "agentId"
-        case teamId = "team_id"
-        case teamIdCamel = "teamId"
         case workflowId = "workflow_id"
         case workflowIdCamel = "workflowId"
         case workflowVersion = "workflow_version"
@@ -161,7 +156,6 @@ public struct GaryxTaskExecutor: Decodable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         type = try container.garyxDecodeFirstString(.type) ?? ""
         agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel)
-        teamId = try container.garyxDecodeFirstString(.teamId, .teamIdCamel)
         workflowId = try container.garyxDecodeFirstString(.workflowId, .workflowIdCamel)
         workflowVersion = try container.decodeIfPresent(Int.self, forKey: .workflowVersion)
             ?? container.decodeIfPresent(Int.self, forKey: .workflowVersionCamel)

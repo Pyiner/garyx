@@ -7,9 +7,7 @@ use garyx_models::provider::{
     MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY, MODEL_SERVICE_TIER_METADATA_KEY,
     MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY, ProviderType,
 };
-use garyx_models::{
-    AgentTeamProfile, CustomAgentProfile, agent_runtime_metadata, resolve_agent_reference,
-};
+use garyx_models::{CustomAgentProfile, agent_runtime_metadata, resolve_agent_reference};
 use serde_json::{Value, json};
 
 use crate::garyx_db::ThreadMetaRecord;
@@ -40,7 +38,6 @@ pub(crate) fn provider_label(provider_type: &ProviderType) -> &'static str {
         ProviderType::Gpt => "GPT",
         ProviderType::ClaudeLlm => "Claude",
         ProviderType::GeminiLlm => "Gemini",
-        ProviderType::AgentTeam => "Team",
     }
 }
 
@@ -72,7 +69,6 @@ fn provider_default_config_keys(provider_type: &ProviderType) -> &'static [&'sta
         ProviderType::Gpt => &["gpt", "openai", "garyx", "garyx_native", "native"],
         ProviderType::ClaudeLlm => &["anthropic", "claude_llm"],
         ProviderType::GeminiLlm => &["google", "gemini_llm"],
-        ProviderType::AgentTeam => &[],
     }
 }
 
@@ -92,24 +88,22 @@ fn configured_provider_default_config(
     None
 }
 
-/// Agent/team catalog snapshot for one request. List routes resolve it once
+/// Agent catalog snapshot for one request. List routes resolve it once
 /// and build every row's runtime summary against it instead of cloning the
 /// full catalogs per thread.
 pub(crate) struct AgentCatalogSnapshot {
     agents: Vec<CustomAgentProfile>,
-    teams: Vec<AgentTeamProfile>,
 }
 
 impl AgentCatalogSnapshot {
     pub(crate) async fn load(state: &Arc<AppState>) -> Self {
         Self {
             agents: state.ops.custom_agents.list_agents().await,
-            teams: state.ops.agent_teams.list_teams().await,
         }
     }
 
     fn agent_runtime_metadata(&self, agent_id: &str) -> HashMap<String, Value> {
-        resolve_agent_reference(agent_id, &self.agents, &self.teams)
+        resolve_agent_reference(agent_id, &self.agents)
             .map(|reference| agent_runtime_metadata(&reference))
             .unwrap_or_default()
     }

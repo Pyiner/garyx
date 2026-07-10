@@ -38,7 +38,6 @@ import {
 import type {
   ArchiveThreadInput,
   CreateCustomAgentInput,
-  CreateTeamInput,
   CreateSkillEntryInput,
   CreateSkillInput,
   CreateTaskInput,
@@ -50,7 +49,6 @@ import type {
   DeleteSkillEntryInput,
   DeleteSkillInput,
   DeleteCustomAgentInput,
-  DeleteTeamInput,
   DeleteMcpServerInput,
   DeleteAutomationInput,
   DeleteThreadInput,
@@ -94,7 +92,6 @@ import type {
   UploadWorkspaceFilesInput,
   UpdateAutomationInput,
   UpdateCustomAgentInput,
-  UpdateTeamInput,
   UpdateThreadRuntimeSettingsInput,
   UpdateMcpServerInput,
   UpdateSkillInput,
@@ -111,7 +108,6 @@ import type {
 
 import {
   createCustomAgent,
-  createTeam,
   createSkill,
   createSkillEntry,
   createTask,
@@ -121,7 +117,6 @@ import {
   checkConnection,
   deleteCapsule,
   deleteCustomAgent,
-  deleteTeam,
   deleteMcpServer,
   deleteSkillEntry,
   deleteSlashCommand,
@@ -151,7 +146,6 @@ import {
   listProviderRecentSessions,
   listCustomAgents,
   listProviderModels,
-  listTeams,
   listWorkspaceDirectories,
   listWorkspaceFiles,
   listMcpServers,
@@ -171,7 +165,6 @@ import {
   uploadWorkspaceFiles,
   uploadChatAttachments,
   updateCustomAgent,
-  updateTeam,
   updateMcpServer,
   updateSkill,
   updateSlashCommand,
@@ -972,26 +965,6 @@ function registerIpcHandlers(): void {
       return generateCustomAgentAvatar(settings, input);
     },
   );
-
-  ipcMain.handle("garyx:list-teams", async () => {
-    const settings = await resolveSettings();
-    return listTeams(settings);
-  });
-
-  ipcMain.handle("garyx:create-team", async (_event, input: CreateTeamInput) => {
-    const settings = await resolveSettings();
-    return createTeam(settings, input);
-  });
-
-  ipcMain.handle("garyx:update-team", async (_event, input: UpdateTeamInput) => {
-    const settings = await resolveSettings();
-    return updateTeam(settings, input);
-  });
-
-  ipcMain.handle("garyx:delete-team", async (_event, input: DeleteTeamInput) => {
-    const settings = await resolveSettings();
-    return deleteTeam(settings, input);
-  });
 
   ipcMain.handle(
     "garyx:create-skill",

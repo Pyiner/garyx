@@ -159,7 +159,7 @@ pub(super) fn gateway_send_error(
 ) -> GatewayCliError {
     if error.is_timeout() {
         // Distinct from connect-refused: the gateway is up but slow (e.g. a
-        // provider bridge reload after an agent/team mutation). "Is it
+        // provider bridge reload after an agent mutation). "Is it
         // running?" would mislead here.
         GatewayCliError {
             kind: GatewayErrorKind::Unreachable,

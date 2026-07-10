@@ -121,23 +121,6 @@ impl MessageRouter {
             for (key, value) in crate::thread_metadata_from_value(thread_record) {
                 dispatch_metadata.entry(key).or_insert(value);
             }
-            if dispatch_metadata.contains_key("agent_team_id")
-                && !dispatch_metadata.contains_key("group_transcript_snapshot")
-            {
-                let snapshot = match self.thread_history.as_ref() {
-                    Some(history) => {
-                        crate::group_transcript::build_group_transcript_snapshot_from_history(
-                            history,
-                            &thread_id,
-                        )
-                        .await
-                    }
-                    None => crate::group_transcript::build_group_transcript_snapshot(
-                        thread_record,
-                    ),
-                };
-                dispatch_metadata.insert("group_transcript_snapshot".to_owned(), snapshot);
-            }
         }
 
         dispatch_metadata.insert(

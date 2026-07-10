@@ -1,23 +1,16 @@
 import Foundation
 
-public enum GaryxAvatarKind: String, Codable, Equatable, Sendable {
-    case agent
-    case team
-}
-
 public struct GaryxAvatarIdentity: Hashable, Codable, Sendable {
     public var scope: String
-    public var kind: GaryxAvatarKind
     public var id: String
 
-    public init(scope: String, kind: GaryxAvatarKind, id: String) {
+    public init(scope: String, id: String) {
         self.scope = scope.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.kind = kind
         self.id = id.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     public var storageKey: String {
-        "\(scope)|\(kind.rawValue)|\(id)"
+        "\(scope)|\(id)"
     }
 
     public var isUsable: Bool {

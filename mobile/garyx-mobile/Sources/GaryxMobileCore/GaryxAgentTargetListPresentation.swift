@@ -4,13 +4,11 @@ import Foundation
 public enum GaryxAgentTargetListPresentation {
     public static let defaultPrimaryLimit = 5
 
-    /// Built-in agents first, then custom agents, then teams; stable within
-    /// each group.
+    /// Built-in agents first, then custom agents; stable within each group.
     public static func ordered(_ targets: [GaryxMobileAgentTarget]) -> [GaryxMobileAgentTarget] {
-        let builtInAgents = targets.filter { $0.kind == .agent && $0.builtIn }
-        let customAgents = targets.filter { $0.kind == .agent && !$0.builtIn }
-        let teams = targets.filter { $0.kind == .team }
-        return builtInAgents + customAgents + teams
+        let builtInAgents = targets.filter(\.builtIn)
+        let customAgents = targets.filter { !$0.builtIn }
+        return builtInAgents + customAgents
     }
 
     /// The rows shown before collapsing into the all-agents level. At most

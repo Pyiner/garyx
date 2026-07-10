@@ -127,7 +127,7 @@ export class ThreadTranscriptCache {
    * Covers snapshot memory, pagination merge, thread info, pending inputs,
    * and the local/remote message merge. Not covered here (stays with legacy
    * owners): message-machine run-state sync, IPC cache persistence,
-   * desktopState session/team propagation, and intent history marking.
+   * desktopState session propagation and intent history marking.
    */
   applyRemote(transcript: ThreadTranscript, options: RemoteApplyOptions): void {
     const resolved = transcriptWithResolvedActiveRun(transcript);

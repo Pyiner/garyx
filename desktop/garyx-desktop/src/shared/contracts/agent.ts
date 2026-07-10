@@ -26,17 +26,6 @@ export interface DesktopCustomAgent {
   updatedAt: string;
 }
 
-export interface DesktopTeam {
-  teamId: string;
-  displayName: string;
-  leaderAgentId: string;
-  memberAgentIds: string[];
-  workflowText: string;
-  avatarDataUrl: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface CreateCustomAgentInput {
   agentId: string;
   displayName: string;
@@ -68,30 +57,10 @@ export interface DeleteCustomAgentInput {
 export interface GenerateCustomAgentAvatarInput {
   agentId?: string | null;
   displayName: string;
-  kind?: "agent" | "team";
   stylePrompt?: string | null;
 }
 
 export interface GenerateCustomAgentAvatarResult {
   avatarDataUrl: string;
   mediaType: string;
-}
-
-export interface CreateTeamInput {
-  teamId: string;
-  displayName: string;
-  leaderAgentId: string;
-  memberAgentIds: string[];
-  workflowText: string;
-  avatarDataUrl?: string | null;
-}
-
-export interface UpdateTeamInput extends CreateTeamInput {
-  currentTeamId: string;
-  /** Concurrency token: the `updatedAt` of the team this edit was based on. */
-  expectedUpdatedAt: string;
-}
-
-export interface DeleteTeamInput {
-  teamId: string;
 }

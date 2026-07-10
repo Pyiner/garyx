@@ -330,7 +330,6 @@ export function mergeForwardTranscriptPage(
     thread: page.thread ?? base.thread ?? null,
     threadInfo: page.threadInfo ?? base.threadInfo ?? null,
     pageInfo: mergeForwardPageInfo(base.pageInfo, page.pageInfo),
-    team: page.team ?? base.team ?? null,
   };
 }
 

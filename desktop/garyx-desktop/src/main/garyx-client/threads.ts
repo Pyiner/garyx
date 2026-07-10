@@ -8,7 +8,6 @@ import type {
   ThreadChannelBindingInfo,
   ThreadLogChunk,
   ThreadRuntimeInfo,
-  ThreadTeamBlock,
   ThreadTranscript,
   TranscriptMessage,
 } from "@shared/contracts";
@@ -59,7 +58,6 @@ interface HistoryPayload {
     reset?: boolean;
     user_query_limit?: number | null;
   };
-  team?: ThreadTeamBlockPayload | null;
   thread_runtime?: ThreadRuntimePayload | null;
 }
 
@@ -115,14 +113,6 @@ interface ThreadActiveRunPayload {
   pending_user_input_count?: number;
 }
 
-interface ThreadTeamBlockPayload {
-  team_id?: string;
-  display_name?: string;
-  leader_agent_id?: string;
-  member_agent_ids?: string[];
-  child_thread_ids?: Record<string, string>;
-}
-
 interface ThreadLogPayload {
   threadId?: string;
   thread_id?: string;
@@ -165,10 +155,6 @@ export interface ThreadSummaryPayload {
   last_user_message?: string | null;
   last_assistant_message?: string | null;
   last_message_preview?: string | null;
-  team_id?: string | null;
-  team_display_name?: string | null;
-  teamDisplayName?: string | null;
-  team?: ThreadTeamBlockPayload | null;
   recent_run_id?: string | null;
   recentRunId?: string | null;
   run_state?: string | null;
@@ -206,8 +192,7 @@ function parseThreadProviderType(
     value === "google" ||
     value === "claude_llm" ||
     value === "gemini_llm" ||
-    value === "garyx_native" ||
-    value === "agent_team"
+    value === "garyx_native"
   ) {
     if (value === "claude_tty") {
       return "claude_code";
@@ -248,8 +233,6 @@ function providerLabelForThread(
     case "google":
     case "gemini_llm":
       return "Gemini";
-    case "agent_team":
-      return "Team";
     default:
       return null;
   }
@@ -396,44 +379,6 @@ function mapPendingUserInput(
   };
 }
 
-function mapThreadTeamBlock(
-  value: ThreadTeamBlockPayload | null | undefined,
-): ThreadTeamBlock | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const teamId = typeof value.team_id === "string" ? value.team_id : "";
-  if (!teamId) {
-    return null;
-  }
-  const memberIds = Array.isArray(value.member_agent_ids)
-    ? value.member_agent_ids.filter(
-        (entry): entry is string => typeof entry === "string",
-      )
-    : [];
-  const childThreadIds: Record<string, string> = {};
-  if (value.child_thread_ids && typeof value.child_thread_ids === "object") {
-    for (const [agentId, threadId] of Object.entries(value.child_thread_ids)) {
-      if (
-        typeof agentId === "string" &&
-        typeof threadId === "string" &&
-        threadId
-      ) {
-        childThreadIds[agentId] = threadId;
-      }
-    }
-  }
-  return {
-    team_id: teamId,
-    display_name:
-      typeof value.display_name === "string" ? value.display_name : "",
-    leader_agent_id:
-      typeof value.leader_agent_id === "string" ? value.leader_agent_id : "",
-    member_agent_ids: memberIds,
-    child_thread_ids: childThreadIds,
-  };
-}
-
 function mapThreadChannelBinding(
   value:
     | NonNullable<ThreadSummaryPayload["channel_bindings"]>[number]
@@ -553,15 +498,6 @@ function mapThreadActiveRun(
 
 export function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
   const id = value.thread_id || value.thread_key || value.session_key || "";
-  const team = mapThreadTeamBlock(value.team);
-  const teamDisplayName =
-    (team && team.display_name.trim()) ||
-    (typeof value.team_display_name === "string"
-      ? value.team_display_name.trim()
-      : "") ||
-    (typeof value.teamDisplayName === "string"
-      ? value.teamDisplayName.trim()
-      : "");
   const labelTrimmed =
     typeof value.label === "string" && value.label.trim()
       ? value.label.trim()
@@ -570,11 +506,7 @@ export function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSumm
     typeof value.title === "string" && value.title.trim()
       ? value.title.trim()
       : "";
-  // Title fallback chain: explicit label wins; otherwise a team thread prefers
-  // the team's display_name so the thread list/header renders the team name.
-  // ThreadsListPage + ThreadPage both consume `DesktopThreadSummary.title`
-  // directly, so this fallback is the single source of truth for that branding.
-  const title = labelTrimmed || titleTrimmed || teamDisplayName || id;
+  const title = labelTrimmed || titleTrimmed || id;
   const lastMessagePreview =
     (typeof value.last_message_preview === "string" &&
       value.last_message_preview.trim()) ||
@@ -615,18 +547,6 @@ export function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSumm
       typeof (value as { agent_id?: unknown }).agent_id === "string"
         ? ((value as { agent_id?: string }).agent_id ?? null)
         : null,
-    teamId:
-      typeof (value as { team_id?: unknown }).team_id === "string"
-        ? ((value as { team_id?: string }).team_id ?? null)
-        : null,
-    teamName:
-      (team && team.display_name) ||
-      (typeof value.team_display_name === "string"
-        ? value.team_display_name
-        : typeof value.teamDisplayName === "string"
-          ? value.teamDisplayName
-          : null),
-    team,
     recentRunId:
       asString(value.recent_run_id) || asString(value.recentRunId) || null,
     runState: asString(value.run_state) || asString(value.runState) || null,
@@ -794,7 +714,6 @@ export async function fetchThreadHistory(
     thread: detail ? mapThreadSummary(detail) : null,
     threadInfo: mapThreadRuntimeInfo(threadInfoPayload),
     pageInfo: mapThreadTranscriptPageInfo(payload, limit),
-    team: mapThreadTeamBlock(payload.team),
   };
 }
 

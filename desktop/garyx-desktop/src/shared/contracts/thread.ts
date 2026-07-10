@@ -10,30 +10,6 @@ import type {
 } from "./transcript.ts";
 import type { DesktopWorkspaceMode } from "./workspace.ts";
 
-/**
- * Team block attached to a thread when its bound agent_id resolves to a Team.
- * Mirrors the Rust response shape — field names stay in snake_case for wire
- * fidelity because they flow straight through from the gateway JSON.
- *
- * Emitted by thread detail/history responses (GET /api/threads/:key nested
- * under the thread object; GET /api/threads/history as a top-level sibling of
- * `thread`/`messages`). The thread list stays lightweight and does not fetch
- * this block. Absent/null when the thread isn't bound to a Team. The `teamId`
- * + `teamName` hints remain for backward compatibility but the full block is
- * the authoritative source for team branding once details are loaded.
- */
-export interface ThreadTeamBlock {
-  team_id: string;
-  display_name: string;
-  leader_agent_id: string;
-  member_agent_ids: string[];
-  /**
-   * agent_id -> child thread_id. Empty object when no sub-agent has been
-   * dispatched yet. Always present when the `team` block itself is present.
-   */
-  child_thread_ids: Record<string, string>;
-}
-
 export interface DesktopThreadSummary {
   id: string;
   title: string;
@@ -44,16 +20,9 @@ export interface DesktopThreadSummary {
   workspacePath?: string | null;
   messageCount?: number;
   agentId?: string | null;
-  teamId?: string | null;
-  teamName?: string | null;
   recentRunId?: string | null;
   runState?: string | null;
   worktree?: ThreadWorktreeInfo | null;
-  /**
-   * Full team block when this thread is bound to a Team. It is filled by
-   * thread detail/history responses; list-only snapshots may omit it.
-   */
-  team?: ThreadTeamBlock | null;
 }
 
 export interface ThreadWorktreeInfo {
@@ -151,12 +120,6 @@ export interface ThreadTranscript {
   thread?: DesktopThreadSummary | null;
   threadInfo?: ThreadRuntimeInfo | null;
   pageInfo?: ThreadTranscriptPageInfo | null;
-  /**
-   * Team block when this thread is bound to an AgentTeam. `null` when the
-   * thread isn't a team thread. The gateway's `/api/threads/history`
-   * endpoint emits this as a sibling of `thread`/`messages`.
-   */
-  team?: ThreadTeamBlock | null;
 }
 
 export interface ThreadTranscriptPageInfo {
@@ -221,7 +184,7 @@ export interface CreateThreadInput {
   title?: string;
   workspacePath?: string | null;
   workspaceMode?: DesktopWorkspaceMode;
-  /** Agent or team ID. Backend resolves whether it's a team leader or custom agent. */
+  /** Agent ID. */
   agentId?: string | null;
   /** Optional per-thread model override; wins over the agent's configured model. */
   model?: string | null;

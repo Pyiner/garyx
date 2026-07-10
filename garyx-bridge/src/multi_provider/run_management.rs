@@ -118,11 +118,10 @@ fn summarize_value(value: &Value, limit: usize) -> String {
     }
 }
 
-fn scrub_subagent_runtime_metadata(metadata: &mut HashMap<String, Value>) {
-    // AgentTeam child runs inherit caller metadata for runtime context, but
-    // thread-bound identity/provider fields must be re-derived from the child
-    // thread itself so the leaf provider sees the sub-agent's own persona and
-    // session state rather than the parent group's.
+fn scrub_inline_run_runtime_metadata(metadata: &mut HashMap<String, Value>) {
+    // Inline runs inherit caller metadata for runtime context, but
+    // thread-bound identity/provider fields must be re-derived from the target
+    // thread itself.
     for key in [
         "agent_id",
         "agent_display_name",
@@ -132,8 +131,6 @@ fn scrub_subagent_runtime_metadata(metadata: &mut HashMap<String, Value>) {
         "requested_provider_type",
         SDK_SESSION_ID_METADATA_KEY,
         SDK_SESSION_FORK_METADATA_KEY,
-        "agent_team_id",
-        "group_transcript_snapshot",
         "bridge_run_id",
     ] {
         metadata.remove(key);
@@ -371,21 +368,6 @@ async fn resolve_effective_workspace_dir(
     }
 }
 
-fn missing_agent_team_binding_error(
-    thread_id: &str,
-    metadata: &HashMap<String, Value>,
-) -> BridgeError {
-    let team_id = metadata
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("unknown-team");
-    BridgeError::SessionError(format!(
-        "thread {thread_id} is bound to missing agent team {team_id}",
-    ))
-}
-
 impl MultiProviderBridge {
     async fn resolve_thread_execution_target(
         &self,
@@ -405,12 +387,6 @@ impl MultiProviderBridge {
             .await;
         let requested_provider =
             requested_provider.or_else(|| requested_provider_from_metadata(metadata));
-
-        if requested_provider == Some(ProviderType::AgentTeam)
-            && !metadata.contains_key("agent_team_id")
-        {
-            return Err(missing_agent_team_binding_error(thread_id, metadata));
-        }
 
         let exact_agent_provider_key =
             if let Some(agent_id) = requested_agent_id_from_metadata(metadata) {
@@ -1234,14 +1210,13 @@ impl MultiProviderBridge {
         Ok(())
     }
 
-    /// Run a thread-bound sub-agent turn inline through the bridge's normal
+    /// Run a thread-bound turn inline through the bridge's normal
     /// thread execution path.
     ///
-    /// Used by the AgentTeam meta-provider for child-thread dispatch. Unlike
-    /// `start_agent_run`, this helper awaits completion and persists the child
+    /// Unlike `start_agent_run`, this helper awaits completion and persists the
     /// thread's transcript/provider state before returning the
     /// `ProviderRunResult`.
-    pub async fn run_subagent_streaming(
+    pub async fn run_inline_streaming(
         &self,
         thread_id: &str,
         message: &str,
@@ -1265,7 +1240,7 @@ impl MultiProviderBridge {
             )));
         }
 
-        scrub_subagent_runtime_metadata(&mut metadata);
+        scrub_inline_run_runtime_metadata(&mut metadata);
         if let Some(store) = self.inner.thread_store.read().await.clone()
             && let Some(thread_data) = store.get(thread_id).await
         {
@@ -1280,8 +1255,8 @@ impl MultiProviderBridge {
         let (provider_key, provider, _) = self
             .resolve_thread_execution_target(
                 thread_id,
-                "agent_team",
-                "subagent",
+                "api",
+                "inline",
                 &mut metadata,
                 None,
             )

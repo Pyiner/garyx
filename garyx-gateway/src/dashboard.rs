@@ -14,7 +14,6 @@ use garyx_models::local_paths::default_log_file_path;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::agent_team_provider::AGENT_TEAM_PROVIDER_KEY;
 use crate::delivery_target::metrics_snapshot as delivery_target_metrics_snapshot;
 use crate::server::AppState;
 
@@ -75,16 +74,8 @@ pub async fn agent_view(State(state): State<Arc<AppState>>) -> impl IntoResponse
     let keys = bridge.provider_keys().await;
     let active_runs = bridge.get_active_runs().await;
 
-    // The AgentTeam meta-provider is always registered at boot and is an
-    // internal dispatch target rather than a user-configurable provider;
-    // hide it from the admin view. See `agent_team_provider` module docs.
-    let visible_keys: Vec<&String> = keys
-        .iter()
-        .filter(|key| key.as_str() != AGENT_TEAM_PROVIDER_KEY)
-        .collect();
-
     let mut providers = Vec::new();
-    for key in &visible_keys {
+    for key in &keys {
         let provider = bridge.get_provider(key).await;
         if let Some(p) = provider {
             let run_count = active_runs.len(); // approximate; per-provider not tracked
@@ -99,7 +90,7 @@ pub async fn agent_view(State(state): State<Arc<AppState>>) -> impl IntoResponse
 
     Json(json!({
         "providers": providers,
-        "bridge_ready": !visible_keys.is_empty(),
+        "bridge_ready": !keys.is_empty(),
         "total_active_runs": active_runs.len(),
     }))
 }

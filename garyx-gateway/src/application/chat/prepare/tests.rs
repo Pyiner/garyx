@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent_teams::AgentTeamStore;
 use crate::custom_agents::CustomAgentStore;
 use crate::server::AppStateBuilder;
 use garyx_models::config::{GaryxConfig, McpServerConfig, SlashCommand};
@@ -8,7 +7,6 @@ use serde_json::json;
 fn test_state() -> Arc<AppState> {
     AppStateBuilder::new(GaryxConfig::default())
         .with_custom_agent_store(Arc::new(CustomAgentStore::new()))
-        .with_agent_team_store(Arc::new(AgentTeamStore::new()))
         .build()
 }
 

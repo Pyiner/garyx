@@ -90,7 +90,7 @@ Common account fields:
 | --- | --- |
 | `enabled` | Whether the account should run. |
 | `name` | Optional display name in the desktop app. |
-| `agent_id` | Agent or team used for new inbound threads. |
+| `agent_id` | Agent used for new inbound threads. |
 | `workspace_dir` | Default execution directory path for new threads from this account. Takes priority over the selected Agent's `default_workspace_dir`. |
 | `workspace_mode` | Optional workspace mode for new inbound threads from this account: `local` or `worktree`. Defaults to `local`. |
 | `config` | Channel-specific fields declared by the built-in channel or plugin. |
@@ -498,7 +498,7 @@ commands. Data-change triggers live under Automation and can be managed with
 configured table event fires. Scheduled automations and data-change
 automations are two trigger mechanisms under the same Automation domain.
 
-## Agents and Teams
+## Agents
 
 Each channel account can set `agent_id`.
 
@@ -690,8 +690,8 @@ Garyx does not expose a persistent `/goal` command or thread-level
 auto-continuation loop mode. Use normal thread turns, tasks, or automations for
 long-running work.
 
-Use a custom agent or an agent team by setting the same `agent_id` used in your
-Garyx agent/team configuration. The CLI account setup flow can also prompt for
+Use a custom agent by setting the same `agent_id` used in your Garyx agent
+configuration. The CLI account setup flow can also prompt for
 an agent when `--agent` is omitted.
 
 Custom agents can also store an optional `default_workspace_dir`. It is a path
@@ -833,7 +833,7 @@ Opening that link on iOS imports the gateway URL, optional custom headers, and
 stores the gateway token in the iOS Keychain.
 
 The mobile app mirrors the Mac app's operational surfaces through gateway APIs:
-thread chat/history, active agent or team selection for new threads, task
+thread chat/history, active agent selection for new threads, task
 creation and status changes, automation run-now and pause/enable controls,
 Skills visibility, and gateway settings. It intentionally keeps deeper
 provider, MCP, channel, and Skill editing on the Mac app where the local

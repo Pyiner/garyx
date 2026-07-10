@@ -97,7 +97,7 @@ operation never writes loading flags, streams, or errors.
 **TranscriptLifecycleDeps (the React seams that remain):**
 
 ```
-setDesktopState            — title/team propagation, session cache
+setDesktopState            — title propagation, session cache
 setError                   — load/stream failures
 setHistoryLoading          — selected-thread loader chrome
 setPendingAutomationRun    — automation-response clearing
@@ -149,7 +149,7 @@ to mirror calls and the hook deletes.
    deep-equal (the 3c-2 recorded-ack recipe; side effects land in stub
    deps that append to traces).
 2. **6b-2b — apply chain.** The ride-alongs (persist, session cache,
-   title, team, intent marking) move into the module behind the NEW
+   title and intent marking) move into the module behind the NEW
    high-level entries — `acceptAuthoritativeTranscript` /
    `acceptRemoteTranscript` / the committed side-effect step — which run
    them and call the pure apply facades internally; the pure

@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent_teams::AgentTeamStore;
 use crate::custom_agents::CustomAgentStore;
 use crate::garyx_db::{
     CURRENT_TASK_PROJECTION_VERSION, GaryxDbService, RecentThreadDraft, TASK_PROJECTION_NAME,
@@ -105,11 +104,10 @@ async fn state_with_agent_default_workspace() -> Arc<AppState> {
         .expect("custom agent");
     AppStateBuilder::new(GaryxConfig::default())
         .with_custom_agent_store(custom_agents)
-        .with_agent_team_store(Arc::new(AgentTeamStore::new()))
         .build()
 }
 
-async fn state_with_task_executors() -> Arc<AppState> {
+async fn state_with_task_agents() -> Arc<AppState> {
     let mut config = GaryxConfig::default();
     config.tasks.enabled = true;
     let custom_agents = Arc::new(CustomAgentStore::new());
@@ -135,27 +133,14 @@ async fn state_with_task_executors() -> Arc<AppState> {
             .await
             .expect("custom agent");
     }
-    let agent_teams = Arc::new(AgentTeamStore::new());
-    agent_teams
-        .upsert_team_for_test(crate::agent_teams::UpsertAgentTeamRequest {
-            team_id: "product-ship".to_owned(),
-            display_name: "Product Ship".to_owned(),
-            leader_agent_id: "planner".to_owned(),
-            member_agent_ids: vec!["planner".to_owned(), "coder".to_owned()],
-            workflow_text: "Coordinate the task.".to_owned(),
-            avatar_data_url: None,
-        })
-        .await
-        .expect("agent team");
     AppStateBuilder::new(config)
         .with_custom_agent_store(custom_agents)
-        .with_agent_team_store(agent_teams)
         .build()
 }
 
 #[tokio::test]
 async fn list_task_forest_route_returns_projection_parent_and_run_state() {
-    let state = state_with_task_executors().await;
+    let state = state_with_task_agents().await;
     state
         .ops
         .garyx_db
@@ -248,7 +233,7 @@ async fn list_task_forest_route_returns_projection_parent_and_run_state() {
 
 #[tokio::test]
 async fn list_task_forest_route_defaults_to_pinned_roots_with_metadata() {
-    let state = state_with_task_executors().await;
+    let state = state_with_task_agents().await;
     state
         .ops
         .garyx_db
@@ -367,7 +352,7 @@ async fn list_task_forest_route_defaults_to_pinned_roots_with_metadata() {
 
 #[tokio::test]
 async fn list_task_forest_route_supports_anchor_thread_id() {
-    let state = state_with_task_executors().await;
+    let state = state_with_task_agents().await;
     state
         .ops
         .garyx_db
@@ -439,7 +424,7 @@ async fn list_task_forest_route_supports_anchor_thread_id() {
 
 #[tokio::test]
 async fn list_task_forest_route_supports_conversation_anchor_thread_id() {
-    let state = state_with_task_executors().await;
+    let state = state_with_task_agents().await;
     state
         .ops
         .garyx_db
@@ -552,7 +537,7 @@ async fn list_task_forest_route_supports_conversation_anchor_thread_id() {
 /// anchor and for a deep child task anchor, thread root first.
 #[tokio::test]
 async fn list_task_forest_route_returns_identical_forest_for_conversation_and_task_anchors() {
-    let state = state_with_task_executors().await;
+    let state = state_with_task_agents().await;
     state
         .ops
         .garyx_db
@@ -710,7 +695,6 @@ async fn task_runtime_explicit_workspace_overrides_agent_default() {
 async fn task_runtime_without_agent_default_keeps_workspace_unset() {
     let state = AppStateBuilder::new(GaryxConfig::default())
         .with_custom_agent_store(Arc::new(CustomAgentStore::new()))
-        .with_agent_team_store(Arc::new(AgentTeamStore::new()))
         .build();
     let runtime = task_runtime_with_default_workspace(&state, None, Some("claude"))
         .await
@@ -721,7 +705,7 @@ async fn task_runtime_without_agent_default_keeps_workspace_unset() {
 
 #[tokio::test]
 async fn agent_executor_creates_in_progress_task_and_dispatches_without_assignee() {
-    let state = state_with_task_executors().await;
+    let state = state_with_task_agents().await;
 
     let (status, Json(payload)) = create_task(
         State(state.clone()),
@@ -763,80 +747,8 @@ async fn agent_executor_creates_in_progress_task_and_dispatches_without_assignee
 }
 
 #[tokio::test]
-async fn team_executor_binds_team_and_rejects_standalone_agent() {
-    let state = state_with_task_executors().await;
-
-    let (status, Json(payload)) = create_task(
-        State(state.clone()),
-        HeaderMap::new(),
-        Json(CreateTaskBody {
-            title: Some("Team executor".to_owned()),
-            body: None,
-            assignee: None,
-            notification_target: Some(TaskNotificationTargetBody::None),
-            source: None,
-            executor: Some(TaskExecutorBody::Team {
-                team_id: "product-ship".to_owned(),
-            }),
-            start: false,
-            actor: None,
-            agent_id: None,
-            workspace_dir: None,
-            runtime: None,
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(payload["task"]["status"], "in_progress");
-    assert!(payload["task"]["assignee"].is_null());
-    assert_eq!(payload["task"]["executor"]["type"], "team");
-    assert_eq!(payload["task"]["executor"]["team_id"], "product-ship");
-    assert_eq!(payload["dispatch"]["queued"], true);
-    assert_eq!(payload["dispatch"]["agent_id"], "product-ship");
-    let thread_id = payload["thread_id"].as_str().expect("thread id");
-    let stored = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .expect("stored thread");
-    assert_eq!(stored["agent_id"], "product-ship");
-    assert_eq!(stored["provider_type"], "agent_team");
-
-    let (status, Json(payload)) = create_task(
-        State(state),
-        HeaderMap::new(),
-        Json(CreateTaskBody {
-            title: Some("Bad team executor".to_owned()),
-            body: None,
-            assignee: None,
-            notification_target: Some(TaskNotificationTargetBody::None),
-            source: None,
-            executor: Some(TaskExecutorBody::Team {
-                team_id: "reviewer".to_owned(),
-            }),
-            start: false,
-            actor: None,
-            agent_id: None,
-            workspace_dir: None,
-            runtime: None,
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(
-        payload["error"]
-            .as_str()
-            .unwrap()
-            .contains("requires an agent team")
-    );
-}
-
-#[tokio::test]
-async fn executor_rejects_assignee_and_team_as_agent() {
-    let state = state_with_task_executors().await;
+async fn executor_rejects_assignee() {
+    let state = state_with_task_agents().await;
 
     let (status, Json(payload)) = create_task(
         State(state.clone()),
@@ -868,35 +780,6 @@ async fn executor_rejects_assignee_and_team_as_agent() {
             .unwrap()
             .contains("cannot also set an assignee")
     );
-
-    let (status, Json(payload)) = create_task(
-        State(state),
-        HeaderMap::new(),
-        Json(CreateTaskBody {
-            title: Some("Bad agent executor".to_owned()),
-            body: None,
-            assignee: None,
-            notification_target: Some(TaskNotificationTargetBody::None),
-            source: None,
-            executor: Some(TaskExecutorBody::Agent {
-                agent_id: "product-ship".to_owned(),
-            }),
-            start: false,
-            actor: None,
-            agent_id: None,
-            workspace_dir: None,
-            runtime: None,
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(
-        payload["error"]
-            .as_str()
-            .unwrap()
-            .contains("requires a standalone agent")
-    );
 }
 
 #[tokio::test]
@@ -923,7 +806,6 @@ async fn workflow_backed_task_creation_dispatches_workflow_entrypoint() {
     let state = AppStateBuilder::new(config)
         .with_garyx_db(garyx_db)
         .with_custom_agent_store(Arc::new(CustomAgentStore::new()))
-        .with_agent_team_store(Arc::new(AgentTeamStore::new()))
         .build();
 
     let task_workspace_dir = "/Users/test/workflow-task";

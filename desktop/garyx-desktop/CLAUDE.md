@@ -18,7 +18,7 @@ Before staging a change, scan the diff for personal data and remove it.
 ## Design Context
 
 ### Users
-Mixed audience — both technical users (developers using AI agents for coding, debugging, and automation) and non-technical users (knowledge workers using agents for writing, research, and daily work). Team managers who orchestrate multiple agents and agent teams. Users interact with the app on macOS as a desktop productivity tool.
+Mixed audience — both technical users (developers using AI agents for coding, debugging, and automation) and non-technical users (knowledge workers using agents for writing, research, and daily work). Users interact with the app on macOS as a desktop productivity tool.
 
 ### Brand Personality
 **Professional, refined, restrained** — Like Linear or Notion. Clean, efficient, no unnecessary decoration. Every element earns its place. The interface should feel like a precision instrument, not a toy.

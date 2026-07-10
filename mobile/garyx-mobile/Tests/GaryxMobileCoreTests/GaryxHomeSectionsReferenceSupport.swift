@@ -31,16 +31,13 @@ struct RefAgentIdentity: Equatable {
     var name: String?
     var avatarDataUrl: String?
     var providerType: String?
-    var isTeam: Bool
     var builtIn: Bool
 }
 
 /// Port of the App-target `GaryxSidebarThreadRowAvatar`.
 struct RefThreadRowAvatar: Equatable {
-    enum Kind: Equatable { case agent, team }
     let agentId: String
     let avatarDataUrl: String
-    let kind: Kind
     let label: String
     let providerType: String
     let builtIn: Bool
@@ -74,7 +71,6 @@ enum HomeThreadSectionsReference {
     struct Inputs: Equatable {
         var threads: [GaryxThreadSummary]
         var agents: [GaryxAgentSummary]
-        var teams: [GaryxTeamSummary]
         var automations: [GaryxAutomationSummary]
         var pinnedThreadIds: [String]
         var recentThreadIds: [String]
@@ -93,10 +89,6 @@ enum HomeThreadSectionsReference {
         let pinnedIds = normalizedPinnedThreadIds(input.pinnedThreadIds)
         let pinnedIdSet = Set(pinnedIds)
         let selectedThreadId = input.selectedThreadId
-        var teamsById: [String: GaryxTeamSummary] = [:]
-        for team in input.teams where teamsById[team.id] == nil {
-            teamsById[team.id] = team
-        }
         var agentsById: [String: GaryxAgentSummary] = [:]
         for agent in input.agents where agentsById[agent.id] == nil {
             agentsById[agent.id] = agent
@@ -115,7 +107,6 @@ enum HomeThreadSectionsReference {
                     isSelected: selectedThreadId == thread.id,
                     isPinned: true,
                     showsDivider: index > 0,
-                    teamsById: teamsById,
                     agentsById: agentsById,
                     automationThreadIds: automationThreadIds,
                     busyThreadIds: input.busyThreadIds,
@@ -133,7 +124,6 @@ enum HomeThreadSectionsReference {
                     isSelected: selectedThreadId == thread.id,
                     isPinned: false,
                     showsDivider: index > 0,
-                    teamsById: teamsById,
                     agentsById: agentsById,
                     automationThreadIds: automationThreadIds,
                     busyThreadIds: input.busyThreadIds,
@@ -149,13 +139,12 @@ enum HomeThreadSectionsReference {
         isSelected: Bool,
         isPinned: Bool,
         showsDivider: Bool,
-        teamsById: [String: GaryxTeamSummary],
         agentsById: [String: GaryxAgentSummary],
         automationThreadIds: Set<String>,
         busyThreadIds: Set<String>,
         now: Date
     ) -> RefHomeThreadRow {
-        let identity = self.identity(for: thread, teamsById: teamsById, agentsById: agentsById)
+        let identity = self.identity(for: thread, agentsById: agentsById)
         let canArchive = !busyThreadIds.contains(thread.id) && !automationThreadIds.contains(thread.id)
         return RefHomeThreadRow(
             id: thread.id,
@@ -168,7 +157,6 @@ enum HomeThreadSectionsReference {
             avatar: RefThreadRowAvatar(
                 agentId: identity.id ?? "",
                 avatarDataUrl: identity.avatarDataUrl ?? "",
-                kind: identity.isTeam ? .team : .agent,
                 label: identity.name ?? thread.title,
                 providerType: identity.providerType ?? "",
                 builtIn: identity.builtIn
@@ -180,31 +168,8 @@ enum HomeThreadSectionsReference {
 
     private static func identity(
         for thread: GaryxThreadSummary,
-        teamsById: [String: GaryxTeamSummary],
         agentsById: [String: GaryxAgentSummary]
     ) -> RefAgentIdentity {
-        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !teamId.isEmpty {
-            if let team = teamsById[teamId] {
-                return RefAgentIdentity(
-                    id: team.id,
-                    name: team.displayName,
-                    avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl,
-                    providerType: nil,
-                    isTeam: true,
-                    builtIn: false
-                )
-            }
-            return RefAgentIdentity(
-                id: teamId,
-                name: thread.teamName,
-                avatarDataUrl: nil,
-                providerType: nil,
-                isTeam: true,
-                builtIn: false
-            )
-        }
-
         let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !agentId.isEmpty {
             if let agent = agentsById[agentId] {
@@ -213,7 +178,6 @@ enum HomeThreadSectionsReference {
                     name: agent.displayName,
                     avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
                     providerType: agent.providerType,
-                    isTeam: false,
                     builtIn: agent.builtIn
                 )
             }
@@ -222,7 +186,6 @@ enum HomeThreadSectionsReference {
                 name: nil,
                 avatarDataUrl: nil,
                 providerType: thread.providerType,
-                isTeam: false,
                 builtIn: false
             )
         }
@@ -232,7 +195,6 @@ enum HomeThreadSectionsReference {
             name: nil,
             avatarDataUrl: nil,
             providerType: thread.providerType,
-            isTeam: false,
             builtIn: false
         )
     }
@@ -307,8 +269,6 @@ struct HomeSectionsIdentityKey: Equatable {
         let id: String
         let title: String
         let agentId: String?
-        let teamId: String?
-        let teamName: String?
         let providerType: String?
         let workspacePath: String?
         let lastMessagePreview: String
@@ -319,8 +279,6 @@ struct HomeSectionsIdentityKey: Equatable {
             id = t.id
             title = t.title
             agentId = t.agentId
-            teamId = t.teamId
-            teamName = t.teamName
             providerType = t.providerType
             workspacePath = t.workspacePath
             lastMessagePreview = t.lastMessagePreview
@@ -331,7 +289,6 @@ struct HomeSectionsIdentityKey: Equatable {
 
     let threads: [ThreadIdentity]
     let agents: [GaryxAgentSummary]
-    let teams: [GaryxTeamSummary]
     let automationThreadIds: Set<String>
     let pinnedThreadIds: [String]
     let recentThreadIds: [String]
@@ -340,7 +297,6 @@ struct HomeSectionsIdentityKey: Equatable {
     init(_ input: HomeThreadSectionsReference.Inputs) {
         threads = input.threads.map(ThreadIdentity.init)
         agents = input.agents
-        teams = input.teams
         automationThreadIds = Set(input.automations.compactMap {
             let id = ($0.targetThreadId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return id.isEmpty ? nil : id
@@ -357,7 +313,6 @@ struct HomeSectionsIdentityKey: Equatable {
 struct HomeSectionsNaiveKey: Equatable {
     let threads: [GaryxThreadSummary]
     let agents: [GaryxAgentSummary]
-    let teams: [GaryxTeamSummary]
     let automations: [GaryxAutomationSummary]
     let pinnedThreadIds: [String]
     let recentThreadIds: [String]
@@ -367,7 +322,6 @@ struct HomeSectionsNaiveKey: Equatable {
     init(_ input: HomeThreadSectionsReference.Inputs) {
         threads = input.threads
         agents = input.agents
-        teams = input.teams
         automations = input.automations
         pinnedThreadIds = input.pinnedThreadIds
         recentThreadIds = input.recentThreadIds
@@ -399,11 +353,10 @@ final class HomeThreadSectionsCache {
 
 enum GaryxHomeListFixture {
     /// Build a realistic home-list state: pinned + recent threads, a catalog of
-    /// agents/teams, and automations. All data is synthetic.
+    /// agents, and automations. All data is synthetic.
     static func makeInputs(
         threadCount: Int = 50,
         agentCount: Int = 80,
-        teamCount: Int = 25,
         automationCount: Int = 25,
         pinnedCount: Int = 6,
         runningCount: Int = 4,
@@ -419,18 +372,7 @@ enum GaryxHomeListFixture {
                 builtIn: i % 7 == 0
             )
         }
-        let teams = (0..<teamCount).map { i in
-            GaryxTeamSummary(
-                id: "team-\(i)",
-                displayName: "Test Team \(i)",
-                leaderAgentId: "agent-\(i % max(1, agentCount))",
-                memberAgentIds: ["agent-\(i % max(1, agentCount))"],
-                avatarDataUrl: i % 3 == 0 ? "data:image/png;base64,BBBB" : ""
-            )
-        }
-
         let threads = (0..<threadCount).map { i -> GaryxThreadSummary in
-            let isTeam = i % 5 == 0
             let isRunning = i < runningCount
             return GaryxThreadSummary(
                 id: "thread-\(i)",
@@ -440,9 +382,7 @@ enum GaryxHomeListFixture {
                 lastMessagePreview: "This is a representative multi-word last message preview for row \(i) with enough text to exercise the compacted-preview string work.",
                 workspacePath: "/Users/test/workspaces/project-\(i % 12)",
                 messageCount: 10 + i,
-                agentId: isTeam ? nil : "agent-\(i % max(1, agentCount))",
-                teamId: isTeam ? "team-\(i % max(1, teamCount))" : nil,
-                teamName: isTeam ? "Test Team \(i % max(1, teamCount))" : nil,
+                agentId: "agent-\(i % max(1, agentCount))",
                 providerType: ["claude_code", "codex", "gemini"][i % 3],
                 recentRunId: "run-\(i)",
                 activeRunId: isRunning ? "run-\(i)" : nil,
@@ -468,7 +408,6 @@ enum GaryxHomeListFixture {
         return HomeThreadSectionsReference.Inputs(
             threads: threads,
             agents: agents,
-            teams: teams,
             automations: automations,
             pinnedThreadIds: pinnedThreadIds,
             recentThreadIds: recentThreadIds,

@@ -39,8 +39,7 @@ for personal data and remove it.
 - `garyx-gateway`: HTTP API, MCP server, automations, restart flow, and desktop
   surface.
 - `garyx-router`: canonical threads, transcripts, endpoint state, and routing.
-- `garyx-bridge`: provider orchestration for Claude Code, Codex, Gemini, and
-  teams.
+- `garyx-bridge`: provider orchestration for Claude Code, Codex, and Gemini.
 - `garyx-channels`: built-in channel runtimes and subprocess plugin host.
 - `desktop/garyx-desktop`: Electron desktop app and shared renderer UI.
 - `mobile/garyx-mobile`: iOS app, widget, and `GaryxMobileCore` Swift package.
@@ -64,7 +63,7 @@ for personal data and remove it.
 - Configured bot account `config` is ordinary application state; do not add
   token-specific merge, redaction, or preservation paths beyond keeping real
   secrets out of committed fixtures.
-- Provider, agent, team, bot, and channel identity presentation should resolve
+- Provider, agent, bot, and channel identity presentation should resolve
   through shared presentation helpers instead of local view switch tables.
 
 Detailed data and runtime contracts: @docs/agents/repository-contracts.md and

@@ -69,8 +69,6 @@ final class GaryxConversationSurfaceKindTests: XCTestCase {
             workspacePath: nil,
             messageCount: nil,
             agentId: nil,
-            teamId: nil,
-            teamName: nil,
             providerType: nil,
             recentRunId: nil,
             activeRunId: nil,

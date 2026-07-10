@@ -33,7 +33,6 @@ import {
 import { findPendingAckIntentIndex, selectThreadRuntime } from "../message-machine.ts";
 import {
   mergeThread,
-  teamBlocksEqual,
   threadSummariesEquivalent,
 } from "../thread-model.ts";
 import { resolveIntentHistoryMatch, visibleTranscriptMessages } from "./transcript-materialize.ts";
@@ -466,7 +465,6 @@ function makeLegacyBindings(h) {
           null,
         worktree:
           transcript.thread.worktree ?? transcript.threadInfo?.worktree ?? null,
-        team: transcript.thread.team ?? transcript.team ?? null,
       };
     }
     const timestamps = transcript.messages
@@ -489,7 +487,6 @@ function makeLegacyBindings(h) {
       agentId: transcript.threadInfo?.agentId ?? null,
       recentRunId: transcript.threadInfo?.activeRun?.runId ?? null,
       worktree: transcript.threadInfo?.worktree ?? null,
-      team: transcript.team ?? null,
     };
   }
   function cacheOpenableTranscriptThread(threadId, transcript) {
@@ -522,32 +519,6 @@ function makeLegacyBindings(h) {
       options?.syncRunState ?? true,
     );
     cacheOpenableTranscriptThread(threadId, resolvedTranscript);
-    if (resolvedTranscript.team !== undefined) {
-      h.deps.setDesktopState((current) => {
-        if (!current) {
-          return current;
-        }
-        const nextTeam = resolvedTranscript.team ?? null;
-        let changed = false;
-        const mapThreadTeam = (thread) => {
-          if (thread.id !== threadId) {
-            return thread;
-          }
-          const prev = thread.team ?? null;
-          if (teamBlocksEqual(prev, nextTeam)) {
-            return thread;
-          }
-          changed = true;
-          return { ...thread, team: nextTeam };
-        };
-        const nextThreads = current.threads.map(mapThreadTeam);
-        const nextSessions = current.sessions.map(mapThreadTeam);
-        if (!changed) {
-          return current;
-        }
-        return { ...current, threads: nextThreads, sessions: nextSessions };
-      });
-    }
     markIntentsFromHistory(
       threadId,
       visibleTranscriptMessages(resolvedTranscript.messages),
@@ -1114,7 +1085,6 @@ function replayApplyChainSequence(bindings, h) {
     messages: [userMessage(0, "hello"), assistantMessage(1, "hi there")],
     pendingInputs: [],
     threadInfo: { agentId: "agent-1" },
-    team: { teamId: "team-1", name: "Test Team" },
   };
   // 1. Authoritative apply: persist + run-state + intent marking.
   bindings.applyCanonicalTranscript(THREAD, {
@@ -1123,8 +1093,7 @@ function replayApplyChainSequence(bindings, h) {
     pendingInputs: [],
     threadInfo: { agentId: "agent-1", workspacePath: "/Users/test/repo" },
   });
-  // 2. Remote apply with a team block on a session-only thread: session
-  //    cache write + team propagation into threads/sessions.
+  // 2. Remote apply on a session-only thread exercises the session cache write.
   h.deps.setDesktopState((current) => ({
     ...current,
     threads: [],
@@ -1148,7 +1117,6 @@ function replayApplyChainSequence(bindings, h) {
       ],
       pendingInputs: [],
       threadInfo: { agentId: "agent-1", workspacePath: "/Users/test/repo" },
-      team: { teamId: "team-1", name: "Test Team" },
     },
     { persist: true },
   );
@@ -1222,12 +1190,6 @@ test("dual-run: lifecycle matches the legacy apply chain (6b-2b)", async () => {
   assert.ok(
     nextH.ipcTrace.some(([name]) => name === "getThreadHistoryFull"),
     "the rewrite must run the single-owner refetch",
-  );
-  const sessions = nextH.getDesktopState().sessions;
-  assert.equal(
-    sessions.find((s) => s.id === THREAD)?.team?.teamId,
-    "team-1",
-    "the team block must propagate into the session cache",
   );
 });
 

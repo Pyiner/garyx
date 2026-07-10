@@ -36,10 +36,6 @@ pub enum TaskExecutor {
         #[serde(alias = "agentId")]
         agent_id: String,
     },
-    Team {
-        #[serde(alias = "teamId")]
-        team_id: String,
-    },
     Workflow {
         #[serde(alias = "workflowId")]
         workflow_id: String,

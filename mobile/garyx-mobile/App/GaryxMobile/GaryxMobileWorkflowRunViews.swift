@@ -336,7 +336,6 @@ private struct GaryxWorkflowChildCardView: View {
                 GaryxAgentAvatarView(
                     agentId: target?.id ?? child.agentId ?? "",
                     avatarDataUrl: target?.avatarDataUrl ?? "",
-                    kind: target?.kind ?? .agent,
                     label: target?.title ?? child.agentId ?? child.label,
                     providerType: target?.providerType ?? "",
                     builtIn: target?.builtIn ?? false,

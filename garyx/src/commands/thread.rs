@@ -3,14 +3,10 @@ use super::*;
 fn print_thread_summary(value: &Value) {
     let thread_id = value["thread_id"].as_str().unwrap_or("-");
     let label = value["label"].as_str().unwrap_or("-");
-    let team_id = value["team_id"].as_str();
     let workspace_dir = value["workspace_dir"].as_str().unwrap_or("(none)");
     println!("Thread: {thread_id}");
     println!("Label: {label}");
     println!("Workspace: {workspace_dir}");
-    if let Some(team_id) = team_id {
-        println!("Team: {team_id}");
-    }
 }
 
 pub(crate) async fn cmd_thread_list(
@@ -78,8 +74,6 @@ pub(crate) async fn cmd_thread_create(
     let workspace_dir = workspace_dir
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
-    // agent_id flows through unchanged; team ids and standalone agent ids share
-    // one namespace and the gateway's resolver decides which provider to pick.
     let agent_id = agent_id
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());

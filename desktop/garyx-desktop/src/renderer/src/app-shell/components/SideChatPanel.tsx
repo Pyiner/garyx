@@ -50,10 +50,7 @@ import {
   selectThreadRuntime,
   type MessageIntent,
 } from "../../message-machine";
-import {
-  automationForLatestThread,
-  deriveThreadTeamView,
-} from "../../thread-model";
+import { automationForLatestThread } from "../../thread-model";
 import { useGatewayMirror, useGatewayRoot } from "../../gateway-mirror/react";
 import { transcriptMessageMatchesIntent } from "../../gateway-mirror/transcript-materialize";
 import { isRunLoadingPlaceholderMessage } from "../loading-labels";
@@ -109,7 +106,6 @@ export interface SideChatPanelProps {
   preferredWorkspaceForNewThread: ThreadPageProps["preferredWorkspaceForNewThread"];
   selectableNewThreadWorkspaces: ThreadPageProps["selectableNewThreadWorkspaces"];
   threadAvatarCatalog: ThreadPageProps["threadAvatarCatalog"];
-  teamAgentDisplayNamesById: ThreadPageProps["teamAgentDisplayNamesById"];
   newThreadProviderModels?: DesktopProviderModels | null;
   botGroups: ThreadPageProps["botGroups"];
   botBindingDisabled: boolean;
@@ -176,7 +172,6 @@ export function SideChatPanel({
   preferredWorkspaceForNewThread,
   selectableNewThreadWorkspaces,
   threadAvatarCatalog,
-  teamAgentDisplayNamesById,
   botGroups,
   botBindingDisabled,
   workspaceMutation,
@@ -273,13 +268,11 @@ export function SideChatPanel({
   const sideChatThreadSummary = sideChatThreadId
     ? threadSummaryById.get(sideChatThreadId) || null
     : null;
-  const sideChatThreadTeamView = deriveThreadTeamView(sideChatThreadSummary);
   const sideChatAgent =
     sideChatThreadSummary?.agentId
       ? desktopAgentMap.get(sideChatThreadSummary.agentId) || null
       : null;
   const sideChatAgentLabel =
-    sideChatThreadTeamView.teamDisplayName ||
     sideChatAgent?.displayName ||
     sideChatThreadSummary?.agentId ||
     null;
@@ -874,7 +867,6 @@ export function SideChatPanel({
       threadLogsPanelWidth={0}
       threadLogsResizing={false}
       threadAvatarCatalog={threadAvatarCatalog}
-      teamAgentDisplayNamesById={teamAgentDisplayNamesById}
       visibleRemoteAwaitingAckInputs={sideChatVisibleRemotePendingInputs}
       visibleRemotePendingInputs={sideChatVisibleRemotePendingInputs}
       workflowRunContent={null}

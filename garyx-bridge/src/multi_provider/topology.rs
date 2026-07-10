@@ -44,24 +44,6 @@ impl MultiProviderBridge {
         Ok(())
     }
 
-    /// Pick any registered provider whose `provider_type()` matches `target`.
-    ///
-    /// Used by the AgentTeam meta-provider to route a child-thread run to the
-    /// provider backing that child's configured `provider_type`. This is an
-    /// O(n) scan of the provider pool; for MVP the pool is tiny (≤ a few
-    /// entries) and this is called at most once per child turn.
-    pub async fn pick_provider_by_type(
-        &self,
-        target: ProviderType,
-    ) -> Option<Arc<dyn AgentLoopProvider>> {
-        let topology = self.inner.topology.read().await;
-        topology
-            .provider_pool
-            .values()
-            .find(|provider| provider.provider_type() == target)
-            .cloned()
-    }
-
     /// Get a reference-counted handle to a provider by key.
     pub async fn get_provider(&self, key: &str) -> Option<Arc<dyn AgentLoopProvider>> {
         self.inner

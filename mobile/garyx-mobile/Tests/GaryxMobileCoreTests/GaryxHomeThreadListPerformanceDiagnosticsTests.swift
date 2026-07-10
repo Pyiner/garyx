@@ -61,17 +61,12 @@ final class GaryxHomeThreadListPerformanceDiagnosticsTests: XCTestCase {
 
         let current = DiagnosticAgentTargetPublicationBox(
             agents: fixture.agents,
-            teams: fixture.teams,
             automations: fixture.automations
         )
         var currentPublishes = 0
         var currentDerivedRows = 0
         var currentCancellables: Set<AnyCancellable> = []
         current.$agents.dropFirst().sink { _ in
-            currentPublishes += 1
-            currentDerivedRows += deriver.sections(input: fixture.input).totalRows
-        }.store(in: &currentCancellables)
-        current.$teams.dropFirst().sink { _ in
             currentPublishes += 1
             currentDerivedRows += deriver.sections(input: fixture.input).totalRows
         }.store(in: &currentCancellables)
@@ -82,26 +77,20 @@ final class GaryxHomeThreadListPerformanceDiagnosticsTests: XCTestCase {
 
         current.applyCurrent(
             agents: fixture.agents,
-            teams: fixture.teams,
             automations: fixture.automations
         )
 
-        XCTAssertEqual(currentPublishes, 3)
-        XCTAssertEqual(currentDerivedRows, 150)
+        XCTAssertEqual(currentPublishes, 2)
+        XCTAssertEqual(currentDerivedRows, 100)
 
         let target = DiagnosticAgentTargetPublicationBox(
             agents: fixture.agents,
-            teams: fixture.teams,
             automations: fixture.automations
         )
         var targetPublishes = 0
         var targetDerivedRows = 0
         var targetCancellables: Set<AnyCancellable> = []
         target.$agents.dropFirst().sink { _ in
-            targetPublishes += 1
-            targetDerivedRows += deriver.sections(input: fixture.input).totalRows
-        }.store(in: &targetCancellables)
-        target.$teams.dropFirst().sink { _ in
             targetPublishes += 1
             targetDerivedRows += deriver.sections(input: fixture.input).totalRows
         }.store(in: &targetCancellables)
@@ -112,7 +101,6 @@ final class GaryxHomeThreadListPerformanceDiagnosticsTests: XCTestCase {
 
         target.applyDeduped(
             agents: fixture.agents,
-            teams: fixture.teams,
             automations: fixture.automations
         )
 
@@ -227,7 +215,6 @@ private struct DiagnosticHomeThreadSectionsInput: Equatable {
     var recentThreadIds: [String]
     var selectedThreadId: String?
     var agents: [GaryxAgentSummary]
-    var teams: [GaryxTeamSummary]
     var automations: [GaryxAutomationSummary]
     var busyThreadIds: Set<String>
     var relativeTimeBucket: Int
@@ -258,7 +245,6 @@ private struct DiagnosticHomeThreadRow: Equatable, Identifiable {
 private struct DiagnosticHomeThreadRowAvatar: Equatable {
     let agentId: String
     let avatarDataUrl: String
-    let kind: GaryxMobileAgentTarget.Kind
     let label: String
     let providerType: String
     let builtIn: Bool
@@ -273,11 +259,6 @@ private final class DiagnosticHomeThreadSectionDeriver {
 
         let pinnedIds = normalizedThreadIds(input.pinnedThreadIds)
         let pinnedIdSet = Set(pinnedIds)
-
-        var teamsById: [String: GaryxTeamSummary] = [:]
-        for team in input.teams where teamsById[team.id] == nil {
-            teamsById[team.id] = team
-        }
 
         var agentsById: [String: GaryxAgentSummary] = [:]
         for agent in input.agents where agentsById[agent.id] == nil {
@@ -298,7 +279,6 @@ private final class DiagnosticHomeThreadSectionDeriver {
                     input: input,
                     isPinned: true,
                     showsDivider: index > 0,
-                    teamsById: teamsById,
                     agentsById: agentsById,
                     automationThreadIds: automationThreadIds
                 )
@@ -314,7 +294,6 @@ private final class DiagnosticHomeThreadSectionDeriver {
                     input: input,
                     isPinned: false,
                     showsDivider: index > 0,
-                    teamsById: teamsById,
                     agentsById: agentsById,
                     automationThreadIds: automationThreadIds
                 )
@@ -328,11 +307,10 @@ private final class DiagnosticHomeThreadSectionDeriver {
         input: DiagnosticHomeThreadSectionsInput,
         isPinned: Bool,
         showsDivider: Bool,
-        teamsById: [String: GaryxTeamSummary],
         agentsById: [String: GaryxAgentSummary],
         automationThreadIds: Set<String>
     ) -> DiagnosticHomeThreadRow {
-        let identity = identity(for: thread, teamsById: teamsById, agentsById: agentsById)
+        let identity = identity(for: thread, agentsById: agentsById)
         let timestamp = Self.formattedTimestamp(
             thread.updatedAt ?? thread.createdAt,
             relativeTimeBucket: input.relativeTimeBucket
@@ -350,7 +328,6 @@ private final class DiagnosticHomeThreadSectionDeriver {
             avatar: DiagnosticHomeThreadRowAvatar(
                 agentId: identity.id ?? "",
                 avatarDataUrl: identity.avatarDataUrl ?? "",
-                kind: identity.isTeam ? .team : .agent,
                 label: identity.name ?? thread.title,
                 providerType: identity.providerType ?? "",
                 builtIn: identity.builtIn
@@ -362,31 +339,8 @@ private final class DiagnosticHomeThreadSectionDeriver {
 
     private func identity(
         for thread: GaryxThreadSummary,
-        teamsById: [String: GaryxTeamSummary],
         agentsById: [String: GaryxAgentSummary]
     ) -> DiagnosticWidgetAgentIdentity {
-        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !teamId.isEmpty {
-            if let team = teamsById[teamId] {
-                return DiagnosticWidgetAgentIdentity(
-                    id: team.id,
-                    name: team.displayName,
-                    avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl,
-                    providerType: nil,
-                    isTeam: true,
-                    builtIn: false
-                )
-            }
-            return DiagnosticWidgetAgentIdentity(
-                id: teamId,
-                name: thread.teamName,
-                avatarDataUrl: nil,
-                providerType: nil,
-                isTeam: true,
-                builtIn: false
-            )
-        }
-
         let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !agentId.isEmpty {
             if let agent = agentsById[agentId] {
@@ -395,7 +349,6 @@ private final class DiagnosticHomeThreadSectionDeriver {
                     name: agent.displayName,
                     avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
                     providerType: agent.providerType,
-                    isTeam: false,
                     builtIn: agent.builtIn
                 )
             }
@@ -404,7 +357,6 @@ private final class DiagnosticHomeThreadSectionDeriver {
                 name: nil,
                 avatarDataUrl: nil,
                 providerType: thread.providerType,
-                isTeam: false,
                 builtIn: false
             )
         }
@@ -414,7 +366,6 @@ private final class DiagnosticHomeThreadSectionDeriver {
             name: nil,
             avatarDataUrl: nil,
             providerType: thread.providerType,
-            isTeam: false,
             builtIn: false
         )
     }
@@ -513,7 +464,7 @@ private final class DiagnosticWidgetSnapshotDeriver {
             let workspaceName = thread.workspacePath?
                 .garyxLastPathComponent
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let identity = widgetAgentIdentity(for: thread, agents: input.agents, teams: input.teams)
+            let identity = widgetAgentIdentity(for: thread, agents: input.agents)
             return GaryxMobileWidgetThread(
                 id: thread.id,
                 title: thread.title,
@@ -525,7 +476,6 @@ private final class DiagnosticWidgetSnapshotDeriver {
                 agentName: identity.name,
                 avatarDataUrl: identity.avatarDataUrl,
                 providerType: identity.providerType,
-                isTeam: identity.isTeam,
                 builtIn: identity.builtIn
             )
         }
@@ -533,31 +483,8 @@ private final class DiagnosticWidgetSnapshotDeriver {
 
     private func widgetAgentIdentity(
         for thread: GaryxThreadSummary,
-        agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary]
+        agents: [GaryxAgentSummary]
     ) -> DiagnosticWidgetAgentIdentity {
-        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !teamId.isEmpty {
-            if let team = teams.first(where: { $0.id == teamId }) {
-                return DiagnosticWidgetAgentIdentity(
-                    id: team.id,
-                    name: team.displayName,
-                    avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl,
-                    providerType: nil,
-                    isTeam: true,
-                    builtIn: false
-                )
-            }
-            return DiagnosticWidgetAgentIdentity(
-                id: teamId,
-                name: thread.teamName,
-                avatarDataUrl: nil,
-                providerType: nil,
-                isTeam: true,
-                builtIn: false
-            )
-        }
-
         let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !agentId.isEmpty {
             if let agent = agents.first(where: { $0.id == agentId }) {
@@ -566,7 +493,6 @@ private final class DiagnosticWidgetSnapshotDeriver {
                     name: agent.displayName,
                     avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
                     providerType: agent.providerType,
-                    isTeam: false,
                     builtIn: agent.builtIn
                 )
             }
@@ -575,7 +501,6 @@ private final class DiagnosticWidgetSnapshotDeriver {
                 name: nil,
                 avatarDataUrl: nil,
                 providerType: thread.providerType,
-                isTeam: false,
                 builtIn: false
             )
         }
@@ -585,7 +510,6 @@ private final class DiagnosticWidgetSnapshotDeriver {
             name: nil,
             avatarDataUrl: nil,
             providerType: thread.providerType,
-            isTeam: false,
             builtIn: false
         )
     }
@@ -607,45 +531,35 @@ private struct DiagnosticWidgetAgentIdentity: Equatable {
     var name: String?
     var avatarDataUrl: String?
     var providerType: String?
-    var isTeam: Bool
     var builtIn: Bool
 }
 
 private final class DiagnosticAgentTargetPublicationBox: ObservableObject {
     @Published var agents: [GaryxAgentSummary]
-    @Published var teams: [GaryxTeamSummary]
     @Published var automations: [GaryxAutomationSummary]
 
     init(
         agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary],
         automations: [GaryxAutomationSummary]
     ) {
         self.agents = agents
-        self.teams = teams
         self.automations = automations
     }
 
     func applyCurrent(
         agents nextAgents: [GaryxAgentSummary],
-        teams nextTeams: [GaryxTeamSummary],
         automations nextAutomations: [GaryxAutomationSummary]
     ) {
         agents = nextAgents
-        teams = nextTeams
         automations = nextAutomations
     }
 
     func applyDeduped(
         agents nextAgents: [GaryxAgentSummary],
-        teams nextTeams: [GaryxTeamSummary],
         automations nextAutomations: [GaryxAutomationSummary]
     ) {
         if agents != nextAgents {
             agents = nextAgents
-        }
-        if teams != nextTeams {
-            teams = nextTeams
         }
         if automations != nextAutomations {
             automations = nextAutomations
@@ -741,7 +655,6 @@ private struct DiagnosticHomeThreadFixture {
     let pinnedThreadIds: [String]
     let recentThreadIds: [String]
     let agents: [GaryxAgentSummary]
-    let teams: [GaryxTeamSummary]
     let automations: [GaryxAutomationSummary]
     let busyThreadIds: Set<String>
     let relativeTimeBucket: Int
@@ -753,7 +666,6 @@ private struct DiagnosticHomeThreadFixture {
             recentThreadIds: recentThreadIds,
             selectedThreadId: "thread-004",
             agents: agents,
-            teams: teams,
             automations: automations,
             busyThreadIds: busyThreadIds,
             relativeTimeBucket: relativeTimeBucket
@@ -764,11 +676,9 @@ private struct DiagnosticHomeThreadFixture {
         let relativeTimeBucket = 1_800_000_000
         let now = Date(timeIntervalSince1970: TimeInterval(relativeTimeBucket))
         let agents = makeAgents(count: 72)
-        let teams = makeTeams(count: 28)
         let threads = makeThreads(
             count: 50,
             agents: agents,
-            teams: teams,
             now: now
         )
         let pinnedThreadIds = (0..<8).map { threadId($0) }
@@ -781,7 +691,6 @@ private struct DiagnosticHomeThreadFixture {
             pinnedThreadIds: pinnedThreadIds,
             recentThreadIds: recentThreadIds,
             agents: agents,
-            teams: teams,
             automations: automations,
             busyThreadIds: busyThreadIds,
             relativeTimeBucket: relativeTimeBucket
@@ -802,32 +711,13 @@ private struct DiagnosticHomeThreadFixture {
         }
     }
 
-    private static func makeTeams(count: Int) -> [GaryxTeamSummary] {
-        (0..<count).map { index in
-            GaryxTeamSummary(
-                id: teamId(index),
-                displayName: "Test Team \(index)",
-                leaderAgentId: agentId(index),
-                memberAgentIds: [
-                    agentId(index),
-                    agentId(index + 1),
-                    agentId(index + 2),
-                ],
-                avatarDataUrl: ""
-            )
-        }
-    }
-
     private static func makeThreads(
         count: Int,
         agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary],
         now: Date
     ) -> [GaryxThreadSummary] {
         (0..<count).map { index in
-            let usesTeam = index.isMultiple(of: 5)
             let agent = agents[index % agents.count]
-            let team = teams[index % teams.count]
             return GaryxThreadSummary(
                 id: threadId(index),
                 title: "Synthetic Thread \(index)",
@@ -836,9 +726,7 @@ private struct DiagnosticHomeThreadFixture {
                 lastMessagePreview: "Synthetic preview text for row \(index) with enough words to exercise compaction.",
                 workspacePath: "/Users/test/workspace-\(index % 6)",
                 messageCount: 10 + index,
-                agentId: usesTeam ? nil : agent.id,
-                teamId: usesTeam ? team.id : nil,
-                teamName: usesTeam ? team.displayName : nil,
+                agentId: agent.id,
                 providerType: agent.providerType,
                 recentRunId: index < 12 ? "run-\(index)" : nil,
                 activeRunId: index < 12 ? "run-\(index)" : nil,
@@ -868,10 +756,6 @@ private struct DiagnosticHomeThreadFixture {
 
     private static func agentId(_ index: Int) -> String {
         String(format: "agent-%03d", index)
-    }
-
-    private static func teamId(_ index: Int) -> String {
-        String(format: "team-%03d", index)
     }
 
     private static func iso8601String(from date: Date) -> String {

@@ -93,7 +93,6 @@ fn provider_model_config_key(provider_type: &ProviderType) -> Result<&'static st
         ProviderType::Gpt => Ok("gpt"),
         ProviderType::ClaudeLlm => Ok("anthropic"),
         ProviderType::GeminiLlm => Ok("google"),
-        ProviderType::AgentTeam => Err("agent_team is not a model provider".to_owned()),
     }
 }
 
@@ -152,9 +151,6 @@ fn provider_descriptors() -> Vec<ProviderDescriptor> {
 fn provider_descriptor_for_slug(provider: &str) -> Result<ProviderDescriptor, String> {
     let provider_type = ProviderType::from_slug(provider)
         .ok_or_else(|| format!("unsupported provider type: {provider}"))?;
-    if provider_type == ProviderType::AgentTeam {
-        return Err("agent_team is not a model provider".to_owned());
-    }
     provider_descriptors()
         .into_iter()
         .find(|descriptor| descriptor.provider_type == provider_type)
@@ -273,7 +269,6 @@ fn provider_config_auth_label(
                 auth_source.to_owned()
             }
         }
-        ProviderType::AgentTeam => "n/a".to_owned(),
     }
 }
 
@@ -1366,7 +1361,6 @@ mod tests {
             provider_model_config_key(&ProviderType::GeminiLlm).unwrap(),
             "google"
         );
-        assert!(provider_model_config_key(&ProviderType::AgentTeam).is_err());
     }
 
     #[test]

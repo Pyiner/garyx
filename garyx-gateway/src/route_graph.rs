@@ -292,16 +292,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(api::list_provider_models),
         )
         .route(
-            "/api/teams",
-            axum::routing::get(api::list_agent_teams).post(api::create_agent_team),
-        )
-        .route(
-            "/api/teams/{team_id}",
-            axum::routing::get(api::get_agent_team)
-                .put(api::update_agent_team)
-                .delete(api::delete_agent_team),
-        )
-        .route(
             "/api/custom-agents/{agent_id}",
             axum::routing::get(api::get_custom_agent)
                 .put(api::update_custom_agent)

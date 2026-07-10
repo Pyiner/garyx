@@ -517,7 +517,6 @@ pub(crate) async fn resolve_automation_agent_id(
     let agent_id = selected_agent_reference_id(requested, current);
     resolve_agent_reference_from_stores(
         state.ops.custom_agents.as_ref(),
-        state.ops.agent_teams.as_ref(),
         &agent_id,
     )
     .await?;

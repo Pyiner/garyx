@@ -2,10 +2,9 @@ import type {
   DesktopApiProviderType,
   DesktopCustomAgent,
   DesktopProviderIconDescriptor,
-  DesktopTeam,
 } from "@shared/contracts";
 
-export type AgentOptionKind = "builtin" | "agent" | "team";
+export type AgentOptionKind = "builtin" | "agent";
 
 export type AgentPickerOption = {
   id: string;
@@ -24,11 +23,6 @@ export type AgentTargetOption = AgentPickerOption & {
 };
 
 type AgentLabelStyle = "display" | "target";
-
-type TeamLabelStyle = "display" | "target";
-
-const byDisplayName = <T extends { displayName: string }>(a: T, b: T) =>
-  a.displayName.localeCompare(b.displayName);
 
 function sortAgents(agents: DesktopCustomAgent[]): DesktopCustomAgent[] {
   return [...agents]
@@ -49,10 +43,6 @@ function displayAgentName(agent: DesktopCustomAgent): string {
   return agent.displayName.trim() || agent.agentId;
 }
 
-function displayTeamName(team: DesktopTeam): string {
-  return team.displayName.trim() || team.teamId;
-}
-
 export function formatAgentOptionLabel(
   agent: DesktopCustomAgent,
   style: AgentLabelStyle = "target",
@@ -61,19 +51,6 @@ export function formatAgentOptionLabel(
   return style === "display" || displayName.trim() === agent.agentId.trim()
     ? displayName
     : `${displayName} (${agent.agentId})`;
-}
-
-export function formatTeamOptionLabel(
-  team: DesktopTeam,
-  style: TeamLabelStyle = "target",
-): string {
-  const displayName = displayTeamName(team);
-  if (style === "display") {
-    return displayName;
-  }
-  return displayName.trim() === team.teamId.trim()
-    ? `${displayName} (team)`
-    : `${displayName} (${team.teamId}, team)`;
 }
 
 function toAgentPickerOption(
@@ -87,20 +64,6 @@ function toAgentPickerOption(
     avatarDataUrl: agent.avatarDataUrl,
     providerIcon: agent.providerIcon,
     providerType: agent.providerType,
-  };
-}
-
-function toTeamPickerOption(
-  team: DesktopTeam,
-  labelStyle: TeamLabelStyle,
-  detail?: string,
-): AgentPickerOption {
-  return {
-    id: team.teamId,
-    label: formatTeamOptionLabel(team, labelStyle),
-    kind: "team",
-    avatarDataUrl: team.avatarDataUrl,
-    detail,
   };
 }
 
@@ -129,99 +92,37 @@ export function buildStandaloneAgentOptions(
   return buildAgentPickerOptions(agents, { ...options, standaloneOnly: true });
 }
 
-export function buildTeamOptions(
-  teams: DesktopTeam[],
-  options: {
-    detail?: string | ((team: DesktopTeam) => string | undefined);
-    labelStyle?: TeamLabelStyle;
-  } = {},
-): AgentPickerOption[] {
-  const { detail, labelStyle = "display" } = options;
-  return [...teams]
-    .sort(byDisplayName)
-    .map((team) => toTeamPickerOption(
-      team,
-      labelStyle,
-      typeof detail === "function" ? detail(team) : detail,
-    ));
-}
-
-export function buildAgentAndTeamOptions(
-  agents: DesktopCustomAgent[],
-  teams: DesktopTeam[],
-  options: {
-    agentLabelStyle?: AgentLabelStyle;
-    teamDetail?: string;
-    teamLabelStyle?: TeamLabelStyle;
-    teamsFirst?: boolean;
-  } = {},
-): AgentPickerOption[] {
-  const agentOptions = buildStandaloneAgentOptions(agents, {
-    labelStyle: options.agentLabelStyle ?? "display",
-  });
-  const teamOptions = buildTeamOptions(teams, {
-    detail: options.teamDetail,
-    labelStyle: options.teamLabelStyle ?? "display",
-  });
-  return options.teamsFirst
-    ? [...teamOptions, ...agentOptions]
-    : [...agentOptions, ...teamOptions];
-}
-
 /**
  * Build the flat agent-option list shown in new-thread pickers: built-in
- * agents, custom solo agents (excluding team leaders), then teams.
+ * agents followed by custom standalone agents.
  */
 export function buildAgentOptions(
   agents: DesktopCustomAgent[],
-  teams: DesktopTeam[],
 ): ComposerAgentOption[] {
-  const teamLeaderIds = new Set(teams.map((team) => team.leaderAgentId));
-  const agentNameById = new Map(
-    agents.map((agent) => [agent.agentId, agent.displayName] as const),
-  );
-
   const builtInAgents = buildStandaloneAgentOptions(
     agents.filter((agent) => agent.builtIn),
     { labelStyle: "display" },
   );
   const customAgents = buildStandaloneAgentOptions(
     agents.filter((agent) => !agent.builtIn),
-    { excludeAgentIds: teamLeaderIds, labelStyle: "display" },
+    { labelStyle: "display" },
   );
-  const teamOptions = buildTeamOptions(teams, {
-    detail: (team) => {
-      const leaderLabel = agentNameById.get(team.leaderAgentId) || team.leaderAgentId;
-      return `Lead: ${leaderLabel}`;
-    },
-    labelStyle: "display",
-  });
 
-  return [...builtInAgents, ...customAgents, ...teamOptions];
+  return [...builtInAgents, ...customAgents];
 }
 
 export function groupAgentOptions(options: ComposerAgentOption[]) {
   return {
     builtin: options.filter((o) => o.kind === "builtin"),
     agent: options.filter((o) => o.kind === "agent"),
-    team: options.filter((o) => o.kind === "team"),
   };
 }
 
 export function buildAgentTargetOptions(
   agents: DesktopCustomAgent[],
-  teams: DesktopTeam[],
-  options: { teamsFirst?: boolean } = {},
 ): AgentTargetOption[] {
-  const toTarget = (option: AgentPickerOption): AgentTargetOption => ({
+  return buildStandaloneAgentOptions(agents, { labelStyle: "target" }).map((option) => ({
     ...option,
     value: option.id,
-  });
-  const allOptions = buildAgentAndTeamOptions(agents, teams, {
-    agentLabelStyle: "target",
-    teamDetail: "Team",
-    teamLabelStyle: "target",
-    teamsFirst: options.teamsFirst,
-  });
-  return allOptions.map(toTarget);
+  }));
 }

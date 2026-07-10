@@ -12,8 +12,8 @@ use garyx_models::provider::{
     attachments_to_metadata_value,
 };
 use garyx_models::{
-    AgentTeamProfile, CustomAgentProfile, Principal, TaskEvent, TaskEventKind, TaskStatus,
-    ThreadTask, builtin_provider_agent_profiles,
+    CustomAgentProfile, Principal, TaskEvent, TaskEventKind, TaskStatus, ThreadTask,
+    builtin_provider_agent_profiles,
 };
 use garyx_router::{
     InMemoryThreadStore, ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
@@ -1313,62 +1313,6 @@ async fn configured_native_provider_default_is_addressable() {
 }
 
 #[tokio::test]
-async fn test_provider_type_for_team_returns_agent_team_meta_provider() {
-    // A team is its own addressable agent in the unified namespace, served by
-    // the AgentTeam meta-provider. Leader is NOT privileged — resolving the
-    // leader's agent_id still returns the leader's own provider type, not the
-    // team's.
-    let bridge = MultiProviderBridge::new();
-    bridge
-        .replace_agent_profiles({
-            let mut profiles = builtin_provider_agent_profiles();
-            profiles.push(custom_agent(
-                "interactive-claude",
-                "Interactive Claude",
-                ProviderType::ClaudeCode,
-                "",
-                "Use Claude Code.",
-            ));
-            profiles
-        })
-        .await;
-    bridge
-        .replace_team_profiles(vec![AgentTeamProfile {
-            team_id: "product-ship".to_owned(),
-            display_name: "Product Ship".to_owned(),
-            leader_agent_id: "codex".to_owned(),
-            member_agent_ids: vec!["codex".to_owned(), "claude".to_owned()],
-            workflow_text: "Codex leads and Claude reviews.".to_owned(),
-            avatar_data_url: None,
-            created_at: "2026-01-01T00:00:00Z".to_owned(),
-            updated_at: "2026-01-01T00:00:00Z".to_owned(),
-        }])
-        .await;
-
-    assert_eq!(
-        bridge.provider_type_for_agent("product-ship").await,
-        Some(ProviderType::AgentTeam)
-    );
-    assert_eq!(
-        bridge.provider_type_for_agent("codex").await,
-        Some(ProviderType::CodexAppServer)
-    );
-    assert_eq!(
-        bridge.provider_type_for_agent("interactive-claude").await,
-        Some(ProviderType::ClaudeCode)
-    );
-    assert_eq!(
-        bridge.provider_type_for_agent("claude-tty").await,
-        Some(ProviderType::ClaudeCode)
-    );
-    assert_eq!(bridge.provider_type_for_agent("gpt").await, None);
-    assert_eq!(bridge.provider_type_for_agent("anthropic").await, None);
-    assert_eq!(bridge.provider_type_for_agent("google").await, None);
-    assert_eq!(bridge.provider_type_for_agent("claude_llm").await, None);
-    assert_eq!(bridge.provider_type_for_agent("gemini_llm").await, None);
-}
-
-#[tokio::test]
 async fn test_configured_native_model_agent_gets_dedicated_provider_key() {
     let bridge = MultiProviderBridge::new();
     bridge
@@ -1749,37 +1693,7 @@ async fn test_reload_from_config_removes_disabled_routes() {
 }
 
 #[tokio::test]
-async fn test_reload_from_config_preserves_agent_team_provider() {
-    // Regression: `reload_from_config` rebuilds `desired_provider_keys` from
-    // config-driven channel routes + default providers + remote providers.
-    // The AgentTeam meta-provider is registered imperatively at boot and has
-    // no config representation, so reload must explicitly keep it or
-    // team-bound threads lose their provider on the next config edit.
-    let bridge = MultiProviderBridge::new();
-    let agent_team = Arc::new(MockProvider::new(ProviderType::AgentTeam));
-    bridge
-        .register_provider("agent_team::default", agent_team)
-        .await;
-
-    let config = GaryxConfig::default();
-    bridge.reload_from_config(&config).await.unwrap();
-
-    assert!(
-        bridge.get_provider("agent_team::default").await.is_some(),
-        "AgentTeam provider must survive reload_from_config"
-    );
-
-    // Second reload must also keep it (the retain rule must hold across
-    // repeated reconciliations, not just the first).
-    bridge.reload_from_config(&config).await.unwrap();
-    assert!(
-        bridge.get_provider("agent_team::default").await.is_some(),
-        "AgentTeam provider must survive successive reload_from_config calls"
-    );
-}
-
-#[tokio::test]
-async fn run_subagent_streaming_rederives_leaf_metadata_and_persists_history() {
+async fn run_inline_streaming_rederives_target_metadata_and_persists_history() {
     let bridge = MultiProviderBridge::new();
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     bridge.set_thread_store(store.clone()).await;
@@ -1818,12 +1732,10 @@ async fn run_subagent_streaming_rederives_leaf_metadata_and_persists_history() {
         .await;
 
     let metadata = HashMap::from([
-        ("agent_id".to_owned(), json!("product-ship")),
-        ("agent_display_name".to_owned(), json!("Product Ship")),
-        ("system_prompt".to_owned(), json!("team prompt")),
-        ("model".to_owned(), json!("team-model")),
-        ("agent_team_id".to_owned(), json!("product-ship")),
-        ("group_transcript_snapshot".to_owned(), json!([])),
+        ("agent_id".to_owned(), json!("caller")),
+        ("agent_display_name".to_owned(), json!("Caller")),
+        ("system_prompt".to_owned(), json!("caller prompt")),
+        ("model".to_owned(), json!("caller-model")),
         ("channel".to_owned(), json!("telegram")),
     ]);
 
@@ -1836,7 +1748,7 @@ async fn run_subagent_streaming_rederives_leaf_metadata_and_persists_history() {
     });
 
     let result = bridge
-        .run_subagent_streaming(
+        .run_inline_streaming(
             "thread::child-coder",
             "hello child",
             metadata,
@@ -1845,7 +1757,7 @@ async fn run_subagent_streaming_rederives_leaf_metadata_and_persists_history() {
             Some(callback),
         )
         .await
-        .expect("sub-agent run should succeed");
+        .expect("inline run should succeed");
 
     assert_eq!(result.response, "echo: hello child");
     assert_eq!(*streamed.lock().unwrap(), "echo: hello child");
@@ -1869,9 +1781,6 @@ async fn run_subagent_streaming_rederives_leaf_metadata_and_persists_history() {
         snapshot.get("model").and_then(|v| v.as_str()),
         Some("claude-opus-child")
     );
-    assert!(!snapshot.contains_key("agent_team_id"));
-    assert!(!snapshot.contains_key("group_transcript_snapshot"));
-
     let thread_data = store
         .get("thread::child-coder")
         .await
@@ -1903,7 +1812,7 @@ async fn run_subagent_streaming_rederives_leaf_metadata_and_persists_history() {
 }
 
 #[tokio::test]
-async fn run_subagent_streaming_uses_global_run_limiter() {
+async fn run_inline_streaming_uses_global_run_limiter() {
     let bridge = Arc::new(MultiProviderBridge::new_with_max_concurrent_runs(1));
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     bridge.set_thread_store(store.clone()).await;
@@ -1942,7 +1851,7 @@ async fn run_subagent_streaming_uses_global_run_limiter() {
     let first_bridge = bridge.clone();
     let first = tokio::spawn(async move {
         first_bridge
-            .run_subagent_streaming(
+            .run_inline_streaming(
                 "thread::child-one",
                 "first",
                 HashMap::new(),
@@ -1956,7 +1865,7 @@ async fn run_subagent_streaming_uses_global_run_limiter() {
     assert_eq!(bridge.available_run_slots(), 0);
 
     let second = bridge
-        .run_subagent_streaming(
+        .run_inline_streaming(
             "thread::child-two",
             "second",
             HashMap::new(),
@@ -1972,52 +1881,6 @@ async fn run_subagent_streaming_uses_global_run_limiter() {
         .expect("first task joins")
         .expect("first run succeeds");
     assert_eq!(bridge.available_run_slots(), 1);
-}
-
-#[tokio::test]
-async fn start_agent_run_rejects_thread_bound_to_missing_team() {
-    let bridge = MultiProviderBridge::new();
-    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
-    bridge.set_thread_store(store.clone()).await;
-    bridge.set_thread_history(make_history(store.clone()));
-    store
-        .set(
-            "thread::deleted-team",
-            json!({
-                "thread_id": "thread::deleted-team",
-                "agent_id": "team::deleted",
-                "provider_type": "agent_team",
-            }),
-        )
-        .await;
-
-    let error = bridge
-        .start_agent_run(
-            AgentRunRequest::new(
-                "thread::deleted-team",
-                "hello",
-                "run-missing-team",
-                "api",
-                "main",
-                HashMap::from([
-                    ("agent_id".to_owned(), json!("team::deleted")),
-                    ("requested_provider_type".to_owned(), json!("agent_team")),
-                ]),
-            ),
-            None,
-        )
-        .await
-        .expect_err("missing team should fail before provider dispatch");
-
-    match error {
-        BridgeError::SessionError(message) => {
-            assert!(
-                message.contains("missing agent team team::deleted"),
-                "unexpected error: {message}"
-            );
-        }
-        other => panic!("expected SessionError, got {other:?}"),
-    }
 }
 
 #[tokio::test]

@@ -1,15 +1,14 @@
 use super::{
     AutomationThreadsParams, UpdateAutomationBody, automation_agent_id, automation_threads,
     build_automation_job, compile_schedule, infer_schedule_view, is_automation_job, parse_time_hm,
-    render_data_trigger_template, resolve_automation_agent_id, run_data_triggers_for_db_event,
-    to_summary, update_automation,
+    render_data_trigger_template, run_data_triggers_for_db_event, to_summary, update_automation,
 };
 use crate::app_db::{
     AppDbEvent, AppDbFieldSpec, AppDbService, CreateDataTriggerBody, CreateTableBody,
 };
 use crate::cron::{CronJob, CronService, JobRunStatus};
 use crate::garyx_db::AutomationThreadRunDraft;
-use crate::server::{AppStateBuilder, create_app_state};
+use crate::server::AppStateBuilder;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -497,30 +496,6 @@ async fn automation_threads_endpoint_returns_generated_run_associations() {
         "generated_thread"
     );
     assert_eq!(payload["items"][0]["thread"]["excludeFromRecent"], true);
-}
-
-#[tokio::test]
-async fn resolve_automation_agent_id_preserves_raw_team_id() {
-    let state = create_app_state(GaryxConfig::default());
-    state
-        .ops
-        .agent_teams
-        .upsert_team_for_test(crate::agent_teams::UpsertAgentTeamRequest {
-            team_id: "product-ship".to_owned(),
-            display_name: "Product Ship".to_owned(),
-            leader_agent_id: "codex".to_owned(),
-            member_agent_ids: vec!["codex".to_owned(), "claude".to_owned()],
-            workflow_text: "Codex leads and Claude reviews.".to_owned(),
-            avatar_data_url: None,
-        })
-        .await
-        .expect("team saved");
-
-    let resolved = resolve_automation_agent_id(&state, Some("product-ship"), None)
-        .await
-        .expect("team id should validate");
-
-    assert_eq!(resolved, "product-ship");
 }
 
 #[test]

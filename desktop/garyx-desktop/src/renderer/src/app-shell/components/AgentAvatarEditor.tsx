@@ -23,7 +23,6 @@ type AgentAvatarEditorProps = {
   label: string;
   providerIcon?: DesktopProviderIconDescriptor | null;
   providerType?: ProviderType | null;
-  team?: boolean;
 };
 
 export function AgentAvatarEditor({
@@ -34,15 +33,13 @@ export function AgentAvatarEditor({
   label,
   providerIcon,
   providerType,
-  team,
 }: AgentAvatarEditorProps) {
   const showProviderIcon =
-    Boolean(builtIn && !team && !avatarDataUrl)
+    Boolean(builtIn && !avatarDataUrl)
     && hasProviderAgentIcon(agentId, providerType, providerIcon);
   const classes = [
     className,
     builtIn ? 'builtin' : '',
-    team ? 'team' : '',
     avatarDataUrl ? 'image' : '',
     showProviderIcon ? 'provider' : '',
   ].filter(Boolean).join(' ');

@@ -17,10 +17,7 @@
     = `${formatRelativeTime(updatedAt)} · ${creator}`（如 `9m · Test Agent`）；
     revision/byteSize 仅进 `title=` tooltip（`:116`），**不**进副信息。
   - creator 取法 `describeCreator`（`CapsulesPanel.tsx:84-99`）：
-    `agents[agentId].displayName` → `agentId` → `providerType`(原串) → `"Agent"`
-    （Mac 的 describeCreator **本身不查 team**）。iOS 现有 owner badge 额外用
-    `agents`/`teams` 解析 displayName（`GaryxMobileCapsuleViews.swift:681-692`），
-    对齐时**保留 team 这一档**（见 §2，iOS creator 为 Mac 的超集）。
+    `agents[agentId].displayName` → `agentId` → `providerType`(原串) → `"Agent"`。
 - iOS 画廊卡现状 `mobile/.../App/GaryxMobile/GaryxMobileCapsuleViews.swift:129-179`：
   - 卡圆角 18（`:165-168`），内缩 `.padding(8)`，缩略图独立圆角 14 + 自带描边（`:139-148`）。
   - 副信息是**两个 pill**（`:155-160`）：`GaryxCapsuleMetadataChip("clock", time)` +
@@ -85,16 +82,12 @@ presentation + SwiftPM 测试。逐项对齐表（Mac 为真相源）：
     向后兼容聊天卡 `:568-574` 与画廊原行为），画廊传 `showsBorder:false`，
     gate 掉缩略图自身的 `.overlay { RoundedRectangle.stroke }`（`:220-223`）。其余
     （`.task` reconcile、内容渲染、安全配置）**不动**。
-- **副信息 creator 优先级**（修同卡两端不一致根因），**5 档、含 team**，按此顺序逐档命中即返回：
+- **副信息 creator 优先级**（修同卡两端不一致根因），按此顺序逐档命中即返回：
   1. `agents.first{$0.id==agentId}?.displayName`（trim 非空）
-  2. `teams.first{$0.id==agentId}?.displayName`（trim 非空）—— **team 档，不可漏**；
-     这是 Mac describeCreator 不查、但 iOS 现有 owner badge 已解析的一档（`:681-692`），
-     对齐时**保留**，故 iOS creator 是 Mac 的**超集**（agent-created 常态两端一致；
-     team-created 时 iOS 显示 team 名、Mac 显示原始 id，属 iOS 严格更优、非回归）。
-  3. `agentId`（agentId 非空但 catalog 未命中）
-  4. `providerType` → `GaryxProviderPresentation.displayName(for:)` **美化**（如 `claude_code`→「Claude Code」）
-  5. `"Agent"`（全空兜底）
-  - 与 Mac 唯一刻意差异：第 4 档 provider 兜底用美化名而非 Mac 原串（「claude_code」）——iOS 既有
+  2. `agentId`（agentId 非空但 catalog 未命中）
+  3. `providerType` → `GaryxProviderPresentation.displayName(for:)` **美化**（如 `claude_code`→「Claude Code」）
+  4. `"Agent"`（全空兜底）
+  - 与 Mac 唯一刻意差异：provider 兜底用美化名而非 Mac 原串（「claude_code」）——iOS 既有
     展示惯例、更原生，且该兜底是历史/无 agent 的边角分支（正常 capsule 有 agentId → 走 agent 名）。
     该美化行为由 §2.1 测试 pin 死。flag 给 reviewer。
 - **副信息时间**：`capsule.formattedUpdatedAt`（`:701-703`，`garyxFormattedTaskTimestamp`）。
@@ -110,14 +103,11 @@ Core 是 SwiftPM，无 pbxproj 影响）：
 
 ```swift
 public enum GaryxCapsuleGalleryCardPresentation {
-    /// Creator precedence (iOS superset of desktop describeCreator, which lacks
-    /// the team lookup): agent name → team name → agentId → prettified provider
-    /// → "Agent". The team tier preserves the current owner-badge resolution.
+    /// Creator precedence: agent name → agentId → prettified provider → "Agent".
     public static func creatorName(
         agentId: String?,
         providerType: String?,
         agents: [GaryxAgentSummary],
-        teams: [GaryxTeamSummary]
     ) -> String { ... }
 
     /// "time · creator"，time 为空时仅 creator（不留悬挂的 "·"）。
@@ -125,16 +115,15 @@ public enum GaryxCapsuleGalleryCardPresentation {
 }
 ```
 
-`GaryxAgentSummary`/`GaryxTeamSummary` 已是 Core 类型（`GaryxGatewayAgentModels.swift:8/158`）。
+`GaryxAgentSummary` 已是 Core 类型（`GaryxGatewayAgentModels.swift`）。
 View 端只调这两个静态函数拼字符串，保持「presentation/business-rule 在 Core + 哑渲染」。
 
 新增测试 `Tests/GaryxMobileCoreTests/GaryxCapsulePreviewLoadPlannerTests.swift`（已存在文件，
 追加用例；SwiftPM 自动纳入，无 pbxproj）：
-- `creatorName`（5 档逐档断言）：agent 命中优先；agent miss / **team 命中**（pin team 档）；
-  agent+team 都 miss 用 agentId；无 agentId → **pin 美化 provider**（断言 `providerType:"claude_code"`
+- `creatorName` 逐档断言：agent 命中优先；agent miss 用 agentId；无 agentId → **pin 美化 provider**（断言 `providerType:"claude_code"`
   → `"Claude Code"`，钉死美化兜底契约）；全空得 `"Agent"`。
 - `subline`：有 time → `"9m · Test Agent"`；time 为空/`nil` → `"Test Agent"`。
-- fixture 用合成占位（`Test Agent` / `Test Team` / `1000000001` / 合成 UUID），无真实个人数据。
+- fixture 用合成占位（`Test Agent` / `1000000001` / 合成 UUID），无真实个人数据。
 
 ## 3. 需求 2：预览页 ⋯ 菜单「打开来源对话」
 
@@ -226,9 +215,6 @@ iOS（完成标准）：
    任务允许「disabled 或不显示」。
 5. iOS「打开来源对话」依赖 `clearRouteDrivenDetailState()` 清两个预览绑定的既有行为
    （`GaryxMobileModel+Navigation.swift:370-379`）——已逐行核对成立。
-6. **creator 含 team 档**：iOS 保留 team 名解析（Mac describeCreator 不查 team），creator 为
-   Mac 超集；agent-created 常态两端一致，team-created 时 iOS 更优非回归。已由 §2.1 测试覆盖。
-
 ## 7. 一句话
 
 iOS 画廊卡去 pill、按 Mac CSS 逐项对齐成满铺预览 + 单行 `time · creator` 文字副信息（creator 按

@@ -412,7 +412,7 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
 
     private let unsupportedProviderJSON = """
     {
-        "provider_type": "agent_team",
+        "provider_type": "unsupported_provider",
         "supports_model_selection": false,
         "source": "provider",
         "models": []

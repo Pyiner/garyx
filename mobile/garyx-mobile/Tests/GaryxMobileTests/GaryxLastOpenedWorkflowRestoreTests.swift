@@ -175,8 +175,6 @@ final class GaryxLastOpenedWorkflowRestoreTests: XCTestCase {
             ("workspace_dir", thread.workspacePath),
             ("message_count", thread.messageCount),
             ("agent_id", thread.agentId),
-            ("team_id", thread.teamId),
-            ("team_name", thread.teamName),
             ("provider_type", thread.providerType),
             ("recent_run_id", thread.recentRunId),
             ("active_run_id", thread.activeRunId),
@@ -265,8 +263,6 @@ private struct CapturedThreadSummary: Decodable {
     var workspacePath: String?
     var messageCount: Int?
     var agentId: String?
-    var teamId: String?
-    var teamName: String?
     var providerType: String?
     var recentRunId: String?
     var activeRunId: String?
@@ -285,8 +281,6 @@ private struct CapturedThreadSummary: Decodable {
             workspacePath: workspacePath,
             messageCount: messageCount,
             agentId: agentId,
-            teamId: teamId,
-            teamName: teamName,
             providerType: providerType,
             recentRunId: recentRunId,
             activeRunId: activeRunId,

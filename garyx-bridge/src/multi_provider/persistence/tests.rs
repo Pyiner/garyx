@@ -718,58 +718,6 @@ fn test_streaming_run_snapshot_stamps_assistant_segments_at_creation() {
     );
 }
 
-#[test]
-fn test_streaming_run_snapshot_strips_agent_prefix_into_metadata() {
-    let mut snapshot = StreamingRunSnapshot::default();
-    assert!(snapshot.apply_stream_event(&StreamEvent::Delta {
-        text: "[claude] hello team".to_owned(),
-    }));
-
-    assert_eq!(snapshot.assistant_response, "hello team");
-    assert_eq!(snapshot.session_messages.len(), 1);
-    assert_eq!(
-        snapshot.session_messages[0].text.as_deref(),
-        Some("hello team")
-    );
-    assert_eq!(
-        snapshot.session_messages[0].metadata.get("agent_id"),
-        Some(&json!("claude"))
-    );
-    assert_eq!(
-        snapshot.session_messages[0]
-            .metadata
-            .get("agent_display_name"),
-        Some(&json!("claude"))
-    );
-}
-
-#[test]
-fn test_streaming_run_snapshot_splits_on_agent_prefix_change_without_boundary() {
-    let mut snapshot = StreamingRunSnapshot::default();
-    assert!(snapshot.apply_stream_event(&StreamEvent::Delta {
-        text: "[claude] hello".to_owned(),
-    }));
-    assert!(snapshot.apply_stream_event(&StreamEvent::Delta {
-        text: "[codex] hi back".to_owned(),
-    }));
-
-    assert_eq!(snapshot.assistant_response, "hello\n\nhi back");
-    assert_eq!(snapshot.session_messages.len(), 2);
-    assert_eq!(
-        snapshot.session_messages[0].metadata.get("agent_id"),
-        Some(&json!("claude"))
-    );
-    assert_eq!(
-        snapshot.session_messages[1].metadata.get("agent_id"),
-        Some(&json!("codex"))
-    );
-    assert_eq!(snapshot.session_messages[0].text.as_deref(), Some("hello"));
-    assert_eq!(
-        snapshot.session_messages[1].text.as_deref(),
-        Some("hi back")
-    );
-}
-
 #[tokio::test]
 async fn test_save_streaming_partial_commits_user_row_without_inflight_content_track() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());

@@ -152,7 +152,6 @@ impl RuntimeAssembler {
                 state.ops.thread_logs.clone(),
                 self.config.mcp_servers.clone(),
                 state.ops.custom_agents.clone(),
-                state.ops.agent_teams.clone(),
             )
             .await;
         Ok(RuntimeAssembly {

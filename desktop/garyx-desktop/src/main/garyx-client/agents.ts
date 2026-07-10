@@ -1,15 +1,11 @@
 import type {
   CreateCustomAgentInput,
-  CreateTeamInput,
   DeleteCustomAgentInput,
-  DeleteTeamInput,
   DesktopCustomAgent,
   DesktopProviderIconDescriptor,
   DesktopProviderIconKey,
   DesktopSettings,
-  DesktopTeam,
   UpdateCustomAgentInput,
-  UpdateTeamInput,
 } from "@shared/contracts";
 import { baseUrl, requestJson } from "./http.ts";
 import { normalizeDesktopProviderType } from "./provider.ts";
@@ -70,29 +66,6 @@ interface CustomAgentsPayload {
   agents?: CustomAgentPayload[];
 }
 
-interface TeamPayload {
-  team_id?: string;
-  teamId?: string;
-  display_name?: string;
-  displayName?: string;
-  leader_agent_id?: string;
-  leaderAgentId?: string;
-  member_agent_ids?: unknown;
-  memberAgentIds?: unknown;
-  workflow_text?: string | null;
-  workflowText?: string | null;
-  avatar_data_url?: string | null;
-  avatarDataUrl?: string | null;
-  created_at?: string;
-  createdAt?: string;
-  updated_at?: string;
-  updatedAt?: string;
-}
-
-interface TeamsPayload {
-  teams?: TeamPayload[];
-}
-
 function normalizeProviderIconKey(value: unknown): DesktopProviderIconKey | null {
   if (value === "claude" || value === "codex" || value === "traex" || value === "gemini") {
     return value;
@@ -117,26 +90,6 @@ function mapProviderIconDescriptor(
         ? normalizeDesktopProviderType(value.provider_type || value.providerType)
         : null,
     label: typeof value.label === "string" ? value.label : null,
-  };
-}
-
-function mapTeam(value: TeamPayload): DesktopTeam {
-  const members = Array.isArray(value.member_agent_ids)
-    ? value.member_agent_ids
-    : Array.isArray(value.memberAgentIds)
-      ? value.memberAgentIds
-      : [];
-  return {
-    teamId: value.team_id || value.teamId || "",
-    displayName: value.display_name || value.displayName || "",
-    leaderAgentId: value.leader_agent_id || value.leaderAgentId || "",
-    memberAgentIds: members.filter(
-      (entry): entry is string => typeof entry === "string",
-    ),
-    workflowText: value.workflow_text || value.workflowText || "",
-    avatarDataUrl: value.avatar_data_url || value.avatarDataUrl || "",
-    createdAt: value.created_at || value.createdAt || new Date(0).toISOString(),
-    updatedAt: value.updated_at || value.updatedAt || new Date(0).toISOString(),
   };
 }
 
@@ -193,16 +146,6 @@ export async function listCustomAgents(
   return Array.isArray(payload.agents)
     ? payload.agents.map(mapCustomAgent)
     : [];
-}
-
-export async function listTeams(
-  settings: DesktopSettings,
-): Promise<DesktopTeam[]> {
-  const payload = await requestJson<TeamsPayload>(settings, "/api/teams", {
-    signal: AbortSignal.timeout(8000),
-  });
-
-  return Array.isArray(payload.teams) ? payload.teams.map(mapTeam) : [];
 }
 
 export async function createCustomAgent(
@@ -279,63 +222,6 @@ export async function deleteCustomAgent(
   await requestJson<unknown>(
     settings,
     `/api/custom-agents/${encodeURIComponent(input.agentId)}`,
-    {
-      method: "DELETE",
-      signal: AbortSignal.timeout(8000),
-    },
-  );
-}
-
-export async function createTeam(
-  settings: DesktopSettings,
-  input: CreateTeamInput,
-): Promise<DesktopTeam> {
-  const payload = await requestJson<TeamPayload>(settings, "/api/teams", {
-    method: "POST",
-    signal: AbortSignal.timeout(8000),
-    body: JSON.stringify({
-      teamId: input.teamId,
-      displayName: input.displayName,
-      leaderAgentId: input.leaderAgentId,
-      memberAgentIds: input.memberAgentIds,
-      workflowText: input.workflowText,
-      avatarDataUrl: input.avatarDataUrl ?? null,
-    }),
-  });
-  return mapTeam(payload);
-}
-
-export async function updateTeam(
-  settings: DesktopSettings,
-  input: UpdateTeamInput,
-): Promise<DesktopTeam> {
-  const payload = await requestJson<TeamPayload>(
-    settings,
-    `/api/teams/${encodeURIComponent(input.currentTeamId)}`,
-    {
-      method: "PUT",
-      signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({
-        teamId: input.teamId,
-        displayName: input.displayName,
-        leaderAgentId: input.leaderAgentId,
-        memberAgentIds: input.memberAgentIds,
-        workflowText: input.workflowText,
-        avatarDataUrl: input.avatarDataUrl ?? null,
-        expectedUpdatedAt: input.expectedUpdatedAt,
-      }),
-    },
-  );
-  return mapTeam(payload);
-}
-
-export async function deleteTeam(
-  settings: DesktopSettings,
-  input: DeleteTeamInput,
-): Promise<void> {
-  await requestJson<unknown>(
-    settings,
-    `/api/teams/${encodeURIComponent(input.teamId)}`,
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),

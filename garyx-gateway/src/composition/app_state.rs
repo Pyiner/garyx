@@ -20,7 +20,6 @@ use tokio::sync::Notify;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
-use crate::agent_teams::AgentTeamStore;
 use crate::api::RestartTracker;
 use crate::app_db::AppDbService;
 use crate::cron::CronService;
@@ -62,12 +61,6 @@ pub struct OpsState {
     pub thread_logs: Arc<dyn ThreadLogSink>,
     pub skills: Arc<SkillsService>,
     pub custom_agents: Arc<CustomAgentStore>,
-    pub agent_teams: Arc<AgentTeamStore>,
-    /// Read-only handle to the AgentTeam provider's Group store. Sharing
-    /// one instance between the provider and the gateway read path keeps
-    /// the in-memory cache coherent — the gateway surfaces the same
-    /// `child_thread_ids` the provider is updating.
-    pub agent_team_group_store: Arc<dyn garyx_bridge::providers::agent_team::GroupStore>,
     pub wikis: Arc<WikiStore>,
     pub app_db: Arc<AppDbService>,
     pub garyx_db: Arc<GaryxDbService>,
@@ -283,10 +276,6 @@ impl AppState {
             .bridge
             .replace_agent_profiles(self.ops.custom_agents.list_agents().await)
             .await;
-        self.integration
-            .bridge
-            .replace_team_profiles(self.ops.agent_teams.list_teams().await)
-            .await;
         self.integration.bridge.reload_from_config(&config).await?;
         // Rebuild the built-in routes from the new config and publish
         // them through the `SwappableDispatcher` so the concrete swap
@@ -356,7 +345,6 @@ impl AppState {
                     self.ops.thread_logs.clone(),
                     managed_mcp_servers,
                     self.ops.custom_agents.clone(),
-                    self.ops.agent_teams.clone(),
                 )
                 .await;
         }
@@ -403,8 +391,6 @@ impl AppState {
                 thread_logs: self.ops.thread_logs.clone(),
                 skills: self.ops.skills.clone(),
                 custom_agents: self.ops.custom_agents.clone(),
-                agent_teams: self.ops.agent_teams.clone(),
-                agent_team_group_store: self.ops.agent_team_group_store.clone(),
                 wikis: self.ops.wikis.clone(),
                 app_db: self.ops.app_db.clone(),
                 garyx_db: self.ops.garyx_db.clone(),

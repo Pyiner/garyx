@@ -6,29 +6,16 @@ import WidgetKit
 extension GaryxMobileModel {
     @discardableResult
     func applyAgentTargets(
-        agents nextAgents: [GaryxAgentSummary]?,
-        teams nextTeams: [GaryxTeamSummary]?
+        agents nextAgents: [GaryxAgentSummary]
     ) -> Bool {
-        var didUpdateTargets = false
-        let receivedTargets = nextAgents != nil || nextTeams != nil
-        if let nextAgents {
-            didUpdateTargets = GaryxEquatableAssignment.assignIfChanged(
-                current: agents,
-                next: nextAgents
-            ) { agents = $0 } || didUpdateTargets
-        }
-        if let nextTeams {
-            didUpdateTargets = GaryxEquatableAssignment.assignIfChanged(
-                current: teams,
-                next: nextTeams
-            ) { teams = $0 } || didUpdateTargets
-        }
-        if receivedTargets, agentTargetsLoadPhase != .loaded {
+        let didUpdateTargets = GaryxEquatableAssignment.assignIfChanged(
+            current: agents,
+            next: nextAgents
+        ) { agents = $0 }
+        if agentTargetsLoadPhase != .loaded {
             agentTargetsLoadPhase = .loaded
         }
-        if receivedTargets {
-            ensureSelectedAgentTarget()
-        }
+        ensureSelectedAgentTarget()
         if didUpdateTargets {
             if !threads.isEmpty {
                 persistRecentThreadsWidgetSnapshot()

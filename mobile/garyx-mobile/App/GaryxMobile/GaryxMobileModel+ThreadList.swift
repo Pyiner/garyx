@@ -222,7 +222,6 @@ extension GaryxMobileModel {
         let input = GaryxRecentThreadsWidgetSnapshotInput(
             threads: threads,
             agents: agents,
-            teams: teams,
             pinnedThreadIds: pinnedThreadIds,
             recentThreadIds: recentThreadIds,
             gatewayScopeId: currentGatewayScopeId
@@ -242,15 +241,13 @@ extension GaryxMobileModel {
     func widgetAgentIdentity(for thread: GaryxThreadSummary) -> WidgetAgentIdentity {
         let identity = GaryxWidgetAgentIdentityProjector.identity(
             for: thread,
-            agents: agents,
-            teams: teams
+            agents: agents
         )
         return WidgetAgentIdentity(
             id: identity.id,
             name: identity.name,
             avatarDataUrl: identity.avatarDataUrl,
             providerType: identity.providerType,
-            isTeam: identity.isTeam,
             builtIn: identity.builtIn
         )
     }

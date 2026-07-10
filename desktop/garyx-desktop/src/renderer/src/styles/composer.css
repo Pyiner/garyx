@@ -699,11 +699,6 @@
   letter-spacing: 0;
 }
 
-.agent-option-avatar--team {
-  background: color-mix(in oklab, var(--color-accent-green) 14%, transparent);
-  color: color-mix(in oklab, var(--color-accent-green) 78%, black);
-}
-
 .agent-option-avatar--provider {
   background: white;
 }

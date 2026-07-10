@@ -16,7 +16,7 @@ desktop app.
 | Queue follow-up input | `POST /api/chat/stream-input` |
 | Selected-thread transcript stream | `GET /api/threads/{thread_id}/stream?after_seq=...` Server-Sent Events |
 | Stop active run | `POST /api/chat/interrupt` |
-| Agent/team selection | `GET /api/custom-agents`, `GET /api/teams` |
+| Agent selection | `GET /api/custom-agents` |
 | Skills visibility | `GET /api/skills` |
 | Task control | `GET /api/tasks`, `POST /api/tasks`, task status/stop/delete endpoints |
 | Automation control | `GET /api/automations`, `POST /api/automations/{id}/run-now`, `PATCH /api/automations/{id}` |
@@ -50,7 +50,7 @@ keys such as OpenAI, Anthropic, Claude, Codex, or Gemini credentials stay on the
 Mac/gateway because all model execution still happens there.
 
 Mobile feature parity is intentionally gateway-first. The iOS app reads the same
-thread, task, automation, custom-agent, team, and Skill resources that the Mac
+thread, task, automation, custom-agent, and Skill resources that the Mac
 app uses, but presents them as compact action panels instead of copying the Mac
 window one-to-one.
 

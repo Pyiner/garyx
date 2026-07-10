@@ -5,7 +5,6 @@ import type {
   DesktopCustomAgent,
   DesktopSettings,
   DesktopState,
-  DesktopTeam,
   DesktopWorkflowDefinition,
 } from "@shared/contracts";
 
@@ -64,7 +63,6 @@ type UseGatewayConnectionControllerArgs = {
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
   setDesktopAgents: React.Dispatch<React.SetStateAction<DesktopCustomAgent[]>>;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
-  setDesktopTeams: React.Dispatch<React.SetStateAction<DesktopTeam[]>>;
   setDesktopWorkflows: React.Dispatch<
     React.SetStateAction<DesktopWorkflowDefinition[]>
   >;
@@ -95,7 +93,6 @@ export function useGatewayConnectionController({
   setConnection,
   setDesktopAgents,
   setDesktopState,
-  setDesktopTeams,
   setDesktopWorkflows,
   setError,
   setGatewaySettingsStatus,
@@ -337,7 +334,6 @@ export function useGatewayConnectionController({
     startTransition(() => {
       setDesktopState(nextState);
       setDesktopAgents([...catalog.agents]);
-      setDesktopTeams([...catalog.teams]);
       setDesktopWorkflows([...catalog.workflows]);
     });
     return nextState;
