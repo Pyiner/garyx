@@ -71,6 +71,30 @@ final class GaryxConversationLayoutMetricsTests: XCTestCase {
         metrics.contentTopOffset = nil
         XCTAssertFalse(metrics.isNearLoadedHistoryStart)
     }
+
+    func testPulledPastTopRequiresIntentThreshold() {
+        var metrics = GaryxConversationLayoutMetrics(
+            contentTopOffset: 40,
+            contentBottomOffset: 340,
+            viewportHeight: 800
+        )
+        XCTAssertTrue(metrics.isPulledPastTop)
+
+        // Sub-threshold jitter is not a pull.
+        metrics.contentTopOffset = 10
+        XCTAssertFalse(metrics.isPulledPastTop)
+
+        // Resting top-aligned content is not a pull.
+        metrics.contentTopOffset = 0
+        XCTAssertFalse(metrics.isPulledPastTop)
+
+        metrics.contentTopOffset = nil
+        XCTAssertFalse(metrics.isPulledPastTop)
+
+        metrics.contentTopOffset = 40
+        metrics.viewportHeight = 0
+        XCTAssertFalse(metrics.isPulledPastTop)
+    }
 }
 
 final class GaryxConversationScrollStateTests: XCTestCase {
@@ -449,7 +473,7 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         )
     }
 
-    func testCapturedSmallWindowDoesNotAutoPrefetchAfterLightScroll() {
+    func testSmallWindowAutoPagesAfterScrollTowardHistory() {
         var state = GaryxConversationScrollState()
         _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
         _ = state.userScrollInteractionChanged(isInteracting: true)
@@ -463,13 +487,89 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         )
         _ = state.userScrollInteractionChanged(isInteracting: false)
 
-        XCTAssertFalse(
+        XCTAssertTrue(
             state.shouldPrefetchOlderHistory(
                 hasMoreHistoryBefore: true,
                 isLoadingOlderHistory: false,
                 hasPendingPrefetch: false
             ),
-            "A barely scrollable one-turn window must not auto-page older history from top-row onAppear."
+            "Scrolling up in a barely scrollable window is a reach for older history and must auto-page — no manual load button exists."
+        )
+    }
+
+    func testShortTranscriptTopPullArmsAutomaticHistoryPaging() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        // Content shorter than the viewport can never flip the anchoring to
+        // browsing; before the pull, nothing may auto-page.
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: 0,
+                contentBottomOffset: 300,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        XCTAssertFalse(
+            state.shouldPrefetchOlderHistory(
+                hasMoreHistoryBefore: true,
+                isLoadingOlderHistory: false,
+                hasPendingPrefetch: false
+            )
+        )
+
+        // The reader rubber-bands the top past the intent threshold.
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: 40,
+                contentBottomOffset: 340,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        XCTAssertTrue(state.hasMovedTowardOlderHistory)
+
+        // The pull settles back; the armed intent persists and paging fires.
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: 0,
+                contentBottomOffset: 300,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        XCTAssertTrue(
+            state.shouldPrefetchOlderHistory(
+                hasMoreHistoryBefore: true,
+                isLoadingOlderHistory: false,
+                hasPendingPrefetch: false
+            )
+        )
+    }
+
+    func testUntouchedThreadNeverAutoPagesFromTopRowAppearance() {
+        var state = GaryxConversationScrollState()
+        _ = state.contentChanged(isInitialLoad: true, isHistoryPrepend: false, hasTailContent: true)
+
+        // Cold open of a short transcript puts the loaded start on screen
+        // immediately (top-row onAppear fires); without any reader gesture
+        // no automatic paging may start.
+        _ = state.metricsChanged(
+            GaryxConversationLayoutMetrics(
+                contentTopOffset: 0,
+                contentBottomOffset: 300,
+                viewportHeight: 800
+            ),
+            hasTailContent: true
+        )
+        XCTAssertFalse(state.hasMovedTowardOlderHistory)
+        XCTAssertFalse(
+            state.shouldPrefetchOlderHistory(
+                hasMoreHistoryBefore: true,
+                isLoadingOlderHistory: false,
+                hasPendingPrefetch: false
+            )
         )
     }
 

@@ -32,6 +32,10 @@ public struct GaryxConversationLayoutMetrics: Equatable {
     public static let nearBottomThreshold: CGFloat = 96
     public static let historyPrefetchMinDistance: CGFloat = 640
     public static let historyPrefetchViewportMultiplier: CGFloat = 1.5
+    /// How far the content top must be pulled below the viewport top (top
+    /// rubber band) before the pull counts as a deliberate "show me older
+    /// history" gesture instead of scroll jitter.
+    public static let topPullIntentThreshold: CGFloat = 24
 
     // MARK: Derived position facts
 
@@ -75,13 +79,13 @@ public struct GaryxConversationLayoutMetrics: Equatable {
         return contentTopOffset >= -prefetchDistance
     }
 
-    /// A tiny cold-open transcript can place the loaded-start row on screen
-    /// immediately. Automatic history prefetch only arms after the measured
-    /// content has at least one viewport of scrollable overflow.
-    public var isLargeEnoughForAutomaticHistoryPrefetch: Bool {
-        guard let contentHeight, viewportHeight > 0 else { return false }
-        let requiredOverflow = max(Self.historyPrefetchMinDistance, viewportHeight)
-        return contentHeight - viewportHeight >= requiredOverflow
+    /// The content top was pulled below the viewport top (top rubber band).
+    /// This is the only geometric "show me older history" signal a short
+    /// transcript can produce — content that does not overflow the viewport
+    /// can never move the anchoring to `.browsingHistory`.
+    public var isPulledPastTop: Bool {
+        guard let contentTopOffset, viewportHeight > 0 else { return false }
+        return contentTopOffset >= Self.topPullIntentThreshold
     }
 }
 
@@ -178,7 +182,9 @@ public struct GaryxConversationScrollState: Equatable {
     /// Whether the transcript has any tail to follow (messages or a thinking
     /// indicator).
     public private(set) var hasTailContent = false
-    /// Whether the reader ever scrolled toward older history in this thread.
+    /// Whether the reader ever moved toward older history in this thread —
+    /// either scrolled away from the tail, or pulled the content top past the
+    /// viewport top (the only gesture a non-overflowing transcript affords).
     /// Gates history prefetch so an untouched thread never pages backwards.
     public private(set) var hasMovedTowardOlderHistory = false
     /// Whether the reader's finger or fling currently drives the scroll
@@ -266,6 +272,13 @@ public struct GaryxConversationScrollState: Equatable {
         self.metrics = metrics
         self.hasTailContent = hasTailContent
         guard metrics.viewportHeight > 0 else { return nil }
+        if metrics.isPulledPastTop {
+            // A top rubber-band pull is a deliberate reach for older history.
+            // Short transcripts can only express the intent this way; recording
+            // it here keeps the signal purely geometric, so it also works before
+            // iOS 18 where no scroll-phase gesture reporting exists.
+            hasMovedTowardOlderHistory = true
+        }
         if metrics.isNearBottom {
             anchoring = .followingTail
         } else if isFollowingTail, !hasUserScrolledSinceOpen, !isUserScrollInteracting {
@@ -359,6 +372,13 @@ public struct GaryxConversationScrollState: Equatable {
 
     // MARK: History paging
 
+    /// Automatic older-history loading: fires once the reader ever moved
+    /// toward older history and the loaded start is within prefetch distance.
+    /// Every page (or window reveal) grows the content above the reader, so
+    /// the distance gate converges — loading stops as soon as the loaded
+    /// start sits more than ~1.5 viewports above, and resumes when the reader
+    /// scrolls near the top again. An untouched thread never pages backwards
+    /// because `hasMovedTowardOlderHistory` requires a reader gesture.
     public func shouldPrefetchOlderHistory(
         hasMoreHistoryBefore: Bool,
         isLoadingOlderHistory: Bool,
@@ -370,8 +390,7 @@ public struct GaryxConversationScrollState: Equatable {
               hasMovedTowardOlderHistory else {
             return false
         }
-        return metrics.isLargeEnoughForAutomaticHistoryPrefetch
-            && metrics.isNearLoadedHistoryStart
+        return metrics.isNearLoadedHistoryStart
     }
 
     /// Visible render rows changed after a render snapshot update. This covers

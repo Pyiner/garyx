@@ -352,14 +352,14 @@ struct GaryxConversationView: View {
                     }
                 } else {
                     if model.selectedThreadHasMoreRenderableHistory {
-                        GaryxLoadEarlierHistoryButton(isLoading: model.isLoadingOlderThreadHistory) {
-                            // Two-stage: reveal window-hidden in-memory rows first
-                            // (instant), then fetch an older network page only when
-                            // the window is exhausted (TASK-1751 P3).
-                            Task {
-                                await model.advanceSelectedThreadHistoryBoundary()
-                            }
-                        }
+                        // Older history loads automatically as the reader nears
+                        // the top (two-stage: reveal window-hidden in-memory rows
+                        // first, then page the network — TASK-1751 P3). This row
+                        // is the top boundary sentinel plus the only loading
+                        // affordance; there is no manual load button.
+                        GaryxEarlierHistoryLoadingIndicator(
+                            isLoading: model.isLoadingOlderThreadHistory
+                        )
                         .onAppear {
                             prefetchOlderHistoryIfNeeded()
                         }

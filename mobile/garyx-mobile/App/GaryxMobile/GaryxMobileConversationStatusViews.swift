@@ -53,29 +53,31 @@ struct GaryxThreadHistoryLoadingView: View {
     }
 }
 
-struct GaryxLoadEarlierHistoryButton: View {
+/// Silent top-of-transcript boundary row for automatic older-history loading.
+/// Idle it is a 1pt invisible sentinel (its `onAppear` re-arms the prefetch
+/// gate when the reader reaches the very top); while a network page is
+/// in-flight it shows a small unlabeled spinner. In-memory window reveals are
+/// synchronous and never show it. There is no tap affordance — loading is
+/// driven entirely by the scroll position.
+struct GaryxEarlierHistoryLoadingIndicator: View {
     let isLoading: Bool
-    let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if isLoading {
-                    ProgressView()
-                        .scaleEffect(0.68)
-                } else {
-                    Image(systemName: "chevron.up")
-                        .font(GaryxFont.system(size: 12, weight: .semibold))
-                }
-                Text(isLoading ? "Loading earlier" : "Load Earlier")
-                    .font(GaryxFont.caption(weight: .semibold))
+        Group {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .transition(.opacity)
+            } else {
+                Color.clear
+                    .frame(height: 1)
             }
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
         }
-        .buttonStyle(.plain)
-        .disabled(isLoading)
+        .accessibilityHidden(!isLoading)
+        .accessibilityLabel("Loading earlier messages")
     }
 }
 
