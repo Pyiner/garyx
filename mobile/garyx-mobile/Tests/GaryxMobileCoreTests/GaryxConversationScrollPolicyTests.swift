@@ -852,65 +852,63 @@ final class GaryxConversationScrollStateTests: XCTestCase {
         XCTAssertTrue(state.hasTailContent)
     }
 
-    /// Exact prepend offset compensation (#TASK-2088 regression): the reader
-    /// prefetched from ~640pt above the loaded start — one full prefetch
-    /// distance away, NOT at the top. The compensated offset must preserve
-    /// the reading position exactly for any distance, because it only
-    /// depends on how much the content grew, never on where the reader was.
-    func testPrependOffsetCompensationIsExactAtPrefetchDistance() {
-        // Reader offset 640pt below the loaded start (content 3000pt tall);
-        // a network page prepends 2400pt of older rows.
+    /// #TASK-2088 regression — the exact restore is the anchor row's
+    /// displacement in the transcript CONTENT coordinate space. It depends
+    /// only on how much height was inserted above the anchor, never on where
+    /// the reader was (T = 0, 640pt, or a full prefetch distance away) and
+    /// never on concurrent tail growth below the anchor — neither quantity
+    /// appears in the formula.
+    func testHistoryPrependTopGrowthIsAnchorDisplacement() {
+        // A 2400pt network page lays out above the anchor row.
         XCTAssertEqual(
-            GaryxConversationScrollState.compensatedHistoryPrependOffset(
-                capturedOffsetY: 640,
-                capturedContentHeight: 3_000,
-                currentContentHeight: 5_400
-            ),
-            3_040
-        )
-        // At the very top (T≈0) the same math holds.
-        XCTAssertEqual(
-            GaryxConversationScrollState.compensatedHistoryPrependOffset(
-                capturedOffsetY: 0,
-                capturedContentHeight: 3_000,
-                currentContentHeight: 5_400
+            GaryxConversationScrollState.historyPrependTopGrowth(
+                capturedAnchorMinY: 35,
+                currentAnchorMinY: 2_435
             ),
             2_400
         )
-        // Rubber-banded past the top (negative offset) stays exact too.
+        // A 60-row in-memory window reveal works the same way.
         XCTAssertEqual(
-            GaryxConversationScrollState.compensatedHistoryPrependOffset(
-                capturedOffsetY: -40,
-                capturedContentHeight: 3_000,
-                currentContentHeight: 5_400
+            GaryxConversationScrollState.historyPrependTopGrowth(
+                capturedAnchorMinY: 0,
+                currentAnchorMinY: 812.5
             ),
-            2_360
+            812.5
         )
     }
 
-    /// Compensation only fires once the layout actually grew: unchanged and
-    /// shrinking content (thread switch, residency eviction) return nil so
-    /// the caller retries or gives up instead of teleporting the reader.
-    func testPrependOffsetCompensationRequiresGrowth() {
+    /// The restore waits for observable growth: missing geometry, unchanged
+    /// layout, and upward movement (not a prepend) all return nil so the
+    /// caller retries or falls back instead of teleporting the reader.
+    func testHistoryPrependTopGrowthRequiresObservableGrowth() {
         XCTAssertNil(
-            GaryxConversationScrollState.compensatedHistoryPrependOffset(
-                capturedOffsetY: 640,
-                capturedContentHeight: 3_000,
-                currentContentHeight: 3_000
+            GaryxConversationScrollState.historyPrependTopGrowth(
+                capturedAnchorMinY: nil,
+                currentAnchorMinY: 2_435
             )
         )
         XCTAssertNil(
-            GaryxConversationScrollState.compensatedHistoryPrependOffset(
-                capturedOffsetY: 640,
-                capturedContentHeight: 3_000,
-                currentContentHeight: 3_000.4
+            GaryxConversationScrollState.historyPrependTopGrowth(
+                capturedAnchorMinY: 35,
+                currentAnchorMinY: nil
             )
         )
         XCTAssertNil(
-            GaryxConversationScrollState.compensatedHistoryPrependOffset(
-                capturedOffsetY: 640,
-                capturedContentHeight: 3_000,
-                currentContentHeight: 800
+            GaryxConversationScrollState.historyPrependTopGrowth(
+                capturedAnchorMinY: 35,
+                currentAnchorMinY: 35
+            )
+        )
+        XCTAssertNil(
+            GaryxConversationScrollState.historyPrependTopGrowth(
+                capturedAnchorMinY: 35,
+                currentAnchorMinY: 35.4
+            )
+        )
+        XCTAssertNil(
+            GaryxConversationScrollState.historyPrependTopGrowth(
+                capturedAnchorMinY: 2_435,
+                currentAnchorMinY: 35
             )
         )
     }

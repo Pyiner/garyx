@@ -9,28 +9,50 @@ extension AnyTransition {
         .combined(with: .opacity)
 }
 
+/// Named coordinate space attached to the transcript CONTENT stack (not the
+/// scroll viewport). Positions measured in it are scroll-invariant: they only
+/// change when the layout itself changes, which is what makes it the right
+/// ruler for older-history prepend compensation — the anchor row's
+/// content-space displacement IS the exact height inserted above it,
+/// unaffected by concurrent tail growth or reader scrolling.
+let garyxConversationContentSpaceName = "garyx-conversation-content"
+
 struct GaryxMobileTurnRowsView: View {
     let rows: [GaryxMobileTurnRow]
     let prefetchBoundaryRowCount: Int
     let onNearHistoryBoundary: () -> Void
+    let onRowContentMinYChange: (_ rowId: String, _ minY: CGFloat) -> Void
 
     init(
         rows: [GaryxMobileTurnRow],
         prefetchBoundaryRowCount: Int = 0,
-        onNearHistoryBoundary: @escaping () -> Void = {}
+        onNearHistoryBoundary: @escaping () -> Void = {},
+        onRowContentMinYChange: @escaping (_ rowId: String, _ minY: CGFloat) -> Void = { _, _ in }
     ) {
         self.rows = rows
         self.prefetchBoundaryRowCount = prefetchBoundaryRowCount
         self.onNearHistoryBoundary = onNearHistoryBoundary
+        self.onRowContentMinYChange = onRowContentMinYChange
     }
 
     var body: some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { rowIndex, row in
-            turnRowContent(rowIndex: rowIndex, row: row)
-                .onAppear {
-                    guard rowIndex <= prefetchBoundaryRowCount else { return }
-                    onNearHistoryBoundary()
-                }
+            // The row wrapper VStack exists so the whole turn row has ONE
+            // geometry to observe. Its spacing matches the transcript stack,
+            // so the wrapped layout stays pixel-identical to the previously
+            // flattened children.
+            VStack(alignment: .leading, spacing: 14) {
+                turnRowContent(rowIndex: rowIndex, row: row)
+            }
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.frame(in: .named(garyxConversationContentSpaceName)).minY
+            } action: { minY in
+                onRowContentMinYChange(row.id, minY)
+            }
+            .onAppear {
+                guard rowIndex <= prefetchBoundaryRowCount else { return }
+                onNearHistoryBoundary()
+            }
         }
     }
 

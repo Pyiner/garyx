@@ -478,13 +478,18 @@ public struct GaryxConversationScrollState: Equatable {
     /// prepend physically pushes the reading position out and parks the
     /// viewport over the just-loaded oldest rows.
     ///
-    /// The view executes this with exact offset compensation against the
-    /// hosting scroll view (`GaryxHistoryPrependOffsetCompensation`): the
-    /// content grew by ΔH above, so the same reading position now lives at
-    /// `capturedOffset + ΔH` — exact for any distance from the loaded start,
-    /// including prefetches that fire up to 1.5 viewports away. The
-    /// pre-prepend first row only serves as a coarse fallback anchor when the
-    /// hosting scroll view cannot be resolved.
+    /// The view executes the restore with the anchor row's displacement in
+    /// the transcript CONTENT coordinate space (`historyPrependTopGrowth`):
+    /// content-space positions are scroll-invariant and only move when the
+    /// layout itself changes, so the anchor row's displacement IS the exact
+    /// height inserted above it — concurrent tail streaming below and
+    /// concurrent reader scrolling both cancel out structurally. The shift is
+    /// applied once on top of the CURRENT scroll offset, preserving whatever
+    /// the reader did meanwhile.
+    ///
+    /// When row geometry is unavailable the restore degrades to scrolling
+    /// the anchor row back to the viewport top (coarse: loses at most the
+    /// prefetch distance, never parks the reader on the oldest rows).
     public struct ReadingAnchorRestore: Equatable {
         /// The row that was first before the prepend — the new content's
         /// lower boundary. `preservesScrollForPrependedHistory` guarantees it
@@ -494,6 +499,21 @@ public struct GaryxConversationScrollState: Equatable {
         public init(anchorRowId: String) {
             self.anchorRowId = anchorRowId
         }
+    }
+
+    /// Exact height inserted above the anchor row by an older-history
+    /// prepend: its content-space displacement between the pre-prepend
+    /// capture and the post-prepend layout. Returns nil while geometry is
+    /// missing or the layout has not grown yet (the caller retries on a
+    /// later pass); a shrinking displacement is not a prepend.
+    public static func historyPrependTopGrowth(
+        capturedAnchorMinY: CGFloat?,
+        currentAnchorMinY: CGFloat?
+    ) -> CGFloat? {
+        guard let capturedAnchorMinY, let currentAnchorMinY else { return nil }
+        let growth = currentAnchorMinY - capturedAnchorMinY
+        guard growth > 0.5 else { return nil }
+        return growth
     }
 
     /// Visible render rows changed after a render snapshot update. This covers
@@ -521,28 +541,6 @@ public struct GaryxConversationScrollState: Equatable {
             hasTailContent: hasTailContent
         )
         return ReadingAnchorRestore(anchorRowId: anchorRowId)
-    }
-
-    /// Exact reading-position math for an older-history prepend.
-    ///
-    /// Captured before the prepend lays out: the hosting scroll view's
-    /// content offset and content height. Once the layout has grown by
-    /// ΔH = `currentContentHeight - capturedContentHeight`, the identical
-    /// reading position sits at `capturedOffsetY + ΔH` — independent of how
-    /// far the reader was from the loaded start, so a prefetch that fired
-    /// 1.5 viewports early restores just as exactly as one at the very top.
-    ///
-    /// Returns nil while the content has not grown yet (the caller retries
-    /// on a later layout pass) and for shrinking content (thread switches and
-    /// evictions are not prepends and must never be "compensated").
-    public static func compensatedHistoryPrependOffset(
-        capturedOffsetY: CGFloat,
-        capturedContentHeight: CGFloat,
-        currentContentHeight: CGFloat
-    ) -> CGFloat? {
-        let growth = currentContentHeight - capturedContentHeight
-        guard growth > 0.5 else { return nil }
-        return capturedOffsetY + growth
     }
 
     /// Whether a messages change is an older-history prepend whose reading

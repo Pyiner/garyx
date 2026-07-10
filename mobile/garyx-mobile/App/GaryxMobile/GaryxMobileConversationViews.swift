@@ -41,55 +41,87 @@ private final class GaryxConversationScrollStateBox {
     var state = GaryxConversationScrollState()
 }
 
-/// Weak handle to the UIScrollView hosting the conversation transcript.
-/// Older-history prepends need exact offset compensation (content grew by ΔH
-/// above → same reading position now lives at offset + ΔH), and only the
-/// UIKit scroll view exposes contentOffset/contentSize for that. Resolved by
-/// `GaryxEnclosingScrollViewReader`; a nil handle degrades to the coarse
-/// fallback anchor scroll, never a crash.
+/// Live route to the UIScrollView hosting the conversation transcript.
+///
+/// Deliberately NOT a cached weak scroll-view reference: SwiftUI can replace
+/// its hosting scroll view without moving the content to a new window, which
+/// zeroes a stored weak handle with no re-resolve trigger (#TASK-2088 round
+/// 2 — the compensation silently never ran). Instead the box keeps the
+/// resolver view that lives INSIDE the scroll content — it is reparented
+/// together with the content — and walks its superview chain at every use,
+/// so the walk always lands on the current host.
 private final class GaryxConversationHostScrollViewBox {
-    weak var scrollView: UIScrollView?
+    weak var resolver: UIView?
+
+    func currentScrollView() -> UIScrollView? {
+        var candidate: UIView? = resolver?.superview
+        while let view = candidate, !(view is UIScrollView) {
+            candidate = view.superview
+        }
+        return candidate as? UIScrollView
+    }
 }
 
-/// Invisible bridge view that resolves the enclosing UIScrollView of the
-/// transcript content into `GaryxConversationHostScrollViewBox`. Walking the
-/// superview chain from inside the ScrollView's content is the only stable
-/// way to reach SwiftUI's hosting UIScrollView; it re-resolves on every move
-/// to a window so scroll-view identity changes (thread switches recreate the
-/// scroll view) never leave a stale handle.
+/// Plain (non-observable) store of every turn row's minY in the transcript
+/// content coordinate space, fed by `GaryxMobileTurnRowsView`. Content-space
+/// positions are scroll-invariant, so scrolling writes nothing here; only
+/// layout changes do. Older-history prepend compensation reads the anchor
+/// row's displacement out of this box — the exact height inserted above it.
+private final class GaryxTurnRowGeometryBox {
+    private var minYByRowId: [String: CGFloat] = [:]
+
+    func record(_ rowId: String, minY: CGFloat) {
+        minYByRowId[rowId] = minY
+    }
+
+    func minY(of rowId: String) -> CGFloat? {
+        minYByRowId[rowId]
+    }
+
+    /// Drop rows that left the transcript so a long session cannot grow the
+    /// map without bound.
+    func retain(only rowIds: Set<String>) {
+        minYByRowId = minYByRowId.filter { rowIds.contains($0.key) }
+    }
+}
+
+/// Invisible bridge view registering itself into
+/// `GaryxConversationHostScrollViewBox` so the box can walk the live
+/// superview chain on demand. It carries no scroll-view state of its own.
 private struct GaryxEnclosingScrollViewReader: UIViewRepresentable {
     let box: GaryxConversationHostScrollViewBox
 
+    /// Registration happens on window ENTRY, never from make/update: SwiftUI
+    /// tears the representable down and up when the scroll view's identity
+    /// changes (thread open), and the dying instance's final `updateUIView`
+    /// would otherwise overwrite the box with a view that deallocates a beat
+    /// later, zeroing the weak handle for good (observed on-device,
+    /// #TASK-2088 round 3). Entry/exit callbacks converge in either order:
+    /// the incoming view registers itself; the outgoing view only clears the
+    /// box when it is still the registered one.
     final class ResolverView: UIView {
-        var box: GaryxConversationHostScrollViewBox?
+        weak var box: GaryxConversationHostScrollViewBox?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            resolve()
-        }
-
-        func resolve() {
-            var candidate: UIView? = superview
-            while let view = candidate, !(view is UIScrollView) {
-                candidate = view.superview
-            }
-            if let scrollView = candidate as? UIScrollView {
-                box?.scrollView = scrollView
+            if window != nil {
+                box?.resolver = self
+            } else if box?.resolver === self {
+                box?.resolver = nil
             }
         }
     }
 
     func makeUIView(context: Context) -> ResolverView {
         let view = ResolverView()
-        view.box = box
         view.isUserInteractionEnabled = false
         view.isAccessibilityElement = false
+        view.box = box
         return view
     }
 
     func updateUIView(_ uiView: ResolverView, context: Context) {
         uiView.box = box
-        uiView.resolve()
     }
 }
 
@@ -131,6 +163,7 @@ struct GaryxConversationView: View {
     // fact the body reads, mirrored into SwiftUI state when it flips.
     @State private var scrollStateBox = GaryxConversationScrollStateBox()
     @State private var hostScrollViewBox = GaryxConversationHostScrollViewBox()
+    @State private var rowGeometryBox = GaryxTurnRowGeometryBox()
     @State private var showsScrollToBottomButton = false
     @State private var scrollPreservationThreadId: String?
     @State private var rowScrollPreservationThreadId: String?
@@ -257,14 +290,16 @@ struct GaryxConversationView: View {
                         hasTailContent: !newValue.isEmpty || showsDebouncedTailThinking
                     )
                     if let restore {
-                        // Capture synchronously: onChange runs before the new
-                        // rows lay out, so the scroll view still reports the
-                        // pre-prepend offset and content height.
-                        let captured = hostScrollViewBox.scrollView.map {
-                            (offsetY: $0.contentOffset.y, contentHeight: $0.contentSize.height)
-                        }
-                        scheduleReadingAnchorRestore(restore, captured: captured, proxy: proxy)
+                        // Captured BEFORE the new rows lay out: the geometry
+                        // box still holds the anchor row's pre-prepend
+                        // content-space position.
+                        scheduleReadingAnchorRestore(
+                            restore,
+                            capturedAnchorMinY: rowGeometryBox.minY(of: restore.anchorRowId),
+                            proxy: proxy
+                        )
                     }
+                    rowGeometryBox.retain(only: Set(newValue))
                 }
                 .onChange(of: model.showsTailThinkingIndicator) { _, _ in
                     syncTailThinkingPresentation(proxy: proxy)
@@ -446,10 +481,17 @@ struct GaryxConversationView: View {
                     }
                     GaryxMobileTurnRowsView(
                         rows: turnRows,
-                        prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows
-                    ) {
-                        prefetchOlderHistoryIfNeeded()
-                    }
+                        prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows,
+                        onNearHistoryBoundary: {
+                            prefetchOlderHistoryIfNeeded()
+                        },
+                        onRowContentMinYChange: { rowId, minY in
+                            // Plain box write: content-space geometry never
+                            // changes from scrolling, so this only fires on
+                            // layout changes and never invalidates the body.
+                            rowGeometryBox.record(rowId, minY: minY)
+                        }
+                    )
                     if showsDebouncedTailThinking {
                         GaryxThinkingLabel()
                             .id(tailThinkingAnchorId)
@@ -466,6 +508,10 @@ struct GaryxConversationView: View {
             .padding(.horizontal, 16)
             .padding(.top, 18)
             .padding(.bottom, 24)
+            // Content coordinate space for row geometry: scroll-invariant, so
+            // a row's minY here only moves when the layout itself changes —
+            // the ruler for exact prepend compensation.
+            .coordinateSpace(name: garyxConversationContentSpaceName)
             .garyxVerticalScrollContentWidth(alignment: .topLeading)
             // Resolve the hosting UIScrollView for exact older-history
             // prepend offset compensation. Must sit on content INSIDE the
@@ -604,79 +650,76 @@ struct GaryxConversationView: View {
         scheduleScrollToConversationTail(proxy, request: request)
     }
 
-    /// Pin the reading position through an older-history prepend.
+    /// Pin the reading position through an older-history prepend
+    /// (#TASK-2088): once the new rows have laid out, the anchor row's
+    /// displacement in the transcript CONTENT coordinate space is exactly
+    /// the height inserted above it (`historyPrependTopGrowth`). Shifting the
+    /// CURRENT scroll offset by that displacement keeps the content under
+    /// the reader perfectly still — concurrent tail streaming and concurrent
+    /// reader scrolling both cancel out structurally, and no `scrollTo` is
+    /// involved (its application timing is asynchronous and fights SwiftUI's
+    /// own size-change repositioning; measured on-device).
     ///
-    /// Preferred path — exact offset compensation: the caller captured the
-    /// hosting UIScrollView's contentOffset and contentSize BEFORE the new
-    /// rows laid out; once the content has grown by ΔH, the identical
-    /// reading position sits at `capturedOffset + ΔH`
-    /// (`compensatedHistoryPrependOffset`), regardless of how far the reader
-    /// was from the loaded start when the prefetch fired. Attempts retry
-    /// across the next layout passes until the growth is observable, then
-    /// stop — compensation must apply exactly once per prepend.
-    ///
-    /// Fallback — when the hosting scroll view could not be resolved, scroll
-    /// the pre-prepend first row back to the viewport top (coarse: loses the
-    /// in-viewport offset, but still strictly better than parking the
-    /// viewport over the just-loaded oldest rows).
+    /// The attempts retry until the anchor row's post-prepend geometry is
+    /// observable, apply exactly once (the generation bump kills the rest of
+    /// the chain), and degrade to a coarse anchor-top `scrollTo` on the last
+    /// attempt when geometry or the hosting scroll view never materialized.
     private func scheduleReadingAnchorRestore(
         _ restore: GaryxConversationScrollState.ReadingAnchorRestore,
-        captured: (offsetY: CGFloat, contentHeight: CGFloat)?,
+        capturedAnchorMinY: CGFloat?,
         proxy: ScrollViewProxy
     ) {
         readingAnchorRestoreGeneration += 1
         let generation = readingAnchorRestoreGeneration
         let identity = conversationScrollIdentity
+        let delays: [DispatchTimeInterval] = [
+            .milliseconds(0), .milliseconds(16), .milliseconds(60), .milliseconds(140),
+        ]
 
-        guard let captured, hostScrollViewBox.scrollView != nil else {
-            // No UIKit handle: coarse anchor fallback, single shot.
-            DispatchQueue.main.async {
-                guard generation == readingAnchorRestoreGeneration,
-                      identity == conversationScrollIdentity else {
-                    return
-                }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo(restore.anchorRowId, anchor: .top)
-                }
-            }
-            return
-        }
-
-        for delay in [DispatchTimeInterval.milliseconds(0), .milliseconds(16), .milliseconds(60), .milliseconds(140)] {
+        for (index, delay) in delays.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 DispatchQueue.main.async {
                     guard generation == readingAnchorRestoreGeneration,
-                          identity == conversationScrollIdentity,
-                          let scrollView = hostScrollViewBox.scrollView else {
+                          identity == conversationScrollIdentity else {
                         return
                     }
-                    guard let compensated = GaryxConversationScrollState.compensatedHistoryPrependOffset(
-                        capturedOffsetY: captured.offsetY,
-                        capturedContentHeight: captured.contentHeight,
-                        currentContentHeight: scrollView.contentSize.height
-                    ) else {
-                        // Layout has not grown yet — a later attempt retries.
+                    if let scrollView = hostScrollViewBox.currentScrollView(),
+                       let growth = GaryxConversationScrollState.historyPrependTopGrowth(
+                           capturedAnchorMinY: capturedAnchorMinY,
+                           currentAnchorMinY: rowGeometryBox.minY(of: restore.anchorRowId)
+                       ) {
+                        let minOffset = -scrollView.adjustedContentInset.top
+                        let maxOffset = max(
+                            minOffset,
+                            scrollView.contentSize.height - scrollView.bounds.height
+                                + scrollView.adjustedContentInset.bottom
+                        )
+                        scrollView.setContentOffset(
+                            CGPoint(
+                                x: scrollView.contentOffset.x,
+                                y: min(max(scrollView.contentOffset.y + growth, minOffset), maxOffset)
+                            ),
+                            animated: false
+                        )
+                        // Applied exactly once: kill the remaining attempts
+                        // of this chain (a newer prepend has already re-armed
+                        // with its own generation).
+                        readingAnchorRestoreGeneration &+= 1
                         return
                     }
-                    let minOffset = -scrollView.adjustedContentInset.top
-                    let maxOffset = max(
-                        minOffset,
-                        scrollView.contentSize.height - scrollView.bounds.height
-                            + scrollView.adjustedContentInset.bottom
-                    )
-                    scrollView.setContentOffset(
-                        CGPoint(
-                            x: scrollView.contentOffset.x,
-                            y: min(max(compensated, minOffset), maxOffset)
-                        ),
-                        animated: false
-                    )
-                    // Applied exactly once: kill the remaining attempts of
-                    // this chain (a newer prepend has already re-armed with
-                    // its own generation).
-                    readingAnchorRestoreGeneration &+= 1
+                    // Geometry (or the platform scroll view) never became
+                    // observable: last attempt falls back to the coarse
+                    // anchor-top scroll — still strictly better than parking
+                    // the viewport over the just-loaded oldest rows. Never
+                    // while a reader gesture drives the scroll view.
+                    if index == delays.count - 1,
+                       !scrollStateBox.state.isUserScrollInteracting {
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            proxy.scrollTo(restore.anchorRowId, anchor: .top)
+                        }
+                    }
                 }
             }
         }
