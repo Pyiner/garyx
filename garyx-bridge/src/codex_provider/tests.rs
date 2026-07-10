@@ -102,6 +102,98 @@ fn build_codex_rate_limit_ignores_bare_saturation_without_explicit_signal() {
     assert!(build_codex_rate_limit("codex_app_server", false, Some(&reached), None).is_some());
 }
 
+fn local_now(hour: u32, minute: u32) -> chrono::DateTime<chrono::Local> {
+    use chrono::TimeZone;
+    chrono::Local
+        .with_ymd_and_hms(2026, 7, 10, hour, minute, 0)
+        .single()
+        .expect("mid-July local time resolves")
+}
+
+fn parsed_offset_minutes(reset_at: &str, now: chrono::DateTime<chrono::Local>) -> i64 {
+    let reset = chrono::DateTime::parse_from_rfc3339(reset_at).expect("rfc3339 reset");
+    (reset.with_timezone(&chrono::Utc) - now.with_timezone(&chrono::Utc)).num_minutes()
+}
+
+#[test]
+fn reset_from_message_parses_wall_clock_time_later_today() {
+    let now = local_now(21, 0);
+    let reset = reset_at_from_usage_message(
+        "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 9:42 PM.",
+        now,
+    )
+    .expect("reset parsed");
+    assert_eq!(parsed_offset_minutes(&reset, now), 42);
+}
+
+#[test]
+fn reset_from_message_rolls_past_time_to_tomorrow() {
+    let now = local_now(22, 0);
+    let reset = reset_at_from_usage_message("or try again at 9:42 PM.", now).expect("parsed");
+    assert_eq!(parsed_offset_minutes(&reset, now), 23 * 60 + 42);
+}
+
+#[test]
+fn reset_from_message_keeps_just_recovered_time_today() {
+    // Within the five-minute slack the window just recovered; the reset must
+    // stay today (slightly in the past), not jump a full day out.
+    let now = local_now(21, 44);
+    let reset = reset_at_from_usage_message("try again at 9:42 PM", now).expect("parsed");
+    assert_eq!(parsed_offset_minutes(&reset, now), -2);
+}
+
+#[test]
+fn reset_from_message_maps_twelve_am_pm_correctly() {
+    let now = local_now(1, 0);
+    let midnight = reset_at_from_usage_message("try again at 12 AM", now).expect("parsed");
+    assert_eq!(parsed_offset_minutes(&midnight, now), 23 * 60);
+
+    let noon = reset_at_from_usage_message("try again at 12:30 PM", now).expect("parsed");
+    assert_eq!(parsed_offset_minutes(&noon, now), 11 * 60 + 30);
+}
+
+#[test]
+fn reset_from_message_parses_relative_durations() {
+    let now = local_now(9, 0);
+    let combined = reset_at_from_usage_message("Please try again in 2 hours 13 minutes.", now)
+        .expect("parsed");
+    assert_eq!(parsed_offset_minutes(&combined, now), 133);
+
+    let minutes_only = reset_at_from_usage_message("try again in 45 minutes", now).expect("parsed");
+    assert_eq!(parsed_offset_minutes(&minutes_only, now), 45);
+}
+
+#[test]
+fn reset_from_message_returns_none_without_reset_hint() {
+    let now = local_now(9, 0);
+    assert!(
+        reset_at_from_usage_message(
+            "You've hit your usage limit. Visit the settings page to purchase more credits.",
+            now,
+        )
+        .is_none()
+    );
+    assert!(reset_at_from_usage_message("try again at 25:99 PM", now).is_none());
+    assert!(reset_at_from_usage_message("try again shortly", now).is_none());
+}
+
+#[test]
+fn build_codex_rate_limit_falls_back_to_message_reset_without_snapshot() {
+    // The real-world Codex shape: usage-limit error with no structured
+    // snapshot, reset time only in the message. `reset_at` presence is what
+    // activates the countdown banner and quota auto-resend downstream.
+    let rate_limit = build_codex_rate_limit(
+        "codex_app_server",
+        true,
+        None,
+        Some("You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 9:42 PM."),
+    )
+    .expect("rate limit built");
+    assert!(rate_limit.reset_at.is_some());
+    assert!(rate_limit.window.is_none());
+    assert!(rate_limit.message.is_some());
+}
+
 #[test]
 fn extract_rate_limit_snapshot_accepts_wrapped_and_flattened_shapes() {
     let wrapped = json!({ "rateLimits": { "primary": { "usedPercent": 50 } } });
@@ -305,7 +397,11 @@ fn completed_only_sub_agent_activity_synthesizes_a_paired_tool_use_frame() {
 
     let mut started_ids = std::collections::HashSet::new();
     let messages = tool_session_messages_for_completed_item(&item, &mut started_ids);
-    assert_eq!(messages.len(), 2, "expected synthesized ToolUse + ToolResult");
+    assert_eq!(
+        messages.len(),
+        2,
+        "expected synthesized ToolUse + ToolResult"
+    );
     assert_eq!(messages[0].role, ProviderMessageRole::ToolUse);
     assert_eq!(messages[0].tool_name.as_deref(), Some("subAgent:reviewer"));
     assert_eq!(messages[0].tool_use_id.as_deref(), Some("item-1"));
@@ -333,7 +429,11 @@ fn completed_item_with_prior_started_frame_stays_a_single_tool_result() {
     assert!(started_ids.contains("item-3"));
 
     let messages = tool_session_messages_for_completed_item(&item, &mut started_ids);
-    assert_eq!(messages.len(), 1, "started items complete without synthesis");
+    assert_eq!(
+        messages.len(),
+        1,
+        "started items complete without synthesis"
+    );
     assert_eq!(messages[0].tool_name.as_deref(), Some("sleep"));
 }
 

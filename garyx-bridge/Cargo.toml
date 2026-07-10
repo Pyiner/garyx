@@ -24,6 +24,7 @@ shellexpand = "3"
 urlencoding = "2"
 chrono = { workspace = true }
 iana-time-zone = { workspace = true }
+regex = { workspace = true }
 toml = "0.8"
 reqwest = { workspace = true }
 rmcp = { version = "0.17", features = [

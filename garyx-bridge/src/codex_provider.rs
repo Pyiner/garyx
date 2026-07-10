@@ -199,6 +199,109 @@ fn unix_to_rfc3339(secs: i64) -> Option<String> {
     chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
 }
 
+/// Parse a concrete reset hint out of Codex's usage-limit message text.
+///
+/// Codex only attaches a structured `rateLimits` snapshot to some turns; when
+/// it is absent, the human-readable error ("You've hit your usage limit. …
+/// or try again at 9:42 PM.") is the only carrier of the reset time. Deriving
+/// `reset_at` from it activates both the countdown banner and the gateway's
+/// quota auto-resend, which key off `reset_at` presence.
+///
+/// Supported shapes (case-insensitive):
+/// - "try again at 9:42 PM" / "try again at 10 pm" — a wall-clock time in the
+///   gateway machine's local timezone (Codex CLI formats it locally). A time
+///   more than five minutes in the past rolls over to tomorrow.
+/// - "try again in 2 hours 13 minutes" / "try again in 45 minutes" — a
+///   relative duration from `now`.
+///
+/// Returns RFC3339 UTC. `now` is injected so the parse is unit-testable.
+fn reset_at_from_usage_message(
+    message: &str,
+    now: chrono::DateTime<chrono::Local>,
+) -> Option<String> {
+    use chrono::{Duration as ChronoDuration, LocalResult, TimeZone, Utc};
+
+    static AT_TIME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)try again (?:at|after)\s+(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?")
+            .expect("valid regex")
+    });
+    static IN_DURATION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?i)try again in\s+((?:\d+\s*(?:days?|hours?|minutes?|seconds?)(?:[,\s]|and\s)*)+)",
+        )
+        .expect("valid regex")
+    });
+    static DURATION_PART: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)(\d+)\s*(day|hour|minute|second)s?").expect("valid regex")
+    });
+
+    if let Some(captures) = AT_TIME.captures(message) {
+        let hour12: u32 = captures.get(1)?.as_str().parse().ok()?;
+        if !(1..=12).contains(&hour12) {
+            return None;
+        }
+        let minute: u32 = captures
+            .get(2)
+            .map(|m| m.as_str().parse().ok())
+            .unwrap_or(Some(0))?;
+        if minute > 59 {
+            return None;
+        }
+        let is_pm = captures.get(3)?.as_str().eq_ignore_ascii_case("p");
+        let hour = match (hour12, is_pm) {
+            (12, false) => 0,
+            (12, true) => 12,
+            (h, false) => h,
+            (h, true) => h + 12,
+        };
+
+        // Resolve the wall-clock time in local time, tolerating DST edges: an
+        // ambiguous time takes the earliest instant, a gap time slides an hour
+        // forward.
+        let resolve = |naive: chrono::NaiveDateTime| match chrono::Local.from_local_datetime(&naive)
+        {
+            LocalResult::Single(dt) => Some(dt),
+            LocalResult::Ambiguous(earliest, _) => Some(earliest),
+            LocalResult::None => chrono::Local
+                .from_local_datetime(&(naive + ChronoDuration::hours(1)))
+                .earliest(),
+        };
+
+        let today = now.date_naive().and_hms_opt(hour, minute, 0)?;
+        let mut reset = resolve(today)?;
+        // A reset time slightly in the past means the window just recovered;
+        // keep it today so downstream consumers treat it as recovered instead
+        // of scheduling a resend a full day out.
+        if reset < now - ChronoDuration::minutes(5) {
+            reset = resolve(today + ChronoDuration::days(1))?;
+        }
+        return Some(reset.with_timezone(&Utc).to_rfc3339());
+    }
+
+    if let Some(captures) = IN_DURATION.captures(message) {
+        let body = captures.get(1)?.as_str();
+        let mut total = ChronoDuration::zero();
+        let mut matched = false;
+        for part in DURATION_PART.captures_iter(body) {
+            let amount: i64 = part.get(1)?.as_str().parse().ok()?;
+            let unit = part.get(2)?.as_str().to_ascii_lowercase();
+            total = total
+                + match unit.as_str() {
+                    "day" => ChronoDuration::days(amount),
+                    "hour" => ChronoDuration::hours(amount),
+                    "minute" => ChronoDuration::minutes(amount),
+                    _ => ChronoDuration::seconds(amount),
+                };
+            matched = true;
+        }
+        if matched && total > ChronoDuration::zero() {
+            return Some((now + total).with_timezone(&Utc).to_rfc3339());
+        }
+    }
+
+    None
+}
+
 /// Build a `ProviderRateLimit` from Codex's structured quota signal. Returns
 /// `None` unless Codex actually reported a usage-limit error, a
 /// `rateLimitReachedType`, or a saturated window — so it is safe to call on
@@ -239,11 +342,20 @@ fn build_codex_rate_limit(
         None => (None, None),
     };
 
+    // Prefer the structured snapshot's reset; fall back to the reset hint
+    // embedded in the usage-limit message ("… try again at 9:42 PM"), which is
+    // the only carrier when Codex omits the snapshot. `reset_at` presence is
+    // what downstream turns into the countdown and the quota auto-resend.
+    let reset_at = window
+        .and_then(|window| window.resets_at)
+        .and_then(unix_to_rfc3339)
+        .or_else(|| {
+            message.and_then(|message| reset_at_from_usage_message(message, chrono::Local::now()))
+        });
+
     Some(ProviderRateLimit {
         provider: provider_slug.to_owned(),
-        reset_at: window
-            .and_then(|window| window.resets_at)
-            .and_then(unix_to_rfc3339),
+        reset_at,
         window: window_label,
         used_percent: window.map(|window| window.used_percent),
         reached_type,

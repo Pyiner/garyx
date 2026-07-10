@@ -26,9 +26,9 @@ use tracing::{info, warn};
 
 use crate::server::AppState;
 
-/// Fire the resend slightly after the reported reset so the provider window has
-/// actually rolled over by the time we resubmit.
-const RESEND_BUFFER_SECS: i64 = 20;
+/// Fire the resend one minute after the reported reset so the provider window
+/// has actually rolled over by the time we resubmit.
+const RESEND_BUFFER_SECS: i64 = 60;
 
 /// How many recent events to replay after a broadcast lag, to recover any
 /// `rate_limited` record that was dropped from the subscriber buffer. Matches
