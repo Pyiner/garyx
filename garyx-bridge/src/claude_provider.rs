@@ -4,16 +4,16 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use claude_agent_sdk::{
-    AssistantMessage, ClaudeAgentDefinition, ClaudeAgentOptions, ClaudeRun, ClaudeRunControl,
-    ClaudeSDKError, ContentBlock, McpServerConfig, Message, OutboundUserMessage, PermissionMode,
-    SystemMessage, TextBlock, UserInput, run_streaming as sdk_run_streaming,
+    AssistantMessage, AssistantMessageError, ClaudeAgentDefinition, ClaudeAgentOptions, ClaudeRun,
+    ClaudeRunControl, ClaudeSDKError, ContentBlock, McpServerConfig, Message, OutboundUserMessage,
+    PermissionMode, SystemMessage, TextBlock, UserInput, run_streaming as sdk_run_streaming,
 };
 use garyx_models::{
     is_builtin_provider_agent_id,
     provider::{
-        ClaudeCodeConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderRunOptions,
-        ProviderRunResult, ProviderType, QueuedUserInput, SDK_SESSION_FORK_METADATA_KEY,
-        StreamBoundaryKind, StreamEvent, attachments_from_metadata,
+        ClaudeCodeConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderRateLimit,
+        ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+        SDK_SESSION_FORK_METADATA_KEY, StreamBoundaryKind, StreamEvent, attachments_from_metadata,
         build_prompt_message_with_attachments, default_claude_cli_mode,
     },
 };
@@ -141,6 +141,27 @@ fn update_claude_background_tasks(
     sys_msg: &SystemMessage,
     active_background_tasks: &mut HashSet<String>,
 ) {
+    // `background_tasks_changed` carries the FULL set of live background tasks
+    // with REPLACE semantics: swap the tracked set for the payload. This keeps
+    // the post-result drain gate structurally current even when an individual
+    // terminal `task_updated`/`task_notification` signal was missed.
+    if sys_msg.subtype == "background_tasks_changed" {
+        if let Some(tasks) = sys_msg.data.get("tasks").and_then(Value::as_array) {
+            active_background_tasks.clear();
+            for task in tasks {
+                if let Some(task_id) = task
+                    .get("task_id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    active_background_tasks.insert(task_id.to_owned());
+                }
+            }
+        }
+        return;
+    }
+
     let Some(task_key) = claude_background_task_key(&sys_msg.data) else {
         return;
     };
@@ -160,6 +181,130 @@ fn update_claude_background_tasks(
             }
         }
         _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Run terminal-state and quota signals (Claude Agent SDK protocol)
+// ---------------------------------------------------------------------------
+
+/// Signals observed on the stream that matter for run-state classification
+/// but arrive outside the formal `ResultMessage`.
+#[derive(Debug, Default)]
+struct StreamSignals {
+    /// Latest `rate_limit_event` payload (`rate_limit_info` object).
+    rate_limit_info: Option<Value>,
+    /// Last assistant-level API error classification seen on the stream.
+    last_assistant_error: Option<AssistantMessageError>,
+}
+
+fn unix_to_rfc3339(secs: i64) -> Option<String> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
+}
+
+/// Build a `ProviderRateLimit` from Claude's structured quota signals. Returns
+/// `None` unless the run actually terminated on the subscription quota: the
+/// result's `terminal_reason == "blocking_limit"`, or a `rate_limit_event`
+/// with `status == "rejected"` was observed. A mere `allowed_warning` is NOT
+/// enough — warning-level utilization must never trigger an automatic resend.
+fn build_claude_rate_limit(
+    provider_slug: &str,
+    terminal_reason: Option<&str>,
+    rate_limit_info: Option<&Value>,
+    message: Option<&str>,
+) -> Option<ProviderRateLimit> {
+    let blocking_result = terminal_reason == Some("blocking_limit");
+    let info = rate_limit_info.and_then(Value::as_object);
+    let rejected = info
+        .and_then(|object| object.get("status"))
+        .and_then(Value::as_str)
+        .map(|status| status.eq_ignore_ascii_case("rejected"))
+        .unwrap_or(false);
+    if !blocking_result && !rejected {
+        return None;
+    }
+
+    Some(ProviderRateLimit {
+        provider: provider_slug.to_owned(),
+        reset_at: info
+            .and_then(|object| object.get("resetsAt"))
+            .and_then(Value::as_i64)
+            .and_then(unix_to_rfc3339),
+        window: info
+            .and_then(|object| object.get("rateLimitType"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        used_percent: info
+            .and_then(|object| object.get("utilization"))
+            .and_then(claude_utilization_percent),
+        reached_type: if blocking_result {
+            terminal_reason.map(ToOwned::to_owned)
+        } else {
+            Some("rate_limit_rejected".to_owned())
+        },
+        message: message
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+    })
+}
+
+/// Normalize the Claude `rate_limit_info.utilization` value to a whole
+/// percentage. The official CLI reports a `0..1` ratio (e.g. `0.93`), so
+/// ratios are scaled by 100; values above `1` are treated as already being
+/// percentages for tolerance. Numeric strings are accepted too.
+fn claude_utilization_percent(value: &Value) -> Option<i64> {
+    let raw = value.as_f64().or_else(|| {
+        value
+            .as_str()
+            .map(str::trim)
+            .and_then(|text| text.parse::<f64>().ok())
+    })?;
+    if !raw.is_finite() || raw < 0.0 {
+        return None;
+    }
+    let percent = if raw <= 1.0 { raw * 100.0 } else { raw };
+    Some(percent.round() as i64)
+}
+
+/// Compose a structured run error message from the result frame's terminal
+/// classification plus the last assistant-level API error, replacing the old
+/// opaque "claude SDK reported error".
+fn format_claude_run_error(
+    result: &ProcessedResult,
+    last_assistant_error: Option<&AssistantMessageError>,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !result.subtype.is_empty() && result.subtype != "success" {
+        parts.push(result.subtype.clone());
+    }
+    if let Some(terminal_reason) = result
+        .terminal_reason
+        .as_deref()
+        .filter(|reason| !reason.is_empty())
+    {
+        parts.push(format!("terminal_reason={terminal_reason}"));
+    }
+    if let Some(stop_reason) = result
+        .stop_reason
+        .as_deref()
+        .filter(|reason| !reason.is_empty())
+    {
+        parts.push(format!("stop_reason={stop_reason}"));
+    }
+    if let Some(status) = result.api_error_status {
+        parts.push(format!("api_error_status={status}"));
+    }
+    if let Some(api_error) = last_assistant_error {
+        parts.push(format!("api_error={}", api_error.as_label()));
+    }
+    let detail = result.errors.join("; ");
+
+    match (parts.is_empty(), detail.is_empty()) {
+        (false, false) => format!("claude run failed ({}): {detail}", parts.join(", ")),
+        (false, true) => format!("claude run failed ({})", parts.join(", ")),
+        (true, false) => format!("claude run failed: {detail}"),
+        (true, true) => "claude SDK reported error".to_owned(),
     }
 }
 
@@ -771,6 +916,73 @@ fn has_tool_result_blocks(blocks: &[ContentBlock]) -> bool {
         .any(|b| matches!(b, ContentBlock::ToolResult(_)))
 }
 
+/// Name shared with the Codex provider's structured-activity mapping so
+/// context compaction renders identically across providers.
+const CONTEXT_COMPACTION_TOOL_NAME: &str = "contextCompaction";
+
+/// Stable activity id for a synthesized system-activity frame: the system
+/// message's own wire `uuid` when present, otherwise a fresh one.
+fn claude_system_activity_id(data: &Value) -> String {
+    data.get("uuid")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| Uuid::new_v4().to_string())
+}
+
+/// Emit a paired `ToolUse`/`ToolResult` activity frame for a context
+/// compaction. Compaction is completed-only on the Claude wire (a successful
+/// compact surfaces as `compact_boundary`, a failed one as a `status` frame
+/// with `compact_result: "failed"`), and a lone `ToolResult` frame is
+/// invisible on channels that render tool activity from the `ToolUse` frame —
+/// so both halves are synthesized together, mirroring the Codex
+/// completed-only-item precedent. Stays inside the provider-neutral stream
+/// contract.
+fn emit_context_compaction_activity(
+    session_messages: &mut Vec<ProviderMessage>,
+    on_chunk: &StreamCallback,
+    activity_id: &str,
+    input: Value,
+    result_content: Value,
+    result_text: String,
+    is_error: bool,
+) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let tool_use = ProviderMessage::tool_use(
+        serde_json::json!({
+            "tool": CONTEXT_COMPACTION_TOOL_NAME,
+            "input": input,
+        }),
+        Some(activity_id.to_owned()),
+        Some(CONTEXT_COMPACTION_TOOL_NAME.to_owned()),
+    )
+    .with_timestamp(now.clone())
+    .with_metadata_value("source", serde_json::json!("claude_sdk"))
+    // `item_type` drives the channel-side placeholder policy
+    // (`plugin_tools::should_hide_tool_call_display`), keeping Claude
+    // compaction hidden on Telegram/Discord exactly like Codex compaction.
+    .with_metadata_value("item_type", serde_json::json!(CONTEXT_COMPACTION_TOOL_NAME));
+    let mut tool_result = ProviderMessage::tool_result(
+        serde_json::json!({
+            "result": result_content,
+            "text": result_text.clone(),
+        }),
+        Some(activity_id.to_owned()),
+        Some(CONTEXT_COMPACTION_TOOL_NAME.to_owned()),
+        Some(is_error),
+    )
+    .with_timestamp(now)
+    .with_metadata_value("source", serde_json::json!("claude_sdk"))
+    .with_metadata_value("item_type", serde_json::json!(CONTEXT_COMPACTION_TOOL_NAME));
+    tool_result.text = (!result_text.is_empty()).then_some(result_text);
+
+    for entry in [tool_use, tool_result] {
+        emit_tool_stream_event(&entry, on_chunk);
+        session_messages.push(entry);
+    }
+}
+
 fn metadata_string_map(
     metadata: &HashMap<String, serde_json::Value>,
     key: &str,
@@ -948,6 +1160,10 @@ pub struct ClaudeCliProvider {
     run_pending_inputs: Mutex<HashMap<String, VecDeque<PendingAckMarker>>>,
     /// Last user message per thread, used for auto-recovery replay.
     last_messages: Mutex<HashMap<String, String>>,
+    /// Quota-exhaustion context staged per thread when a run terminates on the
+    /// provider's rolling usage limit; consumed exactly once by the bridge
+    /// run-completion path via `take_rate_limit`.
+    pending_rate_limits: Mutex<HashMap<String, ProviderRateLimit>>,
     #[cfg(test)]
     test_run_attempts: Mutex<VecDeque<Result<Option<SdkRunOutcome>, BridgeError>>>,
     #[cfg(test)]
@@ -979,6 +1195,7 @@ impl ClaudeCliProvider {
             run_session_map: Mutex::new(HashMap::new()),
             run_pending_inputs: Mutex::new(HashMap::new()),
             last_messages: Mutex::new(HashMap::new()),
+            pending_rate_limits: Mutex::new(HashMap::new()),
             #[cfg(test)]
             test_run_attempts: Mutex::new(VecDeque::new()),
             #[cfg(test)]
@@ -1395,6 +1612,16 @@ impl ClaudeCliProvider {
         run_id: &str,
         on_chunk: &StreamCallback,
     ) -> Result<Option<SdkRunOutcome>, BridgeError> {
+        // Drop any quota stash left by a prior attempt on this thread FIRST —
+        // before connect/send can fail — so a stale entry from an earlier
+        // attempt can never be attributed to this attempt's terminal record.
+        // The freshest attempt re-stages at the end of its message loop when
+        // it actually hits the quota.
+        self.pending_rate_limits
+            .lock()
+            .await
+            .remove(&options.thread_id);
+
         #[cfg(test)]
         {
             self.test_recorded_session_attempts
@@ -1431,7 +1658,7 @@ impl ClaudeCliProvider {
             )));
         }
 
-        let (response_text, result_data) = self
+        let (response_text, result_data, signals) = self
             .process_messages_streaming(run_id, &options.thread_id, &mut run, on_chunk)
             .await?;
 
@@ -1449,12 +1676,15 @@ impl ClaudeCliProvider {
             } else {
                 None
             };
+            let error_message = result
+                .is_error
+                .then(|| format_claude_run_error(&result, signals.last_assistant_error.as_ref()));
             Ok(Some(SdkRunOutcome {
                 session_id: result.session_id,
                 response_text,
                 session_messages: result.session_messages,
                 is_error: result.is_error,
-                error_message: None,
+                error_message,
                 input_tokens: result.input_tokens,
                 output_tokens: result.output_tokens,
                 cost_usd: result.cost_usd,
@@ -1471,12 +1701,19 @@ impl ClaudeCliProvider {
             // interrupted mid-stream). Preserve the partial text and
             // session_id, but do not report success: task lifecycle depends
             // on the ResultMessage as the only reliable completion marker.
+            let error_message = match signals.last_assistant_error.as_ref() {
+                Some(api_error) => format!(
+                    "{CLAUDE_MISSING_RESULT_ERROR} (api_error={})",
+                    api_error.as_label()
+                ),
+                None => CLAUDE_MISSING_RESULT_ERROR.to_owned(),
+            };
             Ok(Some(SdkRunOutcome {
                 session_id: session_id.unwrap_or_default().to_owned(),
                 response_text,
                 session_messages: Vec::new(),
                 is_error: true,
-                error_message: Some(CLAUDE_MISSING_RESULT_ERROR.to_owned()),
+                error_message: Some(error_message),
                 input_tokens: 0,
                 output_tokens: 0,
                 cost_usd: 0.0,
@@ -1493,9 +1730,14 @@ impl ClaudeCliProvider {
         thread_id: &str,
         source: &mut (impl MessageSource + Send),
         on_chunk: &StreamCallback,
-    ) -> Result<(String, Option<ProcessedResult>), BridgeError> {
+    ) -> Result<(String, Option<ProcessedResult>, StreamSignals), BridgeError> {
+        // NOTE: the per-attempt quota-stash cleanup lives at the TOP of
+        // `execute_sdk_run` (before connect/send can fail), not here — a
+        // failed connect on a retry attempt must still discard the previous
+        // attempt's stash.
         let mut response_text = String::new();
         let mut result_data: Option<ProcessedResult> = None;
+        let mut signals = StreamSignals::default();
         let mut session_messages: Vec<ProviderMessage> = Vec::new();
         let mut assistant_or_tool_activity_seen = false;
         let mut actual_model: Option<String> = None;
@@ -1569,6 +1811,15 @@ impl ClaudeCliProvider {
                         });
                     }
                     Ok(Message::Assistant(assistant_msg)) => {
+                        if let Some(api_error) = assistant_msg.error.as_ref() {
+                            tracing::warn!(
+                                run_id = %run_id,
+                                thread_id = %thread_id,
+                                api_error = api_error.as_label(),
+                                "claude assistant message carried an API error"
+                            );
+                            signals.last_assistant_error = Some(api_error.clone());
+                        }
                         if is_synthetic_no_response_message(&assistant_msg) {
                             tracing::debug!(
                                 run_id = %run_id,
@@ -1624,12 +1875,44 @@ impl ClaudeCliProvider {
                         }
                         let (input_tokens, output_tokens) =
                             result_usage_tokens(result_msg.usage.as_ref());
+                        if !result_msg.permission_denials.is_empty() {
+                            let denied_tools: Vec<&str> = result_msg
+                                .permission_denials
+                                .iter()
+                                .filter_map(|denial| {
+                                    denial.get("tool_name").and_then(Value::as_str)
+                                })
+                                .collect();
+                            tracing::warn!(
+                                run_id = %run_id,
+                                thread_id = %thread_id,
+                                count = result_msg.permission_denials.len(),
+                                tools = ?denied_tools,
+                                "claude run had permission-denied tool calls"
+                            );
+                        }
+                        if let Some(model_usage) = result_msg.model_usage.as_ref()
+                            && !model_usage.is_empty()
+                        {
+                            tracing::debug!(
+                                run_id = %run_id,
+                                thread_id = %thread_id,
+                                model_usage = %serde_json::to_string(model_usage)
+                                    .unwrap_or_default(),
+                                "claude per-model usage breakdown"
+                            );
+                        }
                         result_data = Some(ProcessedResult {
                             session_id: result_msg.session_id.clone(),
                             cost_usd: result_msg.total_cost_usd.unwrap_or(0.0),
                             input_tokens,
                             output_tokens,
                             is_error: result_msg.is_error,
+                            subtype: result_msg.subtype.clone(),
+                            terminal_reason: result_msg.terminal_reason.clone(),
+                            stop_reason: result_msg.stop_reason.clone(),
+                            errors: result_msg.errors.clone(),
+                            api_error_status: result_msg.api_error_status,
                             actual_model: actual_model.clone(),
                             thread_title: thread_title.clone(),
                             session_messages: session_messages.clone(),
@@ -1639,6 +1922,193 @@ impl ClaudeCliProvider {
                         update_claude_background_tasks(&sys_msg, &mut active_background_tasks);
                         if sys_msg.subtype == "task_notification" {
                             result_seen = false;
+                        }
+                        match sys_msg.subtype.as_str() {
+                            // Subscription quota snapshot. Unknown top-level
+                            // message types are surfaced by the SDK as System
+                            // messages keyed by the type string, so
+                            // `rate_limit_event` arrives here.
+                            "rate_limit_event" => {
+                                if let Some(info) = sys_msg
+                                    .data
+                                    .get("rate_limit_info")
+                                    .filter(|value| value.is_object())
+                                {
+                                    let status = info
+                                        .get("status")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default();
+                                    if status.eq_ignore_ascii_case("rejected") {
+                                        tracing::warn!(
+                                            run_id = %run_id,
+                                            thread_id = %thread_id,
+                                            rate_limit_info = %info,
+                                            "claude subscription rate limit rejected the request"
+                                        );
+                                    }
+                                    signals.rate_limit_info = Some(info.clone());
+                                }
+                            }
+                            // Advisory: the CLI is retrying a failed API
+                            // request. Log-only, mirroring the Codex
+                            // `willRetry` handling.
+                            "api_retry" => {
+                                let attempt = sys_msg
+                                    .data
+                                    .get("attempt")
+                                    .and_then(Value::as_i64)
+                                    .unwrap_or(0);
+                                let max_retries = sys_msg
+                                    .data
+                                    .get("max_retries")
+                                    .and_then(Value::as_i64)
+                                    .unwrap_or(0);
+                                let retry_delay_ms = sys_msg
+                                    .data
+                                    .get("retry_delay_ms")
+                                    .and_then(Value::as_i64)
+                                    .unwrap_or(0);
+                                let error_status =
+                                    sys_msg.data.get("error_status").and_then(Value::as_i64);
+                                let error = sys_msg
+                                    .data
+                                    .get("error")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                tracing::warn!(
+                                    run_id = %run_id,
+                                    thread_id = %thread_id,
+                                    attempt,
+                                    max_retries,
+                                    retry_delay_ms,
+                                    error_status = ?error_status,
+                                    error,
+                                    "claude API request failed; CLI is retrying"
+                                );
+                            }
+                            // The model refused and the CLI rerouted the turn
+                            // to a fallback model: subsequent output runs on
+                            // the fallback, so it becomes the run's actual
+                            // model. Mirrors Codex `model/rerouted`.
+                            "model_refusal_fallback" => {
+                                let original = sys_msg
+                                    .data
+                                    .get("original_model")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default();
+                                let direction = sys_msg
+                                    .data
+                                    .get("direction")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                let category = sys_msg
+                                    .data
+                                    .get("api_refusal_category")
+                                    .and_then(Value::as_str);
+                                if let Some(fallback) = sys_msg
+                                    .data
+                                    .get("fallback_model")
+                                    .and_then(Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|value| !value.is_empty())
+                                {
+                                    tracing::warn!(
+                                        run_id = %run_id,
+                                        thread_id = %thread_id,
+                                        original_model = original,
+                                        fallback_model = fallback,
+                                        direction,
+                                        category = ?category,
+                                        "claude model refusal fallback; updating actual model"
+                                    );
+                                    actual_model = Some(fallback.to_owned());
+                                }
+                            }
+                            "model_refusal_no_fallback" => {
+                                let original_model = sys_msg
+                                    .data
+                                    .get("original_model")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                let category = sys_msg
+                                    .data
+                                    .get("api_refusal_category")
+                                    .and_then(Value::as_str);
+                                tracing::error!(
+                                    run_id = %run_id,
+                                    thread_id = %thread_id,
+                                    original_model,
+                                    category = ?category,
+                                    "claude model refused the request with no fallback model"
+                                );
+                            }
+                            // A failed compaction only surfaces on the status
+                            // frame (`compact_result: "failed"`); successful
+                            // compaction is paired on `compact_boundary`
+                            // below, so pairing on failure here cannot
+                            // double-emit.
+                            "status" => {
+                                let compact_result = sys_msg
+                                    .data
+                                    .get("compact_result")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default();
+                                if compact_result.eq_ignore_ascii_case("failed") {
+                                    let compact_error = sys_msg
+                                        .data
+                                        .get("compact_error")
+                                        .and_then(Value::as_str)
+                                        .map(str::trim)
+                                        .filter(|value| !value.is_empty())
+                                        .unwrap_or("context compaction failed");
+                                    let activity_id = claude_system_activity_id(&sys_msg.data);
+                                    emit_context_compaction_activity(
+                                        &mut session_messages,
+                                        on_chunk,
+                                        &activity_id,
+                                        serde_json::json!({}),
+                                        serde_json::json!({ "compact_error": compact_error }),
+                                        compact_error.to_owned(),
+                                        true,
+                                    );
+                                }
+                            }
+                            // Successful context compaction boundary: emit the
+                            // paired activity frame with the token accounting.
+                            "compact_boundary" => {
+                                let metadata = sys_msg
+                                    .data
+                                    .get("compact_metadata")
+                                    .cloned()
+                                    .unwrap_or_else(|| serde_json::json!({}));
+                                let pre_tokens = metadata.get("pre_tokens").and_then(Value::as_i64);
+                                let post_tokens =
+                                    metadata.get("post_tokens").and_then(Value::as_i64);
+                                let trigger = metadata
+                                    .get("trigger")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("auto");
+                                let result_text = match (pre_tokens, post_tokens) {
+                                    (Some(pre), Some(post)) => format!(
+                                        "compacted context ({trigger}): {pre} -> {post} tokens"
+                                    ),
+                                    (Some(pre), None) => format!(
+                                        "compacted context ({trigger}): {pre} tokens before compaction"
+                                    ),
+                                    _ => format!("compacted context ({trigger})"),
+                                };
+                                let activity_id = claude_system_activity_id(&sys_msg.data);
+                                emit_context_compaction_activity(
+                                    &mut session_messages,
+                                    on_chunk,
+                                    &activity_id,
+                                    serde_json::json!({ "trigger": trigger }),
+                                    metadata,
+                                    result_text,
+                                    false,
+                                );
+                            }
+                            _ => {}
                         }
                         // Eagerly capture the session_id from the `init` system
                         // message so it is persisted even if the run is
@@ -1685,7 +2155,40 @@ impl ClaudeCliProvider {
             }
         }
 
-        Ok((response_text, result_data))
+        // Stage quota-exhaustion context for the bridge run-completion path
+        // (`take_rate_limit`) when this attempt terminated on the subscription
+        // quota: an explicit `blocking_limit` terminal reason, or a rejected
+        // `rate_limit_event` on a run that did not complete successfully.
+        let run_errored = result_data.as_ref().is_none_or(|result| result.is_error);
+        if run_errored {
+            let errors_joined = result_data
+                .as_ref()
+                .map(|result| result.errors.join("; "))
+                .filter(|joined| !joined.is_empty());
+            if let Some(rate_limit) = build_claude_rate_limit(
+                self.config.provider_type.as_slug(),
+                result_data
+                    .as_ref()
+                    .and_then(|result| result.terminal_reason.as_deref()),
+                signals.rate_limit_info.as_ref(),
+                errors_joined.as_deref(),
+            ) {
+                tracing::warn!(
+                    run_id = %run_id,
+                    thread_id = %thread_id,
+                    provider = %rate_limit.provider,
+                    window = ?rate_limit.window,
+                    reset_at = ?rate_limit.reset_at,
+                    "claude run hit usage quota; staging rate-limit context for auto-resend",
+                );
+                self.pending_rate_limits
+                    .lock()
+                    .await
+                    .insert(thread_id.to_owned(), rate_limit);
+            }
+        }
+
+        Ok((response_text, result_data, signals))
     }
 }
 
@@ -1697,6 +2200,17 @@ struct ProcessedResult {
     input_tokens: i64,
     output_tokens: i64,
     is_error: bool,
+    /// Result frame subtype (`success`, `error_during_execution`,
+    /// `error_max_turns`, …).
+    subtype: String,
+    /// Machine-readable terminal classification (open string).
+    terminal_reason: Option<String>,
+    /// API stop reason for the final turn, when reported.
+    stop_reason: Option<String>,
+    /// Human-readable error strings from an error result.
+    errors: Vec<String>,
+    /// HTTP status of the failing API request, when the run died on one.
+    api_error_status: Option<i64>,
     actual_model: Option<String>,
     thread_title: Option<String>,
     session_messages: Vec<ProviderMessage>,
@@ -1853,6 +2367,14 @@ impl AgentLoopProvider for ClaudeCliProvider {
             .lock()
             .await
             .insert(options.thread_id.clone(), options.message.clone());
+
+        // Drop any quota stash left by a prior run on this thread so a stale
+        // entry can never be attributed to this run's terminal record (e.g.
+        // when this run dies before its stream loop starts).
+        self.pending_rate_limits
+            .lock()
+            .await
+            .remove(&options.thread_id);
 
         let run_id = resolve_run_id(&options.metadata);
         // Capture the requested model before the run starts so a concurrent
@@ -2014,6 +2536,10 @@ impl AgentLoopProvider for ClaudeCliProvider {
         } else {
             false
         }
+    }
+
+    async fn take_rate_limit(&self, thread_id: &str) -> Option<ProviderRateLimit> {
+        self.pending_rate_limits.lock().await.remove(thread_id)
     }
 
     fn supports_streaming_input(&self) -> bool {

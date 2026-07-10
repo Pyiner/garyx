@@ -140,12 +140,36 @@ pub enum ContentBlock {
 #[serde(rename_all = "snake_case")]
 pub enum AssistantMessageError {
     AuthenticationFailed,
+    OauthOrgNotAllowed,
     BillingError,
     RateLimit,
+    Overloaded,
     InvalidRequest,
+    ModelNotFound,
     ServerError,
     MaxOutputTokens,
+    /// Catch-all so error categories added by newer CLIs degrade to `Unknown`
+    /// instead of dropping the classification entirely.
+    #[serde(other)]
     Unknown,
+}
+
+impl AssistantMessageError {
+    /// Stable snake_case label for logs and run error messages.
+    pub fn as_label(&self) -> &'static str {
+        match self {
+            Self::AuthenticationFailed => "authentication_failed",
+            Self::OauthOrgNotAllowed => "oauth_org_not_allowed",
+            Self::BillingError => "billing_error",
+            Self::RateLimit => "rate_limit",
+            Self::Overloaded => "overloaded",
+            Self::InvalidRequest => "invalid_request",
+            Self::ModelNotFound => "model_not_found",
+            Self::ServerError => "server_error",
+            Self::MaxOutputTokens => "max_output_tokens",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -183,7 +207,7 @@ pub struct SystemMessage {
     pub data: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ResultMessage {
     pub subtype: String,
     pub duration_ms: i64,
@@ -199,6 +223,34 @@ pub struct ResultMessage {
     pub result: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_output: Option<Value>,
+    /// API stop reason for the final turn, when reported (open string — new
+    /// values ship on the wire ahead of schema updates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    /// Machine-readable terminal classification for the run (e.g.
+    /// `completed`, `max_turns`, `blocking_limit`, `aborted_streaming`).
+    /// Open string: newer CLIs add reasons ahead of schema updates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
+    /// HTTP status of the failing API request, when the run died on an API
+    /// error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_error_status: Option<i64>,
+    /// Human-readable error strings for error results.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+    /// Tool invocations denied by permission evaluation during the run. Kept
+    /// as raw JSON objects (`tool_name`, `tool_use_id`, `tool_input`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_denials: Vec<Value>,
+    /// Per-model usage breakdown keyed by model id (tokens, cache reads and
+    /// writes, cost, context window). Kept as raw JSON for tolerance.
+    #[serde(
+        rename = "modelUsage",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub model_usage: Option<HashMap<String, Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -215,7 +267,9 @@ pub enum Message {
     User(UserMessage),
     Assistant(AssistantMessage),
     System(SystemMessage),
-    Result(ResultMessage),
+    /// Boxed: the result frame carries the full terminal accounting and is
+    /// much larger than the streaming variants exchanged per message.
+    Result(Box<ResultMessage>),
     StreamEvent(StreamEvent),
 }
 
@@ -227,7 +281,7 @@ impl Message {
 
     pub fn as_result(&self) -> Option<&ResultMessage> {
         match self {
-            Self::Result(r) => Some(r),
+            Self::Result(r) => Some(r.as_ref()),
             _ => None,
         }
     }

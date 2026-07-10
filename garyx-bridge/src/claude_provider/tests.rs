@@ -1318,7 +1318,7 @@ async fn test_process_messages_streaming_emits_user_ack_boundaries() {
     usage.insert("input".to_owned(), Value::from(12));
     usage.insert("output".to_owned(), Value::from(34));
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -1329,7 +1329,8 @@ async fn test_process_messages_streaming_emits_user_ack_boundaries() {
         usage: Some(usage),
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
@@ -1341,7 +1342,7 @@ async fn test_process_messages_streaming_emits_user_ack_boundaries() {
     });
 
     provider.set_pending_inputs("run-1", 1).await;
-    let (response_text, result_data) = provider
+    let (response_text, result_data, _signals) = provider
         .process_messages_streaming("run-1", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -1404,7 +1405,7 @@ async fn test_process_messages_streaming_requires_result_message_for_completion(
     drop(tx);
 
     let cb: StreamCallback = Box::new(|_| {});
-    let (response_text, result_data) = provider
+    let (response_text, result_data, _signals) = provider
         .process_messages_streaming("run-no-result", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -1449,7 +1450,7 @@ async fn test_process_messages_streaming_keeps_input_queue_open_during_post_resu
     })))
     .await
     .unwrap();
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -1460,7 +1461,8 @@ async fn test_process_messages_streaming_keeps_input_queue_open_during_post_resu
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
 
@@ -1499,7 +1501,7 @@ async fn test_process_messages_streaming_keeps_input_queue_open_during_post_resu
     })))
     .await
     .unwrap();
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -1510,12 +1512,13 @@ async fn test_process_messages_streaming_keeps_input_queue_open_during_post_resu
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
 
-    let (response_text, result_data) = task
+    let (response_text, result_data, _signals) = task
         .await
         .expect("processing task should not panic")
         .expect("stream should process");
@@ -1571,7 +1574,7 @@ async fn test_process_messages_streaming_waits_for_background_task_notification_
     })))
     .await
     .unwrap();
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -1582,7 +1585,8 @@ async fn test_process_messages_streaming_waits_for_background_task_notification_
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
 
@@ -1633,7 +1637,7 @@ async fn test_process_messages_streaming_waits_for_background_task_notification_
     })))
     .await
     .unwrap();
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -1644,12 +1648,13 @@ async fn test_process_messages_streaming_waits_for_background_task_notification_
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
 
-    let (response_text, result_data) = task
+    let (response_text, result_data, _signals) = task
         .await
         .expect("processing task should not panic")
         .expect("stream should process");
@@ -1694,7 +1699,7 @@ async fn test_process_messages_streaming_emits_queued_input_ack_id_after_root_ac
     .await
     .unwrap();
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -1705,7 +1710,8 @@ async fn test_process_messages_streaming_emits_queued_input_ack_id_after_root_ac
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
@@ -1724,7 +1730,7 @@ async fn test_process_messages_streaming_emits_queued_input_ack_id_after_root_ac
         chunks_cb.lock().expect("chunks mutex poisoned").push(event);
     });
 
-    let (_response_text, result_data) = provider
+    let (_response_text, result_data, _signals) = provider
         .process_messages_streaming("run-queued", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -1798,7 +1804,7 @@ async fn test_process_messages_streaming_suppresses_claude_synthetic_no_response
     .await
     .unwrap();
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -1809,7 +1815,8 @@ async fn test_process_messages_streaming_suppresses_claude_synthetic_no_response
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
@@ -1828,7 +1835,7 @@ async fn test_process_messages_streaming_suppresses_claude_synthetic_no_response
         chunks_cb.lock().expect("chunks mutex poisoned").push(event);
     });
 
-    let (response_text, result_data) = provider
+    let (response_text, result_data, _signals) = provider
         .process_messages_streaming("run-synthetic", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -1879,7 +1886,7 @@ async fn test_process_messages_streaming_preserves_non_synthetic_no_response_tex
     .await
     .unwrap();
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -1890,7 +1897,8 @@ async fn test_process_messages_streaming_preserves_non_synthetic_no_response_tex
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
@@ -1901,7 +1909,7 @@ async fn test_process_messages_streaming_preserves_non_synthetic_no_response_tex
         chunks_cb.lock().expect("chunks mutex poisoned").push(event);
     });
 
-    let (response_text, result_data) = provider
+    let (response_text, result_data, _signals) = provider
         .process_messages_streaming("run-real-text", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -1964,7 +1972,7 @@ async fn test_process_messages_streaming_emits_assistant_segment_boundaries() {
     .await
     .unwrap();
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -1975,7 +1983,8 @@ async fn test_process_messages_streaming_emits_assistant_segment_boundaries() {
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
@@ -1986,7 +1995,7 @@ async fn test_process_messages_streaming_emits_assistant_segment_boundaries() {
         chunks_cb.lock().expect("chunks mutex poisoned").push(event);
     });
 
-    let (response_text, _result_data) = provider
+    let (response_text, _result_data, _signals) = provider
         .process_messages_streaming("run-assistant-segment", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -2052,7 +2061,7 @@ async fn test_process_messages_streaming_emits_tool_result_user_echo_without_bou
     .await
     .unwrap();
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -2063,7 +2072,8 @@ async fn test_process_messages_streaming_emits_tool_result_user_echo_without_bou
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
@@ -2075,7 +2085,7 @@ async fn test_process_messages_streaming_emits_tool_result_user_echo_without_bou
     });
 
     provider.set_pending_inputs("run-2", 1).await;
-    let (response_text, _result_data) = provider
+    let (response_text, _result_data, _signals) = provider
         .process_messages_streaming("run-2", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -2127,7 +2137,7 @@ async fn test_process_messages_streaming_emits_live_tool_events() {
     .await
     .unwrap();
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -2138,7 +2148,8 @@ async fn test_process_messages_streaming_emits_live_tool_events() {
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
@@ -2149,7 +2160,7 @@ async fn test_process_messages_streaming_emits_live_tool_events() {
         chunks_cb.lock().expect("chunks mutex poisoned").push(event);
     });
 
-    let (response_text, _result_data) = provider
+    let (response_text, _result_data, _signals) = provider
         .process_messages_streaming("run-tools", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -2213,7 +2224,7 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
     .await
     .unwrap();
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -2224,7 +2235,8 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
@@ -2235,7 +2247,7 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
         chunks_cb.lock().expect("chunks mutex poisoned").push(event);
     });
 
-    let (response_text, result_data) = provider
+    let (response_text, result_data, _signals) = provider
         .process_messages_streaming("run-subagent", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -2280,8 +2292,8 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
     );
 }
 
-fn result_message_with_error(session_id: &str, is_error: bool) -> ResultMessage {
-    ResultMessage {
+fn result_message_with_error(session_id: &str, is_error: bool) -> Box<ResultMessage> {
+    Box::new(ResultMessage {
         subtype: if is_error { "error" } else { "success" }.to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -2292,7 +2304,8 @@ fn result_message_with_error(session_id: &str, is_error: bool) -> ResultMessage 
         usage: None,
         result: None,
         structured_output: None,
-    }
+        ..Default::default()
+    })
 }
 
 fn assistant_text_message(text: &str) -> AssistantMessage {
@@ -2508,7 +2521,7 @@ async fn test_process_messages_streaming_preserves_assistant_block_order() {
     .await
     .unwrap();
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -2519,7 +2532,8 @@ async fn test_process_messages_streaming_preserves_assistant_block_order() {
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
@@ -2530,7 +2544,7 @@ async fn test_process_messages_streaming_preserves_assistant_block_order() {
         chunks_cb.lock().expect("chunks mutex poisoned").push(event);
     });
 
-    let (response_text, result_data) = provider
+    let (response_text, result_data, _signals) = provider
         .process_messages_streaming("run-order", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -2591,7 +2605,7 @@ async fn test_process_messages_streaming_waits_for_all_pending_results() {
     .await
     .unwrap();
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -2602,7 +2616,8 @@ async fn test_process_messages_streaming_waits_for_all_pending_results() {
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
 
@@ -2626,7 +2641,7 @@ async fn test_process_messages_streaming_waits_for_all_pending_results() {
     .await
     .unwrap();
 
-    tx.send(Ok(Message::Result(ResultMessage {
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
         subtype: "success".to_owned(),
         duration_ms: 1,
         duration_api_ms: 1,
@@ -2637,7 +2652,8 @@ async fn test_process_messages_streaming_waits_for_all_pending_results() {
         usage: None,
         result: None,
         structured_output: None,
-    })))
+        ..Default::default()
+    }))))
     .await
     .unwrap();
     drop(tx);
@@ -2655,7 +2671,7 @@ async fn test_process_messages_streaming_waits_for_all_pending_results() {
             PendingAckMarker::QueuedInput("queued-1".to_owned()),
         ]),
     );
-    let (response_text, result_data) = provider
+    let (response_text, result_data, _signals) = provider
         .process_messages_streaming("run-3", "thread::test", &mut rx, &cb)
         .await
         .expect("stream should process");
@@ -3339,5 +3355,555 @@ fn test_resolve_requested_effort_uses_config_default() {
     assert_eq!(
         resolve_requested_effort(&config, &metadata),
         Some("high".to_owned())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Agent SDK protocol signals: terminal classification, rate limits, refusal
+// fallback, background-task replace, context compaction
+// ---------------------------------------------------------------------------
+
+fn collecting_callback() -> (Arc<std::sync::Mutex<Vec<StreamEvent>>>, StreamCallback) {
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let chunks_cb = chunks.clone();
+    let cb: StreamCallback = Box::new(move |event| {
+        chunks_cb.lock().expect("chunks mutex poisoned").push(event);
+    });
+    (chunks, cb)
+}
+
+#[tokio::test]
+async fn test_result_terminal_classification_carried_into_processed_result() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
+        subtype: "error_during_execution".to_owned(),
+        is_error: true,
+        session_id: "sdk-session-err".to_owned(),
+        terminal_reason: Some("api_error".to_owned()),
+        stop_reason: Some("max_tokens".to_owned()),
+        api_error_status: Some(529),
+        errors: vec!["upstream exploded".to_owned()],
+        ..Default::default()
+    }))))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let (_chunks, cb) = collecting_callback();
+    let (_text, result_data, _signals) = provider
+        .process_messages_streaming("run-term", "thread::test", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    let result = result_data.expect("result frame should be captured");
+    assert!(result.is_error);
+    assert_eq!(result.subtype, "error_during_execution");
+    assert_eq!(result.terminal_reason.as_deref(), Some("api_error"));
+    assert_eq!(result.stop_reason.as_deref(), Some("max_tokens"));
+    assert_eq!(result.api_error_status, Some(529));
+    assert_eq!(result.errors, vec!["upstream exploded".to_owned()]);
+
+    let formatted = format_claude_run_error(&result, Some(&AssistantMessageError::Overloaded));
+    assert_eq!(
+        formatted,
+        "claude run failed (error_during_execution, terminal_reason=api_error, \
+         stop_reason=max_tokens, api_error_status=529, api_error=overloaded): \
+         upstream exploded"
+    );
+}
+
+#[test]
+fn test_format_claude_run_error_falls_back_to_generic_label() {
+    let result = ProcessedResult {
+        session_id: String::new(),
+        cost_usd: 0.0,
+        input_tokens: 0,
+        output_tokens: 0,
+        is_error: true,
+        subtype: "success".to_owned(),
+        terminal_reason: None,
+        stop_reason: None,
+        errors: Vec::new(),
+        api_error_status: None,
+        actual_model: None,
+        thread_title: None,
+        session_messages: Vec::new(),
+    };
+    assert_eq!(
+        format_claude_run_error(&result, None),
+        "claude SDK reported error"
+    );
+}
+
+#[tokio::test]
+async fn test_blocking_limit_result_stages_rate_limit_for_take() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "rate_limit_event".to_owned(),
+        data: json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": {
+                "status": "rejected",
+                "resetsAt": 1767225600,
+                "rateLimitType": "five_hour",
+                "utilization": 0.93,
+            },
+        }),
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
+        subtype: "error_during_execution".to_owned(),
+        is_error: true,
+        session_id: "sdk-session-limit".to_owned(),
+        terminal_reason: Some("blocking_limit".to_owned()),
+        errors: vec!["usage limit reached".to_owned()],
+        ..Default::default()
+    }))))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let (_chunks, cb) = collecting_callback();
+    provider
+        .process_messages_streaming("run-limit", "thread::limit", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    let staged = provider
+        .take_rate_limit("thread::limit")
+        .await
+        .expect("rate limit should be staged");
+    assert_eq!(staged.provider, "claude_code");
+    assert_eq!(staged.reset_at, unix_to_rfc3339(1767225600));
+    assert_eq!(staged.window.as_deref(), Some("five_hour"));
+    assert_eq!(staged.used_percent, Some(93));
+    assert_eq!(staged.reached_type.as_deref(), Some("blocking_limit"));
+    assert_eq!(staged.message.as_deref(), Some("usage limit reached"));
+
+    // Consumed exactly once.
+    assert!(provider.take_rate_limit("thread::limit").await.is_none());
+}
+
+#[tokio::test]
+async fn test_rejected_rate_limit_without_result_still_stages() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "rate_limit_event".to_owned(),
+        data: json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": {
+                "status": "rejected",
+                "resetsAt": 1767225600,
+                "rateLimitType": "seven_day",
+            },
+        }),
+    })))
+    .await
+    .unwrap();
+    // Stream dies without a result frame (CLI killed by the limit).
+    drop(tx);
+
+    let (_chunks, cb) = collecting_callback();
+    provider
+        .process_messages_streaming("run-dead", "thread::dead", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    let staged = provider
+        .take_rate_limit("thread::dead")
+        .await
+        .expect("rate limit should be staged for the dead run");
+    assert_eq!(staged.window.as_deref(), Some("seven_day"));
+    assert_eq!(staged.reached_type.as_deref(), Some("rate_limit_rejected"));
+}
+
+#[tokio::test]
+async fn test_rate_limit_not_staged_on_success_or_warning() {
+    let provider = make_provider();
+
+    // Success run after a rejected event: no staging.
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "rate_limit_event".to_owned(),
+        data: json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": { "status": "rejected", "resetsAt": 1767225600 },
+        }),
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
+        subtype: "success".to_owned(),
+        is_error: false,
+        session_id: "sdk-session-ok".to_owned(),
+        ..Default::default()
+    }))))
+    .await
+    .unwrap();
+    drop(tx);
+    let (_chunks, cb) = collecting_callback();
+    provider
+        .process_messages_streaming("run-ok", "thread::ok", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+    assert!(provider.take_rate_limit("thread::ok").await.is_none());
+
+    // Failed run with only a warning-level event: no staging.
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "rate_limit_event".to_owned(),
+        data: json!({
+            "type": "rate_limit_event",
+            "rate_limit_info": { "status": "allowed_warning", "utilization": 91 },
+        }),
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
+        subtype: "error_during_execution".to_owned(),
+        is_error: true,
+        session_id: "sdk-session-warn".to_owned(),
+        terminal_reason: Some("api_error".to_owned()),
+        ..Default::default()
+    }))))
+    .await
+    .unwrap();
+    drop(tx);
+    let (_chunks, cb) = collecting_callback();
+    provider
+        .process_messages_streaming("run-warn", "thread::warn", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+    assert!(provider.take_rate_limit("thread::warn").await.is_none());
+}
+
+#[test]
+fn test_background_tasks_changed_replaces_task_set() {
+    let mut active = HashSet::new();
+    active.insert("stale-task".to_owned());
+
+    update_claude_background_tasks(
+        &SystemMessage {
+            subtype: "background_tasks_changed".to_owned(),
+            data: json!({
+                "tasks": [
+                    { "task_id": "live-1", "task_type": "local_agent", "description": "d1" },
+                    { "task_id": "live-2", "task_type": "local_agent", "description": "d2" },
+                ],
+            }),
+        },
+        &mut active,
+    );
+    assert_eq!(
+        active,
+        HashSet::from(["live-1".to_owned(), "live-2".to_owned()])
+    );
+
+    // Empty payload clears everything, releasing the post-result drain gate
+    // even when an individual terminal task signal was missed.
+    update_claude_background_tasks(
+        &SystemMessage {
+            subtype: "background_tasks_changed".to_owned(),
+            data: json!({ "tasks": [] }),
+        },
+        &mut active,
+    );
+    assert!(active.is_empty());
+}
+
+#[tokio::test]
+async fn test_model_refusal_fallback_overrides_actual_model() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "before refusal".to_owned(),
+        })],
+        model: "claude-original".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "model_refusal_fallback".to_owned(),
+        data: json!({
+            "original_model": "claude-original",
+            "fallback_model": "claude-fallback",
+            "direction": "sticky",
+        }),
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
+        subtype: "success".to_owned(),
+        is_error: false,
+        session_id: "sdk-session-refusal".to_owned(),
+        ..Default::default()
+    }))))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let (_chunks, cb) = collecting_callback();
+    let (_text, result_data, _signals) = provider
+        .process_messages_streaming("run-refusal", "thread::test", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    assert_eq!(
+        result_data
+            .expect("result frame should be captured")
+            .actual_model
+            .as_deref(),
+        Some("claude-fallback")
+    );
+}
+
+#[tokio::test]
+async fn test_assistant_api_error_captured_in_signals() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: Vec::new(),
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: Some(AssistantMessageError::RateLimit),
+    })))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let (_chunks, cb) = collecting_callback();
+    let (_text, _result_data, signals) = provider
+        .process_messages_streaming("run-apierr", "thread::test", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    assert_eq!(
+        signals.last_assistant_error,
+        Some(AssistantMessageError::RateLimit)
+    );
+}
+
+#[tokio::test]
+async fn test_compact_boundary_emits_paired_context_compaction_activity() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "compact_boundary".to_owned(),
+        data: json!({
+            "uuid": "compact-uuid-1",
+            "compact_metadata": {
+                "trigger": "auto",
+                "pre_tokens": 50000,
+                "post_tokens": 8000,
+            },
+        }),
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
+        subtype: "success".to_owned(),
+        is_error: false,
+        session_id: "sdk-session-compact".to_owned(),
+        ..Default::default()
+    }))))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let (chunks, cb) = collecting_callback();
+    let (_text, result_data, _signals) = provider
+        .process_messages_streaming("run-compact", "thread::test", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
+    let tool_use = emitted
+        .iter()
+        .find_map(|event| match event {
+            StreamEvent::ToolUse { message } => Some(message.clone()),
+            _ => None,
+        })
+        .expect("paired ToolUse frame should be emitted");
+    let tool_result = emitted
+        .iter()
+        .find_map(|event| match event {
+            StreamEvent::ToolResult { message } => Some(message.clone()),
+            _ => None,
+        })
+        .expect("paired ToolResult frame should be emitted");
+
+    assert_eq!(tool_use.tool_name.as_deref(), Some("contextCompaction"));
+    assert_eq!(tool_use.tool_use_id.as_deref(), Some("compact-uuid-1"));
+    // `item_type` must be present so channel placeholder policy
+    // (plugin_tools::should_hide_tool_call_display) hides compaction like
+    // it does for Codex.
+    assert_eq!(
+        tool_use.metadata.get("item_type").and_then(Value::as_str),
+        Some("contextCompaction")
+    );
+    assert_eq!(
+        tool_result
+            .metadata
+            .get("item_type")
+            .and_then(Value::as_str),
+        Some("contextCompaction")
+    );
+    assert_eq!(tool_result.tool_use_id.as_deref(), Some("compact-uuid-1"));
+    assert_eq!(tool_result.is_error, Some(false));
+    let text = tool_result.text.clone().unwrap_or_default();
+    assert!(
+        text.contains("50000 -> 8000"),
+        "result text should carry token accounting, got: {text}"
+    );
+
+    // Both halves also land in the persisted session messages.
+    let session_messages = result_data
+        .expect("result frame should be captured")
+        .session_messages;
+    let compaction_rows = session_messages
+        .iter()
+        .filter(|message| message.tool_name.as_deref() == Some("contextCompaction"))
+        .count();
+    assert_eq!(compaction_rows, 2);
+}
+
+#[tokio::test]
+async fn test_failed_compact_status_emits_error_activity() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "status".to_owned(),
+        data: json!({
+            "uuid": "compact-uuid-2",
+            "status": null,
+            "compact_result": "failed",
+            "compact_error": "compaction blew up",
+        }),
+    })))
+    .await
+    .unwrap();
+    tx.send(Ok(Message::Result(Box::new(ResultMessage {
+        subtype: "success".to_owned(),
+        is_error: false,
+        session_id: "sdk-session-compact-fail".to_owned(),
+        ..Default::default()
+    }))))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let (chunks, cb) = collecting_callback();
+    provider
+        .process_messages_streaming("run-compact-fail", "thread::test", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+
+    let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
+    let tool_result = emitted
+        .iter()
+        .find_map(|event| match event {
+            StreamEvent::ToolResult { message } => Some(message.clone()),
+            _ => None,
+        })
+        .expect("failed compact should emit a paired ToolResult frame");
+    assert_eq!(tool_result.tool_name.as_deref(), Some("contextCompaction"));
+    assert_eq!(tool_result.is_error, Some(true));
+    assert_eq!(tool_result.text.as_deref(), Some("compaction blew up"));
+
+    // A plain "compacting" status frame must NOT emit activity: pairing is
+    // completed-only.
+    let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+    tx.send(Ok(Message::System(SystemMessage {
+        subtype: "status".to_owned(),
+        data: json!({ "status": "compacting" }),
+    })))
+    .await
+    .unwrap();
+    drop(tx);
+    let (chunks, cb) = collecting_callback();
+    provider
+        .process_messages_streaming("run-compacting", "thread::test", &mut rx, &cb)
+        .await
+        .expect("stream should process");
+    assert!(
+        chunks.lock().expect("chunks mutex poisoned").is_empty(),
+        "in-progress compacting status must not emit frames"
+    );
+}
+
+#[test]
+fn test_claude_utilization_percent_normalizes_ratio_and_percent() {
+    // Official CLI reports a 0..1 ratio.
+    assert_eq!(claude_utilization_percent(&json!(0.93)), Some(93));
+    assert_eq!(claude_utilization_percent(&json!(1.0)), Some(100));
+    assert_eq!(claude_utilization_percent(&json!(0)), Some(0));
+    // Values above 1 are treated as already-percentages for tolerance.
+    assert_eq!(claude_utilization_percent(&json!(93)), Some(93));
+    // Numeric strings are accepted.
+    assert_eq!(claude_utilization_percent(&json!("0.5")), Some(50));
+    // Garbage is rejected.
+    assert_eq!(claude_utilization_percent(&json!(-0.1)), None);
+    assert_eq!(claude_utilization_percent(&json!("nope")), None);
+    assert_eq!(claude_utilization_percent(&json!(null)), None);
+}
+
+#[tokio::test]
+async fn test_execute_sdk_run_entry_clears_stale_rate_limit_stash() {
+    let provider = make_provider();
+
+    // A previous attempt staged a rate limit for this thread.
+    provider.pending_rate_limits.lock().await.insert(
+        "thread::stale-stash".to_owned(),
+        garyx_models::provider::ProviderRateLimit {
+            provider: "claude_code".to_owned(),
+            ..Default::default()
+        },
+    );
+
+    // The next attempt dies at connect time (injected before the message
+    // loop, mirroring a connect/send failure that never reaches it).
+    provider
+        .test_run_attempts
+        .lock()
+        .await
+        .push_back(Err(BridgeError::RunFailed(
+            "failed to connect to claude: boom".to_owned(),
+        )));
+
+    let options = ProviderRunOptions {
+        thread_id: "thread::stale-stash".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::new(),
+    };
+    let cb: StreamCallback = Box::new(|_| {});
+    let attempt = provider
+        .execute_sdk_run(&options, None, "run-stale", &cb)
+        .await;
+    assert!(attempt.is_err(), "injected connect failure should surface");
+
+    // The stale stash from the earlier attempt must NOT be attributed to
+    // this failed attempt's terminal record.
+    assert!(
+        provider
+            .take_rate_limit("thread::stale-stash")
+            .await
+            .is_none(),
+        "connect-failure attempt must clear the stale rate-limit stash"
     );
 }

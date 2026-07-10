@@ -393,6 +393,22 @@ mod tests {
     }
 
     #[test]
+    fn claude_context_compaction_tool_call_display_is_hidden() {
+        // Exact shape emitted by the Claude provider's synthesized compaction
+        // activity frame (emit_context_compaction_activity): name in
+        // `tool_name`, classifier in `metadata.item_type`.
+        let message = ProviderMessage::tool_use(
+            json!({"tool": "contextCompaction", "input": {"trigger": "auto"}}),
+            Some("compact-uuid-1".to_owned()),
+            Some("contextCompaction".to_owned()),
+        )
+        .with_metadata_value("source", json!("claude_sdk"))
+        .with_metadata_value("item_type", json!("contextCompaction"));
+
+        assert!(should_hide_tool_call_display(&message));
+    }
+
+    #[test]
     fn tool_call_display_state_renders_numbered_placeholder() {
         let mut state = ToolCallDisplayState::default();
         let message =

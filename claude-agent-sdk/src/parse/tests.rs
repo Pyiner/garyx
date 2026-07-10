@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::AssistantMessageError;
 use serde_json::json;
 
 #[test]
@@ -299,4 +300,102 @@ fn test_parse_missing_type() {
 fn test_parse_non_object() {
     let data = json!("hello");
     assert!(parse_message(&data).is_err());
+}
+
+#[test]
+fn test_parse_result_message_terminal_state_fields() {
+    let data = json!({
+        "type": "result",
+        "subtype": "error_during_execution",
+        "duration_ms": 10,
+        "duration_api_ms": 5,
+        "is_error": true,
+        "num_turns": 1,
+        "session_id": "sess-2",
+        "stop_reason": "max_tokens",
+        "terminal_reason": "blocking_limit",
+        "api_error_status": 429,
+        "errors": ["usage limit reached", "", "   "],
+        "permission_denials": [
+            { "tool_name": "Bash", "tool_use_id": "toolu_1", "tool_input": {} }
+        ],
+        "modelUsage": {
+            "claude-x": { "inputTokens": 10, "outputTokens": 20, "contextWindow": 200000 }
+        }
+    });
+
+    let msg = parse_message(&data).unwrap();
+    match msg {
+        Message::Result(r) => {
+            assert_eq!(r.stop_reason.as_deref(), Some("max_tokens"));
+            assert_eq!(r.terminal_reason.as_deref(), Some("blocking_limit"));
+            assert_eq!(r.api_error_status, Some(429));
+            // Blank error strings are dropped.
+            assert_eq!(r.errors, vec!["usage limit reached".to_owned()]);
+            assert_eq!(r.permission_denials.len(), 1);
+            assert_eq!(
+                r.permission_denials[0]
+                    .get("tool_name")
+                    .and_then(|v| v.as_str()),
+                Some("Bash")
+            );
+            let model_usage = r.model_usage.expect("modelUsage should parse");
+            assert_eq!(
+                model_usage
+                    .get("claude-x")
+                    .and_then(|usage| usage.get("contextWindow"))
+                    .and_then(|v| v.as_i64()),
+                Some(200000)
+            );
+        }
+        other => panic!("Expected Result, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_result_message_new_fields_absent_defaults() {
+    let data = json!({
+        "type": "result",
+        "subtype": "success",
+        "duration_ms": 1,
+        "duration_api_ms": 1,
+        "is_error": false,
+        "num_turns": 1,
+        "session_id": "sess-3"
+    });
+
+    let msg = parse_message(&data).unwrap();
+    match msg {
+        Message::Result(r) => {
+            assert_eq!(r.stop_reason, None);
+            assert_eq!(r.terminal_reason, None);
+            assert_eq!(r.api_error_status, None);
+            assert!(r.errors.is_empty());
+            assert!(r.permission_denials.is_empty());
+            assert_eq!(r.model_usage, None);
+        }
+        other => panic!("Expected Result, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_assistant_error_unknown_category_degrades_to_unknown() {
+    let data = json!({
+        "type": "assistant",
+        "message": {
+            "content": [{ "type": "text", "text": "hi" }],
+            "model": "claude-x"
+        },
+        "error": "brand_new_error_category_from_future_cli"
+    });
+
+    let msg = parse_message(&data).unwrap();
+    match msg {
+        Message::Assistant(a) => {
+            // Unknown categories must degrade to Unknown, not drop the
+            // classification entirely.
+            assert_eq!(a.error, Some(AssistantMessageError::Unknown));
+        }
+        other => panic!("Expected Assistant, got {other:?}"),
+    }
 }

@@ -245,8 +245,12 @@ fn parse_assistant_message(data: &Value) -> Result<Message> {
         .get("parent_tool_use_id")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let error = message
+    // The wire places `error` on the assistant envelope (top level), next to
+    // `message` — not inside it. Keep the nested location as a fallback.
+    let error = data
         .get("error")
+        .or_else(|| message.get("error"))
+        .filter(|v| !v.is_null())
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
     Ok(Message::Assistant(AssistantMessage {
@@ -277,7 +281,7 @@ fn parse_result_message(data: &Value) -> Result<Message> {
     let subtype = str_field(data, "subtype")?;
     let session_id = str_field(data, "session_id")?;
 
-    Ok(Message::Result(ResultMessage {
+    Ok(Message::Result(Box::new(ResultMessage {
         subtype,
         duration_ms: data
             .get("duration_ms")
@@ -305,7 +309,41 @@ fn parse_result_message(data: &Value) -> Result<Message> {
             .get("structured_output")
             .cloned()
             .filter(|v| !v.is_null()),
-    }))
+        stop_reason: data
+            .get("stop_reason")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from),
+        terminal_reason: data
+            .get("terminal_reason")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from),
+        api_error_status: data.get("api_error_status").and_then(|v| v.as_i64()),
+        errors: data
+            .get("errors")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        permission_denials: data
+            .get("permission_denials")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default(),
+        model_usage: data
+            .get("modelUsage")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+    })))
 }
 
 fn parse_stream_event(data: &Value) -> Result<Message> {
