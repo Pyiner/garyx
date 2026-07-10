@@ -137,8 +137,7 @@ struct GaryxTaskTreeSidebarSurface: ViewModifier {
         // stays square at every reveal progress.
         return GaryxTaskTreeSidebarPanel(
             topSafeAreaInset: safeAreaInsets.top,
-            bottomSafeAreaInset: safeAreaInsets.bottom,
-            onClose: { closePanel() }
+            bottomSafeAreaInset: safeAreaInsets.bottom
         )
             .frame(width: panelWidth)
             .frame(maxHeight: .infinity)
@@ -311,7 +310,6 @@ private struct GaryxTaskTreeSidebarPanel: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let topSafeAreaInset: CGFloat
     let bottomSafeAreaInset: CGFloat
-    let onClose: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -332,25 +330,7 @@ private struct GaryxTaskTreeSidebarPanel: View {
             Text("Task tree")
                 .font(GaryxFont.body(weight: .semibold))
                 .foregroundStyle(.primary)
-            if model.taskTreeActiveBadgeCount > 0 {
-                Text("\(model.taskTreeActiveBadgeCount)")
-                    .font(GaryxFont.system(size: 11, weight: .bold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Color.primary.opacity(0.08), in: Capsule())
-                    .accessibilityLabel("\(model.taskTreeActiveBadgeCount) active tasks")
-            }
             Spacer(minLength: 0)
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(GaryxFont.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Close task tree")
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
