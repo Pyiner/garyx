@@ -170,12 +170,15 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         }
     }
 
-    @State private var page = Page.main
-    /// Two-phase drill-in coordinator: the current page fades out fully,
-    /// then the page swaps and fades in. Only one page is ever mounted.
-    @State private var pageContentVisible = true
-    @State private var pageTransitionToken = 0
+    /// Two-phase drill-in coordinator (GaryxMobileCore): the current page
+    /// fades out fully, then the page swaps and fades in. Only one page is
+    /// ever mounted; the view owns clocks and curves, the pager owns the
+    /// ordering rules.
+    @State private var pager = GaryxRuntimePanelPager<Page>(page: .main)
     @State private var measuredOptionsHeight: CGFloat?
+
+    private var page: Page { pager.page }
+    private var pageContentVisible: Bool { pager.isContentVisible }
 
     private var selectedThread: GaryxThreadSummary? { model.selectedThread }
     private var runtime: GaryxThreadRuntimeSummary? { selectedThread?.threadRuntime }
@@ -307,12 +310,11 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         }
         // Collapsing from a sub-page resets to the compact-row header
         // instantly (no page transition), keeping the capsule hand-off
-        // free of "< Model" residue.
+        // free of "< Model" residue. The reset also invalidates any
+        // in-flight phase-2 continuation.
         .onChange(of: isExpanded) { _, expanded in
             if !expanded {
-                pageTransitionToken += 1
-                page = .main
-                pageContentVisible = true
+                pager.reset(to: .main)
             }
         }
         .task(id: providerType) {
@@ -338,10 +340,12 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     /// measured content height once laid out — Dynamic Type sizes grow the
     /// rows, and the viewport follows instead of forcing an inner scroll.
     private var optionsViewportHeight: CGFloat {
-        let rows = CGFloat(optionsPageCount)
-        let hairlines = max(rows - 1, 0) * (1 / UIScreen.main.scale)
-        let estimate = rows * 44 + hairlines + 4 + 12
-        return min(max(measuredOptionsHeight ?? estimate, 96), panelMaxHeight)
+        GaryxRuntimeOptionsViewportMetrics.height(
+            rowCount: optionsPageCount,
+            hairlineHeight: 1 / UIScreen.main.scale,
+            measuredContentHeight: measuredOptionsHeight,
+            maxHeight: panelMaxHeight
+        )
     }
 
     private var optionsPageCount: Int {
@@ -479,7 +483,11 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Back")
+                    // VoiceOver keeps the visible page title (with header
+                    // semantics); going back is the action, not the label.
+                    .accessibilityLabel(page.title)
+                    .accessibilityHint("Back to thread settings")
+                    .accessibilityAddTraits(.isHeader)
                     .transition(.identity)
                 }
             }
@@ -748,20 +756,19 @@ struct GaryxThreadRuntimeSettingsPanel: View {
     }
 
     private func setPage(_ nextPage: Page) {
-        guard page != nextPage else { return }
-        pageTransitionToken += 1
-        let token = pageTransitionToken
+        var exiting = pager
+        guard let token = exiting.begin(to: nextPage) else { return }
         withAnimation(.easeIn(duration: 0.10)) {
-            pageContentVisible = false
+            pager = exiting
         }
         Task { @MainActor in
             // 100ms exit + 50ms rest before the new page enters.
             try? await Task.sleep(for: .milliseconds(150))
-            guard token == pageTransitionToken else { return }
+            var entering = pager
+            guard entering.complete(token: token, to: nextPage) else { return }
             measuredOptionsHeight = nil
             withAnimation(.easeOut(duration: reduceMotion ? 0.12 : 0.18)) {
-                page = nextPage
-                pageContentVisible = true
+                pager = entering
             }
         }
     }
