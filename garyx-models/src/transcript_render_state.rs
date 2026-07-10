@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::tool_field_projection::{RenderToolFieldProjection, merge_tool_result_projection};
 use crate::transcript_kind::{
     is_control_message, is_tool_related_message, is_tool_result_trace,
     resolve_message_kind_for_object, tool_call_id,
@@ -176,6 +177,8 @@ pub struct RenderToolEntry {
     pub status: RenderToolEntryStatus,
     pub tool_use: Option<RenderMessageRef>,
     pub tool_result: Option<RenderMessageRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<RenderToolFieldProjection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -584,14 +587,16 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
                 }));
             }
             "tool_trace" => {
+                let is_result = is_tool_result_trace(&role, message);
                 current_tool_group.push_tool_message(
                     ToolMessage {
                         reference,
                         timestamp: message_timestamp(record, message),
                         tool_use_id: tool_call_id(message),
-                        is_result: is_tool_result_trace(&role, message),
+                        is_result,
                         is_error: message_bool(message, "is_error")
                             || message_bool(message, "isError"),
+                        projection: RenderToolFieldProjection::from_message(message, is_result),
                     },
                     &mut blocks,
                 );
@@ -682,6 +687,7 @@ struct ToolMessage {
     tool_use_id: Option<String>,
     is_result: bool,
     is_error: bool,
+    projection: Option<RenderToolFieldProjection>,
 }
 
 #[derive(Debug, Clone)]
@@ -694,6 +700,7 @@ struct ToolEntryDraft {
     first_timestamp: Option<String>,
     last_timestamp: Option<String>,
     is_error: bool,
+    projection: Option<RenderToolFieldProjection>,
 }
 
 impl ToolEntryDraft {
@@ -709,6 +716,7 @@ impl ToolEntryDraft {
             first_timestamp: message.timestamp.clone(),
             last_timestamp: message.timestamp,
             is_error: false,
+            projection: message.projection,
         }
     }
 
@@ -724,6 +732,7 @@ impl ToolEntryDraft {
             first_timestamp: message.timestamp.clone(),
             last_timestamp: message.timestamp,
             is_error: message.is_error,
+            projection: message.projection,
         }
     }
 
@@ -735,6 +744,7 @@ impl ToolEntryDraft {
         self.tool_result = Some(message.reference);
         self.last_timestamp = message.timestamp.or_else(|| self.last_timestamp.clone());
         self.is_error = message.is_error;
+        self.projection = merge_tool_result_projection(self.projection.take(), message.projection);
     }
 
     fn is_pending(&self) -> bool {
@@ -797,6 +807,8 @@ impl ToolGroupBuilder {
             } else {
                 RenderToolEntryStatus::Completed
             };
+            entry.projection =
+                merge_tool_result_projection(entry.projection.take(), message.projection);
             if message.timestamp.is_some() {
                 group.finished_at = message.timestamp;
             }
@@ -885,6 +897,7 @@ impl ToolGroupBuilder {
                     },
                     tool_use: entry.tool_use,
                     tool_result: entry.tool_result,
+                    projection: entry.projection,
                 }
             })
             .collect();
@@ -1895,6 +1908,83 @@ mod tests {
             groups[0].entries[0].status,
             RenderToolEntryStatus::Completed
         );
+    }
+
+    #[test]
+    fn codex_command_projection_survives_late_result_backfill() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(
+                2,
+                "Inspect the repository",
+                "00000000-0000-0000-0000-000000000011",
+            ),
+            message_record(
+                3,
+                json!({
+                    "role": "tool_use",
+                    "kind": "tool_trace",
+                    "tool_name": "commandExecution",
+                    "tool_use_id": "call_projection",
+                    "content": {
+                        "type": "commandExecution",
+                        "command": "/bin/zsh -lc 'git status --short'",
+                        "cwd": "/Users/test/repo",
+                        "status": "inProgress"
+                    }
+                }),
+            ),
+            assistant_record(4, "Checking the result."),
+            message_record(
+                5,
+                json!({
+                    "role": "tool_result",
+                    "kind": "tool_trace",
+                    "tool_name": "commandExecution",
+                    "tool_use_id": "call_projection",
+                    "content": {
+                        "type": "commandExecution",
+                        "aggregatedOutput": " M README.md\n",
+                        "status": "completed",
+                        "exitCode": 0,
+                        "durationMs": 7
+                    }
+                }),
+            ),
+        ];
+
+        let snapshot = reduce_transcript_render_state(&records);
+        let entry = snapshot
+            .rows
+            .iter()
+            .map(|row| match row {
+                RenderRow::UserTurn(turn) => turn,
+            })
+            .flat_map(|turn| turn.activity.iter())
+            .filter_map(|activity| match activity {
+                RenderActivityRow::Step(step) => Some(step),
+                _ => None,
+            })
+            .flat_map(|step| step.steps.iter())
+            .find_map(|item| match item {
+                RenderStepItem::ToolGroup(group) => group.entries.first(),
+                _ => None,
+            })
+            .expect("projected tool entry");
+        let projection = entry.projection.as_ref().expect("field projection");
+
+        assert_eq!(
+            projection.kind,
+            crate::tool_field_projection::RenderToolKind::Command
+        );
+        assert_eq!(projection.call.as_ref().unwrap().path, ["command"]);
+        assert_eq!(
+            projection.result.as_ref().unwrap().path,
+            ["aggregatedOutput"]
+        );
+        assert_eq!(projection.status.as_deref(), Some("completed"));
+        assert_eq!(projection.exit_code, Some(0));
+        assert_eq!(projection.duration_ms, Some(7));
     }
 
     #[test]

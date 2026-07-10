@@ -136,6 +136,13 @@ private struct GaryxToolCallRowLabel: View {
             }
 
             Spacer(minLength: 0)
+
+            if let metadata = row.metadata {
+                Text(metadata)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(GaryxTheme.tertiaryText)
+                    .lineLimit(1)
+            }
         }
         .padding(.vertical, 11)
         .contentShape(Rectangle())

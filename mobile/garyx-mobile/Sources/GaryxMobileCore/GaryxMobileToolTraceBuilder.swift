@@ -148,6 +148,12 @@ struct GaryxMessageListSignature: Equatable, Sendable {
                     hasher.combine(entry.isError)
                     hasher.combine(entry.timestamp)
                     hasher.combine(entry.primaryPathBadge)
+                    hasher.combine(entry.fieldProjection?.kind.rawValue)
+                    hasher.combine(entry.fieldProjection?.call?.format.rawValue)
+                    hasher.combine(entry.fieldProjection?.result?.format.rawValue)
+                    hasher.combine(entry.fieldProjection?.status)
+                    hasher.combine(entry.fieldProjection?.exitCode)
+                    hasher.combine(entry.fieldProjection?.durationMs)
                     sampled = combineTextSignature(entry.inputText, into: &hasher) || sampled
                     sampled = combineTextSignature(entry.resultText, into: &hasher) || sampled
                 }

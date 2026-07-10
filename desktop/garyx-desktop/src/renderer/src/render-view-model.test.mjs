@@ -160,6 +160,22 @@ test('tool_group active flag mirrors activeToolGroupId', () => {
   );
 });
 
+test('tool entries pass the server field projection through unchanged', () => {
+  const fixtureCase = renderFixture.cases.find(
+    (c) => c.name === 'tool lull after completed tool',
+  );
+  const renderState = fixtureCase.expected;
+  const rows = buildThreadViewRows(renderState, messagesBySeqFor(renderState));
+  const userTurn = rows.find((row) => row.kind === 'user_turn');
+  const turn = userTurn.activityRows.find((row) => row.kind === 'turn');
+  const group = turn.steps.find((block) => block.kind === 'tool_group');
+  const wireEntry = renderState.rows[0].activity[0].steps.find(
+    (step) => step.kind === 'tool_group',
+  ).entries[0];
+
+  assert.deepEqual(group.entries[0].projection, wireEntry.projection);
+});
+
 test('final answer surfaces a finalBlock outside the collapsible', () => {
   const fixtureCase = renderFixture.cases.find(
     (c) => c.name === 'final answer completed',

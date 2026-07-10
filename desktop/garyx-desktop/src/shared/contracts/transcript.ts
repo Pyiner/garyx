@@ -93,12 +93,72 @@ export interface RenderMessageRef {
 
 export type RenderToolEntryStatus = "running" | "completed" | "failed";
 
+export type RenderToolKind =
+  | "command"
+  | "file_read"
+  | "file_write"
+  | "file_edit"
+  | "search"
+  | "web"
+  | "agent"
+  | "task"
+  | "image"
+  | "system"
+  | "generic";
+
+export type RenderToolFieldRoot = "content" | "input" | "result" | "text";
+
+export type RenderToolFieldFormat =
+  | "text"
+  | "code"
+  | "path"
+  | "json"
+  | "diff"
+  | "image";
+
+export type RenderToolFieldLabel =
+  | "call"
+  | "command"
+  | "file"
+  | "query"
+  | "url"
+  | "prompt"
+  | "parameters"
+  | "content"
+  | "output"
+  | "result"
+  | "response"
+  | "diff"
+  | "image"
+  | "error";
+
+export type RenderToolVisibility = "normal" | "nested" | "quiet" | "hidden";
+
+export interface RenderToolFieldSelector {
+  root: RenderToolFieldRoot;
+  path?: string[];
+  format: RenderToolFieldFormat;
+  label: RenderToolFieldLabel;
+}
+
+export interface RenderToolFieldProjection {
+  tool_name?: string;
+  kind: RenderToolKind;
+  visibility: RenderToolVisibility;
+  call?: RenderToolFieldSelector;
+  result?: RenderToolFieldSelector;
+  status?: string;
+  exit_code?: number;
+  duration_ms?: number;
+}
+
 export interface RenderToolEntry {
   id: string;
   tool_use_id: string | null;
   status: RenderToolEntryStatus;
   tool_use: RenderMessageRef | null;
   tool_result: RenderMessageRef | null;
+  projection?: RenderToolFieldProjection;
 }
 
 export type RenderToolGroupStatus = "active" | "completed";

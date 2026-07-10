@@ -96,6 +96,11 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   tail and event delivery is still governed by the SSE cursor. Prioritize
   headless, no-UI tests for message-related work by driving the server snapshot
   / real captured stream data and asserting the mapped output.
+- Tool call/result field selection is server-owned through
+  `RenderToolEntry.projection`. Keep projections lightweight by sending field
+  selectors, not copied command output; Mac and iOS resolve those selectors
+  generically against their cached message bodies and must not add separate
+  provider-specific JSON field switch tables.
 - Keep mobile SwiftUI feature surfaces in feature-specific files.
 - Mobile page backgrounds and bottom floating controls should use the shared
   safe-area chrome helpers (`garyxPageBackground`, `garyxFloatingBottomChrome`)

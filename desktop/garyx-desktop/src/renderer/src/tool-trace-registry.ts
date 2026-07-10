@@ -1,4 +1,9 @@
-import type { TranscriptMessage } from '@shared/contracts';
+import type {
+  RenderToolFieldProjection,
+  RenderToolFieldSelector,
+  RenderToolKind,
+  TranscriptMessage,
+} from '@shared/contracts';
 
 import {
   imageSourceFromUnknown,
@@ -17,7 +22,15 @@ export type ToolPathImageRef = {
 
 export type ToolTraceMessage = Pick<
   TranscriptMessage,
-  'role' | 'text' | 'content' | 'toolUseId' | 'toolName' | 'metadata' | 'isError'
+  | 'role'
+  | 'text'
+  | 'content'
+  | 'input'
+  | 'result'
+  | 'toolUseId'
+  | 'toolName'
+  | 'metadata'
+  | 'isError'
 >;
 
 type ToolTraceEnvelope = {
@@ -221,6 +234,12 @@ function firstMeaningfulLine(value: string | undefined): string | undefined {
     .map((entry) => entry.trim())
     .find(Boolean);
   return line || undefined;
+}
+
+function firstProjectedMeaningfulLine(value: string | undefined): string | undefined {
+  // Tool output may be megabytes. The expandable detail keeps the exact
+  // selected string, while the one-line header only inspects a bounded prefix.
+  return firstMeaningfulLine(value?.slice(0, 4096));
 }
 
 function unwrapMatchingQuotes(value: string | undefined): string | undefined {
@@ -1453,19 +1472,298 @@ function stripImageBlocks(value: unknown): unknown {
   return meaningful ? next : undefined;
 }
 
+function projectionRootValue(
+  message: ToolTraceMessage | undefined,
+  selector: RenderToolFieldSelector | undefined,
+): unknown {
+  if (!message || !selector) {
+    return undefined;
+  }
+  switch (selector.root) {
+    case 'content':
+      return message.content;
+    case 'input':
+      return message.input;
+    case 'result':
+      return message.result;
+    case 'text':
+      return message.text;
+  }
+}
+
+function projectionPathValue(
+  message: ToolTraceMessage | undefined,
+  selector: RenderToolFieldSelector | undefined,
+): unknown {
+  let value = projectionRootValue(message, selector);
+  for (const component of selector?.path || []) {
+    value = parseMaybeJson(value);
+    if (Array.isArray(value)) {
+      const index = Number(component);
+      if (!Number.isInteger(index) || index < 0 || index >= value.length) {
+        return undefined;
+      }
+      value = value[index];
+      continue;
+    }
+    const record = asRecord(value);
+    if (!record || !(component in record)) {
+      return undefined;
+    }
+    value = record[component];
+  }
+  return value;
+}
+
+function unwrapProjectedString(value: string): string {
+  let encoded = value;
+  if (!value.startsWith('"') || !value.endsWith('"')) {
+    // Provider labels are sometimes JSON-encoded strings with surrounding
+    // whitespace. Keep this convenience bounded so a megabyte of stdout is
+    // never copied merely to decide whether it needs unwrapping.
+    if (value.length > 16_384) {
+      return value;
+    }
+    encoded = value.trim();
+  }
+  if (encoded.length >= 2 && encoded.startsWith('"') && encoded.endsWith('"')) {
+    try {
+      const parsed = JSON.parse(encoded);
+      if (typeof parsed === 'string') {
+        return parsed;
+      }
+    } catch {
+      // Keep provider text verbatim when it only resembles a JSON string.
+    }
+  }
+  return value;
+}
+
+function collectProjectedResultImages(
+  toolResult: ToolTraceMessage | undefined,
+  projection: RenderToolFieldProjection,
+): ToolResultImageSegment[] {
+  if (!toolResult || projection.result?.format !== 'image') {
+    return [];
+  }
+  return collectToolResultImageSegments([
+    parseMaybeJson(toolResult.result),
+    parseMaybeJson(toolResult.content),
+  ]);
+}
+
+function collectProjectedPathImages(
+  toolUse: ToolTraceMessage | undefined,
+  toolResult: ToolTraceMessage | undefined,
+  projection: RenderToolFieldProjection,
+): ToolPathImageRef[] {
+  if (projection.kind !== 'image') {
+    return [];
+  }
+  const candidates = [
+    projection.call && ['image', 'path'].includes(projection.call.format)
+      ? projectionPathValue(toolUse, projection.call)
+      : undefined,
+    projection.result && ['image', 'path'].includes(projection.result.format)
+      ? projectionPathValue(toolResult, projection.result)
+      : undefined,
+  ];
+  const seen = new Set<string>();
+  const images: ToolPathImageRef[] = [];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string' || candidate.length > 16_384) {
+      continue;
+    }
+    const path = unwrapProjectedString(candidate).trim();
+    if (!path || seen.has(path)) {
+      continue;
+    }
+    seen.add(path);
+    images.push({
+      key: `projected-image:${path}`,
+      path,
+      alt: path.split(/[\\/]/).filter(Boolean).pop() || 'Tool image',
+    });
+  }
+  return images;
+}
+
+function projectionDiffText(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    return unwrapProjectedString(value);
+  }
+  if (Array.isArray(value)) {
+    const chunks = value
+      .map((entry) => {
+        const record = asRecord(entry);
+        const diff = asString(record?.diff);
+        return diff || (entry === null || entry === undefined ? '' : stringifyUnknown(entry));
+      })
+      .filter((entry) => entry.trim());
+    return chunks.length ? chunks.join('\n') : undefined;
+  }
+  const record = asRecord(value);
+  return asString(record?.diff) || (record ? stringifyUnknown(record) : undefined);
+}
+
+function projectionDisplayValue(
+  message: ToolTraceMessage | undefined,
+  selector: RenderToolFieldSelector | undefined,
+): string | undefined {
+  if (!selector || selector.format === 'image') {
+    return undefined;
+  }
+  const value = projectionPathValue(message, selector);
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (selector.format === 'diff') {
+    return projectionDiffText(value);
+  }
+  if (typeof value === 'string') {
+    const text = unwrapProjectedString(value);
+    return text.length ? text : undefined;
+  }
+  const text = stringifyUnknown(value);
+  return text.trim() ? text : undefined;
+}
+
+function projectionLabel(selector: RenderToolFieldSelector | undefined): string | undefined {
+  switch (selector?.label) {
+    case 'url':
+      return 'URL';
+    case 'call':
+      return 'Call';
+    case 'command':
+      return 'Command';
+    case 'file':
+      return 'File';
+    case 'query':
+      return 'Query';
+    case 'prompt':
+      return 'Prompt';
+    case 'parameters':
+      return 'Parameters';
+    case 'content':
+      return 'Content';
+    case 'output':
+      return 'Output';
+    case 'result':
+      return 'Result';
+    case 'response':
+      return 'Response';
+    case 'diff':
+      return 'Diff';
+    case 'image':
+      return 'Image';
+    case 'error':
+      return 'Error';
+    default:
+      return undefined;
+  }
+}
+
+function projectionTitle(kind: RenderToolKind, toolName: string | undefined): string {
+  switch (kind) {
+    case 'command':
+      return 'Command';
+    case 'file_read':
+      return 'Read';
+    case 'file_write':
+      return 'Write';
+    case 'file_edit':
+      return 'Edit';
+    case 'search':
+      return 'Search';
+    case 'web':
+      return 'Web';
+    case 'agent':
+      return 'Agent';
+    case 'task':
+      return 'Task';
+    case 'image':
+      return 'Image';
+    case 'system':
+      return 'Activity';
+    case 'generic':
+      return humanizeToolLabel(toolName);
+  }
+}
+
+function projectionIcon(kind: RenderToolKind): string {
+  switch (kind) {
+    case 'command':
+      return '⌘';
+    case 'file_read':
+      return '≡';
+    case 'file_write':
+    case 'file_edit':
+      return '✎';
+    case 'search':
+      return '⌕';
+    case 'web':
+      return '↗';
+    case 'agent':
+      return '◇';
+    case 'task':
+      return '☑';
+    case 'image':
+      return '◌';
+    case 'system':
+    case 'generic':
+      return '·';
+  }
+}
+
+function projectionMetaBadges(projection: RenderToolFieldProjection): string[] {
+  const badges: string[] = [];
+  if (projection.exit_code !== undefined) {
+    badges.push(`exit ${projection.exit_code}`);
+  }
+  if (projection.duration_ms !== undefined) {
+    const duration = projection.duration_ms;
+    badges.push(duration >= 1000 ? `${(duration / 1000).toFixed(1)} s` : `${duration} ms`);
+  }
+  return badges;
+}
+
+function projectionStatus(projection: RenderToolFieldProjection): ToolTraceStatus | undefined {
+  if (projection.exit_code !== undefined && projection.exit_code !== 0) {
+    return { label: `exit ${projection.exit_code}`, tone: 'error' };
+  }
+  return toolStatusFromState(projection.status);
+}
+
+function projectionIsError(projection: RenderToolFieldProjection): boolean {
+  if (projection.exit_code !== undefined && projection.exit_code !== 0) {
+    return true;
+  }
+  return ['failed', 'declined', 'errored', 'error', 'canceled', 'cancelled'].includes(
+    projection.status?.trim().toLowerCase() || '',
+  );
+}
+
 export function resolveMergedToolTrace(
   toolUse?: ToolTraceMessage,
   toolResult?: ToolTraceMessage,
+  projection?: RenderToolFieldProjection,
 ): MergedToolTrace {
-  const parsedUse = toolUse ? parseToolTraceMessage(toolUse) : null;
-  const parsedResult = toolResult ? parseToolTraceMessage(toolResult) : null;
+  // Projection-aware frames already contain the server's presentation
+  // decision. Keep the provider parsers only as backwards compatibility for
+  // older frames instead of doing both sets of work on every render.
+  const parsedUse = !projection && toolUse ? parseToolTraceMessage(toolUse) : null;
+  const parsedResult = !projection && toolResult ? parseToolTraceMessage(toolResult) : null;
   // Image blocks are lifted out of the result BEFORE presenters run, so no
   // presenter (including the stringify fallbacks) ever serializes base64
   // image data into the detail text.
-  const resultImages = parsedResult
-    ? collectToolResultImageSegments(parsedResult.result ?? parsedResult.payload)
-    : [];
-  const pathImages = collectToolPathImages([parsedUse, parsedResult]);
+  const resultImages = projection
+    ? collectProjectedResultImages(toolResult, projection)
+    : parsedResult
+      ? collectToolResultImageSegments(parsedResult.result ?? parsedResult.payload)
+      : [];
+  const pathImages = projection
+    ? collectProjectedPathImages(toolUse, toolResult, projection)
+    : collectToolPathImages([parsedUse, parsedResult]);
   if (parsedResult && resultImages.length) {
     parsedResult.result = stripImageBlocks(parsedResult.result);
     parsedResult.payload = stripImageBlocks(parsedResult.payload);
@@ -1474,20 +1772,49 @@ export function resolveMergedToolTrace(
   const resultSide = parsedResult ? resolveToolTraceSide(parsedResult) : null;
   const resolvedStatus = parsedResult ? resultSide?.status : resultSide?.status || useSide?.status;
 
+  const projectedCall = projectionDisplayValue(toolUse, projection?.call);
+  const projectedResult = projectionDisplayValue(toolResult, projection?.result);
+  const projectedSummary = truncateSingleLine(firstProjectedMeaningfulLine(projectedCall), 132);
+  const projectedResultSummary = truncateSingleLine(
+    firstProjectedMeaningfulLine(projectedResult),
+    132,
+  );
+  const projectedPathBadge =
+    projection?.call?.format === 'path'
+      ? pathTail(projectedCall) || projectedCall
+      : undefined;
+
   return {
-    title: useSide?.title || resultSide?.title || 'Tool',
-    summary: useSide?.summary,
-    resultSummary: undefined,
-    badges: dedupeBadges([...(useSide?.badges || []), ...(resultSide?.badges || [])]),
+    title: projection
+      ? projectionTitle(projection.kind, projection.tool_name)
+      : useSide?.title || resultSide?.title || 'Tool',
+    summary: projection ? projectedSummary : useSide?.summary,
+    resultSummary: projection ? projectedResultSummary : undefined,
+    badges: dedupeBadges([
+      ...(useSide?.badges || []),
+      ...(resultSide?.badges || []),
+      projectedPathBadge,
+      ...(projection ? projectionMetaBadges(projection) : []),
+    ]),
     diffStats: useSide?.diffStats || resultSide?.diffStats,
-    status: resolvedStatus,
-    inputDetail: useSide?.detail,
-    inputLabel: useSide?.detailLabel,
-    resultDetail: resultSide?.detail || (parsedResult?.result ? truncateDetail(stringifyUnknown(parsedResult.result)) : undefined),
-    resultLabel: resultSide?.detailLabel || (resultSide?.detail || parsedResult?.result ? 'Result' : undefined),
+    status: projection ? projectionStatus(projection) : resolvedStatus,
+    inputDetail: projection ? projectedCall : useSide?.detail,
+    inputLabel: projection ? projectionLabel(projection.call) : useSide?.detailLabel,
+    resultDetail: projection
+      ? projectedResult
+      : resultSide?.detail || (parsedResult?.result ? truncateDetail(stringifyUnknown(parsedResult.result)) : undefined),
+    resultLabel: projection
+      ? projectionLabel(projection.result)
+      : resultSide?.detailLabel || (resultSide?.detail || parsedResult?.result ? 'Result' : undefined),
     resultImages,
     pathImages,
-    icon: useSide?.icon || resultSide?.icon || '·',
-    isError: Boolean(parsedUse?.isError || parsedResult?.isError),
+    icon: projection ? projectionIcon(projection.kind) : useSide?.icon || resultSide?.icon || '·',
+    isError: Boolean(
+      toolUse?.isError ||
+      toolResult?.isError ||
+      parsedUse?.isError ||
+      parsedResult?.isError ||
+      (projection && projectionIsError(projection)),
+    ),
   };
 }

@@ -19,6 +19,7 @@ pub mod task;
 pub mod thread_logs;
 pub mod thread_record;
 pub mod threading;
+pub mod tool_field_projection;
 pub mod transcript_kind;
 pub mod transcript_render_state;
 pub mod transcript_run_state;
@@ -79,6 +80,10 @@ pub use thread_record::{
 };
 pub use threading::{
     GroupActivation, QueueDrop, QueueMode, SendPolicy, ThreadOrigin, ThreadTokenUsage,
+};
+pub use tool_field_projection::{
+    RenderToolFieldFormat, RenderToolFieldLabel, RenderToolFieldProjection, RenderToolFieldRoot,
+    RenderToolFieldSelector, RenderToolKind, RenderToolVisibility,
 };
 pub use transcript_kind::{
     is_control_message, is_tool_related_message, resolve_message_kind,

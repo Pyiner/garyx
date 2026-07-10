@@ -347,6 +347,20 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_check",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "kind": "command",
+                          "status": "inProgress",
+                          "tool_name": "commandExecution",
+                          "visibility": "normal"
+                        },
                         "status": "running",
                         "tool_result": null,
                         "tool_use": {
@@ -423,6 +437,30 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_check",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 7,
+                          "exit_code": 0,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "commandExecution",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:5",
@@ -503,6 +541,30 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_check",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 7,
+                          "exit_code": 0,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "commandExecution",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:5",
@@ -593,6 +655,30 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_list",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 8,
+                          "exit_code": 0,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:4",
@@ -669,6 +755,30 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_list",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 8,
+                          "exit_code": 0,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:4",
@@ -684,6 +794,20 @@
                       },
                       {
                         "id": "tool_entry:call_fixture_write",
+                        "projection": {
+                          "call": {
+                            "format": "path",
+                            "label": "file",
+                            "path": [
+                              "path"
+                            ],
+                            "root": "content"
+                          },
+                          "kind": "file_write",
+                          "status": "inProgress",
+                          "tool_name": "Write",
+                          "visibility": "normal"
+                        },
                         "status": "running",
                         "tool_result": null,
                         "tool_use": {
@@ -756,6 +880,30 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_list",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 8,
+                          "exit_code": 0,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:4",
@@ -771,6 +919,28 @@
                       },
                       {
                         "id": "tool_entry:call_fixture_write",
+                        "projection": {
+                          "call": {
+                            "format": "path",
+                            "label": "file",
+                            "path": [
+                              "path"
+                            ],
+                            "root": "content"
+                          },
+                          "kind": "file_write",
+                          "result": {
+                            "format": "text",
+                            "label": "result",
+                            "path": [
+                              "result"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "Write",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:6",
@@ -847,6 +1017,20 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_a",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "kind": "command",
+                          "status": "inProgress",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "running",
                         "tool_result": null,
                         "tool_use": {
@@ -858,6 +1042,20 @@
                       },
                       {
                         "id": "tool_entry:call_fixture_b",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "kind": "command",
+                          "status": "inProgress",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "running",
                         "tool_result": null,
                         "tool_use": {
@@ -930,6 +1128,30 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_a",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 4,
+                          "exit_code": 0,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:5",
@@ -945,6 +1167,20 @@
                       },
                       {
                         "id": "tool_entry:call_fixture_b",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "kind": "command",
+                          "status": "inProgress",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "running",
                         "tool_result": null,
                         "tool_use": {
@@ -1017,6 +1253,30 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_a",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 4,
+                          "exit_code": 0,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:5",
@@ -1032,6 +1292,30 @@
                       },
                       {
                         "id": "tool_entry:call_fixture_b",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 5,
+                          "exit_code": 0,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:6",
@@ -1098,6 +1382,30 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_list",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 8,
+                          "exit_code": 0,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:4",
@@ -1168,6 +1476,30 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_final",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 3,
+                          "exit_code": 0,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "completed",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "completed",
                         "tool_result": {
                           "id": "seq:4",
@@ -1338,6 +1670,30 @@
                     "entries": [
                       {
                         "id": "tool_entry:call_fixture_failed",
+                        "projection": {
+                          "call": {
+                            "format": "code",
+                            "label": "command",
+                            "path": [
+                              "command"
+                            ],
+                            "root": "content"
+                          },
+                          "duration_ms": 4,
+                          "exit_code": 1,
+                          "kind": "command",
+                          "result": {
+                            "format": "code",
+                            "label": "output",
+                            "path": [
+                              "aggregatedOutput"
+                            ],
+                            "root": "content"
+                          },
+                          "status": "failed",
+                          "tool_name": "Bash",
+                          "visibility": "normal"
+                        },
                         "status": "failed",
                         "tool_result": {
                           "id": "seq:4",

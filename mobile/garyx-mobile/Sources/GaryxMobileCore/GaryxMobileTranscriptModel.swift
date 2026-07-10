@@ -191,8 +191,12 @@ struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
     /// keeps only the tail for compact rows; thumbnails and per-call list
     /// rows need the whole path.
     var primaryPath: String? = nil
+    var fieldProjection: GaryxResolvedToolFieldProjection? = nil
 
     var isCommand: Bool {
+        if let kind = fieldProjection?.kind {
+            return kind == .command
+        }
         let normalized = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized == "exec_command"
             || normalized == "command"
@@ -204,6 +208,9 @@ struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
     }
 
     var isFileRead: Bool {
+        if let kind = fieldProjection?.kind {
+            return kind == .fileRead
+        }
         let normalized = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized == "read"
             || normalized == "view"
@@ -215,11 +222,17 @@ struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
     }
 
     var isFileWrite: Bool {
+        if let kind = fieldProjection?.kind {
+            return kind == .fileWrite
+        }
         let normalized = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized == "write" || normalized == "create"
     }
 
     var isFileEdit: Bool {
+        if let kind = fieldProjection?.kind {
+            return kind == .fileEdit || kind == .fileWrite
+        }
         let normalized = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized == "write"
             || normalized == "edit"

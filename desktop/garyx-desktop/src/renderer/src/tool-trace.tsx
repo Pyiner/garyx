@@ -1,5 +1,7 @@
 import { memo, type ComponentType, type ReactNode, useEffect, useMemo, useState } from 'react';
 
+import type { RenderToolFieldProjection } from '@shared/contracts';
+
 import { Brain, ChevronDown, FileText, Folder, Globe, LayoutList, ListChecks, ListTree, MessageCircleQuestion, Pencil, Search, Terminal, Wrench } from 'lucide-react';
 
 import {
@@ -18,6 +20,7 @@ type ToolTraceEntry = {
   key: string;
   toolUse?: ToolTraceMessage;
   toolResult?: ToolTraceMessage;
+  projection?: RenderToolFieldProjection;
 };
 
 type ToolTraceTreeNode = {
@@ -71,11 +74,16 @@ function ToolTraceHeader({ merged }: { merged: MergedToolTrace }) {
           <span className="tool-trace-title" title={merged.title}>
             {merged.title}
           </span>
-          {merged.summary || merged.badges.length || merged.diffStats ? (
+          {merged.summary || merged.resultSummary || merged.badges.length || merged.diffStats ? (
             <span className="tool-trace-meta-row">
               {merged.summary ? (
                 <span className="tool-trace-summary" title={merged.summary}>
                   {merged.summary}
+                </span>
+              ) : null}
+              {merged.resultSummary ? (
+                <span className="tool-trace-result-summary" title={merged.resultSummary}>
+                  {merged.resultSummary}
                 </span>
               ) : null}
               {merged.badges.length ? (
@@ -199,6 +207,7 @@ function ToolTraceTree({
           key={node.entry.key}
           nestedChildren={node.children.length ? <ToolTraceTree nodes={node.children} onThreadNavigate={onThreadNavigate} /> : null}
           onThreadNavigate={onThreadNavigate}
+          projection={node.entry.projection}
           toolResult={node.entry.toolResult}
           toolUse={node.entry.toolUse}
         />
@@ -236,7 +245,7 @@ function summarizeToolTraceEntries(
   const fileKeys = new Set<string>();
 
   for (const entry of entries) {
-    const merged = resolveMergedToolTrace(entry.toolUse, entry.toolResult);
+    const merged = resolveMergedToolTrace(entry.toolUse, entry.toolResult, entry.projection);
     if (merged.icon === '⌘' || merged.title === 'Command') {
       commandCount += 1;
       continue;
@@ -280,7 +289,7 @@ function collectToolTraceGroupImages(entries: ToolTraceEntry[]): ToolTraceGroupI
   const seenSources = new Set<string>();
   const seenPaths = new Set<string>();
   for (const entry of entries) {
-    const merged = resolveMergedToolTrace(entry.toolUse, entry.toolResult);
+    const merged = resolveMergedToolTrace(entry.toolUse, entry.toolResult, entry.projection);
     for (const image of merged.resultImages) {
       if (seenSources.has(image.src)) {
         continue;
@@ -416,16 +425,21 @@ function extractTargetThreadId(toolResult?: ToolTraceMessage): string | null {
 export function ToolTraceLine({
   toolUse,
   toolResult,
+  projection,
   nestedChildren,
   onThreadNavigate,
 }: {
   toolUse?: ToolTraceMessage;
   toolResult?: ToolTraceMessage;
+  projection?: RenderToolFieldProjection;
   nestedChildren?: ReactNode;
   onThreadNavigate?: (threadId: string) => void;
 }) {
   const { t } = useI18n();
-  const merged = resolveMergedToolTrace(toolUse, toolResult);
+  const merged = useMemo(
+    () => resolveMergedToolTrace(toolUse, toolResult, projection),
+    [projection, toolResult, toolUse],
+  );
   const [expanded, setExpanded] = useState(false);
   const targetThreadId = extractTargetThreadId(toolResult);
   const hasDetails = Boolean(merged.inputDetail || merged.resultDetail || nestedChildren);

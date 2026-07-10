@@ -366,6 +366,188 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertTrue(toolMessage.toolTraceGroup?.entries.only?.resultText?.contains("ok") == true)
     }
 
+    func testCodexProjectionMapsOnlyCommandAndAggregatedOutput() throws {
+        let command = #"/bin/zsh -lc "git status --short""#
+        let output = " M README.md\n M Package.swift\n"
+        let transcriptMessages = [
+            GaryxTranscriptMessage(
+                index: 1,
+                role: .toolUse,
+                content: json(#"""
+                {
+                  "type": "commandExecution",
+                  "command": "/bin/zsh -lc \"git status --short\"",
+                  "cwd": "/Users/test/repo",
+                  "id": "exec-test"
+                }
+                """#),
+                toolName: "commandExecution",
+                toolUseId: "call-projection"
+            ),
+            GaryxTranscriptMessage(
+                index: 2,
+                role: .toolResult,
+                content: json(#"""
+                {
+                  "type": "commandExecution",
+                  "aggregatedOutput": " M README.md\n M Package.swift\n",
+                  "cwd": "/Users/test/repo",
+                  "id": "exec-test",
+                  "status": "completed",
+                  "exitCode": 0,
+                  "durationMs": 12
+                }
+                """#),
+                toolName: "commandExecution",
+                toolUseId: "call-projection"
+            ),
+        ]
+        let projection = GaryxRenderToolFieldProjection(
+            toolName: "commandExecution",
+            kind: .command,
+            call: .init(
+                root: .content,
+                path: ["command"],
+                format: .code,
+                label: .command
+            ),
+            result: .init(
+                root: .content,
+                path: ["aggregatedOutput"],
+                format: .code,
+                label: .output
+            ),
+            status: "completed",
+            exitCode: 0,
+            durationMs: 12
+        )
+        let snapshot = GaryxRenderSnapshot(
+            basedOnSeq: 3,
+            rows: [
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "turn:projection",
+                    user: ref(seq: 1, role: "user"),
+                    activity: [
+                        .step(GaryxRenderStepRow(
+                            id: "step:projection",
+                            steps: [
+                                .toolGroup(GaryxRenderToolGroup(
+                                    id: "tool-group:projection",
+                                    status: .completed,
+                                    entries: [
+                                        GaryxRenderToolEntry(
+                                            id: "tool-entry:projection",
+                                            toolUseId: "call-projection",
+                                            status: .completed,
+                                            toolUse: ref(seq: 2, role: "tool_use"),
+                                            toolResult: ref(seq: 3, role: "tool_result"),
+                                            projection: projection
+                                        ),
+                                    ]
+                                )),
+                            ]
+                        )),
+                    ]
+                )),
+            ]
+        )
+
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: [mobileMessage(index: 0, role: .user, text: "Inspect")],
+            transcriptMessages: transcriptMessages
+        )
+        guard case let .turn(turn) = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only),
+              case let .toolGroup(toolMessage) = try XCTUnwrap(turn.steps.only) else {
+            return XCTFail("expected projected tool group")
+        }
+        let entry = try XCTUnwrap(toolMessage.toolTraceGroup?.entries.only)
+        XCTAssertEqual(entry.inputText, command)
+        XCTAssertEqual(entry.inputLabel, "Command")
+        XCTAssertEqual(entry.resultText, output)
+        XCTAssertEqual(entry.resultLabel, "Output")
+        XCTAssertEqual(entry.fieldProjection?.metadataText, "exit 0 · 12 ms")
+        XCTAssertFalse(entry.resultText?.contains("/Users/test/repo") == true)
+        XCTAssertFalse(entry.resultText?.contains("exec-test") == true)
+
+        let detail = GaryxToolCallPresentation.detail(for: entry)
+        XCTAssertEqual(detail.sections.map(\.label), ["Command", "Output"])
+        XCTAssertEqual(detail.sections[0].content, .codeCard(command))
+        XCTAssertEqual(detail.sections[1].content, .codeCard(output))
+    }
+
+    func testToolProjectionDecodesServerSnakeCaseFields() throws {
+        let snapshot = try decodeRenderSnapshot(#"""
+        {
+          "based_on_seq": 2,
+          "rows": [
+            {
+              "kind": "user_turn",
+              "id": "turn:projection-wire",
+              "user": null,
+              "activity": [
+                {
+                  "kind": "step",
+                  "id": "step:projection-wire",
+                  "steps": [
+                    {
+                      "kind": "tool_group",
+                      "id": "group:projection-wire",
+                      "status": "completed",
+                      "entries": [
+                        {
+                          "id": "entry:projection-wire",
+                          "tool_use_id": "call-wire",
+                          "status": "completed",
+                          "tool_use": null,
+                          "tool_result": null,
+                          "projection": {
+                            "tool_name": "commandExecution",
+                            "kind": "command",
+                            "visibility": "normal",
+                            "call": {
+                              "root": "content",
+                              "format": "code",
+                              "label": "command"
+                            },
+                            "exit_code": 0,
+                            "duration_ms": 7
+                          }
+                        }
+                      ],
+                      "started_at": null,
+                      "finished_at": null
+                    }
+                  ],
+                  "final_message": null,
+                  "running": false,
+                  "started_at": null,
+                  "finished_at": null
+                }
+              ],
+              "started_at": null,
+              "finished_at": null
+            }
+          ],
+          "tailActivity": "none",
+          "activeToolGroupId": null,
+          "progress_locus": "none",
+          "filtered_placeholders": []
+        }
+        """#)
+
+        guard case let .userTurn(row) = try XCTUnwrap(snapshot.rows.only),
+              case let .step(step) = try XCTUnwrap(row.activity.only),
+              case let .toolGroup(group) = try XCTUnwrap(step.steps.only) else {
+            return XCTFail("expected projected render entry")
+        }
+        let projection = try XCTUnwrap(group.entries.only?.projection)
+        XCTAssertEqual(projection.kind, .command)
+        XCTAssertEqual(projection.call?.path, [])
+        XCTAssertEqual(projection.exitCode, 0)
+        XCTAssertEqual(projection.durationMs, 7)
+    }
+
     func testToolEntryFallsBackToGenericWhenRefsAreMissing() throws {
         let snapshot = GaryxRenderSnapshot(
             basedOnSeq: 1,

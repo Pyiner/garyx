@@ -19,6 +19,7 @@ struct GaryxToolCallListRow: Identifiable, Equatable {
     let icon: GaryxToolCallIcon
     let verb: String
     let detail: String?
+    let metadata: String?
     let isRunning: Bool
     let isError: Bool
 }
@@ -104,6 +105,7 @@ enum GaryxToolCallPresentation {
                 icon: icon(for: entry),
                 verb: verb(for: entry),
                 detail: detail(for: entry),
+                metadata: entry.fieldProjection?.metadataText,
                 isRunning: entry.status == .running,
                 isError: entry.isError
             )
@@ -131,6 +133,15 @@ enum GaryxToolCallPresentation {
     }
 
     static func detail(for entry: GaryxMobileToolTraceEntry) -> GaryxToolCallDetail {
+        if let sections = projectedSections(for: entry) {
+            return GaryxToolCallDetail(
+                title: entry.title,
+                isRunning: entry.status == .running,
+                isError: entry.isError,
+                sections: sections
+            )
+        }
+
         let input = decodedInput(entry.inputText)
         var sections: [GaryxToolCallDetailSectionModel] = []
 
@@ -181,6 +192,61 @@ enum GaryxToolCallPresentation {
             isError: entry.isError,
             sections: sections
         )
+    }
+
+    private static func projectedSections(
+        for entry: GaryxMobileToolTraceEntry
+    ) -> [GaryxToolCallDetailSectionModel]? {
+        guard let projection = entry.fieldProjection else {
+            return nil
+        }
+        var sections: [GaryxToolCallDetailSectionModel] = []
+        if let call = projection.call {
+            sections.append(projectedSection(call))
+        }
+        if let result = projection.result {
+            sections.append(projectedSection(result))
+        } else if entry.status == .running, entry.isCommand {
+            sections.append(.init(label: "Output", content: .codeCard("Running…")))
+        }
+        return sections
+    }
+
+    private static func projectedSection(
+        _ field: GaryxResolvedToolField
+    ) -> GaryxToolCallDetailSectionModel {
+        let content: GaryxToolCallDetailContent
+        switch field.format {
+        case .path:
+            content = .plainMonospace(field.text)
+        case .diff:
+            let lines = projectedDiffLines(field.text)
+            content = lines.isEmpty ? .codeCard(field.text) : .diff(lines)
+        case .image:
+            content = isImagePath(field.text) ? .imagePreview(field.text) : .codeCard(field.text)
+        case .text, .code, .json:
+            content = .codeCard(field.text)
+        }
+        return .init(label: field.label, content: content)
+    }
+
+    private static func projectedDiffLines(_ text: String) -> [GaryxToolCallDiffLine] {
+        let rawLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard rawLines.contains(where: {
+            ($0.hasPrefix("+") && !$0.hasPrefix("+++"))
+                || ($0.hasPrefix("-") && !$0.hasPrefix("---"))
+        }) else {
+            return []
+        }
+        return rawLines.enumerated().map { index, line in
+            if line.hasPrefix("+"), !line.hasPrefix("+++") {
+                return .init(id: index, kind: .added, text: String(line.dropFirst()))
+            }
+            if line.hasPrefix("-"), !line.hasPrefix("---") {
+                return .init(id: index, kind: .removed, text: String(line.dropFirst()))
+            }
+            return .init(id: index, kind: .context, text: line)
+        }
     }
 
     private static func outputSection(
@@ -305,6 +371,16 @@ enum GaryxToolCallPresentation {
     }
 
     private static func icon(for entry: GaryxMobileToolTraceEntry) -> GaryxToolCallIcon {
+        if let kind = entry.fieldProjection?.kind {
+            switch kind {
+            case .command: return .command
+            case .fileRead: return .read
+            case .fileWrite, .fileEdit: return .edit
+            case .search: return .search
+            case .web: return .web
+            case .agent, .task, .image, .system, .generic: return .generic
+            }
+        }
         if entry.isCommand { return .command }
         if entry.isFileRead { return .read }
         if entry.isFileEdit || entry.isFileWrite { return .edit }

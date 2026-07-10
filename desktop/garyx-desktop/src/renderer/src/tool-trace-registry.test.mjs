@@ -175,3 +175,134 @@ test('ordinary path-bearing tools do not request gateway image previews', () => 
 
   assert.deepEqual(merged.pathImages, []);
 });
+
+test('server projection shows only the selected Codex command fields', () => {
+  const command = '/bin/zsh -lc "git status --short"';
+  const output = ' M README.md\n M package.json\n';
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: {
+        command,
+        cwd: '/Users/test/repo',
+        id: 'exec-test',
+        status: 'inProgress',
+        type: 'commandExecution',
+      },
+      toolUseId: 'tool:command',
+      toolName: 'commandExecution',
+    },
+    {
+      role: 'tool_result',
+      content: {
+        aggregatedOutput: output,
+        command,
+        cwd: '/Users/test/repo',
+        durationMs: 12,
+        exitCode: 0,
+        id: 'exec-test',
+        status: 'completed',
+        type: 'commandExecution',
+      },
+      toolUseId: 'tool:command',
+      toolName: 'commandExecution',
+    },
+    {
+      tool_name: 'commandExecution',
+      kind: 'command',
+      visibility: 'normal',
+      call: {
+        root: 'content',
+        path: ['command'],
+        format: 'code',
+        label: 'command',
+      },
+      result: {
+        root: 'content',
+        path: ['aggregatedOutput'],
+        format: 'code',
+        label: 'output',
+      },
+      status: 'completed',
+      exit_code: 0,
+      duration_ms: 12,
+    },
+  );
+
+  assert.equal(merged.inputDetail, command);
+  assert.equal(merged.inputLabel, 'Command');
+  assert.equal(merged.resultDetail, output);
+  assert.equal(merged.resultLabel, 'Output');
+  assert.ok(!merged.resultDetail.includes('/Users/test/repo'));
+  assert.ok(!merged.resultDetail.includes('exec-test'));
+  assert.deepEqual(merged.badges.slice(-2), ['exit 0', '12 ms']);
+});
+
+test('projection with no result selector never falls back to the JSON envelope', () => {
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: { command: 'true', type: 'commandExecution' },
+      toolUseId: 'tool:no-output',
+      toolName: 'commandExecution',
+    },
+    {
+      role: 'tool_result',
+      content: {
+        aggregatedOutput: null,
+        command: 'true',
+        cwd: '/Users/test/repo',
+        exitCode: 0,
+        status: 'completed',
+        type: 'commandExecution',
+      },
+      toolUseId: 'tool:no-output',
+      toolName: 'commandExecution',
+    },
+    {
+      tool_name: 'commandExecution',
+      kind: 'command',
+      visibility: 'normal',
+      call: {
+        root: 'content',
+        path: ['command'],
+        format: 'code',
+        label: 'command',
+      },
+      status: 'completed',
+      exit_code: 0,
+    },
+  );
+
+  assert.equal(merged.inputDetail, 'true');
+  assert.equal(merged.resultDetail, undefined);
+});
+
+test('server projection unwraps Antigravity JSON-encoded scalar labels', () => {
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: {
+        name: 'run_command',
+        args: { toolSummary: '"Check status"' },
+      },
+      toolUseId: 'tool:antigravity',
+      toolName: 'run_command',
+    },
+    undefined,
+    {
+      tool_name: 'run_command',
+      kind: 'command',
+      visibility: 'normal',
+      call: {
+        root: 'content',
+        path: ['args', 'toolSummary'],
+        format: 'text',
+        label: 'call',
+      },
+    },
+  );
+
+  assert.equal(merged.summary, 'Check status');
+  assert.equal(merged.inputDetail, 'Check status');
+});

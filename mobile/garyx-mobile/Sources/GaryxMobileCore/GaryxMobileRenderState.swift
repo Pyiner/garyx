@@ -746,25 +746,158 @@ public enum GaryxRenderToolGroupStatus: String, Codable, Equatable, Sendable {
     case completed
 }
 
+public enum GaryxRenderToolKind: String, Codable, Equatable, Sendable {
+    case command
+    case fileRead = "file_read"
+    case fileWrite = "file_write"
+    case fileEdit = "file_edit"
+    case search
+    case web
+    case agent
+    case task
+    case image
+    case system
+    case generic
+}
+
+public enum GaryxRenderToolFieldRoot: String, Codable, Equatable, Sendable {
+    case content
+    case input
+    case result
+    case text
+}
+
+public enum GaryxRenderToolFieldFormat: String, Codable, Equatable, Sendable {
+    case text
+    case code
+    case path
+    case json
+    case diff
+    case image
+}
+
+public enum GaryxRenderToolFieldLabel: String, Codable, Equatable, Sendable {
+    case call
+    case command
+    case file
+    case query
+    case url
+    case prompt
+    case parameters
+    case content
+    case output
+    case result
+    case response
+    case diff
+    case image
+    case error
+}
+
+public enum GaryxRenderToolVisibility: String, Codable, Equatable, Sendable {
+    case normal
+    case nested
+    case quiet
+    case hidden
+}
+
+public struct GaryxRenderToolFieldSelector: Codable, Equatable, Sendable {
+    public var root: GaryxRenderToolFieldRoot
+    public var path: [String]
+    public var format: GaryxRenderToolFieldFormat
+    public var label: GaryxRenderToolFieldLabel
+
+    public init(
+        root: GaryxRenderToolFieldRoot,
+        path: [String] = [],
+        format: GaryxRenderToolFieldFormat,
+        label: GaryxRenderToolFieldLabel
+    ) {
+        self.root = root
+        self.path = path
+        self.format = format
+        self.label = label
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case root
+        case path
+        case format
+        case label
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        root = try container.decode(GaryxRenderToolFieldRoot.self, forKey: .root)
+        path = try container.decodeIfPresent([String].self, forKey: .path) ?? []
+        format = try container.decode(GaryxRenderToolFieldFormat.self, forKey: .format)
+        label = try container.decode(GaryxRenderToolFieldLabel.self, forKey: .label)
+    }
+}
+
+public struct GaryxRenderToolFieldProjection: Codable, Equatable, Sendable {
+    public var toolName: String?
+    public var kind: GaryxRenderToolKind
+    public var visibility: GaryxRenderToolVisibility
+    public var call: GaryxRenderToolFieldSelector?
+    public var result: GaryxRenderToolFieldSelector?
+    public var status: String?
+    public var exitCode: Int?
+    public var durationMs: Int?
+
+    public init(
+        toolName: String? = nil,
+        kind: GaryxRenderToolKind,
+        visibility: GaryxRenderToolVisibility = .normal,
+        call: GaryxRenderToolFieldSelector? = nil,
+        result: GaryxRenderToolFieldSelector? = nil,
+        status: String? = nil,
+        exitCode: Int? = nil,
+        durationMs: Int? = nil
+    ) {
+        self.toolName = toolName
+        self.kind = kind
+        self.visibility = visibility
+        self.call = call
+        self.result = result
+        self.status = status
+        self.exitCode = exitCode
+        self.durationMs = durationMs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case toolName = "tool_name"
+        case kind
+        case visibility
+        case call
+        case result
+        case status
+        case exitCode = "exit_code"
+        case durationMs = "duration_ms"
+    }
+}
+
 public struct GaryxRenderToolEntry: Codable, Equatable, Sendable {
     public var id: String
     public var toolUseId: String?
     public var status: GaryxRenderToolEntryStatus
     public var toolUse: GaryxRenderMessageRef?
     public var toolResult: GaryxRenderMessageRef?
+    public var projection: GaryxRenderToolFieldProjection?
 
     public init(
         id: String,
         toolUseId: String? = nil,
         status: GaryxRenderToolEntryStatus,
         toolUse: GaryxRenderMessageRef? = nil,
-        toolResult: GaryxRenderMessageRef? = nil
+        toolResult: GaryxRenderMessageRef? = nil,
+        projection: GaryxRenderToolFieldProjection? = nil
     ) {
         self.id = id
         self.toolUseId = toolUseId
         self.status = status
         self.toolUse = toolUse
         self.toolResult = toolResult
+        self.projection = projection
     }
 
     enum CodingKeys: String, CodingKey {
@@ -773,6 +906,7 @@ public struct GaryxRenderToolEntry: Codable, Equatable, Sendable {
         case status
         case toolUse = "tool_use"
         case toolResult = "tool_result"
+        case projection
     }
 }
 
@@ -1085,29 +1219,57 @@ private extension GaryxRenderToolEntry {
         let resultMessage = lookup.transcriptMessage(for: toolResult)
         let usePayload = useMessage.map(GaryxMobileToolTracePayload.fromTranscript)
         let resultPayload = resultMessage.map(GaryxMobileToolTracePayload.fromTranscript)
+        let resolvedProjection = GaryxToolFieldProjectionResolver.resolve(
+            projection,
+            toolUse: useMessage,
+            toolResult: resultMessage
+        )
         let resolvedToolUseId = toolUseId.garyxRenderTrimmedNilIfEmpty
             ?? usePayload?.toolUseId
             ?? resultPayload?.toolUseId
-        let toolName = usePayload?.normalizedToolName.garyxRenderTrimmedNilIfEmpty
+        let toolName = resolvedProjection?.toolName.garyxRenderTrimmedNilIfEmpty
+            ?? usePayload?.normalizedToolName.garyxRenderTrimmedNilIfEmpty
             ?? resultPayload?.normalizedToolName.garyxRenderTrimmedNilIfEmpty
             ?? "tool"
-        let title = GaryxMobileToolTraceEntry.title(for: toolName)
+        let title = resolvedProjection?.title ?? GaryxMobileToolTraceEntry.title(for: toolName)
+        let projectedPath = resolvedProjection?.call?.format == .path
+            ? resolvedProjection?.call?.text
+            : nil
+        let inputText: String?
+        let resultText: String?
+        let summaryText: String?
+        if let resolvedProjection {
+            inputText = resolvedProjection.call?.text
+            resultText = resolvedProjection.result?.text
+            summaryText = resolvedProjection.call?.previewText
+                ?? resolvedProjection.result?.previewText
+        } else {
+            inputText = usePayload?.contentText
+            resultText = resultPayload?.contentText
+            summaryText = usePayload?.summaryText ?? resultPayload?.summaryText
+        }
         return GaryxMobileToolTraceEntry(
             id: id,
             toolUseId: resolvedToolUseId,
             parentToolUseId: usePayload?.parentToolUseId ?? resultPayload?.parentToolUseId,
             toolName: toolName,
             title: title,
-            inputText: usePayload?.contentText,
-            resultText: resultPayload?.contentText,
-            summaryText: usePayload?.summaryText ?? resultPayload?.summaryText,
-            inputLabel: "Call",
-            resultLabel: "Result",
+            inputText: inputText,
+            resultText: resultText,
+            summaryText: summaryText,
+            inputLabel: resolvedProjection?.call?.label ?? "Call",
+            resultLabel: resolvedProjection?.result?.label ?? "Result",
             status: mobileStatus,
-            isError: status == .failed || resultPayload?.isError == true || usePayload?.isError == true,
+            isError: status == .failed
+                || resolvedProjection?.isError == true
+                || resultPayload?.isError == true
+                || usePayload?.isError == true,
             timestamp: usePayload?.timestamp ?? resultPayload?.timestamp,
-            primaryPathBadge: usePayload?.primaryPathBadge ?? resultPayload?.primaryPathBadge,
-            primaryPath: usePayload?.primaryPath ?? resultPayload?.primaryPath
+            primaryPathBadge: projectedPath.map(GaryxMobileToolSummaryFormatter.pathTail)
+                ?? usePayload?.primaryPathBadge
+                ?? resultPayload?.primaryPathBadge,
+            primaryPath: projectedPath ?? usePayload?.primaryPath ?? resultPayload?.primaryPath,
+            fieldProjection: resolvedProjection
         )
     }
 

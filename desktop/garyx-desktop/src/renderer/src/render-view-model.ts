@@ -5,6 +5,7 @@ import type {
   RenderState,
   RenderStepRow,
   RenderToolEntry,
+  RenderToolFieldProjection,
   RenderToolGroup,
   TranscriptMessage,
 } from '@shared/contracts';
@@ -33,6 +34,7 @@ export type RenderTranscriptEntry =
       key: string;
       toolUse?: TranscriptMessage;
       toolResult?: TranscriptMessage;
+      projection?: RenderToolFieldProjection;
     };
 
 export type RenderTranscriptBlock =
@@ -212,7 +214,13 @@ function toolEntry(
   if (!toolUse && !toolResult) {
     return null;
   }
-  return { kind: 'tool', key: entry.id, toolUse, toolResult };
+  return {
+    kind: 'tool',
+    key: entry.id,
+    toolUse,
+    toolResult,
+    projection: entry.projection,
+  };
 }
 
 function toolGroupBlock(
