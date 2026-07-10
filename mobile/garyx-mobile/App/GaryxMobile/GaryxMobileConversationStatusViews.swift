@@ -227,96 +227,138 @@ struct GaryxRateLimitBanner: View {
     var onContinue: (() async -> Void)?
 
     @State private var sending = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             if let model = GaryxRateLimitBannerModel.make(from: rateLimit, now: context.date) {
-                HStack(alignment: .center, spacing: 10) {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color(.tertiarySystemFill))
-                        .frame(width: 26, height: 26)
-                        .overlay(
-                            Image(systemName: rateLimit.willAutoResend
-                                ? "arrow.clockwise"
-                                : "hourglass")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(Color(.secondaryLabel))
-                        )
-                    VStack(alignment: .leading, spacing: 1) {
-                        // Compact type matching the desktop card's 13/12px
-                        // scale; semantic fonts so Dynamic Type still applies.
-                        Text(model.title)
-                            .font(.footnote)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(Color(.label))
-                        Text(model.detail)
-                            .font(.caption)
-                            .monospacedDigit()
-                            .foregroundStyle(GaryxTheme.secondaryText)
-                            // Keep the card short even for a verbose provider
-                            // message; the reset hint sits at the end, so
-                            // truncate from the head.
-                            .lineLimit(2)
-                            .truncationMode(.head)
-                    }
-                    Spacer(minLength: 0)
-                    if model.showContinue, let onContinue {
-                        Button {
-                            guard !sending else { return }
-                            sending = true
-                            Task {
-                                await onContinue()
-                                // Re-arm once the dispatch settles: a failed
-                                // send leaves the card mounted and the button
-                                // must come back.
-                                sending = false
-                            }
-                        } label: {
-                            Text(sending ? "Sending…" : "Continue")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(
-                                    sending ? Color(.secondaryLabel) : Color(.label)
-                                )
-                                .padding(.horizontal, 12)
-                                // Vertical padding instead of a fixed height
-                                // so the capsule grows with Dynamic Type.
-                                .padding(.vertical, 5)
-                                .background(
-                                    Capsule(style: .continuous)
-                                        .fill(Color(.systemBackground))
-                                )
-                                .overlay(
-                                    Capsule(style: .continuous)
-                                        .stroke(Color(.separator), lineWidth: 1)
-                                )
-                                // 44pt touch target extended beyond the
-                                // compact visual capsule so the card itself
-                                // stays short.
-                                .contentShape(Rectangle().inset(by: -9))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(sending)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(.systemBackground))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color(.separator).opacity(0.6), lineWidth: 1)
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .combine)
+                card(for: model)
             }
         }
         .onChange(of: rateLimit) { _, _ in
             // A fresh rate-limit context re-arms the Continue action.
             sending = false
         }
+    }
+
+    @ViewBuilder
+    private func card(for model: GaryxRateLimitBannerModel) -> some View {
+        // Compact single-row card at standard sizes. Accessibility Dynamic
+        // Type is a layout input: the detail gets its line cap lifted (the
+        // two-line head truncation would drop the reset hint's meaning) and
+        // the Continue capsule moves below the text instead of squeezing it.
+        let isAccessibilitySize = dynamicTypeSize.isAccessibilitySize
+
+        Group {
+            if isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 10) {
+                        iconChip
+                        textColumn(for: model, lineLimit: nil)
+                    }
+                    if model.showContinue, onContinue != nil {
+                        continueButton
+                    }
+                }
+            } else {
+                HStack(alignment: .center, spacing: 10) {
+                    iconChip
+                    textColumn(for: model, lineLimit: 2)
+                    Spacer(minLength: 0)
+                    if model.showContinue, onContinue != nil {
+                        continueButton
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.systemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color(.separator).opacity(0.6), lineWidth: 1)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var iconChip: some View {
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .fill(Color(.tertiarySystemFill))
+            .frame(width: 26, height: 26)
+            .overlay(
+                Image(systemName: rateLimit.willAutoResend
+                    ? "arrow.clockwise"
+                    : "hourglass")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color(.secondaryLabel))
+            )
+    }
+
+    private func textColumn(
+        for model: GaryxRateLimitBannerModel,
+        lineLimit: Int?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            // Compact type matching the desktop card's 13/12px scale;
+            // semantic fonts so Dynamic Type still applies.
+            Text(model.title)
+                .font(.footnote)
+                .fontWeight(.semibold)
+                .foregroundStyle(Color(.label))
+            Text(model.detail)
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(GaryxTheme.secondaryText)
+                // Keep the card short for a verbose provider message; the
+                // reset hint sits at the end, so truncate from the head.
+                // Accessibility sizes pass nil and show the full text.
+                .lineLimit(lineLimit)
+                .truncationMode(.head)
+        }
+    }
+
+    private var continueButton: some View {
+        Button {
+            guard !sending else { return }
+            sending = true
+            Task {
+                await onContinue?()
+                // Re-arm once the dispatch settles: a failed send leaves the
+                // card mounted and the button must come back.
+                sending = false
+            }
+        } label: {
+            Text(sending ? "Sending…" : "Continue")
+                .font(.caption)
+                .fontWeight(.semibold)
+                // The label never hyphenates; the capsule grows to fit.
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .foregroundStyle(
+                    sending ? Color(.secondaryLabel) : Color(.label)
+                )
+                .padding(.horizontal, 12)
+                // Vertical padding instead of a fixed height so the capsule
+                // grows with Dynamic Type.
+                .padding(.vertical, 5)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color(.systemBackground))
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color(.separator), lineWidth: 1)
+                )
+                // 44pt touch target extended beyond the compact visual
+                // capsule so the card itself stays short.
+                .contentShape(Rectangle().inset(by: -9))
+        }
+        .buttonStyle(.plain)
+        .disabled(sending)
     }
 }
 
