@@ -78,6 +78,10 @@ final class GaryxRateLimitBannerModelTests: XCTestCase {
             timeZone: utc
         )
         XCTAssertEqual(model?.detail, "Resets at 06:01 · 01:00 left")
+        XCTAssertEqual(
+            model?.compactText,
+            "Codex 5-hour limit reached · Resets at 06:01 · 01:00 left"
+        )
         XCTAssertEqual(model?.isResending, false)
         XCTAssertEqual(model?.showContinue, true)
     }
@@ -119,6 +123,9 @@ final class GaryxRateLimitBannerModelTests: XCTestCase {
             model?.detail,
             "You've hit your usage limit. Visit https://example.com/usage to purchase more credits or try again at 9:42 PM."
         )
+        // The provider message carries its own context; the compact card
+        // shows it verbatim without prepending the title.
+        XCTAssertEqual(model?.compactText, model?.detail)
         XCTAssertEqual(model?.showContinue, true)
     }
 

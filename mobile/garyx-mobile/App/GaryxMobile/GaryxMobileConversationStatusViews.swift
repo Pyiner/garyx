@@ -243,27 +243,24 @@ struct GaryxRateLimitBanner: View {
 
     @ViewBuilder
     private func card(for model: GaryxRateLimitBannerModel) -> some View {
-        // Compact single-row card at standard sizes. Accessibility Dynamic
-        // Type is a layout input: the detail gets its line cap lifted (the
-        // two-line head truncation would drop the reset hint's meaning) and
-        // the Continue capsule moves below the text instead of squeezing it.
+        // Minimal single-paragraph card: no icon, no title row — just the
+        // compact text and the Continue capsule. Accessibility Dynamic Type
+        // is a layout input: the line cap is lifted (the two-line head
+        // truncation would drop the reset hint's meaning) and the Continue
+        // capsule moves below the text instead of squeezing it.
         let isAccessibilitySize = dynamicTypeSize.isAccessibilitySize
 
         Group {
             if isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .center, spacing: 10) {
-                        iconChip
-                        textColumn(for: model, lineLimit: nil)
-                    }
+                    compactText(for: model, lineLimit: nil)
                     if model.showContinue, onContinue != nil {
                         continueButton
                     }
                 }
             } else {
                 HStack(alignment: .center, spacing: 10) {
-                    iconChip
-                    textColumn(for: model, lineLimit: 2)
+                    compactText(for: model, lineLimit: 2)
                     Spacer(minLength: 0)
                     if model.showContinue, onContinue != nil {
                         continueButton
@@ -272,7 +269,7 @@ struct GaryxRateLimitBanner: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 9)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(.systemBackground))
@@ -285,40 +282,20 @@ struct GaryxRateLimitBanner: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var iconChip: some View {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(Color(.tertiarySystemFill))
-            .frame(width: 26, height: 26)
-            .overlay(
-                Image(systemName: rateLimit.willAutoResend
-                    ? "arrow.clockwise"
-                    : "hourglass")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color(.secondaryLabel))
-            )
-    }
-
-    private func textColumn(
+    private func compactText(
         for model: GaryxRateLimitBannerModel,
         lineLimit: Int?
     ) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            // Compact type matching the desktop card's 13/12px scale;
-            // semantic fonts so Dynamic Type still applies.
-            Text(model.title)
-                .font(.footnote)
-                .fontWeight(.semibold)
-                .foregroundStyle(Color(.label))
-            Text(model.detail)
-                .font(.caption)
-                .monospacedDigit()
-                .foregroundStyle(GaryxTheme.secondaryText)
-                // Keep the card short for a verbose provider message; the
-                // reset hint sits at the end, so truncate from the head.
-                // Accessibility sizes pass nil and show the full text.
-                .lineLimit(lineLimit)
-                .truncationMode(.head)
-        }
+        // One quiet paragraph; semantic font so Dynamic Type still applies.
+        Text(model.compactText)
+            .font(.caption)
+            .monospacedDigit()
+            .foregroundStyle(GaryxTheme.secondaryText)
+            // Keep the card short for a verbose provider message; the reset
+            // hint sits at the end, so truncate from the head. Accessibility
+            // sizes pass nil and show the full text.
+            .lineLimit(lineLimit)
+            .truncationMode(.head)
     }
 
     private var continueButton: some View {

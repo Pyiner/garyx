@@ -1374,6 +1374,10 @@ private extension String {
 public struct GaryxRateLimitBannerModel: Equatable, Sendable {
     public let title: String
     public let detail: String
+    /// Single-paragraph body for the compact mobile card (no separate title
+    /// row): the provider's message verbatim when that is the detail,
+    /// otherwise the title and detail joined into one sentence.
+    public let compactText: String
     /// True when the quota window has recovered and a resend is imminent — the
     /// view can show an active/in-progress treatment.
     public let isResending: Bool
@@ -1381,9 +1385,16 @@ public struct GaryxRateLimitBannerModel: Equatable, Sendable {
     /// scheduled, so the user nudges the thread forward themselves.
     public let showContinue: Bool
 
-    public init(title: String, detail: String, isResending: Bool, showContinue: Bool) {
+    public init(
+        title: String,
+        detail: String,
+        compactText: String,
+        isResending: Bool,
+        showContinue: Bool
+    ) {
         self.title = title
         self.detail = detail
+        self.compactText = compactText
         self.isResending = isResending
         self.showContinue = showContinue
     }
@@ -1412,6 +1423,7 @@ public struct GaryxRateLimitBannerModel: Equatable, Sendable {
         var detail: String
         var isResending = false
         var showContinue = false
+        var detailIsProviderMessage = false
         if rateLimit.willAutoResend {
             if let remaining, let clock, !recovered {
                 // The gateway fires the resend a buffer after the reset, so
@@ -1432,14 +1444,21 @@ public struct GaryxRateLimitBannerModel: Equatable, Sendable {
                 detail = "Reset at \(clock) — quota should be available again."
             } else if let message, !message.isEmpty {
                 detail = message
+                detailIsProviderMessage = true
             } else {
                 detail = "Try again shortly."
             }
         }
 
+        // The provider message already carries its own context; every other
+        // detail needs the title's provider/window context prepended once the
+        // card renders as a single paragraph.
+        let compactText = detailIsProviderMessage ? detail : "\(title) · \(detail)"
+
         return GaryxRateLimitBannerModel(
             title: title,
             detail: detail,
+            compactText: compactText,
             isResending: isResending,
             showContinue: showContinue
         )
