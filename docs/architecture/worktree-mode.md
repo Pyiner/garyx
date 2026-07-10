@@ -68,7 +68,7 @@ CLI should expose worktree mode as a boolean flag on explicit create commands:
 
 ```bash
 garyx thread create --workspace-dir /path/to/repo --worktree
-garyx task create --workspace-dir /path/to/repo --worktree
+garyx task create --agent <agent_id> --workspace-dir /path/to/repo --worktree
 ```
 
 Bot channel accounts can also set `workspace_mode=worktree`; newly created

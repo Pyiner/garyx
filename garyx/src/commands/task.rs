@@ -134,9 +134,6 @@ pub(crate) async fn cmd_task_create(
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let executor = task_executor_payload(agent, workflow, input)?;
-    // Picking an executor starts the task immediately; a
-    // bare task with no executor is created as a `todo` placeholder.
-    let start = executor.is_some();
     let notification_target = task_notification_target_payload(notify)?;
     let notify_current_thread = notification_targets_current_thread(&notification_target);
     let source = task_source_payload_from_env();
@@ -144,15 +141,17 @@ pub(crate) async fn cmd_task_create(
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let gateway = gateway_endpoint(config_path)?;
-    let workflow_workspace_dir = executor
-        .as_ref()
-        .filter(|executor| executor.get("type").and_then(Value::as_str) == Some("workflow"))
-        .and(workspace_dir.clone());
+    let workflow_workspace_dir = if executor.get("type").and_then(Value::as_str) == Some("workflow")
+    {
+        workspace_dir.clone()
+    } else {
+        None
+    };
     let request = json!({
         "title": title,
         "body": body,
         "assignee": Value::Null,
-        "start": start,
+        "start": true,
         "workspace_dir": workflow_workspace_dir,
         "executor": executor,
         "runtime": {
@@ -197,7 +196,7 @@ fn task_executor_payload(
     agent: Option<String>,
     workflow: Option<String>,
     input: Option<String>,
-) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+) -> Result<Value, Box<dyn std::error::Error>> {
     let agent_id = agent
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
@@ -209,13 +208,16 @@ fn task_executor_payload(
         return Err("choose only one task executor: --agent or --workflow".into());
     }
     if let Some(agent_id) = agent_id {
-        return Ok(Some(json!({
+        return Ok(json!({
             "type": "agent",
             "agentId": agent_id,
-        })));
+        }));
     }
     let Some(workflow_id) = workflow_id else {
-        return Ok(None);
+        return Err(
+            "Task creation is a delegation feature, so you must specify an Agent with --agent."
+                .into(),
+        );
     };
     // Workflow input is a single plain-text string; a workflow that needs
     // structured data parses this text in its first step.
@@ -223,11 +225,11 @@ fn task_executor_payload(
         Some(text) => Value::String(text),
         None => Value::Null,
     };
-    Ok(Some(json!({
+    Ok(json!({
         "type": "workflow",
         "workflowId": workflow_id,
         "input": input,
-    })))
+    }))
 }
 
 fn task_source_payload_from_env() -> Option<Value> {
@@ -1082,6 +1084,19 @@ mod tests {
     use std::sync::{Arc as StdArc, Mutex};
     use tempfile::tempdir;
     use tokio::{net::TcpListener, task::JoinHandle};
+
+    #[test]
+    fn task_executor_payload_requires_a_delegation_target() {
+        for agent in [None, Some(" \t".to_owned())] {
+            let error = task_executor_payload(agent, None, None)
+                .expect_err("task creation without an executor should fail");
+
+            assert_eq!(
+                error.to_string(),
+                "Task creation is a delegation feature, so you must specify an Agent with --agent."
+            );
+        }
+    }
 
     #[tokio::test]
     async fn cmd_task_create_posts_worktree_runtime_mode() {

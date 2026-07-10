@@ -705,7 +705,7 @@ New local threads and task backing threads can opt into a managed Git worktree:
 
 ```bash
 garyx thread create --workspace-dir /path/to/repo --worktree
-garyx task create --title "Investigate" --workspace-dir /path/to/repo --worktree --notify none
+garyx task create --title "Investigate" --agent <agent_id> --workspace-dir /path/to/repo --worktree --notify none
 ```
 
 Bot accounts can make the same choice for newly created inbound threads:

@@ -1531,7 +1531,7 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         json: bool,
     },
-    /// Create a new task thread
+    /// Delegate work in a new task thread
     Create {
         /// Task title shown in task lists
         #[arg(long)]
@@ -1545,7 +1545,7 @@ pub(crate) enum TaskAction {
         /// Create the backing thread in a managed git worktree. Requires workspace-dir to be a git repo root.
         #[arg(long)]
         worktree: bool,
-        /// Run this task with an agent executor
+        /// Agent that receives the delegated task
         #[arg(long, conflicts_with = "workflow")]
         agent: Option<String>,
         /// Run this task with a reusable workflow definition instead of an agent
