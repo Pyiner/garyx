@@ -231,29 +231,33 @@ struct GaryxRateLimitBanner: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             if let model = GaryxRateLimitBannerModel.make(from: rateLimit, now: context.date) {
-                HStack(alignment: .center, spacing: 12) {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                HStack(alignment: .center, spacing: 10) {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(Color(.tertiarySystemFill))
-                        .frame(width: 30, height: 30)
+                        .frame(width: 26, height: 26)
                         .overlay(
                             Image(systemName: rateLimit.willAutoResend
                                 ? "arrow.clockwise"
                                 : "hourglass")
-                                .font(.system(size: 13, weight: .medium))
+                                .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(Color(.secondaryLabel))
                         )
-                    VStack(alignment: .leading, spacing: 2) {
-                        // Semantic fonts (not the fixed-size GaryxFont ramp)
-                        // so the card tracks Dynamic Type; defaults match the
-                        // previous 17/12pt values.
+                    VStack(alignment: .leading, spacing: 1) {
+                        // Compact type matching the desktop card's 13/12px
+                        // scale; semantic fonts so Dynamic Type still applies.
                         Text(model.title)
-                            .font(.body)
+                            .font(.footnote)
                             .fontWeight(.semibold)
                             .foregroundStyle(Color(.label))
                         Text(model.detail)
                             .font(.caption)
                             .monospacedDigit()
                             .foregroundStyle(GaryxTheme.secondaryText)
+                            // Keep the card short even for a verbose provider
+                            // message; the reset hint sits at the end, so
+                            // truncate from the head.
+                            .lineLimit(2)
+                            .truncationMode(.head)
                     }
                     Spacer(minLength: 0)
                     if model.showContinue, let onContinue {
@@ -274,10 +278,10 @@ struct GaryxRateLimitBanner: View {
                                 .foregroundStyle(
                                     sending ? Color(.secondaryLabel) : Color(.label)
                                 )
-                                .padding(.horizontal, 14)
+                                .padding(.horizontal, 12)
                                 // Vertical padding instead of a fixed height
                                 // so the capsule grows with Dynamic Type.
-                                .padding(.vertical, 7)
+                                .padding(.vertical, 5)
                                 .background(
                                     Capsule(style: .continuous)
                                         .fill(Color(.systemBackground))
@@ -286,18 +290,17 @@ struct GaryxRateLimitBanner: View {
                                     Capsule(style: .continuous)
                                         .stroke(Color(.separator), lineWidth: 1)
                                 )
-                                // 44pt minimum touch target around the visual
-                                // capsule, matching the shared button styles'
-                                // hit-area convention.
-                                .frame(minWidth: 44, minHeight: 44)
-                                .contentShape(Rectangle())
+                                // 44pt touch target extended beyond the
+                                // compact visual capsule so the card itself
+                                // stays short.
+                                .contentShape(Rectangle().inset(by: -9))
                         }
                         .buttonStyle(.plain)
                         .disabled(sending)
                     }
                 }
-                .padding(.horizontal, 13)
-                .padding(.vertical, 11)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(Color(.systemBackground))
