@@ -33,6 +33,11 @@ enum GaryxThreadRuntimeMorph {
 struct GaryxThreadRuntimeCompactRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
+    /// The in-bar capsule caps itself so it shares the bar with the side
+    /// buttons; the expanded panel header passes `nil` to let the title
+    /// run the full panel width.
+    var maxWidth: CGFloat? = 282
+
     private var title: String {
         model.selectedThread?.title ?? model.draftThreadTitle
     }
@@ -50,7 +55,7 @@ struct GaryxThreadRuntimeCompactRow: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 44, alignment: .leading)
-        .frame(maxWidth: 282, alignment: .leading)
+        .frame(maxWidth: maxWidth ?? .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -431,11 +436,19 @@ struct GaryxThreadRuntimeSettingsPanel: View {
         HStack(alignment: .center, spacing: 12) {
             Group {
                 if page == .main {
-                    // The exact view that renders inside the top-bar capsule,
-                    // pinned to the capsule's width: the morph never moves or
-                    // re-truncates the title.
-                    GaryxThreadRuntimeCompactRow()
-                        .frame(width: compactRowWidth, alignment: .leading)
+                    // Collapsed, the row is pinned to the capsule's width so
+                    // the morph hand-off is pixel-exact. Expanded, the title
+                    // runs the full panel width. The width flips INSTANTLY at
+                    // the expansion boundary (transaction strips the spring):
+                    // the long title is simply revealed by the growing
+                    // surface, and the collapse starts from the short title —
+                    // truncation never re-flows mid-animation.
+                    GaryxThreadRuntimeCompactRow(maxWidth: nil)
+                        .frame(
+                            width: isExpanded ? nil : compactRowWidth,
+                            alignment: .leading
+                        )
+                        .transaction { $0.animation = nil }
                         .transition(.identity)
                 } else {
                     // The button's 30pt visual sits inside a 44pt hit
