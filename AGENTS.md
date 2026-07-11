@@ -16,6 +16,12 @@ operating principles here; detailed rules live in the referenced files under
   the current task.
 - When pushing completed work, push directly to the remote `main` branch unless
   the requester explicitly specifies a different target branch.
+- Dedicated development worktrees are temporary and owned by the task creator
+  or orchestrator. After explicit approval, preserve the required commits,
+  remove the worktree from its parent checkout, verify the Git worktree record
+  is gone, and only then mark the task done. A done task must not leave its
+  worktree or Rust `target` cache behind. Never remove an active worktree or
+  discard unpreserved changes to satisfy cleanup.
 - When committing from an agent, use the repository's configured Git author and
   committer metadata. Do not override local Git identity.
 - When you create review tasks for your own work, notify `current-thread` so

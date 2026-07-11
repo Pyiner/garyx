@@ -11,6 +11,28 @@
 6. Commit every completed code change before handoff. Stage only files changed
    for the current task and leave unrelated user work untouched.
 
+## Development Worktree Cleanup
+
+Dedicated worktrees created to implement or review a Garyx task are temporary.
+The task creator or orchestrator owns their cleanup; a worker cannot reliably
+remove the worktree that is still its own process directory.
+
+After the result is explicitly approved:
+
+1. Confirm no agent, reviewer, Cargo command, or other process is still using
+   the worktree.
+2. Inspect the worktree status and preserve every required change as a commit.
+   Resolve dirty state instead of forcing deletion over unpreserved work.
+3. From the parent checkout, run `git worktree remove <worktree-path>`. This
+   removes the checkout and its local build artifacts, including Rust
+   `target/`, while retaining the task branch.
+4. Run `git worktree prune`, then verify the path no longer appears in
+   `git worktree list --porcelain`.
+5. Only after that verification, mark the task `done`.
+
+Do not leave an approved/done task's worktree around as a build cache. Shared
+compiler caching must be handled separately; task worktrees remain ephemeral.
+
 ## Desktop Dev Mode
 
 For fast macOS UI iteration, run the Electron dev build:
