@@ -70,6 +70,65 @@ pub struct RecentThreadRecord {
     pub recorded_at: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum RecentThreadTaskFilter {
+    #[default]
+    Include,
+    Exclude,
+    Only,
+}
+
+impl RecentThreadTaskFilter {
+    fn count_sql(self) -> &'static str {
+        match self {
+            Self::Include => "SELECT COUNT(*) FROM recent_threads",
+            Self::Exclude => {
+                "SELECT COUNT(*) FROM recent_threads WHERE thread_type <> 'task'"
+            }
+            Self::Only => "SELECT COUNT(*) FROM recent_threads WHERE thread_type = 'task'",
+        }
+    }
+
+    fn page_sql(self) -> &'static str {
+        match self {
+            Self::Include => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, recorded_at
+                   FROM recent_threads
+                  ORDER BY last_active_at DESC, thread_id ASC
+                  LIMIT ?1 OFFSET ?2"
+            }
+            Self::Exclude => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, recorded_at
+                   FROM recent_threads
+                  WHERE thread_type <> 'task'
+                  ORDER BY last_active_at DESC, thread_id ASC
+                  LIMIT ?1 OFFSET ?2"
+            }
+            Self::Only => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, recorded_at
+                   FROM recent_threads
+                  WHERE thread_type = 'task'
+                  ORDER BY last_active_at DESC, thread_id ASC
+                  LIMIT ?1 OFFSET ?2"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecentThreadDbPage {
+    pub records: Vec<RecentThreadRecord>,
+    pub total: usize,
+    pub offset: usize,
+    pub has_more: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecentThreadDraft {
     pub thread_id: String,
@@ -670,40 +729,61 @@ impl GaryxDbService {
         limit: usize,
         offset: usize,
     ) -> GaryxDbResult<Vec<RecentThreadRecord>> {
-        let conn = self.read_conn()?;
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
-        let mut stmt = conn.prepare(
-            "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
-                    message_count, last_message_preview, recent_run_id, active_run_id, run_state,
-                    updated_at, last_active_at, recorded_at
-             FROM recent_threads
-             ORDER BY last_active_at DESC, thread_id ASC
-             LIMIT ?1 OFFSET ?2",
+        Ok(self
+            .list_recent_threads_page(RecentThreadTaskFilter::Include, limit, offset)?
+            .records)
+    }
+
+    pub(crate) fn list_recent_threads_page(
+        &self,
+        filter: RecentThreadTaskFilter,
+        limit: usize,
+        requested_offset: usize,
+    ) -> GaryxDbResult<RecentThreadDbPage> {
+        self.list_recent_threads_page_inner(filter, limit, requested_offset, || Ok(()))
+    }
+
+    fn list_recent_threads_page_inner<F>(
+        &self,
+        filter: RecentThreadTaskFilter,
+        limit: usize,
+        requested_offset: usize,
+        after_count: F,
+    ) -> GaryxDbResult<RecentThreadDbPage>
+    where
+        F: FnOnce() -> GaryxDbResult<()>,
+    {
+        let mut conn = self.read_conn()?;
+        let tx = conn.transaction()?;
+        let total: i64 = tx.query_row(filter.count_sql(), [], |row| row.get(0))?;
+        let total = usize::try_from(total).unwrap_or(usize::MAX);
+        let offset = requested_offset.min(total);
+
+        // Test seam for proving that the count and page stay on one WAL read
+        // snapshot when a writer commits between the two statements.
+        after_count()?;
+
+        let limit_param = i64::try_from(limit).unwrap_or(i64::MAX);
+        let offset_param = i64::try_from(offset).unwrap_or(i64::MAX);
+        let mut stmt = tx.prepare(filter.page_sql())?;
+        let rows = stmt.query_map(
+            params![limit_param, offset_param],
+            recent_thread_record_from_row,
         )?;
-        let rows = stmt.query_map(params![limit, offset], |row| {
-            Ok(RecentThreadRecord {
-                thread_id: row.get(0)?,
-                title: row.get(1)?,
-                workspace_dir: row.get(2)?,
-                thread_type: row.get(3)?,
-                provider_type: row.get(4)?,
-                agent_id: row.get(5)?,
-                message_count: row.get(6)?,
-                last_message_preview: row.get(7)?,
-                recent_run_id: row.get(8)?,
-                active_run_id: row.get(9)?,
-                run_state: row.get(10)?,
-                updated_at: row.get(11)?,
-                last_active_at: row.get(12)?,
-                recorded_at: row.get(13)?,
-            })
-        })?;
         let mut records = Vec::new();
         for row in rows {
             records.push(row?);
         }
-        Ok(records)
+        drop(stmt);
+        tx.commit()?;
+
+        let has_more = offset.saturating_add(records.len()) < total;
+        Ok(RecentThreadDbPage {
+            records,
+            total,
+            offset,
+            has_more,
+        })
     }
 
     /// Startup crash recovery: the bridge run index is rebuilt empty on
@@ -731,10 +811,9 @@ impl GaryxDbService {
     }
 
     pub fn count_recent_threads(&self) -> GaryxDbResult<usize> {
-        let conn = self.read_conn()?;
-        let count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM recent_threads", [], |row| row.get(0))?;
-        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+        Ok(self
+            .list_recent_threads_page(RecentThreadTaskFilter::Include, 0, 0)?
+            .total)
     }
 
     /// Run every versioned thread-data migration that must complete after
@@ -1692,6 +1771,14 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
 
         CREATE INDEX IF NOT EXISTS idx_recent_threads_last_active
             ON recent_threads(last_active_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_recent_threads_task_last_active
+            ON recent_threads(last_active_at DESC, thread_id ASC)
+            WHERE thread_type = 'task';
+
+        CREATE INDEX IF NOT EXISTS idx_recent_threads_non_task_last_active
+            ON recent_threads(last_active_at DESC, thread_id ASC)
+            WHERE thread_type <> 'task';
 
         CREATE TABLE IF NOT EXISTS projection_states (
             projection_name TEXT PRIMARY KEY,
@@ -2662,6 +2749,27 @@ fn ensure_thread_channel_endpoint_columns(conn: &Connection) -> GaryxDbResult<()
         }
     }
     Ok(())
+}
+
+fn recent_thread_record_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<RecentThreadRecord> {
+    Ok(RecentThreadRecord {
+        thread_id: row.get(0)?,
+        title: row.get(1)?,
+        workspace_dir: row.get(2)?,
+        thread_type: row.get(3)?,
+        provider_type: row.get(4)?,
+        agent_id: row.get(5)?,
+        message_count: row.get(6)?,
+        last_message_preview: row.get(7)?,
+        recent_run_id: row.get(8)?,
+        active_run_id: row.get(9)?,
+        run_state: row.get(10)?,
+        updated_at: row.get(11)?,
+        last_active_at: row.get(12)?,
+        recorded_at: row.get(13)?,
+    })
 }
 
 fn workspace_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceRecord> {
@@ -4120,6 +4228,177 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["thread::newer"],
         );
+    }
+
+    #[test]
+    fn recent_threads_filtered_page_filters_before_pagination() {
+        let db = GaryxDbService::memory().expect("db opens");
+        for (thread_id, thread_type, timestamp) in [
+            ("thread::task-newest", "task", "2026-05-23T14:00:00Z"),
+            ("thread::chat-newer", "chat", "2026-05-23T13:00:00Z"),
+            ("thread::task-middle", "task", "2026-05-23T12:00:00Z"),
+            ("thread::chat-older", "chat", "2026-05-23T13:00:00Z"),
+        ] {
+            db.upsert_recent_thread(RecentThreadDraft {
+                thread_id: thread_id.to_owned(),
+                title: thread_id.to_owned(),
+                workspace_dir: None,
+                thread_type: thread_type.to_owned(),
+                provider_type: None,
+                agent_id: None,
+                message_count: 0,
+                last_message_preview: String::new(),
+                recent_run_id: None,
+                active_run_id: None,
+                run_state: "idle".to_owned(),
+                updated_at: Some(timestamp.to_owned()),
+                last_active_at: timestamp.to_owned(),
+            })
+            .expect("seed recent row");
+        }
+
+        let excluded = db
+            .list_recent_threads_page(RecentThreadTaskFilter::Exclude, 2, 0)
+            .expect("exclude page");
+        assert_eq!(excluded.total, 2);
+        assert_eq!(excluded.offset, 0);
+        assert!(!excluded.has_more);
+        assert_eq!(
+            excluded
+                .records
+                .iter()
+                .map(|row| row.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::chat-newer", "thread::chat-older"],
+            "task rows ahead of chats must not shorten the filtered page"
+        );
+
+        let only_first = db
+            .list_recent_threads_page(RecentThreadTaskFilter::Only, 1, 0)
+            .expect("only first page");
+        assert_eq!(only_first.total, 2);
+        assert!(only_first.has_more);
+        assert_eq!(only_first.records[0].thread_id, "thread::task-newest");
+        let only_second = db
+            .list_recent_threads_page(RecentThreadTaskFilter::Only, 1, 1)
+            .expect("only second page");
+        assert_eq!(only_second.offset, 1);
+        assert!(!only_second.has_more);
+        assert_eq!(only_second.records[0].thread_id, "thread::task-middle");
+
+        let included = db
+            .list_recent_threads_page(RecentThreadTaskFilter::Include, 10, 0)
+            .expect("include page");
+        assert_eq!(included.total, 4);
+        assert_eq!(
+            included
+                .records
+                .iter()
+                .map(|row| row.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "thread::task-newest",
+                "thread::chat-newer",
+                "thread::chat-older",
+                "thread::task-middle",
+            ]
+        );
+
+        let clamped = db
+            .list_recent_threads_page(RecentThreadTaskFilter::Exclude, 10, 99)
+            .expect("clamped page");
+        assert_eq!(clamped.total, 2);
+        assert_eq!(clamped.offset, 2);
+        assert!(clamped.records.is_empty());
+        assert!(!clamped.has_more);
+    }
+
+    #[test]
+    fn recent_threads_filtered_page_uses_one_read_snapshot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let db = GaryxDbService::open(&path).expect("db opens");
+        db.upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::snapshot-before".to_owned(),
+            title: "Before".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 0,
+            last_message_preview: String::new(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: Some("2026-05-23T10:00:00Z".to_owned()),
+            last_active_at: "2026-05-23T10:00:00Z".to_owned(),
+        })
+        .expect("seed initial row");
+
+        let page = db
+            .list_recent_threads_page_inner(
+                RecentThreadTaskFilter::Include,
+                10,
+                0,
+                || {
+                    let writer = Connection::open(&path)?;
+                    writer.execute(
+                        "INSERT INTO recent_threads (
+                            thread_id, title, thread_type, last_active_at, recorded_at
+                         ) VALUES (
+                            'thread::snapshot-after', 'After', 'chat',
+                            '2026-05-23T11:00:00Z', '2026-05-23T11:00:00Z'
+                         )",
+                        [],
+                    )?;
+                    Ok(())
+                },
+            )
+            .expect("snapshot page");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0].thread_id, "thread::snapshot-before");
+        assert_eq!(
+            db.count_recent_threads().expect("post-write count"),
+            2,
+            "the concurrent commit must exist after the read transaction closes"
+        );
+    }
+
+    #[test]
+    fn recent_threads_filtered_queries_use_partial_order_indexes() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let conn = db.conn().expect("conn");
+        for (predicate, expected_index) in [
+            (
+                "thread_type = 'task'",
+                "idx_recent_threads_task_last_active",
+            ),
+            (
+                "thread_type <> 'task'",
+                "idx_recent_threads_non_task_last_active",
+            ),
+        ] {
+            let sql = format!(
+                "EXPLAIN QUERY PLAN
+                 SELECT thread_id FROM recent_threads
+                  WHERE {predicate}
+                  ORDER BY last_active_at DESC, thread_id ASC
+                  LIMIT 10 OFFSET 0"
+            );
+            let mut stmt = conn.prepare(&sql).expect("prepare query plan");
+            let details = stmt
+                .query_map([], |row| row.get::<_, String>(3))
+                .expect("query plan")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("plan rows")
+                .join("\n");
+            assert!(
+                details.contains(expected_index),
+                "expected {expected_index} in query plan:\n{details}"
+            );
+        }
     }
 
     #[test]

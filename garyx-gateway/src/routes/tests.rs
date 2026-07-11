@@ -3202,6 +3202,160 @@ async fn recent_threads_route_defaults_to_thirty_threads() {
 }
 
 #[tokio::test]
+async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
+    let state = AppStateBuilder::new(test_config()).build();
+    for (thread_id, thread_type, timestamp) in [
+        ("thread::route-task-newest", "task", "2026-05-23T14:00:00Z"),
+        ("thread::route-chat-newer", "chat", "2026-05-23T13:00:00Z"),
+        ("thread::route-task-middle", "task", "2026-05-23T12:00:00Z"),
+        ("thread::route-chat-older", "chat", "2026-05-23T11:00:00Z"),
+    ] {
+        state
+            .ops
+            .garyx_db
+            .upsert_recent_thread(crate::garyx_db::RecentThreadDraft {
+                thread_id: thread_id.to_owned(),
+                title: format!("Title for {thread_id}"),
+                workspace_dir: Some("/workspace/test".to_owned()),
+                thread_type: thread_type.to_owned(),
+                provider_type: Some("codex".to_owned()),
+                agent_id: Some("test-agent".to_owned()),
+                message_count: 2,
+                last_message_preview: "preview".to_owned(),
+                recent_run_id: None,
+                active_run_id: None,
+                run_state: "idle".to_owned(),
+                updated_at: Some(timestamp.to_owned()),
+                last_active_at: timestamp.to_owned(),
+            })
+            .expect("seed recent projection");
+    }
+    let router = build_router(state);
+
+    let omitted_response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri("/api/recent-threads?limit=10&offset=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(omitted_response.status(), StatusCode::OK);
+    let omitted_body = axum::body::to_bytes(omitted_response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+
+    let include_response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri("/api/recent-threads?limit=10&offset=0&tasks=include")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(include_response.status(), StatusCode::OK);
+    let include_body = axum::body::to_bytes(include_response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        omitted_body, include_body,
+        "omitting tasks must remain byte-identical to explicit include"
+    );
+    let included: Value = serde_json::from_slice(&omitted_body).unwrap();
+    assert_eq!(included["total"], 4);
+    assert_eq!(included["threads"][0]["thread_id"], "thread::route-task-newest");
+    assert_eq!(included["threads"][0]["thread_type"], "task");
+    assert_eq!(included["threads"][0]["message_count"], 2);
+    assert_eq!(included["threads"][0]["last_message_preview"], "preview");
+
+    let exclude_response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri("/api/recent-threads?limit=1&offset=0&tasks=exclude")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(exclude_response.status(), StatusCode::OK);
+    let exclude_body = axum::body::to_bytes(exclude_response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let excluded: Value = serde_json::from_slice(&exclude_body).unwrap();
+    assert_eq!(excluded["total"], 2);
+    assert_eq!(excluded["count"], 1);
+    assert_eq!(excluded["has_more"], true);
+    assert_eq!(excluded["threads"][0]["thread_id"], "thread::route-chat-newer");
+
+    let only_response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri("/api/recent-threads?limit=10&offset=1&tasks=only")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(only_response.status(), StatusCode::OK);
+    let only_body = axum::body::to_bytes(only_response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let only: Value = serde_json::from_slice(&only_body).unwrap();
+    assert_eq!(only["total"], 2);
+    assert_eq!(only["offset"], 1);
+    assert_eq!(only["has_more"], false);
+    assert_eq!(only["threads"][0]["thread_id"], "thread::route-task-middle");
+
+    let clamped_response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri("/api/recent-threads?limit=10&offset=99&tasks=only")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(clamped_response.status(), StatusCode::OK);
+    let clamped_body = axum::body::to_bytes(clamped_response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let clamped: Value = serde_json::from_slice(&clamped_body).unwrap();
+    assert_eq!(clamped["offset"], 2);
+    assert_eq!(clamped["total"], 2);
+    assert_eq!(clamped["count"], 0);
+    assert_eq!(clamped["threads"], json!([]));
+
+    let invalid_response = router
+        .oneshot(
+            authed_request()
+                .uri("/api/recent-threads?tasks=maybe")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_response.status(), StatusCode::BAD_REQUEST);
+    let invalid_body = axum::body::to_bytes(invalid_response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let invalid: Value = serde_json::from_slice(&invalid_body).unwrap();
+    assert_eq!(invalid["error"], "BadRequest");
+    assert!(
+        invalid["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("include, exclude, only")
+    );
+}
+
+#[tokio::test]
 async fn recent_threads_route_removes_hidden_threads_from_projection() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::hidden-recent-route";

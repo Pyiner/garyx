@@ -38,7 +38,9 @@ use tokio_stream;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::agent_identity::create_thread_for_agent_reference;
-use crate::garyx_db::{GaryxDbError, PinnedThreadRecord, RecentThreadRecord, ThreadMetaRecord};
+use crate::garyx_db::{
+    GaryxDbError, PinnedThreadRecord, RecentThreadRecord, RecentThreadTaskFilter, ThreadMetaRecord,
+};
 use crate::provider_session_locator::{
     list_recent_local_provider_sessions, recover_local_provider_session,
 };
@@ -662,6 +664,10 @@ pub struct ListRecentThreadsParams {
     /// Offset for pagination.
     #[serde(default)]
     pub offset: usize,
+    /// Task membership filter. Omitting it preserves the existing unfiltered
+    /// recent-thread response.
+    #[serde(default)]
+    pub tasks: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -682,6 +688,19 @@ fn default_thread_limit() -> usize {
 
 fn default_recent_thread_limit() -> usize {
     DEFAULT_RECENT_THREAD_LIMIT
+}
+
+fn parse_recent_thread_task_filter(
+    value: Option<&str>,
+) -> Result<RecentThreadTaskFilter, GaryxDbError> {
+    match value {
+        None | Some("include") => Ok(RecentThreadTaskFilter::Include),
+        Some("exclude") => Ok(RecentThreadTaskFilter::Exclude),
+        Some("only") => Ok(RecentThreadTaskFilter::Only),
+        Some(_) => Err(GaryxDbError::BadRequest(
+            "tasks must be one of: include, exclude, only".to_owned(),
+        )),
+    }
 }
 
 fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<ProviderType>, String> {
@@ -1464,6 +1483,7 @@ async fn recent_threads_payload(
     limit: usize,
     offset: usize,
     total: usize,
+    has_more: bool,
 ) -> Value {
     let mut threads = Vec::with_capacity(records.len());
     let catalog = AgentCatalogSnapshot::load(state).await;
@@ -1479,7 +1499,7 @@ async fn recent_threads_payload(
         "limit": limit,
         "offset": offset,
         "total": total,
-        "has_more": offset.saturating_add(records.len()) < total,
+        "has_more": has_more,
     })
 }
 
@@ -1595,20 +1615,29 @@ pub async fn list_recent_threads(
 ) -> impl IntoResponse {
     let limit = params.limit.min(MAX_RECENT_THREAD_LIMIT);
     let requested_offset = params.offset;
+    let filter = match parse_recent_thread_task_filter(params.tasks.as_deref()) {
+        Ok(filter) => filter,
+        Err(error) => return garyx_db_error_response(error).into_response(),
+    };
     let paged = state
         .ops
         .garyx_db
-        .run_blocking(move |db| {
-            let total = db.count_recent_threads()?;
-            let offset = requested_offset.min(total);
-            let records = db.list_recent_threads(limit, offset)?;
-            Ok((total, offset, records))
-        })
+        .run_blocking(move |db| db.list_recent_threads_page(filter, limit, requested_offset))
         .await;
     match paged {
-        Ok((total, offset, records)) => (
+        Ok(page) => (
             StatusCode::OK,
-            Json(recent_threads_payload(&state, &records, limit, offset, total).await),
+            Json(
+                recent_threads_payload(
+                    &state,
+                    &page.records,
+                    limit,
+                    page.offset,
+                    page.total,
+                    page.has_more,
+                )
+                .await,
+            ),
         )
             .into_response(),
         Err(error) => garyx_db_error_response(error).into_response(),
