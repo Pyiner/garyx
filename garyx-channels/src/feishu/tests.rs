@@ -580,7 +580,8 @@ mod dispatch_tests {
     fn make_router() -> Arc<Mutex<MessageRouter>> {
         let store = Arc::new(InMemoryThreadStore::new());
         let config = GaryxConfig::default();
-        let mut router = MessageRouter::new(store, config);
+        let mut router = MessageRouter::new(store.clone(), config);
+        crate::test_helpers::configure_test_router(&mut router, store);
         router.set_message_ledger_store(Arc::new(garyx_router::MessageLedgerStore::memory()));
         Arc::new(Mutex::new(router))
     }
@@ -1191,8 +1192,7 @@ mod e2e_tests {
     };
     use garyx_router::{
         ChannelBinding, InMemoryThreadStore, MessageRouter, ThreadEnsureOptions, ThreadStore,
-        bind_endpoint_to_thread, bindings_from_value, create_thread_record,
-        detach_endpoint_from_thread, is_thread_key,
+        bindings_from_value, create_thread_record, is_thread_key,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use wiremock::matchers::{method, path, path_regex, query_param};
@@ -1984,13 +1984,15 @@ mod e2e_tests {
     }
 
     fn make_router_with_store(store: Arc<dyn ThreadStore>) -> Arc<Mutex<MessageRouter>> {
-        let mut router = MessageRouter::new(store, GaryxConfig::default());
+        let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+        configure_test_router(&mut router, store);
         router.set_message_ledger_store(Arc::new(garyx_router::MessageLedgerStore::memory()));
         Arc::new(Mutex::new(router))
     }
 
     async fn seed_bound_dm_thread(
         store: &Arc<dyn ThreadStore>,
+        router: &Arc<Mutex<MessageRouter>>,
         account_id: &str,
         binding_key: &str,
         label: &str,
@@ -2011,23 +2013,25 @@ mod e2e_tests {
             is_group: Some(false),
         };
         let (thread_id, _) = create_thread_record(store, options).await.unwrap();
-        bind_endpoint_to_thread(
-            store,
-            &thread_id,
-            ChannelBinding {
-                channel: "feishu".to_owned(),
-                account_id: account_id.to_owned(),
-                binding_key: binding_key.to_owned(),
-                chat_id: format!("oc_dm_{binding_key}"),
-                delivery_target_type: "chat_id".to_owned(),
-                delivery_target_id: format!("oc_dm_{binding_key}"),
-                display_label: label.to_owned(),
-                last_inbound_at: None,
-                last_delivery_at: None,
-            },
-        )
-        .await
-        .unwrap();
+        router
+            .lock()
+            .await
+            .bind_endpoint_runtime(
+                &thread_id,
+                ChannelBinding {
+                    channel: "feishu".to_owned(),
+                    account_id: account_id.to_owned(),
+                    binding_key: binding_key.to_owned(),
+                    chat_id: format!("oc_dm_{binding_key}"),
+                    delivery_target_type: "chat_id".to_owned(),
+                    delivery_target_id: format!("oc_dm_{binding_key}"),
+                    display_label: label.to_owned(),
+                    last_inbound_at: None,
+                    last_delivery_at: None,
+                },
+            )
+            .await
+            .unwrap();
         thread_id
     }
 
@@ -3638,10 +3642,7 @@ mod e2e_tests {
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
+        let router = make_router_with_store(store.clone());
         let account = make_default_account();
 
         let event1 = FeishuEventBuilder::dm("ou_user123", "first msg")
@@ -3675,27 +3676,25 @@ mod e2e_tests {
         )
         .await
         .expect("thread should be created");
-        bind_endpoint_to_thread(
-            &store,
-            &new_thread,
-            ChannelBinding {
-                channel: "feishu".to_owned(),
-                account_id: "app1".to_owned(),
-                binding_key: "ou_user123".to_owned(),
-                chat_id: "oc_dm_ou_user123".to_owned(),
-                delivery_target_type: "chat_id".to_owned(),
-                delivery_target_id: "oc_dm_ou_user123".to_owned(),
-                display_label: "ou_user123".to_owned(),
-                last_inbound_at: None,
-                last_delivery_at: None,
-            },
-        )
-        .await
-        .expect("bind should succeed");
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.rebuild_thread_indexes().await;
-        }
+        router
+            .lock()
+            .await
+            .bind_endpoint_runtime(
+                &new_thread,
+                ChannelBinding {
+                    channel: "feishu".to_owned(),
+                    account_id: "app1".to_owned(),
+                    binding_key: "ou_user123".to_owned(),
+                    chat_id: "oc_dm_ou_user123".to_owned(),
+                    delivery_target_type: "chat_id".to_owned(),
+                    delivery_target_id: "oc_dm_ou_user123".to_owned(),
+                    display_label: "ou_user123".to_owned(),
+                    last_inbound_at: None,
+                    last_delivery_at: None,
+                },
+            )
+            .await
+            .expect("bind should succeed");
 
         let event2 = FeishuEventBuilder::dm("ou_user123", "follow old thread")
             .with_message_id("om_test_msg_rebind_002")
@@ -3742,10 +3741,7 @@ mod e2e_tests {
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
+        let router = make_router_with_store(store.clone());
         let account = make_default_account();
 
         let event1 = FeishuEventBuilder::dm("ou_user123", "first msg")
@@ -3770,10 +3766,7 @@ mod e2e_tests {
         wait_for_thread_delivery_persistence(&store, &first_thread).await;
 
         // Simulate router restart: rebuild reply index and delivery cache from persisted store.
-        let restarted_router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
+        let restarted_router = make_router_with_store(store.clone());
         {
             let mut guard = restarted_router.lock().await;
             assert_eq!(guard.rebuild_routing_index("feishu").await, 1);
@@ -3804,51 +3797,46 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_feishu_sessionprev_rebuilds_history_after_restart() {
+    async fn test_e2e_feishu_addressed_recent_pages_bind_exact_external_thread() {
         let (server, client) = setup_feishu_mock().await;
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
+        let router = make_router_with_store(store.clone());
         let account = make_default_account();
 
+        let target_thread = "thread::feishu-external-target";
         store
             .set(
-                "app1::main::ou_user123_a",
+                target_thread,
                 serde_json::json!({
-                    "from_id": "ou_user123",
-                    "updated_at": "2026-03-01T10:00:00Z"
+                    "thread_id": target_thread,
+                    "label": "Feishu external target",
+                    "channel": "api",
+                    "account_id": "main"
                 }),
             )
             .await;
-        store
-            .set(
-                "app1::main::ou_user123_b",
-                serde_json::json!({
-                    "from_id": "ou_user123",
-                    "updated_at": "2026-03-01T11:00:00Z"
-                }),
-            )
-            .await;
-        store
-            .set(
-                "app1::main::ou_user123_c",
-                serde_json::json!({
-                    "from_id": "ou_user123",
-                    "updated_at": "2026-03-01T12:00:00Z"
-                }),
-            )
-            .await;
+        let mut entries = (1..=10)
+            .map(|index| {
+                recent_thread_entry(
+                    &format!("thread::feishu-external-{index}"),
+                    &format!("Feishu external row {index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        entries.push(recent_thread_entry(target_thread, "Feishu external target"));
+        router
+            .lock()
+            .await
+            .set_recent_thread_page_reader(Arc::new(TestRecentThreadPageReader::new(entries)));
 
-        let command = FeishuEventBuilder::dm("ou_user123", "/threadprev")
-            .with_message_id("om_cmd_prev_001")
+        let first_page = FeishuEventBuilder::dm("ou_user123", "/threads@sample_bot")
+            .with_message_id("om_recent_page_001")
             .build();
         dispatch_im_message_event(
             "app1",
-            &command,
+            &first_page,
             &router,
             &bridge,
             &client,
@@ -3860,23 +3848,80 @@ mod e2e_tests {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 0);
-        let command_reqs = server.received_requests().await.unwrap();
-        let switched_notice: Vec<_> = command_reqs
-            .iter()
-            .filter(|r| {
-                r.url.path() == "/im/v1/messages/om_cmd_prev_001/reply"
-                    && r.method.as_str() == "POST"
-                    && std::str::from_utf8(&r.body)
-                        .map(|body| {
-                            body.contains("Switched to previous thread: app1::main::ou_user123_b")
-                        })
-                        .unwrap_or(false)
-            })
-            .collect();
-        assert_eq!(switched_notice.len(), 1);
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|request| {
+                    request.url.path() == "/im/v1/messages/om_recent_page_001/reply"
+                        && std::str::from_utf8(&request.body)
+                            .is_ok_and(|body| body.contains("Recent threads · page 1/2"))
+                })
+        );
 
-        let normal = FeishuEventBuilder::dm("ou_user123", "after restart command")
-            .with_message_id("om_cmd_prev_002")
+        let next_page = FeishuEventBuilder::dm("ou_user123", "/threads@sample_bot next")
+            .with_message_id("om_recent_page_002")
+            .build();
+        dispatch_im_message_event(
+            "app1",
+            &next_page,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|request| {
+                    request.url.path() == "/im/v1/messages/om_recent_page_002/reply"
+                        && std::str::from_utf8(&request.body)
+                            .is_ok_and(|body| body.contains("11. Feishu external target"))
+                })
+        );
+
+        let bind = FeishuEventBuilder::dm("ou_user123", "/bindthread@sample_bot 11")
+            .with_message_id("om_recent_bind_003")
+            .build();
+        dispatch_im_message_event(
+            "app1",
+            &bind,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|request| {
+                    request.url.path() == "/im/v1/messages/om_recent_bind_003/reply"
+                        && std::str::from_utf8(&request.body).is_ok_and(|body| {
+                            body.contains("Switched to thread: Feishu external target")
+                        })
+                })
+        );
+
+        let normal = FeishuEventBuilder::dm("ou_user123", "continue on external target")
+            .with_message_id("om_recent_normal_004")
             .build();
         dispatch_im_message_event(
             "app1",
@@ -3889,82 +3934,8 @@ mod e2e_tests {
             &account.app_id,
         )
         .await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
-        let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].thread_id, "app1::main::ou_user123_b");
-    }
-
-    #[tokio::test]
-    async fn test_e2e_feishu_sessions_lists_named_sessions_with_current_marker() {
-        let (server, client) = setup_feishu_mock().await;
-        let provider = Arc::new(ConfigurableTestProvider::echo());
-        let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
-        let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
-        let account = make_default_account();
-
-        {
-            let mut router_guard = router.lock().await;
-            router_guard
-                .ensure_thread_entry(
-                    "app1::main::ou_user123:thread-a",
-                    "feishu",
-                    "app1",
-                    "ou_user123",
-                    Some("thread-a"),
-                )
-                .await;
-            router_guard
-                .ensure_thread_entry(
-                    "app1::main::ou_user123:thread-b",
-                    "feishu",
-                    "app1",
-                    "ou_user123",
-                    Some("thread-b"),
-                )
-                .await;
-            let user_key = MessageRouter::build_binding_context_key("feishu", "app1", "ou_user123");
-            router_guard.switch_to_thread(&user_key, "app1::main::ou_user123:thread-b");
-        }
-
-        let command = FeishuEventBuilder::dm("ou_user123", "/threads")
-            .with_message_id("om_cmd_sessions_001")
-            .build();
-        dispatch_im_message_event(
-            "app1",
-            &command,
-            &router,
-            &bridge,
-            &client,
-            &account,
-            "",
-            &account.app_id,
-        )
-        .await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        assert_eq!(provider.call_count.load(Ordering::Relaxed), 0);
-        let requests = server.received_requests().await.unwrap();
-        let sessions_reply: Vec<_> = requests
-            .iter()
-            .filter(|r| {
-                r.url.path() == "/im/v1/messages/om_cmd_sessions_001/reply"
-                    && r.method.as_str() == "POST"
-                    && std::str::from_utf8(&r.body)
-                        .map(|body| {
-                            body.contains("Your Threads:")
-                                && body.contains("thread-a")
-                                && body.contains("thread-b ⬅️")
-                        })
-                        .unwrap_or(false)
-            })
-            .collect();
-        assert_eq!(sessions_reply.len(), 1);
+        wait_for_provider_calls(provider.as_ref(), 1).await;
+        assert_eq!(provider.calls.lock().unwrap()[0].thread_id, target_thread);
     }
 
     #[tokio::test]
@@ -4131,14 +4102,16 @@ mod e2e_tests {
         };
         assert!(first_thread.starts_with("thread::"));
 
-        let detached = detach_endpoint_from_thread(&store, "feishu::app1::ou_user123")
+        let detached = router
+            .lock()
+            .await
+            .detach_endpoint_runtime("feishu::app1::ou_user123")
             .await
             .expect("detach should succeed");
-        assert_eq!(detached.as_deref(), Some(first_thread.as_str()));
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.rebuild_thread_indexes().await;
-        }
+        assert_eq!(
+            detached.previous_thread_id.as_deref(),
+            Some(first_thread.as_str())
+        );
 
         let second = FeishuEventBuilder::dm("ou_user123", "second rebound thread")
             .with_message_id("om_bind_detach_002")
@@ -4163,27 +4136,25 @@ mod e2e_tests {
         assert!(second_thread.starts_with("thread::"));
         assert_ne!(second_thread, first_thread);
 
-        bind_endpoint_to_thread(
-            &store,
-            &first_thread,
-            ChannelBinding {
-                channel: "feishu".to_owned(),
-                account_id: "app1".to_owned(),
-                binding_key: "ou_user123".to_owned(),
-                chat_id: "oc_dm_ou_user123".to_owned(),
-                delivery_target_type: "chat_id".to_owned(),
-                delivery_target_id: "oc_dm_ou_user123".to_owned(),
-                display_label: "ou_user123".to_owned(),
-                last_inbound_at: None,
-                last_delivery_at: None,
-            },
-        )
-        .await
-        .expect("bind should succeed");
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.rebuild_thread_indexes().await;
-        }
+        router
+            .lock()
+            .await
+            .bind_endpoint_runtime(
+                &first_thread,
+                ChannelBinding {
+                    channel: "feishu".to_owned(),
+                    account_id: "app1".to_owned(),
+                    binding_key: "ou_user123".to_owned(),
+                    chat_id: "oc_dm_ou_user123".to_owned(),
+                    delivery_target_type: "chat_id".to_owned(),
+                    delivery_target_id: "oc_dm_ou_user123".to_owned(),
+                    display_label: "ou_user123".to_owned(),
+                    last_inbound_at: None,
+                    last_delivery_at: None,
+                },
+            )
+            .await
+            .expect("bind should succeed");
 
         let third = FeishuEventBuilder::dm("ou_user123", "third back to first")
             .with_message_id("om_bind_detach_003")
@@ -4252,13 +4223,12 @@ mod e2e_tests {
             router_guard.switch_to_thread(&user_key, &first_thread);
         }
 
-        detach_endpoint_from_thread(&store, "feishu::app1::ou_user123")
+        router
+            .lock()
+            .await
+            .detach_endpoint_runtime("feishu::app1::ou_user123")
             .await
             .expect("detach should succeed");
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.rebuild_thread_indexes().await;
-        }
 
         let second = FeishuEventBuilder::dm("ou_user123", "after detach should not stick")
             .with_message_id("om_bind_detach_override_002")
@@ -4479,7 +4449,8 @@ mod e2e_tests {
         let router = make_router_with_store(store.clone());
         let account = make_default_account();
 
-        let seeded_app1_thread = seed_bound_dm_thread(&store, "app1", "ou_user123", "custom").await;
+        let seeded_app1_thread =
+            seed_bound_dm_thread(&store, &router, "app1", "ou_user123", "custom").await;
         {
             let mut router_guard = router.lock().await;
             router_guard.rebuild_thread_indexes().await;

@@ -46,15 +46,43 @@ reinterpreted in feature code.
 
 - Mobile recent-thread lists read the gateway SQLite `recent_threads`
   projection only.
+- A task backing thread durably carries `thread_kind="task"` from creation
+  through task overlay deletion. `recent_threads.thread_type` and
+  `thread_meta.thread_type` derive from that canonical kind and therefore
+  remain `"task"` after the task itself is deleted. Do not infer task identity
+  from a live task projection, a title, or a title prefix.
 - Keep `recent_threads` current by writing it from the thread-store write path;
   do not make `GET /api/recent-threads` rescan router/thread files.
+- Bot `/threads` and `/bindthread` reads go through the injected
+  `RecentThreadPageReader`, backed by the same SQLite projection. A missing or
+  failed reader is an explicit temporary-unavailable result; never add a
+  thread-store scan fallback.
 - Provider bridge run persistence must use the same thread store as the
   gateway/router (the `SqliteThreadStore`) so active run state derives into
   `recent_threads` inside the same write transaction.
 - Do not repair stale `active_run_id` or `run_state` in read routes.
-- The only startup recovery is `clear_stale_active_runs`: one SQL pass that
-  settles running rows orphaned by the previous process (the bridge run
-  index is empty at boot). There is no other startup reconciliation.
+- The only recurring startup recovery is `clear_stale_active_runs`: one SQL
+  pass that settles running rows orphaned by the previous process (the bridge
+  run index is empty at boot). Versioned, transactional one-shot cutovers such
+  as `recent_task_thread_kind_v1` and `endpoint_holder_dedup_v1` run after the
+  boot import and record a durable marker; they are not read-time or recurring
+  reconciliation.
+
+## Endpoint Binding Ownership
+
+- Each endpoint key has at most one holder in canonical `thread_records`.
+  `endpoint_holder_dedup_v1` established this invariant for legacy data; every
+  later bind or detach must preserve it through the serialized
+  `EndpointBindingMutator` service.
+- Runtime bind/detach paths point-read the previous owner from
+  `thread_channel_endpoints`, validate known target records, and point-write
+  only the known previous/target records. HTTP bind/detach, `/newthread`, and
+  `/bindthread` must share this service. Do not reintroduce `list_keys` or
+  record-body scans to find endpoint holders.
+- When an endpoint has no projected owner, construct its first binding from
+  inbound or known-endpoint metadata. Persist binding-related delivery context
+  using the already-known record ids; absence of an owner is not permission to
+  scan.
 
 ## Transcript Rendering
 

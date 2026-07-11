@@ -103,16 +103,9 @@ fn telegram_bot_commands_are_projected_from_command_list() {
         .map(|command| command.command.as_str())
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        &names[..5],
-        &[
-            "newthread",
-            "threads",
-            "threadprev",
-            "threadnext",
-            "summary",
-        ]
-    );
+    assert_eq!(names, vec!["newthread", "threads", "bindthread", "summary"]);
+    assert!(!names.contains(&"threadprev"));
+    assert!(!names.contains(&"threadnext"));
     assert!(names.contains(&"summary"));
 }
 
@@ -728,7 +721,8 @@ mod dispatch_tests {
     fn make_router() -> Arc<Mutex<MessageRouter>> {
         let store = Arc::new(InMemoryThreadStore::new());
         let config = GaryxConfig::default();
-        let mut router = MessageRouter::new(store, config);
+        let mut router = MessageRouter::new(store.clone(), config);
+        crate::test_helpers::configure_test_router(&mut router, store);
         router.set_message_ledger_store(Arc::new(garyx_router::MessageLedgerStore::memory()));
         Arc::new(Mutex::new(router))
     }
@@ -1037,8 +1031,7 @@ mod e2e_tests {
     };
     use garyx_router::{
         ChannelBinding, InMemoryThreadStore, MessageRouter, ThreadEnsureOptions, ThreadStore,
-        bind_endpoint_to_thread, bindings_from_value, create_thread_record,
-        detach_endpoint_from_thread, is_thread_key,
+        bindings_from_value, create_thread_record, is_thread_key,
     };
     use serde_json::Value;
     use std::collections::HashMap;
@@ -1178,13 +1171,15 @@ mod e2e_tests {
     }
 
     fn make_router_with_store(store: Arc<dyn ThreadStore>) -> Arc<Mutex<MessageRouter>> {
-        let mut router = MessageRouter::new(store, GaryxConfig::default());
+        let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+        configure_test_router(&mut router, store);
         router.set_message_ledger_store(Arc::new(garyx_router::MessageLedgerStore::memory()));
         Arc::new(Mutex::new(router))
     }
 
     async fn seed_bound_dm_thread(
         store: &Arc<dyn ThreadStore>,
+        router: &Arc<Mutex<MessageRouter>>,
         account_id: &str,
         binding_key: &str,
         label: &str,
@@ -1205,23 +1200,25 @@ mod e2e_tests {
             is_group: Some(false),
         };
         let (thread_id, _) = create_thread_record(store, options).await.unwrap();
-        bind_endpoint_to_thread(
-            store,
-            &thread_id,
-            ChannelBinding {
-                channel: "telegram".to_owned(),
-                account_id: account_id.to_owned(),
-                binding_key: binding_key.to_owned(),
-                chat_id: binding_key.to_owned(),
-                delivery_target_type: "chat_id".to_owned(),
-                delivery_target_id: binding_key.to_owned(),
-                display_label: label.to_owned(),
-                last_inbound_at: None,
-                last_delivery_at: None,
-            },
-        )
-        .await
-        .unwrap();
+        router
+            .lock()
+            .await
+            .bind_endpoint_runtime(
+                &thread_id,
+                ChannelBinding {
+                    channel: "telegram".to_owned(),
+                    account_id: account_id.to_owned(),
+                    binding_key: binding_key.to_owned(),
+                    chat_id: binding_key.to_owned(),
+                    delivery_target_type: "chat_id".to_owned(),
+                    delivery_target_id: binding_key.to_owned(),
+                    display_label: label.to_owned(),
+                    last_inbound_at: None,
+                    last_delivery_at: None,
+                },
+            )
+            .await
+            .unwrap();
         thread_id
     }
 
@@ -4099,10 +4096,7 @@ mod e2e_tests {
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
+        let router = make_router_with_store(store.clone());
         let http = reqwest::Client::new();
 
         let update1 = TgUpdateBuilder::dm(42, "first message")
@@ -4147,27 +4141,25 @@ mod e2e_tests {
         )
         .await
         .expect("thread should be created");
-        bind_endpoint_to_thread(
-            &store,
-            &new_thread,
-            ChannelBinding {
-                channel: "telegram".to_owned(),
-                account_id: "bot1".to_owned(),
-                binding_key: "42".to_owned(),
-                chat_id: "42".to_owned(),
-                delivery_target_type: "chat_id".to_owned(),
-                delivery_target_id: "42".to_owned(),
-                display_label: "42".to_owned(),
-                last_inbound_at: None,
-                last_delivery_at: None,
-            },
-        )
-        .await
-        .expect("bind should succeed");
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.rebuild_thread_indexes().await;
-        }
+        router
+            .lock()
+            .await
+            .bind_endpoint_runtime(
+                &new_thread,
+                ChannelBinding {
+                    channel: "telegram".to_owned(),
+                    account_id: "bot1".to_owned(),
+                    binding_key: "42".to_owned(),
+                    chat_id: "42".to_owned(),
+                    delivery_target_type: "chat_id".to_owned(),
+                    delivery_target_id: "42".to_owned(),
+                    display_label: "42".to_owned(),
+                    last_inbound_at: None,
+                    last_delivery_at: None,
+                },
+            )
+            .await
+            .expect("bind should succeed");
 
         let bot_reply_msg = TgMessage {
             message_id: 999,
@@ -4256,10 +4248,7 @@ mod e2e_tests {
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
+        let router = make_router_with_store(store.clone());
         let http = reqwest::Client::new();
 
         let update1 = TgUpdateBuilder::dm(42, "first message")
@@ -4290,10 +4279,7 @@ mod e2e_tests {
         wait_for_provider_calls(provider.as_ref(), 1).await;
 
         // Simulate router restart: rebuild reply index and delivery cache from persisted store.
-        let restarted_router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
+        let restarted_router = make_router_with_store(store.clone());
         {
             let rebuild_count = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 loop {
@@ -4400,10 +4386,7 @@ mod e2e_tests {
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
+        let router = make_router_with_store(store.clone());
         let http = reqwest::Client::new();
 
         let update1 = TgUpdateBuilder::dm(42, "first message")
@@ -4440,31 +4423,30 @@ mod e2e_tests {
         )
         .await
         .expect("thread should be created");
-        bind_endpoint_to_thread(
-            &store,
-            &new_thread,
-            ChannelBinding {
-                channel: "telegram".to_owned(),
-                account_id: "bot1".to_owned(),
-                binding_key: "42".to_owned(),
-                chat_id: "42".to_owned(),
-                delivery_target_type: "chat_id".to_owned(),
-                delivery_target_id: "42".to_owned(),
-                display_label: "42".to_owned(),
-                last_inbound_at: None,
-                last_delivery_at: None,
-            },
-        )
-        .await
-        .expect("bind should succeed");
+        router
+            .lock()
+            .await
+            .bind_endpoint_runtime(
+                &new_thread,
+                ChannelBinding {
+                    channel: "telegram".to_owned(),
+                    account_id: "bot1".to_owned(),
+                    binding_key: "42".to_owned(),
+                    chat_id: "42".to_owned(),
+                    delivery_target_type: "chat_id".to_owned(),
+                    delivery_target_id: "42".to_owned(),
+                    display_label: "42".to_owned(),
+                    last_inbound_at: None,
+                    last_delivery_at: None,
+                },
+            )
+            .await
+            .expect("bind should succeed");
         assert!(
             store.delete(&old_thread).await,
             "old thread should be deleted"
         );
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.rebuild_thread_indexes().await;
-        }
+        router.lock().await.rebuild_thread_indexes().await;
 
         let bot_reply_msg = TgMessage {
             message_id: 999,
@@ -4843,7 +4825,8 @@ mod e2e_tests {
         let router = make_router_with_store(store.clone());
         let http = reqwest::Client::new();
 
-        let seeded_bot1_thread = seed_bound_dm_thread(&store, "bot1", "42", "custom").await;
+        let seeded_bot1_thread =
+            seed_bound_dm_thread(&store, &router, "bot1", "42", "custom").await;
         {
             let mut router_guard = router.lock().await;
             router_guard.rebuild_thread_indexes().await;
@@ -5073,14 +5056,16 @@ mod e2e_tests {
         };
         assert!(first_thread.starts_with("thread::"));
 
-        let detached = detach_endpoint_from_thread(&store, "telegram::bot1::42")
+        let detached = router
+            .lock()
+            .await
+            .detach_endpoint_runtime("telegram::bot1::42")
             .await
             .expect("detach should succeed");
-        assert_eq!(detached.as_deref(), Some(first_thread.as_str()));
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.rebuild_thread_indexes().await;
-        }
+        assert_eq!(
+            detached.previous_thread_id.as_deref(),
+            Some(first_thread.as_str())
+        );
 
         let second = TgUpdateBuilder::dm(42, "second rebound thread")
             .with_message_id(4002)
@@ -5177,27 +5162,25 @@ mod e2e_tests {
             Some(second_thread.as_str())
         );
 
-        bind_endpoint_to_thread(
-            &store,
-            &first_thread,
-            ChannelBinding {
-                channel: "telegram".to_owned(),
-                account_id: "bot1".to_owned(),
-                binding_key: "42".to_owned(),
-                chat_id: "42".to_owned(),
-                delivery_target_type: "chat_id".to_owned(),
-                delivery_target_id: "42".to_owned(),
-                display_label: "42".to_owned(),
-                last_inbound_at: None,
-                last_delivery_at: None,
-            },
-        )
-        .await
-        .expect("bind should succeed");
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.rebuild_thread_indexes().await;
-        }
+        router
+            .lock()
+            .await
+            .bind_endpoint_runtime(
+                &first_thread,
+                ChannelBinding {
+                    channel: "telegram".to_owned(),
+                    account_id: "bot1".to_owned(),
+                    binding_key: "42".to_owned(),
+                    chat_id: "42".to_owned(),
+                    delivery_target_type: "chat_id".to_owned(),
+                    delivery_target_id: "42".to_owned(),
+                    display_label: "42".to_owned(),
+                    last_inbound_at: None,
+                    last_delivery_at: None,
+                },
+            )
+            .await
+            .expect("bind should succeed");
 
         let third = TgUpdateBuilder::dm(42, "third back to first")
             .with_message_id(4003)
@@ -5241,10 +5224,7 @@ mod e2e_tests {
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
+        let router = make_router_with_store(store.clone());
         let http = reqwest::Client::new();
 
         let first = TgUpdateBuilder::dm(42, "first bound thread")
@@ -5276,13 +5256,12 @@ mod e2e_tests {
             router_guard.switch_to_thread(&user_key, &first_thread);
         }
 
-        detach_endpoint_from_thread(&store, "telegram::bot1::42")
+        router
+            .lock()
+            .await
+            .detach_endpoint_runtime("telegram::bot1::42")
             .await
             .expect("detach should succeed");
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.rebuild_thread_indexes().await;
-        }
 
         let second = TgUpdateBuilder::dm(42, "after detach should not stick")
             .with_message_id(4012)
@@ -5310,43 +5289,54 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_telegram_sessions_lists_named_sessions_with_current_marker() {
+    async fn test_e2e_telegram_recent_pages_bind_exact_external_thread() {
         let (server, capture) = setup_tg_capture_mock(false).await;
         let api_base = unique_api_base(&server);
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
         let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
+        let router = make_router_with_store(store.clone());
         let http = reqwest::Client::new();
 
-        {
-            let mut router_guard = router.lock().await;
-            router_guard
-                .ensure_thread_entry(
-                    "bot1::main::42:thread-a",
-                    "telegram",
-                    "bot1",
-                    "42",
-                    Some("thread-a"),
+        let target_thread = "thread::external-recent-target";
+        store
+            .set(
+                target_thread,
+                serde_json::json!({
+                    "thread_id": target_thread,
+                    "label": "External target",
+                    "channel": "api",
+                    "account_id": "main"
+                }),
+            )
+            .await;
+        store
+            .set(
+                "thread::hidden-task",
+                serde_json::json!({
+                    "thread_id": "thread::hidden-task",
+                    "label": "Task must stay hidden",
+                    "thread_kind": "task"
+                }),
+            )
+            .await;
+        let mut entries = (1..=10)
+            .map(|index| {
+                recent_thread_entry(
+                    &format!("thread::external-{index}"),
+                    &format!("External row {index}"),
                 )
-                .await;
-            router_guard
-                .ensure_thread_entry(
-                    "bot1::main::42:thread-b",
-                    "telegram",
-                    "bot1",
-                    "42",
-                    Some("thread-b"),
-                )
-                .await;
-            let user_key = MessageRouter::build_binding_context_key("telegram", "bot1", "42");
-            router_guard.switch_to_thread(&user_key, "bot1::main::42:thread-b");
-        }
+            })
+            .collect::<Vec<_>>();
+        entries.push(recent_thread_entry(target_thread, "External target"));
+        router
+            .lock()
+            .await
+            .set_recent_thread_page_reader(Arc::new(TestRecentThreadPageReader::new(entries)));
 
-        let update = TgUpdateBuilder::dm(42, "/threads").build();
+        let update = TgUpdateBuilder::dm(42, "/threads")
+            .with_message_id(5101)
+            .build();
         dispatch_update(
             &http,
             "bot1",
@@ -5369,54 +5359,19 @@ mod e2e_tests {
         )
         .await;
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 0);
-        let text = send_bodies
+        let first_page = send_bodies
             .iter()
             .find_map(|body| {
                 let text = body_text(body);
-                text.contains("Your Threads:").then_some(text)
+                text.contains("Recent threads · page 1/2 (11 total)")
+                    .then_some(text)
             })
             .unwrap_or_default();
-        assert!(text.contains("Your Threads:"));
-        assert!(text.contains("thread-a"));
-        assert!(text.contains("thread-b ⬅️"));
-        assert!(text.contains("Use /newthread to create a thread."));
-    }
+        assert!(first_page.contains("External row 1"));
+        assert!(!first_page.contains("Task must stay hidden"));
 
-    #[tokio::test]
-    async fn test_e2e_telegram_sessionprev_rebuilds_history_after_restart() {
-        let server = setup_tg_mock().await;
-        let api_base = unique_api_base(&server);
-        let provider = Arc::new(ConfigurableTestProvider::echo());
-        let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
-        let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-
-        store
-            .set(
-                "bot1::main::42_a",
-                serde_json::json!({"from_id": "42", "updated_at": "2026-03-01T10:00:00Z"}),
-            )
-            .await;
-        store
-            .set(
-                "bot1::main::42_b",
-                serde_json::json!({"from_id": "42", "updated_at": "2026-03-01T11:00:00Z"}),
-            )
-            .await;
-        store
-            .set(
-                "bot1::main::42_c",
-                serde_json::json!({"from_id": "42", "updated_at": "2026-03-01T12:00:00Z"}),
-            )
-            .await;
-
-        let router = Arc::new(Mutex::new(MessageRouter::new(
-            store.clone(),
-            GaryxConfig::default(),
-        )));
-        let http = reqwest::Client::new();
-
-        let command = TgUpdateBuilder::dm(42, "/threadprev")
-            .with_message_id(3101)
+        let next = TgUpdateBuilder::dm(42, "/threads next")
+            .with_message_id(5102)
             .build();
         dispatch_update(
             &http,
@@ -5425,36 +5380,58 @@ mod e2e_tests {
             "garyx",
             999,
             &default_account(),
-            &command,
+            &next,
             &router,
             &bridge,
             &api_base,
         )
         .await;
-        let command_reqs = wait_for_request_quiet_window(
-            &server,
+        let send_bodies = wait_for_json_capture_quiet_window(
+            &capture.send_messages,
             std::time::Duration::from_millis(200),
             std::time::Duration::from_secs(5),
-            1,
+            2,
         )
         .await;
-
-        assert_eq!(provider.call_count.load(Ordering::Relaxed), 0);
-        let switched_notice = command_reqs.iter().find(|r| {
-            if !r.url.path().contains("sendMessage") {
-                return false;
-            }
-            let body: serde_json::Value =
-                serde_json::from_slice(&r.body).expect("sendMessage body json");
-            body_text(&body).contains("Switched to previous thread: bot1::main::42_b")
-        });
         assert!(
-            switched_notice.is_some(),
-            "command reply should report rebuilt previous thread"
+            send_bodies
+                .iter()
+                .map(body_text)
+                .any(|text| text.contains("11. External target"))
         );
 
-        let normal = TgUpdateBuilder::dm(42, "after restart command")
-            .with_message_id(3102)
+        let bind = TgUpdateBuilder::dm(42, "/bindthread 11")
+            .with_message_id(5103)
+            .build();
+        dispatch_update(
+            &http,
+            "bot1",
+            "fake-token",
+            "garyx",
+            999,
+            &default_account(),
+            &bind,
+            &router,
+            &bridge,
+            &api_base,
+        )
+        .await;
+        let send_bodies = wait_for_json_capture_quiet_window(
+            &capture.send_messages,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            3,
+        )
+        .await;
+        assert!(
+            send_bodies
+                .iter()
+                .map(body_text)
+                .any(|text| text.contains("Switched to thread: External target"))
+        );
+
+        let normal = TgUpdateBuilder::dm(42, "continue on external target")
+            .with_message_id(5104)
             .build();
         dispatch_update(
             &http,
@@ -5470,10 +5447,8 @@ mod e2e_tests {
         )
         .await;
         wait_for_counter_at_least(&provider.call_count, 1).await;
-
-        assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
         let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].thread_id, "bot1::main::42_b");
+        assert_eq!(calls[0].thread_id, target_thread);
     }
 
     #[tokio::test]

@@ -38,6 +38,25 @@ endpoint reads only the SQLite projection and returns pagination metadata
 (`total`, `offset`, and `has_more`) alongside the requested page. It must not
 rescan router thread files on the read path.
 
+The optional `tasks` query parameter selects the filtering domain before
+pagination:
+
+- `tasks=include` includes task and non-task threads and is the default when
+  the parameter is omitted.
+- `tasks=exclude` returns only non-task threads.
+- `tasks=only` returns only task threads.
+
+Unknown values return HTTP 400. `total`, `offset`, and `has_more` always
+describe the selected domain. Existing clients that omit `tasks` retain the
+same member set, ordering, pagination, envelope, and row schema.
+
+Channel bots use this same projection for thread management. The
+`/threads [page|next|prev]` command browses recent non-task threads in pages of
+10, and `/bindthread <n>` binds an absolute row number from pages that endpoint
+has already seen. `/newthread` creates a fresh thread. The former
+`/threadprev` and `/threadnext` commands are hidden compatibility commands that
+now point users to the browse-then-bind flow.
+
 ## How a chat becomes a thread
 
 When a message arrives on a channel, Garyx looks up the right thread by:

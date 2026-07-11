@@ -8,7 +8,7 @@ command list.
 Garyx currently has exactly two interaction command kinds:
 
 - `channel_native`: built-in channel-only management commands, such as
-  `/threads`, `/newthread`, `/threadprev`, and `/threadnext`.
+  `/newthread`, `/threads [page|next|prev]`, and `/bindthread <n>`.
 - `shortcut`: global prompt shortcuts configured by the user, such as
   `/summary -> "Summarize the active thread"`.
 
@@ -40,16 +40,17 @@ Response shape:
   "revision": "v1:...",
   "commands": [
     {
-      "id": "builtin.router.newthread",
-      "name": "newthread",
-      "slash": "/newthread",
+      "id": "builtin.router.threads",
+      "name": "threads",
+      "slash": "/threads",
       "aliases": [],
-      "description": "Start a new thread",
+      "description": "Browse recent threads",
       "category": "Thread",
       "kind": "channel_native",
       "source": "builtin",
       "surfaces": ["plugin", "telegram"],
-      "dispatch": { "type": "router_native", "key": "router.native.newthread" },
+      "dispatch": { "type": "router_native", "key": "router.native.threads" },
+      "args_hint": "[page|next|prev]",
       "visibility": "visible",
       "warnings": []
     }
@@ -67,6 +68,27 @@ Response shape:
 - Telegram requests `surface=telegram&channel=telegram` and receives both
   `channel_native` and `shortcut` commands.
 - Shortcuts are globally visible wherever shortcut execution is supported.
+
+The visible thread-management menu is `newthread`, `threads`, and
+`bindthread`. `threadprev` and `threadnext` remain reserved and recognizable
+for one compatibility release, but are hidden from normal command lists and
+Telegram menus. They return migration guidance instead of switching threads:
+use `/threads prev|next`, then `/bindthread <n>`. Callers requesting
+`include_hidden=true` may inspect those compatibility entries.
+
+## Thread Command Semantics
+
+- `/threads`, `/threads <page>`, `/threads next`, and `/threads prev` browse
+  the global recent non-task thread projection in pages of 10. Addressed forms
+  such as `/threads@bot_name 2` preserve the same arguments.
+- `/bindthread <n>` switches to an absolute row number from pages successfully
+  shown to that endpoint. A canonical `thread::<id>` may also be supplied for
+  compatibility; either form is revalidated before binding.
+- `/newthread` creates and binds a fresh thread, then clears the endpoint's
+  accumulated recent-list snapshot.
+
+`args_hint` is `[page|next|prev]` for `threads` and `<n>` for `bindthread`.
+Invalid arguments are handled locally and never become model prompts.
 
 ## Plugin Contract
 
@@ -117,4 +139,6 @@ Gateway core does not expose a manual Telegram command-sync endpoint.
 - Payload uses `revision`.
 - Plugin RPC uses `commands/list` and returns the command-list shape.
 - Telegram sync includes both `channel_native` and `shortcut` commands.
+- Telegram's visible native menu contains `newthread`, `threads`, and
+  `bindthread`; deprecated navigation commands remain hidden.
 - Mac app settings manage only prompt shortcuts.

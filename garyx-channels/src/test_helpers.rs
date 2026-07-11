@@ -1,6 +1,7 @@
 //! Shared test utilities for channel E2E tests.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -12,11 +13,215 @@ use garyx_models::provider::{
     PromptAttachment, PromptAttachmentKind, ProviderRunOptions, ProviderRunResult, ProviderType,
     StreamEvent, attachments_from_metadata,
 };
+use garyx_router::recent_threads::{
+    RecentThreadFilter, RecentThreadListEntry, RecentThreadPage, RecentThreadPageReader,
+};
 use garyx_router::{
-    InMemoryThreadStore, MessageRouter, ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
+    ChannelBinding, EndpointBindResult, EndpointBindingMutationError, EndpointBindingMutator,
+    EndpointBindingOwner, EndpointDetachResult, InMemoryThreadStore, MessageRouter,
+    ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore, bindings_from_value,
+    remove_binding, upsert_binding, upsert_known_channel_endpoint,
+    validate_thread_accepts_bot_binding,
 };
 use serde_json::Value;
 use tokio::sync::{Mutex, broadcast};
+
+pub struct TestEndpointBindingMutator {
+    store: Arc<dyn ThreadStore>,
+    owners: Mutex<HashMap<String, EndpointBindingOwner>>,
+}
+
+impl TestEndpointBindingMutator {
+    fn new(store: Arc<dyn ThreadStore>) -> Self {
+        Self {
+            store,
+            owners: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl EndpointBindingMutator for TestEndpointBindingMutator {
+    async fn binding_for_endpoint(
+        &self,
+        endpoint_key: &str,
+    ) -> Result<Option<EndpointBindingOwner>, EndpointBindingMutationError> {
+        Ok(self.owners.lock().await.get(endpoint_key).cloned())
+    }
+
+    async fn bind_endpoint(
+        &self,
+        target_thread_id: &str,
+        binding: ChannelBinding,
+    ) -> Result<EndpointBindResult, EndpointBindingMutationError> {
+        let mut owners = self.owners.lock().await;
+        let Some(mut target) = self.store.get(target_thread_id).await else {
+            return Err(EndpointBindingMutationError::TargetNotFound(
+                target_thread_id.to_owned(),
+            ));
+        };
+        validate_thread_accepts_bot_binding(
+            target_thread_id,
+            &target,
+            &binding.channel,
+            &binding.account_id,
+        )
+        .map_err(EndpointBindingMutationError::Incompatible)?;
+
+        let endpoint_key = binding.endpoint_key();
+        let previous_owner = owners.get(&endpoint_key).cloned();
+        let previous_thread_id = previous_owner
+            .as_ref()
+            .map(|owner| owner.thread_id.as_str())
+            .filter(|owner| *owner != target_thread_id)
+            .map(ToOwned::to_owned);
+        if let Some(previous_thread_id) = previous_thread_id.as_deref() {
+            let Some(mut previous) = self.store.get(previous_thread_id).await else {
+                return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
+                    previous_thread_id.to_owned(),
+                ));
+            };
+            if !remove_binding(&mut previous, &endpoint_key) {
+                return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
+                    previous_thread_id.to_owned(),
+                ));
+            }
+            self.store.set(previous_thread_id, previous).await;
+        }
+
+        let target_changed = bindings_from_value(&target)
+            .into_iter()
+            .find(|candidate| candidate.endpoint_key() == endpoint_key)
+            .as_ref()
+            != Some(&binding);
+        if target_changed || previous_thread_id.is_some() {
+            upsert_binding(&mut target, binding.clone());
+            self.store.set(target_thread_id, target).await;
+        }
+        upsert_known_channel_endpoint(&self.store, &binding)
+            .await
+            .map_err(|message| EndpointBindingMutationError::WriteFailed {
+                thread_id: garyx_router::KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+                message,
+            })?;
+        owners.insert(
+            endpoint_key,
+            EndpointBindingOwner {
+                thread_id: target_thread_id.to_owned(),
+                binding: binding.clone(),
+            },
+        );
+        Ok(EndpointBindResult {
+            thread_id: target_thread_id.to_owned(),
+            previous_thread_id,
+            binding,
+            changed: target_changed
+                || previous_owner.is_some_and(|owner| owner.thread_id != target_thread_id),
+        })
+    }
+
+    async fn detach_endpoint(
+        &self,
+        endpoint_key: &str,
+    ) -> Result<EndpointDetachResult, EndpointBindingMutationError> {
+        let mut owners = self.owners.lock().await;
+        let Some(owner) = owners.remove(endpoint_key) else {
+            return Ok(EndpointDetachResult {
+                previous_thread_id: None,
+                binding: None,
+                changed: false,
+            });
+        };
+        let Some(mut previous) = self.store.get(&owner.thread_id).await else {
+            return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
+                owner.thread_id,
+            ));
+        };
+        if !remove_binding(&mut previous, endpoint_key) {
+            return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
+                owner.thread_id,
+            ));
+        }
+        self.store.set(&owner.thread_id, previous).await;
+        upsert_known_channel_endpoint(&self.store, &owner.binding)
+            .await
+            .map_err(|message| EndpointBindingMutationError::WriteFailed {
+                thread_id: garyx_router::KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+                message,
+            })?;
+        Ok(EndpointDetachResult {
+            previous_thread_id: Some(owner.thread_id),
+            binding: Some(owner.binding),
+            changed: true,
+        })
+    }
+}
+
+pub struct TestRecentThreadPageReader {
+    entries: Mutex<Vec<RecentThreadListEntry>>,
+}
+
+impl TestRecentThreadPageReader {
+    pub fn new(entries: Vec<RecentThreadListEntry>) -> Self {
+        Self {
+            entries: Mutex::new(entries),
+        }
+    }
+
+    pub async fn replace_entries(&self, entries: Vec<RecentThreadListEntry>) {
+        *self.entries.lock().await = entries;
+    }
+}
+
+#[async_trait]
+impl RecentThreadPageReader for TestRecentThreadPageReader {
+    async fn page(
+        &self,
+        filter: RecentThreadFilter,
+        limit: usize,
+        offset: usize,
+    ) -> Result<RecentThreadPage, String> {
+        assert_eq!(filter, RecentThreadFilter::Exclude);
+        let entries = self.entries.lock().await;
+        let total = entries.len();
+        let offset = offset.min(total);
+        let page_entries = entries
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(RecentThreadPage {
+            has_more: offset.saturating_add(page_entries.len()) < total,
+            entries: page_entries,
+            total,
+            offset,
+        })
+    }
+
+    async fn contains_selectable_thread(&self, thread_id: &str) -> Result<bool, String> {
+        Ok(self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .any(|entry| entry.thread_id == thread_id))
+    }
+}
+
+pub fn recent_thread_entry(thread_id: &str, title: &str) -> RecentThreadListEntry {
+    RecentThreadListEntry {
+        thread_id: thread_id.to_owned(),
+        title: title.to_owned(),
+        last_message_preview: String::new(),
+        last_active_at: "2026-07-11T08:00:00Z".to_owned(),
+    }
+}
+
+pub fn configure_test_router(router: &mut MessageRouter, store: Arc<dyn ThreadStore>) {
+    router.set_endpoint_binding_mutator(Arc::new(TestEndpointBindingMutator::new(store)));
+    router.set_recent_thread_page_reader(Arc::new(TestRecentThreadPageReader::new(Vec::new())));
+}
 
 // ---------------------------------------------------------------------------
 // ConfigurableTestProvider
@@ -169,9 +374,11 @@ impl AgentLoopProvider for ConfigurableTestProvider {
 
 /// Create a router with in-memory thread store.
 pub fn make_router() -> Arc<Mutex<MessageRouter>> {
-    let store = Arc::new(InMemoryThreadStore::new());
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let config = GaryxConfig::default();
-    Arc::new(Mutex::new(MessageRouter::new(store, config)))
+    let mut router = MessageRouter::new(store.clone(), config);
+    configure_test_router(&mut router, store);
+    Arc::new(Mutex::new(router))
 }
 
 /// Create a bridge with a given provider registered as default.
