@@ -67,13 +67,6 @@ pub struct InboundResult {
     pub dispatch_outcome: Option<AgentDispatchOutcome>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadListEntry {
-    pub thread_id: String,
-    pub label: Option<String>,
-    pub updated_at: Option<String>,
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct RouteContext<'a> {
     pub(crate) channel: &'a str,

@@ -24,8 +24,7 @@ mod threading;
 pub use command_catalog::{command_catalog_for_config, reserved_command_names};
 pub use contracts::ThreadCreator;
 pub use contracts::{
-    AgentDispatcher, InboundRequest, InboundResult, InboundSink, ThreadListEntry,
-    ThreadMessageRequest,
+    AgentDispatcher, InboundRequest, InboundResult, InboundSink, ThreadMessageRequest,
 };
 pub(crate) use contracts::{DispatchMetadataContext, NavigationContext, RouteContext};
 pub use inbound::is_native_command_text;
@@ -33,8 +32,6 @@ pub use inbound::is_native_command_text;
 #[cfg(test)]
 mod tests;
 
-/// Maximum number of threads kept in per-user navigation history.
-const MAX_HISTORY: usize = 20;
 /// Maximum number of outbound message records persisted per thread.
 const MAX_OUTBOUND_MESSAGE_IDS: usize = 100;
 pub const NATIVE_COMMAND_TEXT_METADATA_KEY: &str = "native_command_text";

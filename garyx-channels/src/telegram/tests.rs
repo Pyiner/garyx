@@ -794,36 +794,6 @@ mod dispatch_tests {
     }
 
     #[tokio::test]
-    async fn test_command_session_navigation() {
-        let router = make_router();
-
-        // Set up thread history
-        {
-            let mut r = router.lock().await;
-            let user_key = MessageRouter::build_binding_context_key("telegram", "bot1", "42");
-            r.switch_to_thread(&user_key, "session_a");
-            r.switch_to_thread(&user_key, "session_b");
-            r.switch_to_thread(&user_key, "session_c");
-        }
-
-        // Navigate backwards (/threadprev)
-        {
-            let mut r = router.lock().await;
-            let user_key = MessageRouter::build_binding_context_key("telegram", "bot1", "42");
-            let prev = r.navigate_thread(&user_key, -1);
-            assert_eq!(prev.as_deref(), Some("session_b"));
-        }
-
-        // Navigate forwards (/threadnext)
-        {
-            let mut r = router.lock().await;
-            let user_key = MessageRouter::build_binding_context_key("telegram", "bot1", "42");
-            let next = r.navigate_thread(&user_key, 1);
-            assert_eq!(next.as_deref(), Some("session_c"));
-        }
-    }
-
-    #[tokio::test]
     async fn test_bridge_dispatch() {
         let router = make_router();
         let bridge = make_bridge().await;

@@ -666,52 +666,6 @@ pub async fn delete_thread_record(
     Ok(())
 }
 
-pub async fn bind_endpoint_to_thread(
-    store: &Arc<dyn ThreadStore>,
-    thread_id: &str,
-    binding: ChannelBinding,
-) -> Result<Option<String>, String> {
-    let Some(mut target) = store.get(thread_id).await else {
-        return Err(format!("thread not found: {thread_id}"));
-    };
-
-    let endpoint_key = binding.endpoint_key();
-    let keys = store.list_keys(None).await;
-    let mut previous_thread: Option<(String, Option<String>)> = None;
-
-    for key in keys {
-        if !is_thread_key(&key) || key == thread_id {
-            continue;
-        }
-        let Some(mut value) = store.get(&key).await else {
-            continue;
-        };
-        let updated_at = value_updated_at(&value);
-        if remove_binding(&mut value, &endpoint_key) {
-            let should_replace =
-                previous_thread
-                    .as_ref()
-                    .is_none_or(|(current_key, current_updated_at)| {
-                        is_preferred_thread_binding(
-                            &key,
-                            updated_at.as_deref(),
-                            current_key,
-                            current_updated_at.as_deref(),
-                        )
-                    });
-            if should_replace {
-                previous_thread = Some((key.clone(), updated_at));
-            }
-            store.set(&key, value).await;
-        }
-    }
-
-    upsert_known_channel_endpoint(store, &binding).await?;
-    upsert_binding(&mut target, binding);
-    store.set(thread_id, target).await;
-    Ok(previous_thread.map(|(key, _)| key))
-}
-
 pub async fn sync_endpoint_delivery_timestamp(
     store: &Arc<dyn ThreadStore>,
     channel: &str,
@@ -763,54 +717,6 @@ pub async fn sync_endpoint_delivery_timestamp(
     }
 
     Ok(())
-}
-
-pub async fn detach_endpoint_from_thread(
-    store: &Arc<dyn ThreadStore>,
-    endpoint_key_to_remove: &str,
-) -> Result<Option<String>, String> {
-    let keys = store.list_keys(None).await;
-    let mut previous_thread: Option<(String, Option<String>)> = None;
-    let mut known_binding: Option<ChannelBinding> = None;
-
-    for key in keys {
-        if !is_thread_key(&key) {
-            continue;
-        }
-        let Some(mut value) = store.get(&key).await else {
-            continue;
-        };
-        let updated_at = value_updated_at(&value);
-        let binding = bindings_from_value(&value)
-            .into_iter()
-            .find(|binding| binding.endpoint_key() == endpoint_key_to_remove);
-        if remove_binding(&mut value, endpoint_key_to_remove) {
-            if known_binding.is_none() {
-                known_binding = binding.clone();
-            }
-            let should_replace =
-                previous_thread
-                    .as_ref()
-                    .is_none_or(|(current_key, current_updated_at)| {
-                        is_preferred_thread_binding(
-                            &key,
-                            updated_at.as_deref(),
-                            current_key,
-                            current_updated_at.as_deref(),
-                        )
-                    });
-            if should_replace {
-                previous_thread = Some((key.clone(), updated_at));
-            }
-            store.set(&key, value).await;
-        }
-    }
-
-    if let Some(binding) = known_binding.as_ref() {
-        upsert_known_channel_endpoint(store, binding).await?;
-    }
-
-    Ok(previous_thread.map(|(key, _)| key))
 }
 
 /// Endpoints recorded in the channel binding registry, without touching any

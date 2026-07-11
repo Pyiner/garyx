@@ -5923,18 +5923,6 @@ async fn delete_thread_clears_switched_thread_references() {
         .threads
         .thread_store
         .set(
-            "thread::older",
-            serde_json::json!({
-                "thread_id": "thread::older",
-                "thread_id": "thread::older",
-                "label": "Older"
-            }),
-        )
-        .await;
-    state
-        .threads
-        .thread_store
-        .set(
             thread_id,
             serde_json::json!({
                 "thread_id": thread_id,
@@ -5946,7 +5934,6 @@ async fn delete_thread_clears_switched_thread_references() {
     {
         let mut router = state.threads.router.lock().await;
         let user_key = MessageRouter::build_account_user_key("telegram", "main", "u1", false, None);
-        router.switch_to_thread(&user_key, "thread::older");
         router.switch_to_thread(&user_key, thread_id);
         assert_eq!(
             router.get_current_thread_id_for_account("telegram", "main", "u1", false, None),
@@ -5966,7 +5953,7 @@ async fn delete_thread_clears_switched_thread_references() {
     let router = state.threads.router.lock().await;
     assert_eq!(
         router.get_current_thread_id_for_account("telegram", "main", "u1", false, None),
-        Some("thread::older")
+        None
     );
 }
 

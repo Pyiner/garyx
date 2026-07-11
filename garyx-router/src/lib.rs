@@ -21,7 +21,7 @@ pub mod inbound {
 pub mod routing {
     pub use crate::router::{
         AgentDispatcher, InboundRequest, InboundResult, InboundSink, MessageRouter, ThreadCreator,
-        ThreadListEntry, ThreadMessageRequest,
+        ThreadMessageRequest,
     };
 }
 
@@ -48,16 +48,15 @@ pub mod threading {
     pub use crate::threads::{
         ChannelBinding, KNOWN_CHANNEL_ENDPOINTS_KEY, KnownChannelEndpoint, ThreadEnsureOptions,
         ThreadIndexStats,
-        agent_id_from_value, bind_endpoint_to_thread, bindings_from_value, create_thread_record,
+        agent_id_from_value, bindings_from_value, create_thread_record,
         default_agent_for_channel_account, default_workspace_for_channel_account,
         default_workspace_mode_for_channel_account, delete_thread_record,
-        detach_endpoint_from_thread, endpoint_key, is_default_thread_list_hidden,
-        is_hidden_thread_value, is_thread_key, label_from_value, list_known_channel_endpoints,
-        list_registry_channel_endpoints, new_thread_key, normalize_workspace_dir,
-        remove_binding, thread_kind_from_value, thread_metadata_from_value, update_thread_record,
-        upsert_binding, upsert_known_channel_endpoint, upsert_thread_fields,
-        validate_thread_accepts_bot_binding, workspace_dir_from_value,
-        worktree_base_dir_for_config,
+        endpoint_key, is_default_thread_list_hidden, is_hidden_thread_value, is_thread_key,
+        label_from_value, list_known_channel_endpoints, list_registry_channel_endpoints,
+        new_thread_key, normalize_workspace_dir, remove_binding, thread_kind_from_value,
+        thread_metadata_from_value, update_thread_record, upsert_binding,
+        upsert_known_channel_endpoint, upsert_thread_fields, validate_thread_accepts_bot_binding,
+        workspace_dir_from_value, worktree_base_dir_for_config,
     };
 }
 
@@ -94,15 +93,14 @@ pub use thread_history::{
 pub use threads::{
     ChannelBinding, KNOWN_CHANNEL_ENDPOINTS_KEY, KnownChannelEndpoint, ThreadEnsureOptions,
     ThreadIndexStats,
-    agent_id_from_value, bind_endpoint_to_thread, bindings_from_value, create_thread_record,
+    agent_id_from_value, bindings_from_value, create_thread_record,
     default_agent_for_channel_account, default_workspace_for_channel_account,
-    default_workspace_mode_for_channel_account, delete_thread_record, detach_endpoint_from_thread,
-    endpoint_key, is_default_thread_list_hidden, is_hidden_thread_value, is_thread_key,
-    label_from_value, list_known_channel_endpoints, list_registry_channel_endpoints,
-    new_thread_key, normalize_workspace_dir, remove_binding, thread_kind_from_value,
-    thread_metadata_from_value, update_thread_record, upsert_binding,
-    upsert_known_channel_endpoint, upsert_thread_fields, validate_thread_accepts_bot_binding,
-    workspace_dir_from_value, worktree_base_dir_for_config,
+    default_workspace_mode_for_channel_account, delete_thread_record, endpoint_key,
+    is_default_thread_list_hidden, is_hidden_thread_value, is_thread_key, label_from_value,
+    list_known_channel_endpoints, list_registry_channel_endpoints, new_thread_key,
+    normalize_workspace_dir, remove_binding, thread_kind_from_value, thread_metadata_from_value,
+    update_thread_record, upsert_binding, upsert_known_channel_endpoint, upsert_thread_fields,
+    validate_thread_accepts_bot_binding, workspace_dir_from_value, worktree_base_dir_for_config,
 };
 pub use worktree::{
     PreparedWorktree, WorkspaceGitStatus, WorkspaceMode, prepare_thread_worktree,

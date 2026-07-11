@@ -2,7 +2,7 @@ use super::*;
 use crate::threads::is_thread_key;
 use crate::{
     ChannelBinding, ThreadCreator, ThreadEnsureOptions, ThreadStore, WorkspaceMode,
-    bind_endpoint_to_thread, bindings_from_value, create_thread_record,
+    bindings_from_value, create_thread_record,
 };
 
 struct FallbackOnlyThreadCreator;
@@ -2020,25 +2020,30 @@ async fn test_route_and_dispatch_reply_routing_falls_back_to_rebound_thread_when
     )
     .await
     .expect("thread should be created");
-    bind_endpoint_to_thread(
-        &store_dyn,
-        &new_thread,
-        ChannelBinding {
-            channel: "telegram".to_owned(),
-            account_id: "bot1".to_owned(),
-            binding_key: "user42".to_owned(),
-            chat_id: "user42".to_owned(),
-            delivery_target_type: "chat_id".to_owned(),
-            delivery_target_id: "user42".to_owned(),
-            display_label: "user42".to_owned(),
-            last_inbound_at: None,
-            last_delivery_at: None,
-        },
-    )
-    .await
-    .expect("bind should succeed");
+    let (mut router, mutator) = test_router(store.clone(), GaryxConfig::default());
+    let old_binding = bindings_from_value(&store.get("thread::old").await.unwrap())
+        .into_iter()
+        .next()
+        .unwrap();
+    mutator.seed_owner("thread::old", old_binding).await;
+    router
+        .bind_endpoint_runtime(
+            &new_thread,
+            ChannelBinding {
+                channel: "telegram".to_owned(),
+                account_id: "bot1".to_owned(),
+                binding_key: "user42".to_owned(),
+                chat_id: "user42".to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: "user42".to_owned(),
+                display_label: "user42".to_owned(),
+                last_inbound_at: None,
+                last_delivery_at: None,
+            },
+        )
+        .await
+        .expect("bind should succeed");
 
-    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
     router.record_outbound_message_for_chat(
         "thread::old",
         "telegram",
@@ -2086,7 +2091,7 @@ async fn test_route_and_dispatch_reply_routing_falls_back_to_rebound_thread_when
 async fn test_route_and_dispatch_reply_routing_falls_back_after_real_initial_dispatch_and_delete() {
     let store = Arc::new(InMemoryThreadStore::new());
     let store_dyn: Arc<dyn crate::ThreadStore> = store.clone();
-    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    let (mut router, _) = test_router(store.clone(), GaryxConfig::default());
     let dispatcher = MockDispatcher::new();
 
     let initial = InboundRequest {
@@ -2125,23 +2130,23 @@ async fn test_route_and_dispatch_reply_routing_falls_back_after_real_initial_dis
     )
     .await
     .expect("thread should be created");
-    bind_endpoint_to_thread(
-        &store_dyn,
-        &new_thread,
-        ChannelBinding {
-            channel: "telegram".to_owned(),
-            account_id: "bot1".to_owned(),
-            binding_key: "user42".to_owned(),
-            chat_id: "user42".to_owned(),
-            delivery_target_type: "chat_id".to_owned(),
-            delivery_target_id: "user42".to_owned(),
-            display_label: "user42".to_owned(),
-            last_inbound_at: None,
-            last_delivery_at: None,
-        },
-    )
-    .await
-    .expect("bind should succeed");
+    router
+        .bind_endpoint_runtime(
+            &new_thread,
+            ChannelBinding {
+                channel: "telegram".to_owned(),
+                account_id: "bot1".to_owned(),
+                binding_key: "user42".to_owned(),
+                chat_id: "user42".to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: "user42".to_owned(),
+                display_label: "user42".to_owned(),
+                last_inbound_at: None,
+                last_delivery_at: None,
+            },
+        )
+        .await
+        .expect("bind should succeed");
 
     assert!(store.delete(&initial_result.thread_id).await);
     router.rebuild_thread_indexes().await;

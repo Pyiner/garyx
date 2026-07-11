@@ -132,39 +132,6 @@ async fn list_known_channel_endpoints_orders_by_endpoint_key_not_activity() {
 }
 
 #[tokio::test]
-async fn detached_endpoint_remains_known_without_thread_binding() {
-    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
-    store
-        .set(
-            "thread::123",
-            json!({
-                "thread_id": "thread::123",
-                "label": "Alice Support",
-                "channel_bindings": [{
-                    "channel": "telegram",
-                    "account_id": "main",
-                    "peer_id": "12345678",
-                    "chat_id": "12345678",
-                    "display_label": "Alice"
-                }]
-            }),
-        )
-        .await;
-
-    let detached = detach_endpoint_from_thread(&store, "telegram::main::12345678")
-        .await
-        .unwrap();
-    assert_eq!(detached.as_deref(), Some("thread::123"));
-
-    let endpoints = list_known_channel_endpoints(&store).await;
-    assert_eq!(endpoints.len(), 1);
-    let endpoint = &endpoints[0];
-    assert_eq!(endpoint.endpoint_key, "telegram::main::12345678");
-    assert!(endpoint.thread_id.is_none());
-    assert_eq!(endpoint.display_label, "Alice");
-}
-
-#[tokio::test]
 async fn list_known_channel_endpoints_prefers_latest_thread_binding_when_duplicates_exist() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     store
@@ -212,42 +179,6 @@ async fn list_known_channel_endpoints_prefers_latest_thread_binding_when_duplica
         endpoint.thread_updated_at.as_deref(),
         Some("2026-03-07T12:00:00Z")
     );
-}
-
-#[tokio::test]
-async fn detach_endpoint_from_thread_clears_all_duplicate_bindings() {
-    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
-    for (thread_id, updated_at) in [
-        ("thread::one", "2026-03-07T10:00:00Z"),
-        ("thread::two", "2026-03-07T12:00:00Z"),
-    ] {
-        store
-            .set(
-                thread_id,
-                json!({
-                    "thread_id": thread_id,
-                    "updated_at": updated_at,
-                    "channel_bindings": [{
-                        "channel": "telegram",
-                        "account_id": "main",
-                        "peer_id": "12345678",
-                        "chat_id": "12345678",
-                        "display_label": "Alice"
-                    }]
-                }),
-            )
-            .await;
-    }
-
-    let detached = detach_endpoint_from_thread(&store, "telegram::main::12345678")
-        .await
-        .unwrap();
-    assert_eq!(detached.as_deref(), Some("thread::two"));
-
-    for thread_id in ["thread::one", "thread::two"] {
-        let value = store.get(thread_id).await.unwrap();
-        assert_eq!(bindings_from_value(&value).len(), 0);
-    }
 }
 
 #[tokio::test]
