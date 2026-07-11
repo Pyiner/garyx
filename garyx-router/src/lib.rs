@@ -2,6 +2,7 @@ pub mod file_store;
 pub mod memory_store;
 pub mod message_ledger;
 pub mod message_routing;
+pub mod recent_threads;
 pub mod router;
 pub mod runtime_context;
 pub mod store;

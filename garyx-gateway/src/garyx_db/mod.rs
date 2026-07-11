@@ -743,6 +743,24 @@ impl GaryxDbService {
         self.list_recent_threads_page_inner(filter, limit, requested_offset, || Ok(()))
     }
 
+    pub(crate) fn contains_selectable_recent_thread(
+        &self,
+        thread_id: &str,
+    ) -> GaryxDbResult<bool> {
+        let thread_id = normalize_thread_id(thread_id)?;
+        let conn = self.read_conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT 1
+                   FROM recent_threads
+                  WHERE thread_id = ?1 AND thread_type <> 'task'",
+                params![thread_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     fn list_recent_threads_page_inner<F>(
         &self,
         filter: RecentThreadTaskFilter,

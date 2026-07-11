@@ -27,6 +27,7 @@ mod provider_auth;
 mod provider_models;
 mod provider_session_locator;
 mod quota_resend;
+mod recent_thread_reader;
 mod recent_thread_projection;
 pub mod restart;
 pub mod restart_wake;

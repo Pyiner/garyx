@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::message_ledger::MessageLedgerStore;
 pub(crate) use crate::message_routing::MessageRoutingIndex;
+use crate::recent_threads::RecentThreadPageReader;
 use crate::store::ThreadStore;
 use crate::thread_history::ThreadHistoryRepository;
 use garyx_models::config::GaryxConfig;
@@ -59,6 +60,7 @@ pub struct MessageRouter {
     config: GaryxConfig,
     default_agent: String,
     thread_creator: Option<Arc<dyn ThreadCreator>>,
+    recent_thread_page_reader: Option<Arc<dyn RecentThreadPageReader>>,
     inbound_sink: Option<Arc<dyn InboundSink>>,
     thread_nav: threading::ThreadNavigationState,
     reply_routing: message::ReplyRoutingState,
@@ -82,6 +84,7 @@ impl MessageRouter {
             config,
             default_agent,
             thread_creator: None,
+            recent_thread_page_reader: None,
             inbound_sink: None,
             thread_nav: threading::ThreadNavigationState::default(),
             reply_routing: message::ReplyRoutingState::default(),
@@ -93,6 +96,14 @@ impl MessageRouter {
 
     pub fn set_thread_creator(&mut self, creator: Arc<dyn ThreadCreator>) {
         self.thread_creator = Some(creator);
+    }
+
+    pub fn set_recent_thread_page_reader(&mut self, reader: Arc<dyn RecentThreadPageReader>) {
+        self.recent_thread_page_reader = Some(reader);
+    }
+
+    pub fn recent_thread_page_reader(&self) -> Option<Arc<dyn RecentThreadPageReader>> {
+        self.recent_thread_page_reader.clone()
     }
 
     pub fn set_inbound_sink(&mut self, sink: Arc<dyn InboundSink>) {

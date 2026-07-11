@@ -31,6 +31,7 @@ use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::provider_auth::ClaudeAuthSessionStore;
+use crate::recent_thread_reader::SqlRecentThreadPageReader;
 use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe};
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
@@ -344,6 +345,9 @@ impl AppStateBuilder {
         );
         let thread_history = Arc::new(thread_history);
         let mut router = MessageRouter::new(thread_store.clone(), self.config.clone());
+        router.set_recent_thread_page_reader(Arc::new(SqlRecentThreadPageReader::new(
+            self.garyx_db.clone(),
+        )));
         let thread_creator: Arc<dyn ThreadCreator> = Arc::new(GatewayThreadCreator::new(
             self.bridge.clone(),
             self.custom_agents.clone(),
