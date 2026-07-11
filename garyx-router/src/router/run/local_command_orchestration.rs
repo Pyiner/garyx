@@ -25,6 +25,7 @@ impl MessageRouter {
                     &request.from_id,
                     request.is_group,
                     thread_binding_key,
+                    &request.extra_metadata,
                     thread_command,
                 )
                 .await?

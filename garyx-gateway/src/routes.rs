@@ -24,8 +24,8 @@ use garyx_models::provider::{
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::{
     ChannelBinding, KnownChannelEndpoint, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadEnsureOptions,
-    ThreadTranscriptRecord, WorkspaceMode, bindings_from_value, detach_endpoint_from_thread,
-    history_message_count, is_thread_key, update_thread_record, workspace_dir_from_value,
+    ThreadTranscriptRecord, WorkspaceMode, bindings_from_value, history_message_count,
+    is_thread_key, update_thread_record, workspace_dir_from_value,
     workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
@@ -1218,17 +1218,6 @@ fn binding_from_known_endpoint(endpoint: &KnownChannelEndpoint) -> ChannelBindin
     }
 }
 
-async fn existing_thread_binding_for_endpoint_key(
-    state: &Arc<AppState>,
-    thread_id: &str,
-    requested_endpoint_key: &str,
-) -> Option<ChannelBinding> {
-    let thread_data = state.threads.thread_store.get(thread_id).await?;
-    bindings_from_value(&thread_data)
-        .into_iter()
-        .find(|binding| endpoint_key_matches(&binding.endpoint_key(), requested_endpoint_key))
-}
-
 pub(crate) async fn bind_channel_endpoint_key_to_thread(
     state: &Arc<AppState>,
     endpoint_key: &str,
@@ -1242,17 +1231,6 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
         ));
     };
 
-    if let Some(binding) =
-        existing_thread_binding_for_endpoint_key(state, &thread_id, &requested_endpoint_key).await
-    {
-        return Ok(ChannelEndpointBindResult {
-            thread_id,
-            previous_thread_id: None,
-            endpoint_key: requested_endpoint_key,
-            binding,
-        });
-    }
-
     let known_endpoint = state
         .cached_channel_endpoints()
         .await
@@ -1260,16 +1238,7 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
         .find(|endpoint| endpoint_key_matches(&endpoint.endpoint_key, &requested_endpoint_key));
 
     let binding = if let Some(endpoint) = known_endpoint.as_ref() {
-        let binding = binding_from_known_endpoint(endpoint);
-        if endpoint.thread_id.as_deref() == Some(thread_id.as_str()) {
-            return Ok(ChannelEndpointBindResult {
-                thread_id,
-                previous_thread_id: None,
-                endpoint_key: requested_endpoint_key,
-                binding,
-            });
-        }
-        binding
+        binding_from_known_endpoint(endpoint)
     } else if let Some(binding) = resolve_main_endpoint_by_key(state, &requested_endpoint_key)
         .await
         .map(|endpoint| endpoint.to_binding())
@@ -1290,15 +1259,15 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
     };
 
     match bind_result {
-        Ok(previous_thread_id) => {
+        Ok(mutation) => {
             // bind_endpoint_runtime upserts the endpoint index entry itself;
             // no full index rebuild is needed here.
             state.invalidate_gateway_sync_caches().await;
             Ok(ChannelEndpointBindResult {
                 thread_id,
-                previous_thread_id,
+                previous_thread_id: mutation.previous_thread_id,
                 endpoint_key: requested_endpoint_key,
-                binding,
+                binding: mutation.binding,
             })
         }
         Err(error) if error.contains("thread not found") => Err(ChannelEndpointMutationError::new(
@@ -1317,59 +1286,46 @@ pub(crate) async fn detach_channel_endpoint_key(
     endpoint_key: &str,
 ) -> Result<ChannelEndpointDetachResult, ChannelEndpointMutationError> {
     let requested_endpoint_key = normalize_endpoint_lookup_key(endpoint_key);
-    match detach_endpoint_from_thread(&state.threads.thread_store, &requested_endpoint_key).await {
-        Ok(previous_thread_id) => {
+    let mutation = {
+        let mut router = state.threads.router.lock().await;
+        router
+            .detach_endpoint_runtime(&requested_endpoint_key)
+            .await
+    };
+    match mutation {
+        Ok(mutation) => {
+            let previous_thread_id = mutation.previous_thread_id;
             state.invalidate_channel_endpoint_cache().await;
-            let detached_endpoint =
-                state
-                    .cached_channel_endpoints()
-                    .await
-                    .into_iter()
-                    .find(|endpoint| {
-                        endpoint_key_matches(&endpoint.endpoint_key, &requested_endpoint_key)
-                    });
-            if let (Some(thread_id), Some(endpoint)) =
-                (previous_thread_id.as_deref(), detached_endpoint.as_ref())
+            if let (Some(thread_id), Some(binding)) =
+                (previous_thread_id.as_deref(), mutation.binding.as_ref())
             {
                 let delivery_thread_id =
-                    binding_delivery_thread_id(&endpoint.binding_key, &endpoint.chat_id);
+                    binding_delivery_thread_id(&binding.binding_key, &binding.chat_id);
                 let mut router = state.threads.router.lock().await;
                 router
                     .clear_reply_routing_for_chat_with_persistence(
                         thread_id,
-                        &endpoint.channel,
-                        &endpoint.account_id,
-                        &endpoint.chat_id,
+                        &binding.channel,
+                        &binding.account_id,
+                        &binding.chat_id,
                         delivery_thread_id.as_deref(),
                     )
                     .await;
                 router
-                    .clear_last_delivery_for_chat_with_persistence(
+                    .clear_last_delivery_for_chat_with_known_thread_persistence(
                         thread_id,
-                        &endpoint.channel,
-                        &endpoint.account_id,
-                        &endpoint.chat_id,
+                        &binding.channel,
+                        &binding.account_id,
+                        &binding.chat_id,
                         delivery_thread_id.as_deref(),
                     )
                     .await;
-                router.rebuild_routing_index(&endpoint.channel).await;
-            }
-            {
-                // Drop this endpoint's binding/index entries incrementally.
-                // Prefer the authoritative endpoint key when the cached
-                // endpoint row was found; fall back to the requested key.
-                let purge_key = detached_endpoint
-                    .as_ref()
-                    .map(|endpoint| endpoint.endpoint_key.clone())
-                    .unwrap_or_else(|| requested_endpoint_key.clone());
-                let mut router = state.threads.router.lock().await;
-                router.purge_endpoint_binding(&purge_key);
             }
             state.invalidate_gateway_sync_caches().await;
             Ok(ChannelEndpointDetachResult {
                 previous_thread_id,
                 endpoint_key: requested_endpoint_key,
-                binding: detached_endpoint.as_ref().map(binding_from_known_endpoint),
+                binding: mutation.binding,
             })
         }
         Err(error) => Err(ChannelEndpointMutationError::new(

@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 
-use chrono::{Local, Utc};
-use garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID;
+use chrono::Local;
 
 use super::super::inbound::NativeThreadCommand;
 use super::super::*;
 use crate::threads::{
-    ChannelBinding, ThreadEnsureOptions, default_agent_for_channel_account,
-    default_workspace_for_channel_account, default_workspace_mode_for_channel_account,
-    worktree_base_dir_for_config,
+    ThreadEnsureOptions, default_agent_for_channel_account, default_workspace_for_channel_account,
+    default_workspace_mode_for_channel_account, worktree_base_dir_for_config,
 };
 
 impl MessageRouter {
@@ -19,6 +17,7 @@ impl MessageRouter {
         from_id: &str,
         is_group: bool,
         thread_binding_key: &str,
+        extra_metadata: &HashMap<String, Value>,
         command: NativeThreadCommand,
     ) -> Result<NativeThreadResult, String> {
         let binding_context_key =
@@ -99,24 +98,14 @@ impl MessageRouter {
                 };
 
                 let binding = self
-                    .endpoint_binding_for_thread(
+                    .endpoint_binding_from_inbound(
                         channel,
                         account_id,
                         thread_binding_key,
-                        Some(&new_thread_key),
+                        extra_metadata,
+                        Some(&thread_name),
                     )
-                    .await
-                    .unwrap_or(ChannelBinding {
-                        channel: channel.to_owned(),
-                        account_id: account_id.to_owned(),
-                        binding_key: thread_binding_key.to_owned(),
-                        chat_id: thread_binding_key.to_owned(),
-                        delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
-                        delivery_target_id: thread_binding_key.to_owned(),
-                        display_label: thread_name.clone(),
-                        last_inbound_at: Some(Utc::now().to_rfc3339()),
-                        last_delivery_at: None,
-                    });
+                    .await;
                 self.bind_endpoint_runtime(&new_thread_key, binding.clone())
                     .await?;
 
@@ -144,16 +133,16 @@ impl MessageRouter {
                         direction,
                     )
                     .await;
-                if let Some(target_thread) = switched.as_deref()
-                    && let Some(binding) = self
-                        .endpoint_binding_for_thread(
+                if let Some(target_thread) = switched.as_deref() {
+                    let binding = self
+                        .endpoint_binding_from_inbound(
                             channel,
                             account_id,
                             thread_binding_key,
-                            Some(target_thread),
+                            extra_metadata,
+                            None,
                         )
-                        .await
-                {
+                        .await;
                     self.bind_endpoint_runtime(target_thread, binding.clone())
                         .await?;
                 }

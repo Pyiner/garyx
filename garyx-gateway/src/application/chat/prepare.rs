@@ -10,9 +10,8 @@ use garyx_models::provider::{
 use garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID;
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_router::{
-    ChannelBinding, NATIVE_COMMAND_TEXT_METADATA_KEY, bind_endpoint_to_thread,
-    build_runtime_context_metadata, is_thread_key, normalize_workspace_dir, update_thread_record,
-    workspace_dir_from_value,
+    ChannelBinding, NATIVE_COMMAND_TEXT_METADATA_KEY, build_runtime_context_metadata,
+    is_thread_key, normalize_workspace_dir, update_thread_record, workspace_dir_from_value,
 };
 use serde_json::{Value, json};
 
@@ -615,7 +614,12 @@ async fn persist_explicit_api_thread_binding(
         last_delivery_at: None,
     };
 
-    bind_endpoint_to_thread(&state.threads.thread_store, thread_id, binding)
+    state
+        .threads
+        .router
+        .lock()
+        .await
+        .bind_endpoint_runtime(thread_id, binding)
         .await
         .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
             thread_id: thread_id.to_owned(),

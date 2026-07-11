@@ -285,7 +285,7 @@ async fn test_navigate_thread_with_rebuild_respects_bound_current_thread_for_pre
         )
         .await;
 
-    let mut seeded_router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    let (mut seeded_router, _) = test_router(store.clone(), GaryxConfig::default());
     seeded_router
         .bind_endpoint_runtime(
             "thread::b",
@@ -435,7 +435,7 @@ async fn test_rebuild_thread_indexes_prefers_latest_updated_binding_for_duplicat
 }
 
 #[tokio::test]
-async fn test_resolve_endpoint_thread_id_lazy_rebuilds_from_thread_bindings() {
+async fn test_resolve_endpoint_thread_id_uses_projected_owner_point_lookup() {
     let store = Arc::new(InMemoryThreadStore::new());
     store
         .set(
@@ -455,7 +455,16 @@ async fn test_resolve_endpoint_thread_id_lazy_rebuilds_from_thread_bindings() {
         )
         .await;
 
-    let mut router = MessageRouter::new(store, GaryxConfig::default());
+    let binding = ChannelBinding {
+        channel: "telegram".to_owned(),
+        account_id: "main".to_owned(),
+        binding_key: "user42".to_owned(),
+        chat_id: "user42".to_owned(),
+        display_label: "Test User".to_owned(),
+        ..Default::default()
+    };
+    let (mut router, mutator) = test_router(store, GaryxConfig::default());
+    mutator.seed_owner("thread::bound", binding).await;
 
     assert!(router.thread_nav.endpoint_thread_map.is_empty());
     assert_eq!(

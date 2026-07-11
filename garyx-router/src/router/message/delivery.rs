@@ -55,8 +55,28 @@ impl MessageRouter {
         thread_id: &str,
         ctx: DeliveryContext,
     ) {
+        self.set_last_delivery_with_persistence_mode(thread_id, ctx, true)
+            .await;
+    }
+
+    pub async fn set_last_delivery_with_known_thread_persistence(
+        &mut self,
+        thread_id: &str,
+        ctx: DeliveryContext,
+    ) {
+        self.set_last_delivery_with_persistence_mode(thread_id, ctx, false)
+            .await;
+    }
+
+    async fn set_last_delivery_with_persistence_mode(
+        &mut self,
+        thread_id: &str,
+        ctx: DeliveryContext,
+        sync_endpoint_timestamp: bool,
+    ) {
         self.set_last_delivery(thread_id, ctx.clone());
-        self.persist_delivery_context(thread_id, &ctx).await;
+        self.persist_delivery_context(thread_id, &ctx, sync_endpoint_timestamp)
+            .await;
         let thread_id = ctx
             .thread_id
             .as_deref()
@@ -82,7 +102,12 @@ impl MessageRouter {
         }
     }
 
-    async fn persist_delivery_context(&self, thread_id: &str, ctx: &DeliveryContext) {
+    async fn persist_delivery_context(
+        &self,
+        thread_id: &str,
+        ctx: &DeliveryContext,
+        sync_endpoint_timestamp: bool,
+    ) {
         let Some(mut thread_data) = self.threads.get(thread_id).await else {
             debug!(
                 thread_id,
@@ -150,15 +175,17 @@ impl MessageRouter {
         );
 
         self.threads.set(thread_id, thread_data).await;
-        let binding_key = Self::delivery_binding_key(ctx);
-        let _ = sync_endpoint_delivery_timestamp(
-            &self.threads,
-            &ctx.channel,
-            &ctx.account_id,
-            binding_key,
-            Some(&Utc::now().to_rfc3339()),
-        )
-        .await;
+        if sync_endpoint_timestamp {
+            let binding_key = Self::delivery_binding_key(ctx);
+            let _ = sync_endpoint_delivery_timestamp(
+                &self.threads,
+                &ctx.channel,
+                &ctx.account_id,
+                binding_key,
+                Some(&Utc::now().to_rfc3339()),
+            )
+            .await;
+        }
     }
 
     /// Get the last delivery context for a thread.
@@ -201,6 +228,23 @@ impl MessageRouter {
     }
 
     pub async fn clear_last_delivery_with_persistence(&mut self, thread_id: &str) {
+        self.clear_last_delivery_with_persistence_mode(thread_id, true)
+            .await;
+    }
+
+    pub async fn clear_last_delivery_with_known_thread_persistence(
+        &mut self,
+        thread_id: &str,
+    ) {
+        self.clear_last_delivery_with_persistence_mode(thread_id, false)
+            .await;
+    }
+
+    async fn clear_last_delivery_with_persistence_mode(
+        &mut self,
+        thread_id: &str,
+        sync_endpoint_timestamp: bool,
+    ) {
         let existing_ctx = self.get_last_delivery(thread_id).cloned().or(self
             .threads
             .get(thread_id)
@@ -209,7 +253,9 @@ impl MessageRouter {
         self.clear_last_delivery(thread_id);
 
         let Some(mut thread_data) = self.threads.get(thread_id).await else {
-            if let Some(ctx) = existing_ctx {
+            if sync_endpoint_timestamp
+                && let Some(ctx) = existing_ctx
+            {
                 let binding_key = Self::delivery_binding_key(&ctx);
                 let _ = sync_endpoint_delivery_timestamp(
                     &self.threads,
@@ -245,7 +291,9 @@ impl MessageRouter {
             Value::String(Utc::now().to_rfc3339()),
         );
         self.threads.set(thread_id, thread_data).await;
-        if let Some(ctx) = existing_ctx {
+        if sync_endpoint_timestamp
+            && let Some(ctx) = existing_ctx
+        {
             let binding_key = Self::delivery_binding_key(&ctx);
             let _ = sync_endpoint_delivery_timestamp(
                 &self.threads,
@@ -265,6 +313,45 @@ impl MessageRouter {
         account_id: &str,
         chat_id: &str,
         thread_binding_key: Option<&str>,
+    ) {
+        self.clear_last_delivery_for_chat_with_persistence_mode(
+            thread_id,
+            channel,
+            account_id,
+            chat_id,
+            thread_binding_key,
+            true,
+        )
+        .await;
+    }
+
+    pub async fn clear_last_delivery_for_chat_with_known_thread_persistence(
+        &mut self,
+        thread_id: &str,
+        channel: &str,
+        account_id: &str,
+        chat_id: &str,
+        thread_binding_key: Option<&str>,
+    ) {
+        self.clear_last_delivery_for_chat_with_persistence_mode(
+            thread_id,
+            channel,
+            account_id,
+            chat_id,
+            thread_binding_key,
+            false,
+        )
+        .await;
+    }
+
+    async fn clear_last_delivery_for_chat_with_persistence_mode(
+        &mut self,
+        thread_id: &str,
+        channel: &str,
+        account_id: &str,
+        chat_id: &str,
+        thread_binding_key: Option<&str>,
+        sync_endpoint_timestamp: bool,
     ) {
         let expected_binding_key = thread_binding_key
             .map(str::trim)
@@ -286,7 +373,8 @@ impl MessageRouter {
                     && Self::delivery_binding_key(&ctx) == expected_binding_key
             });
         if should_clear {
-            self.clear_last_delivery_with_persistence(thread_id).await;
+            self.clear_last_delivery_with_persistence_mode(thread_id, sync_endpoint_timestamp)
+                .await;
         }
     }
 

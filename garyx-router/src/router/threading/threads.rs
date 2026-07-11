@@ -1,18 +1,16 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use garyx_models::routing::{
-    DELIVERY_TARGET_TYPE_CHAT_ID, infer_delivery_target_id, infer_delivery_target_type,
-};
+use garyx_models::routing::{infer_delivery_target_id, infer_delivery_target_type};
 use serde_json::Value;
 
 use super::super::*;
 use crate::threads::{
-    ChannelBinding, ThreadEnsureOptions, ThreadIndexStats, bind_endpoint_to_thread,
-    default_agent_for_channel_account, default_workspace_for_channel_account,
-    default_workspace_mode_for_channel_account, endpoint_key, label_from_value,
-    list_known_channel_endpoints, new_thread_key, worktree_base_dir_for_config,
+    ChannelBinding, ThreadEnsureOptions, ThreadIndexStats, default_agent_for_channel_account,
+    default_workspace_for_channel_account, default_workspace_mode_for_channel_account,
+    endpoint_key, list_known_channel_endpoints, new_thread_key, worktree_base_dir_for_config,
 };
+use crate::{EndpointBindingMutationError, EndpointDetachResult};
 
 const INBOUND_FALLBACK_AGENT_ID: &str = "claude";
 
@@ -41,14 +39,23 @@ impl MessageRouter {
     pub async fn bind_endpoint_runtime(
         &mut self,
         thread_id: &str,
-        binding: ChannelBinding,
-    ) -> Result<Option<String>, String> {
-        let previous_thread_id =
-            bind_endpoint_to_thread(&self.threads, thread_id, binding.clone()).await?;
+        mut binding: ChannelBinding,
+    ) -> Result<crate::EndpointBindResult, String> {
+        let Some(mutator) = self.endpoint_binding_mutator() else {
+            return Err(EndpointBindingMutationError::Unavailable.to_string());
+        };
+        let delivered_at = Utc::now().to_rfc3339();
+        binding.last_delivery_at = Some(delivered_at);
+        let result = mutator
+            .bind_endpoint(thread_id, binding.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let previous_thread_id = result.previous_thread_id.clone();
+        let binding = result.binding.clone();
         if let Some(previous_thread_id) = previous_thread_id.as_deref()
             && previous_thread_id != thread_id
         {
-            self.clear_last_delivery_for_chat_with_persistence(
+            self.clear_last_delivery_for_chat_with_known_thread_persistence(
                 previous_thread_id,
                 &binding.channel,
                 &binding.account_id,
@@ -57,7 +64,7 @@ impl MessageRouter {
             )
             .await;
         }
-        self.set_last_delivery_with_persistence(
+        self.set_last_delivery_with_known_thread_persistence(
             thread_id,
             garyx_models::routing::DeliveryContext {
                 channel: binding.channel.clone(),
@@ -74,7 +81,22 @@ impl MessageRouter {
         self.thread_nav
             .endpoint_thread_map
             .insert(binding.endpoint_key(), thread_id.to_owned());
-        Ok(previous_thread_id)
+        Ok(result)
+    }
+
+    pub async fn detach_endpoint_runtime(
+        &mut self,
+        endpoint_key: &str,
+    ) -> Result<EndpointDetachResult, String> {
+        let Some(mutator) = self.endpoint_binding_mutator() else {
+            return Err(EndpointBindingMutationError::Unavailable.to_string());
+        };
+        let result = mutator
+            .detach_endpoint(endpoint_key)
+            .await
+            .map_err(|error| error.to_string())?;
+        self.purge_endpoint_binding(endpoint_key);
+        Ok(result)
     }
 
     pub(in crate::router) async fn current_canonical_thread_for_binding(
@@ -140,53 +162,68 @@ impl MessageRouter {
         None
     }
 
-    pub(in crate::router) async fn endpoint_binding_for_thread(
+    pub(in crate::router) async fn endpoint_binding_from_inbound(
         &self,
         channel: &str,
         account_id: &str,
         thread_binding_key: &str,
-        preferred_thread_id: Option<&str>,
-    ) -> Option<ChannelBinding> {
+        extra_metadata: &HashMap<String, Value>,
+        fallback_display_label: Option<&str>,
+    ) -> ChannelBinding {
         let endpoint = endpoint_key(channel, account_id, thread_binding_key);
-        if let Some(existing) = list_known_channel_endpoints(&self.threads)
-            .await
-            .into_iter()
-            .find(|candidate| candidate.endpoint_key == endpoint)
-        {
-            return Some(ChannelBinding {
-                channel: existing.channel,
-                account_id: existing.account_id,
-                binding_key: existing.binding_key,
-                chat_id: existing.chat_id,
-                delivery_target_type: existing.delivery_target_type,
-                delivery_target_id: existing.delivery_target_id,
-                display_label: existing.display_label,
-                last_inbound_at: existing.last_inbound_at,
-                last_delivery_at: existing.last_delivery_at,
-            });
+        if let Some(mutator) = self.endpoint_binding_mutator() {
+            match mutator.binding_for_endpoint(&endpoint).await {
+                Ok(Some(owner)) => return owner.binding,
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(endpoint_key = endpoint, error = %error, "endpoint binding point lookup failed");
+                }
+            }
         }
 
-        let display_label = match preferred_thread_id {
-            Some(key) => self
-                .threads
-                .get(key)
-                .await
-                .and_then(|value| label_from_value(&value))
-                .unwrap_or_else(|| thread_binding_key.to_owned()),
-            None => thread_binding_key.to_owned(),
-        };
-
-        Some(ChannelBinding {
+        let chat_id = Self::resolve_chat_id_from_metadata(extra_metadata, thread_binding_key);
+        let explicit_target_type = extra_metadata
+            .get("delivery_target_type")
+            .and_then(Value::as_str);
+        let explicit_target_id = extra_metadata
+            .get("delivery_target_id")
+            .and_then(Value::as_str);
+        let delivery_target_type = infer_delivery_target_type(
+            channel,
+            explicit_target_type,
+            explicit_target_id,
+            &chat_id,
+            thread_binding_key,
+        );
+        let delivery_target_id = infer_delivery_target_id(
+            channel,
+            Some(&delivery_target_type),
+            explicit_target_id,
+            &chat_id,
+            thread_binding_key,
+        );
+        ChannelBinding {
             channel: channel.to_owned(),
             account_id: account_id.to_owned(),
             binding_key: thread_binding_key.to_owned(),
-            chat_id: String::new(),
-            delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
-            delivery_target_id: String::new(),
-            display_label,
+            chat_id,
+            delivery_target_type,
+            delivery_target_id,
+            display_label: fallback_display_label
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| {
+                    Self::resolve_display_label(
+                        extra_metadata,
+                        channel,
+                        account_id,
+                        thread_binding_key,
+                    )
+                }),
             last_inbound_at: Some(Utc::now().to_rfc3339()),
             last_delivery_at: None,
-        })
+        }
     }
 
     fn resolve_display_label(
@@ -311,31 +348,15 @@ impl MessageRouter {
             }
         };
 
-        let resolved_chat_id =
-            Self::resolve_chat_id_from_metadata(extra_metadata, thread_binding_key);
-        let binding = ChannelBinding {
-            channel: channel.to_owned(),
-            account_id: account_id.to_owned(),
-            binding_key: thread_binding_key.to_owned(),
-            chat_id: resolved_chat_id.clone(),
-            delivery_target_type: infer_delivery_target_type(
+        let binding = self
+            .endpoint_binding_from_inbound(
                 channel,
-                Some(DELIVERY_TARGET_TYPE_CHAT_ID),
-                Some(&resolved_chat_id),
-                &resolved_chat_id,
-                &resolved_chat_id,
-            ),
-            delivery_target_id: infer_delivery_target_id(
-                channel,
-                Some(DELIVERY_TARGET_TYPE_CHAT_ID),
-                Some(&resolved_chat_id),
-                &resolved_chat_id,
-                &resolved_chat_id,
-            ),
-            display_label,
-            last_inbound_at: Some(Utc::now().to_rfc3339()),
-            last_delivery_at: None,
-        };
+                account_id,
+                thread_binding_key,
+                extra_metadata,
+                Some(&display_label),
+            )
+            .await;
         if let Err(error) = self
             .bind_endpoint_runtime(&thread_id, binding.clone())
             .await
@@ -413,19 +434,18 @@ impl MessageRouter {
                     redirect = %redirect_key,
                     "auto-recovery redirect applied"
                 );
-                if let Some(binding) = self
-                    .endpoint_binding_for_thread(
+                let binding = self
+                    .endpoint_binding_from_inbound(
                         route.channel,
                         route.account_id,
                         route.thread_binding_key,
-                        Some(&redirect_key),
+                        route.extra_metadata,
+                        None,
                     )
+                    .await;
+                self.bind_endpoint_runtime(&redirect_key, binding.clone())
                     .await
-                {
-                    self.bind_endpoint_runtime(&redirect_key, binding.clone())
-                        .await
-                        .ok();
-                }
+                    .ok();
                 self.switch_to_thread(&binding_context_key, &redirect_key);
                 thread_id = redirect_key;
             } else {
@@ -454,11 +474,18 @@ impl MessageRouter {
             self.thread_nav.endpoint_thread_map.remove(&key);
         }
 
-        let endpoint = list_known_channel_endpoints(&self.threads)
-            .await
-            .into_iter()
-            .find(|candidate| candidate.endpoint_key == key)?;
-        let thread_id = endpoint.thread_id?;
+        let mutator = self.endpoint_binding_mutator()?;
+        let owner = match mutator.binding_for_endpoint(&key).await {
+            Ok(owner) => owner?,
+            Err(error) => {
+                tracing::warn!(endpoint_key = key, error = %error, "endpoint owner point lookup failed");
+                return None;
+            }
+        };
+        let thread_id = owner.thread_id;
+        if !self.threads.exists(&thread_id).await {
+            return None;
+        }
         self.thread_nav
             .endpoint_thread_map
             .insert(key, thread_id.clone());

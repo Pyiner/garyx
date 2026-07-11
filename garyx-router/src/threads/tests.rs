@@ -1,4 +1,23 @@
 use super::*;
+
+#[test]
+fn internal_api_binding_remains_compatible_with_external_thread() {
+    let thread = json!({
+        "thread_id": "thread::external",
+        "channel": "telegram",
+        "account_id": "main",
+        "channel_bindings": [{
+            "channel": "telegram",
+            "account_id": "main",
+            "binding_key": "1000000001",
+            "chat_id": "1000000001"
+        }]
+    });
+
+    assert!(
+        validate_thread_accepts_bot_binding("thread::external", &thread, "api", "main").is_ok()
+    );
+}
 use crate::memory_store::InMemoryThreadStore;
 use serde_json::json;
 

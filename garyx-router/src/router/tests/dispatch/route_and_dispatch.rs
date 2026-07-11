@@ -189,7 +189,7 @@ async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent(
             },
         );
 
-    let mut router = MessageRouter::new(store.clone(), config);
+    let (mut router, _) = test_router(store.clone(), config);
     router.set_message_ledger_store(Arc::new(crate::message_ledger::MessageLedgerStore::memory()));
     router.set_thread_creator(Arc::new(FallbackOnlyThreadCreator));
     let dispatcher = MockDispatcher::new();
@@ -450,31 +450,21 @@ async fn test_route_and_dispatch_injects_runtime_context_and_workspace() {
 #[tokio::test]
 async fn test_endpoint_binding_is_binding_key_driven() {
     let router = make_router();
+    let metadata = HashMap::new();
 
-    assert!(
-        router
-            .endpoint_binding_for_thread("telegram", "bot1", "u1", None)
-            .await
-            .is_some()
-    );
-    assert!(
-        router
-            .endpoint_binding_for_thread("feishu", "app1", "u1", None)
-            .await
-            .is_some()
-    );
-    assert!(
-        router
-            .endpoint_binding_for_thread("weixin", "wx-main", "u1", None)
-            .await
-            .is_some()
-    );
-    assert!(
-        router
-            .endpoint_binding_for_thread("internal", "main", "u1", None)
-            .await
-            .is_some()
-    );
+    for (channel, account_id) in [
+        ("telegram", "bot1"),
+        ("feishu", "app1"),
+        ("weixin", "wx-main"),
+        ("internal", "main"),
+    ] {
+        let binding = router
+            .endpoint_binding_from_inbound(channel, account_id, "u1", &metadata, None)
+            .await;
+        assert_eq!(binding.channel, channel);
+        assert_eq!(binding.account_id, account_id);
+        assert_eq!(binding.binding_key, "u1");
+    }
 }
 
 #[tokio::test]
@@ -521,7 +511,7 @@ async fn test_route_and_dispatch_handles_native_sessions_locally() {
 #[tokio::test]
 async fn test_route_and_dispatch_new_session_sets_last_delivery_on_new_thread() {
     let store = Arc::new(InMemoryThreadStore::new());
-    let mut router = MessageRouter::new(store, GaryxConfig::default());
+    let (mut router, _) = test_router(store, GaryxConfig::default());
     let dispatcher = MockDispatcher::new();
 
     let mut extra_metadata = HashMap::new();
@@ -569,7 +559,7 @@ async fn test_route_and_dispatch_new_session_sets_last_delivery_on_new_thread() 
 #[tokio::test]
 async fn test_route_and_dispatch_weixin_newthread_binds_endpoint() {
     let store = Arc::new(InMemoryThreadStore::new());
-    let mut router = MessageRouter::new(store, GaryxConfig::default());
+    let (mut router, _) = test_router(store, GaryxConfig::default());
     let dispatcher = MockDispatcher::new();
 
     let mut extra_metadata = HashMap::new();
@@ -633,7 +623,17 @@ async fn test_route_and_dispatch_threads_keeps_old_dm_threads_after_newthread_re
     )
     .await;
 
-    let mut router = MessageRouter::new(store, GaryxConfig::default());
+    let binding = bindings_from_value(
+        &store
+            .get("thread::legacy-user42")
+            .await
+            .expect("seeded thread should exist"),
+    )
+    .into_iter()
+    .next()
+    .expect("seeded thread should have a binding");
+    let (mut router, mutator) = test_router(store, GaryxConfig::default());
+    mutator.seed_owner("thread::legacy-user42", binding).await;
     router.rebuild_thread_indexes().await;
     let dispatcher = MockDispatcher::new();
 
@@ -1483,7 +1483,7 @@ async fn test_route_and_dispatch_auto_recovery_ignores_missing_target() {
 }
 
 #[tokio::test]
-async fn test_route_and_dispatch_uses_bound_thread_without_rebuilt_endpoint_map() {
+async fn test_route_and_dispatch_uses_projected_owner_without_rebuilt_endpoint_map() {
     let store = Arc::new(InMemoryThreadStore::new());
     seed_bound_dm_thread(
         &store,
@@ -1494,7 +1494,17 @@ async fn test_route_and_dispatch_uses_bound_thread_without_rebuilt_endpoint_map(
     )
     .await;
 
-    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    let binding = bindings_from_value(
+        &store
+            .get("thread::user42-existing")
+            .await
+            .expect("seeded thread should exist"),
+    )
+    .into_iter()
+    .next()
+    .expect("seeded thread should have a binding");
+    let (mut router, mutator) = test_router(store.clone(), GaryxConfig::default());
+    mutator.seed_owner("thread::user42-existing", binding).await;
     let dispatcher = MockDispatcher::new();
     let request = InboundRequest {
         channel: "telegram".to_owned(),

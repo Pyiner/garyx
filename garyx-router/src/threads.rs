@@ -17,7 +17,7 @@ use crate::{DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, ThreadStore};
 use crate::{WorkspaceMode, prepare_thread_worktree};
 
 pub const THREAD_KEY_PREFIX: &str = "thread::";
-const KNOWN_CHANNEL_ENDPOINTS_KEY: &str = "meta::known_channel_endpoints";
+pub const KNOWN_CHANNEL_ENDPOINTS_KEY: &str = "meta::known_channel_endpoints";
 const EXPLICIT_THREAD_TITLE_SOURCE: &str = "explicit";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -200,7 +200,73 @@ pub fn bindings_from_value(value: &Value) -> Vec<ChannelBinding> {
         .unwrap_or_default()
 }
 
-async fn upsert_known_channel_endpoint(
+fn thread_string_field(value: &Value, primary: &str, fallback: &str) -> Option<String> {
+    value
+        .get(primary)
+        .or_else(|| value.get(fallback))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn is_internal_binding_channel(channel: &str) -> bool {
+    channel.trim().eq_ignore_ascii_case("api")
+}
+
+pub fn validate_thread_accepts_bot_binding(
+    thread_id: &str,
+    thread_data: &Value,
+    channel: &str,
+    account_id: &str,
+) -> Result<(), String> {
+    if is_internal_binding_channel(channel) {
+        return Ok(());
+    }
+    let bot_id = format!("{channel}:{account_id}");
+    let thread_channel = thread_string_field(thread_data, "channel", "origin_channel");
+    let thread_account_id = thread_string_field(thread_data, "account_id", "origin_account_id");
+
+    if let Some(owner_channel) = thread_channel.as_deref()
+        && owner_channel != channel
+        && !is_internal_binding_channel(owner_channel)
+    {
+        return Err(format!(
+            "cannot bind bot '{bot_id}' to thread '{thread_id}': thread belongs to channel '{owner_channel}'"
+        ));
+    }
+
+    if thread_channel.as_deref() == Some(channel)
+        && let Some(owner_account_id) = thread_account_id.as_deref()
+        && owner_account_id != account_id
+    {
+        return Err(format!(
+            "cannot bind bot '{bot_id}' to thread '{thread_id}': thread belongs to bot '{channel}:{owner_account_id}'"
+        ));
+    }
+
+    for binding in bindings_from_value(thread_data) {
+        if is_internal_binding_channel(&binding.channel) {
+            continue;
+        }
+        if binding.channel != channel {
+            return Err(format!(
+                "cannot bind bot '{bot_id}' to thread '{thread_id}': thread is already bound to channel '{}'",
+                binding.channel
+            ));
+        }
+        if binding.account_id != account_id {
+            return Err(format!(
+                "cannot bind bot '{bot_id}' to thread '{thread_id}': thread is already bound to bot '{}:{}'",
+                binding.channel, binding.account_id
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn upsert_known_channel_endpoint(
     store: &Arc<dyn ThreadStore>,
     binding: &ChannelBinding,
 ) -> Result<(), String> {

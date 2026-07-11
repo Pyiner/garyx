@@ -26,6 +26,7 @@ use crate::app_db::AppDbService;
 use crate::app_state::{AppState, IntegrationState, OpsState, RuntimeState, ThreadState};
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
+use crate::endpoint_binding_mutator::SqlEndpointBindingMutator;
 use crate::event_stream_hub::EventStreamHub;
 use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
@@ -346,6 +347,10 @@ impl AppStateBuilder {
         let thread_history = Arc::new(thread_history);
         let mut router = MessageRouter::new(thread_store.clone(), self.config.clone());
         router.set_recent_thread_page_reader(Arc::new(SqlRecentThreadPageReader::new(
+            self.garyx_db.clone(),
+        )));
+        router.set_endpoint_binding_mutator(Arc::new(SqlEndpointBindingMutator::new(
+            thread_store.clone(),
             self.garyx_db.clone(),
         )));
         let thread_creator: Arc<dyn ThreadCreator> = Arc::new(GatewayThreadCreator::new(

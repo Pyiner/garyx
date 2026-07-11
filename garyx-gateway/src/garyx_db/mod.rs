@@ -20,6 +20,8 @@ pub use task_forest::{
 const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 4;
 pub(crate) const RECENT_TASK_THREAD_KIND_MIGRATION_NAME: &str = "recent_task_thread_kind_v1";
 const RECENT_TASK_THREAD_KIND_MIGRATION_VERSION: i64 = 1;
+pub(crate) const ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME: &str = "endpoint_holder_dedup_v1";
+const ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION: i64 = 1;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GaryxDbError {
@@ -838,7 +840,277 @@ impl GaryxDbService {
     /// the one-shot archive import and before the gateway starts serving.
     pub(crate) fn run_thread_data_startup_migrations(&self) -> GaryxDbResult<()> {
         self.migrate_recent_task_thread_kind_v1()?;
+        self.migrate_endpoint_holder_dedup_v1()?;
         Ok(())
+    }
+
+    /// Establish the canonical invariant that one endpoint appears on at
+    /// most one thread record. Winner selection exactly follows the existing
+    /// preference order: parsed timestamp, raw timestamp, then thread id.
+    /// Canonical JSON and the endpoint projection are rewritten in one
+    /// transaction so no ghost holder can survive the cutover to point reads.
+    pub(crate) fn migrate_endpoint_holder_dedup_v1(
+        &self,
+    ) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let completed_source_count = tx
+            .query_row(
+                "SELECT source_row_count
+                   FROM projection_states
+                  WHERE projection_name = ?1 AND projection_version = ?2",
+                params![
+                    ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME,
+                    ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        tx.execute_batch(
+            "DROP TABLE IF EXISTS temp.endpoint_holder_dedup_rows;
+             DROP TABLE IF EXISTS temp.endpoint_holder_dedup_winners;
+             CREATE TEMP TABLE endpoint_holder_dedup_rows (
+                 thread_id TEXT NOT NULL,
+                 binding_index INTEGER NOT NULL,
+                 endpoint_key TEXT NOT NULL,
+                 channel TEXT NOT NULL,
+                 account_id TEXT NOT NULL,
+                 binding_key TEXT NOT NULL,
+                 chat_id TEXT NOT NULL,
+                 delivery_target_type TEXT NOT NULL,
+                 delivery_target_id TEXT NOT NULL,
+                 display_label TEXT NOT NULL,
+                 last_inbound_at TEXT,
+                 last_delivery_at TEXT,
+                 thread_label TEXT,
+                 workspace_dir TEXT,
+                 thread_updated_at TEXT NOT NULL
+             ) STRICT;
+             CREATE TEMP TABLE endpoint_holder_dedup_winners (
+                 endpoint_key TEXT PRIMARY KEY,
+                 thread_id TEXT NOT NULL
+             ) STRICT;",
+        )?;
+        tx.execute(
+            "INSERT INTO endpoint_holder_dedup_rows (
+                 thread_id, binding_index, endpoint_key, channel, account_id,
+                 binding_key, chat_id, delivery_target_type, delivery_target_id,
+                 display_label, last_inbound_at, last_delivery_at, thread_label,
+                 workspace_dir, thread_updated_at
+             )
+             SELECT record.key,
+                    CAST(binding.key AS INTEGER),
+                    COALESCE(json_extract(binding.value, '$.channel'), '') || '::' ||
+                    COALESCE(json_extract(binding.value, '$.account_id'), '') || '::' ||
+                    trim(CASE
+                        WHEN json_type(binding.value, '$.binding_key') = 'text'
+                            THEN json_extract(binding.value, '$.binding_key')
+                        WHEN json_type(binding.value, '$.thread_scope') = 'text'
+                            THEN json_extract(binding.value, '$.thread_scope')
+                        WHEN json_type(binding.value, '$.peer_id') = 'text'
+                            THEN json_extract(binding.value, '$.peer_id')
+                        ELSE ''
+                    END),
+                    COALESCE(json_extract(binding.value, '$.channel'), ''),
+                    COALESCE(json_extract(binding.value, '$.account_id'), ''),
+                    trim(CASE
+                        WHEN json_type(binding.value, '$.binding_key') = 'text'
+                            THEN json_extract(binding.value, '$.binding_key')
+                        WHEN json_type(binding.value, '$.thread_scope') = 'text'
+                            THEN json_extract(binding.value, '$.thread_scope')
+                        WHEN json_type(binding.value, '$.peer_id') = 'text'
+                            THEN json_extract(binding.value, '$.peer_id')
+                        ELSE ''
+                    END),
+                    trim(COALESCE(json_extract(binding.value, '$.chat_id'), '')),
+                    trim(COALESCE(json_extract(binding.value, '$.delivery_target_type'), '')),
+                    trim(COALESCE(json_extract(binding.value, '$.delivery_target_id'), '')),
+                    trim(COALESCE(json_extract(binding.value, '$.display_label'), '')),
+                    CASE WHEN json_type(binding.value, '$.last_inbound_at') = 'text'
+                         THEN json_extract(binding.value, '$.last_inbound_at') END,
+                    CASE WHEN json_type(binding.value, '$.last_delivery_at') = 'text'
+                         THEN json_extract(binding.value, '$.last_delivery_at') END,
+                    CASE WHEN json_type(record.body, '$.label') = 'text'
+                         THEN json_extract(record.body, '$.label') END,
+                    CASE WHEN json_type(record.body, '$.workspace_dir') = 'text'
+                         THEN json_extract(record.body, '$.workspace_dir') END,
+                    CASE WHEN json_type(record.body, '$.updated_at') = 'text'
+                         THEN json_extract(record.body, '$.updated_at') ELSE '' END
+               FROM thread_records AS record,
+                    json_each(json_extract(record.body, '$.channel_bindings')) AS binding
+              WHERE substr(record.key, 1, 8) = 'thread::'
+                AND json_type(binding.value) = 'object'
+                AND (json_type(binding.value, '$.channel') IS NULL OR
+                     json_type(binding.value, '$.channel') = 'text')
+                AND (json_type(binding.value, '$.account_id') IS NULL OR
+                     json_type(binding.value, '$.account_id') = 'text')
+                AND (json_type(binding.value, '$.binding_key') IS NULL OR
+                     json_type(binding.value, '$.binding_key') = 'text')
+                AND (json_type(binding.value, '$.chat_id') IS NULL OR
+                     json_type(binding.value, '$.chat_id') = 'text')
+                AND (json_type(binding.value, '$.delivery_target_type') IS NULL OR
+                     json_type(binding.value, '$.delivery_target_type') = 'text')
+                AND (json_type(binding.value, '$.delivery_target_id') IS NULL OR
+                     json_type(binding.value, '$.delivery_target_id') = 'text')
+                AND (json_type(binding.value, '$.display_label') IS NULL OR
+                     json_type(binding.value, '$.display_label') = 'text')
+                AND (json_type(binding.value, '$.last_inbound_at') IS NULL OR
+                     json_type(binding.value, '$.last_inbound_at') = 'text')
+                AND (json_type(binding.value, '$.last_delivery_at') IS NULL OR
+                     json_type(binding.value, '$.last_delivery_at') = 'text')",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO endpoint_holder_dedup_winners (endpoint_key, thread_id)
+             SELECT endpoint_key, thread_id
+               FROM (
+                   SELECT endpoint_key,
+                          thread_id,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY endpoint_key
+                              ORDER BY
+                                  CASE
+                                      WHEN thread_updated_at GLOB
+                                           '????-??-??T??:??:??*'
+                                           AND julianday(thread_updated_at) IS NOT NULL
+                                      THEN 1 ELSE 0
+                                  END DESC,
+                                  CASE
+                                      WHEN thread_updated_at GLOB
+                                           '????-??-??T??:??:??*'
+                                      THEN julianday(thread_updated_at)
+                                  END DESC,
+                                  thread_updated_at DESC,
+                                  thread_id DESC
+                          ) AS preference_rank
+                     FROM endpoint_holder_dedup_rows
+               )
+              WHERE preference_rank = 1",
+            [],
+        )?;
+        let source_row_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM endpoint_holder_dedup_rows",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let updated_row_count = tx.execute(
+            "UPDATE thread_records
+                SET body = json_set(
+                    body,
+                    '$.channel_bindings',
+                    json(COALESCE((
+                        SELECT json_group_array(json(binding.value))
+                          FROM json_each(
+                              json_extract(thread_records.body, '$.channel_bindings')
+                          ) AS binding
+                         WHERE NOT EXISTS (
+                             SELECT 1
+                               FROM endpoint_holder_dedup_rows AS holder
+                               JOIN endpoint_holder_dedup_winners AS winner
+                                 ON winner.endpoint_key = holder.endpoint_key
+                              WHERE holder.thread_id = thread_records.key
+                                AND holder.binding_index = CAST(binding.key AS INTEGER)
+                                AND winner.thread_id <> holder.thread_id
+                         )
+                    ), '[]'))
+                )
+              WHERE key IN (
+                  SELECT DISTINCT holder.thread_id
+                    FROM endpoint_holder_dedup_rows AS holder
+                    JOIN endpoint_holder_dedup_winners AS winner
+                      ON winner.endpoint_key = holder.endpoint_key
+                   WHERE winner.thread_id <> holder.thread_id
+              )",
+            [],
+        )?;
+
+        tx.execute("DELETE FROM thread_channel_endpoints", [])?;
+        tx.execute(
+            "INSERT OR REPLACE INTO thread_channel_endpoints (
+                 endpoint_key, channel, account_id, binding_key, chat_id,
+                 delivery_target_type, delivery_target_id, display_label,
+                 thread_id, thread_label, workspace_dir, thread_updated_at,
+                 last_inbound_at, last_delivery_at, projected_at
+             )
+             SELECT holder.endpoint_key,
+                    holder.channel,
+                    holder.account_id,
+                    holder.binding_key,
+                    holder.chat_id,
+                    CASE
+                        WHEN holder.delivery_target_id <> '' THEN
+                            CASE WHEN holder.delivery_target_type = 'open_id'
+                                 THEN 'open_id' ELSE 'chat_id' END
+                        WHEN holder.channel = 'feishu'
+                             AND holder.chat_id <> ''
+                             AND holder.chat_id = holder.binding_key
+                             AND holder.chat_id LIKE 'ou_%'
+                        THEN 'open_id'
+                        ELSE 'chat_id'
+                    END,
+                    CASE
+                        WHEN holder.delivery_target_id <> ''
+                        THEN holder.delivery_target_id
+                        WHEN holder.channel = 'feishu'
+                             AND holder.chat_id <> ''
+                             AND holder.chat_id = holder.binding_key
+                             AND holder.chat_id LIKE 'ou_%'
+                        THEN CASE WHEN holder.binding_key <> ''
+                                  THEN holder.binding_key ELSE holder.chat_id END
+                        ELSE CASE WHEN holder.chat_id <> ''
+                                  THEN holder.chat_id ELSE holder.binding_key END
+                    END,
+                    holder.display_label,
+                    holder.thread_id,
+                    NULLIF(trim(holder.thread_label), ''),
+                    NULLIF(trim(holder.workspace_dir), ''),
+                    NULLIF(trim(holder.thread_updated_at), ''),
+                    NULLIF(trim(holder.last_inbound_at), ''),
+                    NULLIF(trim(holder.last_delivery_at), ''),
+                    ?1
+               FROM endpoint_holder_dedup_rows AS holder
+               JOIN endpoint_holder_dedup_winners AS winner
+                 ON winner.endpoint_key = holder.endpoint_key
+                AND winner.thread_id = holder.thread_id
+              ORDER BY holder.thread_id ASC, holder.binding_index ASC",
+            params![now_string()],
+        )?;
+        tx.execute(
+            "INSERT INTO projection_states (
+                projection_name, projection_version, source_row_count, projected_at
+             ) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(projection_name) DO UPDATE SET
+                projection_version = excluded.projection_version,
+                source_row_count = excluded.source_row_count,
+                projected_at = excluded.projected_at",
+            params![
+                ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME,
+                ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION,
+                source_row_count,
+                now_string(),
+            ],
+        )?;
+        tx.execute_batch(
+            "DROP TABLE endpoint_holder_dedup_winners;
+             DROP TABLE endpoint_holder_dedup_rows;",
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count,
+            already_completed: false,
+        })
     }
 
     /// Persist task identity on legacy backing threads. The migration is a
@@ -1255,29 +1527,32 @@ impl GaryxDbService {
              FROM thread_channel_endpoints
              ORDER BY endpoint_key ASC",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(KnownChannelEndpoint {
-                endpoint_key: row.get(0)?,
-                channel: row.get(1)?,
-                account_id: row.get(2)?,
-                binding_key: row.get(3)?,
-                chat_id: row.get(4)?,
-                delivery_target_type: row.get(5)?,
-                delivery_target_id: row.get(6)?,
-                display_label: row.get(7)?,
-                thread_id: row.get(8)?,
-                thread_label: row.get(9)?,
-                workspace_dir: row.get(10)?,
-                thread_updated_at: row.get(11)?,
-                last_inbound_at: row.get(12)?,
-                last_delivery_at: row.get(13)?,
-            })
-        })?;
+        let rows = stmt.query_map([], known_channel_endpoint_from_row)?;
         let mut records = Vec::new();
         for row in rows {
             records.push(row?);
         }
         Ok(records)
+    }
+
+    pub(crate) fn get_thread_channel_endpoint(
+        &self,
+        endpoint_key: &str,
+    ) -> GaryxDbResult<Option<KnownChannelEndpoint>> {
+        let endpoint_key = normalize_required("endpoint_key", endpoint_key)?;
+        let conn = self.read_conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT endpoint_key, channel, account_id, binding_key, chat_id,
+                        delivery_target_type, delivery_target_id, display_label,
+                        thread_id, thread_label, workspace_dir, thread_updated_at,
+                        last_inbound_at, last_delivery_at
+                   FROM thread_channel_endpoints
+                  WHERE endpoint_key = ?1",
+                params![endpoint_key],
+                known_channel_endpoint_from_row,
+            )
+            .optional()?)
     }
 
     pub fn list_thread_message_routes(&self) -> GaryxDbResult<Vec<ThreadMessageRouteRecord>> {
@@ -2790,6 +3065,27 @@ fn recent_thread_record_from_row(
     })
 }
 
+fn known_channel_endpoint_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<KnownChannelEndpoint> {
+    Ok(KnownChannelEndpoint {
+        endpoint_key: row.get(0)?,
+        channel: row.get(1)?,
+        account_id: row.get(2)?,
+        binding_key: row.get(3)?,
+        chat_id: row.get(4)?,
+        delivery_target_type: row.get(5)?,
+        delivery_target_id: row.get(6)?,
+        display_label: row.get(7)?,
+        thread_id: row.get(8)?,
+        thread_label: row.get(9)?,
+        workspace_dir: row.get(10)?,
+        thread_updated_at: row.get(11)?,
+        last_inbound_at: row.get(12)?,
+        last_delivery_at: row.get(13)?,
+    })
+}
+
 fn workspace_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceRecord> {
     Ok(WorkspaceRecord {
         name: row.get(0)?,
@@ -2877,6 +3173,7 @@ fn automation_thread_run_by_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     /// A read query slow enough (tens of ms) to make lock serialization
     /// visible to the wall clock.
@@ -3253,6 +3550,214 @@ mod tests {
                 .projection_state_exists(
                     RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
                     RECENT_TASK_THREAD_KIND_MIGRATION_VERSION,
+                )
+                .expect("marker lookup")
+        );
+    }
+
+    fn seed_endpoint_holder_record(
+        service: &GaryxDbService,
+        thread_id: &str,
+        updated_at: &str,
+        bindings: Value,
+    ) {
+        let body = json!({
+            "thread_id": thread_id,
+            "label": format!("Title for {thread_id}"),
+            "workspace_dir": "/workspace/test",
+            "updated_at": updated_at,
+            "channel_bindings": bindings,
+        });
+        service
+            .write_thread_record_with_projections(
+                thread_id,
+                &serde_json::to_string(&body).expect("record json"),
+                Some(updated_at),
+                None,
+            )
+            .expect("seed holder record");
+    }
+
+    fn test_binding(binding_key: &str, label: &str) -> Value {
+        json!({
+            "channel": "telegram",
+            "account_id": "main",
+            "binding_key": binding_key,
+            "chat_id": binding_key,
+            "delivery_target_type": "chat_id",
+            "delivery_target_id": binding_key,
+            "display_label": label,
+            "last_inbound_at": "2026-07-01T00:00:00Z",
+        })
+    }
+
+    #[test]
+    fn endpoint_holder_dedup_migration_keeps_preferred_holder_and_syncs_projection() {
+        let service = GaryxDbService::memory().expect("memory db");
+        seed_endpoint_holder_record(
+            &service,
+            "thread::holder-old",
+            "2026-07-01T00:00:00Z",
+            json!([
+                test_binding("1000000001", "Old duplicate"),
+                test_binding("1000000002", "Old unique"),
+            ]),
+        );
+        seed_endpoint_holder_record(
+            &service,
+            "thread::holder-new",
+            "2026-07-02T00:00:00Z",
+            json!([test_binding("1000000001", "New duplicate")]),
+        );
+        service
+            .conn()
+            .expect("conn")
+            .execute(
+                "INSERT INTO thread_channel_endpoints (
+                    endpoint_key, channel, account_id, binding_key, chat_id,
+                    thread_id, projected_at
+                 ) VALUES (
+                    'telegram::main::1000000001', 'telegram', 'main',
+                    '1000000001', '1000000001', 'thread::holder-old',
+                    '2026-07-01T00:00:00Z'
+                 )",
+                [],
+            )
+            .expect("seed stale projection owner");
+
+        let summary = service
+            .migrate_endpoint_holder_dedup_v1()
+            .expect("dedup migration");
+        assert_eq!(summary.source_row_count, 3);
+        assert_eq!(summary.updated_row_count, 1);
+        assert!(!summary.already_completed);
+
+        let old: Value = serde_json::from_str(
+            &service
+                .get_thread_record_body("thread::holder-old")
+                .expect("old body")
+                .expect("old record"),
+        )
+        .expect("old json");
+        let new: Value = serde_json::from_str(
+            &service
+                .get_thread_record_body("thread::holder-new")
+                .expect("new body")
+                .expect("new record"),
+        )
+        .expect("new json");
+        assert_eq!(old["updated_at"], "2026-07-01T00:00:00Z");
+        assert_eq!(new["updated_at"], "2026-07-02T00:00:00Z");
+        let old_bindings = garyx_router::bindings_from_value(&old);
+        let new_bindings = garyx_router::bindings_from_value(&new);
+        assert_eq!(old_bindings.len(), 1);
+        assert_eq!(old_bindings[0].binding_key, "1000000002");
+        assert_eq!(new_bindings.len(), 1);
+        assert_eq!(new_bindings[0].binding_key, "1000000001");
+
+        let projected = service
+            .list_thread_channel_endpoints()
+            .expect("endpoint projection");
+        let duplicate = projected
+            .iter()
+            .find(|row| row.endpoint_key == "telegram::main::1000000001")
+            .expect("deduplicated endpoint");
+        assert_eq!(duplicate.thread_id.as_deref(), Some("thread::holder-new"));
+        assert_eq!(duplicate.display_label, "New duplicate");
+        let unique = projected
+            .iter()
+            .find(|row| row.endpoint_key == "telegram::main::1000000002")
+            .expect("unique endpoint");
+        assert_eq!(unique.thread_id.as_deref(), Some("thread::holder-old"));
+
+        let second = service
+            .migrate_endpoint_holder_dedup_v1()
+            .expect("idempotent rerun");
+        assert!(second.already_completed);
+        assert_eq!(second.source_row_count, 3);
+        assert_eq!(second.updated_row_count, 0);
+    }
+
+    #[test]
+    fn endpoint_holder_dedup_migration_records_zero_and_does_not_rerun() {
+        let service = GaryxDbService::memory().expect("memory db");
+        let first = service
+            .migrate_endpoint_holder_dedup_v1()
+            .expect("zero migration");
+        assert_eq!(first.source_row_count, 0);
+        assert!(!first.already_completed);
+
+        seed_endpoint_holder_record(
+            &service,
+            "thread::late-holder-a",
+            "2026-07-01T00:00:00Z",
+            json!([test_binding("1000000003", "Late A")]),
+        );
+        seed_endpoint_holder_record(
+            &service,
+            "thread::late-holder-b",
+            "2026-07-02T00:00:00Z",
+            json!([test_binding("1000000003", "Late B")]),
+        );
+        let second = service
+            .migrate_endpoint_holder_dedup_v1()
+            .expect("completed migration skips");
+        assert!(second.already_completed);
+        assert_eq!(second.source_row_count, 0);
+        for thread_id in ["thread::late-holder-a", "thread::late-holder-b"] {
+            let body: Value = serde_json::from_str(
+                &service
+                    .get_thread_record_body(thread_id)
+                    .expect("body read")
+                    .expect("body exists"),
+            )
+            .expect("body json");
+            assert_eq!(garyx_router::bindings_from_value(&body).len(), 1);
+        }
+    }
+
+    #[test]
+    fn endpoint_holder_dedup_migration_is_atomic_on_projection_failure() {
+        let service = GaryxDbService::memory().expect("memory db");
+        for (thread_id, updated_at) in [
+            ("thread::atomic-holder-a", "2026-07-01T00:00:00Z"),
+            ("thread::atomic-holder-b", "2026-07-02T00:00:00Z"),
+        ] {
+            seed_endpoint_holder_record(
+                &service,
+                thread_id,
+                updated_at,
+                json!([test_binding("1000000004", "Atomic")]),
+            );
+        }
+        service
+            .conn()
+            .expect("conn")
+            .execute_batch(
+                "CREATE TRIGGER fail_endpoint_dedup_projection
+                 BEFORE INSERT ON thread_channel_endpoints
+                 BEGIN
+                     SELECT RAISE(ABORT, 'forced endpoint projection failure');
+                 END;",
+            )
+            .expect("failure trigger");
+
+        assert!(service.migrate_endpoint_holder_dedup_v1().is_err());
+        for thread_id in ["thread::atomic-holder-a", "thread::atomic-holder-b"] {
+            let body: Value = serde_json::from_str(
+                &service
+                    .get_thread_record_body(thread_id)
+                    .expect("body read")
+                    .expect("body exists"),
+            )
+            .expect("body json");
+            assert_eq!(garyx_router::bindings_from_value(&body).len(), 1);
+        }
+        assert!(
+            !service
+                .projection_state_exists(
+                    ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME,
+                    ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION,
                 )
                 .expect("marker lookup")
         );

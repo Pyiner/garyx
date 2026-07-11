@@ -5,6 +5,7 @@ pub(crate) use crate::message_routing::MessageRoutingIndex;
 use crate::recent_threads::RecentThreadPageReader;
 use crate::store::ThreadStore;
 use crate::thread_history::ThreadHistoryRepository;
+use crate::EndpointBindingMutator;
 use garyx_models::config::GaryxConfig;
 pub(crate) use garyx_models::provider::ImagePayload;
 use garyx_models::provider::StreamEvent;
@@ -61,6 +62,7 @@ pub struct MessageRouter {
     default_agent: String,
     thread_creator: Option<Arc<dyn ThreadCreator>>,
     recent_thread_page_reader: Option<Arc<dyn RecentThreadPageReader>>,
+    endpoint_binding_mutator: Option<Arc<dyn EndpointBindingMutator>>,
     inbound_sink: Option<Arc<dyn InboundSink>>,
     thread_nav: threading::ThreadNavigationState,
     reply_routing: message::ReplyRoutingState,
@@ -85,6 +87,7 @@ impl MessageRouter {
             default_agent,
             thread_creator: None,
             recent_thread_page_reader: None,
+            endpoint_binding_mutator: None,
             inbound_sink: None,
             thread_nav: threading::ThreadNavigationState::default(),
             reply_routing: message::ReplyRoutingState::default(),
@@ -104,6 +107,14 @@ impl MessageRouter {
 
     pub fn recent_thread_page_reader(&self) -> Option<Arc<dyn RecentThreadPageReader>> {
         self.recent_thread_page_reader.clone()
+    }
+
+    pub fn set_endpoint_binding_mutator(&mut self, mutator: Arc<dyn EndpointBindingMutator>) {
+        self.endpoint_binding_mutator = Some(mutator);
+    }
+
+    pub fn endpoint_binding_mutator(&self) -> Option<Arc<dyn EndpointBindingMutator>> {
+        self.endpoint_binding_mutator.clone()
     }
 
     pub fn set_inbound_sink(&mut self, sink: Arc<dyn InboundSink>) {

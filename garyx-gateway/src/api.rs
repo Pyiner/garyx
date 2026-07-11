@@ -25,7 +25,7 @@ use garyx_models::{ChannelOutboundContent, CustomAgentProfile};
 use garyx_router::{
     ChannelBinding, ThreadHistoryError, bindings_from_value, count_user_query_messages,
     default_workspace_mode_for_channel_account, history_message_count, is_thread_key,
-    workspace_dir_from_value,
+    validate_thread_accepts_bot_binding, workspace_dir_from_value,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -424,7 +424,7 @@ pub async fn bot_bind(
     };
 
     if let Err(error) =
-        validate_thread_accepts_bot_binding(thread_id, &thread_data, &bot_id, channel, account_id)
+        validate_thread_accepts_bot_binding(thread_id, &thread_data, channel, account_id)
     {
         return (
             StatusCode::BAD_REQUEST,
@@ -548,69 +548,6 @@ fn parse_bot_selector(bot_id: &str) -> Result<(&str, &str), String> {
         return Err("bot_id must be `channel:account_id`".to_owned());
     }
     Ok((channel, account_id))
-}
-
-fn thread_string_field(thread_data: &Value, primary: &str, fallback: &str) -> Option<String> {
-    thread_data
-        .get(primary)
-        .or_else(|| thread_data.get(fallback))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn is_internal_binding_channel(channel: &str) -> bool {
-    channel.trim().eq_ignore_ascii_case("api")
-}
-
-fn validate_thread_accepts_bot_binding(
-    thread_id: &str,
-    thread_data: &Value,
-    bot_id: &str,
-    channel: &str,
-    account_id: &str,
-) -> Result<(), String> {
-    let thread_channel = thread_string_field(thread_data, "channel", "origin_channel");
-    let thread_account_id = thread_string_field(thread_data, "account_id", "origin_account_id");
-
-    if let Some(owner_channel) = thread_channel.as_deref()
-        && owner_channel != channel
-        && !is_internal_binding_channel(owner_channel)
-    {
-        return Err(format!(
-            "cannot bind bot '{bot_id}' to thread '{thread_id}': thread belongs to channel '{owner_channel}'"
-        ));
-    }
-
-    if thread_channel.as_deref() == Some(channel)
-        && let Some(owner_account_id) = thread_account_id.as_deref()
-        && owner_account_id != account_id
-    {
-        return Err(format!(
-            "cannot bind bot '{bot_id}' to thread '{thread_id}': thread belongs to bot '{channel}:{owner_account_id}'"
-        ));
-    }
-
-    for binding in bindings_from_value(thread_data) {
-        if is_internal_binding_channel(&binding.channel) {
-            continue;
-        }
-        if binding.channel != channel {
-            return Err(format!(
-                "cannot bind bot '{bot_id}' to thread '{thread_id}': thread is already bound to channel '{}'",
-                binding.channel
-            ));
-        }
-        if binding.account_id != account_id {
-            return Err(format!(
-                "cannot bind bot '{bot_id}' to thread '{thread_id}': thread is already bound to bot '{}:{}'",
-                binding.channel, binding.account_id
-            ));
-        }
-    }
-
-    Ok(())
 }
 
 fn enrich_bot_binding_payload(
