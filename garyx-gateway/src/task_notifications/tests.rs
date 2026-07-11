@@ -197,16 +197,90 @@ fn format_wraps_notification_with_single_outer_xml_tag() {
 }
 
 #[test]
-fn cap_task_notification_handoff_limits_long_bodies() {
-    let long_body = "a".repeat(TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT + 100);
-    let capped = cap_task_notification_handoff(&long_body);
+fn cap_bot_task_notification_handoff_limits_long_bodies() {
+    let long_body = "a".repeat(BOT_TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT + 100);
+    let capped = cap_bot_task_notification_handoff(&long_body);
 
     assert!(capped.ends_with("\n\n[truncated]"));
     assert!(
         capped.chars().count()
-            <= TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT + "\n\n[truncated]".chars().count()
+            <= BOT_TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT + "\n\n[truncated]".chars().count()
     );
-    assert!(!capped.contains(&"a".repeat(TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT + 1)));
+    assert!(!capped.contains(&"a".repeat(BOT_TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT + 1)));
+}
+
+#[tokio::test]
+async fn thread_target_receives_complete_handoff_beyond_bot_cap() {
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let provider = Arc::new(RecordingProvider::default());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("recording-provider", provider.clone())
+        .await;
+    bridge.set_default_provider_key("recording-provider").await;
+    let state = crate::app_bootstrap::AppStateBuilder::new(telegram_owner_config())
+        .with_bridge(bridge.clone())
+        .with_channel_dispatcher(dispatcher)
+        .build();
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::task-long-handoff",
+            json!({
+                "thread_id": "thread::task-long-handoff",
+                "task": task_for_notification(TaskNotificationTarget::Thread {
+                    thread_id: "thread::review-parent".to_owned(),
+                }),
+            }),
+        )
+        .await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::review-parent",
+            json!({
+                "thread_id": "thread::review-parent",
+                "provider_key": "recording-provider",
+            }),
+        )
+        .await;
+
+    let handoff = format!(
+        "{}\ncomplete-handoff-tail",
+        "a".repeat(BOT_TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT)
+    );
+    deliver_task_review_handoff(
+        &state,
+        TaskReadyForReviewEvent {
+            thread_id: "thread::task-long-handoff".to_owned(),
+            task_id: "#TASK-42".to_owned(),
+            run_id: Some("run-long-handoff".to_owned()),
+            handoff: Some(handoff.clone()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let provider_calls = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let calls = provider.calls();
+            if !calls.is_empty() {
+                break calls;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("notification should trigger target thread agent");
+    assert_eq!(provider_calls.len(), 1);
+    assert!(provider_calls[0].1.contains(&handoff));
+    assert!(!provider_calls[0].1.contains("[truncated]"));
 }
 
 #[tokio::test]
@@ -380,13 +454,17 @@ async fn dispatches_ready_notification_to_bot_target() {
         )
         .await;
 
+    let handoff = format!(
+        "The implementation is complete.\n{}\nbot-handoff-tail",
+        "a".repeat(BOT_TASK_NOTIFICATION_HANDOFF_CHAR_LIMIT)
+    );
     deliver_task_review_handoff(
         &state,
         TaskReadyForReviewEvent {
             thread_id: "thread::task".to_owned(),
             task_id: "#TASK-42".to_owned(),
             run_id: Some("run-42".to_owned()),
-            handoff: Some("The implementation is complete.".to_owned()),
+            handoff: Some(handoff),
         },
     )
     .await
@@ -407,6 +485,8 @@ async fn dispatches_ready_notification_to_bot_target() {
     let text = notification_call.content.as_text().unwrap();
     assert!(text.contains("Task #TASK-42 is ready for review"));
     assert!(text.contains("The implementation is complete."));
+    assert!(text.contains("[truncated]"));
+    assert!(!text.contains("bot-handoff-tail"));
 
     let provider_calls = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
@@ -431,6 +511,8 @@ async fn dispatches_ready_notification_to_bot_target() {
             .1
             .contains("The implementation is complete.")
     );
+    assert!(provider_calls[0].1.contains("[truncated]"));
+    assert!(!provider_calls[0].1.contains("bot-handoff-tail"));
     assert_eq!(
         provider_calls[0].2.get("task_notification"),
         Some(&Value::Bool(true))

@@ -90,10 +90,12 @@ Keep the event contract unchanged:
 
 ## Length Limit
 
-Add one notification-body cap to task-ready handoffs before formatting the
-notification. Apply it after final-answer extraction. It should be large enough
-for a normal final summary but prevent progress dumps or pasted logs from
-dominating a review channel.
+Apply a notification-body cap to external bot targets after final-answer
+extraction. It should be large enough for a normal final summary but prevent
+progress dumps or pasted logs from dominating a review channel. Thread targets
+keep the complete handoff because the notification is also input to the review
+agent; presentation concerns on first-party clients belong in collapsible UI,
+not destructive gateway truncation.
 
 Logging can keep its existing short summaries because logs are not the user
 notification body.
@@ -120,7 +122,8 @@ Add model tests for the helper:
 - single assistant reply returns that reply;
 - no assistant reply returns `None`.
 
-Add gateway coverage for the shared cap.
+Add gateway coverage for the bot-target cap and complete thread-target
+handoffs.
 
 ## Validation
 
