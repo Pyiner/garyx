@@ -384,10 +384,16 @@ async fn start_chat_run(
             match &outcome {
                 AgentDispatchOutcome::Started => bound_stream.detach(),
                 AgentDispatchOutcome::QueuedToActiveRun { .. } => {
-                    // The reply belongs to the already-active run, which this
-                    // subscription (keyed to the fresh run id) will never see;
-                    // keep it alive and it leaks until process exit.
+                    // The reply belongs to the already-active run, which the
+                    // fresh-run-keyed subscriptions will never see; keeping
+                    // them alive leaks until process exit. That covers both
+                    // the bound channel stream and any caller-attached
+                    // committed-stream task (the chat WS handler's per-start
+                    // subscriber waiting on this run id).
                     bound_stream.abort();
+                    for task in &stream_tasks {
+                        task.abort();
+                    }
                 }
             }
             crate::runtime_diagnostics::record_message_ledger_event(

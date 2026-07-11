@@ -1499,6 +1499,12 @@ impl CronService {
 
         tracing::info!(job_id = %job.id, run_id = %run_id, action = ?job.action, "cron job executing");
 
+        // The run id recorded on the RunRecord. A scheduled turn queued into
+        // a thread's already-active run is owned by that run — automation
+        // activity resolves the transcript through this id, so it must be the
+        // effective one; the requested id stays in logs as the dispatch
+        // correlation id.
+        let mut record_run_id = run_id.clone();
         let (status, error) = match &job.kind {
             CronJobKind::InternalDispatch { payload } => {
                 // Boundary fallback: classify drop-vs-transient and
@@ -1548,7 +1554,10 @@ impl CronService {
                         )
                         .await
                         {
-                            Ok(()) => (JobRunStatus::Success, None),
+                            Ok(effective_run_id) => {
+                                record_run_id = effective_run_id;
+                                (JobRunStatus::Success, None)
+                            }
                             Err(e) => (JobRunStatus::Failed, Some(e)),
                         }
                     }
@@ -1568,7 +1577,7 @@ impl CronService {
         );
 
         RunRecord {
-            run_id,
+            run_id: record_run_id,
             job_id: job.id.clone(),
             started_at,
             finished_at: Some(finished_at),
@@ -1786,6 +1795,10 @@ impl CronService {
     /// user message (router inbound semantics, transcript user turn, busy
     /// queueing, channel echo), sharing the pipeline with `schedule_followup`
     /// and the quota auto-resend instead of starting a bridge run directly.
+    ///
+    /// Returns the run id that owns the reply — the requested one for a fresh
+    /// run, or the already-active run's id when the prompt was queued into it
+    /// — so run records and automation activity resolve the real transcript.
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_agent_turn_via_thread(
         job: &CronJob,
@@ -1795,7 +1808,7 @@ impl CronService {
         runtime: &CronDispatchRuntime,
         app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
         thread_key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let automation_job = is_automation_prompt_job(job);
         let source = if automation_job { "automation" } else { "cron" };
 
@@ -1878,7 +1891,7 @@ impl CronService {
                         .with_field("thread_id", serde_json::json!(thread_key)),
                     )
                     .await;
-                Ok(())
+                Ok(effective_run_id)
             }
             Err(error) => {
                 runtime
@@ -1906,7 +1919,7 @@ impl CronService {
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
         app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let runtime = dispatch_runtime
             .read()
             .await
@@ -2135,7 +2148,7 @@ impl CronService {
                 "failed to sync external user skills before scheduled dispatch"
             );
         }
-        if let Err(error) = runtime
+        let outcome = match runtime
             .bridge
             .start_agent_run(
                 AgentRunRequest::new(
@@ -2151,23 +2164,31 @@ impl CronService {
             )
             .await
         {
-            if let Some(thread_id) = &thread_log_id {
-                runtime
-                    .thread_logs
-                    .record_event(
-                        ThreadLogEvent::error(thread_id, "automation", "scheduled dispatch failed")
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if let Some(thread_id) = &thread_log_id {
+                    runtime
+                        .thread_logs
+                        .record_event(
+                            ThreadLogEvent::error(
+                                thread_id,
+                                "automation",
+                                "scheduled dispatch failed",
+                            )
                             .with_run_id(run_id.to_owned())
                             .with_field("job_id", serde_json::json!(job.id))
                             .with_field("error", serde_json::json!(error.to_string())),
-                    )
-                    .await;
+                        )
+                        .await;
+                }
+                return Err(format!("cron dispatch failed: {error}"));
             }
-            return Err(format!("cron dispatch failed: {error}"));
-        }
+        };
+        let effective_run_id = outcome.effective_run_id().unwrap_or(run_id).to_owned();
         active_agent_runs
             .write()
             .await
-            .insert(job.id.clone(), run_id.to_owned());
+            .insert(job.id.clone(), effective_run_id.clone());
         if let Some(thread_id) = &thread_log_id {
             runtime
                 .thread_logs
@@ -2180,7 +2201,7 @@ impl CronService {
                 .await;
         }
 
-        Ok(())
+        Ok(effective_run_id)
     }
 }
 

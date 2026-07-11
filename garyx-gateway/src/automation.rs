@@ -868,15 +868,23 @@ pub async fn create_automation(
         Ok(value) => value,
         Err(error) => return invalid(error),
     };
-    let agent_id = match resolve_automation_agent_id(&state, body.agent_id.as_deref(), None).await {
-        Ok(value) => value,
-        Err(error) => return invalid(error),
-    };
     let target_thread =
         match resolve_automation_target_thread(&state, body.target_thread_id.as_deref()).await {
             Ok(value) => value,
             Err(error) => return invalid(error),
         };
+    // A thread-bound automation executes under the thread's own agent, so
+    // the automation-level agent is not validated (and a stale/deleted one
+    // must not block unrelated edits). Generated-thread automations still
+    // require a resolvable agent.
+    let agent_id = if target_thread.is_some() {
+        selected_agent_reference_id(body.agent_id.as_deref(), None)
+    } else {
+        match resolve_automation_agent_id(&state, body.agent_id.as_deref(), None).await {
+            Ok(value) => value,
+            Err(error) => return invalid(error),
+        }
+    };
     let explicit_workspace_dir = body
         .workspace_dir
         .as_deref()
@@ -950,16 +958,6 @@ pub async fn update_automation(
         },
         None => automation_prompt(&current),
     };
-    let agent_id = match resolve_automation_agent_id(
-        &state,
-        body.agent_id.as_deref(),
-        current.agent_id.as_deref(),
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(error) => return invalid(error),
-    };
     let target_thread = match &body.target_thread_id {
         Some(Some(thread_id)) => {
             match resolve_automation_target_thread(&state, Some(thread_id.as_str())).await {
@@ -972,6 +970,23 @@ pub async fn update_automation(
             thread_id,
             workspace_dir: None,
         }),
+    };
+    // A thread-bound automation executes under the thread's own agent: skip
+    // job-agent validation so a stale/deleted automation agent cannot 400 an
+    // unrelated edit (e.g. renaming the label).
+    let agent_id = if target_thread.is_some() {
+        selected_agent_reference_id(body.agent_id.as_deref(), current.agent_id.as_deref())
+    } else {
+        match resolve_automation_agent_id(
+            &state,
+            body.agent_id.as_deref(),
+            current.agent_id.as_deref(),
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => return invalid(error),
+        }
     };
     let explicit_workspace_dir = body
         .workspace_dir

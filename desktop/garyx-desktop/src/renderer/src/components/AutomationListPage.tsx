@@ -68,9 +68,23 @@ function getTargetLabel(
 }
 
 function getAgentLabel(
+  state: DesktopState | null,
   agents: DesktopCustomAgent[],
   automation: DesktopAutomationSummary,
-): string {
+): string | null {
+  const targetThreadId = automation.targetThreadId?.trim();
+  if (targetThreadId) {
+    // A thread-bound automation runs under the thread's own agent; the
+    // automation-level agent does not apply. Derive the pill from the
+    // thread, and show none rather than a wrong default when unknown.
+    const thread = state?.threads.find((entry) => entry.id === targetThreadId);
+    const threadAgentId = thread?.agentId?.trim();
+    if (!threadAgentId) {
+      return null;
+    }
+    const match = agents.find((agent) => agent.agentId === threadAgentId);
+    return match?.displayName || threadAgentId;
+  }
   const match = agents.find((agent) => agent.agentId === automation.agentId);
   return match?.displayName || automation.agentId || 'Claude';
 }
@@ -196,7 +210,7 @@ export function AutomationListPage({
           {automations.map((automation) => {
             const wsLabel = getWorkspaceLabel(desktopState, automation, t);
             const targetLabel = getTargetLabel(desktopState, automation, wsLabel, t);
-            const agentLabel = getAgentLabel(agents, automation);
+            const agentLabel = getAgentLabel(desktopState, agents, automation);
             const workspace = selectedWorkspace(desktopState, automation.workspacePath);
             const nextTitle = automation.schedule.kind === 'once' ? t('Run At') : t('Next');
             const nextRunLabel = automation.schedule.kind === 'once'
@@ -223,7 +237,9 @@ export function AutomationListPage({
                   </div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                     <span className={`codex-sync-pill ${status.pillClass}`}>{t(status.label)}</span>
-                    <span className="codex-sync-pill">{agentLabel}</span>
+                    {agentLabel ? (
+                      <span className="codex-sync-pill">{agentLabel}</span>
+                    ) : null}
                     <span className="codex-sync-pill ok">{formatSchedule(automation.schedule, t)}</span>
                     {workspace && !workspace.available && (
                       <span className="codex-sync-pill fail">{t('Workspace unavailable')}</span>
