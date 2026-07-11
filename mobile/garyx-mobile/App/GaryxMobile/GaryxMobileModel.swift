@@ -356,6 +356,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var draftMcpHeaders = ""
     let defaults: UserDefaults
     let keychain: GaryxMobileKeychain
+    let gatewayClientFactory: ((GaryxGatewayConfiguration) -> GaryxGatewayClient)?
     var backgroundCommittedRunReconcileTask: Task<Void, Never>?
     var selectedThreadReconcileTask: Task<Void, Never>?
     var selectedThreadReconcileThreadId: String?
@@ -422,6 +423,8 @@ final class GaryxMobileModel: ObservableObject {
     var pendingDirectFollowUpsByThread: [String: [(userId: String, assistantId: String)]] = [:]
     var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]
     var pendingThreadArchives = GaryxPendingThreadArchiveState()
+    var auxiliaryAllRecentThreadsRefreshTask: Task<Void, Never>?
+    var auxiliaryAllRecentThreadsRefreshTaskId: UUID?
     var gatewayRuntimeGeneration = UUID()
     var selectedThreadRecoveryTask: Task<Void, Never>?
     var selectedThreadRecoveryThreadId: String?
@@ -471,9 +474,14 @@ final class GaryxMobileModel: ObservableObject {
     var debugSnapshotActive = false
     #endif
 
-    init(defaults: UserDefaults = .standard, keychain: GaryxMobileKeychain = .shared) {
+    init(
+        defaults: UserDefaults = .standard,
+        keychain: GaryxMobileKeychain = .shared,
+        gatewayClientFactory: ((GaryxGatewayConfiguration) -> GaryxGatewayClient)? = nil
+    ) {
         self.defaults = defaults
         self.keychain = keychain
+        self.gatewayClientFactory = gatewayClientFactory
         let avatarStore = GaryxAvatarDiskStore()
         self.avatarStore = avatarStore
         self.avatarImageProvider = GaryxAvatarImageProvider(

@@ -20,10 +20,7 @@ extension GaryxMobileModel {
         guard let ticket = recentThreadFeeds.requestRefresh() else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
         if ticket.filter == .nonTask {
-            startAuxiliaryAllRecentThreadsRefresh(
-                source: source,
-                runtimeGeneration: runtimeGeneration
-            )
+            startAuxiliaryAllRecentThreadsRefresh(source: source)
         }
         let previousThreadSummaries = Self.mergedThreadSummaries(threads + [selectedThread].compactMap { $0 })
         let previouslyRemoteBusyThreadIds = remoteBusyThreadIds
@@ -105,18 +102,24 @@ extension GaryxMobileModel {
         }
     }
 
-    private func startAuxiliaryAllRecentThreadsRefresh(
-        source: GaryxThreadListRefreshSource,
-        runtimeGeneration: UUID
-    ) {
+    private func startAuxiliaryAllRecentThreadsRefresh(source: GaryxThreadListRefreshSource) {
         guard let ticket = recentThreadFeeds.requestRefresh(filter: .all) else { return }
-        Task { [weak self] in
-            await self?.performAuxiliaryAllRecentThreadsRefresh(
+        let runtimeGeneration = gatewayRuntimeGeneration
+        let taskId = UUID()
+        auxiliaryAllRecentThreadsRefreshTaskId = taskId
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performAuxiliaryAllRecentThreadsRefresh(
                 ticket: ticket,
                 source: source,
                 runtimeGeneration: runtimeGeneration
             )
+            if self.auxiliaryAllRecentThreadsRefreshTaskId == taskId {
+                self.auxiliaryAllRecentThreadsRefreshTask = nil
+                self.auxiliaryAllRecentThreadsRefreshTaskId = nil
+            }
         }
+        auxiliaryAllRecentThreadsRefreshTask = task
     }
 
     private func performAuxiliaryAllRecentThreadsRefresh(
@@ -155,15 +158,15 @@ extension GaryxMobileModel {
                 )
                 persistRecentThreadsWidgetSnapshot()
             case .abandonedLocalMutation:
-                startAuxiliaryAllRecentThreadsRefresh(
-                    source: source,
-                    runtimeGeneration: runtimeGeneration
-                )
+                // The replacement ticket belongs to the runtime that exists
+                // now, not the generation captured by the abandoned request.
+                startAuxiliaryAllRecentThreadsRefresh(source: source)
             case .abandonedStaleEpoch:
                 return
             }
         } catch {
             recentThreadFeeds.failRefresh(ticket)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             // Auxiliary All failures remain silent while Chats is selected.
             // If the user switched to All while the coalesced request was in
             // flight, the request now owns the visible feed and follows the

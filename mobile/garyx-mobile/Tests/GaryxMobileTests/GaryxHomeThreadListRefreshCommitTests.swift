@@ -1,9 +1,10 @@
+import Foundation
 import XCTest
 @testable import GaryxMobile
 
 /// TASK-1802: head refresh owns its filter-keyed pager ticket through the
-/// final pre-commit await. Pins the #TASK-1804 archive interleavings without
-/// a network by playing the model exactly as `refreshThreads` does.
+/// final pre-commit await. Pins the App orchestration and #TASK-1804 archive
+/// interleavings with an in-process URL loading stub.
 @MainActor
 final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
     func testCommitDoesNotResurrectThreadArchivedDuringBackfillAwait() throws {
@@ -154,12 +155,280 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertEqual(model.threads.first(where: { $0.id == task.id })?.title, "New task title")
     }
 
-    private func makeModel() -> GaryxMobileModel {
+    func testChatsRefreshStartsOneAuxiliaryAllRequestWithoutExtendingSelectedRefresh() async throws {
+        let auxiliaryStarted = expectation(description: "auxiliary All request started")
+        let auxiliaryGate = DispatchSemaphore(value: 0)
+        let allRequestCount = GaryxLockedCounter()
+        let chatsPage = try makeRecentThreadsPageData(rows: [
+            (id: "thread-chat", title: "Chat thread"),
+        ])
+        let allPage = try makeRecentThreadsPageData(rows: [
+            (id: "thread-task", title: "Task thread"),
+            (id: "thread-chat", title: "Chat thread"),
+        ])
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if components.path == "/api/thread-pins" {
+                return try garyxStubResponse(request, data: Data(#"{"thread_ids":[]}"#.utf8))
+            }
+            guard components.path == "/api/recent-threads" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            let tasks = components.queryItems?.first(where: { $0.name == "tasks" })?.value
+            if tasks == GaryxRecentThreadFilter.all.tasksQueryValue {
+                if allRequestCount.increment() == 1 {
+                    auxiliaryStarted.fulfill()
+                }
+                guard auxiliaryGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, data: allPage)
+            }
+            XCTAssertEqual(tasks, GaryxRecentThreadFilter.nonTask.tasksQueryValue)
+            return try garyxStubResponse(request, data: chatsPage)
+        }
+        defer {
+            auxiliaryGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.recentThreadFeeds.select(.nonTask)
+        let selectedRefresh = Task { @MainActor in
+            await model.refreshThreads(source: .userPullToRefresh)
+        }
+
+        await fulfillment(of: [auxiliaryStarted], timeout: 2)
+        let auxiliaryTask = try XCTUnwrap(model.auxiliaryAllRecentThreadsRefreshTask)
+        await selectedRefresh.value
+
+        XCTAssertEqual(model.visibleRecentThreadIds, ["thread-chat"])
+        XCTAssertFalse(model.recentThreadFeeds.selectedPresentation.isRefreshingHead)
+        XCTAssertTrue(
+            model.recentThreadFeeds.allFeed.presentation.isRefreshingHead,
+            "the selected pull spinner must finish while the independent All request is still in flight"
+        )
+
+        // A second selected refresh is allowed, but the filter-owned All gate
+        // must coalesce its auxiliary request.
+        await model.refreshThreads(source: .userPullToRefresh)
+        XCTAssertEqual(allRequestCount.value, 1)
+
+        auxiliaryGate.signal()
+        await auxiliaryTask.value
+
+        XCTAssertEqual(model.allRecentThreadIds, ["thread-task", "thread-chat"])
+        XCTAssertEqual(
+            model.visibleRecentThreadIds,
+            ["thread-chat"],
+            "the auxiliary result may update All and the shared cache, never the selected Chats membership"
+        )
+        XCTAssertNil(model.lastError)
+    }
+
+    func testChatsAuxiliaryFailureOnlyMarksAllFeed() async throws {
+        let auxiliaryStarted = expectation(description: "failing auxiliary All request started")
+        let auxiliaryGate = DispatchSemaphore(value: 0)
+        let chatsPage = try makeRecentThreadsPageData(rows: [
+            (id: "thread-chat", title: "Chat thread"),
+        ])
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if components.path == "/api/thread-pins" {
+                return try garyxStubResponse(request, data: Data(#"{"thread_ids":[]}"#.utf8))
+            }
+            guard components.path == "/api/recent-threads" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            let tasks = components.queryItems?.first(where: { $0.name == "tasks" })?.value
+            if tasks == GaryxRecentThreadFilter.all.tasksQueryValue {
+                auxiliaryStarted.fulfill()
+                guard auxiliaryGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    statusCode: 400,
+                    data: Data(#"{"error":"synthetic auxiliary failure"}"#.utf8)
+                )
+            }
+            return try garyxStubResponse(request, data: chatsPage)
+        }
+        defer {
+            auxiliaryGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.recentThreadFeeds.select(.nonTask)
+        let selectedRefresh = Task { @MainActor in
+            await model.refreshThreads(source: .userPullToRefresh)
+        }
+        await fulfillment(of: [auxiliaryStarted], timeout: 2)
+        let auxiliaryTask = try XCTUnwrap(model.auxiliaryAllRecentThreadsRefreshTask)
+        await selectedRefresh.value
+        let selectedPresentation = model.recentThreadFeeds.selectedPresentation
+
+        auxiliaryGate.signal()
+        await auxiliaryTask.value
+
+        XCTAssertNil(model.lastError)
+        XCTAssertEqual(model.visibleRecentThreadIds, ["thread-chat"])
+        XCTAssertEqual(model.recentThreadFeeds.selectedPresentation, selectedPresentation)
+        XCTAssertTrue(model.recentThreadFeeds.allFeed.headFailure)
+    }
+
+    func testAuxiliaryFailureFromPreviousGatewayDoesNotToastAfterReset() async throws {
+        let auxiliaryStarted = expectation(description: "old gateway auxiliary request started")
+        let auxiliaryGate = DispatchSemaphore(value: 0)
+        let chatsPage = try makeRecentThreadsPageData(rows: [
+            (id: "thread-chat", title: "Chat thread"),
+        ])
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if components.path == "/api/thread-pins" {
+                return try garyxStubResponse(request, data: Data(#"{"thread_ids":[]}"#.utf8))
+            }
+            guard components.path == "/api/recent-threads" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            let tasks = components.queryItems?.first(where: { $0.name == "tasks" })?.value
+            if tasks == GaryxRecentThreadFilter.all.tasksQueryValue {
+                auxiliaryStarted.fulfill()
+                guard auxiliaryGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    statusCode: 400,
+                    data: Data(#"{"error":"old gateway failed"}"#.utf8)
+                )
+            }
+            return try garyxStubResponse(request, data: chatsPage)
+        }
+        defer {
+            auxiliaryGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.recentThreadFeeds.select(.nonTask)
+        let selectedRefresh = Task { @MainActor in
+            await model.refreshThreads(source: .userPullToRefresh)
+        }
+        await fulfillment(of: [auxiliaryStarted], timeout: 2)
+        let auxiliaryTask = try XCTUnwrap(model.auxiliaryAllRecentThreadsRefreshTask)
+        await selectedRefresh.value
+
+        let oldGeneration = model.gatewayRuntimeGeneration
+        model.resetGatewayRuntimeState()
+        XCTAssertNotEqual(model.gatewayRuntimeGeneration, oldGeneration)
+        XCTAssertEqual(model.recentThreadFeeds.selectedFilter, .all)
+
+        auxiliaryGate.signal()
+        await auxiliaryTask.value
+
+        XCTAssertNil(
+            model.lastError,
+            "an old gateway failure must be dropped even though reset selected All, the ticket's filter"
+        )
+        XCTAssertEqual(model.recentThreadFeeds.selectedPresentation, GaryxRecentThreadFeedPresentation())
+    }
+
+    func testArchiveSuccessInvalidatesRefreshIssuedAfterOptimisticRemoval() async throws {
+        let archiveStarted = expectation(description: "archive request started")
+        let archiveGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "POST", components.path.hasSuffix("/archive") {
+                archiveStarted.fulfill()
+                guard archiveGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    data: Data(
+                        #"{"archived":true,"deleted":true,"thread_id":"thread-archived","detached_endpoint_keys":[]}"#.utf8
+                    )
+                )
+            }
+            // Post-archive catalog/list refreshes are irrelevant to this
+            // interleaving and fail immediately so the real App flow can exit.
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            archiveGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let archived = makeThread(id: "thread-archived", title: "Archived thread")
+        let survivor = makeThread(id: "thread-survivor", title: "Surviving thread")
+        model.threads = [archived, survivor]
+        primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .all)
+        primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .nonTask)
+
+        let archiveTask = Task { @MainActor in
+            await model.archiveThreadRecord(threadId: archived.id)
+        }
+        await fulfillment(of: [archiveStarted], timeout: 2)
+        XCTAssertTrue(model.pendingThreadArchives.contains(threadId: archived.id))
+        XCTAssertEqual(model.allRecentThreadIds, [survivor.id])
+
+        // This ticket is newer than the optimistic removal, so only the
+        // successful archive's second local removal can invalidate its stale
+        // server page after the pending tombstone has been resolved.
+        let staleTicket = try XCTUnwrap(model.recentThreadFeeds.requestRefresh(filter: .all))
+        archiveGate.signal()
+        let archiveResolved = await waitUntil {
+            !model.pendingThreadArchives.contains(threadId: archived.id)
+        }
+        XCTAssertTrue(
+            archiveResolved,
+            "the real archive success path must resolve its pending tombstone"
+        )
+
+        let completion = model.recentThreadFeeds.completeRefresh(
+            staleTicket,
+            pageIds: [archived.id, survivor.id],
+            pageOffset: 0,
+            pageCount: 2,
+            hasMore: false
+        )
+        XCTAssertEqual(completion, .abandonedLocalMutation)
+        XCTAssertEqual(model.allRecentThreadIds, [survivor.id])
+        XCTAssertFalse(model.threads.contains { $0.id == archived.id })
+
+        await archiveTask.value
+    }
+
+    private func makeModel(session: URLSession? = nil) -> GaryxMobileModel {
         let suiteName = "GaryxHomeThreadListRefreshCommitTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
-        defaults.set("http://127.0.0.1:31337", forKey: GaryxMobileSettingsKeys.gatewayUrl)
-        return GaryxMobileModel(defaults: defaults)
+        defaults.set("http://gateway.example.test", forKey: GaryxMobileSettingsKeys.gatewayUrl)
+        let clientFactory = session.map { session in
+            { (configuration: GaryxGatewayConfiguration) in
+                GaryxGatewayClient(
+                    configuration: configuration,
+                    session: session,
+                    retryPolicy: .disabled
+                )
+            }
+        }
+        return GaryxMobileModel(defaults: defaults, gatewayClientFactory: clientFactory)
     }
 
     private func makeThread(id: String, title: String) -> GaryxThreadSummary {
@@ -214,5 +483,118 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         }
         """
         return try JSONDecoder().decode(GaryxRecentThreadsPage.self, from: Data(json.utf8))
+    }
+
+    private func makeRecentThreadsPageData(rows: [(id: String, title: String)]) throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: [
+                "threads": rows.map { row in
+                    [
+                        "thread_id": row.id,
+                        "title": row.title,
+                        "last_active_at": "2026-07-07T02:00:00Z",
+                        "last_message_preview": "",
+                    ]
+                },
+                "count": rows.count,
+                "limit": 30,
+                "offset": 0,
+                "total": rows.count,
+                "has_more": false,
+            ]
+        )
+    }
+
+    private func makeStubSession(
+        handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
+    ) -> URLSession {
+        GaryxRecentThreadsURLProtocolStub.requestHandler = handler
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxRecentThreadsURLProtocolStub.self]
+        return URLSession(configuration: configuration)
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 2,
+        condition: () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return condition()
+    }
+}
+
+private enum GaryxRefreshStubError: Error {
+    case timedOut
+    case missingURL
+    case invalidResponse
+}
+
+private func garyxStubResponse(
+    _ request: URLRequest,
+    statusCode: Int = 200,
+    data: Data
+) throws -> (HTTPURLResponse, Data) {
+    guard let url = request.url else { throw GaryxRefreshStubError.missingURL }
+    guard let response = HTTPURLResponse(
+        url: url,
+        statusCode: statusCode,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"]
+    ) else {
+        throw GaryxRefreshStubError.invalidResponse
+    }
+    return (response, data)
+}
+
+private final class GaryxRecentThreadsURLProtocolStub: URLProtocol {
+    static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let requestHandler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        let request = request
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                let (response, data) = try requestHandler(request)
+                self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                self.client?.urlProtocol(self, didLoad: data)
+                self.client?.urlProtocolDidFinishLoading(self)
+            } catch {
+                self.client?.urlProtocol(self, didFailWithError: error)
+            }
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private final class GaryxLockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    @discardableResult
+    func increment() -> Int {
+        lock.lock()
+        count += 1
+        let next = count
+        lock.unlock()
+        return next
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
 }

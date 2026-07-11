@@ -59,13 +59,13 @@ extension GaryxMobileModel {
         guard let url = parsedGatewayURL(from: normalized) else {
             throw GaryxGatewayError.invalidURL(normalized)
         }
-        return GaryxGatewayClient(
-            configuration: GaryxGatewayConfiguration(
-                baseURL: url,
-                authToken: gatewayAuthToken,
-                customHeaders: GaryxGatewayHeaders.parse(gatewayHeaders)
-            )
+        let configuration = GaryxGatewayConfiguration(
+            baseURL: url,
+            authToken: gatewayAuthToken,
+            customHeaders: GaryxGatewayHeaders.parse(gatewayHeaders)
         )
+        return gatewayClientFactory?(configuration)
+            ?? GaryxGatewayClient(configuration: configuration)
     }
 
     func parsedGatewayURL(from value: String) -> URL? {
