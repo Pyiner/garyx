@@ -1096,15 +1096,24 @@ pub struct CreateSkillEntryBody {
     pub entry_type: String,
 }
 
-async fn ensure_existing_thread_id(state: &Arc<AppState>, key: &str) -> Option<String> {
+/// Resolve an existing thread id at a request boundary: `Ok(None)` is a
+/// plain 404, while a store backend failure surfaces as `Err` so handlers
+/// answer 500 instead of a misleading not-found.
+async fn ensure_existing_thread_id(
+    state: &Arc<AppState>,
+    key: &str,
+) -> Result<Option<String>, (StatusCode, Json<Value>)> {
     let trimmed = key.trim();
     if trimmed.is_empty() || !is_thread_key(trimmed) {
-        return None;
+        return Ok(None);
     }
-    if state.threads.thread_store.exists_logged(trimmed).await {
-        Some(trimmed.to_owned())
-    } else {
-        None
+    match state.threads.thread_store.exists(trimmed).await {
+        Ok(true) => Ok(Some(trimmed.to_owned())),
+        Ok(false) => Ok(None),
+        Err(error) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )),
     }
 }
 
@@ -1205,7 +1214,16 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
     thread_id: &str,
 ) -> Result<ChannelEndpointBindResult, ChannelEndpointMutationError> {
     let requested_endpoint_key = normalize_endpoint_lookup_key(endpoint_key);
-    let Some(thread_id) = ensure_existing_thread_id(state, thread_id).await else {
+    let Some(thread_id) =
+        ensure_existing_thread_id(state, thread_id)
+            .await
+            .map_err(|(status, body)| {
+                ChannelEndpointMutationError::new(
+                    status,
+                    body.0["error"].as_str().unwrap_or("thread store failed"),
+                )
+            })?
+    else {
         return Err(ChannelEndpointMutationError::new(
             StatusCode::NOT_FOUND,
             "target thread not found",
@@ -1443,6 +1461,7 @@ async fn recent_threads_payload(
 fn garyx_db_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {
     let (status, code) = match &error {
         GaryxDbError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BadRequest"),
+        GaryxDbError::ThreadArchived(_) => (StatusCode::GONE, "ThreadArchived"),
         GaryxDbError::LockPoisoned
         | GaryxDbError::Join(_)
         | GaryxDbError::Configuration(_)
@@ -1587,20 +1606,28 @@ pub async fn get_thread(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    let Some(thread_id) = ensure_existing_thread_id(&state, &key).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "thread not found"})),
-        );
+    let thread_id = match ensure_existing_thread_id(&state, &key).await {
+        Ok(Some(thread_id)) => thread_id,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "thread not found"})),
+            );
+        }
+        Err(response) => return response,
     };
-    match state.threads.thread_store.get_logged(&thread_id).await {
-        Some(data) => (
+    match state.threads.thread_store.get(&thread_id).await {
+        Ok(Some(data)) => (
             StatusCode::OK,
             Json(thread_metadata_response(&state, &thread_id, &data).await),
         ),
-        None => (
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "thread not found"})),
+        ),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
         ),
     }
 }
@@ -1623,12 +1650,16 @@ pub async fn pin_thread(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    let Some(thread_id) = ensure_existing_thread_id(&state, &key).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"pinned": false, "error": "thread not found"})),
-        )
-            .into_response();
+    let thread_id = match ensure_existing_thread_id(&state, &key).await {
+        Ok(Some(thread_id)) => thread_id,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"pinned": false, "error": "thread not found"})),
+            )
+                .into_response();
+        }
+        Err(response) => return response.into_response(),
     };
     let pin_thread_id = thread_id.clone();
     match state
@@ -1660,9 +1691,10 @@ pub async fn unpin_thread(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    let thread_id = ensure_existing_thread_id(&state, &key)
-        .await
-        .unwrap_or_else(|| key.trim().to_owned());
+    let thread_id = match ensure_existing_thread_id(&state, &key).await {
+        Ok(resolved) => resolved.unwrap_or_else(|| key.trim().to_owned()),
+        Err(response) => return response.into_response(),
+    };
     let unpin_thread_id = thread_id.clone();
     match state
         .ops
@@ -1695,11 +1727,15 @@ pub async fn get_thread_logs(
     Path(key): Path<String>,
     Query(params): Query<ThreadLogParams>,
 ) -> impl IntoResponse {
-    let Some(thread_id) = ensure_existing_thread_id(&state, &key).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "thread not found"})),
-        );
+    let thread_id = match ensure_existing_thread_id(&state, &key).await {
+        Ok(Some(thread_id)) => thread_id,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "thread not found"})),
+            );
+        }
+        Err(response) => return response,
     };
 
     match state
@@ -1816,12 +1852,16 @@ pub async fn thread_stream(
     Query(params): Query<ThreadStreamParams>,
     headers: HeaderMap,
 ) -> axum::response::Response {
-    let Some(thread_id) = ensure_existing_thread_id(&state, &key).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "thread not found"})),
-        )
-            .into_response();
+    let thread_id = match ensure_existing_thread_id(&state, &key).await {
+        Ok(Some(thread_id)) => thread_id,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "thread not found"})),
+            )
+                .into_response();
+        }
+        Err(response) => return response.into_response(),
     };
 
     // Resume via Last-Event-ID (standard SSE) or the after_seq query param.
@@ -2539,11 +2579,15 @@ pub async fn create_thread(
 
     let fork_source = match requested_fork_thread_key {
         Some(source_key) => {
-            let Some(source_thread_id) = ensure_existing_thread_id(&state, source_key).await else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "fork source thread not found"})),
-                );
+            let source_thread_id = match ensure_existing_thread_id(&state, source_key).await {
+                Ok(Some(source_thread_id)) => source_thread_id,
+                Ok(None) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "fork source thread not found"})),
+                    );
+                }
+                Err(response) => return response,
             };
             let Some(source_thread_data) = state
                 .threads
@@ -2770,11 +2814,15 @@ pub async fn update_thread(
     Path(key): Path<String>,
     Json(body): Json<UpdateThreadBody>,
 ) -> impl IntoResponse {
-    let Some(thread_id) = ensure_existing_thread_id(&state, &key).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "thread not found"})),
-        );
+    let thread_id = match ensure_existing_thread_id(&state, &key).await {
+        Ok(Some(thread_id)) => thread_id,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "thread not found"})),
+            );
+        }
+        Err(response) => return response,
     };
 
     match update_thread_record(
@@ -2967,29 +3015,33 @@ pub async fn archive_thread(
             Json(json!({"archived": false, "error": "thread not found"})),
         );
     }
-    let Some(thread_data) = state.threads.thread_store.get_logged(trimmed).await else {
-        // No record: projections were removed with it in the same delete
-        // transaction, so only the tombstone and runtime state remain.
-        let archive_id = trimmed.to_owned();
-        if let Err(error) = state
-            .ops
-            .garyx_db
-            .run_blocking(move |db| db.mark_thread_archived(&archive_id))
-            .await
-        {
-            return archive_internal_error(error);
+    let thread_data = match state.threads.thread_store.get(trimmed).await {
+        Ok(Some(thread_data)) => thread_data,
+        Ok(None) => {
+            // No record: the atomic archive still writes the tombstone
+            // (and is a no-op on projections, which died with the record).
+            let archive_id = trimmed.to_owned();
+            if let Err(error) = state
+                .ops
+                .garyx_db
+                .run_blocking(move |db| db.archive_thread_record(&archive_id).map(|_| ()))
+                .await
+            {
+                return archive_internal_error(error);
+            }
+            clear_deleted_thread_runtime_state(&state, trimmed, None).await;
+            purge_thread_from_indexes(&state, trimmed).await;
+            state.invalidate_gateway_sync_caches().await;
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "archived": true,
+                    "deleted": true,
+                    "thread_id": trimmed,
+                })),
+            );
         }
-        clear_deleted_thread_runtime_state(&state, trimmed, None).await;
-        purge_thread_from_indexes(&state, trimmed).await;
-        state.invalidate_gateway_sync_caches().await;
-        return (
-            StatusCode::OK,
-            Json(json!({
-                "archived": true,
-                "deleted": true,
-                "thread_id": trimmed,
-            })),
-        );
+        Err(error) => return archive_internal_error(error),
     };
 
     if let Some(active_run_id) = active_run_for_archive_conflict(&state, trimmed).await {
@@ -3018,24 +3070,27 @@ pub async fn archive_thread(
         }
     }
 
+    // Tombstone + record + projections + pin go in one transaction; a
+    // write racing the archive is rejected by the in-transaction
+    // tombstone check on the record-write path.
+    let provider_key = thread_data
+        .get("provider_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     let archive_id = trimmed.to_owned();
     if let Err(error) = state
         .ops
         .garyx_db
-        .run_blocking(move |db| db.mark_thread_archived(&archive_id))
+        .run_blocking(move |db| db.archive_thread_record(&archive_id).map(|_| ()))
         .await
     {
         return archive_internal_error(error);
     }
-    let delete_data = state
-        .threads
-        .thread_store
-        .get_logged(trimmed)
-        .await
-        .unwrap_or(thread_data);
-    if let Err(response) = hard_delete_thread_record(&state, trimmed, &delete_data, false).await {
-        return response;
-    }
+    clear_deleted_thread_runtime_state(&state, trimmed, provider_key.as_deref()).await;
+    purge_thread_from_indexes(&state, trimmed).await;
+    state.invalidate_gateway_sync_caches().await;
     (
         StatusCode::OK,
         Json(json!({
@@ -3052,20 +3107,33 @@ pub async fn delete_thread(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    let Some(thread_id) = ensure_existing_thread_id(&state, &key).await else {
+    let thread_id = match ensure_existing_thread_id(&state, &key).await {
+        Ok(Some(thread_id)) => thread_id,
         // Projections derive and delete in the same transaction as the
         // record, so a missing record has no projection rows left to
         // repair — this is a plain not-found.
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"deleted": false, "error": "thread not found"})),
-        );
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"deleted": false, "error": "thread not found"})),
+            );
+        }
+        Err(response) => return response,
     };
-    let Some(thread_data) = state.threads.thread_store.get_logged(&thread_id).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"deleted": false, "error": "thread not found"})),
-        );
+    let thread_data = match state.threads.thread_store.get(&thread_id).await {
+        Ok(Some(thread_data)) => thread_data,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"deleted": false, "error": "thread not found"})),
+            );
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"deleted": false, "error": error.to_string()})),
+            );
+        }
     };
     // Block deletion only while at least one binding still points at a bot
     // account that is still enabled. Orphan bindings (left behind when a bot
@@ -3511,12 +3579,16 @@ pub async fn detach_channel_endpoint(
 /// GET /api/status - detailed system status
 pub async fn system_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let uptime = state.runtime.start_time.elapsed().as_secs();
-    let thread_count = state
-        .threads
-        .thread_store
-        .list_keys_logged(None)
-        .await
-        .len();
+    let thread_count = match state.threads.thread_store.count_keys(None).await {
+        Ok(count) => count,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
     let stream_drops = state.ops.events.dropped_count();
     let stream_history_size = state.ops.events.history_len().await;
 
@@ -3532,6 +3604,7 @@ pub async fn system_status(State(state): State<Arc<AppState>>) -> impl IntoRespo
         },
         "version": env!("CARGO_PKG_VERSION"),
     }))
+    .into_response()
 }
 
 /// Fallback handler for unknown routes

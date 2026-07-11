@@ -43,6 +43,12 @@ pub(crate) struct SqliteThreadStore {
     garyx_db: Arc<GaryxDbService>,
     transcript_store: Arc<ThreadTranscriptStore>,
     active_run_probe: Arc<dyn ActiveRunProbe>,
+    /// SQL read seams over the projections this store derives in the same
+    /// transaction as every record write. Exposed through the
+    /// `ThreadStore` accessor methods so their lifetime is tied to the
+    /// store itself — no process-global registry.
+    endpoint_projection: Arc<dyn garyx_router::ChannelEndpointProjection>,
+    task_projection: Arc<dyn garyx_router::tasks::TaskProjectionReader>,
     /// Per-key locks serializing read-merge-write cycles and the projection
     /// derivation for one key, so concurrent writes to the same thread
     /// cannot interleave (folded in from RecentThreadProjectingStore).
@@ -56,6 +62,12 @@ impl SqliteThreadStore {
         active_run_probe: Arc<dyn ActiveRunProbe>,
     ) -> Self {
         Self {
+            endpoint_projection: Arc::new(
+                crate::endpoint_projection::SqlChannelEndpointProjection::new(garyx_db.clone()),
+            ),
+            task_projection: Arc::new(crate::task_projection::SqlTaskProjectionReader::new(
+                garyx_db.clone(),
+            )),
             garyx_db,
             transcript_store,
             active_run_probe,
@@ -70,43 +82,6 @@ impl SqliteThreadStore {
             .entry(key.to_owned())
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone()
-    }
-
-    /// Archived threads reject writes and clear their projections — same
-    /// semantics as the former wrapper. One blocking hop covers the
-    /// tombstone check and the projection cleanup. A failed tombstone
-    /// check is an error (never fail-open into a write that may be
-    /// silently dropped downstream).
-    async fn reject_archived_thread_write(
-        &self,
-        thread_id: &str,
-    ) -> Result<bool, ThreadStoreError> {
-        if !is_thread_key(thread_id) {
-            return Ok(false);
-        }
-        let owned_thread_id = thread_id.to_owned();
-        self.garyx_db
-            .run_blocking(move |db| {
-                let thread_id = owned_thread_id.as_str();
-                if !db.is_thread_archived(thread_id)? {
-                    return Ok(false);
-                }
-                if let Err(error) = db.unpin_thread(thread_id) {
-                    warn!(thread_id, error = %error, "failed to unpin archived thread");
-                }
-                if let Err(error) = db.remove_recent_thread(thread_id) {
-                    warn!(thread_id, error = %error, "failed to remove archived thread from recent projection");
-                }
-                if let Err(error) = db.remove_thread_meta_projection(thread_id) {
-                    warn!(thread_id, error = %error, "failed to remove archived thread meta projection");
-                }
-                if let Err(error) = db.remove_task_projection(thread_id) {
-                    warn!(thread_id, error = %error, "failed to remove archived task projection");
-                }
-                Ok(true)
-            })
-            .await
-            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
 
     /// Derive the projection set for one thread record. Non-thread keys get
@@ -164,7 +139,12 @@ impl SqliteThreadStore {
                 )
             })
             .await
-            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
+            .map_err(|error| match error {
+                crate::garyx_db::GaryxDbError::ThreadArchived(thread_id) => {
+                    ThreadStoreError::Archived(thread_id)
+                }
+                other => ThreadStoreError::Backend(other.to_string()),
+            })
     }
 }
 
@@ -191,12 +171,10 @@ impl ThreadStore for SqliteThreadStore {
     async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
         let lock = self.key_lock(thread_id);
         let _guard = lock.lock().await;
-        // Archived threads reject writes with a typed error so callers
-        // cannot mistake a dropped write for a persisted one (#TASK-2099;
-        // rejection semantics from review #TASK-1901).
-        if self.reject_archived_thread_write(thread_id).await? {
-            return Err(ThreadStoreError::Archived(thread_id.to_owned()));
-        }
+        // Archived threads reject writes with Err(Archived): the tombstone
+        // check runs inside the record-write transaction itself, so a
+        // racing archive can never be overtaken (#TASK-2099; rejection
+        // semantics from review #TASK-1901).
         self.write_record(thread_id, data).await
     }
 
@@ -229,12 +207,28 @@ impl ThreadStore for SqliteThreadStore {
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
 
+    async fn count_keys(&self, prefix: Option<&str>) -> Result<usize, ThreadStoreError> {
+        let garyx_db = Arc::clone(&self.garyx_db);
+        let prefix = prefix.map(ToOwned::to_owned);
+        garyx_db
+            .run_blocking(move |db| db.count_thread_record_keys(prefix.as_deref()))
+            .await
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
+    }
+
+    fn channel_endpoint_projection(
+        &self,
+    ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
+        Some(self.endpoint_projection.clone())
+    }
+
+    fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
+        Some(self.task_projection.clone())
+    }
+
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
         let lock = self.key_lock(thread_id);
         let _guard = lock.lock().await;
-        if self.reject_archived_thread_write(thread_id).await? {
-            return Err(ThreadStoreError::Archived(thread_id.to_owned()));
-        }
         // Read-merge-write under the per-key lock: equivalent to an atomic
         // top-level merge because no other writer for this key can
         // interleave, and the write itself is a single transaction.
@@ -957,9 +951,13 @@ mod contract_tests {
         );
         assert!(store.exists(thread_id).await.unwrap());
 
-        // Archived threads reject writes with a typed error (#TASK-2099):
-        // a dropped write must never look persisted to the caller.
-        garyx_db.mark_thread_archived(thread_id).expect("archive");
+        // Product archive is one transaction: tombstone written, record
+        // and projections deleted together. A later write is rejected by
+        // the in-transaction tombstone check with a typed error — a
+        // dropped write must never look persisted to the caller
+        // (#TASK-2099).
+        assert!(garyx_db.archive_thread_record(thread_id).expect("archive"));
+        assert_eq!(store.get(thread_id).await.unwrap(), None);
         let rejected = store
             .set(
                 thread_id,
@@ -970,14 +968,10 @@ mod contract_tests {
             matches!(rejected, Err(ThreadStoreError::Archived(_))),
             "archived write must surface as ThreadStoreError::Archived, got {rejected:?}"
         );
-        let read = store
-            .get(thread_id)
-            .await
-            .unwrap()
-            .expect("record still readable");
         assert_eq!(
-            read["label"], "Projected",
-            "archived threads must reject writes"
+            store.get(thread_id).await.unwrap(),
+            None,
+            "the rejected write must not recreate the archived record"
         );
     }
 }

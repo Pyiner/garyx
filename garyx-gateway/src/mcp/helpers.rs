@@ -424,8 +424,12 @@ impl GaryMcpServer {
             None
         };
 
-        let thread_keys = state.threads.thread_store.list_keys_logged(None).await;
-        let thread_count = thread_keys.len();
+        let thread_count = state
+            .threads
+            .thread_store
+            .count_keys(None)
+            .await
+            .map_err(|error| format!("thread store count failed: {error}"))?;
 
         let bridge = &state.integration.bridge;
         let keys = bridge.provider_keys().await;

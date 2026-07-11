@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    InMemoryTaskCounterStore, InMemoryThreadStore, agent_id_from_value, history_message_count,
-    update_thread_record,
-};
+use crate::{InMemoryTaskCounterStore, InMemoryThreadStore, update_thread_record};
 
 struct StaticProjectionReader {
     running_subtask: bool,
@@ -10,174 +7,6 @@ struct StaticProjectionReader {
 
 struct ListProjectionReader {
     summary: TaskSummary,
-}
-
-/// Test double for the SQL task projection: answers projection queries by
-/// scanning the in-memory store. Production readers are SQL-backed and
-/// structurally current; this double reproduces the same semantics for
-/// router unit tests without a database.
-struct ScanProjectionReader {
-    store: Arc<dyn ThreadStore>,
-}
-
-impl ScanProjectionReader {
-    async fn tasks(&self) -> Result<Vec<(String, Value, ThreadTask)>, String> {
-        let mut tasks = Vec::new();
-        for key in self
-            .store
-            .list_keys(None)
-            .await
-            .map_err(|e| e.to_string())?
-        {
-            if !is_thread_key(&key) {
-                continue;
-            }
-            let Some(record) = self.store.get(&key).await.map_err(|e| e.to_string())? else {
-                continue;
-            };
-            let Ok(Some(task)) = task_from_record(&record) else {
-                continue;
-            };
-            tasks.push((key, record, task));
-        }
-        Ok(tasks)
-    }
-}
-
-fn scan_summary(thread_id: String, record: &Value, task: &ThreadTask) -> TaskSummary {
-    TaskSummary {
-        thread_id,
-        task_id: canonical_task_id(task),
-        number: task.number,
-        title: task.title.clone(),
-        status: task.status,
-        creator: task.creator.clone(),
-        assignee: task.assignee.clone(),
-        source: task.source.clone(),
-        executor: task.executor.clone(),
-        updated_at: task.updated_at,
-        updated_by: task.updated_by.clone(),
-        runtime_agent_id: agent_id_from_value(record).unwrap_or_default(),
-        reply_count: u32::try_from(history_message_count(record)).unwrap_or(u32::MAX),
-    }
-}
-
-fn scan_matches_source_thread(task: &ThreadTask, source_thread_id: &str) -> bool {
-    let Some(source) = task.source.as_ref() else {
-        return false;
-    };
-    source.thread_id.as_deref() == Some(source_thread_id)
-        || source.task_thread_id.as_deref() == Some(source_thread_id)
-}
-
-fn scan_matches_source_task(task: &ThreadTask, source_task_id: &str) -> bool {
-    task.source
-        .as_ref()
-        .and_then(|source| source.task_id.as_deref())
-        .is_some_and(|task_id| task_id.eq_ignore_ascii_case(source_task_id))
-}
-
-fn scan_matches_source_bot(task: &ThreadTask, source_bot_id: &str) -> bool {
-    let Some(source) = task.source.as_ref() else {
-        return false;
-    };
-    if source.bot_id.as_deref() == Some(source_bot_id) {
-        return true;
-    }
-    match (&source.channel, &source.account_id) {
-        (Some(channel), Some(account_id)) => format!("{channel}:{account_id}") == source_bot_id,
-        _ => false,
-    }
-}
-
-#[async_trait]
-impl TaskProjectionReader for ScanProjectionReader {
-    async fn thread_id_for_number(&self, number: u64) -> Result<Option<String>, String> {
-        Ok(self
-            .tasks()
-            .await?
-            .into_iter()
-            .find(|(_, _, task)| task.number == number)
-            .map(|(thread_id, _, _)| thread_id))
-    }
-
-    async fn has_running_subtask_targeting(&self, thread_id: &str) -> Result<bool, String> {
-        Ok(self.tasks().await?.into_iter().any(|(key, _, task)| {
-            key != thread_id
-                && task.status == TaskStatus::InProgress
-                && matches!(
-                    task.notification_target.as_ref(),
-                    Some(TaskNotificationTarget::Thread { thread_id: target }) if target == thread_id
-                )
-        }))
-    }
-
-    async fn list_task_summaries(
-        &self,
-        filter: &TaskListFilter,
-    ) -> Result<(Vec<TaskSummary>, usize, bool), String> {
-        let limit = filter.limit.unwrap_or(50);
-        let offset = filter.offset.unwrap_or(0);
-        let mut summaries = Vec::new();
-        for (key, record, task) in self.tasks().await? {
-            if !filter.include_done && task.status == TaskStatus::Done {
-                continue;
-            }
-            if filter.status.is_some_and(|status| task.status != status) {
-                continue;
-            }
-            if filter
-                .assignee
-                .as_ref()
-                .is_some_and(|candidate| task.assignee.as_ref() != Some(candidate))
-            {
-                continue;
-            }
-            if filter
-                .creator
-                .as_ref()
-                .is_some_and(|creator| &task.creator != creator)
-            {
-                continue;
-            }
-            if filter
-                .source_thread_id
-                .as_deref()
-                .is_some_and(|value| !scan_matches_source_thread(&task, value))
-            {
-                continue;
-            }
-            if filter
-                .source_task_id
-                .as_deref()
-                .is_some_and(|value| !scan_matches_source_task(&task, value))
-            {
-                continue;
-            }
-            if filter
-                .source_bot_id
-                .as_deref()
-                .is_some_and(|value| !scan_matches_source_bot(&task, value))
-            {
-                continue;
-            }
-            summaries.push(scan_summary(key, &record, &task));
-        }
-        summaries.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| left.thread_id.cmp(&right.thread_id))
-        });
-        let total = summaries.len();
-        let page = summaries
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .collect::<Vec<_>>();
-        let has_more = offset.saturating_add(page.len()) < total;
-        Ok((page, total, has_more))
-    }
 }
 
 #[async_trait]
@@ -217,9 +46,12 @@ impl TaskProjectionReader for ListProjectionReader {
 }
 
 fn service() -> TaskService {
-    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
-    TaskService::new(store.clone(), Arc::new(InMemoryTaskCounterStore::new()))
-        .with_projection_reader(Arc::new(ScanProjectionReader { store }))
+    // Condition queries fall back to the lib ScanTaskProjectionReader for
+    // stores without their own SQL projection — no explicit wiring needed.
+    TaskService::new(
+        Arc::new(InMemoryThreadStore::new()),
+        Arc::new(InMemoryTaskCounterStore::new()),
+    )
 }
 
 fn actor() -> Principal {
@@ -228,23 +60,56 @@ fn actor() -> Principal {
     }
 }
 
+/// Store wrapper that provides its own task projection reader — the shape
+/// SqliteThreadStore uses in production.
+struct StoreWithTaskProjection {
+    inner: InMemoryThreadStore,
+    reader: Arc<dyn TaskProjectionReader>,
+}
+
+#[async_trait]
+impl ThreadStore for StoreWithTaskProjection {
+    async fn get(&self, thread_id: &str) -> Result<Option<Value>, crate::ThreadStoreError> {
+        self.inner.get(thread_id).await
+    }
+    async fn set(&self, thread_id: &str, data: Value) -> Result<(), crate::ThreadStoreError> {
+        self.inner.set(thread_id, data).await
+    }
+    async fn delete(&self, thread_id: &str) -> Result<bool, crate::ThreadStoreError> {
+        self.inner.delete(thread_id).await
+    }
+    async fn list_keys(
+        &self,
+        prefix: Option<&str>,
+    ) -> Result<Vec<String>, crate::ThreadStoreError> {
+        self.inner.list_keys(prefix).await
+    }
+    async fn exists(&self, thread_id: &str) -> Result<bool, crate::ThreadStoreError> {
+        self.inner.exists(thread_id).await
+    }
+    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), crate::ThreadStoreError> {
+        self.inner.update(thread_id, updates).await
+    }
+    fn task_projection(&self) -> Option<Arc<dyn TaskProjectionReader>> {
+        Some(self.reader.clone())
+    }
+}
+
 #[tokio::test]
-async fn running_subtask_gate_uses_registered_projection_reader() {
-    let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
-    register_task_projection_reader(
-        &thread_store,
-        Arc::new(StaticProjectionReader {
+async fn running_subtask_gate_uses_store_provided_projection_reader() {
+    let thread_store: Arc<dyn ThreadStore> = Arc::new(StoreWithTaskProjection {
+        inner: InMemoryThreadStore::new(),
+        reader: Arc::new(StaticProjectionReader {
             running_subtask: true,
         }),
-    );
+    });
 
     assert!(
         thread_task_has_running_subtasks(&thread_store, "thread::parent")
             .await
             .expect("projection-backed subtask gate"),
-        "registered projection reader should gate without a warmed TASK_INDEX"
+        "the store-provided projection reader should answer the gate"
     );
-    remove_task_projection_reader(&thread_store);
 }
 
 #[tokio::test]
@@ -760,14 +625,8 @@ async fn run_completion_marks_in_progress_task_in_review() {
 #[tokio::test]
 async fn run_completion_defers_review_while_subtasks_run() {
     let service = service();
-    // The run-end transition is a free function that resolves its
-    // projection reader through the global registry, keyed by store.
-    register_task_projection_reader(
-        &service.thread_store,
-        Arc::new(ScanProjectionReader {
-            store: service.thread_store.clone(),
-        }),
-    );
+    // The run-end transition is a free function; without a store-provided
+    // SQL reader it falls back to the scan reader automatically.
     let (parent_thread_id, _parent_task) = service
         .create_task(CreateTaskInput {
             title: Some("Parent work".to_owned()),
@@ -856,7 +715,6 @@ async fn run_completion_defers_review_while_subtasks_run() {
     assert_eq!(released.handoff.as_deref(), Some("parent handoff"));
     let released = released.task;
     assert_eq!(released.status, TaskStatus::InReview);
-    remove_task_projection_reader(&service.thread_store);
 }
 
 #[tokio::test]

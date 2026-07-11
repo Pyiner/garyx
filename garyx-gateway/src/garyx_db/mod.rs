@@ -27,6 +27,8 @@ const ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION: i64 = 1;
 pub enum GaryxDbError {
     #[error("BadRequest: {0}")]
     BadRequest(String),
+    #[error("thread is archived: {0}")]
+    ThreadArchived(String),
     #[error("database lock poisoned")]
     LockPoisoned,
     #[error("blocking database task failed: {0}")]
@@ -484,17 +486,36 @@ impl GaryxDbService {
         Ok(removed > 0)
     }
 
-    pub fn mark_thread_archived(&self, thread_id: &str) -> GaryxDbResult<String> {
+    /// Product archive semantics in one transaction: write the tombstone
+    /// and delete the record, its projection rows, and its pin together.
+    /// Returns whether a record existed. Nothing is left to repair on any
+    /// other path — a write racing this transaction either lands before
+    /// the tombstone (and is deleted here) or is rejected by the in-tx
+    /// tombstone check in `write_thread_record_with_projections`.
+    pub fn archive_thread_record(&self, thread_id: &str) -> GaryxDbResult<bool> {
         let thread_id = normalize_thread_id(thread_id)?;
         let archived_at = now_string();
-        let conn = self.conn()?;
-        conn.execute(
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO archived_threads (thread_id, archived_at)
              VALUES (?1, ?2)
              ON CONFLICT(thread_id) DO UPDATE SET archived_at = excluded.archived_at",
             params![thread_id, archived_at],
         )?;
-        Ok(archived_at)
+        let removed = tx.execute(
+            "DELETE FROM thread_records WHERE key = ?1",
+            params![thread_id],
+        )? > 0;
+        remove_thread_meta_projection_tx(&tx, &thread_id)?;
+        remove_task_projection_tx(&tx, &thread_id)?;
+        remove_recent_thread_tx(&tx, &thread_id)?;
+        tx.execute(
+            "DELETE FROM thread_pins WHERE thread_id = ?1",
+            params![thread_id],
+        )?;
+        tx.commit()?;
+        Ok(removed)
     }
 
     pub fn is_thread_archived(&self, thread_id: &str) -> GaryxDbResult<bool> {
@@ -1630,6 +1651,21 @@ impl GaryxDbService {
         let recorded_at = now_string();
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
+        // Archived threads reject writes inside the same transaction that
+        // would persist them — a tombstone committed by a racing archive
+        // can never be overtaken by a write that passed an earlier check.
+        if garyx_router::is_thread_key(&key) {
+            let archived: Option<i64> = tx
+                .query_row(
+                    "SELECT 1 FROM archived_threads WHERE thread_id = ?1",
+                    params![key],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if archived.is_some() {
+                return Err(GaryxDbError::ThreadArchived(key));
+            }
+        }
         tx.execute(
             "INSERT INTO thread_records (key, body, updated_at, recorded_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -1706,6 +1742,25 @@ impl GaryxDbService {
             )
             .optional()?
             .is_some())
+    }
+
+    /// Count record keys by prefix with the same exact case-sensitive
+    /// prefix semantics as `list_thread_record_keys`.
+    pub fn count_thread_record_keys(&self, prefix: Option<&str>) -> GaryxDbResult<usize> {
+        match prefix.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(prefix) => {
+                // LIKE is ASCII case-insensitive in SQLite; count exact
+                // matches in Rust over the narrowed set (same reasoning as
+                // list_thread_record_keys, review #TASK-1896).
+                Ok(self.list_thread_record_keys(Some(prefix))?.len())
+            }
+            None => {
+                let conn = self.read_conn()?;
+                let count: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM thread_records", [], |row| row.get(0))?;
+                Ok(usize::try_from(count).unwrap_or(usize::MAX))
+            }
+        }
     }
 
     pub fn list_thread_record_keys(&self, prefix: Option<&str>) -> GaryxDbResult<Vec<String>> {
@@ -1898,8 +1953,7 @@ impl GaryxDbService {
 
 fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    let rebuild_endpoint_rows = thread_channel_endpoints_needs_holder_pk(conn)?;
-    if rebuild_endpoint_rows {
+    if thread_channel_endpoints_needs_holder_pk(conn)? {
         conn.execute("DROP TABLE thread_channel_endpoints", [])?;
     }
     conn.execute_batch(
@@ -2179,11 +2233,12 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         "#,
     )?;
     purge_retired_workflow_state(conn)?;
-    if rebuild_endpoint_rows {
-        rederive_thread_channel_endpoint_rows(conn)?;
-    }
+    rederive_thread_channel_endpoint_rows_if_needed(conn)?;
     Ok(())
 }
+
+const THREAD_CHANNEL_ENDPOINT_HOLDERS_NAME: &str = "thread_channel_endpoint_holders";
+const THREAD_CHANNEL_ENDPOINT_HOLDERS_VERSION: i64 = 1;
 
 /// True when `thread_channel_endpoints` still has the pre-#TASK-2107
 /// single-column `endpoint_key` primary key, which could represent only
@@ -2211,8 +2266,30 @@ fn thread_channel_endpoints_needs_holder_pk(conn: &Connection) -> GaryxDbResult<
 /// One-shot repopulation after the holder-PK rebuild: derive every
 /// endpoint row from the thread record bodies so holders that the old
 /// single-row schema could not represent become visible again.
-fn rederive_thread_channel_endpoint_rows(conn: &Connection) -> GaryxDbResult<()> {
+fn rederive_thread_channel_endpoint_rows_if_needed(conn: &Connection) -> GaryxDbResult<()> {
+    // Durable completion marker: the DROP, the CREATE, and the
+    // repopulation are separate steps on the open path, so only this
+    // projection_states row — committed in the same transaction as the
+    // rebuilt rows — proves the re-derivation finished. A crash at any
+    // earlier point leaves the marker absent and the next open re-runs
+    // the re-derivation instead of trusting an empty table.
+    let marker_present: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM projection_states
+             WHERE projection_name = ?1 AND projection_version = ?2",
+            params![
+                THREAD_CHANNEL_ENDPOINT_HOLDERS_NAME,
+                THREAD_CHANNEL_ENDPOINT_HOLDERS_VERSION
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if marker_present.is_some() {
+        return Ok(());
+    }
+
     let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM thread_channel_endpoints", [])?;
     let projected_at = now_string();
     let mut rederived = 0usize;
     {
@@ -2240,6 +2317,22 @@ fn rederive_thread_channel_endpoint_rows(conn: &Connection) -> GaryxDbResult<()>
             }
         }
     }
+    tx.execute(
+        "INSERT INTO projection_states (
+            projection_name, projection_version, source_row_count, projected_at
+         )
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(projection_name) DO UPDATE SET
+            projection_version = excluded.projection_version,
+            source_row_count = excluded.source_row_count,
+            projected_at = excluded.projected_at",
+        params![
+            THREAD_CHANNEL_ENDPOINT_HOLDERS_NAME,
+            THREAD_CHANNEL_ENDPOINT_HOLDERS_VERSION,
+            i64::try_from(rederived).unwrap_or(i64::MAX),
+            projected_at,
+        ],
+    )?;
     tx.commit()?;
     tracing::info!(
         rederived,
@@ -4330,7 +4423,7 @@ mod tests {
             "the rebuild must surface every holder from the record bodies"
         );
 
-        // A second open is a no-op (composite PK already in place).
+        // A second open is a no-op (completion marker already recorded).
         drop(db);
         let db = GaryxDbService::open(&path).expect("reopen migrated db");
         assert_eq!(
@@ -4338,6 +4431,70 @@ mod tests {
                 .expect("holders after reopen")
                 .len(),
             2
+        );
+    }
+
+    /// Crash-interruption regression (#TASK-2099 root review finding 1):
+    /// a crash after the composite-PK table was created but before the
+    /// re-derivation committed leaves an EMPTY holder table on disk. The
+    /// completion marker is absent in that state, so the next open must
+    /// re-derive from the record bodies instead of trusting the empty
+    /// table.
+    #[test]
+    fn interrupted_holder_rebuild_rederives_on_next_open() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            // Exact post-CREATE / pre-rederive disk state: v2 composite-PK
+            // endpoint table, zero rows, no completion marker, one bound
+            // record body.
+            let conn = Connection::open(&path).expect("interrupted db");
+            conn.execute_batch(
+                r#"
+                CREATE TABLE thread_channel_endpoints (
+                    endpoint_key TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    binding_key TEXT NOT NULL,
+                    chat_id TEXT NOT NULL DEFAULT '',
+                    delivery_target_type TEXT NOT NULL DEFAULT 'chat_id',
+                    delivery_target_id TEXT NOT NULL DEFAULT '',
+                    display_label TEXT NOT NULL DEFAULT '',
+                    thread_id TEXT NOT NULL,
+                    thread_label TEXT,
+                    workspace_dir TEXT,
+                    thread_updated_at TEXT,
+                    last_inbound_at TEXT,
+                    last_delivery_at TEXT,
+                    projected_at TEXT NOT NULL,
+                    PRIMARY KEY (endpoint_key, thread_id)
+                ) STRICT;
+
+                CREATE TABLE thread_records (
+                    key         TEXT PRIMARY KEY,
+                    body        TEXT NOT NULL,
+                    updated_at  TEXT,
+                    recorded_at TEXT NOT NULL
+                ) STRICT;
+
+                INSERT INTO thread_records (key, body, updated_at, recorded_at) VALUES
+                (
+                    'thread::holder-a',
+                    '{"thread_id":"thread::holder-a","updated_at":"2026-06-03T00:00:01.000Z","channel_bindings":[{"channel":"telegram","account_id":"main","binding_key":"1000000001","chat_id":"1000000001"}]}',
+                    '2026-06-03T00:00:01.000Z',
+                    '2026-06-03T00:00:01.000Z'
+                );
+                "#,
+            )
+            .expect("interrupted rebuild state");
+        }
+
+        let db = GaryxDbService::open(&path).expect("open interrupted db");
+        assert_eq!(
+            db.thread_ids_for_channel_endpoint("telegram::main::1000000001")
+                .expect("holders"),
+            vec!["thread::holder-a".to_owned()],
+            "an interrupted rebuild must re-derive on the next open"
         );
     }
 

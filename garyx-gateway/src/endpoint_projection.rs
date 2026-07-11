@@ -10,7 +10,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use garyx_router::{
     ChannelEndpointProjection, DeliveryContextRow, KnownChannelEndpoint, OutboundRouteRow,
-    ThreadStore, register_channel_endpoint_projection,
 };
 
 use crate::garyx_db::GaryxDbService;
@@ -19,16 +18,10 @@ pub(crate) struct SqlChannelEndpointProjection {
     garyx_db: Arc<GaryxDbService>,
 }
 
-pub(crate) fn register_gateway_channel_endpoint_projection(
-    thread_store: &Arc<dyn ThreadStore>,
-    garyx_db: &Arc<GaryxDbService>,
-) {
-    register_channel_endpoint_projection(
-        thread_store,
-        Arc::new(SqlChannelEndpointProjection {
-            garyx_db: garyx_db.clone(),
-        }),
-    );
+impl SqlChannelEndpointProjection {
+    pub(crate) fn new(garyx_db: Arc<GaryxDbService>) -> Self {
+        Self { garyx_db }
+    }
 }
 
 #[async_trait]
@@ -211,6 +204,60 @@ mod tests {
         );
         let old_record = store.get("thread::old").await.unwrap().expect("old record");
         assert!(garyx_router::bindings_from_value(&old_record).is_empty());
+    }
+
+    /// Injected non-SQL stores must resolve to the scan projection over
+    /// the SAME store — never to an unrelated SQL database (#TASK-2099
+    /// root review finding 4). The projection accessor lives on the store
+    /// itself, so there is no pointer-keyed registry to leak or mismatch.
+    #[tokio::test]
+    async fn injected_in_memory_store_resolves_scan_projection_over_itself() {
+        let injected: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
+        let state = AppStateBuilder::new(garyx_models::GaryxConfig::default())
+            .with_thread_store(injected.clone())
+            .build();
+        let store = state.threads.thread_store.clone();
+        store
+            .set("thread::bound", bound_thread_record("thread::bound", "42"))
+            .await
+            .unwrap();
+
+        let projection = channel_endpoint_projection_for(&store);
+        assert_eq!(
+            projection
+                .endpoint_holders("telegram::main::42")
+                .await
+                .expect("holders on injected store"),
+            vec!["thread::bound".to_owned()],
+            "the injected store must be answered by its own scan projection"
+        );
+
+        // Task condition queries fall back to the scan reader the same way.
+        let service = garyx_router::TaskService::new(
+            store.clone(),
+            Arc::new(garyx_router::InMemoryTaskCounterStore::new()),
+        );
+        let (thread_id, task) = service
+            .create_task(garyx_router::CreateTaskInput {
+                title: Some("Injected".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: None,
+                source: None,
+                executor: None,
+                start: false,
+                actor: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .expect("create task on injected store");
+        let (resolved_thread_id, _, resolved) = service
+            .get_task(&format!("#TASK-{}", task.number))
+            .await
+            .expect("resolve task by number over the scan reader");
+        assert_eq!(resolved_thread_id, thread_id);
+        assert_eq!(resolved.number, task.number);
     }
 
     /// Two thread records holding the SAME endpoint (legacy import or a

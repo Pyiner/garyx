@@ -63,8 +63,7 @@ pub mod threading {
 
 pub use endpoint_projection::{
     ChannelEndpointProjection, DeliveryContextRow, OutboundRouteRow, ScanChannelEndpointProjection,
-    channel_endpoint_projection_for, register_channel_endpoint_projection,
-    remove_channel_endpoint_projection,
+    channel_endpoint_projection_for,
 };
 pub use file_store::FileThreadStore;
 pub use endpoint_binding::{
@@ -83,9 +82,10 @@ pub use runtime_context::build_runtime_context_metadata;
 pub use store::{ThreadStore, ThreadStoreError, ThreadStoreExt};
 pub use task_counter::{InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore};
 pub use tasks::{
-    CreateTaskInput, EnterReview, TaskHistoryPage, TaskId, TaskListFilter, TaskRuntimeInput,
-    TaskService, TaskServiceError, TaskSummary, UpdateTaskStatusInput,
-    mark_thread_task_in_progress_on_wake, mark_thread_task_in_review_if_in_progress,
+    CreateTaskInput, EnterReview, ScanTaskProjectionReader, TaskHistoryPage, TaskId,
+    TaskListFilter, TaskProjectionReader, TaskRuntimeInput, TaskService, TaskServiceError,
+    TaskSummary, UpdateTaskStatusInput, mark_thread_task_in_progress_on_wake,
+    mark_thread_task_in_review_if_in_progress, task_projection_reader_for,
 };
 pub use thread_history::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,

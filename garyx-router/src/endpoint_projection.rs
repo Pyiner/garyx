@@ -1,21 +1,19 @@
 //! Read seam over the SQL channel-endpoint projections.
 //!
 //! Thread condition queries must go through SQL projections (repository
-//! contract): the gateway registers a SQL-backed implementation over
+//! contract): `SqliteThreadStore` exposes a SQL-backed implementation over
 //! `thread_channel_endpoints`, `thread_meta`, and `thread_message_routes`
-//! for its `SqliteThreadStore` at bootstrap. Projections derive in the
-//! same transaction as every record write, so readers are structurally
-//! current — there is no staleness gate and no repair path.
+//! through [`crate::ThreadStore::channel_endpoint_projection`]. Projections
+//! derive in the same transaction as every record write, so readers are
+//! structurally current — there is no staleness gate and no repair path.
 //!
-//! Stores without a registered projection (in-memory embedders, unit
-//! tests) fall back to [`ScanChannelEndpointProjection`], which answers
-//! the same queries by scanning the store. For an in-memory store the
-//! whole store already lives in memory, so the scan is the structural
-//! equivalent of a projection read; SQLite-backed stores must register
-//! the SQL implementation instead.
+//! Stores without their own projection (in-memory embedders, unit tests)
+//! fall back to [`ScanChannelEndpointProjection`], which answers the same
+//! queries by scanning the store. For an in-memory store the whole store
+//! already lives in memory, so the scan is the structural equivalent of a
+//! projection read.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -67,49 +65,16 @@ pub trait ChannelEndpointProjection: Send + Sync {
     async fn outbound_routes(&self) -> Result<Vec<OutboundRouteRow>, String>;
 }
 
-static CHANNEL_ENDPOINT_PROJECTIONS: OnceLock<
-    StdMutex<HashMap<usize, Arc<dyn ChannelEndpointProjection>>>,
-> = OnceLock::new();
-
-fn projection_registry() -> &'static StdMutex<HashMap<usize, Arc<dyn ChannelEndpointProjection>>> {
-    CHANNEL_ENDPOINT_PROJECTIONS.get_or_init(|| StdMutex::new(HashMap::new()))
-}
-
-fn store_id(store: &Arc<dyn ThreadStore>) -> usize {
-    Arc::as_ptr(store) as *const () as usize
-}
-
-/// Register the SQL projection for a store. The gateway calls this once at
-/// bootstrap for its `SqliteThreadStore`.
-pub fn register_channel_endpoint_projection(
-    store: &Arc<dyn ThreadStore>,
-    projection: Arc<dyn ChannelEndpointProjection>,
-) {
-    let mut registry = projection_registry()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    registry.insert(store_id(store), projection);
-}
-
-pub fn remove_channel_endpoint_projection(store: &Arc<dyn ThreadStore>) {
-    let mut registry = projection_registry()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    registry.remove(&store_id(store));
-}
-
-/// The projection registered for this store, or the scan fallback for
-/// stores without one (in-memory embedders and unit tests).
+/// The projection for this store: the store's own SQL projection when the
+/// backend maintains one (SQLite), else the scan fallback — the structural
+/// equivalent for in-memory stores. The projection's lifetime is tied to
+/// the store; there is no process-global registry.
 pub fn channel_endpoint_projection_for(
     store: &Arc<dyn ThreadStore>,
 ) -> Arc<dyn ChannelEndpointProjection> {
-    let registered = {
-        let registry = projection_registry()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        registry.get(&store_id(store)).cloned()
-    };
-    registered.unwrap_or_else(|| Arc::new(ScanChannelEndpointProjection::new(store.clone())))
+    store
+        .channel_endpoint_projection()
+        .unwrap_or_else(|| Arc::new(ScanChannelEndpointProjection::new(store.clone())))
 }
 
 /// Scan-backed projection for stores without SQL projections. Answers the

@@ -1,5 +1,10 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
+
+use crate::endpoint_projection::ChannelEndpointProjection;
+use crate::tasks::TaskProjectionReader;
 
 /// Abstract interface for thread storage.
 ///
@@ -37,6 +42,29 @@ pub trait ThreadStore: Send + Sync {
     /// Returns [`ThreadStoreError::NotFound`] if the thread does not exist
     /// and [`ThreadStoreError::Archived`] if it is tombstoned.
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError>;
+
+    /// Count keys, optionally filtered by prefix. Backends with SQL
+    /// storage override this with a COUNT query; the default lists keys.
+    async fn count_keys(&self, prefix: Option<&str>) -> Result<usize, ThreadStoreError> {
+        Ok(self.list_keys(prefix).await?.len())
+    }
+
+    /// The SQL channel-endpoint projection maintained by this store, when
+    /// the backend derives one in the same transaction as record writes
+    /// (the SQLite store). `None` means condition queries fall back to
+    /// [`crate::endpoint_projection::ScanChannelEndpointProjection`], the
+    /// structural equivalent for in-memory stores. Tied to the store's own
+    /// lifetime — there is no process-global registry.
+    fn channel_endpoint_projection(&self) -> Option<Arc<dyn ChannelEndpointProjection>> {
+        None
+    }
+
+    /// The SQL task projection maintained by this store, when the backend
+    /// derives one in the same transaction as record writes. `None` means
+    /// task condition queries fall back to the scan reader.
+    fn task_projection(&self) -> Option<Arc<dyn TaskProjectionReader>> {
+        None
+    }
 }
 
 /// Logged fallbacks for call sites whose signatures cannot surface a

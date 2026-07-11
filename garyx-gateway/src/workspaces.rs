@@ -186,6 +186,7 @@ fn workspace_response(
 fn workspace_error_response(error: GaryxDbError) -> (StatusCode, Json<serde_json::Value>) {
     let status = match error {
         GaryxDbError::BadRequest(_) => StatusCode::BAD_REQUEST,
+        GaryxDbError::ThreadArchived(_) => StatusCode::GONE,
         GaryxDbError::LockPoisoned
         | GaryxDbError::Join(_)
         | GaryxDbError::Configuration(_)

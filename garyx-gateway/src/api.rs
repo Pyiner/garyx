@@ -395,17 +395,32 @@ pub async fn bot_bind(
             })),
         );
     }
-    let Some(thread_data) = state.threads.thread_store.get_logged(thread_id).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "ok": false,
-                "bot_id": &bot_id,
-                "thread_id": thread_id,
-                "reason": "thread-not-found",
-                "error": "thread not found",
-            })),
-        );
+    let thread_data = match state.threads.thread_store.get(thread_id).await {
+        Ok(Some(thread_data)) => thread_data,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "ok": false,
+                    "bot_id": &bot_id,
+                    "thread_id": thread_id,
+                    "reason": "thread-not-found",
+                    "error": "thread not found",
+                })),
+            );
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "ok": false,
+                    "bot_id": &bot_id,
+                    "thread_id": thread_id,
+                    "reason": "thread-store-error",
+                    "error": error.to_string(),
+                })),
+            );
+        }
     };
 
     let Some(endpoint) =

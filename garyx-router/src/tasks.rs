@@ -21,8 +21,6 @@ const TASK_THREAD_TITLE_SOURCE: &str = "task";
 type TaskThreadLock = Arc<tokio::sync::Mutex<()>>;
 
 static TASK_THREAD_LOCKS: OnceLock<StdMutex<HashMap<String, TaskThreadLock>>> = OnceLock::new();
-static TASK_PROJECTION_READERS: OnceLock<StdMutex<HashMap<usize, Arc<dyn TaskProjectionReader>>>> =
-    OnceLock::new();
 
 #[derive(Debug, thiserror::Error)]
 pub enum TaskServiceError {
@@ -159,6 +157,182 @@ pub trait TaskProjectionReader: Send + Sync {
     ) -> Result<(Vec<TaskSummary>, usize, bool), String>;
 }
 
+/// Scan-backed task projection for stores without SQL projections.
+/// Answers the same queries by walking the store; only correct for
+/// in-memory stores, where the walk is a hash-map iteration.
+pub struct ScanTaskProjectionReader {
+    store: Arc<dyn ThreadStore>,
+}
+
+impl ScanTaskProjectionReader {
+    pub fn new(store: Arc<dyn ThreadStore>) -> Self {
+        Self { store }
+    }
+
+    async fn tasks(&self) -> Result<Vec<(String, Value, ThreadTask)>, String> {
+        let mut tasks = Vec::new();
+        let keys = self
+            .store
+            .list_keys(None)
+            .await
+            .map_err(|error| error.to_string())?;
+        for key in keys {
+            if !is_thread_key(&key) {
+                continue;
+            }
+            let Some(record) = self
+                .store
+                .get(&key)
+                .await
+                .map_err(|error| error.to_string())?
+            else {
+                continue;
+            };
+            let Ok(Some(task)) = task_from_record(&record) else {
+                continue;
+            };
+            tasks.push((key, record, task));
+        }
+        Ok(tasks)
+    }
+}
+
+fn scan_task_summary(thread_id: String, record: &Value, task: &ThreadTask) -> TaskSummary {
+    TaskSummary {
+        thread_id,
+        task_id: canonical_task_id(task),
+        number: task.number,
+        title: task.title.clone(),
+        status: task.status,
+        creator: task.creator.clone(),
+        assignee: task.assignee.clone(),
+        source: task.source.clone(),
+        executor: task.executor.clone(),
+        updated_at: task.updated_at,
+        updated_by: task.updated_by.clone(),
+        runtime_agent_id: crate::agent_id_from_value(record).unwrap_or_default(),
+        reply_count: u32::try_from(crate::history_message_count(record)).unwrap_or(u32::MAX),
+    }
+}
+
+fn scan_matches_source_thread(task: &ThreadTask, source_thread_id: &str) -> bool {
+    let Some(source) = task.source.as_ref() else {
+        return false;
+    };
+    source.thread_id.as_deref() == Some(source_thread_id)
+        || source.task_thread_id.as_deref() == Some(source_thread_id)
+}
+
+fn scan_matches_source_task(task: &ThreadTask, source_task_id: &str) -> bool {
+    task.source
+        .as_ref()
+        .and_then(|source| source.task_id.as_deref())
+        .is_some_and(|task_id| task_id.eq_ignore_ascii_case(source_task_id))
+}
+
+fn scan_matches_source_bot(task: &ThreadTask, source_bot_id: &str) -> bool {
+    let Some(source) = task.source.as_ref() else {
+        return false;
+    };
+    if source.bot_id.as_deref() == Some(source_bot_id) {
+        return true;
+    }
+    match (&source.channel, &source.account_id) {
+        (Some(channel), Some(account_id)) => format!("{channel}:{account_id}") == source_bot_id,
+        _ => false,
+    }
+}
+
+#[async_trait]
+impl TaskProjectionReader for ScanTaskProjectionReader {
+    async fn thread_id_for_number(&self, number: u64) -> Result<Option<String>, String> {
+        Ok(self
+            .tasks()
+            .await?
+            .into_iter()
+            .find(|(_, _, task)| task.number == number)
+            .map(|(thread_id, _, _)| thread_id))
+    }
+
+    async fn has_running_subtask_targeting(&self, thread_id: &str) -> Result<bool, String> {
+        Ok(self.tasks().await?.into_iter().any(|(key, _, task)| {
+            key != thread_id
+                && task.status == TaskStatus::InProgress
+                && matches!(
+                    task.notification_target.as_ref(),
+                    Some(TaskNotificationTarget::Thread { thread_id: target }) if target == thread_id
+                )
+        }))
+    }
+
+    async fn list_task_summaries(
+        &self,
+        filter: &TaskListFilter,
+    ) -> Result<(Vec<TaskSummary>, usize, bool), String> {
+        let limit = filter.limit.unwrap_or(DEFAULT_TASK_LIST_LIMIT);
+        let offset = filter.offset.unwrap_or(0);
+        let mut summaries = Vec::new();
+        for (key, record, task) in self.tasks().await? {
+            if !filter.include_done && task.status == TaskStatus::Done {
+                continue;
+            }
+            if filter.status.is_some_and(|status| task.status != status) {
+                continue;
+            }
+            if filter
+                .assignee
+                .as_ref()
+                .is_some_and(|candidate| task.assignee.as_ref() != Some(candidate))
+            {
+                continue;
+            }
+            if filter
+                .creator
+                .as_ref()
+                .is_some_and(|creator| &task.creator != creator)
+            {
+                continue;
+            }
+            if filter
+                .source_thread_id
+                .as_deref()
+                .is_some_and(|value| !scan_matches_source_thread(&task, value))
+            {
+                continue;
+            }
+            if filter
+                .source_task_id
+                .as_deref()
+                .is_some_and(|value| !scan_matches_source_task(&task, value))
+            {
+                continue;
+            }
+            if filter
+                .source_bot_id
+                .as_deref()
+                .is_some_and(|value| !scan_matches_source_bot(&task, value))
+            {
+                continue;
+            }
+            summaries.push(scan_task_summary(key, &record, &task));
+        }
+        summaries.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.thread_id.cmp(&right.thread_id))
+        });
+        let total = summaries.len();
+        let page = summaries
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>();
+        let has_more = offset.saturating_add(page.len()) < total;
+        Ok((page, total, has_more))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskId {
     ThreadId(String),
@@ -216,15 +390,10 @@ impl TaskService {
         self
     }
 
-    fn projection_reader(&self) -> Result<Arc<dyn TaskProjectionReader>, TaskServiceError> {
+    fn projection_reader(&self) -> Arc<dyn TaskProjectionReader> {
         self.projection_reader
             .clone()
-            .or_else(|| task_projection_reader_for_store_id(thread_store_id(&self.thread_store)))
-            .ok_or_else(|| {
-                TaskServiceError::Store(
-                    "no task projection reader registered for this thread store".to_owned(),
-                )
-            })
+            .unwrap_or_else(|| task_projection_reader_for(&self.thread_store))
     }
 
     pub async fn create_task(
@@ -357,7 +526,7 @@ impl TaskService {
             offset: Some(offset),
             ..filter
         };
-        self.projection_reader()?
+        self.projection_reader()
             .list_task_summaries(&filter)
             .await
             .map_err(TaskServiceError::Store)
@@ -677,7 +846,7 @@ impl TaskService {
 
     async fn find_task_by_number(&self, number: u64) -> Result<(String, Value), TaskServiceError> {
         let thread_id = self
-            .projection_reader()?
+            .projection_reader()
             .thread_id_for_number(number)
             .await
             .map_err(TaskServiceError::Store)?
@@ -798,20 +967,26 @@ pub async fn mark_thread_task_in_progress_on_wake(
 /// completion notification. Such a task is a subtask of this thread's task:
 /// it was created from this thread and will call back into it when done.
 ///
-/// Answered by the SQL task projection. A store without a registered
-/// projection reader (router-only embedders, unit tests) has no subtask
-/// tracking and conservatively reports no subtasks.
+/// Answered by the store's SQL task projection, or the scan reader for
+/// stores without one (in-memory embedders, unit tests).
 pub async fn thread_task_has_running_subtasks(
     thread_store: &Arc<dyn ThreadStore>,
     thread_id: &str,
 ) -> Result<bool, TaskServiceError> {
-    let Some(reader) = task_projection_reader_for_store_id(thread_store_id(thread_store)) else {
-        return Ok(false);
-    };
-    reader
+    task_projection_reader_for(thread_store)
         .has_running_subtask_targeting(thread_id)
         .await
         .map_err(TaskServiceError::Store)
+}
+
+/// The task projection for this store: the store's own SQL reader when the
+/// backend maintains one (SQLite), else [`ScanTaskProjectionReader`] — the
+/// structural equivalent for in-memory stores. Lifetime is tied to the
+/// store; there is no process-global registry.
+pub fn task_projection_reader_for(store: &Arc<dyn ThreadStore>) -> Arc<dyn TaskProjectionReader> {
+    store
+        .task_projection()
+        .unwrap_or_else(|| Arc::new(ScanTaskProjectionReader::new(store.clone())))
 }
 
 pub fn canonical_task_id(task: &ThreadTask) -> String {
@@ -892,46 +1067,6 @@ fn task_thread_lock(thread_id: &str) -> TaskThreadLock {
         .entry(thread_id.to_owned())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
-}
-
-pub fn thread_store_id(thread_store: &Arc<dyn ThreadStore>) -> usize {
-    Arc::as_ptr(thread_store) as *const () as usize
-}
-
-fn task_projection_reader_state() -> &'static StdMutex<HashMap<usize, Arc<dyn TaskProjectionReader>>>
-{
-    TASK_PROJECTION_READERS.get_or_init(|| StdMutex::new(HashMap::new()))
-}
-
-pub fn register_task_projection_reader(
-    thread_store: &Arc<dyn ThreadStore>,
-    reader: Arc<dyn TaskProjectionReader>,
-) {
-    register_task_projection_reader_for_store_id(thread_store_id(thread_store), reader);
-}
-
-pub fn register_task_projection_reader_for_store_id(
-    store_id: usize,
-    reader: Arc<dyn TaskProjectionReader>,
-) {
-    let mut readers = task_projection_reader_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    readers.insert(store_id, reader);
-}
-
-pub fn remove_task_projection_reader(thread_store: &Arc<dyn ThreadStore>) {
-    let mut readers = task_projection_reader_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    readers.remove(&thread_store_id(thread_store));
-}
-
-fn task_projection_reader_for_store_id(store_id: usize) -> Option<Arc<dyn TaskProjectionReader>> {
-    let readers = task_projection_reader_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    readers.get(&store_id).cloned()
 }
 
 fn push_event(

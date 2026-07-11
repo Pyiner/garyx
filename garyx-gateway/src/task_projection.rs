@@ -5,10 +5,9 @@ use async_trait::async_trait;
 use chrono::SecondsFormat;
 use garyx_models::{Principal, TaskNotificationTarget, TaskSource, ThreadTask};
 use garyx_router::tasks::{
-    TaskId, TaskListFilter, TaskProjectionReader, TaskSummary, register_task_projection_reader,
-    task_from_record,
+    TaskId, TaskListFilter, TaskProjectionReader, TaskSummary, task_from_record,
 };
-use garyx_router::{TaskCounterError, TaskCounterStore, ThreadStore, is_thread_key};
+use garyx_router::{TaskCounterError, TaskCounterStore, is_thread_key};
 use serde::Serialize;
 use serde_json::Value;
 use tracing::warn;
@@ -23,16 +22,6 @@ impl SqlTaskProjectionReader {
     pub(crate) fn new(garyx_db: Arc<GaryxDbService>) -> Self {
         Self { garyx_db }
     }
-}
-
-pub(crate) fn register_gateway_task_projection_reader(
-    thread_store: &Arc<dyn ThreadStore>,
-    garyx_db: &Arc<GaryxDbService>,
-) -> Arc<dyn TaskProjectionReader> {
-    let reader: Arc<dyn TaskProjectionReader> =
-        Arc::new(SqlTaskProjectionReader::new(garyx_db.clone()));
-    register_task_projection_reader(thread_store, reader.clone());
-    reader
 }
 
 /// Projections derive in the same transaction as every record write

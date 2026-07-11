@@ -3,7 +3,6 @@
 //! Provides system overview, agent view, log tailing, and settings for the
 //! Garyx gateway.
 
-use garyx_router::ThreadStoreExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -26,12 +25,16 @@ use crate::server::AppState;
 pub async fn overview(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let cfg = state.config_snapshot();
     let uptime_secs = state.runtime.start_time.elapsed().as_secs();
-    let thread_count = state
-        .threads
-        .thread_store
-        .list_keys_logged(None)
-        .await
-        .len();
+    let thread_count = match state.threads.thread_store.count_keys(None).await {
+        Ok(count) => count,
+        Err(error) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
     let stream_drops = state.ops.events.dropped_count();
     let stream_history_size = state.ops.events.history_len().await;
     let feishu_policy_blocks = policy_block_counters_snapshot();
@@ -67,6 +70,7 @@ pub async fn overview(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         "mcp_metrics": mcp_metrics,
         "delivery_target_metrics": delivery_target_metrics,
     }))
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------

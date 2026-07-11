@@ -36,7 +36,6 @@ use crate::recent_thread_reader::SqlRecentThreadPageReader;
 use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe};
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
-use crate::task_projection::register_gateway_task_projection_reader;
 use crate::wikis::WikiStore;
 
 /// Load a persistent `Store` from the given on-disk path, falling back to an
@@ -339,11 +338,6 @@ impl AppStateBuilder {
                 active_run_probe,
             ))
         });
-        register_gateway_task_projection_reader(&thread_store, &self.garyx_db);
-        crate::endpoint_projection::register_gateway_channel_endpoint_projection(
-            &thread_store,
-            &self.garyx_db,
-        );
         let thread_history = ThreadHistoryRepository::new(
             thread_store.clone(),
             self.thread_history.transcript_store(),

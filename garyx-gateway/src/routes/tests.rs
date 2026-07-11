@@ -3657,6 +3657,89 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
     assert!(payload["threads"].as_array().unwrap().is_empty());
 }
 
+/// Store that fails every operation — pins the request-boundary error
+/// contract: a backend failure must answer 500, never a misleading 404
+/// (#TASK-2099 root review finding 2).
+struct FailingThreadStore;
+
+#[async_trait::async_trait]
+impl garyx_router::ThreadStore for FailingThreadStore {
+    async fn get(&self, _thread_id: &str) -> Result<Option<Value>, garyx_router::ThreadStoreError> {
+        Err(garyx_router::ThreadStoreError::Backend(
+            "simulated backend failure".to_owned(),
+        ))
+    }
+    async fn set(
+        &self,
+        _thread_id: &str,
+        _data: Value,
+    ) -> Result<(), garyx_router::ThreadStoreError> {
+        Err(garyx_router::ThreadStoreError::Backend(
+            "simulated backend failure".to_owned(),
+        ))
+    }
+    async fn delete(&self, _thread_id: &str) -> Result<bool, garyx_router::ThreadStoreError> {
+        Err(garyx_router::ThreadStoreError::Backend(
+            "simulated backend failure".to_owned(),
+        ))
+    }
+    async fn list_keys(
+        &self,
+        _prefix: Option<&str>,
+    ) -> Result<Vec<String>, garyx_router::ThreadStoreError> {
+        Err(garyx_router::ThreadStoreError::Backend(
+            "simulated backend failure".to_owned(),
+        ))
+    }
+    async fn exists(&self, _thread_id: &str) -> Result<bool, garyx_router::ThreadStoreError> {
+        Err(garyx_router::ThreadStoreError::Backend(
+            "simulated backend failure".to_owned(),
+        ))
+    }
+    async fn update(
+        &self,
+        _thread_id: &str,
+        _updates: Value,
+    ) -> Result<(), garyx_router::ThreadStoreError> {
+        Err(garyx_router::ThreadStoreError::Backend(
+            "simulated backend failure".to_owned(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn thread_store_backend_failure_answers_500_not_404() {
+    let state = AppStateBuilder::new(test_config())
+        .with_thread_store(Arc::new(FailingThreadStore))
+        .build();
+    let router = build_router(state.clone());
+
+    for (method, uri) in [
+        ("GET", "/api/threads/thread::storage-failure"),
+        ("DELETE", "/api/threads/thread::storage-failure"),
+    ] {
+        let request = authed_request()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{method} {uri} must surface the backend failure as 500"
+        );
+    }
+
+    // Status endpoints propagate count failures the same way.
+    let request = authed_request()
+        .uri("/api/status")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 #[tokio::test]
 async fn delete_thread_without_record_is_plain_not_found() {
     // Projections derive and delete in the same transaction as the
@@ -5659,7 +5742,7 @@ async fn archived_thread_tombstone_blocks_projection_rewrite() {
     state
         .ops
         .garyx_db
-        .mark_thread_archived(thread_id)
+        .archive_thread_record(thread_id)
         .expect("mark thread archived");
 
     let rejected = state
@@ -5707,7 +5790,7 @@ async fn chat_start_rejects_archived_thread_id() {
     state
         .ops
         .garyx_db
-        .mark_thread_archived(thread_id)
+        .archive_thread_record(thread_id)
         .expect("mark thread archived");
 
     let router = build_router(state);
