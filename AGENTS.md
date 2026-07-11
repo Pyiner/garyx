@@ -14,6 +14,8 @@ operating principles here; detailed rules live in the referenced files under
 - Run focused deterministic validation for the touched area.
 - Commit completed code changes before handoff. Stage only files changed for
   the current task.
+- When pushing completed work, push directly to the remote `main` branch unless
+  the requester explicitly specifies a different target branch.
 - When committing from an agent, use the repository's configured Git author and
   committer metadata. Do not override local Git identity.
 - When you create review tasks for your own work, notify `current-thread` so
