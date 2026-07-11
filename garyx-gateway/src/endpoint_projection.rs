@@ -33,6 +33,17 @@ impl ChannelEndpointProjection for SqlChannelEndpointProjection {
             .map_err(|error| error.to_string())
     }
 
+    async fn endpoint_owner(
+        &self,
+        endpoint_key: &str,
+    ) -> Result<Option<KnownChannelEndpoint>, String> {
+        let endpoint_key = endpoint_key.to_owned();
+        self.garyx_db
+            .run_blocking(move |db| db.get_thread_channel_endpoint(&endpoint_key))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
     async fn delivery_contexts(&self) -> Result<Vec<DeliveryContextRow>, String> {
         self.garyx_db
             .run_blocking(|db| db.list_thread_delivery_contexts())

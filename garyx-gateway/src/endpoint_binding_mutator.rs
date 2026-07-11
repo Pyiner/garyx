@@ -27,15 +27,20 @@ impl SqlEndpointBindingMutator {
         }
     }
 
+    /// Current owner of one endpoint, resolved through the STORE'S OWN
+    /// projection accessor (#TASK-2155): the lookup and the mutation
+    /// writes share one truth source. The SQLite store answers with the
+    /// indexed point query over the same database its writes derive
+    /// into; an injected non-SQL store answers with the scan projection
+    /// over itself — never an unrelated database.
     async fn projected_owner(
         &self,
         endpoint_key: &str,
     ) -> Result<Option<KnownChannelEndpoint>, EndpointBindingMutationError> {
-        let endpoint_key = endpoint_key.to_owned();
-        self.garyx_db
-            .run_blocking(move |db| db.get_thread_channel_endpoint(&endpoint_key))
+        garyx_router::channel_endpoint_projection_for(&self.thread_store)
+            .endpoint_owner(endpoint_key)
             .await
-            .map_err(|error| EndpointBindingMutationError::Projection(error.to_string()))
+            .map_err(EndpointBindingMutationError::Projection)
     }
 
     async fn is_archived(&self, thread_id: &str) -> Result<bool, EndpointBindingMutationError> {
@@ -386,6 +391,18 @@ mod tests {
             self.inner.update(thread_id, updates).await
         }
 
+        fn channel_endpoint_projection(
+            &self,
+        ) -> Option<Arc<dyn garyx_router::ChannelEndpointProjection>> {
+            // A delegating wrapper shares its inner store's truth source,
+            // projections included.
+            self.inner.channel_endpoint_projection()
+        }
+
+        fn task_projection(&self) -> Option<Arc<dyn garyx_router::tasks::TaskProjectionReader>> {
+            self.inner.task_projection()
+        }
+
         async fn update_many_atomic(
             &self,
             entries: Vec<AtomicRecordMerge>,
@@ -721,6 +738,56 @@ mod tests {
             .await
             .expect("detach succeeds once storage recovers");
         assert!(detached.changed);
+    }
+
+    /// Owner lookup and mutation writes must share ONE truth source
+    /// (#TASK-2155): with an injected non-SQL store, the owner resolves
+    /// through the scan projection over that same store — never an
+    /// unrelated SQL database — so a move still strips the previous
+    /// owner instead of leaving a ghost binding on both threads.
+    #[tokio::test]
+    async fn injected_store_moves_resolve_owner_from_the_same_store() {
+        let db = Arc::new(GaryxDbService::memory().expect("in-memory database"));
+        let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
+        let mutator = SqlEndpointBindingMutator::new(store.clone(), db);
+        for thread_id in ["thread::old", "thread::target"] {
+            store
+                .set(
+                    thread_id,
+                    json!({
+                        "thread_id": thread_id,
+                        "channel": "telegram",
+                        "account_id": "main"
+                    }),
+                )
+                .await
+                .unwrap();
+        }
+
+        mutator
+            .bind_endpoint("thread::old", binding())
+            .await
+            .expect("initial bind");
+        let moved = mutator
+            .bind_endpoint("thread::target", binding())
+            .await
+            .expect("move bind");
+        assert_eq!(moved.previous_thread_id.as_deref(), Some("thread::old"));
+
+        assert!(
+            bindings_from_value(&store.get("thread::old").await.unwrap().unwrap()).is_empty(),
+            "the previous owner must be stripped — no ghost binding"
+        );
+        assert_eq!(
+            bindings_from_value(&store.get("thread::target").await.unwrap().unwrap()),
+            vec![binding()],
+        );
+        let owner = mutator
+            .binding_for_endpoint("telegram::main::1000000001")
+            .await
+            .expect("owner lookup")
+            .expect("owner");
+        assert_eq!(owner.thread_id, "thread::target");
     }
 
     #[tokio::test]

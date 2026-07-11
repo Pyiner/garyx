@@ -55,6 +55,34 @@ pub trait ChannelEndpointProjection: Send + Sync {
     /// holder dedup migration).
     async fn endpoints(&self) -> Result<Vec<KnownChannelEndpoint>, String>;
 
+    /// Point lookup of one endpoint's owner entry — the same truth
+    /// source as [`Self::endpoints`], narrowed to a single key. The SQL
+    /// projection overrides this with an indexed point query; the scan
+    /// fallback reduces duplicates (legacy record bodies) to the
+    /// preferred holder.
+    async fn endpoint_owner(
+        &self,
+        endpoint_key: &str,
+    ) -> Result<Option<KnownChannelEndpoint>, String> {
+        Ok(self
+            .endpoints()
+            .await?
+            .into_iter()
+            .filter(|candidate| candidate.endpoint_key == endpoint_key)
+            .reduce(|current, candidate| {
+                if crate::threads::is_preferred_thread_binding(
+                    candidate.thread_id.as_deref().unwrap_or_default(),
+                    candidate.thread_updated_at.as_deref(),
+                    current.thread_id.as_deref().unwrap_or_default(),
+                    current.thread_updated_at.as_deref(),
+                ) {
+                    candidate
+                } else {
+                    current
+                }
+            }))
+    }
+
     /// Every thread with a persisted delivery context.
     async fn delivery_contexts(&self) -> Result<Vec<DeliveryContextRow>, String>;
 
