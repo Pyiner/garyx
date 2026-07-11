@@ -1,8 +1,9 @@
 use super::*;
 use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use axum::body::Body;
 use futures_util::StreamExt;
 use garyx_bridge::MultiProviderBridge;
@@ -18,7 +19,9 @@ use garyx_models::provider::{
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink};
 use garyx_models::{RenderDelta, apply_render_delta, render_rows_digest};
-use garyx_router::{MessageRouter, RunTranscriptRecordDraft};
+use garyx_router::{
+    InMemoryThreadStore, MessageRouter, RunTranscriptRecordDraft, ThreadStore, ThreadStoreError,
+};
 use std::path::Path;
 use std::process::Command;
 use tempfile::{TempDir, tempdir};
@@ -38,6 +41,69 @@ fn test_config() -> GaryxConfig {
 
 fn authed_request() -> axum::http::request::Builder {
     crate::test_support::authed_request()
+}
+
+struct RouteStoreProbe {
+    inner: Arc<dyn ThreadStore>,
+    list_calls: AtomicUsize,
+    get_calls: Mutex<Vec<String>>,
+}
+
+impl RouteStoreProbe {
+    fn new(inner: Arc<dyn ThreadStore>) -> Self {
+        Self {
+            inner,
+            list_calls: AtomicUsize::new(0),
+            get_calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn reset_observations(&self) {
+        self.list_calls.store(0, Ordering::SeqCst);
+        self.get_calls
+            .lock()
+            .expect("route store probe lock")
+            .clear();
+    }
+
+    fn get_calls(&self) -> Vec<String> {
+        self.get_calls
+            .lock()
+            .expect("route store probe lock")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl ThreadStore for RouteStoreProbe {
+    async fn get(&self, thread_id: &str) -> Option<Value> {
+        self.get_calls
+            .lock()
+            .expect("route store probe lock")
+            .push(thread_id.to_owned());
+        self.inner.get(thread_id).await
+    }
+
+    async fn set(&self, thread_id: &str, data: Value) {
+        self.inner.set(thread_id, data).await;
+    }
+
+    async fn delete(&self, thread_id: &str) -> bool {
+        self.inner.delete(thread_id).await
+    }
+
+    async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
+        self.list_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.list_keys(prefix).await
+    }
+
+    async fn exists(&self, thread_id: &str) -> bool {
+        self.inner.exists(thread_id).await
+    }
+
+    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+        self.inner.update(thread_id, updates).await
+    }
 }
 
 /// Every message-ref id a wire `render_state.rows` tree references, in
@@ -3352,6 +3418,88 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
             .as_str()
             .unwrap_or_default()
             .contains("include, exclude, only")
+    );
+}
+
+#[tokio::test]
+async fn recent_threads_tasks_exclude_never_scans_thread_store() {
+    let store = Arc::new(RouteStoreProbe::new(Arc::new(InMemoryThreadStore::new())));
+    let state = AppStateBuilder::new(test_config())
+        .with_thread_store(store.clone())
+        .build();
+    for (thread_id, thread_type, timestamp) in [
+        (
+            "thread::route-no-scan-task",
+            "task",
+            "2026-05-23T14:00:00Z",
+        ),
+        (
+            "thread::route-no-scan-chat",
+            "chat",
+            "2026-05-23T13:00:00Z",
+        ),
+    ] {
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "thread_kind": thread_type,
+                    "label": format!("Title for {thread_id}"),
+                    "updated_at": timestamp,
+                }),
+            )
+            .await;
+        state
+            .ops
+            .garyx_db
+            .upsert_recent_thread(RecentThreadDraft {
+                thread_id: thread_id.to_owned(),
+                title: format!("Title for {thread_id}"),
+                workspace_dir: Some("/workspace/test".to_owned()),
+                thread_type: thread_type.to_owned(),
+                provider_type: None,
+                agent_id: None,
+                message_count: 0,
+                last_message_preview: String::new(),
+                recent_run_id: None,
+                active_run_id: None,
+                run_state: "idle".to_owned(),
+                updated_at: Some(timestamp.to_owned()),
+                last_active_at: timestamp.to_owned(),
+            })
+            .expect("seed recent projection");
+    }
+    store.reset_observations();
+    let router = build_router(state);
+
+    let response = router
+        .oneshot(
+            authed_request()
+                .uri("/api/recent-threads?limit=10&offset=0&tasks=exclude")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["total"], 1);
+    assert_eq!(payload["threads"][0]["thread_id"], "thread::route-no-scan-chat");
+    assert_eq!(
+        store.list_calls.load(Ordering::SeqCst),
+        0,
+        "recent task filtering must never enumerate thread-store keys"
+    );
+    assert_eq!(
+        store.get_calls(),
+        vec!["thread::route-no-scan-chat"],
+        "task rows must be filtered by SQL before per-result runtime point reads"
     );
 }
 
