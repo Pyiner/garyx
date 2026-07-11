@@ -14,7 +14,7 @@ export const Kinds = () => (
   <div style={row}>
     <AgentOptionAvatar agentId="codex" label="Codex" kind="agent" size="default" />
     <AgentOptionAvatar agentId="review-team" label="Review Team" kind="team" size="default" />
-    <AgentOptionAvatar agentId="gemini" label="Gemini" kind="agent" size="default" />
+    <AgentOptionAvatar agentId="google" label="Google" kind="agent" size="default" />
   </div>
 );
 

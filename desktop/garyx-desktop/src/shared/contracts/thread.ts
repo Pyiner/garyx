@@ -192,9 +192,9 @@ export interface CreateThreadInput {
   modelReasoningEffort?: string | null;
   /** Optional per-thread service tier override. */
   modelServiceTier?: string | null;
-  /** Optional Claude/Codex/Gemini provider session id to resume from. Garyx resolves the real local provider/workspace from it. */
+  /** Optional Claude/Codex provider session id to resume from. Garyx resolves the real local provider/workspace from it. */
   sdkSessionId?: string | null;
-  /** Optional provider hint for sdkSessionId. Supported values are claude, codex, and gemini. */
+  /** Optional provider hint for sdkSessionId. Supported values are claude and codex. */
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
   /** Optional Garyx thread id to fork from using the provider-native session fork. */
   forkFromThreadId?: string | null;

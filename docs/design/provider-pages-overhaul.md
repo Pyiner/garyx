@@ -91,8 +91,8 @@ exactly three providers: `claude_code`, `codex`, `antigravity`. Per provider,
   reset_after_seconds? (:116), description? (:119) }` (**Antigravity only** — one
   bucket per model)
 
-Per-provider ~20 s cache with stale-on-error fallback. The five non-metered
-providers (`traex`, `gemini_cli`, `gpt`, `anthropic`, `google`) have no usage
+Per-provider ~20 s cache with stale-on-error fallback. The four non-metered
+providers (`traex`, `gpt`, `anthropic`, `google`) have no usage
 source and never appear in this response.
 
 **Everything "nice usage" needs is already on the wire** — `session`, `plan`,
@@ -114,9 +114,9 @@ fields this feature touches:
 | `base_url` | `:239` | native providers |
 | `env` (`HashMap`) | `:201` | **API keys live here** (see §1.2) |
 | `claude_cli_mode` / `claude_cli_path` | `:205` / `:207` | host, read-only on iOS |
-| `codex_home`, `gemini_bin`, `antigravity_bin`, `approval_mode`, `permission_mode` | various | host, read-only on iOS |
+| `codex_home`, `antigravity_bin`, `permission_mode` | various | host, read-only on iOS |
 
-The eight product providers and their config keys:
+The seven product providers and their config keys:
 
 | Provider type | Config key | Group | Usage id |
 |---|---|---|---|
@@ -124,7 +124,6 @@ The eight product providers and their config keys:
 | `codex_app_server` | `codex` | default (CLI) | `codex` |
 | `antigravity` | `antigravity` | default (CLI) | `antigravity` |
 | `traex` | `traex` | default (CLI) | — |
-| `gemini_cli` | `gemini` | default (CLI) | — |
 | `gpt` | `gpt` | native loop | — |
 | `anthropic` | `anthropic` | native loop | — |
 | `google` | `google` | native loop | — |
@@ -152,7 +151,7 @@ fields, exactly mirroring Mac. iOS does not introduce a separate key field.
 
 ### 1.3 Mac — `ProviderSettingsPanel.tsx`
 
-Fixed 8-row shadcn table (`MODEL_PROVIDER_ROWS`, ~`:97–167`) with columns
+Fixed 7-row shadcn table (`MODEL_PROVIDER_ROWS`, ~`:97–167`) with columns
 Provider / Type / Auth / Model / Usage / Status / Actions, plus one shared
 Configure `Dialog` (`:1096–1495`). Diagnosis:
 
@@ -166,7 +165,7 @@ Configure `Dialog` (`:1096–1495`). Diagnosis:
   shows only the tightest bucket (rest in a hover tooltip).
 - **Bug — Antigravity default config never persists.** `handleSaveProviderConfig`
   (`:901–995`) has explicit branches for `claude_code`, `codex_app_server`,
-  `gemini_cli`, `traex`, and `group === 'native'` (gpt/anthropic/google).
+  `traex`, and `group === 'native'` (gpt/anthropic/google).
   **Antigravity matches none** — its key is not special-cased and its group is
   `default` (CLI), not `native` — so saving Antigravity defaults falls through to
   the `finally` and is a **silent no-op**. Confirmed real. Clean fix: add an

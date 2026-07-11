@@ -18,7 +18,7 @@ export function ProviderSelect() {
       <SelectContent>
         <SelectItem value="claude">Claude Code</SelectItem>
         <SelectItem value="codex">Codex</SelectItem>
-        <SelectItem value="gemini">Gemini</SelectItem>
+        <SelectItem value="google">Google</SelectItem>
       </SelectContent>
     </Select>
   )

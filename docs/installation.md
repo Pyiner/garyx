@@ -94,7 +94,7 @@ Telegram bot so real messages can enter Garyx through a channel.
 ## Where to go next
 
 - [Your first bot](/first-bot) — wire up Telegram, Feishu, or WeChat
-- [Providers](/concepts/providers) — log in to Claude Code, Codex, or Gemini
+- [Providers](/concepts/providers) — authenticate the CLI or native model providers you use
 - [Security](/security) — secret handling and local runtime boundaries
 - [Service manager](/reference/service-manager) — what `gateway install`
   actually writes

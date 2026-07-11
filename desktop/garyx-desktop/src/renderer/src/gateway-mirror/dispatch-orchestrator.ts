@@ -200,9 +200,6 @@ export function presentProviderReadyError(
   if (providerType === "traex") {
     return "Traex is not ready on this Mac. Check that the traex CLI is installed, logged in, and available on the Garyx gateway PATH.";
   }
-  if (providerType === "gemini_cli") {
-    return "Gemini CLI is not ready on this Mac. Check that the gemini CLI is installed and available on the Garyx gateway PATH.";
-  }
   if (providerType === "gpt") {
     return "GPT provider is not ready on this Mac. Check the gateway status and Codex/OpenAI auth configuration.";
   }

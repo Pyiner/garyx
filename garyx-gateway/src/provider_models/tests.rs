@@ -3,46 +3,6 @@ use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
-fn parses_flexible_model_payloads() {
-    let discovery = parse_gemini_models_result(&json!({
-        "models": [
-            "gemini-2.5-pro",
-            {
-                "name": "models/gemini-2.5-flash",
-                "displayName": "Gemini 2.5 Flash",
-                "description": "Fast model",
-                "recommended": true
-            },
-            { "id": "" },
-            "gemini-2.5-pro"
-        ],
-        "defaultModel": "gemini-2.5-flash"
-    }));
-
-    assert_eq!(discovery.default_model.as_deref(), Some("gemini-2.5-flash"));
-    assert_eq!(discovery.models.len(), 2);
-    assert_eq!(discovery.models[0].id, "gemini-2.5-pro");
-    assert_eq!(discovery.models[0].label, "gemini-2.5-pro");
-    assert_eq!(discovery.models[1].id, "models/gemini-2.5-flash");
-    assert_eq!(discovery.models[1].label, "Gemini 2.5 Flash");
-    assert!(discovery.models[1].recommended);
-}
-
-#[test]
-fn reads_configured_gemini_binary() {
-    let mut config = GaryxConfig::default();
-    config.agents.insert(
-        "custom-gemini".to_owned(),
-        json!({
-            "provider_type": "gemini_cli",
-            "gemini_bin": "/tmp/gemini-acp"
-        }),
-    );
-
-    assert_eq!(configured_gemini_bin(&config), "/tmp/gemini-acp");
-}
-
-#[test]
 fn maps_codex_presets_with_model_specific_reasoning() {
     let discovery = gpt_builtin_models(None);
 
@@ -468,17 +428,6 @@ fn discover_or_fallback_prefers_stale_success_before_builtin_preset() {
     assert_eq!(stale.source, "claude_code_api");
     assert_eq!(stale.models[0].id, "claude-stale");
     assert_eq!(stale.error.as_deref(), Some("network down"));
-}
-
-#[tokio::test]
-async fn gemini_cli_discovery_failure_uses_nonempty_preset() {
-    let response = list_provider_models(&GaryxConfig::default(), ProviderType::GeminiCli).await;
-
-    assert_eq!(response.provider_type, ProviderType::GeminiCli);
-    assert!(response.supports_model_selection);
-    assert_eq!(response.source, "gemini_cli_builtin");
-    assert!(response.error.is_some());
-    assert!(!response.models.is_empty());
 }
 
 #[tokio::test]

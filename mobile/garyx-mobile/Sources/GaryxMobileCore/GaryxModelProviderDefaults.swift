@@ -83,7 +83,6 @@ public enum GaryxModelProviderDefaults {
             fallbackDefaultModel: "Claude Opus 4.6 (Thinking)"
         ),
         GaryxModelProviderDefault(providerType: "traex", configKey: "traex", fallbackDefaultModel: ""),
-        GaryxModelProviderDefault(providerType: "gemini_cli", configKey: "gemini", fallbackDefaultModel: "gemini-3-flash-preview"),
         GaryxModelProviderDefault(providerType: "gpt", configKey: "gpt", fallbackDefaultModel: "gpt-5.5"),
         GaryxModelProviderDefault(providerType: "anthropic", configKey: "anthropic", fallbackDefaultModel: "claude-sonnet-4-6"),
         GaryxModelProviderDefault(providerType: "google", configKey: "google", fallbackDefaultModel: "gemini-3-flash-preview")
@@ -272,9 +271,6 @@ public enum GaryxModelProviderDefaults {
             append("Permission mode", "permission_mode")
         case "codex_app_server":
             append("Codex home", "codex_home")
-        case "gemini_cli":
-            append("Gemini binary", "gemini_bin")
-            append("Approval mode", "approval_mode")
         case "antigravity":
             append("Antigravity binary", "antigravity_bin")
         case "gpt":

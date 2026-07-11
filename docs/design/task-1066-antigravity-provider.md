@@ -62,8 +62,7 @@ Implement `garyx-bridge/src/antigravity_provider.rs`.
 
 For each run:
 
-1. Resolve `run_id` from metadata using the same fallback order as the Gemini
-   provider.
+1. Resolve `run_id` from metadata using the standard provider fallback order.
 2. Resolve cwd from run options, provider config, or current directory.
 3. Resolve binary from `antigravity_bin`, then `agy`.
 4. Resolve model from metadata `model`, config `model`, config `default_model`,

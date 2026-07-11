@@ -15,7 +15,7 @@ Both backends share the same idea: launch `/bin/sh -c` with a one-liner
 that re-enters the user's login shell with `-lic`, then `exec` the gateway.
 Re-entering the shell is what makes `~/.zshrc` (and friends) source-able,
 which in turn lets provider tokens like `CLAUDE_CODE_OAUTH_TOKEN` propagate
-into the spawned `claude` / `codex` / `gemini` CLIs.
+into the spawned `claude` / `codex` / `traex` / `agy` CLIs.
 
 Concretely, the macOS plist looks like:
 
@@ -63,8 +63,7 @@ tail -f ~/.garyx/logs/stderr.log
 ```
 
 When the gateway is misbehaving, `stderr.log` is the file to read first.
-Provider-side errors (claude / codex / gemini) bubble up there with their
-own warnings prefixed by `claude_provider:`, `codex_provider:`, etc.
+Provider-side errors bubble up there with their own provider-prefixed warnings.
 
 ## Removing the service
 

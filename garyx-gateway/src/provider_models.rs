@@ -73,11 +73,6 @@ pub(crate) struct ProviderCatalogDefault {
     pub service_tier: Option<String>,
 }
 
-struct GeminiModelDiscovery {
-    models: Vec<ProviderModelOption>,
-    default_model: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 struct ProviderModelDiscovery {
     models: Vec<ProviderModelOption>,
@@ -107,44 +102,6 @@ pub(crate) async fn list_provider_models(
                 &default_model,
                 configured_default_reasoning_effort(config, ProviderType::AntigravityCli, aliases),
             )
-        }
-        ProviderType::GeminiCli => {
-            let aliases = &["gemini", "gemini_cli"];
-            let configured_default =
-                configured_default_model(config, ProviderType::GeminiCli, aliases);
-            let configured_default_reasoning_effort =
-                configured_default_reasoning_effort(config, ProviderType::GeminiCli, aliases);
-            let discovery = match fresh_cached_discovery("gemini_cli") {
-                Some(discovery) => discovery,
-                None => {
-                    let result = fetch_gemini_acp_models(config).await.map(|discovery| {
-                        ProviderModelDiscovery {
-                            models: discovery.models,
-                            default_model: discovery.default_model,
-                            reasoning_efforts: Vec::new(),
-                            service_tiers: Vec::new(),
-                            source: "gemini_acp",
-                            error: None,
-                        }
-                    });
-                    discover_or_fallback("gemini_cli", result, gemini_cli_preset_models)
-                }
-            };
-            let supports_reasoning_effort_selection =
-                provider_supports_reasoning_effort_selection(&discovery.models);
-            ProviderModelsResponse {
-                provider_type,
-                supports_model_selection: !discovery.models.is_empty(),
-                supports_reasoning_effort_selection,
-                reasoning_efforts: discovery.reasoning_efforts,
-                models: discovery.models,
-                supports_service_tier_selection: !discovery.service_tiers.is_empty(),
-                service_tiers: discovery.service_tiers,
-                default_model: configured_default.or(discovery.default_model),
-                default_reasoning_effort: configured_default_reasoning_effort,
-                source: discovery.source,
-                error: discovery.error,
-            }
         }
         ProviderType::ClaudeCode => {
             // The CLI's actual default model is account/plan dependent and not
@@ -375,10 +332,9 @@ pub(crate) fn builtin_provider_catalog_default(
             reasoning_effort: None,
             service_tier: None,
         },
-        ProviderType::ClaudeCode
-        | ProviderType::CodexAppServer
-        | ProviderType::Traex
-        | ProviderType::GeminiCli => ProviderCatalogDefault::default(),
+        ProviderType::ClaudeCode | ProviderType::CodexAppServer | ProviderType::Traex => {
+            ProviderCatalogDefault::default()
+        }
     }
 }
 
@@ -422,17 +378,15 @@ mod app_server;
 mod cache;
 mod claude_code;
 mod codex;
-mod gemini_acp;
 mod native;
-mod parse;
+mod process_rpc;
 
 use app_server::*;
 use cache::*;
 use claude_code::*;
 use codex::*;
-use gemini_acp::*;
 use native::*;
-use parse::*;
+use process_rpc::*;
 
 #[cfg(test)]
 mod tests;

@@ -75,7 +75,7 @@ fn provider_icon_descriptor(provider_type: &ProviderType) -> Option<Value> {
         ProviderType::ClaudeCode | ProviderType::ClaudeLlm => ("claude", "Claude"),
         ProviderType::CodexAppServer => ("codex", "Codex"),
         ProviderType::Traex => ("traex", "Traex"),
-        ProviderType::GeminiCli | ProviderType::GeminiLlm => ("gemini", "Gemini"),
+        ProviderType::GeminiLlm => ("gemini", "Gemini"),
         ProviderType::AntigravityCli => ("gemini", "Antigravity"),
         ProviderType::Gpt => return None,
     };

@@ -54,7 +54,6 @@ fn locate_claude_session_binding_treats_legacy_tty_hint_as_claude() {
         claude_projects_dir: Some(projects_dir),
         codex_state_db: None,
         codex_session_roots: Vec::new(),
-        gemini_tmp_dir: None,
     };
     let binding = locate_local_provider_session_with_roots(
         session_id,
@@ -106,40 +105,6 @@ fn locate_codex_session_binding_reads_cwd_from_session_meta() {
 }
 
 #[test]
-fn locate_gemini_session_binding_reads_project_root() {
-    let temp = tempfile::tempdir().unwrap();
-    let workspace = temp.path().join("novel");
-    fs::create_dir_all(&workspace).unwrap();
-    let project_dir = temp.path().join(".gemini").join("tmp").join("novel");
-    let chats_dir = project_dir.join("chats");
-    fs::create_dir_all(&chats_dir).unwrap();
-    fs::write(
-        project_dir.join(".project_root"),
-        format!("{}\n", workspace.display()),
-    )
-    .unwrap();
-    let session_id = "47dc720f-5a99-4ca6-9904-11513e92af91";
-    fs::write(
-        chats_dir.join("session-2026-04-10T13-12-47dc720f.jsonl"),
-        format!("{{\"sessionId\":\"{session_id}\"}}"),
-    )
-    .unwrap();
-
-    let binding =
-        locate_gemini_session_binding(session_id, &temp.path().join(".gemini").join("tmp"))
-            .expect("binding");
-    assert_eq!(binding.provider_type, ProviderType::GeminiCli);
-    assert_eq!(binding.agent_id, "gemini");
-    assert_eq!(
-        binding.workspace_dir,
-        fs::canonicalize(&workspace)
-            .unwrap()
-            .to_string_lossy()
-            .to_string()
-    );
-}
-
-#[test]
 fn recover_local_provider_session_with_roots_imports_claude_messages() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = temp.path().join("novel");
@@ -170,7 +135,6 @@ fn recover_local_provider_session_with_roots_imports_claude_messages() {
             claude_projects_dir: Some(projects_dir),
             codex_state_db: None,
             codex_session_roots: Vec::new(),
-            gemini_tmp_dir: None,
         },
     )
     .expect("recover")
@@ -215,7 +179,6 @@ fn recover_local_provider_session_with_roots_imports_codex_messages() {
             claude_projects_dir: None,
             codex_state_db: None,
             codex_session_roots: vec![sessions_root],
-            gemini_tmp_dir: None,
         },
     )
     .expect("recover")
@@ -227,57 +190,6 @@ fn recover_local_provider_session_with_roots_imports_codex_messages() {
     assert_eq!(recovered.messages[0]["content"], "hello codex");
     assert_eq!(recovered.messages[1]["role"], "assistant");
     assert_eq!(recovered.messages[1]["content"], "hi from codex");
-}
-
-#[test]
-fn recover_local_provider_session_with_roots_imports_gemini_messages() {
-    let temp = tempfile::tempdir().unwrap();
-    let workspace = temp.path().join("novel");
-    fs::create_dir_all(&workspace).unwrap();
-    let project_dir = temp.path().join(".gemini").join("tmp").join("novel");
-    let chats_dir = project_dir.join("chats");
-    fs::create_dir_all(&chats_dir).unwrap();
-    fs::write(
-        project_dir.join(".project_root"),
-        format!("{}\n", workspace.display()),
-    )
-    .unwrap();
-    let session_id = "gemini-session";
-    fs::write(
-        chats_dir.join("session-2026-04-14T00-00-gemini.jsonl"),
-        format!(
-            concat!(
-                "{{\"sessionId\":\"{}\",\"projectHash\":\"project\",\"startTime\":\"2026-04-14T00:00:00Z\",\"lastUpdated\":\"2026-04-14T00:00:00Z\",\"kind\":\"main\"}}\n",
-                "{{\"id\":\"u1\",\"timestamp\":\"2026-04-14T00:00:00Z\",\"type\":\"user\",\"content\":[{{\"text\":\"hello gemini\"}}]}}\n",
-                "{{\"$set\":{{\"lastUpdated\":\"2026-04-14T00:00:00Z\"}}}}\n",
-                "{{\"id\":\"g1\",\"timestamp\":\"2026-04-14T00:00:01Z\",\"type\":\"gemini\",\"content\":\"\",\"toolCalls\":[{{\"name\":\"search\"}}]}}\n",
-                "{{\"id\":\"g2\",\"timestamp\":\"2026-04-14T00:00:02Z\",\"type\":\"gemini\",\"content\":\"hi from gemini\"}}\n",
-                "{{\"$set\":{{\"lastUpdated\":\"2026-04-14T00:00:02Z\"}}}}\n"
-            ),
-            session_id
-        ),
-    )
-    .unwrap();
-
-    let recovered = recover_local_provider_session_with_roots(
-        session_id,
-        Some(ProviderType::GeminiCli),
-        &ProviderSessionSearchRoots {
-            claude_projects_dir: None,
-            codex_state_db: None,
-            codex_session_roots: Vec::new(),
-            gemini_tmp_dir: Some(temp.path().join(".gemini").join("tmp")),
-        },
-    )
-    .expect("recover")
-    .expect("gemini recovery");
-
-    assert_eq!(recovered.binding.agent_id, "gemini");
-    assert_eq!(recovered.messages.len(), 2);
-    assert_eq!(recovered.messages[0]["role"], "user");
-    assert_eq!(recovered.messages[0]["content"], "hello gemini");
-    assert_eq!(recovered.messages[1]["role"], "assistant");
-    assert_eq!(recovered.messages[1]["content"], "hi from gemini");
 }
 
 #[test]
@@ -346,29 +258,10 @@ fn list_recent_local_provider_sessions_with_roots_orders_titles_and_filters() {
         )
         .unwrap();
 
-    let gemini_project = temp.path().join(".gemini").join("tmp").join("workspace");
-    let gemini_chats = gemini_project.join("chats");
-    fs::create_dir_all(&gemini_chats).unwrap();
-    fs::write(
-        gemini_project.join(".project_root"),
-        format!("{}\n", workspace.display()),
-    )
-    .unwrap();
-    fs::write(
-        gemini_chats.join("gemini-mid.jsonl"),
-        concat!(
-            "{\"sessionId\":\"gemini-mid\",\"projectHash\":\"project\",\"startTime\":\"2026-04-14T00:00:00Z\",\"lastUpdated\":\"2026-04-14T00:00:00Z\",\"kind\":\"main\"}\n",
-            "{\"id\":\"u1\",\"timestamp\":\"2026-04-14T00:00:03Z\",\"type\":\"user\",\"content\":[{\"text\":\"Gemini middle research\"}]}\n",
-            "{\"$set\":{\"lastUpdated\":\"2026-04-14T00:00:03Z\"}}\n",
-        ),
-    )
-    .unwrap();
-
     let roots = ProviderSessionSearchRoots {
         claude_projects_dir: Some(temp.path().join(".claude").join("projects")),
         codex_state_db: Some(codex_state_db),
         codex_session_roots: Vec::new(),
-        gemini_tmp_dir: Some(temp.path().join(".gemini").join("tmp")),
     };
 
     let recent = list_recent_local_provider_sessions_with_roots(None, 2, &roots);
@@ -376,8 +269,8 @@ fn list_recent_local_provider_sessions_with_roots_orders_titles_and_filters() {
     assert_eq!(recent[0].provider_hint, "codex");
     assert_eq!(recent[0].session_id, "codex-new");
     assert_eq!(recent[0].title, "Codex newest task title");
-    assert_eq!(recent[1].provider_hint, "gemini");
-    assert_eq!(recent[1].session_id, "gemini-mid");
+    assert_eq!(recent[1].provider_hint, "claude");
+    assert_eq!(recent[1].session_id, "claude-old");
 
     let claude =
         list_recent_local_provider_sessions_with_roots(Some(ProviderType::ClaudeCode), 10, &roots);
@@ -464,7 +357,6 @@ fn list_recent_codex_sessions_reads_state_db_threads_index() {
             claude_projects_dir: None,
             codex_state_db: Some(state_db),
             codex_session_roots: Vec::new(),
-            gemini_tmp_dir: None,
         },
     );
 
@@ -517,7 +409,6 @@ fn locate_local_provider_session_with_roots_rejects_ambiguous_matches() {
             claude_projects_dir: Some(temp.path().join(".claude").join("projects")),
             codex_state_db: None,
             codex_session_roots: vec![codex_root],
-            gemini_tmp_dir: None,
         },
     )
     .expect_err("ambiguous");
@@ -560,7 +451,6 @@ fn locate_local_provider_session_with_roots_filters_by_provider_hint() {
             claude_projects_dir: Some(temp.path().join(".claude").join("projects")),
             codex_state_db: None,
             codex_session_roots: vec![codex_root],
-            gemini_tmp_dir: None,
         },
     )
     .expect("filtered lookup")

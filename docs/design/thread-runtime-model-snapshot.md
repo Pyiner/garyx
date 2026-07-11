@@ -81,7 +81,7 @@ Each provider implementation should reuse its existing request builders/helpers:
 - Codex/Traex: `resolve_codex_request_model`,
   `resolve_codex_request_reasoning_effort`, and
   `resolve_codex_request_service_tier`.
-- Gemini and Antigravity: their existing `model_id` helpers.
+- Antigravity: its existing `model_id` helper.
 - Native GPT/Claude/Gemini: the same `model_id` and request option resolution
   used to build `AgentLoopRunRequest`.
 

@@ -28,8 +28,8 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
               "error": "Codex usage request returned HTTP 500"
             },
             {
-              "id": "gemini",
-              "name": "Gemini",
+              "id": "other",
+              "name": "Other",
               "available": false,
               "error": "no credentials"
             },
@@ -73,9 +73,9 @@ final class GaryxMobileUsageWidgetTests: XCTestCase {
         XCTAssertEqual(codex.weekly?.resetAfterSeconds, 140_803)
         XCTAssertEqual(codex.error, "Codex usage request returned HTTP 500")
 
-        let gemini = try XCTUnwrap(usage.provider(id: "gemini"))
-        XCTAssertFalse(gemini.available)
-        XCTAssertNil(gemini.weekly)
+        let other = try XCTUnwrap(usage.provider(id: "other"))
+        XCTAssertFalse(other.available)
+        XCTAssertNil(other.weekly)
 
         let antigravity = try XCTUnwrap(usage.provider(id: "antigravity"))
         XCTAssertTrue(antigravity.available)

@@ -195,9 +195,6 @@ function providerTypeLabel(provider: any): string {
   if (value === 'traex') {
     return 'traex';
   }
-  if (value === 'gemini_cli') {
-    return 'gemini';
-  }
   if (value === 'gpt') {
     return 'gpt';
   }

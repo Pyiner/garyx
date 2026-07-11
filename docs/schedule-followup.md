@@ -1,9 +1,9 @@
 # `schedule_followup` — delayed self-wake for long-running tasks
 
 `schedule_followup` is an MCP tool exposed by the Garyx gateway as
-`mcp__garyx__schedule_followup`. When a Claude / Codex / Gemini agent
-is partway through a task that depends on external progress (a remote
-build, a queued job, "sleep N minutes then poll"), it can use this
+`mcp__garyx__schedule_followup`. When an agent is partway through a task that
+depends on external progress (a remote build, a queued job, "sleep N minutes
+then poll"), it can use this
 tool to park the turn cleanly and have the gateway re-wake the same
 thread later with a synthetic user message — instead of leaving the
 conversation silent until the user re-engages.

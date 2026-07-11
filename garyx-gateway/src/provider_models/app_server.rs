@@ -44,7 +44,7 @@ pub(super) async fn fetch_app_server_models(
     let mut lines = BufReader::new(stdout).lines();
 
     let result = async {
-        send_acp_request(
+        send_process_request(
             &mut stdin,
             1,
             "initialize",
@@ -57,18 +57,18 @@ pub(super) async fn fetch_app_server_models(
             }),
         )
         .await?;
-        let initialize = read_acp_response(&mut lines, 1, Duration::from_secs(10)).await?;
-        if let Some(message) = acp_error_message(&initialize) {
+        let initialize = read_process_response(&mut lines, 1, Duration::from_secs(10)).await?;
+        if let Some(message) = process_error_message(&initialize) {
             return Err(format!("app-server initialize failed: {message}"));
         }
-        send_jsonrpc_notification(&mut stdin, "initialized", json!({})).await?;
+        send_process_notification(&mut stdin, "initialized", json!({})).await?;
 
-        send_acp_request(&mut stdin, 2, "model/list", json!({})).await?;
-        let response = read_acp_response(&mut lines, 2, Duration::from_secs(15)).await?;
-        if acp_error_code(&response) == Some(-32601) {
+        send_process_request(&mut stdin, 2, "model/list", json!({})).await?;
+        let response = read_process_response(&mut lines, 2, Duration::from_secs(15)).await?;
+        if process_error_code(&response) == Some(-32601) {
             return Err("app-server does not expose model/list".to_owned());
         }
-        if let Some(message) = acp_error_message(&response) {
+        if let Some(message) = process_error_message(&response) {
             return Err(format!("app-server model/list failed: {message}"));
         }
         let result = response

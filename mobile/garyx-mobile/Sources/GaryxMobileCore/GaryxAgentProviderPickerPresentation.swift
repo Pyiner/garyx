@@ -23,7 +23,6 @@ public enum GaryxAgentProviderPickerPresentation {
         "claude_code",
         "codex_app_server",
         "traex",
-        "gemini_cli",
         "gpt",
         "anthropic",
         "google",

@@ -106,9 +106,6 @@ export function normalizeDesktopProviderType(value: unknown): DesktopApiProvider
   if (value === "traex" || value === "trae" || value === "trae_cli" || value === "traecli") {
     return "traex";
   }
-  if (value === "gemini_cli") {
-    return "gemini_cli";
-  }
   if (value === "gpt" || value === "openai" || value === "garyx_native") {
     return "gpt";
   }
@@ -333,7 +330,7 @@ function mapProviderRecentSession(
     asString(record.providerHint) || asString(record.provider_hint) || "";
   if (
     !sessionId ||
-    !["claude", "codex", "gemini"].includes(providerHint)
+    !["claude", "codex"].includes(providerHint)
   ) {
     return null;
   }

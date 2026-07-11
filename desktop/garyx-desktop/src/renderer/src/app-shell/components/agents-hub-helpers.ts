@@ -3,7 +3,7 @@ import type {
   DesktopProviderModels,
 } from '@shared/contracts';
 
-export type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex' | 'gemini_cli' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
+export type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
 export type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 export type AvatarStyleId = 'clean_glyph' | 'soft_3d' | 'glass_icon' | 'pixel_badge' | 'ink_line' | 'paper_cut' | 'blueprint' | 'enamel_sticker' | 'custom';
 
@@ -122,9 +122,6 @@ export function providerLabel(value: ProviderType): string {
   }
   if (value === 'traex') {
     return 'Traex';
-  }
-  if (value === 'gemini_cli') {
-    return 'Gemini';
   }
   if (value === 'gpt') {
     return 'GPT';

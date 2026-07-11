@@ -21,7 +21,7 @@ import {
 import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 
-type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex' | 'gemini_cli' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
+type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
 type EditorMode = 'inspect' | 'create' | 'edit';
 
 type AgentsPanelProps = {
@@ -89,9 +89,6 @@ function providerLabel(value: ProviderType): string {
   }
   if (value === 'traex') {
     return 'Traex';
-  }
-  if (value === 'gemini_cli') {
-    return 'Gemini';
   }
   if (value === 'gpt') {
     return 'GPT';
@@ -268,7 +265,6 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     [agents, selectedAgentId],
   );
   const activeProviderModels = providerModelsByType[draft.providerType];
-  const providerModelsBusy = providerModelsLoading[draft.providerType] === true;
   const modelOptions = providerModelsWithCurrent(activeProviderModels, draft.model);
   const supportsModelSelection =
     activeProviderModels?.supportsModelSelection === true && modelOptions.length > 0;
@@ -289,14 +285,6 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     draft.providerType === 'gpt'
     && (activeProviderModels?.supportsServiceTierSelection === true || draft.modelServiceTier.trim().length > 0)
     && serviceTierOptions.length > 0;
-  const modelStatus =
-    draft.providerType === 'gemini_cli' && !supportsModelSelection
-      ? providerModelsBusy
-        ? t('Loading models from local Gemini ACP...')
-        : activeProviderModels?.error
-          ? t('Local Gemini ACP does not expose a model list yet.')
-          : null
-      : null;
 
   function openCreateEditor() {
     setEditorMode('create');
@@ -508,14 +496,12 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="antigravity">Antigravity</SelectItem>
                       <SelectItem value="traex">Trae</SelectItem>
-                      <SelectItem value="gemini_cli">Gemini</SelectItem>
                       <SelectItem value="gpt">GPT</SelectItem>
                       <SelectItem value="anthropic">Claude</SelectItem>
                       <SelectItem value="google">Gemini</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                {modelStatus ? <span className="codex-form-hint">{modelStatus}</span> : null}
               </div>
               {isNativeModelProvider(draft.providerType) ? (
                 <>
@@ -766,7 +752,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                 <span className="codex-list-row-name">{t('Provider')}</span>
                 <span className="codex-command-row-desc">{providerLabel(selectedAgent.providerType)}</span>
               </div>
-              {selectedAgent.providerType === 'gemini_cli' || isNativeModelProvider(selectedAgent.providerType as ProviderType) || selectedAgent.model.trim() ? (
+              {isNativeModelProvider(selectedAgent.providerType as ProviderType) || selectedAgent.model.trim() ? (
                 <div className="codex-list-row">
                   <span className="codex-list-row-name">{t('Model')}</span>
                   <span className="codex-command-row-desc">{selectedAgent.model || t('(provider default)')}</span>

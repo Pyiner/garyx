@@ -5,7 +5,7 @@ Status: implemented for the `gpt` model provider.
 ## Goals
 
 Garyx needs a first-party agent loop that runs inside the bridge instead of
-delegating loop control to Claude Code, Codex app-server, or Gemini CLI. The
+delegating loop control to an external CLI provider. The
 first model backend on this loop is the GPT provider. It should:
 
 - use Garyx's existing streaming, transcript, interruption, task, and channel

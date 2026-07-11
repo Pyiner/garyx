@@ -220,12 +220,6 @@ pub struct AgentProviderConfig {
     #[serde(default)]
     pub experimental_api: bool,
 
-    // Gemini CLI specific
-    #[serde(default)]
-    pub gemini_bin: String,
-    #[serde(default = "default_gemini_approval_mode")]
-    pub approval_mode: String,
-
     // Antigravity CLI specific
     #[serde(default)]
     pub antigravity_bin: String,
@@ -253,9 +247,6 @@ pub fn default_permission_mode() -> String {
 }
 pub fn default_mcp_base_url() -> String {
     "http://127.0.0.1:31337".to_owned()
-}
-pub fn default_gemini_approval_mode() -> String {
-    "yolo".to_owned()
 }
 pub fn default_garyx_native_auth_source() -> String {
     "codex".to_owned()
@@ -285,8 +276,6 @@ impl Default for AgentProviderConfig {
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
             experimental_api: false,
-            gemini_bin: String::new(),
-            approval_mode: default_gemini_approval_mode(),
             antigravity_bin: String::new(),
             antigravity_brain_root: String::new(),
             auth_source: default_garyx_native_auth_source(),

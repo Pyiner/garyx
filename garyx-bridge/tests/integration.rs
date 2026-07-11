@@ -17,15 +17,13 @@ use std::sync::{Arc, Mutex};
 
 use garyx_bridge::claude_provider::ClaudeCliProvider;
 use garyx_bridge::codex_provider::CodexAgentProvider;
-use garyx_bridge::gemini_provider::GeminiCliProvider;
 use garyx_bridge::provider_trait::AgentLoopProvider;
 use garyx_models::local_paths::{
     agent_memory_dir_for_gary_home, agent_memory_root_file_for_gary_home, gary_home_dir,
 };
 use garyx_models::provider::{
-    ClaudeCodeConfig, CodexAppServerConfig, GeminiCliConfig, PromptAttachment,
-    PromptAttachmentKind, ProviderRunOptions, ProviderType, QueuedUserInput, StreamEvent,
-    attachments_to_metadata_value,
+    ClaudeCodeConfig, CodexAppServerConfig, PromptAttachment, PromptAttachmentKind,
+    ProviderRunOptions, ProviderType, QueuedUserInput, StreamEvent, attachments_to_metadata_value,
 };
 use tempfile::tempdir;
 
@@ -148,20 +146,6 @@ async fn test_codex_session_management() {
     assert!(sid.is_empty(), "Expected empty placeholder for new session");
 
     assert!(provider.clear_session("test::codex::sess").await);
-}
-
-#[tokio::test]
-async fn test_gemini_session_management() {
-    let config = GeminiCliConfig::default();
-    let provider = GeminiCliProvider::new(config);
-
-    let sid = provider
-        .get_or_create_session("test::gemini::sess")
-        .await
-        .expect("get_or_create_session failed");
-    assert!(sid.is_empty(), "Expected empty placeholder for new session");
-
-    assert!(!provider.clear_session("test::gemini::sess").await);
 }
 
 // ---------------------------------------------------------------------------
@@ -444,112 +428,6 @@ async fn test_codex_provider_full() {
     // --- Shutdown ---
     provider.shutdown().await.expect("shutdown failed");
     assert!(!provider.is_ready());
-}
-
-// ---------------------------------------------------------------------------
-// Gemini Provider — single comprehensive test
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-#[ignore]
-async fn test_gemini_provider_full() {
-    if !binary_available("gemini").await {
-        eprintln!("gemini not found, skipping");
-        return;
-    }
-
-    let mut provider = GeminiCliProvider::new(GeminiCliConfig {
-        approval_mode: "yolo".to_owned(),
-        ..Default::default()
-    });
-    assert_eq!(provider.provider_type(), ProviderType::GeminiCli);
-    assert!(!provider.is_ready());
-    provider.initialize().await.expect("initialize failed");
-    assert!(provider.is_ready());
-
-    let options = ProviderRunOptions {
-        thread_id: "test::gemini::full".to_owned(),
-        message: "Reply with the single word pong.".to_owned(),
-        workspace_dir: None,
-        images: None,
-        metadata: HashMap::new(),
-    };
-
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(180),
-        provider.run_streaming(&options, noop_stream_callback()),
-    )
-    .await
-    .expect("gemini run timed out after 180s")
-    .expect("gemini run_streaming failed");
-
-    assert!(result.success, "Run was not successful: {:?}", result.error);
-    assert!(
-        result.response.to_ascii_lowercase().contains("pong"),
-        "Expected pong in response, got: {}",
-        result.response
-    );
-    assert!(result.sdk_session_id.is_some(), "Expected sdk_session_id");
-
-    provider.shutdown().await.expect("shutdown failed");
-    assert!(!provider.is_ready());
-}
-
-#[tokio::test]
-#[ignore]
-async fn test_gemini_provider_mcp_status_tool_loaded() {
-    if !binary_available("gemini").await {
-        eprintln!("gemini not found, skipping");
-        return;
-    }
-
-    let mcp_base_url =
-        std::env::var("GARYX_MCP_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:31337".to_owned());
-
-    let mut provider = GeminiCliProvider::new(GeminiCliConfig {
-        mcp_base_url,
-        approval_mode: "yolo".to_owned(),
-        ..Default::default()
-    });
-    provider.initialize().await.expect("initialize failed");
-
-    let options = ProviderRunOptions {
-        thread_id: "test::gemini::mcp::status".to_owned(),
-        message: "必须调用 mcp__garyx__status 工具一次，并只输出 status 字段值。".to_owned(),
-        workspace_dir: None,
-        images: None,
-        metadata: HashMap::new(),
-    };
-
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(180),
-        provider.run_streaming(&options, noop_stream_callback()),
-    )
-    .await
-    .expect("gemini MCP run timed out after 180s")
-    .expect("gemini MCP run_streaming failed");
-
-    assert!(result.success, "Run was not successful: {:?}", result.error);
-    let used_mcp_status_tool = result.session_messages.iter().any(|msg| {
-        msg.role_str() == "tool_use"
-            && msg
-                .tool_use_id
-                .as_deref()
-                .is_some_and(|id| id.starts_with("mcp_garyx_status-"))
-    });
-    assert!(
-        used_mcp_status_tool,
-        "Expected tool_use for mcp__garyx__status, got session_messages={:?}",
-        result.session_messages
-    );
-    assert!(
-        result
-            .session_messages
-            .iter()
-            .any(|msg| msg.role_str() == "tool_result"),
-        "Expected at least one tool_result in session_messages={:?}",
-        result.session_messages
-    );
 }
 
 #[tokio::test]
@@ -846,46 +724,6 @@ async fn test_codex_provider_image_attachment_live() {
 
 #[tokio::test]
 #[ignore]
-async fn test_gemini_provider_image_attachment_live() {
-    if !binary_available("gemini").await {
-        eprintln!("gemini not found, skipping");
-        return;
-    }
-
-    let mut provider = GeminiCliProvider::new(GeminiCliConfig {
-        approval_mode: "yolo".to_owned(),
-        workspace_dir: Some(env!("CARGO_MANIFEST_DIR").to_owned()),
-        ..Default::default()
-    });
-    provider.initialize().await.expect("initialize failed");
-
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(180),
-        provider.run_streaming(
-            &ProviderRunOptions {
-                thread_id: "test::gemini::attachment::image".to_owned(),
-                message: "Inspect the attached image file. Reply with exactly one uppercase word: TELEGRAM if it is the Telegram logo, otherwise UNKNOWN.".to_owned(),
-                workspace_dir: None,
-                images: None,
-                metadata: telegram_logo_attachment_metadata(),
-            },
-            noop_stream_callback(),
-        ),
-    )
-    .await
-    .expect("gemini attachment run timed out after 180s")
-    .expect("gemini attachment run failed");
-
-    assert!(result.success, "Gemini run failed: {:?}", result.error);
-    assert!(
-        result.response.to_ascii_uppercase().contains("TELEGRAM"),
-        "Expected TELEGRAM, got: {}",
-        result.response
-    );
-}
-
-#[tokio::test]
-#[ignore]
 async fn test_claude_provider_file_attachment_live() {
     if !binary_available("claude").await {
         eprintln!("claude not found, skipping");
@@ -960,48 +798,6 @@ async fn test_codex_provider_file_attachment_live() {
         .expect("codex file attachment run failed");
 
     assert!(result.success, "Codex run failed: {:?}", result.error);
-    assert!(
-        result.response.contains(&secret),
-        "Expected secret token {}, got: {}",
-        secret,
-        result.response
-    );
-}
-
-#[tokio::test]
-#[ignore]
-async fn test_gemini_provider_file_attachment_live() {
-    if !binary_available("gemini").await {
-        eprintln!("gemini not found, skipping");
-        return;
-    }
-
-    let (_dir, metadata, secret) = temp_text_attachment_metadata();
-    let mut provider = GeminiCliProvider::new(GeminiCliConfig {
-        approval_mode: "yolo".to_owned(),
-        workspace_dir: Some(env!("CARGO_MANIFEST_DIR").to_owned()),
-        ..Default::default()
-    });
-    provider.initialize().await.expect("initialize failed");
-
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(180),
-        provider.run_streaming(
-            &ProviderRunOptions {
-                thread_id: "test::gemini::attachment::file".to_owned(),
-                message: "Read the attached file and reply with exactly the secret token contained inside it. Do not add any other words.".to_owned(),
-                workspace_dir: None,
-                images: None,
-                metadata,
-            },
-            noop_stream_callback(),
-        ),
-    )
-    .await
-    .expect("gemini file attachment run timed out after 180s")
-    .expect("gemini file attachment run failed");
-
-    assert!(result.success, "Gemini run failed: {:?}", result.error);
     assert!(
         result.response.contains(&secret),
         "Expected secret token {}, got: {}",

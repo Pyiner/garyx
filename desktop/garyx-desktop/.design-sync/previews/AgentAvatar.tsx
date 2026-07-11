@@ -6,7 +6,7 @@ export const TeamRoster = () => (
   <div style={row}>
     <AgentAvatar agentId="claude" displayName="Claude Code" role="leader" size={40} />
     <AgentAvatar agentId="codex" displayName="Codex" role="member" size={40} />
-    <AgentAvatar agentId="gemini" displayName="Gemini" role="member" size={40} />
+    <AgentAvatar agentId="google" displayName="Google" role="member" size={40} />
     <AgentAvatar agentId="research-bot" displayName="Research Bot" role="member" size={40} />
     <AgentAvatar agentId="ops-team" displayName="Ops Team" role="member" size={40} />
   </div>

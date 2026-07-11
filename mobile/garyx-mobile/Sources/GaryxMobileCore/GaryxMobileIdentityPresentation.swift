@@ -180,8 +180,6 @@ public struct GaryxProviderPresentation: Equatable {
             return "Traex"
         case "claude_code":
             return "Claude Code"
-        case "gemini_cli":
-            return "Gemini CLI"
         case "gpt":
             return "OpenAI"
         case "anthropic", "claude_llm":

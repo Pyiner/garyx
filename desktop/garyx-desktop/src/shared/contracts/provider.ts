@@ -3,7 +3,6 @@ export type DesktopApiProviderType =
   | "codex_app_server"
   | "antigravity"
   | "traex"
-  | "gemini_cli"
   | "gpt"
   | "anthropic"
   | "google"
@@ -79,7 +78,7 @@ export interface DesktopCodingUsage {
 
 export type DesktopThreadProviderType = DesktopApiProviderType;
 
-export type DesktopSessionProviderHint = "claude" | "codex" | "gemini";
+export type DesktopSessionProviderHint = "claude" | "codex";
 
 export interface DesktopProviderRecentSession {
   providerType: DesktopApiProviderType | string;

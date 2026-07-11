@@ -253,7 +253,7 @@ View changes (`GaryxMobileBotSettingsViews.swift`):
 
 - `authSection` for every entry in `GaryxModelProviderDefaults.providers`:
   claude_code → claudeCode; gpt/anthropic/google → native;
-  codex_app_server/antigravity/traex/gemini_cli → managedOAuth.
+  codex_app_server/antigravity/traex → managedOAuth.
 - `offersGptTokenAuthSource` true only for gpt.
 - `effectiveAuthSource`: empty/whitespace draft → "codex" (gpt) / "api_key"
   (anthropic, google); non-empty draft trimmed and passed through.

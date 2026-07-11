@@ -68,7 +68,7 @@ test("rejects unknown resume providers", () => {
   assert.deepEqual(parseDesktopDeepLink("garyx://resume/unknown/session-123"), {
     type: "error",
     url: "garyx://resume/unknown/session-123",
-    error: "Unsupported resume provider. Use claude, codex, or gemini.",
+    error: "Unsupported resume provider. Use claude or codex.",
   });
 });
 

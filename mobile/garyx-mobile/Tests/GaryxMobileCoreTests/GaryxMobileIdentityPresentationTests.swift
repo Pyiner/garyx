@@ -11,7 +11,6 @@ final class GaryxMobileIdentityPresentationTests: XCTestCase {
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "antigravity").displayName, "Antigravity")
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "antigravity").symbolName, "bolt.fill")
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "claude_code").symbolName, "sparkles")
-        XCTAssertEqual(GaryxProviderPresentation.make(providerType: "gemini_cli").displayName, "Gemini CLI")
         XCTAssertEqual(GaryxProviderPresentation.make(providerType: "gpt").displayName, "OpenAI")
     }
 

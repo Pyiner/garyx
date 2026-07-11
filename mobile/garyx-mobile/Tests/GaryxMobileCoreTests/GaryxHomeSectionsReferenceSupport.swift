@@ -366,7 +366,7 @@ enum GaryxHomeListFixture {
             GaryxAgentSummary(
                 id: "agent-\(i)",
                 displayName: "Test Agent \(i)",
-                providerType: ["claude_code", "codex", "gemini"][i % 3],
+                providerType: ["claude_code", "codex_app_server", "google"][i % 3],
                 model: "model-\(i % 5)",
                 avatarDataUrl: i % 4 == 0 ? "data:image/png;base64,AAAA" : "",
                 builtIn: i % 7 == 0
@@ -383,7 +383,7 @@ enum GaryxHomeListFixture {
                 workspacePath: "/Users/test/workspaces/project-\(i % 12)",
                 messageCount: 10 + i,
                 agentId: "agent-\(i % max(1, agentCount))",
-                providerType: ["claude_code", "codex", "gemini"][i % 3],
+                providerType: ["claude_code", "codex_app_server", "google"][i % 3],
                 recentRunId: "run-\(i)",
                 activeRunId: isRunning ? "run-\(i)" : nil,
                 runState: isRunning ? "running" : "idle",

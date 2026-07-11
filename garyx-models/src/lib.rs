@@ -54,7 +54,7 @@ pub use message_lifecycle::{
 };
 pub use messages::MessageMetadata;
 pub use provider::{
-    ATTACHMENTS_METADATA_KEY, AntigravityCliConfig, FilePayload, GeminiCliConfig, ImagePayload,
+    ATTACHMENTS_METADATA_KEY, AntigravityCliConfig, FilePayload, ImagePayload,
     PromptAttachment, PromptAttachmentKind, ProviderMessage, ProviderMessageRole,
     ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent,
     attachments_from_metadata, attachments_to_metadata_value,

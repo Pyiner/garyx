@@ -96,7 +96,6 @@ fn builtin_provider_agent_id_detection_is_limited_to_builtin_profiles() {
     assert!(is_builtin_provider_agent_id("claude"));
     assert!(is_builtin_provider_agent_id(" codex "));
     assert!(is_builtin_provider_agent_id("traex"));
-    assert!(is_builtin_provider_agent_id("gemini"));
     assert!(!is_builtin_provider_agent_id("gpt"));
     assert!(!is_builtin_provider_agent_id("garyx"));
     assert!(!is_builtin_provider_agent_id("plain-claude"));
@@ -133,7 +132,7 @@ fn builtin_provider_profiles_do_not_include_gpt_agent() {
 #[test]
 fn builtin_provider_profiles_include_desktop_provider_avatars() {
     let profiles = builtin_provider_agent_profiles();
-    for agent_id in ["claude", "codex", "traex", "gemini"] {
+    for agent_id in ["claude", "codex", "traex", "antigravity"] {
         let avatar_data_url = profiles
             .iter()
             .find(|profile| profile.agent_id == agent_id)

@@ -186,7 +186,6 @@ function parseThreadProviderType(
     value === "codex_app_server" ||
     value === "antigravity" ||
     value === "traex" ||
-    value === "gemini_cli" ||
     value === "gpt" ||
     value === "anthropic" ||
     value === "google" ||
@@ -223,8 +222,6 @@ function providerLabelForThread(
       return "Antigravity";
     case "traex":
       return "Traex";
-    case "gemini_cli":
-      return "Gemini";
     case "gpt":
       return "GPT";
     case "anthropic":
@@ -853,7 +850,7 @@ export async function createRemoteThread(
     modelReasoningEffort?: string | null;
     modelServiceTier?: string | null;
     sdkSessionId?: string | null;
-    sdkSessionProviderHint?: "claude" | "codex" | "gemini" | null;
+    sdkSessionProviderHint?: "claude" | "codex" | null;
     forkFromThreadId?: string | null;
     metadata?: Record<string, unknown> | null;
   },

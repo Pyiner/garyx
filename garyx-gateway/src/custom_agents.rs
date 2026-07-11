@@ -83,9 +83,24 @@ impl CustomAgentStore {
             let content = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
             if !content.trim().is_empty() {
                 let persisted =
-                    serde_json::from_str::<HashMap<String, CustomAgentProfile>>(&content)
+                    serde_json::from_str::<HashMap<String, serde_json::Value>>(&content)
                         .map_err(|error| error.to_string())?;
-                for (agent_id, profile) in persisted {
+                for (agent_id, value) in persisted {
+                    let unsupported_provider = value
+                        .get("provider_type")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|provider_type| {
+                            ProviderType::from_slug(provider_type).is_none()
+                        });
+                    if unsupported_provider {
+                        tracing::warn!(
+                            agent_id,
+                            "skipping persisted custom agent with unsupported provider type"
+                        );
+                        continue;
+                    }
+                    let profile = serde_json::from_value::<CustomAgentProfile>(value)
+                        .map_err(|error| error.to_string())?;
                     agents.insert(agent_id, profile);
                 }
             }

@@ -1,17 +1,18 @@
 # Providers
 
 A **provider** is the thing that actually executes a model run on behalf of
-an agent. Garyx ships with three CLI-backed providers:
+an agent. Garyx ships with these CLI-backed providers:
 
 | Provider key | Backed by | Auth model |
 | --- | --- | --- |
 | `claude_code` | Claude Agent SDK launching either Garyx's embedded `cctty` runner or native [Claude Code CLI](https://github.com/anthropics/claude-code) | OAuth long-lived token via `claude setup-token` (recommended) or interactive `claude auth login`. |
 | `codex_app_server` | [Codex CLI](https://github.com/openai/codex) app-server | OpenAI account login via `codex login`. |
-| `gemini_cli` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google account login via `gemini auth login`. |
+| `traex` | TRAE CLI app-server | CLI-managed local login. |
+| `antigravity` | Google Antigravity CLI | CLI-managed OAuth session. |
 
 Providers are not pinned per agent — Garyx auto-detects which CLIs are
-installed at startup and registers `claude_code`, `codex_app_server`, and
-`gemini_cli` when their backing CLIs are available.
+installed at startup and registers their provider adapters when the backing
+CLIs are available.
 
 `claude_tty` is no longer a provider. Garyx now keeps one Claude Agent SDK
 path and chooses the executable launched by that SDK. By default the executable
@@ -61,15 +62,15 @@ into the GUI session; on Macs that primarily run headless we recommend the
 long-lived token instead, because Keychain access can be locked from
 launchd-spawned processes.
 
-## Authenticating Codex / Gemini
+## Authenticating other CLI providers
 
 ```bash
 codex login           # OpenAI account
-gemini auth login     # Google account
 ```
 
-Each CLI persists its own credentials. As long as the CLI binary is on the
-gateway's `PATH`, Garyx will pick it up automatically.
+Codex persists its own credentials. Traex and Antigravity likewise use their
+CLI-managed login flows. As long as the CLI binary is on the gateway's `PATH`,
+Garyx will pick it up automatically.
 
 ## What happens when a token expires
 

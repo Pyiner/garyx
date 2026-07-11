@@ -73,7 +73,6 @@ type AgentFormDialogProps = {
   onToast?: (message: string, tone?: 'success' | 'error' | 'info', durationMs?: number) => void;
   openEditAgentDialog: (agent: DesktopCustomAgent) => void;
   providerModelsByType: Partial<Record<ProviderType, DesktopProviderModels>>;
-  providerModelsLoading: Partial<Record<ProviderType, boolean>>;
   saving: boolean;
   selectedAgent: DesktopCustomAgent | null;
   setAgentDraft: React.Dispatch<React.SetStateAction<AgentDraft>>;
@@ -101,7 +100,6 @@ export function AgentFormDialog({
   onToast,
   openEditAgentDialog,
   providerModelsByType,
-  providerModelsLoading,
   saving,
   selectedAgent,
   setAgentDraft,
@@ -116,7 +114,6 @@ export function AgentFormDialog({
   const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeAgentProviderModels = providerModelsByType[agentDraft.providerType];
-  const agentProviderModelsLoading = providerModelsLoading[agentDraft.providerType] === true;
   const agentModelOptions = providerModelsWithCurrent(activeAgentProviderModels, agentDraft.model);
   const agentSupportsModelSelection =
     activeAgentProviderModels?.supportsModelSelection === true && agentModelOptions.length > 0;
@@ -137,14 +134,6 @@ export function AgentFormDialog({
     agentDraft.providerType === 'gpt'
     && (activeAgentProviderModels?.supportsServiceTierSelection === true || agentDraft.modelServiceTier.trim().length > 0)
     && agentServiceTierOptions.length > 0;
-  const agentModelStatus =
-    agentDraft.providerType === 'gemini_cli' && !agentSupportsModelSelection
-      ? agentProviderModelsLoading
-        ? t('Loading models from local Gemini ACP...')
-        : activeAgentProviderModels?.error
-          ? t('Local Gemini ACP does not expose a model list yet.')
-          : null
-      : null;
   const viewAgentProviderModels = selectedAgent
     ? providerModelsByType[selectedAgent.providerType]
     : undefined;
@@ -349,14 +338,12 @@ export function AgentFormDialog({
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="antigravity">Antigravity</SelectItem>
                       <SelectItem value="traex">Trae</SelectItem>
-                      <SelectItem value="gemini_cli">Gemini</SelectItem>
                       <SelectItem value="gpt">GPT</SelectItem>
                       <SelectItem value="anthropic">Claude</SelectItem>
                       <SelectItem value="google">Gemini</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
-                {agentModelStatus ? <span className="codex-form-hint">{agentModelStatus}</span> : null}
               </div>
 
               {agentSupportsModelSelection ? (

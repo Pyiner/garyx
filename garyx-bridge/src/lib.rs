@@ -3,7 +3,6 @@ pub mod claude_provider;
 pub mod codex_provider;
 mod gary_prompt;
 pub mod garyx_native_provider;
-pub mod gemini_provider;
 pub mod graph_engine;
 mod memory_context;
 pub mod multi_provider;

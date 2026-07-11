@@ -602,7 +602,6 @@ export function AgentsHubPanel({
         onToast={onToast}
         openEditAgentDialog={openEditAgentDialog}
         providerModelsByType={providerModelsByType}
-        providerModelsLoading={providerModelsLoading}
         saving={saving}
         selectedAgent={selectedAgent}
         setAgentDraft={setAgentDraft}

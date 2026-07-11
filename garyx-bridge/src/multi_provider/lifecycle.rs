@@ -111,25 +111,6 @@ impl MultiProviderBridge {
             }
         };
 
-        let gemini_default_agent_cfg = configured_default_provider_config(
-            config,
-            ProviderType::GeminiCli,
-            &["gemini", "gemini_cli"],
-        );
-        let gemini_default_key = match self
-            .get_or_create_provider(&gemini_default_agent_cfg, &default_workspace)
-            .await
-        {
-            Ok(key) => {
-                tracing::info!(provider_key = %key, "registered tertiary default provider");
-                Some(key)
-            }
-            Err(error) => {
-                tracing::debug!(error = %error, "optional gemini provider unavailable");
-                None
-            }
-        };
-
         let traex_default_agent_cfg = configured_default_provider_config(
             config,
             ProviderType::Traex,
@@ -171,7 +152,6 @@ impl MultiProviderBridge {
         let mut default_provider_configs = vec![
             default_agent_cfg.clone(),
             codex_default_agent_cfg.clone(),
-            gemini_default_agent_cfg.clone(),
             traex_default_agent_cfg.clone(),
             antigravity_default_agent_cfg.clone(),
         ];
@@ -244,9 +224,6 @@ impl MultiProviderBridge {
         let mut desired_provider_keys: HashSet<String> = desired_routes.values().cloned().collect();
         desired_provider_keys.insert(default_key.clone());
         if let Some(ref key) = codex_default_key {
-            desired_provider_keys.insert(key.clone());
-        }
-        if let Some(ref key) = gemini_default_key {
             desired_provider_keys.insert(key.clone());
         }
         if let Some(ref key) = traex_default_key {
@@ -421,10 +398,6 @@ impl MultiProviderBridge {
             ),
             "claude" | "claude-tty" | "claude_tty" => Some(
                 self.default_provider_config_for_type(ProviderType::ClaudeCode)
-                    .await,
-            ),
-            "gemini" => Some(
-                self.default_provider_config_for_type(ProviderType::GeminiCli)
                     .await,
             ),
             "antigravity" | "agy" | "antigravity_cli" => Some(
@@ -665,7 +638,6 @@ impl MultiProviderBridge {
             "codex" => Some(ProviderType::CodexAppServer),
             "traex" | "trae" | "trae_cli" | "traecli" => Some(ProviderType::Traex),
             "claude" | "claude-tty" | "claude_tty" => Some(ProviderType::ClaudeCode),
-            "gemini" => Some(ProviderType::GeminiCli),
             "antigravity" | "agy" | "antigravity_cli" => Some(ProviderType::AntigravityCli),
             "gpt" | "openai" | "garyx" | "garyx_native" | "native" => self
                 .configured_provider_config_for_type(ProviderType::Gpt)

@@ -4448,7 +4448,6 @@ async fn thread_history_runtime_leaves_cli_provider_defaults_empty() {
     for (thread_id, provider_type) in [
         ("thread::runtime-codex-cli-default", "codex_app_server"),
         ("thread::runtime-claude-cli-default", "claude_code"),
-        ("thread::runtime-gemini-cli-default", "gemini_cli"),
     ] {
         state
             .threads
@@ -4469,7 +4468,6 @@ async fn thread_history_runtime_leaves_cli_provider_defaults_empty() {
     for (encoded_thread_id, provider_type) in [
         ("thread%3A%3Aruntime-codex-cli-default", "codex_app_server"),
         ("thread%3A%3Aruntime-claude-cli-default", "claude_code"),
-        ("thread%3A%3Aruntime-gemini-cli-default", "gemini_cli"),
     ] {
         let request = authed_request()
             .uri(format!(
@@ -7688,15 +7686,15 @@ async fn task_assign_rejects_assignee_that_differs_from_bound_thread_agent() {
     let claude_provider = Arc::new(RecordingTaskProvider::with_provider_type(
         ProviderType::ClaudeCode,
     ));
-    let gemini_provider = Arc::new(RecordingTaskProvider::with_provider_type(
-        ProviderType::GeminiCli,
+    let antigravity_provider = Arc::new(RecordingTaskProvider::with_provider_type(
+        ProviderType::AntigravityCli,
     ));
     let bridge = Arc::new(MultiProviderBridge::new());
     bridge
         .register_provider("task-claude-provider", claude_provider.clone())
         .await;
     bridge
-        .register_provider("task-gemini-provider", gemini_provider.clone())
+        .register_provider("task-antigravity-provider", antigravity_provider.clone())
         .await;
     bridge
         .set_route("api", "main", "task-claude-provider")
@@ -7762,7 +7760,7 @@ async fn task_assign_rejects_assignee_that_differs_from_bound_thread_agent() {
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
-                "to": {"kind": "agent", "agent_id": "gemini"}
+                "to": {"kind": "agent", "agent_id": "antigravity"}
             }))
             .unwrap(),
         ))
@@ -7778,10 +7776,10 @@ async fn task_assign_rejects_assignee_that_differs_from_bound_thread_agent() {
         payload["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("is bound to agent claude; cannot assign it to agent gemini")
+            .contains("is bound to agent claude; cannot assign it to agent antigravity")
     );
     assert_eq!(claude_provider.runs().len(), 0);
-    assert_eq!(gemini_provider.runs().len(), 0);
+    assert_eq!(antigravity_provider.runs().len(), 0);
 
     let after = state
         .threads
@@ -7802,10 +7800,10 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
     let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
     custom_agents
         .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
-            agent_id: "late-gemini".to_owned(),
-            display_name: "Late Gemini".to_owned(),
-            provider_type: ProviderType::GeminiCli,
-            model: Some("gemini-test".to_owned()),
+            agent_id: "late-antigravity".to_owned(),
+            display_name: "Late Antigravity".to_owned(),
+            provider_type: ProviderType::AntigravityCli,
+            model: Some("antigravity-test".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
             provider_env: None,
@@ -7814,22 +7812,22 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
             codex_home: None,
             max_tool_iterations: None,
             request_timeout_seconds: None,
-            default_workspace_dir: Some("/tmp/late-gemini-default".to_owned()),
+            default_workspace_dir: Some("/tmp/late-antigravity-default".to_owned()),
             avatar_data_url: None,
             system_prompt: Some("Work normally.".to_owned()),
         })
         .await
         .expect("custom agent");
 
-    let gemini_provider = Arc::new(RecordingTaskProvider::with_provider_type(
-        ProviderType::GeminiCli,
+    let antigravity_provider = Arc::new(RecordingTaskProvider::with_provider_type(
+        ProviderType::AntigravityCli,
     ));
     let bridge = Arc::new(MultiProviderBridge::new());
     bridge
-        .register_provider("task-gemini-provider", gemini_provider.clone())
+        .register_provider("task-antigravity-provider", antigravity_provider.clone())
         .await;
     bridge
-        .set_default_provider_key("task-gemini-provider")
+        .set_default_provider_key("task-antigravity-provider")
         .await;
 
     let state = AppStateBuilder::new(config)
@@ -7890,7 +7888,7 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
-                "to": {"kind": "agent", "agent_id": "late-gemini"}
+                "to": {"kind": "agent", "agent_id": "late-antigravity"}
             }))
             .unwrap(),
         ))
@@ -7910,7 +7908,7 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
         .get(&thread_id)
         .await
         .expect("thread after assign");
-    assert_eq!(after["agent_id"], "late-gemini");
-    assert_eq!(after["provider_type"], json!(ProviderType::GeminiCli));
-    assert_eq!(after["workspace_dir"], "/tmp/late-gemini-default");
+    assert_eq!(after["agent_id"], "late-antigravity");
+    assert_eq!(after["provider_type"], json!(ProviderType::AntigravityCli));
+    assert_eq!(after["workspace_dir"], "/tmp/late-antigravity-default");
 }

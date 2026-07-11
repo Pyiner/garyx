@@ -235,7 +235,6 @@ function normalizeSdkSessionProviderHintInput(
   switch (normalized) {
     case 'claude':
     case 'codex':
-    case 'gemini':
       return normalized;
     default:
       return null;

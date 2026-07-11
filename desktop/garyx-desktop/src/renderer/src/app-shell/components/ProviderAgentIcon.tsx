@@ -1,7 +1,7 @@
 import AntigravityColor from '@lobehub/icons/es/Antigravity/components/Color';
 import ClaudeCodeColor from '@lobehub/icons/es/ClaudeCode/components/Color';
 import CodexColor from '@lobehub/icons/es/Codex/components/Color';
-import GeminiCliColor from '@lobehub/icons/es/GeminiCLI/components/Color';
+import GeminiColor from '@lobehub/icons/es/Gemini/components/Color';
 import OpenAIMono from '@lobehub/icons/es/OpenAI/components/Mono';
 
 import type {
@@ -17,7 +17,7 @@ const BUILT_IN_AGENT_ICONS = {
   codex: CodexColor,
   // TRAE CLI is a Codex fork; reuse the Codex glyph until a dedicated icon exists.
   traex: CodexColor,
-  gemini: GeminiCliColor,
+  gemini: GeminiColor,
   openai: OpenAIMono,
 };
 
@@ -43,7 +43,6 @@ function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | nul
   }
   if (
     normalized === 'gemini'
-    || normalized === 'gemini_cli'
     || normalized === 'google'
     || normalized === 'gemini_llm'
   ) {

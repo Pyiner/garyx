@@ -21,7 +21,7 @@ features:
   - title: Channel gateway
     details: Telegram, Feishu / Lark, WeChat, subprocess channel plugins, and a local API channel all share the same routing model.
   - title: Provider bridge
-    details: Route threads to Claude Code, Codex, Gemini, or custom agents while keeping channel setup stable.
+    details: Route threads to Claude Code, Codex, Traex, Antigravity, native model backends, or custom agents while keeping channel setup stable.
   - title: Persistent threads
     details: Conversations keep transcript history, endpoint bindings, provider resume state, and workspace context across surfaces.
   - title: Scoped MCP
@@ -41,7 +41,7 @@ runtime.
 Telegram / Feishu / WeChat / CLI / Desktop / HTTP / WebSocket
   -> Garyx gateway
   -> Threads, transcripts, endpoint bindings, tasks, automations
-  -> Claude Code / Codex / Gemini / custom agents
+  -> Claude Code / Codex / Traex / Antigravity / native models / custom agents
   -> Garyx MCP tools and configured upstream MCP servers
 ```
 
@@ -93,7 +93,7 @@ garyx gateway restart --no-wake
 
 <div class="garyx-panel">
 <strong>Use provider CLIs directly</strong>
-<p>Garyx spawns Claude Code, Codex, and Gemini through their local CLIs, so each provider keeps its normal auth model.</p>
+<p>Garyx launches Claude Code, Codex, Traex, and Antigravity through their local CLIs, while native model backends run in process.</p>
 </div>
 
 <div class="garyx-panel">
@@ -151,7 +151,7 @@ Understand thread identity, endpoint bindings, immutable workspace directories, 
 See how built-in and plugin channels share account config and endpoint binding behavior.
 
 [**Providers**](/concepts/providers)
-Authenticate Claude Code, Codex, and Gemini, then let Garyx auto-detect them.
+Authenticate CLI providers or configure native model credentials, then let Garyx route agents to them.
 
 [**MCP integration**](/concepts/mcp)
 Use Garyx MCP tools and merge in upstream MCP servers for every provider run.

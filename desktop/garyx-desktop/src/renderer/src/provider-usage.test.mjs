@@ -18,7 +18,7 @@ test('model provider rows use explicit gateway usage provider ids', () => {
 });
 
 test('unknown model providers are not inferred from provider type', () => {
-  assert.equal(usageProviderIdForModelProviderKey('gemini_cli'), undefined);
+  assert.equal(usageProviderIdForModelProviderKey('unsupported'), undefined);
 });
 
 test('usage severity follows the shared remaining-percent thresholds', () => {

@@ -10,7 +10,6 @@ final class GaryxAgentProviderPickerPresentationTests: XCTestCase {
             "claude_code",
             "codex_app_server",
             "traex",
-            "gemini_cli",
             "gpt",
             "anthropic",
             "google",
@@ -19,7 +18,6 @@ final class GaryxAgentProviderPickerPresentationTests: XCTestCase {
             "Claude Code",
             "Codex",
             "Traex",
-            "Gemini CLI",
             "OpenAI",
             "Anthropic",
             "Google",
@@ -63,7 +61,7 @@ final class GaryxAgentProviderPickerPresentationTests: XCTestCase {
 
     func testOptionsPrependNonStandardCurrentProvider() {
         let options = GaryxAgentProviderPickerPresentation.options(includingCurrent: "antigravity")
-        XCTAssertEqual(options.count, 8)
+        XCTAssertEqual(options.count, 7)
         XCTAssertEqual(options.first, GaryxAgentProviderPickerOption(id: "antigravity", label: "Antigravity"))
         XCTAssertEqual(Array(options.dropFirst()), GaryxAgentProviderPickerPresentation.standardOptions)
     }
@@ -77,7 +75,6 @@ final class GaryxAgentProviderPickerPresentationTests: XCTestCase {
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "claude_code"), "Claude Code")
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "codex_app_server"), "Codex")
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "traex"), "Traex")
-        XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "gemini_cli"), "Gemini CLI")
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "gpt"), "OpenAI")
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "anthropic"), "Anthropic")
         XCTAssertEqual(GaryxAgentProviderPickerPresentation.label(for: "google"), "Google")
@@ -98,11 +95,11 @@ final class GaryxAgentProviderPickerPresentationTests: XCTestCase {
 
     func testOptionsMatchingIsCaseSensitive() {
         let gpt = GaryxAgentProviderPickerPresentation.options(includingCurrent: "GPT")
-        XCTAssertEqual(gpt.count, 8)
+        XCTAssertEqual(gpt.count, 7)
         XCTAssertEqual(gpt.first, GaryxAgentProviderPickerOption(id: "GPT", label: "GPT"))
 
         let claude = GaryxAgentProviderPickerPresentation.options(includingCurrent: "Claude_Code")
-        XCTAssertEqual(claude.count, 8)
+        XCTAssertEqual(claude.count, 7)
         // The label text coincides with the standard claude_code entry, but the
         // id is the case variant and it goes through the fallback branch.
         XCTAssertEqual(claude.first, GaryxAgentProviderPickerOption(id: "Claude_Code", label: "Claude Code"))

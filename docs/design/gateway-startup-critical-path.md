@@ -82,8 +82,8 @@ Recommended behavior:
 - also verify on first run if warmup has not completed.
 - expose readiness and last error in `/api/status`.
 
-This applies to providers such as Claude Code, Codex app server, Gemini CLI,
-Traex, Antigravity, and remote API providers.
+This applies to providers such as Claude Code, Codex app server, Traex,
+Antigravity, and remote API providers.
 
 ### Channels
 
@@ -175,7 +175,7 @@ Phase 3: steady state
     "started_at": "timestamp"
   },
   "providers": {
-    "gemini_cli": { "state": "warming" },
+    "codex_app_server": { "state": "warming" },
     "traex": { "state": "ready" }
   },
   "channels": {

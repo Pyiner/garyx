@@ -6,7 +6,7 @@ export const Providers = () => (
   <div style={{ display: 'flex', gap: 28, padding: 20, alignItems: 'flex-start' }}>
     <div style={cell}><ProviderAgentIcon agentId="claude" size={32} /><span>Claude</span></div>
     <div style={cell}><ProviderAgentIcon agentId="codex" size={32} /><span>Codex</span></div>
-    <div style={cell}><ProviderAgentIcon agentId="gemini" size={32} /><span>Gemini</span></div>
+    <div style={cell}><ProviderAgentIcon agentId="google" size={32} /><span>Google</span></div>
     <div style={cell}><ProviderAgentIcon agentId="traex" size={32} /><span>TRAE</span></div>
   </div>
 );

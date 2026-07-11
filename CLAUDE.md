@@ -39,7 +39,8 @@ for personal data and remove it.
 - `garyx-gateway`: HTTP API, MCP server, automations, restart flow, and desktop
   surface.
 - `garyx-router`: canonical threads, transcripts, endpoint state, and routing.
-- `garyx-bridge`: provider orchestration for Claude Code, Codex, and Gemini.
+- `garyx-bridge`: provider orchestration for Claude Code, Codex, Traex,
+  Antigravity, and native model backends.
 - `garyx-channels`: built-in channel runtimes and subprocess plugin host.
 - `desktop/garyx-desktop`: Electron desktop app and shared renderer UI.
 - `mobile/garyx-mobile`: iOS app, widget, and `GaryxMobileCore` Swift package.

@@ -1031,7 +1031,7 @@ mod tests {
             config_path.to_str().expect("config path"),
             "spec-review".to_owned(),
             Some("Spec Review".to_owned()),
-            Some("gemini_cli".to_owned()),
+            Some("google".to_owned()),
             Some("gemini-3.1-pro-preview".to_owned()),
             false,
             None,
@@ -1055,7 +1055,7 @@ mod tests {
         assert_eq!(records[0].method, "POST");
         assert_eq!(records[0].path, "/api/custom-agents");
         assert_eq!(records[0].body["model"], "gemini-3.1-pro-preview");
-        assert_eq!(records[0].body["provider_type"], "gemini_cli");
+        assert_eq!(records[0].body["provider_type"], "google");
     }
 
     #[tokio::test]
@@ -1532,7 +1532,7 @@ mod tests {
             agent_value("codex", true),
             agent_value("gary", false),
             agent_value("claude", true),
-            agent_value("gemini", true),
+            agent_value("antigravity", true),
         ];
 
         sort_agents_builtin_first(&mut agents);
@@ -1541,7 +1541,10 @@ mod tests {
             .iter()
             .map(|a| a["agent_id"].as_str().unwrap())
             .collect();
-        assert_eq!(order, vec!["claude", "codex", "gemini", "gary", "novelist"]);
+        assert_eq!(
+            order,
+            vec!["antigravity", "claude", "codex", "gary", "novelist"]
+        );
     }
 
     #[test]

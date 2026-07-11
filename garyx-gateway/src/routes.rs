@@ -712,7 +712,7 @@ fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<Provide
         .map(Some)
         .ok_or_else(|| {
             format!(
-                "Unsupported sdkSessionProviderHint '{value}'. Use claude, codex, gemini, antigravity, gpt, anthropic, or google."
+                "Unsupported sdkSessionProviderHint '{value}'. Use claude, codex, antigravity, gpt, anthropic, or google."
             )
         })
 }
@@ -722,7 +722,6 @@ fn provider_hint_label(value: &ProviderType) -> &'static str {
         ProviderType::ClaudeCode => "Claude",
         ProviderType::CodexAppServer => "Codex",
         ProviderType::Traex => "Traex",
-        ProviderType::GeminiCli => "Gemini",
         ProviderType::AntigravityCli => "Antigravity",
         ProviderType::Gpt => "GPT",
         ProviderType::ClaudeLlm => "Claude",
@@ -736,7 +735,7 @@ fn is_resume_provider(value: &ProviderType) -> bool {
     // ~/.trae and are not wired into the provider session locator).
     matches!(
         value,
-        ProviderType::ClaudeCode | ProviderType::CodexAppServer | ProviderType::GeminiCli
+        ProviderType::ClaudeCode | ProviderType::CodexAppServer
     )
 }
 
@@ -910,7 +909,7 @@ pub struct CreateThreadBody {
     /// Optional provider-native session id to resume from on the first run.
     #[serde(default, alias = "sessionId")]
     pub sdk_session_id: Option<String>,
-    /// Optional provider hint for sdkSessionId. Supported values: claude, codex, gemini.
+    /// Optional provider hint for sdkSessionId. Supported values: claude, codex.
     #[serde(default)]
     pub sdk_session_provider_hint: Option<String>,
     /// Optional Garyx thread id to fork from using the provider-native session fork.
@@ -948,7 +947,7 @@ pub async fn list_recent_provider_sessions(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "provider must be one of claude, codex, or gemini"
+                "error": "provider must be claude or codex"
             })),
         );
     }
@@ -2538,7 +2537,7 @@ pub async fn create_thread(
                 let provider_label = requested_session_provider_hint
                     .as_ref()
                     .map(provider_hint_label)
-                    .unwrap_or("Claude, Codex, or Gemini");
+                    .unwrap_or("Claude or Codex");
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(json!({
@@ -2580,7 +2579,7 @@ pub async fn create_thread(
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(json!({
-                        "error": "forkFromThreadId is only supported for Claude, Codex, or Gemini provider sessions"
+                        "error": "forkFromThreadId is only supported for Claude or Codex provider sessions"
                     })),
                 );
             }

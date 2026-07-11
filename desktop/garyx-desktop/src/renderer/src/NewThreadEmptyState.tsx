@@ -35,7 +35,6 @@ const RESUME_PROVIDER_OPTIONS: Array<{
 }> = [
   { value: "codex", label: "Codex" },
   { value: "claude", label: "Claude Code" },
-  { value: "gemini", label: "Gemini CLI" },
 ];
 const workspaceGitStatusCache = new Map<string, DesktopWorkspaceGitStatus>();
 type NewThreadEmptyStateProps = {

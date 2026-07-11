@@ -1132,7 +1132,7 @@ impl AgentLoopProvider for DelayedQueuedInputProvider {
 #[async_trait::async_trait]
 impl AgentLoopProvider for InterruptingFollowUpProvider {
     fn provider_type(&self) -> ProviderType {
-        ProviderType::GeminiCli
+        ProviderType::AntigravityCli
     }
 
     fn is_ready(&self) -> bool {

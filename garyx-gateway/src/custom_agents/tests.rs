@@ -33,7 +33,7 @@ async fn lists_only_provider_builtin_agents() {
     let agents = store.list_agents().await;
     assert!(agents.iter().any(|agent| agent.agent_id == "claude"));
     assert!(agents.iter().any(|agent| agent.agent_id == "codex"));
-    assert!(agents.iter().any(|agent| agent.agent_id == "gemini"));
+    assert!(agents.iter().any(|agent| agent.agent_id == "traex"));
     assert!(agents.iter().any(|agent| agent.agent_id == "antigravity"));
     assert!(agents.iter().filter(|agent| agent.built_in).all(|agent| {
         agent
@@ -45,6 +45,47 @@ async fn lists_only_provider_builtin_agents() {
     assert!(!agents.iter().any(|agent| agent.agent_id == "planner"));
     assert!(!agents.iter().any(|agent| agent.agent_id == "generator"));
     assert!(!agents.iter().any(|agent| agent.agent_id == "reviewer"));
+}
+
+#[tokio::test]
+async fn file_store_skips_profiles_with_unsupported_provider_types() {
+    let seed = CustomAgentStore::new();
+    let supported = seed
+        .upsert_agent_for_test(model_contract_request(
+            "supported-reviewer",
+            Some("gpt-5"),
+            None,
+            None,
+        ))
+        .await
+        .expect("supported profile");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("custom-agents.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "supported-reviewer": supported,
+            "removed-reviewer": {
+                "provider_type": "removed_provider"
+            }
+        }))
+        .expect("serialize persisted agents"),
+    )
+    .expect("write persisted agents");
+
+    let store = CustomAgentStore::file(&path).expect("load agent store");
+    let agents = store.list_agents().await;
+
+    assert!(
+        agents
+            .iter()
+            .any(|agent| agent.agent_id == "supported-reviewer")
+    );
+    assert!(
+        !agents
+            .iter()
+            .any(|agent| agent.agent_id == "removed-reviewer")
+    );
 }
 
 #[tokio::test]

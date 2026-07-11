@@ -88,7 +88,6 @@ fn provider_model_config_key(provider_type: &ProviderType) -> Result<&'static st
         ProviderType::ClaudeCode => Ok("claude"),
         ProviderType::CodexAppServer => Ok("codex"),
         ProviderType::Traex => Ok("traex"),
-        ProviderType::GeminiCli => Ok("gemini"),
         ProviderType::AntigravityCli => Ok("antigravity"),
         ProviderType::Gpt => Ok("gpt"),
         ProviderType::ClaudeLlm => Ok("anthropic"),
@@ -119,11 +118,6 @@ fn provider_descriptors() -> Vec<ProviderDescriptor> {
             label: "Traex",
             provider_type: ProviderType::Traex,
             key: "traex",
-        },
-        ProviderDescriptor {
-            label: "Gemini CLI",
-            provider_type: ProviderType::GeminiCli,
-            key: "gemini",
         },
         ProviderDescriptor {
             label: "Antigravity",
@@ -162,9 +156,7 @@ fn provider_default_model_fallback(provider_type: &ProviderType) -> Option<Strin
         ProviderType::AntigravityCli => Some(garyx_models::provider::default_antigravity_model()),
         ProviderType::Gpt => Some("gpt-5.5".to_owned()),
         ProviderType::ClaudeLlm => Some("claude-sonnet-4-6".to_owned()),
-        ProviderType::GeminiLlm | ProviderType::GeminiCli => {
-            Some("gemini-3-flash-preview".to_owned())
-        }
+        ProviderType::GeminiLlm => Some("gemini-3-flash-preview".to_owned()),
         _ => None,
     }
 }
@@ -260,7 +252,7 @@ fn provider_config_auth_label(
                 "not signed in".to_owned()
             }
         }
-        ProviderType::Traex | ProviderType::GeminiCli => "local CLI".to_owned(),
+        ProviderType::Traex => "local CLI".to_owned(),
         ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm => {
             let auth_source = provider_config_string(config, "auth_source");
             if auth_source.is_empty() {
@@ -1342,10 +1334,6 @@ mod tests {
             "codex"
         );
         assert_eq!(
-            provider_model_config_key(&ProviderType::GeminiCli).unwrap(),
-            "gemini"
-        );
-        assert_eq!(
             provider_model_config_key(&ProviderType::AntigravityCli).unwrap(),
             "antigravity"
         );
@@ -1584,7 +1572,7 @@ mod tests {
 
         let rows = provider_list_rows(&settings, Some(&usage));
 
-        assert_eq!(rows.len(), 8);
+        assert_eq!(rows.len(), 7);
         assert_eq!(rows[0]["provider"], "Claude Code");
         assert_eq!(rows[0]["usage"], "73% wk");
         let gpt = rows

@@ -120,7 +120,7 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
     }
 
     func testReasoningEffortOptionsEmptyWhenSelectionUnsupported() throws {
-        let providerModels = try decodeProviderModels(geminiProviderJSON)
+        let providerModels = try decodeProviderModels(googleProviderJSON)
         XCTAssertTrue(
             GaryxThreadModelOverridePresentation.reasoningEffortOptions(
                 providerModels: providerModels,
@@ -397,13 +397,13 @@ final class GaryxThreadModelOverridePresentationTests: XCTestCase {
     }
     """
 
-    private let geminiProviderJSON = """
+    private let googleProviderJSON = """
     {
-        "provider_type": "gemini_cli",
+        "provider_type": "google",
         "supports_model_selection": true,
         "supports_reasoning_effort_selection": false,
         "default_model": "gemini-3-pro",
-        "source": "gemini_acp",
+        "source": "native_builtin",
         "models": [
             { "id": "gemini-3-pro", "label": "Gemini 3 Pro", "recommended": true }
         ]

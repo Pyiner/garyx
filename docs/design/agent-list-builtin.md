@@ -27,9 +27,9 @@ change is small and CLI-local — no gateway or models edits required.
 ## Current state (verified)
 
 - `garyx-gateway/src/custom_agents.rs`
-  - `CustomAgentStore::new()` and `::file()` always seed three built-in
-    profiles (`claude`, `codex`, `gemini`) before merging persisted custom
-    agents on top. (lines 54–90)
+  - `CustomAgentStore::new()` and `::file()` seed the built-in provider
+    profiles (`claude`, `codex`, `traex`, `antigravity`) before merging
+    persisted custom agents on top. (lines 54–90)
   - `list_agents()` returns the union and sorts `built_in=false` first
     (because `false < true` in `bool::cmp`), then by `display_name`.
     (lines 92–106)
@@ -37,7 +37,7 @@ change is small and CLI-local — no gateway or models edits required.
   `{ "agents": [...] }`. Each entry carries `built_in: bool` plus all the
   fields enumerated in `garyx-models/src/custom_agent.rs::CustomAgentProfile`.
 - `garyx-models/src/custom_agent.rs::builtin_provider_agent_profiles()`
-  (lines 124–195) is the source of truth for the three built-ins. Each is
+  (lines 124–195) is the source of truth for the built-ins. Each is
   constructed with `built_in: true`.
 - `garyx/src/cli.rs::AgentAction::List` already exposes
   `--include-builtin` (default `false`) and `--json`. (lines 1140–1150)

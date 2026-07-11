@@ -36,7 +36,6 @@ function normalizeProviderHint(
   switch (normalized) {
     case "claude":
     case "codex":
-    case "gemini":
       return normalized;
     default:
       return null;
@@ -186,7 +185,7 @@ export function parseDesktopDeepLink(rawUrl: string): DesktopDeepLinkEvent {
       if (!providerHint) {
         return deepLinkError(
           normalizedUrl,
-          "Unsupported resume provider. Use claude, codex, or gemini.",
+          "Unsupported resume provider. Use claude or codex.",
         );
       }
       if (!secondSegment) {

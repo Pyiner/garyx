@@ -510,8 +510,8 @@ Use a built-in provider agent:
 ```
 
 Custom agents can set `provider_type` to `claude_code`, `codex_app_server`,
-`gemini_cli`, `gpt`, `anthropic`, or `google`. `claude_tty` is deprecated and
-is treated as `claude_code` when encountered in older records.
+`traex`, `antigravity`, `gpt`, `anthropic`, or `google`. `claude_tty` is
+deprecated and is treated as `claude_code` when encountered in older records.
 
 Claude has one provider path: the Claude Agent SDK. Configure which executable
 the SDK launches with `agents.claude`:
@@ -663,13 +663,10 @@ For a custom `anthropic` agent, the desktop provider manager and CLI
 `--api-key` store the key as `provider_env.ANTHROPIC_API_KEY`.
 
 `google` uses Google Gemini API auth from `GEMINI_API_KEY` or
-`GOOGLE_API_KEY`. It can also reuse Gemini CLI OAuth by reading
-`GEMINI_OAUTH_ACCESS_TOKEN` / `GOOGLE_OAUTH_ACCESS_TOKEN`, or a Gemini CLI OAuth
-cache at `$GEMINI_CLI_HOME/oauth_creds.json` or `~/.gemini/oauth_creds.json`.
-If the cached token is expired, Garyx can refresh it when
-`GEMINI_OAUTH_CLIENT_SECRET` or `GOOGLE_OAUTH_CLIENT_SECRET` is configured;
-otherwise refresh the Gemini CLI login first. OAuth requests use the Gemini Code
-Assist transport and resolve the Code Assist project with `loadCodeAssist`. Set
+`GOOGLE_API_KEY`. It can also use an explicitly configured
+`GEMINI_OAUTH_ACCESS_TOKEN` or `GOOGLE_OAUTH_ACCESS_TOKEN`. OAuth requests use
+the Gemini Code Assist transport and resolve the Code Assist project with
+`loadCodeAssist`. Set
 `GEMINI_CODE_ASSIST_PROJECT`, `GOOGLE_CLOUD_PROJECT`, or
 `GOOGLE_CLOUD_PROJECT_ID` to force a project id. `GEMINI_BASE_URL`,
 `GOOGLE_GENERATIVE_AI_BASE_URL`, or `GOOGLE_API_BASE_URL` can override the API
@@ -749,9 +746,7 @@ desktop surfaces for the agent avatar. Omit it or set it to an empty string to
 use the generated initials fallback.
 
 Custom agent model selection is provider-specific. Claude and Codex use their
-provider defaults in the desktop app. Gemini only shows a model picker when the
-gateway can discover models from the local Gemini ACP process; Garyx does not
-use a Gemini API key to populate that list.
+provider defaults in the desktop app.
 
 ## Tasks
 
@@ -841,10 +836,10 @@ provider, MCP, channel, and Skill editing on the Mac app where the local
 runtime and secrets live.
 
 The desktop Providers tab shows a fixed provider table rather than an arbitrary
-add-provider form. `Claude Code`, `Codex`, and `Gemini CLI` are always listed at
-the top as built-in provider agents; their Configure dialogs edit desktop-local
-auth and environment overrides. The same table also lists Garyx native-loop
-model backends (`GPT`, `Claude`, and `Gemini`). Configuring one of those rows
+add-provider form. `Claude Code`, `Codex`, `Traex`, and `Antigravity` are always
+listed at the top as built-in provider agents; their Configure dialogs edit
+desktop-local auth and environment overrides. The same table also lists Garyx
+native-loop model backends (`GPT`, `Claude`, and `Gemini`). Configuring one of those rows
 creates or updates its deterministic custom agent (`gpt`, `anthropic`, or
 `google`), making it selectable like any other agent.
 Clearing the row removes that custom agent. The page does not support adding

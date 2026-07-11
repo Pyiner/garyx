@@ -22,7 +22,6 @@ final class GaryxProviderSettingsPresentationTests: XCTestCase {
             "codex_app_server": .managedOAuth,
             "antigravity": .managedOAuth,
             "traex": .managedOAuth,
-            "gemini_cli": .managedOAuth,
             "gpt": .native,
             "anthropic": .native,
             "google": .native,
@@ -104,7 +103,7 @@ final class GaryxProviderSettingsPresentationTests: XCTestCase {
         XCTAssertEqual(GaryxProviderSettingsPresentation.apiKeyPlaceholder(for: try provider("gpt")), "OPENAI_API_KEY")
         XCTAssertEqual(GaryxProviderSettingsPresentation.apiKeyPlaceholder(for: try provider("anthropic")), "ANTHROPIC_API_KEY")
         XCTAssertEqual(GaryxProviderSettingsPresentation.apiKeyPlaceholder(for: try provider("google")), "GEMINI_API_KEY")
-        for type in ["claude_code", "codex_app_server", "antigravity", "traex", "gemini_cli"] {
+        for type in ["claude_code", "codex_app_server", "antigravity", "traex"] {
             XCTAssertEqual(
                 GaryxProviderSettingsPresentation.apiKeyPlaceholder(for: try provider(type)),
                 "API key",

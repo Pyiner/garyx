@@ -35,9 +35,6 @@ function buildResumeCommand(threadId: string | null, threadInfo: ThreadRuntimeIn
     case 'codex_app_server':
       command = `codex -a never -s danger-full-access resume ${shellEscape(sessionId)}`;
       break;
-    case 'gemini_cli':
-      command = `gemini --approval-mode yolo --resume ${shellEscape(sessionId)}`;
-      break;
     case 'gpt':
     case 'anthropic':
     case 'google':

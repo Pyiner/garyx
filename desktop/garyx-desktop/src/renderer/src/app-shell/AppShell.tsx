@@ -491,7 +491,6 @@ function inferProviderTypeForThread(
     runtimeProvider === "codex_app_server" ||
     runtimeProvider === "antigravity" ||
     runtimeProvider === "traex" ||
-    runtimeProvider === "gemini_cli" ||
     runtimeProvider === "gpt" ||
     runtimeProvider === "anthropic" ||
     runtimeProvider === "google" ||
@@ -520,9 +519,6 @@ function inferProviderTypeForThread(
   }
   if (agentId === "traex") {
     return "traex";
-  }
-  if (agentId === "gemini") {
-    return "gemini_cli";
   }
   if (agentId === "claude") {
     return "claude_code";
@@ -2977,7 +2973,7 @@ export function AppShell() {
   ): Promise<void> {
     const trimmedSessionId = sessionId.trim();
     if (!trimmedSessionId) {
-      throw new Error("Paste a Claude, Codex, or Gemini session ID first.");
+      throw new Error("Paste a Claude or Codex session ID first.");
     }
 
     setError(null);

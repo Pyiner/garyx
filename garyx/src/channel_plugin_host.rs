@@ -484,7 +484,7 @@ impl HostInboundHandler {
         // clear the entry the moment `route_and_dispatch` returns,
         // but the actual agent stream often keeps running in the
         // background — leaving the auto-update stream-idle gate
-        // blind to in-flight Claude/Codex/Gemini runs. The callback
+        // blind to in-flight provider runs. The callback
         // task drains its mpsc on its own schedule and removes the
         // id on exit, which is the true end-of-stream.
 

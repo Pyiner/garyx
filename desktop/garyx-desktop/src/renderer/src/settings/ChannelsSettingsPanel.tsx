@@ -117,8 +117,6 @@ function preferredStandaloneAgentId(
     normalizedProviderType = 'antigravity';
   } else if (providerType === 'traex') {
     normalizedProviderType = 'traex';
-  } else if (providerType === 'gemini_cli') {
-    normalizedProviderType = 'gemini_cli';
   } else if (providerType === 'gpt') {
     normalizedProviderType = 'gpt';
   } else if (providerType === 'anthropic' || providerType === 'claude_llm') {
@@ -134,8 +132,6 @@ function preferredStandaloneAgentId(
     builtInId = 'antigravity';
   } else if (normalizedProviderType === 'traex') {
     builtInId = 'traex';
-  } else if (normalizedProviderType === 'gemini_cli') {
-    builtInId = 'gemini';
   } else if (normalizedProviderType === 'gpt') {
     builtInId = 'gpt';
   } else if (normalizedProviderType === 'anthropic') {

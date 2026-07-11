@@ -64,7 +64,6 @@ type FixedModelProviderKey =
   | 'codex_app_server'
   | 'antigravity'
   | 'traex'
-  | 'gemini_cli'
   | 'gpt'
   | 'anthropic'
   | 'google';
@@ -139,14 +138,6 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
     providerType: 'traex',
     group: 'default',
     defaultModel: '(provider default)',
-  },
-  {
-    key: 'gemini_cli',
-    agentId: 'gemini',
-    label: 'Gemini CLI',
-    providerType: 'gemini_cli',
-    group: 'default',
-    defaultModel: 'gemini-3-flash-preview',
   },
   {
     key: 'gpt',
@@ -486,7 +477,6 @@ function AgentProviderFields({
                   <SelectItem value="claude_code">claude_code</SelectItem>
                   <SelectItem value="codex_app_server">codex_app_server</SelectItem>
                   <SelectItem value="traex">traex</SelectItem>
-                  <SelectItem value="gemini_cli">gemini_cli</SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
@@ -726,17 +716,6 @@ export function ProviderSettingsPanel({
         serviceTier: configuredServiceTier,
       });
     }
-    if (row.key === 'gemini_cli') {
-      return finalize({
-        status: t('Default'),
-        auth: t('CLI'),
-        authState: 'ready',
-        model: configuredDefaultModel || row.defaultModel,
-        reasoning: configuredReasoning,
-        serviceTier: configuredServiceTier,
-      });
-    }
-
     const agent = configuredProviderAgent(agents, row.key);
     const authSource = String(runtimeConfig.auth_source || '').trim()
       || agent?.authSource
@@ -1203,7 +1182,7 @@ export function ProviderSettingsPanel({
         return;
       }
       if (providerConfigRow.group === 'default') {
-        // CLI providers (Codex, Gemini, TRAE, Antigravity) authenticate through
+        // CLI providers (Codex, TRAE, Antigravity) authenticate through
         // their own CLI login or agent/provider env; persist model defaults only.
         mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
         if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {

@@ -26,7 +26,6 @@ pub enum ProviderType {
         alias = "traecli"
     )]
     Traex,
-    GeminiCli,
     /// Google Antigravity CLI (`agy`) provider, driven through the user's local
     /// OAuth-backed CLI session and transcript files.
     #[serde(rename = "antigravity", alias = "agy", alias = "antigravity_cli")]
@@ -53,7 +52,6 @@ impl ProviderType {
             Self::ClaudeCode => "claude_code",
             Self::CodexAppServer => "codex_app_server",
             Self::Traex => "traex",
-            Self::GeminiCli => "gemini_cli",
             Self::AntigravityCli => "antigravity",
             Self::Gpt => "gpt",
             Self::ClaudeLlm => "anthropic",
@@ -66,7 +64,6 @@ impl ProviderType {
             "claude" | "claude_code" | "claude-tty" | "claude_tty" => Some(Self::ClaudeCode),
             "codex" | "codex_app_server" => Some(Self::CodexAppServer),
             "traex" | "trae" | "trae_cli" | "traecli" => Some(Self::Traex),
-            "gemini" | "gemini_cli" => Some(Self::GeminiCli),
             "antigravity" | "agy" | "antigravity_cli" => Some(Self::AntigravityCli),
             "gpt" | "openai" | "openai_gpt" | "garyx" | "garyx_native" | "native" => {
                 Some(Self::Gpt)
@@ -619,58 +616,6 @@ impl Default for CodexAppServerConfig {
             request_timeout_seconds: default_request_timeout(),
             startup_timeout_seconds: default_startup_timeout(),
             experimental_api: false,
-            env: HashMap::new(),
-        }
-    }
-}
-
-/// Configuration for Gemini CLI ACP provider.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct GeminiCliConfig {
-    #[serde(default = "default_gemini_provider_type")]
-    pub provider_type: ProviderType,
-
-    #[serde(default)]
-    pub default_model: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_turns: Option<i64>,
-    #[serde(default)]
-    pub timeout_seconds: f64,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_dir: Option<String>,
-    #[serde(default = "crate::config::default_mcp_base_url")]
-    pub mcp_base_url: String,
-    #[serde(default)]
-    pub gemini_bin: String,
-    #[serde(default = "default_gemini_approval_mode")]
-    pub approval_mode: String,
-    #[serde(default)]
-    pub model: String,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub env: HashMap<String, String>,
-}
-
-fn default_gemini_provider_type() -> ProviderType {
-    ProviderType::GeminiCli
-}
-
-fn default_gemini_approval_mode() -> String {
-    "yolo".to_owned()
-}
-
-impl Default for GeminiCliConfig {
-    fn default() -> Self {
-        Self {
-            provider_type: ProviderType::GeminiCli,
-            default_model: String::new(),
-            max_turns: None,
-            timeout_seconds: 0.0,
-            workspace_dir: None,
-            mcp_base_url: crate::config::default_mcp_base_url(),
-            gemini_bin: String::new(),
-            approval_mode: default_gemini_approval_mode(),
-            model: String::new(),
             env: HashMap::new(),
         }
     }

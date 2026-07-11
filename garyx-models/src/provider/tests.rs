@@ -10,12 +10,6 @@ fn test_provider_type_serde() {
     let legacy: ProviderType = serde_json::from_str("\"claude_tty\"").unwrap();
     assert_eq!(legacy, ProviderType::ClaudeCode);
 
-    let pt = ProviderType::GeminiCli;
-    let json = serde_json::to_string(&pt).unwrap();
-    assert_eq!(json, "\"gemini_cli\"");
-    let back: ProviderType = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, ProviderType::GeminiCli);
-
     let pt = ProviderType::AntigravityCli;
     let json = serde_json::to_string(&pt).unwrap();
     assert_eq!(json, "\"antigravity\"");
@@ -56,7 +50,6 @@ fn test_provider_type_slug_round_trip() {
         ProviderType::ClaudeCode,
         ProviderType::CodexAppServer,
         ProviderType::Traex,
-        ProviderType::GeminiCli,
         ProviderType::AntigravityCli,
         ProviderType::Gpt,
         ProviderType::ClaudeLlm,
@@ -323,16 +316,6 @@ fn test_codex_config_defaults() {
     assert_eq!(cfg.approval_policy, "never");
     assert_eq!(cfg.sandbox_mode, "danger-full-access");
     assert!((cfg.request_timeout_seconds - 300.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn test_gemini_config_defaults() {
-    let cfg = GeminiCliConfig::default();
-    assert_eq!(cfg.provider_type, ProviderType::GeminiCli);
-    assert_eq!(cfg.approval_mode, "yolo");
-    assert_eq!(cfg.default_model, "");
-    assert_eq!(cfg.model, "");
-    assert_eq!(cfg.mcp_base_url, "http://127.0.0.1:31337");
 }
 
 #[test]

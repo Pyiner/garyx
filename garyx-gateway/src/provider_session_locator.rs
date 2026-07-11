@@ -23,7 +23,6 @@ pub(crate) struct ProviderSessionSearchRoots {
     pub(crate) claude_projects_dir: Option<PathBuf>,
     pub(crate) codex_state_db: Option<PathBuf>,
     pub(crate) codex_session_roots: Vec<PathBuf>,
-    pub(crate) gemini_tmp_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,12 +107,6 @@ pub(crate) fn list_recent_local_provider_sessions_with_roots(
         ));
     }
 
-    if matches_provider_hint(provider_hint_ref, ProviderType::GeminiCli)
-        && let Some(gemini_tmp_dir) = roots.gemini_tmp_dir.as_deref()
-    {
-        sessions.extend(list_recent_gemini_sessions(gemini_tmp_dir, limit));
-    }
-
     let mut seen = HashSet::new();
     sessions.retain(|session| {
         seen.insert((
@@ -156,13 +149,6 @@ pub(crate) fn locate_local_provider_session_with_roots(
         matches.push(binding);
     }
 
-    if matches_provider_hint(provider_hint, ProviderType::GeminiCli)
-        && let Some(gemini_tmp_dir) = roots.gemini_tmp_dir.as_deref()
-        && let Some(binding) = locate_gemini_session_binding(session_id, gemini_tmp_dir)
-    {
-        matches.push(binding);
-    }
-
     match matches.len() {
         0 => Ok(None),
         1 => Ok(matches.into_iter().next()),
@@ -195,13 +181,6 @@ pub(crate) fn recover_local_provider_session_with_roots(
 
     if matches_provider_hint(provider_hint, ProviderType::CodexAppServer)
         && let Some(recovered) = recover_codex_session(session_id, &roots.codex_session_roots)
-    {
-        matches.push(recovered);
-    }
-
-    if matches_provider_hint(provider_hint, ProviderType::GeminiCli)
-        && let Some(gemini_tmp_dir) = roots.gemini_tmp_dir.as_deref()
-        && let Some(recovered) = recover_gemini_session(session_id, gemini_tmp_dir)
     {
         matches.push(recovered);
     }
@@ -255,7 +234,6 @@ fn provider_resume_hint(provider_type: &ProviderType) -> &'static str {
     match provider_type {
         ProviderType::ClaudeCode => "claude",
         ProviderType::CodexAppServer => "codex",
-        ProviderType::GeminiCli => "gemini",
         _ => provider_type.as_slug(),
     }
 }
@@ -406,7 +384,6 @@ fn default_provider_session_search_roots() -> ProviderSessionSearchRoots {
         .into_iter()
         .filter_map(existing_dir)
         .collect(),
-        gemini_tmp_dir: existing_dir(home.join(".gemini").join("tmp")),
     }
 }
 
@@ -814,175 +791,6 @@ fn read_codex_transcript_messages(session_file: &Path, session_id: &str) -> Vec<
     messages
 }
 
-fn recover_gemini_session(
-    session_id: &str,
-    tmp_dir: &Path,
-) -> Option<RecoveredLocalProviderSession> {
-    for entry in fs::read_dir(tmp_dir).ok()?.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-
-        let project_dir = entry.path();
-        let Some(workspace_dir) = fs::read_to_string(project_dir.join(".project_root"))
-            .ok()
-            .and_then(|raw| normalized_existing_path(&raw))
-        else {
-            continue;
-        };
-        let chats_dir = project_dir.join("chats");
-        if !chats_dir.is_dir() {
-            continue;
-        }
-
-        for chat_entry in fs::read_dir(chats_dir).ok()?.flatten() {
-            let Ok(chat_type) = chat_entry.file_type() else {
-                continue;
-            };
-            if !chat_type.is_file() {
-                continue;
-            }
-            let chat_path = chat_entry.path();
-            if chat_path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
-                continue;
-            }
-            if read_gemini_session_id(&chat_path).as_deref() != Some(session_id) {
-                continue;
-            }
-
-            return Some(RecoveredLocalProviderSession {
-                binding: LocalProviderSessionBinding {
-                    provider_type: ProviderType::GeminiCli,
-                    agent_id: "gemini".to_owned(),
-                    workspace_dir,
-                },
-                messages: read_gemini_transcript_messages(&chat_path, session_id),
-            });
-        }
-    }
-    None
-}
-
-fn list_recent_gemini_sessions(tmp_dir: &Path, limit: usize) -> Vec<RecentLocalProviderSession> {
-    let mut candidates = Vec::new();
-    for entry in fs::read_dir(tmp_dir).ok().into_iter().flatten().flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-
-        let project_dir = entry.path();
-        let Some(workspace_dir) = fs::read_to_string(project_dir.join(".project_root"))
-            .ok()
-            .and_then(|raw| normalized_existing_path(&raw))
-        else {
-            continue;
-        };
-        let chats_dir = project_dir.join("chats");
-        if !chats_dir.is_dir() {
-            continue;
-        }
-
-        for chat_entry in fs::read_dir(chats_dir).ok().into_iter().flatten().flatten() {
-            let Ok(chat_type) = chat_entry.file_type() else {
-                continue;
-            };
-            if !chat_type.is_file() {
-                continue;
-            }
-            let chat_path = chat_entry.path();
-            if chat_path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
-                continue;
-            }
-            candidates.push((
-                file_modified_sort_key(&chat_path),
-                workspace_dir.clone(),
-                chat_path,
-            ));
-        }
-    }
-    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
-    candidates.truncate(limit);
-
-    let mut sessions = Vec::new();
-    for (_, workspace_dir, chat_path) in candidates {
-        let Some((session_id, metadata_updated_at)) = read_gemini_session_metadata(&chat_path)
-        else {
-            continue;
-        };
-
-        let messages = read_gemini_transcript_messages(&chat_path, &session_id);
-        let updated_at = latest_message_timestamp(&messages)
-            .or(metadata_updated_at)
-            .or_else(|| file_modified_at(&chat_path))
-            .unwrap_or_else(|| Utc::now().to_rfc3339());
-        let title = title_from_messages(&messages)
-            .unwrap_or_else(|| workspace_fallback_title(&workspace_dir, "Gemini"));
-        sessions.push(RecentLocalProviderSession {
-            provider_type: ProviderType::GeminiCli,
-            provider_hint: provider_resume_hint(&ProviderType::GeminiCli),
-            session_id,
-            title,
-            workspace_dir,
-            updated_at,
-            path: chat_path.display().to_string(),
-        });
-    }
-    sessions
-}
-
-fn read_gemini_transcript_messages(chat_file: &Path, session_id: &str) -> Vec<Value> {
-    let Ok(file) = fs::File::open(chat_file) else {
-        return Vec::new();
-    };
-
-    let mut messages = Vec::new();
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        let Some(timestamp) = trimmed_string(value.get("timestamp").and_then(Value::as_str)) else {
-            continue;
-        };
-        let Some(message_type) = value.get("type").and_then(Value::as_str) else {
-            continue;
-        };
-        match message_type {
-            "user" => {
-                let Some(text) = value.get("content").and_then(gemini_content_text) else {
-                    continue;
-                };
-                messages.push(build_imported_message(
-                    "user",
-                    text,
-                    timestamp,
-                    &ProviderType::GeminiCli,
-                    session_id,
-                ));
-            }
-            "gemini" => {
-                let Some(text) = value.get("content").and_then(gemini_content_text) else {
-                    continue;
-                };
-                messages.push(build_imported_message(
-                    "assistant",
-                    text,
-                    timestamp,
-                    &ProviderType::GeminiCli,
-                    session_id,
-                ));
-            }
-            _ => {}
-        }
-    }
-    messages
-}
-
 #[cfg(test)]
 fn locate_claude_session_binding(
     session_id: &str,
@@ -1128,111 +936,6 @@ fn read_codex_session_cwd(session_file: &Path, session_id: &str) -> Option<Strin
         return normalized_existing_path(cwd);
     }
     None
-}
-
-#[cfg(test)]
-fn locate_gemini_session_binding(
-    session_id: &str,
-    tmp_dir: &Path,
-) -> Option<LocalProviderSessionBinding> {
-    for entry in fs::read_dir(tmp_dir).ok()?.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-
-        let project_dir = entry.path();
-        let Some(workspace_dir) = fs::read_to_string(project_dir.join(".project_root"))
-            .ok()
-            .and_then(|raw| normalized_existing_path(&raw))
-        else {
-            continue;
-        };
-        let chats_dir = project_dir.join("chats");
-        if !chats_dir.is_dir() {
-            continue;
-        }
-
-        for chat_entry in fs::read_dir(chats_dir).ok()?.flatten() {
-            let Ok(chat_type) = chat_entry.file_type() else {
-                continue;
-            };
-            if !chat_type.is_file() {
-                continue;
-            }
-            let chat_path = chat_entry.path();
-            if chat_path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
-                continue;
-            }
-            if read_gemini_session_id(&chat_path).as_deref() == Some(session_id) {
-                return Some(LocalProviderSessionBinding {
-                    provider_type: ProviderType::GeminiCli,
-                    agent_id: "gemini".to_owned(),
-                    workspace_dir,
-                });
-            }
-        }
-    }
-    None
-}
-
-fn read_gemini_session_id(chat_file: &Path) -> Option<String> {
-    read_gemini_session_metadata(chat_file).map(|(session_id, _)| session_id)
-}
-
-fn read_gemini_session_metadata(chat_file: &Path) -> Option<(String, Option<String>)> {
-    let file = fs::File::open(chat_file).ok()?;
-    let mut session_id = None;
-    let mut updated_at = None;
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        if session_id.is_none() {
-            session_id = value
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned);
-        }
-        if let Some(last_updated) = value
-            .get("lastUpdated")
-            .and_then(Value::as_str)
-            .and_then(|value| trimmed_string(Some(value)))
-        {
-            updated_at = Some(last_updated);
-        }
-        if let Some(last_updated) = value
-            .get("$set")
-            .and_then(|patch| patch.get("lastUpdated"))
-            .and_then(Value::as_str)
-            .and_then(|value| trimmed_string(Some(value)))
-        {
-            updated_at = Some(last_updated);
-        }
-    }
-    session_id.map(|session_id| (session_id, updated_at))
-}
-
-fn gemini_content_text(content: &Value) -> Option<String> {
-    match content {
-        Value::String(value) => trimmed_string(Some(value)),
-        Value::Array(items) => {
-            let parts: Vec<String> = items
-                .iter()
-                .filter_map(|item| trimmed_string(item.get("text").and_then(Value::as_str)))
-                .collect();
-            if parts.is_empty() {
-                None
-            } else {
-                Some(parts.join("\n\n"))
-            }
-        }
-        _ => None,
-    }
 }
 
 #[cfg(test)]

@@ -4,15 +4,14 @@ use std::sync::Arc;
 
 use garyx_models::config::AgentProviderConfig;
 use garyx_models::provider::{
-    AntigravityCliConfig, ClaudeCodeConfig, CodexAppServerConfig, GaryxNativeConfig,
-    GeminiCliConfig, ProviderType, default_antigravity_model, default_claude_cli_mode,
+    AntigravityCliConfig, ClaudeCodeConfig, CodexAppServerConfig, GaryxNativeConfig, ProviderType,
+    default_antigravity_model, default_claude_cli_mode,
 };
 
 use crate::antigravity_provider::AntigravityCliProvider;
 use crate::claude_provider::ClaudeCliProvider;
 use crate::codex_provider::CodexAgentProvider;
 use crate::garyx_native_provider::GaryxNativeProvider;
-use crate::gemini_provider::GeminiCliProvider;
 use crate::provider_trait::{AgentLoopProvider, BridgeError};
 
 /// Build a `ClaudeCodeConfig` from an agent runtime config.
@@ -70,32 +69,6 @@ fn build_codex_config(
         max_turns: agent_cfg.max_turns,
         timeout_seconds: agent_cfg.timeout_seconds,
         experimental_api: agent_cfg.experimental_api,
-        env: agent_cfg.env.clone(),
-        ..Default::default()
-    }
-}
-
-/// Build a `GeminiCliConfig` from an agent runtime config.
-fn build_gemini_config(
-    agent_cfg: &AgentProviderConfig,
-    default_workspace: &Option<String>,
-) -> GeminiCliConfig {
-    GeminiCliConfig {
-        workspace_dir: agent_cfg
-            .workspace_dir
-            .clone()
-            .or_else(|| default_workspace.clone()),
-        default_model: agent_cfg.default_model.clone(),
-        mcp_base_url: agent_cfg.mcp_base_url.clone(),
-        gemini_bin: agent_cfg.gemini_bin.clone(),
-        approval_mode: agent_cfg.approval_mode.clone(),
-        model: if agent_cfg.model.is_empty() {
-            agent_cfg.default_model.clone()
-        } else {
-            agent_cfg.model.clone()
-        },
-        max_turns: agent_cfg.max_turns,
-        timeout_seconds: agent_cfg.timeout_seconds,
         env: agent_cfg.env.clone(),
         ..Default::default()
     }
@@ -202,7 +175,6 @@ pub(super) fn agent_provider_requires_dedicated_key(agent_cfg: &AgentProviderCon
     custom_claude_cli_mode
         || !agent_cfg.claude_cli_path.trim().is_empty()
         || agent_cfg.experimental_api
-        || !agent_cfg.gemini_bin.trim().is_empty()
         || !agent_cfg.antigravity_bin.trim().is_empty()
         || !agent_cfg.antigravity_brain_root.trim().is_empty()
 }
@@ -269,12 +241,6 @@ pub(super) async fn create_provider(
             let config =
                 build_codex_config(agent_cfg, default_workspace, ProviderType::Traex, "traex");
             let mut provider = CodexAgentProvider::new(config);
-            provider.initialize().await?;
-            Ok(Arc::new(provider))
-        }
-        ProviderType::GeminiCli => {
-            let config = build_gemini_config(agent_cfg, default_workspace);
-            let mut provider = GeminiCliProvider::new(config);
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }

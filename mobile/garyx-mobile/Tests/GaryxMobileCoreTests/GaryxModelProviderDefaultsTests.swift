@@ -84,7 +84,7 @@ final class GaryxModelProviderDefaultsTests: XCTestCase {
             let provider = GaryxModelProviderDefaults.provider(for: providerType)
             XCTAssertEqual(provider?.isNative, true, providerType)
         }
-        for providerType in ["claude_code", "codex_app_server", "antigravity", "traex", "gemini_cli"] {
+        for providerType in ["claude_code", "codex_app_server", "antigravity", "traex"] {
             let provider = GaryxModelProviderDefaults.provider(for: providerType)
             XCTAssertEqual(provider?.isNative, false, providerType)
         }
@@ -310,23 +310,13 @@ final class GaryxModelProviderDefaultsTests: XCTestCase {
     }
 
     func testHostRuntimeFieldsForCliBinaryProviders() throws {
-        let gemini = try XCTUnwrap(GaryxModelProviderDefaults.provider(for: "gemini_cli"))
         let settings: [String: GaryxJSONValue] = [
             "agents": .object([
-                "gemini": .object([
-                    "gemini_bin": .string("/opt/homebrew/bin/gemini"),
-                    "approval_mode": .string("yolo"),
-                ]),
                 "antigravity": .object([
                     "antigravity_bin": .string("/usr/local/bin/antigravity"),
                 ]),
             ]),
         ]
-        XCTAssertEqual(
-            GaryxModelProviderDefaults.hostRuntimeFields(in: settings, provider: gemini).map(\.label),
-            ["Gemini binary", "Approval mode"]
-        )
-
         let antigravity = try XCTUnwrap(GaryxModelProviderDefaults.provider(for: "antigravity"))
         XCTAssertEqual(
             GaryxModelProviderDefaults.hostRuntimeFields(in: settings, provider: antigravity).map(\.label),

@@ -119,7 +119,6 @@ Common flags on `channels add`:
 
 | Command | Use it for |
 | --- | --- |
-| `garyx tool search <query...>` | Search the web through the Gemini provider-native search path. |
 | `garyx tool image <prompt> --output <path>` | Generate one image through the configured Codex provider. |
 
 ## Automations
