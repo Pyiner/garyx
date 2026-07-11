@@ -3,9 +3,7 @@
 .composer-shell-wrap {
   position: absolute;
   right: 0;
-  /* Float 12px above the thread-main bottom so the composer's 4×16
-     drop shadow doesn't get clipped by thread-main's overflow:hidden. */
-  bottom: 12px;
+  bottom: 16px;
   left: 0;
   z-index: 10;
   /* Keep the surface ring and shadow inside thread-main's clipping boundary,
@@ -202,6 +200,7 @@
 }
 
 .composer-shell {
+  container: composer-shell / inline-size;
   position: relative;
   z-index: 1;
   display: grid;
@@ -766,13 +765,24 @@
   padding: 0 8px;
 }
 
+.composer-leading-actions {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .thread-composer-status {
   display: flex;
+  flex: 0 1 auto;
   min-width: 0;
   align-items: center;
   gap: 4px;
   min-height: 28px;
-  padding: 0 8px;
+  overflow: hidden;
+  padding: 0;
 }
 
 .thread-composer-status-pill {
@@ -811,6 +821,37 @@
 
 .thread-composer-status-branch {
   min-width: 0;
+}
+
+@container composer-shell (max-width: 520px) {
+  .thread-composer-status-pill {
+    justify-content: center;
+    width: 30px;
+    padding-inline: 7px;
+  }
+
+  .thread-composer-status-pill span {
+    display: none;
+  }
+
+  .composer-provider-label {
+    max-width: 92px;
+  }
+}
+
+@container composer-shell (max-width: 420px) {
+  .composer-provider-control,
+  button.composer-provider-trigger {
+    justify-content: center;
+    width: 32px;
+    padding-inline: 7px;
+  }
+
+  .composer-provider-label,
+  .composer-provider-chevron,
+  button.composer-provider-trigger > svg:last-child {
+    display: none;
+  }
 }
 
 .composer-provider-control {

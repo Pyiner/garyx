@@ -919,7 +919,9 @@
    and composer own the consistent 16px reading gutter. Extra page padding
    would double that gutter exactly where the window is already constrained. */
 .conversation.thread-view .conversation-body {
-  padding-inline: 0;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
 }
 
 .thread-layout {
@@ -939,6 +941,12 @@
 }
 
 .thread-layout.with-log-panel {
+  position: relative;
+  align-items: stretch;
+  gap: 0;
+}
+
+.thread-layout.with-log-panel.log-panel-docked {
   grid-template-columns:
     minmax(0, 1fr)
     var(--thread-log-resizer-width, 10px)
@@ -946,8 +954,29 @@
       var(--thread-log-panel-min-width, 280px),
       var(--thread-log-panel-width, 360px)
     );
-  align-items: stretch;
-  gap: 0;
+}
+
+.thread-layout.with-log-panel.log-panel-overlay {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.thread-layout.with-log-panel.log-panel-overlay .thread-log-resizer {
+  display: none;
+}
+
+.thread-layout.with-log-panel.log-panel-overlay .thread-log-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 45;
+  width: min(var(--thread-log-panel-width, 360px), calc(100% - 24px));
+  max-height: none;
+  padding: 10px 12px 12px;
+  border: 0.5px solid var(--color-token-border);
+  border-radius: 16px;
+  background: var(--color-token-bg-primary);
+  box-shadow: var(--shadow-lg);
 }
 
 .thread-layout.log-panel-resizing {

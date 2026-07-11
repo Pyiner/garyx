@@ -855,6 +855,7 @@ export function SideChatPanel({
       showTailThinking={sideChatShowTailThinking}
       threadLayoutRef={sideChatThreadLayoutRef}
       threadLogsMaxWidth={0}
+      threadLogsDocked={false}
       threadLogsOpen={false}
       threadLogsPanelWidth={0}
       threadLogsResizing={false}

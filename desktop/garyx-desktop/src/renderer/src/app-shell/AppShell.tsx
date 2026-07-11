@@ -1180,12 +1180,14 @@ export function AppShell() {
     sidebarCollapsed,
     sidebarResizing,
     sidebarWidth,
+    sideToolsDocked,
     sideToolsPanelWidth,
     sideToolsPanelWidthCustomizedRef,
     sideToolsPanelWidthRef,
     sideToolsResizeStateRef,
     sideToolsResizing,
     threadLayoutRef,
+    threadLogsDocked,
     threadLogsPanelWidth,
     threadLogsResizing,
     toggleSidebarCollapsed,
@@ -3819,6 +3821,9 @@ export function AppShell() {
     isSkillsView ? "skills-view" : null,
     isTasksView ? "tasks-view" : null,
     showConversationSideTools ? "with-side-tools" : null,
+    showConversationSideTools
+      ? sideToolsDocked ? "side-tools-docked" : "side-tools-overlay"
+      : null,
     sideToolsResizing ? "side-tools-resizing" : null,
   ]
     .filter(Boolean)
@@ -4049,6 +4054,7 @@ export function AppShell() {
                 currentThreadLayoutWidth(),
               )
         }
+        threadLogsDocked={embedded ? false : threadLogsDocked}
         threadLogsOpen={embedded ? false : threadLogsOpen}
         threadLogsPanelWidth={embedded ? 0 : threadLogsPanelWidth}
         threadLogsResizing={embedded ? false : threadLogsResizing}

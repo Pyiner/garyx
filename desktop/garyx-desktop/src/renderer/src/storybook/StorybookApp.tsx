@@ -147,6 +147,7 @@ function ThreadStage({ step }: { step: StoryStep }) {
       showTailThinking={activity.showPendingAckLoading}
       threadLayoutRef={threadLayoutRef}
       threadLogsMaxWidth={0}
+      threadLogsDocked={false}
       threadLogsOpen={false}
       threadLogsPanelWidth={0}
       threadLogsResizing={false}

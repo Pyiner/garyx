@@ -17,6 +17,7 @@ import {
 import type { ContentView } from "./types";
 import {
   isCompactSidebarViewport,
+  isDockedSidePanel,
   resolveSidebarCollapsed,
 } from "./responsive-layout-model";
 
@@ -135,6 +136,8 @@ export function useLayoutResizeController({
   }, [secondaryRailOpen]);
   const threadLayoutRef = useRef<HTMLDivElement | null>(null);
   const conversationRef = useRef<HTMLElement | null>(null);
+  const [conversationWidth, setConversationWidth] = useState(0);
+  const [threadLayoutWidth, setThreadLayoutWidth] = useState(0);
   const threadLogsPanelWidthRef = useRef(
     DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
   );
@@ -148,6 +151,45 @@ export function useLayoutResizeController({
     startWidth: number;
   } | null>(null);
   const sideToolsPanelWidthCustomizedRef = useRef(false);
+
+  const desktopStateReady = desktopState !== null;
+  useLayoutEffect(() => {
+    const conversation = conversationRef.current;
+    const threadLayout = threadLayoutRef.current;
+    const syncMeasuredWidths = () => {
+      const nextConversationWidth = conversation?.clientWidth || 0;
+      const nextThreadLayoutWidth = threadLayout?.clientWidth || 0;
+      setConversationWidth((current) =>
+        current === nextConversationWidth ? current : nextConversationWidth,
+      );
+      setThreadLayoutWidth((current) =>
+        current === nextThreadLayoutWidth ? current : nextThreadLayoutWidth,
+      );
+    };
+
+    syncMeasuredWidths();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", syncMeasuredWidths);
+      return () => {
+        window.removeEventListener("resize", syncMeasuredWidths);
+      };
+    }
+
+    const observer = new ResizeObserver(syncMeasuredWidths);
+    if (conversation) {
+      observer.observe(conversation);
+    }
+    if (threadLayout) {
+      observer.observe(threadLayout);
+    }
+    return () => observer.disconnect();
+  }, [
+    contentView,
+    desktopStateReady,
+    inspectorOpen,
+    openCapsuleTabs.length,
+    threadLogsOpen,
+  ]);
 
   function currentThreadLayoutWidth(): number | null {
     return threadLayoutRef.current?.clientWidth || null;
@@ -307,9 +349,13 @@ export function useLayoutResizeController({
 
   useEffect(() => {
     const handleResize = () => {
+      const measuredThreadLayoutWidth = currentThreadLayoutWidth() || 0;
+      const measuredConversationWidth = currentConversationWidth() || 0;
+      setThreadLayoutWidth(measuredThreadLayoutWidth);
+      setConversationWidth(measuredConversationWidth);
       const nextWidth = clampThreadLogsPanelWidth(
         threadLogsPanelWidthRef.current,
-        currentThreadLayoutWidth(),
+        measuredThreadLayoutWidth,
       );
       if (nextWidth !== threadLogsPanelWidthRef.current) {
         setThreadLogsPanelWidth(nextWidth);
@@ -318,13 +364,12 @@ export function useLayoutResizeController({
           threadLogsPanelWidth: nextWidth,
         }));
       }
-      const conversationWidth = currentConversationWidth();
       const nextSideToolsWidth = sideToolsPanelWidthCustomizedRef.current
         ? clampSideToolsPanelWidth(
             sideToolsPanelWidthRef.current,
-            conversationWidth,
+            measuredConversationWidth,
           )
-        : defaultSideToolsPanelWidth(conversationWidth);
+        : defaultSideToolsPanelWidth(measuredConversationWidth);
       if (nextSideToolsWidth !== sideToolsPanelWidthRef.current) {
         setSideToolsPanelWidth(nextSideToolsWidth);
       }
@@ -494,6 +539,15 @@ export function useLayoutResizeController({
     };
   }, [sideToolsResizing]);
 
+  const sideToolsDocked = isDockedSidePanel({
+    canvasWidth: conversationWidth,
+    panelWidth: sideToolsPanelWidth,
+  });
+  const threadLogsDocked = isDockedSidePanel({
+    canvasWidth: threadLayoutWidth,
+    panelWidth: threadLogsPanelWidth,
+  });
+
   return {
     conversationRef,
     currentConversationWidth,
@@ -508,12 +562,14 @@ export function useLayoutResizeController({
     sidebarCollapsed,
     sidebarResizing,
     sidebarWidth,
+    sideToolsDocked,
     sideToolsPanelWidth,
     sideToolsPanelWidthCustomizedRef,
     sideToolsPanelWidthRef,
     sideToolsResizeStateRef,
     sideToolsResizing,
     threadLayoutRef,
+    threadLogsDocked,
     threadLogsPanelWidth,
     threadLogsResizing,
     toggleSidebarCollapsed,

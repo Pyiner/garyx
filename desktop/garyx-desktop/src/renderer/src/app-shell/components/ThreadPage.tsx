@@ -284,6 +284,7 @@ type ThreadPageProps = {
   threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
   threadLogsMaxWidth: number;
+  threadLogsDocked: boolean;
   threadLogsOpen: boolean;
   threadLogsPanelWidth: number;
   threadLogsResizing: boolean;
@@ -458,6 +459,7 @@ export function ThreadPage({
   threadLayoutRef,
   threadLayoutStyle,
   threadLogsMaxWidth,
+  threadLogsDocked,
   threadLogsOpen,
   threadLogsPanelWidth,
   threadLogsResizing,
@@ -537,6 +539,19 @@ export function ThreadPage({
     !historyLoading &&
     !showAutomationRunInitialPlaceholder;
   const newThreadPromptTitle = "What do you want Garyx to build?";
+  const composerContext = selectedThreadId && composerWorkspaceMode ? (
+    <div
+      aria-label={t("Workspace mode")}
+      className="thread-composer-status"
+    >
+      <span className="thread-composer-status-pill thread-composer-status-branch">
+        <GitBranch aria-hidden size={14} strokeWidth={1.65} />
+        <span>
+          {composerWorkspaceBranch?.trim() || t("Worktree")}
+        </span>
+      </span>
+    </div>
+  ) : null;
   useLayoutEffect(() => {
     const threadMain = threadMainRef.current;
     const composerShellWrap = composerShellWrapRef.current;
@@ -579,7 +594,7 @@ export function ThreadPage({
 
   return (
     <div
-      className={`thread-layout ${isSideChatSurface ? "thread-layout--side-chat" : ""} ${inspectorOpen ? "with-inspector-panel" : ""} ${threadLogsOpen ? "with-log-panel" : ""} ${threadLogsResizing ? "log-panel-resizing" : ""}`}
+      className={`thread-layout ${isSideChatSurface ? "thread-layout--side-chat" : ""} ${inspectorOpen ? "with-inspector-panel" : ""} ${threadLogsOpen ? `with-log-panel ${threadLogsDocked ? "log-panel-docked" : "log-panel-overlay"}` : ""} ${threadLogsResizing ? "log-panel-resizing" : ""}`}
       ref={threadLayoutRef}
       style={threadLayoutStyle}
     >
@@ -990,6 +1005,7 @@ export function ThreadPage({
             <ComposerForm
               activeQueueLength={activeQueue.length}
               composer={composer}
+              composerContext={composerContext}
               composerAttachmentInputRef={composerAttachmentInputRef}
               composerBrowserAnnotations={composerBrowserAnnotations}
               composerFiles={composerFiles}
@@ -1110,24 +1126,6 @@ export function ThreadPage({
               slashCommandsLoaded={slashCommandsLoaded}
               slashCommandsLoading={slashCommandsLoading}
             />
-            {selectedThreadId && composerWorkspaceMode ? (
-              <div
-                aria-label={t("Workspace mode")}
-                className="thread-composer-status"
-              >
-                {composerWorkspaceBranch?.trim() ? (
-                  <span className="thread-composer-status-pill thread-composer-status-branch">
-                    <GitBranch aria-hidden size={14} strokeWidth={1.65} />
-                    <span>{composerWorkspaceBranch.trim()}</span>
-                  </span>
-                ) : (
-                  <span className="thread-composer-status-pill thread-composer-status-branch">
-                    <GitBranch aria-hidden size={14} strokeWidth={1.65} />
-                    <span>{t("Worktree")}</span>
-                  </span>
-                )}
-              </div>
-            ) : null}
             {!selectedThreadId &&
             !activeMessages.length &&
             !historyLoading &&
