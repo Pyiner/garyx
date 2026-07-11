@@ -81,6 +81,28 @@ async fn seed_bound_dm_thread(
     store.set(thread_id, base).await;
 }
 
+fn native_thread_request(command: &str, run_id: &str) -> InboundRequest {
+    InboundRequest {
+        channel: "telegram".to_owned(),
+        account_id: "main".to_owned(),
+        from_id: "1000000001".to_owned(),
+        is_group: false,
+        thread_binding_key: "1000000001".to_owned(),
+        message: command.to_owned(),
+        run_id: run_id.to_owned(),
+        reply_to_message_id: None,
+        images: vec![],
+        extra_metadata: HashMap::from([
+            (
+                NATIVE_COMMAND_TEXT_METADATA_KEY.to_owned(),
+                Value::String(command.to_owned()),
+            ),
+            ("chat_id".to_owned(), Value::String("1000000001".to_owned())),
+        ]),
+        file_paths: vec![],
+    }
+}
+
 #[tokio::test]
 async fn test_route_and_dispatch_basic() {
     let mut router = make_router();
@@ -502,7 +524,7 @@ async fn test_route_and_dispatch_handles_native_sessions_locally() {
         result
             .local_reply
             .as_deref()
-            .is_some_and(|text| text.contains("Your Threads:"))
+            .is_some_and(|text| text.contains("No recent threads yet."))
     );
     let dispatched = dispatcher.dispatched.lock().await;
     assert!(dispatched.is_empty());
@@ -606,7 +628,7 @@ async fn test_route_and_dispatch_weixin_newthread_binds_endpoint() {
 }
 
 #[tokio::test]
-async fn test_route_and_dispatch_threads_keeps_old_dm_threads_after_newthread_rebind() {
+async fn test_route_and_dispatch_recent_list_uses_reader_after_newthread_rebind() {
     let store = Arc::new(InMemoryThreadStore::new());
     seed_bound_dm_thread(
         &store,
@@ -634,6 +656,11 @@ async fn test_route_and_dispatch_threads_keeps_old_dm_threads_after_newthread_re
     .expect("seeded thread should have a binding");
     let (mut router, mutator) = test_router(store, GaryxConfig::default());
     mutator.seed_owner("thread::legacy-user42", binding).await;
+    let reader = Arc::new(TestRecentThreadPageReader::new(vec![recent_entry(
+        "thread::legacy-user42",
+        "legacy-thread",
+    )]));
+    router.set_recent_thread_page_reader(reader.clone());
     router.rebuild_thread_indexes().await;
     let dispatcher = MockDispatcher::new();
 
@@ -669,6 +696,12 @@ async fn test_route_and_dispatch_threads_keeps_old_dm_threads_after_newthread_re
             .as_deref()
             .is_some_and(|text| text.starts_with("Created and switched to new thread: thread-"))
     );
+    reader
+        .replace_entries(vec![
+            recent_entry(&newthread_result.thread_id, "new global thread"),
+            recent_entry("thread::legacy-user42", "legacy-thread"),
+        ])
+        .await;
 
     let mut threads_meta = HashMap::new();
     threads_meta.insert(
@@ -697,10 +730,444 @@ async fn test_route_and_dispatch_threads_keeps_old_dm_threads_after_newthread_re
         .unwrap();
 
     let list_text = threads_result.local_reply.unwrap_or_default();
-    assert!(list_text.contains("Your Threads:"));
+    assert!(list_text.contains("Recent threads · page 1/1 (2 total)"));
     assert!(list_text.contains("legacy-thread"));
-    assert!(list_text.contains("thread-"));
-    assert!(list_text.contains("Use /newthread to create a thread."));
+    assert!(list_text.contains("new global thread"));
+    assert!(list_text.contains("⬅️"));
+}
+
+#[tokio::test]
+async fn test_recent_pages_bind_exact_snapshot_after_projection_order_drifts() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::recent-12",
+            json!({"thread_id": "thread::recent-12", "label": "Thread 12"}),
+        )
+        .await;
+    let (mut router, mutator) = test_router(store, GaryxConfig::default());
+    let entries = (1..=12)
+        .map(|index| {
+            recent_entry(
+                &format!("thread::recent-{index}"),
+                &format!("Thread {index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let reader = Arc::new(TestRecentThreadPageReader::new(entries.clone()));
+    router.set_recent_thread_page_reader(reader.clone());
+    let dispatcher = MockDispatcher::new();
+
+    let first = router
+        .route_and_dispatch(
+            native_thread_request("/threads", "run-recent-page-1"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(first.local_reply.unwrap().contains("page 1/2 (12 total)"));
+    let second = router
+        .route_and_dispatch(
+            native_thread_request("/threads next", "run-recent-page-2"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(second.local_reply.unwrap().contains("12. Thread 12"));
+
+    let mut drifted = vec![recent_entry("thread::new-head", "New head")];
+    drifted.extend(entries);
+    reader.replace_entries(drifted).await;
+
+    let bound = router
+        .route_and_dispatch(
+            native_thread_request("/bindthread 12", "run-bind-snapshot-12"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(bound.thread_id, "thread::recent-12");
+    assert_eq!(
+        bound.local_reply.as_deref(),
+        Some("Switched to thread: Thread 12")
+    );
+    let owner = mutator
+        .binding_for_endpoint("telegram::main::1000000001")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(owner.thread_id, "thread::recent-12");
+
+    let ordinary = router
+        .route_and_dispatch(
+            native_thread_request("hello after binding", "run-after-bind"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(ordinary.thread_id, "thread::recent-12");
+    assert_eq!(dispatcher.dispatched.lock().await[0].0, "thread::recent-12");
+}
+
+#[tokio::test]
+async fn test_recent_page_navigation_boundaries_usage_and_reader_failure() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::page-11",
+            json!({"thread_id": "thread::page-11", "label": "Page row 11"}),
+        )
+        .await;
+    let (mut router, _) = test_router(store, GaryxConfig::default());
+    let reader = Arc::new(TestRecentThreadPageReader::new(
+        (1..=12)
+            .map(|index| {
+                recent_entry(
+                    &format!("thread::page-{index}"),
+                    &format!("Page row {index}"),
+                )
+            })
+            .collect(),
+    ));
+    router.set_recent_thread_page_reader(reader.clone());
+    let dispatcher = MockDispatcher::new();
+
+    let first = router
+        .route_and_dispatch(
+            native_thread_request("/threads next", "run-next-without-state"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(first.local_reply.unwrap().contains("page 1/2"));
+    let second = router
+        .route_and_dispatch(
+            native_thread_request("/threads next", "run-next-page-2"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(second.local_reply.unwrap().contains("page 2/2"));
+    let boundary = router
+        .route_and_dispatch(
+            native_thread_request("/threads next", "run-next-boundary"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        boundary
+            .local_reply
+            .unwrap()
+            .starts_with("Already on the last page.\nRecent threads · page 2/2")
+    );
+    let previous = router
+        .route_and_dispatch(
+            native_thread_request("/threads prev", "run-prev-page-1"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(previous.local_reply.unwrap().contains("page 1/2"));
+
+    let out_of_range = router
+        .route_and_dispatch(
+            native_thread_request("/threads 7", "run-page-out-of-range"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        out_of_range.local_reply.as_deref(),
+        Some("Page 7 is out of range (2 pages). Use /threads 2.")
+    );
+    let preserved_snapshot = router
+        .route_and_dispatch(
+            native_thread_request("/bindthread 11", "run-bind-after-out-of-range"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(preserved_snapshot.thread_id, "thread::page-11");
+    let calls_before_invalid = reader.page_calls.load(Ordering::SeqCst);
+    let invalid = router
+        .route_and_dispatch(
+            native_thread_request("/threads later", "run-page-invalid"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        invalid.local_reply.as_deref(),
+        Some("Usage: /threads [page|next|prev]")
+    );
+    assert_eq!(
+        reader.page_calls.load(Ordering::SeqCst),
+        calls_before_invalid
+    );
+
+    reader.fail_page.store(true, Ordering::SeqCst);
+    let unavailable = router
+        .route_and_dispatch(
+            native_thread_request("/threads 2", "run-page-reader-failure"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        unavailable.local_reply.as_deref(),
+        Some("Recent threads are temporarily unavailable. Try again.")
+    );
+}
+
+#[tokio::test]
+async fn test_bindthread_direct_guard_idempotence_and_deprecated_commands() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    let target = "thread::12345678-1234-1234-1234-123456789abc";
+    let incompatible = "thread::aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    store
+        .set(
+            target,
+            json!({"thread_id": target, "label": "Direct target"}),
+        )
+        .await;
+    store
+        .set(
+            incompatible,
+            json!({
+                "thread_id": incompatible,
+                "label": "Other channel",
+                "channel": "weixin",
+                "account_id": "main"
+            }),
+        )
+        .await;
+    let (mut router, mutator) = test_router(store, GaryxConfig::default());
+    let reader = Arc::new(TestRecentThreadPageReader::new(vec![
+        recent_entry(target, "Direct target"),
+        recent_entry(incompatible, "Other channel"),
+    ]));
+    router.set_recent_thread_page_reader(reader.clone());
+    let dispatcher = MockDispatcher::new();
+
+    let direct = router
+        .route_and_dispatch(
+            native_thread_request(
+                &format!("/bindthread {target}"),
+                "run-bind-direct-canonical",
+            ),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(direct.thread_id, target);
+    assert_eq!(
+        direct.local_reply.as_deref(),
+        Some("Switched to thread: Direct target")
+    );
+
+    let idempotent = router
+        .route_and_dispatch(
+            native_thread_request(
+                &format!("/bindthread {target}"),
+                "run-bind-direct-idempotent",
+            ),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        idempotent.local_reply.as_deref(),
+        Some("Already on thread: Direct target")
+    );
+
+    let rejected = router
+        .route_and_dispatch(
+            native_thread_request(
+                &format!("/bindthread {incompatible}"),
+                "run-bind-incompatible",
+            ),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        rejected
+            .local_reply
+            .as_deref()
+            .is_some_and(|reply| reply.contains("thread belongs to channel 'weixin'"))
+    );
+    assert_eq!(rejected.thread_id, target);
+
+    reader.replace_entries(Vec::new()).await;
+    let no_longer_selectable = router
+        .route_and_dispatch(
+            native_thread_request(
+                &format!("/bindthread {target}"),
+                "run-bind-no-longer-selectable",
+            ),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        no_longer_selectable.local_reply.as_deref(),
+        Some("That thread no longer exists. Run /threads again.")
+    );
+
+    for (command, direction) in [("/threadprev", "prev"), ("/threadnext", "next")] {
+        let deprecated = router
+            .route_and_dispatch(
+                native_thread_request(command, &format!("run-deprecated-{direction}")),
+                &dispatcher,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(deprecated.thread_id, target);
+        assert_eq!(
+            deprecated.local_reply.as_deref(),
+            Some(
+                format!(
+                    "{command} no longer switches threads. Use /threads {direction}, then /bindthread <n>."
+                )
+                .as_str()
+            )
+        );
+    }
+    assert_eq!(
+        mutator
+            .binding_for_endpoint("telegram::main::1000000001")
+            .await
+            .unwrap()
+            .unwrap()
+            .thread_id,
+        target
+    );
+}
+
+#[tokio::test]
+async fn test_newthread_clears_recent_selection_snapshot() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::snapshot-target",
+            json!({"thread_id": "thread::snapshot-target", "label": "Snapshot target"}),
+        )
+        .await;
+    let (mut router, mutator) = test_router(store, GaryxConfig::default());
+    router.set_recent_thread_page_reader(Arc::new(TestRecentThreadPageReader::new(vec![
+        recent_entry("thread::snapshot-target", "Snapshot target"),
+    ])));
+    let dispatcher = MockDispatcher::new();
+
+    router
+        .route_and_dispatch(
+            native_thread_request("/threads", "run-snapshot-before-new"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    let created = router
+        .route_and_dispatch(
+            native_thread_request("/newthread", "run-clear-snapshot-new"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    let missing_snapshot = router
+        .route_and_dispatch(
+            native_thread_request("/bindthread 1", "run-cleared-snapshot-bind"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        missing_snapshot.local_reply.as_deref(),
+        Some("Run /threads first, then /bindthread <n>.")
+    );
+    assert_eq!(missing_snapshot.thread_id, created.thread_id);
+    assert_eq!(
+        mutator
+            .binding_for_endpoint("telegram::main::1000000001")
+            .await
+            .unwrap()
+            .unwrap()
+            .thread_id,
+        created.thread_id
+    );
+}
+
+#[tokio::test]
+async fn test_recent_commands_have_explicit_missing_reader_error() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    router.set_endpoint_binding_mutator(Arc::new(TestEndpointBindingMutator::new(store)));
+    let dispatcher = MockDispatcher::new();
+
+    for (command, run_id) in [
+        ("/threads", "run-missing-reader-list"),
+        (
+            "/bindthread thread::12345678-1234-1234-1234-123456789abc",
+            "run-missing-reader-bind",
+        ),
+    ] {
+        let result = router
+            .route_and_dispatch(native_thread_request(command, run_id), &dispatcher, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.local_reply.as_deref(),
+            Some("Recent threads are temporarily unavailable. Try again.")
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_threads_bindthread_and_newthread_never_list_store_keys() {
+    let store = Arc::new(NoScanThreadStore::new());
+    store
+        .set(
+            "thread::no-scan-target",
+            json!({"thread_id": "thread::no-scan-target", "label": "No scan target"}),
+        )
+        .await;
+    let (mut router, _) = test_router(store.clone(), GaryxConfig::default());
+    router.set_recent_thread_page_reader(Arc::new(TestRecentThreadPageReader::new(vec![
+        recent_entry("thread::no-scan-target", "No scan target"),
+    ])));
+    let dispatcher = MockDispatcher::new();
+
+    for (command, run_id) in [
+        ("/threads", "run-no-scan-list"),
+        ("/bindthread 1", "run-no-scan-bind"),
+        ("/newthread", "run-no-scan-new"),
+    ] {
+        router
+            .route_and_dispatch(native_thread_request(command, run_id), &dispatcher, None)
+            .await
+            .unwrap();
+    }
+    assert_eq!(store.list_calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -735,7 +1202,7 @@ async fn test_route_and_dispatch_native_command_uses_metadata_text() {
         result
             .local_reply
             .as_deref()
-            .is_some_and(|text| text.contains("Your Threads:"))
+            .is_some_and(|text| text.contains("No recent threads yet."))
     );
     let dispatched = dispatcher.dispatched.lock().await;
     assert!(dispatched.is_empty());

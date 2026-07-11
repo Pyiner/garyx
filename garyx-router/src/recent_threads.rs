@@ -248,7 +248,7 @@ pub fn format_recent_thread_page(
         let marker = if is_current { " ⬅️" } else { "" };
         lines.push(format!(
             "{absolute_index}. {} [{}]{marker}",
-            display_title(entry),
+            recent_thread_display_title(&entry.title, &entry.last_message_preview),
             short_thread_id(&entry.thread_id),
         ));
     }
@@ -275,14 +275,12 @@ pub fn format_recent_thread_page(
     lines.join("\n")
 }
 
-fn display_title(entry: &RecentThreadListEntry) -> String {
-    let normalized_title = normalize_text(&entry.title);
+pub(crate) fn recent_thread_display_title(title: &str, last_message_preview: &str) -> String {
+    let normalized_title = normalize_text(title);
     let derived_placeholder = normalized_title
         .as_deref()
         .is_none_or(|title| title.eq_ignore_ascii_case("New Thread"));
-    if derived_placeholder
-        && let Some(preview) = normalize_and_truncate(&entry.last_message_preview, 48)
-    {
+    if derived_placeholder && let Some(preview) = normalize_and_truncate(last_message_preview, 48) {
         return preview;
     }
     normalized_title
@@ -439,7 +437,7 @@ impl RecentThreadBrowserState {
                 absolute_index,
                 RecentThreadSnapshotEntry {
                     thread_id: entry.thread_id.clone(),
-                    title: display_title(entry),
+                    title: recent_thread_display_title(&entry.title, &entry.last_message_preview),
                 },
             );
         }
@@ -454,7 +452,7 @@ impl RecentThreadBrowserState {
     }
 
     pub fn resolve_bind_request(
-        &mut self,
+        &self,
         context_key: &str,
         request: &RecentBindRequest,
     ) -> Result<RecentBindSelection, RecentSnapshotUnavailable> {
@@ -467,12 +465,10 @@ impl RecentThreadBrowserState {
         let RecentBindRequest::SnapshotIndex(index) = request else {
             unreachable!();
         };
-        let access = self.next_access();
         let context = self
             .contexts
-            .get_mut(context_key)
+            .get(context_key)
             .ok_or(RecentSnapshotUnavailable)?;
-        context.last_used = access;
         let entry = context
             .entries
             .get(index)

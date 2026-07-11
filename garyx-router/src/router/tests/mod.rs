@@ -5,6 +5,10 @@ use crate::endpoint_binding::{
 };
 use crate::memory_store::InMemoryThreadStore;
 use crate::message_ledger::MessageLedgerStore;
+use crate::recent_threads::{
+    RecentThreadFilter, RecentThreadListEntry, RecentThreadPage, RecentThreadPageReader,
+};
+use crate::store::ThreadStoreError;
 use crate::threads::{
     ChannelBinding, bindings_from_value, remove_binding, upsert_binding,
     upsert_known_channel_endpoint, validate_thread_accepts_bot_binding,
@@ -12,11 +16,54 @@ use crate::threads::{
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Mutex;
 
 struct TestEndpointBindingMutator {
     store: Arc<dyn ThreadStore>,
     owners: Mutex<HashMap<String, EndpointBindingOwner>>,
+}
+
+struct NoScanThreadStore {
+    inner: InMemoryThreadStore,
+    list_calls: AtomicUsize,
+}
+
+impl NoScanThreadStore {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryThreadStore::new(),
+            list_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl ThreadStore for NoScanThreadStore {
+    async fn get(&self, thread_id: &str) -> Option<Value> {
+        self.inner.get(thread_id).await
+    }
+
+    async fn set(&self, thread_id: &str, data: Value) {
+        self.inner.set(thread_id, data).await;
+    }
+
+    async fn delete(&self, thread_id: &str) -> bool {
+        self.inner.delete(thread_id).await
+    }
+
+    async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
+        self.list_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.list_keys(prefix).await
+    }
+
+    async fn exists(&self, thread_id: &str) -> bool {
+        self.inner.exists(thread_id).await
+    }
+
+    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+        self.inner.update(thread_id, updates).await
+    }
 }
 
 impl TestEndpointBindingMutator {
@@ -166,6 +213,83 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
     }
 }
 
+struct TestRecentThreadPageReader {
+    entries: Mutex<Vec<RecentThreadListEntry>>,
+    fail_page: AtomicBool,
+    fail_contains: AtomicBool,
+    page_calls: AtomicUsize,
+    contains_calls: AtomicUsize,
+}
+
+impl TestRecentThreadPageReader {
+    fn new(entries: Vec<RecentThreadListEntry>) -> Self {
+        Self {
+            entries: Mutex::new(entries),
+            fail_page: AtomicBool::new(false),
+            fail_contains: AtomicBool::new(false),
+            page_calls: AtomicUsize::new(0),
+            contains_calls: AtomicUsize::new(0),
+        }
+    }
+
+    async fn replace_entries(&self, entries: Vec<RecentThreadListEntry>) {
+        *self.entries.lock().await = entries;
+    }
+}
+
+#[async_trait]
+impl RecentThreadPageReader for TestRecentThreadPageReader {
+    async fn page(
+        &self,
+        filter: RecentThreadFilter,
+        limit: usize,
+        offset: usize,
+    ) -> Result<RecentThreadPage, String> {
+        self.page_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_page.load(Ordering::SeqCst) {
+            return Err("forced page failure".to_owned());
+        }
+        assert_eq!(filter, RecentThreadFilter::Exclude);
+        let entries = self.entries.lock().await;
+        let total = entries.len();
+        let offset = offset.min(total);
+        let page_entries = entries
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        Ok(RecentThreadPage {
+            has_more: offset.saturating_add(page_entries.len()) < total,
+            entries: page_entries,
+            total,
+            offset,
+        })
+    }
+
+    async fn contains_selectable_thread(&self, thread_id: &str) -> Result<bool, String> {
+        self.contains_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_contains.load(Ordering::SeqCst) {
+            return Err("forced selectability failure".to_owned());
+        }
+        Ok(self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .any(|entry| entry.thread_id == thread_id))
+    }
+}
+
+fn recent_entry(thread_id: &str, title: &str) -> RecentThreadListEntry {
+    RecentThreadListEntry {
+        thread_id: thread_id.to_owned(),
+        title: title.to_owned(),
+        last_message_preview: String::new(),
+        last_active_at: "2026-07-11T08:00:00Z".to_owned(),
+    }
+}
+
 fn test_router(
     store: Arc<dyn ThreadStore>,
     config: GaryxConfig,
@@ -173,6 +297,7 @@ fn test_router(
     let mut router = MessageRouter::new(store.clone(), config);
     let mutator = Arc::new(TestEndpointBindingMutator::new(store));
     router.set_endpoint_binding_mutator(mutator.clone());
+    router.set_recent_thread_page_reader(Arc::new(TestRecentThreadPageReader::new(Vec::new())));
     (router, mutator)
 }
 

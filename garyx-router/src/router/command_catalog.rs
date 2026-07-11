@@ -10,6 +10,7 @@ use garyx_models::config::{GaryxConfig, SlashCommand};
 use super::inbound::{NativeCommand, NativeThreadCommand};
 
 const DISPATCH_THREADS: &str = "router.native.threads";
+const DISPATCH_BINDTHREAD: &str = "router.native.bindthread";
 const DISPATCH_NEWTHREAD: &str = "router.native.newthread";
 const DISPATCH_THREADPREV: &str = "router.native.threadprev";
 const DISPATCH_THREADNEXT: &str = "router.native.threadnext";
@@ -20,6 +21,8 @@ struct NativeCommandDef {
     category: &'static str,
     dispatch_key: &'static str,
     telegram: bool,
+    args_hint: Option<&'static str>,
+    visible: bool,
 }
 
 const NATIVE_COMMANDS: &[NativeCommandDef] = &[
@@ -29,13 +32,26 @@ const NATIVE_COMMANDS: &[NativeCommandDef] = &[
         category: "Thread",
         dispatch_key: DISPATCH_NEWTHREAD,
         telegram: true,
+        args_hint: None,
+        visible: true,
     },
     NativeCommandDef {
         name: "threads",
-        description: "List all threads",
+        description: "Browse recent threads",
         category: "Thread",
         dispatch_key: DISPATCH_THREADS,
         telegram: true,
+        args_hint: Some("[page|next|prev]"),
+        visible: true,
+    },
+    NativeCommandDef {
+        name: "bindthread",
+        description: "Switch to a thread from the recent list",
+        category: "Thread",
+        dispatch_key: DISPATCH_BINDTHREAD,
+        telegram: true,
+        args_hint: Some("<n>"),
+        visible: true,
     },
     NativeCommandDef {
         name: "threadprev",
@@ -43,6 +59,8 @@ const NATIVE_COMMANDS: &[NativeCommandDef] = &[
         category: "Thread",
         dispatch_key: DISPATCH_THREADPREV,
         telegram: true,
+        args_hint: None,
+        visible: false,
     },
     NativeCommandDef {
         name: "threadnext",
@@ -50,6 +68,8 @@ const NATIVE_COMMANDS: &[NativeCommandDef] = &[
         category: "Thread",
         dispatch_key: DISPATCH_THREADNEXT,
         telegram: true,
+        args_hint: None,
+        visible: false,
     },
 ];
 
@@ -70,10 +90,11 @@ pub fn native_command_from_text(text: &str, channel: &str) -> Option<NativeComma
 
 pub fn native_command_name(command: NativeCommand) -> &'static str {
     match command {
-        NativeCommand::Thread(NativeThreadCommand::Threads) => "/threads",
+        NativeCommand::Thread(NativeThreadCommand::ListRecent) => "/threads",
+        NativeCommand::Thread(NativeThreadCommand::BindRecent) => "/bindthread",
         NativeCommand::Thread(NativeThreadCommand::New) => "/newthread",
-        NativeCommand::Thread(NativeThreadCommand::ThreadPrev) => "/threadprev",
-        NativeCommand::Thread(NativeThreadCommand::ThreadNext) => "/threadnext",
+        NativeCommand::Thread(NativeThreadCommand::DeprecatedThreadPrev) => "/threadprev",
+        NativeCommand::Thread(NativeThreadCommand::DeprecatedThreadNext) => "/threadnext",
     }
 }
 
@@ -145,15 +166,19 @@ fn native_command_available_for_channel(definition: &NativeCommandDef, channel: 
 
 fn native_command_from_dispatch_key(key: &str) -> Option<NativeCommand> {
     Some(match key {
-        DISPATCH_THREADS => NativeCommand::Thread(NativeThreadCommand::Threads),
+        DISPATCH_THREADS => NativeCommand::Thread(NativeThreadCommand::ListRecent),
+        DISPATCH_BINDTHREAD => NativeCommand::Thread(NativeThreadCommand::BindRecent),
         DISPATCH_NEWTHREAD => NativeCommand::Thread(NativeThreadCommand::New),
-        DISPATCH_THREADPREV => NativeCommand::Thread(NativeThreadCommand::ThreadPrev),
-        DISPATCH_THREADNEXT => NativeCommand::Thread(NativeThreadCommand::ThreadNext),
+        DISPATCH_THREADPREV => NativeCommand::Thread(NativeThreadCommand::DeprecatedThreadPrev),
+        DISPATCH_THREADNEXT => NativeCommand::Thread(NativeThreadCommand::DeprecatedThreadNext),
         _ => return None,
     })
 }
 
 fn command_matches_options(definition: &NativeCommandDef, options: &CommandCatalogOptions) -> bool {
+    if !definition.visible && !options.include_hidden {
+        return false;
+    }
     if let Some(channel) = options.channel.as_deref()
         && !native_command_available_for_channel(definition, channel)
     {
@@ -187,14 +212,18 @@ fn native_entry(definition: &NativeCommandDef) -> CommandCatalogEntry {
         aliases: Vec::new(),
         description: definition.description.to_owned(),
         category: definition.category.to_owned(),
-        args_hint: None,
+        args_hint: definition.args_hint.map(ToOwned::to_owned),
         kind: CommandKind::ChannelNative,
         source: CommandSource::Builtin,
         surfaces,
         dispatch: CommandDispatch::RouterNative {
             key: definition.dispatch_key.to_owned(),
         },
-        visibility: CommandVisibility::Visible,
+        visibility: if definition.visible {
+            CommandVisibility::Visible
+        } else {
+            CommandVisibility::Hidden
+        },
         warnings: Vec::new(),
     }
 }

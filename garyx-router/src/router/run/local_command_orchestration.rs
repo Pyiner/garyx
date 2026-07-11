@@ -17,6 +17,8 @@ impl MessageRouter {
         command: NativeCommand,
     ) -> Result<InboundResult, String> {
         let thread_binding_key = request.thread_binding_key.as_str();
+        let command_text = crate::router::inbound::InboundCommandClassifier::command_text(request)
+            .unwrap_or(request.message.as_str());
         let local = match command {
             NativeCommand::Thread(thread_command) => {
                 self.execute_native_thread_command(
@@ -26,6 +28,7 @@ impl MessageRouter {
                     request.is_group,
                     thread_binding_key,
                     &request.extra_metadata,
+                    command_text,
                     thread_command,
                 )
                 .await?
@@ -60,7 +63,7 @@ impl MessageRouter {
             &delivery_chat_id,
             &request.from_id,
         );
-        self.set_last_delivery_with_persistence(
+        self.set_last_delivery_with_known_thread_persistence(
             &thread_id,
             DeliveryContext {
                 channel: request.channel.clone(),

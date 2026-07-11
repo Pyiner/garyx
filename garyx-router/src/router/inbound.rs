@@ -5,10 +5,11 @@ use crate::router::command_catalog;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum NativeThreadCommand {
-    Threads,
+    ListRecent,
+    BindRecent,
     New,
-    ThreadPrev,
-    ThreadNext,
+    DeprecatedThreadPrev,
+    DeprecatedThreadNext,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

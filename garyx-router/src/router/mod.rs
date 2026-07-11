@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::message_ledger::MessageLedgerStore;
 pub(crate) use crate::message_routing::MessageRoutingIndex;
-use crate::recent_threads::RecentThreadPageReader;
+use crate::recent_threads::{RecentThreadBrowserState, RecentThreadPageReader};
 use crate::store::ThreadStore;
 use crate::thread_history::ThreadHistoryRepository;
 use crate::EndpointBindingMutator;
@@ -62,6 +62,7 @@ pub struct MessageRouter {
     default_agent: String,
     thread_creator: Option<Arc<dyn ThreadCreator>>,
     recent_thread_page_reader: Option<Arc<dyn RecentThreadPageReader>>,
+    recent_thread_browser: RecentThreadBrowserState,
     endpoint_binding_mutator: Option<Arc<dyn EndpointBindingMutator>>,
     inbound_sink: Option<Arc<dyn InboundSink>>,
     thread_nav: threading::ThreadNavigationState,
@@ -87,6 +88,7 @@ impl MessageRouter {
             default_agent,
             thread_creator: None,
             recent_thread_page_reader: None,
+            recent_thread_browser: RecentThreadBrowserState::default(),
             endpoint_binding_mutator: None,
             inbound_sink: None,
             thread_nav: threading::ThreadNavigationState::default(),

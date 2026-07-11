@@ -10,6 +10,7 @@ use std::collections::HashMap;
 fn test_is_native_command_text_recognizes_thread_commands() {
     assert!(is_native_command_text("/threads", "telegram"));
     assert!(is_native_command_text("/newthread", "telegram"));
+    assert!(is_native_command_text("/bindthread 1", "telegram"));
     assert!(is_native_command_text("/threadprev", "telegram"));
     assert!(is_native_command_text("/threadnext", "telegram"));
     assert!(!is_native_command_text("/loop", "telegram"));
@@ -70,10 +71,12 @@ fn test_channel_native_catalog_exposes_telegram_menu_commands() {
         .iter()
         .map(|entry| entry.name.as_str())
         .collect::<Vec<_>>();
+    assert_eq!(names, vec!["newthread", "threads", "bindthread"]);
     assert_eq!(
-        names,
-        vec!["newthread", "threads", "threadprev", "threadnext"]
+        catalog.commands[1].args_hint.as_deref(),
+        Some("[page|next|prev]")
     );
+    assert_eq!(catalog.commands[2].args_hint.as_deref(), Some("<n>"));
     assert!(
         catalog
             .commands
@@ -92,6 +95,20 @@ fn test_channel_native_catalog_exposes_telegram_menu_commands() {
             .iter()
             .all(|entry| entry.surfaces.contains(&CommandSurface::Telegram))
     );
+
+    let hidden = crate::command_catalog_for_config(
+        &GaryxConfig::default(),
+        CommandCatalogOptions {
+            surface: Some(CommandSurface::Telegram),
+            channel: Some("telegram".to_owned()),
+            account_id: Some("main".to_owned()),
+            include_hidden: true,
+        },
+    );
+    assert!(hidden.commands.iter().any(|entry| {
+        entry.name == "threadprev"
+            && entry.visibility == garyx_models::command_catalog::CommandVisibility::Hidden
+    }));
 }
 
 #[test]
