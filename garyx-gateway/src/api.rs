@@ -218,7 +218,7 @@ pub struct CustomAgentUpsertPayload {
 pub async fn thread_history(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ThreadHistoryParams>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     if let Some(thread_id) = params.thread_id.as_deref() {
         let payload = thread_history_for_key(
             &state,
@@ -230,14 +230,34 @@ pub async fn thread_history(
             params.after_index,
         )
         .await;
-        return Json(payload);
+        return Json(payload).into_response();
     }
 
+    // List mode is a request boundary: a store failure must surface as a
+    // 500, never as a successful empty listing (#TASK-2099).
+    match thread_history_listing(&state, &params).await {
+        Ok(payload) => Json(payload).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "reason": "thread-store-error",
+                "error": error.to_string(),
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn thread_history_listing(
+    state: &Arc<AppState>,
+    params: &ThreadHistoryParams,
+) -> Result<Value, garyx_router::ThreadStoreError> {
     let keys = state
         .threads
         .thread_store
-        .list_keys_logged(params.prefix.as_deref())
-        .await;
+        .list_keys(params.prefix.as_deref())
+        .await?;
     let keys: Vec<String> = keys.into_iter().filter(|key| is_thread_key(key)).collect();
 
     let limited_keys: Vec<&String> = keys.iter().take(params.limit).collect();
@@ -245,20 +265,17 @@ pub async fn thread_history(
 
     for key in &limited_keys {
         if params.include_messages {
-            if let Some(data) = state.threads.thread_store.get_logged(key).await {
-                threads.push(json!({
-                    "key": key,
-                    "data": data,
-                }));
-            } else {
-                threads.push(json!({
-                    "key": key,
-                    "data": null,
-                }));
-            }
+            // A missing record (deleted between list and get) is Ok(None)
+            // and keeps its `data: null` row; only real store failures
+            // abort the listing.
+            let data = state.threads.thread_store.get(key).await?;
+            threads.push(json!({
+                "key": key,
+                "data": data,
+            }));
         } else {
             // Summary only: key + existence
-            let exists = state.threads.thread_store.exists_logged(key).await;
+            let exists = state.threads.thread_store.exists(key).await?;
             threads.push(json!({
                 "key": key,
                 "active": exists,
@@ -266,7 +283,7 @@ pub async fn thread_history(
         }
     }
 
-    Json(json!({
+    Ok(json!({
         "threads": threads,
         "total": keys.len(),
         "limit": params.limit,

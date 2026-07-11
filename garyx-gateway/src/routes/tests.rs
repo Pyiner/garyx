@@ -3738,6 +3738,22 @@ async fn thread_store_backend_failure_answers_500_not_404() {
         .unwrap();
     let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // History list mode must not degrade a store failure into a
+    // successful empty listing (#TASK-2123): both the summary and the
+    // include_messages variants surface the backend failure as 500.
+    for uri in [
+        "/api/threads/history",
+        "/api/threads/history?include_messages=true",
+    ] {
+        let request = authed_request().uri(uri).body(Body::empty()).unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET {uri} must surface the backend failure as 500"
+        );
+    }
 }
 
 #[tokio::test]
