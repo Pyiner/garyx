@@ -113,7 +113,15 @@ test('recipe pins every shared floating slot to the tokens', () => {
   ]);
   expectRecipe(rules, "[data-slot='dropdown-menu-sub-content']", surfaceDeclarations);
   expectRecipe(rules, "[data-slot='select-content']", surfaceDeclarations);
-  expectRecipe(rules, '.menu-popover-surface', surfaceDeclarations);
+  expectRecipe(rules, '.menu-popover-surface', [
+    'z-index: var(--z-app-floating)',
+    ...surfaceDeclarations,
+  ]);
+  expectRecipe(
+    rules,
+    '.menu-popover-surface.menu-popover-surface-opaque',
+    ['background: var(--color-token-bg-primary)'],
+  );
   expectRecipe(rules, "[data-slot='select-content'] [data-slot='select-viewport']", [
     'padding: var(--menu-surface-padding)',
   ]);
@@ -212,8 +220,10 @@ test('retired per-surface menu forks stay deleted', () => {
   assert.ok(!taskForestCss.includes('#ececea'));
   const gatewaySwitcherSource = read('GatewaySwitcher.tsx');
   assert.ok(
-    gatewaySwitcherSource.includes('menu-popover-surface gateway-switcher-popover'),
-    'gateway popover opts into the shared surface marker',
+    gatewaySwitcherSource.includes(
+      'menu-popover-surface menu-popover-surface-opaque gateway-switcher-popover',
+    ),
+    'gateway popover opts into the shared opaque surface marker',
   );
   assert.ok(
     gatewaySwitcherSource.includes('menu-item-two-line gateway-switcher-item'),

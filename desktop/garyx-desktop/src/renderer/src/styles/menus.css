@@ -105,12 +105,20 @@
   /* Menu-like popovers opt into the same surface with this marker class;
      the consumer keeps only widths, padding, and internal layout local. */
   .menu-popover-surface {
+    z-index: var(--z-app-floating);
     border: 0;
     border-radius: var(--menu-surface-radius);
     background: var(--menu-surface-bg);
     box-shadow: var(--menu-surface-shadow);
     backdrop-filter: blur(var(--menu-surface-blur));
     color: var(--color-token-text-primary);
+  }
+
+  /* Some persistent shell popovers sit directly over high-contrast sidebar
+     content. Keep the Codex geometry/ring/shadow, but provide an opaque shared
+     variant so labels underneath never bleed through the surface. */
+  .menu-popover-surface.menu-popover-surface-opaque {
+    background: var(--color-token-bg-primary);
   }
 
   [data-slot='select-content'] [data-slot='select-viewport'] {

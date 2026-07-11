@@ -150,11 +150,12 @@
 }
 
 .gateway-switcher-popover {
-  /* Hug the identity bar below. Surface identity comes from the shared
-     .menu-popover-surface recipe in styles/menus.css. */
-  width: var(--radix-popover-trigger-width);
+  /* Match Codex's bottom-left profile menu: span the complete footer row,
+     preserve an 8px viewport gutter, and use the shared 4px surface inset. */
+  width: calc(var(--app-sidebar-width) - 16px);
+  max-width: calc(100vw - 16px);
   min-width: 208px;
-  padding: 8px;
+  padding: var(--menu-surface-padding);
 }
 
 .gateway-switcher-list {

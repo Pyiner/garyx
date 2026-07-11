@@ -284,10 +284,7 @@
 .tool-trace-group-list {
   display: grid;
   gap: 4px;
-  max-height: 224px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: thin;
+  overflow: visible;
 }
 
 .tool-trace {
@@ -629,11 +626,8 @@
 .tool-trace-children-scroll {
   display: grid;
   gap: 4px;
-  max-height: 112px;
   padding: 4px 4px 4px 6px;
-  overflow-y: auto;
-  padding-right: 20px;
-  margin-right: -14px;
+  overflow: visible;
 }
 
 .tool-trace-children-scroll .tool-trace {

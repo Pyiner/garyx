@@ -205,9 +205,9 @@ export function GatewayIdentityBar({
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className="menu-popover-surface gateway-switcher-popover"
+          className="menu-popover-surface menu-popover-surface-opaque gateway-switcher-popover"
           side="top"
-          sideOffset={10}
+          sideOffset={7}
         >
           <div className="gateway-switcher-list">
             {rows.list.map((profile) => (

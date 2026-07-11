@@ -14,6 +14,9 @@
 - While a thread is still running, keep active turn containers stable and
   reserve Working/Worked rows for real tool activity from `render_state`.
 - Pure assistant/reasoning text remains normal assistant text.
+- Expanded tool activity grows to its natural height. The transcript owns
+  vertical scrolling; tool groups and nested activity must not introduce
+  max-height caps or inner vertical scrollbars.
 - Desktop interruption controls must be gateway-backed.
 - The local Mac app process may not own the active WebSocket for runs started
   elsewhere or after a reload; after trying any local active socket, call the
@@ -31,6 +34,10 @@
   typography, or hover washes.
 - Menu shortcut hints use the shared `DropdownMenuShortcut` component, not
   local spans.
+- Persistent sidebar popovers that sit over high-contrast navigation content
+  may use the shared `.menu-popover-surface-opaque` variant. It changes only
+  the surface fill; radius, ring, shadow, typography, rows, and spacing still
+  come from `styles/menus.css`.
 
 ## App-Shell Chrome Ownership
 

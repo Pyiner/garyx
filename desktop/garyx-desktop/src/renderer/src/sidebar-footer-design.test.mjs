@@ -108,6 +108,14 @@ test('gateway and settings controls pin the Codex footer alignment', () => {
   expectRule(ownerCss, '.gateway-identity-gear:hover', [
     'background: var(--color-token-row-hover)',
   ]);
+  expectRule(ownerCss, '.gateway-switcher-popover', [
+    'width: calc(var(--app-sidebar-width) - 16px)',
+    'max-width: calc(100vw - 16px)',
+    'padding: var(--menu-surface-padding)',
+  ]);
+
+  const source = read('GatewaySwitcher.tsx');
+  assert.ok(source.includes('sideOffset={7}'));
 });
 
 test('gateway identity keeps Codex icon scale while preserving status semantics', () => {
