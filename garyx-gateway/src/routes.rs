@@ -1293,15 +1293,27 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
                 binding: mutation.binding,
             })
         }
-        Err(error) if error.contains("thread not found") => Err(ChannelEndpointMutationError::new(
-            StatusCode::NOT_FOUND,
-            error,
-        )),
-        Err(error) => Err(ChannelEndpointMutationError::new(
-            StatusCode::BAD_REQUEST,
-            error,
-        )),
+        Err(error) => Err(endpoint_mutation_error_response(error)),
     }
+}
+
+/// Structured status mapping for endpoint binding mutations: a storage
+/// outage inside the mutator surfaces as 500, never as a client error
+/// (#TASK-2147).
+fn endpoint_mutation_error_response(
+    error: garyx_router::EndpointBindingMutationError,
+) -> ChannelEndpointMutationError {
+    use garyx_router::EndpointBindingMutationError as MutationError;
+    let status = match &error {
+        MutationError::TargetNotFound(_) => StatusCode::NOT_FOUND,
+        MutationError::TargetArchived(_) => StatusCode::GONE,
+        MutationError::Incompatible(_) => StatusCode::BAD_REQUEST,
+        MutationError::Unavailable
+        | MutationError::Projection(_)
+        | MutationError::PreviousOwnerUnavailable(_)
+        | MutationError::WriteFailed { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    ChannelEndpointMutationError::new(status, error.to_string())
 }
 
 pub(crate) async fn detach_channel_endpoint_key(
@@ -1351,10 +1363,7 @@ pub(crate) async fn detach_channel_endpoint_key(
                 binding: mutation.binding,
             })
         }
-        Err(error) => Err(ChannelEndpointMutationError::new(
-            StatusCode::BAD_REQUEST,
-            error,
-        )),
+        Err(error) => Err(endpoint_mutation_error_response(error)),
     }
 }
 

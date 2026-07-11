@@ -41,16 +41,13 @@ impl MessageRouter {
         &mut self,
         thread_id: &str,
         mut binding: ChannelBinding,
-    ) -> Result<crate::EndpointBindResult, String> {
+    ) -> Result<crate::EndpointBindResult, EndpointBindingMutationError> {
         let Some(mutator) = self.endpoint_binding_mutator() else {
-            return Err(EndpointBindingMutationError::Unavailable.to_string());
+            return Err(EndpointBindingMutationError::Unavailable);
         };
         let delivered_at = Utc::now().to_rfc3339();
         binding.last_delivery_at = Some(delivered_at);
-        let result = mutator
-            .bind_endpoint(thread_id, binding.clone())
-            .await
-            .map_err(|error| error.to_string())?;
+        let result = mutator.bind_endpoint(thread_id, binding.clone()).await?;
         let previous_thread_id = result.previous_thread_id.clone();
         let binding = result.binding.clone();
         if let Some(previous_thread_id) = previous_thread_id.as_deref()
@@ -88,14 +85,11 @@ impl MessageRouter {
     pub async fn detach_endpoint_runtime(
         &mut self,
         endpoint_key: &str,
-    ) -> Result<EndpointDetachResult, String> {
+    ) -> Result<EndpointDetachResult, EndpointBindingMutationError> {
         let Some(mutator) = self.endpoint_binding_mutator() else {
-            return Err(EndpointBindingMutationError::Unavailable.to_string());
+            return Err(EndpointBindingMutationError::Unavailable);
         };
-        let result = mutator
-            .detach_endpoint(endpoint_key)
-            .await
-            .map_err(|error| error.to_string())?;
+        let result = mutator.detach_endpoint(endpoint_key).await?;
         self.purge_endpoint_binding(endpoint_key);
         Ok(result)
     }

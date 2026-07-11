@@ -3770,6 +3770,7 @@ async fn thread_store_backend_failure_answers_500_not_404() {
 struct ToggleFailingThreadStore {
     inner: garyx_router::InMemoryThreadStore,
     failing: std::sync::atomic::AtomicBool,
+    failing_gets: std::sync::atomic::AtomicBool,
 }
 
 impl ToggleFailingThreadStore {
@@ -3777,6 +3778,7 @@ impl ToggleFailingThreadStore {
         Self {
             inner: garyx_router::InMemoryThreadStore::new(),
             failing: std::sync::atomic::AtomicBool::new(false),
+            failing_gets: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -3795,6 +3797,11 @@ impl ToggleFailingThreadStore {
 impl garyx_router::ThreadStore for ToggleFailingThreadStore {
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, garyx_router::ThreadStoreError> {
         self.fail()?;
+        if self.failing_gets.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(garyx_router::ThreadStoreError::Backend(
+                "simulated target read failure".to_owned(),
+            ));
+        }
         self.inner.get(thread_id).await
     }
     async fn set(
@@ -3828,6 +3835,76 @@ impl garyx_router::ThreadStore for ToggleFailingThreadStore {
         self.fail()?;
         self.inner.update(thread_id, updates).await
     }
+}
+
+/// A storage outage inside the endpoint binding mutator must surface as
+/// 500, never as a 400 client error (#TASK-2147): the endpoint cache is
+/// warm and the existence gate passes, then the mutator's target read
+/// fails — the structured WriteFailed maps to INTERNAL_SERVER_ERROR.
+#[tokio::test]
+async fn bind_surfaces_mutator_store_outage_as_500_not_400() {
+    let store = Arc::new(ToggleFailingThreadStore::new());
+    let state = AppStateBuilder::new(test_config())
+        .with_thread_store(store.clone())
+        .build();
+    store
+        .inner
+        .set(
+            "thread::source",
+            serde_json::json!({
+                "thread_id": "thread::source",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "binding_key": "1000000001",
+                    "chat_id": "1000000001",
+                    "display_label": "Test User"
+                }]
+            }),
+        )
+        .await
+        .unwrap();
+    store
+        .inner
+        .set(
+            "thread::target",
+            serde_json::json!({ "thread_id": "thread::target" }),
+        )
+        .await
+        .unwrap();
+    let router = build_router(state.clone());
+
+    // Warm the endpoint snapshot cache while the store is healthy.
+    let request = authed_request()
+        .uri("/api/channel-endpoints")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Only record reads fail now: the existence gate (exists) passes and
+    // the cache is warm, so the failure happens inside the mutator.
+    store
+        .failing_gets
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/channel-bindings/bind")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "endpointKey": "telegram::main::1000000001",
+                "threadId": "thread::target",
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "a mutator store outage must not read as a client error"
+    );
 }
 
 /// A live outage must not hide behind a recent endpoint snapshot cache

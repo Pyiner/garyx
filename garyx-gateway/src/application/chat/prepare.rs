@@ -686,7 +686,7 @@ async fn persist_explicit_api_thread_binding(
         .await
         .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
             thread_id: thread_id.to_owned(),
-            error,
+            error: error.to_string(),
         })?;
     Ok(true)
 }

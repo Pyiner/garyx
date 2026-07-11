@@ -263,7 +263,9 @@ impl MessageRouter {
                             None,
                         )
                         .await;
-                    self.bind_endpoint_runtime(&target_thread, binding).await?;
+                    self.bind_endpoint_runtime(&target_thread, binding)
+                        .await
+                        .map_err(|error| error.to_string())?;
                     self.switch_to_thread(&binding_context_key, &target_thread);
                     NativeThreadResult {
                         reply_text: format!("Switched to thread: {title}"),
@@ -312,7 +314,8 @@ impl MessageRouter {
                     )
                     .await;
                 self.bind_endpoint_runtime(&new_thread_key, binding.clone())
-                    .await?;
+                    .await
+                    .map_err(|error| error.to_string())?;
 
                 self.switch_to_thread(&binding_context_key, &new_thread_key);
                 self.recent_thread_browser
