@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildThreadLogLines,
+  clampSideToolsPanelWidth,
   defaultSideToolsPanelWidth,
 } from './diagnostics-helpers.ts';
 
@@ -18,11 +19,13 @@ test('still parses legacy RFC3339 thread-log stamps without a timezone suffix', 
   assert.equal(line.text, 'WARN [run] legacy');
 });
 
-test('defaults side tools to a bounded rail instead of consuming most of the window', () => {
-  assert.equal(defaultSideToolsPanelWidth(1800), 720);
+test('defaults side tools to the single measured Codex-style right rail', () => {
+  assert.equal(defaultSideToolsPanelWidth(1800), 320);
+  assert.equal(defaultSideToolsPanelWidth(1235), 320);
+  assert.equal(defaultSideToolsPanelWidth(900), 320);
 });
 
-test('clamps side tools width to keep the main message column usable', () => {
-  assert.equal(defaultSideToolsPanelWidth(1235), 520);
-  assert.equal(defaultSideToolsPanelWidth(900), 520);
+test('clamps a customized side-tools rail to the measured canvas', () => {
+  assert.equal(clampSideToolsPanelWidth(520, 736), 320);
+  assert.equal(clampSideToolsPanelWidth(685, 1235), 685);
 });

@@ -70,15 +70,17 @@
   least 1088px wide, leaving the full reading column intact. Below that width,
   expose the tree through the 28px conversation-header control and show it as
   a dismissible overlay with Escape, outside-click, and focus-return behavior.
-- Right-side tools and logs choose docked versus overlay presentation from the
-  measured conversation canvas, the actual panel width, a 10px resizer, and a
-  540px minimum primary thread. Do not use a viewport-only media query: open
-  rails and user-resized sidebars change the available canvas. A constrained
-  panel floats below the toolbar with 12px edge insets; it never stacks under
-  the transcript or compresses the composer below the minimum primary width.
-- Floating task trees and right panels use the available height between their
-  top and bottom insets. Do not cap them to a percentage of viewport height on
-  tall windows or turn the app shell into document-height vertical stacking.
+- Side tools have one presentation: a right-docked rail, approximately 320px
+  by default. The conversation-header control toggles that rail directly; do
+  not add a second inset/overlay form. The rail may still be resized and must
+  keep its contents responsive within the available width.
+- Thread logs choose docked versus overlay presentation from the measured
+  thread canvas, the actual panel width, a 10px resizer, and a 540px minimum
+  primary thread. Do not use a viewport-only media query: open rails and
+  user-resized sidebars change the available canvas.
+- Floating task trees and log panels use the available height between their top
+  and bottom insets. Do not cap them to a percentage of viewport height on tall
+  windows or turn the app shell into document-height vertical stacking.
 - Validate responsive changes in the installed app around the actual seams:
   640, 720/721, 980/981, 1332/1333, and a wide desktop width. Restore the
   user's original window size after CDP measurement.

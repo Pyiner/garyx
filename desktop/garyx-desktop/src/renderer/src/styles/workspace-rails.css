@@ -1219,18 +1219,11 @@
 .conversation.with-side-tools {
   --side-tools-resizer-width: 10px;
   position: relative;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.conversation.with-side-tools.side-tools-docked {
   grid-template-columns:
     minmax(0, 1fr)
     var(--side-tools-resizer-width)
-    minmax(520px, var(--side-tools-panel-width, 520px));
-}
-
-.conversation.with-side-tools.side-tools-overlay {
-  grid-template-columns: minmax(0, 1fr);
+    minmax(320px, var(--side-tools-panel-width, 320px));
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .conversation.with-side-tools .conversation-header {
@@ -1243,33 +1236,14 @@
   grid-row: 2;
 }
 
-.conversation.with-side-tools.side-tools-docked .side-tools-resizer {
+.conversation.with-side-tools .side-tools-resizer {
   grid-column: 2;
   grid-row: 1 / span 2;
 }
 
-.conversation.with-side-tools.side-tools-docked .thread-side-tools-panel {
+.conversation.with-side-tools .thread-side-tools-panel {
   grid-column: 3;
   grid-row: 1 / span 2;
-}
-
-.conversation.with-side-tools.side-tools-overlay .side-tools-resizer {
-  display: none;
-}
-
-.conversation.with-side-tools.side-tools-overlay .thread-side-tools-panel {
-  position: absolute;
-  top: calc(var(--inset-toolbar) + 12px);
-  right: 12px;
-  bottom: 12px;
-  z-index: 45;
-  width: min(var(--side-tools-panel-width, 520px), calc(100% - 24px));
-  height: auto;
-  max-height: none;
-  border: 0.5px solid var(--color-token-border);
-  border-radius: 16px;
-  background: var(--color-token-bg-primary);
-  box-shadow: var(--shadow-lg);
 }
 
 .conversation.side-tools-resizing {

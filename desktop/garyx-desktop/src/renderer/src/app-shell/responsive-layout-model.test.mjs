@@ -80,25 +80,25 @@ test("task tree docks only after the full 736px reading column still fits", () =
   assert.equal(isDockedTaskTree(TASK_TREE_DOCK_MIN_WIDTH), true);
 });
 
-test("right panels overlay before they can crush the primary thread", () => {
+test("thread logs overlay before they can crush the primary thread", () => {
   assert.equal(
     isDockedSidePanel({
-      canvasWidth: 1069,
-      panelWidth: 520,
+      canvasWidth: 829,
+      panelWidth: 280,
     }),
     false,
   );
   assert.equal(
     isDockedSidePanel({
-      canvasWidth: 1070,
-      panelWidth: 520,
+      canvasWidth: 830,
+      panelWidth: 280,
     }),
     true,
   );
   assert.equal(
     isDockedSidePanel({
       canvasWidth: 736,
-      panelWidth: 520,
+      panelWidth: 280,
     }),
     false,
   );

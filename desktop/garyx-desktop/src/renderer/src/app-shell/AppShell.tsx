@@ -1180,7 +1180,6 @@ export function AppShell() {
     sidebarCollapsed,
     sidebarResizing,
     sidebarWidth,
-    sideToolsDocked,
     sideToolsPanelWidth,
     sideToolsPanelWidthCustomizedRef,
     sideToolsPanelWidthRef,
@@ -3821,9 +3820,6 @@ export function AppShell() {
     isSkillsView ? "skills-view" : null,
     isTasksView ? "tasks-view" : null,
     showConversationSideTools ? "with-side-tools" : null,
-    showConversationSideTools
-      ? sideToolsDocked ? "side-tools-docked" : "side-tools-overlay"
-      : null,
     sideToolsResizing ? "side-tools-resizing" : null,
   ]
     .filter(Boolean)
