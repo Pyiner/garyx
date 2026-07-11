@@ -1716,10 +1716,11 @@ export function AppShell() {
       : null;
   const recentThreadFeeds = useRecentThreadFeeds({
     enabled: shouldShowConversationRail && recentThreadsRailOpen,
-    gatewayScope:
-      desktopState?.entitiesGatewayUrl ||
-      desktopState?.settings.gatewayUrl ||
-      "",
+    // Main owns Gateway URL normalization and stamps every entity slice with
+    // that canonical scope. Do not grow a second renderer normalizer or fall
+    // back to the raw settings string (trailing-slash mismatch would make an
+    // otherwise valid page look cross-scope).
+    gatewayScope: desktopState?.entitiesGatewayUrl || "",
     sharedSummaries:
       desktopState?.threads || EMPTY_DESKTOP_THREAD_SUMMARIES,
   });

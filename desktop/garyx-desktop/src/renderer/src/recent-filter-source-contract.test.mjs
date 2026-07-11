@@ -38,6 +38,11 @@ test("AppShell owns the feed hook outside the conditional rail", () => {
   assert.ok(hookOwner >= 0);
   assert.ok(conditionalRail > hookOwner);
   assert.match(hook, /resetRecentThreadFeedsScope/);
+  assert.match(appShell, /gatewayScope: desktopState\?\.entitiesGatewayUrl \|\| ""/);
+  assert.doesNotMatch(
+    appShell,
+    /gatewayScope:[\s\S]{0,160}desktopState\?\.settings\.gatewayUrl/,
+  );
   assert.doesNotMatch(appShell, /desktopState\?\.threads\s*\.filter/);
   assert.match(
     appShell,
