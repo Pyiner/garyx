@@ -2268,11 +2268,9 @@ mod e2e_tests {
         let calls = provider.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].attachments.len(), 1);
-        assert!(
-            calls[0].attachments[0]
-                .path
-                .contains("garyx-feishu/inbound/")
-        );
+        assert!(calls[0].attachments[0]
+            .path
+            .contains("garyx-feishu/inbound/"));
         assert!(calls[0].attachments[0].name.ends_with("brief.pdf"));
     }
 
@@ -3640,8 +3638,8 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_feishu_reply_routing_after_endpoint_rebind_keeps_old_thread_without_switching_current()
-     {
+    async fn test_e2e_feishu_reply_routing_after_endpoint_rebind_keeps_old_thread_without_switching_current(
+    ) {
         let (_server, client) = setup_feishu_mock().await;
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
@@ -4459,8 +4457,11 @@ mod e2e_tests {
         let seeded_app1_thread =
             seed_bound_dm_thread(&store, &router, "app1", "ou_user123", "custom").await;
         {
+            // Mirror the production detach route: the write-path purge
+            // clears this endpoint's router context incrementally
+            // (startup rebuild is retired, #TASK-2099).
             let mut router_guard = router.lock().await;
-            router_guard.rebuild_thread_indexes().await;
+            router_guard.purge_endpoint_binding("feishu::app1::ou_user123");
         }
 
         let event_app2 = FeishuEventBuilder::dm("ou_user123", "hello from app2")

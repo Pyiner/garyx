@@ -618,12 +618,10 @@ async fn test_route_and_dispatch_weixin_newthread_binds_endpoint() {
         .route_and_dispatch(request, &dispatcher, None)
         .await
         .unwrap();
-    assert!(
-        result
-            .local_reply
-            .as_deref()
-            .is_some_and(|text| text.starts_with("Created and switched to new thread:"))
-    );
+    assert!(result
+        .local_reply
+        .as_deref()
+        .is_some_and(|text| text.starts_with("Created and switched to new thread:")));
     assert_eq!(
         router
             .resolve_endpoint_thread_id("weixin", "wx-main", "u@im.wechat")
@@ -1879,7 +1877,6 @@ async fn test_route_and_dispatch_auto_recovery() {
         .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
-    router.rebuild_thread_indexes().await;
     let dispatcher = MockDispatcher::new();
 
     let request = InboundRequest {
@@ -1927,7 +1924,6 @@ async fn test_route_and_dispatch_auto_recovery_ignores_missing_target() {
     .await;
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
-    router.rebuild_thread_indexes().await;
     let dispatcher = MockDispatcher::new();
     let request = InboundRequest {
         channel: "telegram".to_owned(),
@@ -2021,8 +2017,8 @@ async fn test_route_and_dispatch_uses_projected_owner_without_rebuilt_endpoint_m
 }
 
 #[tokio::test]
-async fn test_route_and_dispatch_reply_routing_falls_back_to_rebound_thread_when_old_thread_is_missing()
- {
+async fn test_route_and_dispatch_reply_routing_falls_back_to_rebound_thread_when_old_thread_is_missing(
+) {
     let store = Arc::new(InMemoryThreadStore::new());
     let store_dyn: Arc<dyn crate::ThreadStore> = store.clone();
     seed_bound_dm_thread(&store, "thread::old", "bot1", "user42", json!({})).await;
@@ -2068,7 +2064,6 @@ async fn test_route_and_dispatch_reply_routing_falls_back_to_rebound_thread_when
         "reply-1",
     );
     assert!(store.delete("thread::old").await.unwrap());
-    router.rebuild_thread_indexes().await;
 
     let request = InboundRequest {
         channel: "telegram".to_owned(),
@@ -2164,7 +2159,6 @@ async fn test_route_and_dispatch_reply_routing_falls_back_after_real_initial_dis
         .expect("bind should succeed");
 
     assert!(store.delete(&initial_result.thread_id).await.unwrap());
-    router.rebuild_thread_indexes().await;
 
     let request = InboundRequest {
         channel: "telegram".to_owned(),

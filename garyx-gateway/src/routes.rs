@@ -1119,10 +1119,10 @@ async fn ensure_existing_thread_id(
 
 /// Incrementally clear router index entries for one deleted/archived thread.
 ///
-/// Request paths must not run the full `rebuild_thread_indexes` scan: it
-/// stats every known thread on disk (O(N) IO, multi-second at a few thousand
-/// threads) and made thread create/delete/archive time out client-side. The
-/// full rebuild runs once from startup reconciliation instead.
+/// The router's endpoint map is a lazy per-endpoint cache over the SQL
+/// endpoint projection; deletes only need that thread's own references
+/// cleared. There is no full rebuild anywhere — startup reconciliation is
+/// retired (#TASK-2099).
 async fn purge_thread_from_indexes(state: &Arc<AppState>, thread_id: &str) {
     let mut router = state.threads.router.lock().await;
     router.purge_thread_from_indexes(thread_id);

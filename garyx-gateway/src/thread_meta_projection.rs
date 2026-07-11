@@ -51,6 +51,8 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
     // record per row.
     let (selected_model, selected_model_reasoning_effort, selected_model_service_tier) =
         selected_model_cells_from_thread_value(data);
+    let (legacy_thread_binding_key, legacy_channel, legacy_account_id, legacy_has_account) =
+        garyx_router::legacy_binding_fields_from_value(data);
     let thread_meta = ThreadMetaDraft {
         thread_id: thread_id.to_owned(),
         workspace_dir: workspace_dir.clone(),
@@ -77,6 +79,10 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
             .map(|(context_json, _)| context_json.clone()),
         last_delivery_updated_at: last_delivery.and_then(|(_, updated_at)| updated_at),
         default_list_hidden: is_default_thread_list_hidden(data),
+        legacy_thread_binding_key,
+        legacy_channel,
+        legacy_account_id,
+        legacy_has_account,
     };
     let channel_endpoints = channel_endpoints_from_thread_data(thread_id, data);
     let message_routes = message_routes_from_thread_data(thread_id, data);

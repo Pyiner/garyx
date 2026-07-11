@@ -5,10 +5,8 @@ use garyx_channels::{
 };
 use garyx_models::config::GaryxConfig;
 use garyx_models::thread_logs::ThreadLogSink;
-use garyx_router::ThreadStoreExt;
 use garyx_router::{
     KnownChannelEndpoint, MessageLedgerStore, MessageRouter, ThreadHistoryRepository, ThreadStore,
-    is_thread_key,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -167,19 +165,10 @@ impl AppState {
         self.integration.channel_plugin_manager.clone()
     }
 
-    /// Count thread records by listing storage keys only. This deliberately
-    /// never reads record bodies: thread files carry their full legacy
-    /// `messages` history (multi-MB for busy threads), and the previous
-    /// "list snapshot" here materialized every record just to report a
-    /// count — the single biggest allocation spike on the startup path.
-    pub async fn thread_record_count(&self) -> usize {
-        self.threads
-            .thread_store
-            .list_keys_logged(None)
-            .await
-            .iter()
-            .filter(|key| is_thread_key(key))
-            .count()
+    /// Count thread records with a SQL COUNT over the `thread::` prefix —
+    /// no key listing and no record bodies (#TASK-2099).
+    pub async fn thread_record_count(&self) -> Result<usize, garyx_router::ThreadStoreError> {
+        self.threads.thread_store.count_keys(Some("thread::")).await
     }
 
     pub async fn cached_channel_endpoints(&self) -> Vec<KnownChannelEndpoint> {
@@ -229,16 +218,11 @@ impl AppState {
         let state = Arc::clone(self);
         tokio::spawn(async move {
             let started = Instant::now();
-            // The router's in-memory endpoint routing map warms up from the
-            // channel-endpoint projection (one SQL read — no record body
-            // scan); the former projection backfill/prune/reconcile chain
-            // is retired (#TASK-1864 closing batch) — projections are
-            // derived inside the same transaction as every record write,
-            // so a repair pass has nothing left to repair.
-            let thread_index_stats = {
-                let mut router = state.threads.router.lock().await;
-                router.rebuild_thread_indexes().await
-            };
+            // No startup index rebuild/reconciliation: the router's
+            // endpoint routing map is a lazy per-endpoint cache over the
+            // SQL endpoint projection, and projections derive inside the
+            // same transaction as every record write, so a repair pass has
+            // nothing left to repair (#TASK-2099).
             // Crash recovery: settle orphaned running rows left by the
             // previous process in one SQL pass (the bridge run index is
             // empty at boot, so every projected active run is stale).
@@ -251,13 +235,15 @@ impl AppState {
                         warn!(error = %error, "failed to clear stale active runs at startup");
                         0
                     });
-            let threads = state.thread_record_count().await;
+            let threads = state.thread_record_count().await.unwrap_or_else(|error| {
+                warn!(error = %error, "failed to count thread records at startup");
+                0
+            });
             let endpoints = state.cached_channel_endpoints().await.len();
             debug!(
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 thread_count = threads,
                 endpoint_count = endpoints,
-                thread_index_endpoint_bindings = thread_index_stats.endpoint_bindings,
                 cleared_orphan_runs,
                 "gateway sync snapshots warmed"
             );

@@ -122,38 +122,6 @@ impl MessageRouter {
         Some(existing)
     }
 
-    pub async fn rebuild_thread_indexes(&mut self) -> ThreadIndexStats {
-        let stale_threads = self
-            .thread_nav
-            .binding_thread_map
-            .values()
-            .cloned()
-            .collect::<std::collections::HashSet<_>>();
-        for thread_id in stale_threads {
-            if crate::threads::is_thread_key(&thread_id)
-                && !self.threads.exists_logged(&thread_id).await
-            {
-                self.clear_thread_references(&thread_id);
-            }
-        }
-
-        self.thread_nav.endpoint_thread_map.clear();
-
-        let mut stats = ThreadIndexStats::default();
-        for endpoint in list_known_channel_endpoints(&self.threads).await {
-            if let Some(thread_id) = endpoint.thread_id {
-                self.thread_nav
-                    .endpoint_thread_map
-                    .insert(endpoint.endpoint_key.clone(), thread_id);
-                stats.endpoint_bindings += 1;
-            } else {
-                self.clear_binding_thread_context(&endpoint.endpoint_key);
-            }
-        }
-
-        stats
-    }
-
     pub async fn resolve_canonical_thread_id(&mut self, thread_id: &str) -> Option<String> {
         let trimmed = thread_id.trim();
         if trimmed.is_empty() {

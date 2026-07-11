@@ -118,17 +118,107 @@ pub struct ThreadEnsureOptions {
     pub is_group: Option<bool>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ThreadIndexStats {
-    pub endpoint_bindings: usize,
-}
-
 pub fn new_thread_key() -> String {
     format!("{THREAD_KEY_PREFIX}{}", Uuid::new_v4())
 }
 
 pub fn is_thread_key(key: &str) -> bool {
     key.trim().starts_with(THREAD_KEY_PREFIX)
+}
+
+/// True when a thread record matches a channel binding, either through
+/// `channel_bindings` or the retained legacy top-level fields (binding key
+/// from `thread_binding_key`/`from_id`, channel absent-or-equal, account
+/// from `account_id`/`origin_account_id`, or the `{account_id}::` thread-id
+/// prefix for records without any account field). Shared by the scan
+/// endpoint projection; the SQL projection mirrors these semantics over
+/// the `thread_meta` legacy binding columns.
+pub(crate) fn thread_matches_binding(
+    thread_id: &str,
+    thread_data: &Value,
+    channel: &str,
+    account_id: &str,
+    thread_binding_key: &str,
+) -> bool {
+    if thread_id.starts_with("meta::") {
+        return false;
+    }
+
+    if bindings_from_value(thread_data).into_iter().any(|binding| {
+        binding.channel == channel
+            && binding.account_id == account_id
+            && binding.binding_key == thread_binding_key
+    }) {
+        return true;
+    }
+
+    let Some(obj) = thread_data.as_object() else {
+        return false;
+    };
+    let legacy_binding_key = obj
+        .get("thread_binding_key")
+        .or_else(|| obj.get("from_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if legacy_binding_key != Some(thread_binding_key) {
+        return false;
+    }
+
+    let legacy_channel_matches = obj
+        .get("channel")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_none_or(|value| value == channel);
+    let has_legacy_account =
+        obj.get("account_id").is_some() || obj.get("origin_account_id").is_some();
+    let legacy_account_matches = obj
+        .get("account_id")
+        .or_else(|| obj.get("origin_account_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(|value| value == account_id)
+        .unwrap_or(false);
+    let legacy_key_matches = thread_id.starts_with(&format!("{account_id}::"));
+
+    legacy_channel_matches
+        && if has_legacy_account {
+            legacy_account_matches
+        } else {
+            legacy_key_matches
+        }
+}
+
+/// The legacy top-level binding fields a record carries, for the
+/// `thread_meta` projection columns: (binding_key, channel, account_id,
+/// has_account_field).
+pub fn legacy_binding_fields_from_value(
+    value: &Value,
+) -> (Option<String>, Option<String>, Option<String>, bool) {
+    let Some(obj) = value.as_object() else {
+        return (None, None, None, false);
+    };
+    let binding_key = obj
+        .get("thread_binding_key")
+        .or_else(|| obj.get("from_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let channel = obj
+        .get("channel")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let has_account = obj.get("account_id").is_some() || obj.get("origin_account_id").is_some();
+    let account_id = obj
+        .get("account_id")
+        .or_else(|| obj.get("origin_account_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(ToOwned::to_owned);
+    (binding_key, channel, account_id, has_account)
 }
 
 pub fn endpoint_key(channel: &str, account_id: &str, binding_key: &str) -> String {

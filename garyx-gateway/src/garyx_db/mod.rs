@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use chrono::{SecondsFormat, Utc};
-use garyx_router::{KnownChannelEndpoint, is_thread_key};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use garyx_router::{is_thread_key, BindingThreadRow, KnownChannelEndpoint};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
@@ -13,8 +13,8 @@ use uuid::Uuid;
 mod task_forest;
 
 pub use task_forest::{
-    CURRENT_TASK_PROJECTION_VERSION, TaskForestNode, TaskForestPage, TaskForestScope,
-    TaskProjectionDraft,
+    TaskForestNode, TaskForestPage, TaskForestScope, TaskProjectionDraft,
+    CURRENT_TASK_PROJECTION_VERSION,
 };
 
 const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 4;
@@ -225,6 +225,14 @@ pub struct ThreadMetaDraft {
     pub last_delivery_context_json: Option<String>,
     pub last_delivery_updated_at: Option<String>,
     pub default_list_hidden: bool,
+    /// Legacy top-level binding fields from the record body
+    /// (`thread_binding_key`/`from_id`, `channel`,
+    /// `account_id`/`origin_account_id`): binding navigation matches these
+    /// in addition to `channel_bindings` (#TASK-2099).
+    pub legacy_thread_binding_key: Option<String>,
+    pub legacy_channel: Option<String>,
+    pub legacy_account_id: Option<String>,
+    pub legacy_has_account: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1416,6 +1424,97 @@ impl GaryxDbService {
             .optional()?)
     }
 
+    /// Threads matching a channel binding, answered from the projections:
+    /// `channel_bindings` matches come from `thread_channel_endpoints`;
+    /// legacy top-level record fields come from the `thread_meta` legacy
+    /// binding columns with the retained matching semantics — channel
+    /// absent-or-equal, and either a matching account field or (for
+    /// records without any account field) a `{account_id}::` thread-id
+    /// prefix (#TASK-2099).
+    pub fn binding_thread_rows(
+        &self,
+        channel: &str,
+        account_id: &str,
+        thread_binding_key: &str,
+    ) -> GaryxDbResult<Vec<BindingThreadRow>> {
+        let conn = self.read_conn()?;
+        let prefix_pattern = format!("{}::%", escape_like_pattern(account_id));
+        let mut stmt = conn.prepare(
+            "SELECT m.thread_id, m.thread_label, m.updated_at, m.created_at
+             FROM thread_meta m
+             WHERE (
+                    m.legacy_thread_binding_key = ?3
+                    AND (m.legacy_channel IS NULL OR m.legacy_channel = ?1)
+                    AND (
+                        (m.legacy_has_account = 1 AND m.legacy_account_id = ?2)
+                        OR (m.legacy_has_account = 0 AND m.thread_id LIKE ?4 ESCAPE '\\')
+                    )
+                )
+                OR m.thread_id IN (
+                    SELECT e.thread_id
+                    FROM thread_channel_endpoints e
+                    WHERE e.channel = ?1 AND e.account_id = ?2 AND e.binding_key = ?3
+                )
+             ORDER BY m.thread_id ASC",
+        )?;
+        let rows = stmt.query_map(
+            params![channel, account_id, thread_binding_key, prefix_pattern],
+            |row| {
+                Ok(BindingThreadRow {
+                    thread_id: row.get(0)?,
+                    thread_label: row.get(1)?,
+                    updated_at: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            },
+        )?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    /// Point lookup: every holder row for one endpoint key.
+    pub fn thread_channel_endpoint_rows(
+        &self,
+        endpoint_key: &str,
+    ) -> GaryxDbResult<Vec<KnownChannelEndpoint>> {
+        let conn = self.read_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT endpoint_key, channel, account_id, binding_key, chat_id,
+                    delivery_target_type, delivery_target_id, display_label,
+                    thread_id, thread_label, workspace_dir, thread_updated_at,
+                    last_inbound_at, last_delivery_at
+             FROM thread_channel_endpoints
+             WHERE endpoint_key = ?1
+             ORDER BY thread_id ASC",
+        )?;
+        let rows = stmt.query_map(params![endpoint_key], |row| {
+            Ok(KnownChannelEndpoint {
+                endpoint_key: row.get(0)?,
+                channel: row.get(1)?,
+                account_id: row.get(2)?,
+                binding_key: row.get(3)?,
+                chat_id: row.get(4)?,
+                delivery_target_type: row.get(5)?,
+                delivery_target_id: row.get(6)?,
+                display_label: row.get(7)?,
+                thread_id: row.get(8)?,
+                thread_label: row.get(9)?,
+                workspace_dir: row.get(10)?,
+                thread_updated_at: row.get(11)?,
+                last_inbound_at: row.get(12)?,
+                last_delivery_at: row.get(13)?,
+            })
+        })?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
     pub fn list_thread_message_routes(&self) -> GaryxDbResult<Vec<ThreadMessageRouteRecord>> {
         let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
@@ -2106,6 +2205,10 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             selected_model_reasoning_effort TEXT,
             selected_model_service_tier TEXT,
             sdk_session_id TEXT,
+            legacy_thread_binding_key TEXT,
+            legacy_channel TEXT,
+            legacy_account_id TEXT,
+            legacy_has_account INTEGER NOT NULL DEFAULT 0,
             projection_version INTEGER NOT NULL DEFAULT 4,
             projected_at TEXT NOT NULL
         ) STRICT;
@@ -2234,6 +2337,92 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     )?;
     purge_retired_workflow_state(conn)?;
     rederive_thread_channel_endpoint_rows_if_needed(conn)?;
+    rederive_thread_meta_binding_columns_if_needed(conn)?;
+    Ok(())
+}
+
+const THREAD_META_BINDING_COLUMNS_NAME: &str = "thread_meta_binding_columns";
+const THREAD_META_BINDING_COLUMNS_VERSION: i64 = 1;
+
+/// One-shot backfill of the `thread_meta` legacy binding columns
+/// (#TASK-2099): rows written before the columns existed re-derive them
+/// from the record bodies so binding navigation answers from SQL for
+/// legacy threads too. Marker-gated and committed atomically with the
+/// updates, mirroring the endpoint-holder re-derivation.
+fn rederive_thread_meta_binding_columns_if_needed(conn: &Connection) -> GaryxDbResult<()> {
+    let marker_present: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM projection_states
+             WHERE projection_name = ?1 AND projection_version = ?2",
+            params![
+                THREAD_META_BINDING_COLUMNS_NAME,
+                THREAD_META_BINDING_COLUMNS_VERSION
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if marker_present.is_some() {
+        return Ok(());
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    let mut rederived = 0usize;
+    {
+        let mut stmt = tx.prepare(
+            "SELECT r.key, r.body
+             FROM thread_records r
+             JOIN thread_meta m ON m.thread_id = r.key",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut update = tx.prepare(
+            "UPDATE thread_meta
+             SET legacy_thread_binding_key = ?2,
+                 legacy_channel = ?3,
+                 legacy_account_id = ?4,
+                 legacy_has_account = ?5
+             WHERE thread_id = ?1",
+        )?;
+        for row in rows {
+            let (key, body) = row?;
+            let Ok(data) = serde_json::from_str::<serde_json::Value>(&body) else {
+                tracing::warn!(
+                    key,
+                    "skipping unparseable record during binding-column re-derivation"
+                );
+                continue;
+            };
+            let (binding_key, channel, account_id, has_account) =
+                garyx_router::legacy_binding_fields_from_value(&data);
+            update.execute(params![
+                key,
+                binding_key,
+                channel,
+                account_id,
+                if has_account { 1 } else { 0 },
+            ])?;
+            rederived += 1;
+        }
+    }
+    tx.execute(
+        "INSERT INTO projection_states (
+            projection_name, projection_version, source_row_count, projected_at
+         )
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(projection_name) DO UPDATE SET
+            projection_version = excluded.projection_version,
+            source_row_count = excluded.source_row_count,
+            projected_at = excluded.projected_at",
+        params![
+            THREAD_META_BINDING_COLUMNS_NAME,
+            THREAD_META_BINDING_COLUMNS_VERSION,
+            i64::try_from(rederived).unwrap_or(i64::MAX),
+            now_string(),
+        ],
+    )?;
+    tx.commit()?;
+    tracing::info!(rederived, "backfilled thread_meta legacy binding columns");
     Ok(())
 }
 
@@ -2767,6 +2956,10 @@ fn upsert_thread_meta(
     let selected_model_service_tier =
         normalize_optional(meta.selected_model_service_tier.as_deref());
     let sdk_session_id = normalize_optional(meta.sdk_session_id.as_deref());
+    let legacy_thread_binding_key = normalize_optional(meta.legacy_thread_binding_key.as_deref());
+    let legacy_channel = normalize_optional(meta.legacy_channel.as_deref());
+    let legacy_account_id = normalize_optional(meta.legacy_account_id.as_deref());
+    let legacy_has_account = if meta.legacy_has_account { 1 } else { 0 };
 
     tx.execute(
         "INSERT INTO thread_meta (
@@ -2776,9 +2969,10 @@ fn upsert_thread_meta(
             last_delivery_context_json, last_delivery_updated_at, default_list_hidden,
             provider_key, selected_model, selected_model_reasoning_effort,
             selected_model_service_tier, sdk_session_id,
+            legacy_thread_binding_key, legacy_channel, legacy_account_id, legacy_has_account,
             projection_version, projected_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
          ON CONFLICT(thread_id) DO UPDATE SET
             workspace_dir = excluded.workspace_dir,
             thread_type = excluded.thread_type,
@@ -2802,6 +2996,10 @@ fn upsert_thread_meta(
             last_delivery_context_json = excluded.last_delivery_context_json,
             last_delivery_updated_at = excluded.last_delivery_updated_at,
             default_list_hidden = excluded.default_list_hidden,
+            legacy_thread_binding_key = excluded.legacy_thread_binding_key,
+            legacy_channel = excluded.legacy_channel,
+            legacy_account_id = excluded.legacy_account_id,
+            legacy_has_account = excluded.legacy_has_account,
             projection_version = excluded.projection_version,
             projected_at = excluded.projected_at",
         params![
@@ -2828,6 +3026,10 @@ fn upsert_thread_meta(
             selected_model_reasoning_effort,
             selected_model_service_tier,
             sdk_session_id,
+            legacy_thread_binding_key,
+            legacy_channel,
+            legacy_account_id,
+            legacy_has_account,
             CURRENT_THREAD_META_PROJECTION_VERSION,
             recorded_at,
         ],
@@ -3040,6 +3242,9 @@ fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()>
         "selected_model_reasoning_effort",
         "selected_model_service_tier",
         "sdk_session_id",
+        "legacy_thread_binding_key",
+        "legacy_channel",
+        "legacy_account_id",
     ] {
         if !columns.contains(name) {
             conn.execute(
@@ -3047,6 +3252,13 @@ fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()>
                 [],
             )?;
         }
+    }
+    if !columns.contains("legacy_has_account") {
+        conn.execute(
+            "ALTER TABLE thread_meta
+             ADD COLUMN legacy_has_account INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
     if !columns.contains("message_count") {
         conn.execute(
@@ -3843,16 +4055,12 @@ mod tests {
                 .expect("get"),
             Some(r#"{"thread_id":"thread::alpha"}"#.to_owned())
         );
-        assert!(
-            service
-                .thread_record_exists("thread::alpha")
-                .expect("exists")
-        );
-        assert!(
-            !service
-                .thread_record_exists("thread::missing")
-                .expect("exists missing")
-        );
+        assert!(service
+            .thread_record_exists("thread::alpha")
+            .expect("exists"));
+        assert!(!service
+            .thread_record_exists("thread::missing")
+            .expect("exists missing"));
         assert_eq!(
             service
                 .list_thread_record_keys(Some("thread::"))
@@ -3876,24 +4084,18 @@ mod tests {
                 None,
             )
             .expect("overwrite");
-        assert!(
-            service
-                .get_thread_record_body("thread::alpha")
-                .expect("get v2")
-                .expect("body")
-                .contains("v2")
-        );
+        assert!(service
+            .get_thread_record_body("thread::alpha")
+            .expect("get v2")
+            .expect("body")
+            .contains("v2"));
 
-        assert!(
-            service
-                .delete_thread_record_with_projections("thread::alpha")
-                .expect("delete")
-        );
-        assert!(
-            !service
-                .delete_thread_record_with_projections("thread::alpha")
-                .expect("delete again")
-        );
+        assert!(service
+            .delete_thread_record_with_projections("thread::alpha")
+            .expect("delete"));
+        assert!(!service
+            .delete_thread_record_with_projections("thread::alpha")
+            .expect("delete again"));
         assert_eq!(
             service
                 .get_thread_record_body("thread::alpha")
@@ -4273,12 +4475,10 @@ mod tests {
         drop(db);
 
         let reopened = GaryxDbService::open(&path).expect("cleanup is idempotent");
-        assert!(
-            reopened
-                .get_thread_record_body("thread::ordinary")
-                .expect("ordinary record after reopen")
-                .is_some()
-        );
+        assert!(reopened
+            .get_thread_record_body("thread::ordinary")
+            .expect("ordinary record after reopen")
+            .is_some());
     }
 
     #[tokio::test]
@@ -4498,6 +4698,71 @@ mod tests {
         );
     }
 
+    /// Rows written before the thread_meta legacy binding columns
+    /// existed carry NULLs there (#TASK-2099 root review finding 3).
+    /// Opening such a database must backfill the columns from the record
+    /// bodies exactly once, so legacy top-level-field threads stay
+    /// visible to SQL binding-thread listings.
+    #[test]
+    fn opening_db_backfills_thread_meta_legacy_binding_columns() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let body = serde_json::json!({
+            "thread_id": "thread::legacy",
+            "channel": "telegram",
+            "account_id": "main",
+            "from_id": "1000000001",
+            "updated_at": "2026-06-03T00:00:01.000Z",
+        });
+        {
+            let db = GaryxDbService::open(&path).expect("open fresh db");
+            let draft = crate::thread_meta_projection::
+                thread_meta_projection_from_thread_data_with_active_run(
+                    "thread::legacy",
+                    &body,
+                    None,
+                );
+            db.write_thread_record_with_projections(
+                "thread::legacy",
+                &body.to_string(),
+                None,
+                Some(ThreadRecordProjections {
+                    thread_meta: draft,
+                    task: None,
+                    recent: None,
+                }),
+            )
+            .expect("write legacy record");
+        }
+        {
+            // Simulate the pre-column database: NULL the derived values
+            // and drop the completion marker.
+            let conn = Connection::open(&path).expect("raw connection");
+            conn.execute_batch(
+                "UPDATE thread_meta SET
+                    legacy_thread_binding_key = NULL,
+                    legacy_channel = NULL,
+                    legacy_account_id = NULL,
+                    legacy_has_account = 0;
+                 DELETE FROM projection_states
+                 WHERE projection_name = 'thread_meta_binding_columns';",
+            )
+            .expect("simulate pre-column rows");
+        }
+
+        let db = GaryxDbService::open(&path).expect("reopen backfills");
+        let rows = db
+            .binding_thread_rows("telegram", "main", "1000000001")
+            .expect("binding rows");
+        assert_eq!(
+            rows.into_iter()
+                .map(|row| row.thread_id)
+                .collect::<Vec<_>>(),
+            vec!["thread::legacy".to_owned()],
+            "the one-shot backfill must restore legacy binding visibility"
+        );
+    }
+
     #[test]
     fn thread_pins_round_trip_in_recency_order() {
         use std::time::Duration;
@@ -4574,10 +4839,9 @@ mod tests {
         );
 
         assert!(db.delete_workspace("/workspace/repo-a").expect("delete"));
-        assert!(
-            !db.delete_workspace("/workspace/repo-a")
-                .expect("delete again")
-        );
+        assert!(!db
+            .delete_workspace("/workspace/repo-a")
+            .expect("delete again"));
         assert_eq!(db.count_workspace_rows().expect("count rows"), 2);
         assert_eq!(
             db.list_workspaces()
@@ -4592,20 +4856,18 @@ mod tests {
     #[test]
     fn workspace_seed_only_runs_before_any_workspace_row_exists() {
         let db = GaryxDbService::memory().expect("db opens");
-        assert!(
-            db.seed_workspaces_if_empty(vec![WorkspaceDraft {
+        assert!(db
+            .seed_workspaces_if_empty(vec![WorkspaceDraft {
                 name: None,
                 path: "/workspace/from-config".to_owned(),
             }])
-            .expect("seed initial")
-        );
-        assert!(
-            !db.seed_workspaces_if_empty(vec![WorkspaceDraft {
+            .expect("seed initial"));
+        assert!(!db
+            .seed_workspaces_if_empty(vec![WorkspaceDraft {
                 name: None,
                 path: "/workspace/ignored".to_owned(),
             }])
-            .expect("skip second seed")
-        );
+            .expect("skip second seed"));
         assert_eq!(
             db.list_workspaces()
                 .expect("list active")
@@ -4615,19 +4877,17 @@ mod tests {
             vec!["/workspace/from-config"],
         );
 
-        assert!(
-            db.delete_workspace("/workspace/from-config")
-                .expect("soft delete")
-        );
+        assert!(db
+            .delete_workspace("/workspace/from-config")
+            .expect("soft delete"));
         assert_eq!(db.count_workspace_rows().expect("count tombstone"), 1);
         assert!(db.list_workspaces().expect("list after delete").is_empty());
-        assert!(
-            !db.seed_workspaces_if_empty(vec![WorkspaceDraft {
+        assert!(!db
+            .seed_workspaces_if_empty(vec![WorkspaceDraft {
                 name: None,
                 path: "/workspace/from-config".to_owned(),
             }])
-            .expect("tombstone prevents reseed")
-        );
+            .expect("tombstone prevents reseed"));
         assert!(db.list_workspaces().expect("list remains empty").is_empty());
     }
 
@@ -4754,11 +5014,9 @@ mod tests {
         assert_eq!(thread_one[0].id, first_id);
         assert!(thread_one.iter().any(|record| record.id == first_id));
         assert!(thread_one.iter().any(|record| record.id == second_id));
-        assert!(
-            thread_one
-                .iter()
-                .all(|record| record.thread_id.as_deref() == Some("thread::one"))
-        );
+        assert!(thread_one
+            .iter()
+            .all(|record| record.thread_id.as_deref() == Some("thread::one")));
     }
 
     #[test]
@@ -4871,14 +5129,12 @@ mod tests {
         assert_eq!(offset[0].thread_id, "thread::newer");
         assert_eq!(db.count_recent_threads().expect("count recent threads"), 2);
 
-        assert!(
-            db.remove_recent_thread("thread::older")
-                .expect("remove older")
-        );
-        assert!(
-            !db.remove_recent_thread("thread::older")
-                .expect("remove older again")
-        );
+        assert!(db
+            .remove_recent_thread("thread::older")
+            .expect("remove older"));
+        assert!(!db
+            .remove_recent_thread("thread::older")
+            .expect("remove older again"));
         assert_eq!(
             db.list_recent_threads(10, 0)
                 .expect("list remaining recent threads")
@@ -5090,6 +5346,10 @@ mod tests {
                 last_delivery_context_json: Some(delivery_json.clone()),
                 last_delivery_updated_at: Some("2026-06-03T08:00:01.000Z".to_owned()),
                 default_list_hidden: false,
+                legacy_thread_binding_key: None,
+                legacy_channel: None,
+                legacy_account_id: None,
+                legacy_has_account: false,
             },
             channel_endpoints: vec![KnownChannelEndpoint {
                 endpoint_key: "telegram::main::42".to_owned(),
@@ -5144,25 +5404,21 @@ mod tests {
         assert_eq!(routes[0].message_id, "message-1");
         assert_eq!(routes[0].thread_binding_key.as_deref(), Some("42"));
 
-        assert!(
-            db.remove_thread_meta_projection("thread::project")
-                .expect("remove projection")
-        );
-        assert!(
-            db.list_thread_meta()
-                .expect("list meta after remove")
-                .is_empty()
-        );
-        assert!(
-            db.list_thread_channel_endpoints()
-                .expect("list endpoints after remove")
-                .is_empty()
-        );
-        assert!(
-            db.list_thread_message_routes()
-                .expect("list routes after remove")
-                .is_empty()
-        );
+        assert!(db
+            .remove_thread_meta_projection("thread::project")
+            .expect("remove projection"));
+        assert!(db
+            .list_thread_meta()
+            .expect("list meta after remove")
+            .is_empty());
+        assert!(db
+            .list_thread_channel_endpoints()
+            .expect("list endpoints after remove")
+            .is_empty());
+        assert!(db
+            .list_thread_message_routes()
+            .expect("list routes after remove")
+            .is_empty());
     }
 
     #[test]
@@ -5190,15 +5446,14 @@ mod tests {
             1
         );
 
-        assert!(
-            db.finish_automation_thread_run(
+        assert!(db
+            .finish_automation_thread_run(
                 "automation::daily",
                 "run-1",
                 "success",
                 "2026-05-28T00:00:05Z",
             )
-            .expect("finish")
-        );
+            .expect("finish"));
 
         let records = db
             .list_automation_thread_runs("automation::daily", Some("generated_thread"), 10, 0)

@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use garyx_router::{
-    ChannelEndpointProjection, DeliveryContextRow, KnownChannelEndpoint, OutboundRouteRow,
+    BindingThreadRow, ChannelEndpointProjection, DeliveryContextRow, KnownChannelEndpoint,
+    OutboundRouteRow,
 };
 
 use crate::garyx_db::GaryxDbService;
@@ -37,6 +38,31 @@ impl ChannelEndpointProjection for SqlChannelEndpointProjection {
     async fn endpoints(&self) -> Result<Vec<KnownChannelEndpoint>, String> {
         self.garyx_db
             .run_blocking(|db| db.list_thread_channel_endpoints())
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn endpoint(&self, endpoint_key: &str) -> Result<Vec<KnownChannelEndpoint>, String> {
+        let endpoint_key = endpoint_key.to_owned();
+        self.garyx_db
+            .run_blocking(move |db| db.thread_channel_endpoint_rows(&endpoint_key))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn binding_threads(
+        &self,
+        channel: &str,
+        account_id: &str,
+        thread_binding_key: &str,
+    ) -> Result<Vec<BindingThreadRow>, String> {
+        let channel = channel.to_owned();
+        let account_id = account_id.to_owned();
+        let thread_binding_key = thread_binding_key.to_owned();
+        self.garyx_db
+            .run_blocking(move |db| {
+                db.binding_thread_rows(&channel, &account_id, &thread_binding_key)
+            })
             .await
             .map_err(|error| error.to_string())
     }
@@ -81,7 +107,7 @@ impl ChannelEndpointProjection for SqlChannelEndpointProjection {
 mod tests {
     use std::sync::Arc;
 
-    use garyx_router::{ThreadStore, channel_endpoint_projection_for};
+    use garyx_router::{channel_endpoint_projection_for, ThreadStore};
     use serde_json::json;
 
     use crate::composition::app_bootstrap::AppStateBuilder;
@@ -158,13 +184,11 @@ mod tests {
 
         // Deleting the record removes the projection rows with it.
         store.delete("thread::bound").await.unwrap();
-        assert!(
-            projection
-                .endpoint_holders("telegram::main::42")
-                .await
-                .expect("holders after delete")
-                .is_empty()
-        );
+        assert!(projection
+            .endpoint_holders("telegram::main::42")
+            .await
+            .expect("holders after delete")
+            .is_empty());
     }
 
     /// Moving a binding between threads goes through the projection to find
@@ -204,6 +228,64 @@ mod tests {
         );
         let old_record = store.get("thread::old").await.unwrap().expect("old record");
         assert!(garyx_router::bindings_from_value(&old_record).is_empty());
+    }
+
+    /// Binding-thread listings answer from SQL for both match families:
+    /// modern `channel_bindings` rows and the legacy top-level record
+    /// fields (`from_id`/`channel`/`account_id`) via the thread_meta
+    /// legacy binding columns (#TASK-2099 root review finding 3).
+    #[tokio::test]
+    async fn binding_threads_matches_modern_bindings_and_legacy_record_fields() {
+        let state = state();
+        let store: Arc<dyn ThreadStore> = state.threads.thread_store.clone();
+        store
+            .set(
+                "thread::modern",
+                bound_thread_record("thread::modern", "42"),
+            )
+            .await
+            .unwrap();
+        store
+            .set(
+                "thread::legacy",
+                json!({
+                    "thread_id": "thread::legacy",
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "from_id": "42",
+                    "label": "Legacy",
+                    "updated_at": "2026-06-30T00:00:00.000Z",
+                }),
+            )
+            .await
+            .unwrap();
+        store
+            .set(
+                "thread::other-binding",
+                json!({
+                    "thread_id": "thread::other-binding",
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "from_id": "99",
+                }),
+            )
+            .await
+            .unwrap();
+
+        let projection = channel_endpoint_projection_for(&store);
+        let mut rows = projection
+            .binding_threads("telegram", "main", "42")
+            .await
+            .expect("binding threads")
+            .into_iter()
+            .map(|row| row.thread_id)
+            .collect::<Vec<_>>();
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec!["thread::legacy".to_owned(), "thread::modern".to_owned()],
+            "both the channel_bindings match and the legacy-field match must surface"
+        );
     }
 
     /// Injected non-SQL stores must resolve to the scan projection over

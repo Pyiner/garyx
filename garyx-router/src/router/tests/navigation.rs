@@ -110,7 +110,7 @@ async fn test_latest_assistant_message_text_for_thread_ignores_user_messages() {
 }
 
 #[tokio::test]
-async fn test_rebuild_thread_indexes_prefers_latest_updated_binding_for_duplicate_endpoint() {
+async fn test_lazy_endpoint_resolution_prefers_latest_updated_binding_for_duplicate_endpoint() {
     let store = Arc::new(InMemoryThreadStore::new());
     for (thread_id, label, updated_at) in [
         ("thread::older", "Older", "2026-03-01T10:00:00Z"),
@@ -136,9 +136,9 @@ async fn test_rebuild_thread_indexes_prefers_latest_updated_binding_for_duplicat
     }
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
-    let stats = router.rebuild_thread_indexes().await;
 
-    assert_eq!(stats.endpoint_bindings, 1);
+    // The lazy point lookup applies the preferred-holder tie-break when
+    // two records hold the same endpoint (no startup rebuild).
     assert_eq!(
         router
             .resolve_endpoint_thread_id("telegram", "main", "user42")
@@ -238,7 +238,7 @@ async fn test_rebuild_thread_indexes_clears_detached_endpoint_thread_context() {
 }
 
 #[tokio::test]
-async fn test_rebuild_thread_indexes_preserves_explicit_thread_overrides_for_bound_endpoint() {
+async fn test_lazy_endpoint_resolution_preserves_explicit_thread_overrides_for_bound_endpoint() {
     let store: Arc<dyn crate::ThreadStore> = Arc::new(InMemoryThreadStore::new());
     store
         .set(
@@ -270,7 +270,7 @@ async fn test_rebuild_thread_indexes_preserves_explicit_thread_overrides_for_bou
 }
 
 #[tokio::test]
-async fn test_rebuild_thread_indexes_clears_missing_explicit_thread_override_for_bound_endpoint() {
+async fn test_canonical_resolution_skips_missing_explicit_thread_override_for_bound_endpoint() {
     let store: Arc<dyn crate::ThreadStore> = Arc::new(InMemoryThreadStore::new());
     store
         .set(
@@ -301,7 +301,7 @@ async fn test_rebuild_thread_indexes_clears_missing_explicit_thread_override_for
     );
     assert_eq!(
         router
-            .resolve_endpoint_thread_id("telegram", "main", "alice")
+            .current_canonical_thread_for_binding("telegram", "main", "alice")
             .await
             .as_deref(),
         Some("thread::bound")
