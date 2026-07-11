@@ -223,7 +223,7 @@ impl AgentDispatcher for DeferredFanoutAgentDispatcher<'_> {
         &self,
         request: AgentRunRequest,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
-    ) -> Result<(), String> {
+    ) -> Result<garyx_models::provider::AgentDispatchOutcome, String> {
         self.fanout
             .attach_thread_from_store(self.thread_store.clone(), &request.thread_id)
             .await;
@@ -310,7 +310,7 @@ mod tests {
             &self,
             request: AgentRunRequest,
             response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
-        ) -> Result<(), String> {
+        ) -> Result<garyx_models::provider::AgentDispatchOutcome, String> {
             self.store
                 .set(
                     &request.thread_id,
@@ -349,7 +349,7 @@ mod tests {
                     text: "after attach".to_owned(),
                 });
             }
-            Ok(())
+            Ok(garyx_models::provider::AgentDispatchOutcome::Started)
         }
     }
 

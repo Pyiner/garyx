@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
 use garyx_models::provider::{
-    AgentRunRequest, FORK_FROM_PROVIDER_TYPE_METADATA_KEY, FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
+    AgentDispatchOutcome, AgentRunRequest, FORK_FROM_PROVIDER_TYPE_METADATA_KEY,
+    FORK_FROM_SDK_SESSION_ID_METADATA_KEY,
     FilePayload, ImagePayload, MODEL_METADATA_KEY, MODEL_OVERRIDE_METADATA_KEY,
     MODEL_REASONING_EFFORT_METADATA_KEY, MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY,
     MODEL_SERVICE_TIER_METADATA_KEY, MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY, PromptAttachment,
@@ -92,6 +93,38 @@ fn metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<Strin
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Dispatch attribution keys worth carrying onto a pending input when the
+/// message is queued into an already-active run, so the acknowledged user
+/// record still identifies where the message came from. A deliberate
+/// allowlist: run metadata also carries runtime-only provider wiring
+/// (tokens, managed MCP definitions) that must not ride along.
+const DISPATCH_ATTRIBUTION_METADATA_KEYS: &[&str] = &[
+    "source",
+    "automation_id",
+    "cron_job_id",
+    "cron_action",
+    "internal_dispatch",
+];
+
+fn dispatch_attribution_metadata(
+    metadata: &HashMap<String, Value>,
+    requested_run_id: &str,
+) -> HashMap<String, Value> {
+    let mut attribution = HashMap::new();
+    for key in DISPATCH_ATTRIBUTION_METADATA_KEYS {
+        if let Some(value) = metadata.get(*key) {
+            attribution.insert((*key).to_owned(), value.clone());
+        }
+    }
+    if !requested_run_id.trim().is_empty() {
+        attribution.insert(
+            "origin_run_id".to_owned(),
+            Value::String(requested_run_id.to_owned()),
+        );
+    }
+    attribution
 }
 
 fn thread_value_string(thread_data: &Value, key: &str) -> Option<String> {
@@ -420,7 +453,7 @@ impl MultiProviderBridge {
         &self,
         request: AgentRunRequest,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
-    ) -> Result<(), BridgeError> {
+    ) -> Result<AgentDispatchOutcome, BridgeError> {
         let AgentRunRequest {
             thread_id,
             message,
@@ -478,21 +511,22 @@ impl MultiProviderBridge {
         } else {
             Some(prompt_attachments.clone())
         };
-        if self
-            .add_streaming_input(
+        if let Some(queued) = self
+            .add_streaming_input_with_metadata(
                 &thread_id,
                 &message,
                 images.clone(),
                 None,
                 queued_attachments,
                 metadata_string(&metadata, "client_intent_id"),
+                dispatch_attribution_metadata(&metadata, &run_id),
             )
             .await
-            .is_some()
         {
             tracing::info!(
                 thread_id = %thread_id,
                 run_id = %run_id,
+                effective_run_id = %queued.run_id,
                 "queued message to existing streaming session"
             );
             record_thread_log(
@@ -501,10 +535,14 @@ impl MultiProviderBridge {
                 ThreadLogEvent::info("", "dispatch", "queued message to active streaming session")
                     .with_run_id(&run_id)
                     .with_field("provider_key", json!(provider_key.clone()))
+                    .with_field("effective_run_id", json!(queued.run_id.clone()))
                     .with_field("message", json!(summarize_text(&message, 160))),
             )
             .await;
-            return Ok(());
+            return Ok(AgentDispatchOutcome::QueuedToActiveRun {
+                effective_run_id: queued.run_id,
+                pending_input_id: queued.pending_input_id,
+            });
         }
         if has_active_streaming_run_for_thread(&self.inner, &thread_id).await {
             let mut interrupted = provider.interrupt_streaming_session(&thread_id).await;
@@ -1199,7 +1237,7 @@ impl MultiProviderBridge {
             .lock()
             .await
             .insert(run_id.to_owned(), task);
-        Ok(())
+        Ok(AgentDispatchOutcome::Started)
     }
 
     /// Run a thread-bound turn inline through the bridge's normal
@@ -1705,6 +1743,33 @@ impl MultiProviderBridge {
         attachments: Option<Vec<PromptAttachment>>,
         client_intent_id: Option<String>,
     ) -> Option<QueuedStreamingInput> {
+        self.add_streaming_input_with_metadata(
+            thread_id,
+            message,
+            images,
+            files,
+            attachments,
+            client_intent_id,
+            HashMap::new(),
+        )
+        .await
+    }
+
+    /// [`Self::add_streaming_input`] carrying attribution metadata from the
+    /// originating dispatch (e.g. `source`/`automation_id` when a scheduled
+    /// turn is queued into an already-active run); merged into the
+    /// acknowledged user record.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_streaming_input_with_metadata(
+        &self,
+        thread_id: &str,
+        message: &str,
+        images: Option<Vec<ImagePayload>>,
+        files: Option<Vec<FilePayload>>,
+        attachments: Option<Vec<PromptAttachment>>,
+        client_intent_id: Option<String>,
+        origin_metadata: HashMap<String, Value>,
+    ) -> Option<QueuedStreamingInput> {
         let provider_key = self
             .inner
             .thread_affinity
@@ -1754,6 +1819,7 @@ impl MultiProviderBridge {
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(ToOwned::to_owned),
+                metadata: origin_metadata,
                 status: PendingUserInputStatus::Queued,
             };
             if let Some(tx) = persistence_tx.as_ref() {

@@ -1464,14 +1464,14 @@ export async function createDesktopAutomation(
     targetThread?.workspacePath || null,
     targetThreadId,
   );
-  const explicitWorkspacePath = normalizeWorkspacePathInput(input.workspacePath);
-  const remoteWorkspacePath = targetThreadId
-    ? explicitWorkspacePath || undefined
-    : workspacePath;
+  // A thread-bound automation always runs with the thread's own agent and
+  // workspace; the gateway rejects explicit overrides for that combination.
+  const remoteWorkspacePath = targetThreadId ? undefined : workspacePath;
+  const agentId = targetThreadId ? undefined : input.agentId?.trim() || undefined;
   const created = await createRemoteAutomation(current.settings, {
     label: input.label.trim(),
     prompt: input.prompt.trim(),
-    agentId: input.agentId.trim(),
+    agentId,
     workspacePath: remoteWorkspacePath,
     targetThreadId: targetThreadId || null,
     schedule: input.schedule,
@@ -1487,7 +1487,7 @@ export async function createDesktopAutomation(
     state,
     automation: state.automations.find((entry) => entry.id === created.id) || {
       ...created,
-      agentId: input.agentId.trim(),
+      agentId: agentId || created.agentId,
       workspacePath,
       targetThreadId,
     },
@@ -1526,14 +1526,13 @@ export async function updateDesktopAutomation(input: {
     fallbackWorkspacePath,
     targetThreadId,
   );
-  const explicitWorkspacePath = normalizeWorkspacePathInput(input.workspacePath);
-  const remoteWorkspacePath = targetThreadId
-    ? explicitWorkspacePath || undefined
-    : workspacePath;
+  // A thread-bound automation always runs with the thread's own agent and
+  // workspace; the gateway rejects explicit overrides for that combination.
+  const remoteWorkspacePath = targetThreadId ? undefined : workspacePath;
   const updated = await updateRemoteAutomation(current.settings, input.automationId, {
     label: input.label?.trim(),
     prompt: input.prompt?.trim(),
-    agentId: input.agentId?.trim(),
+    agentId: targetThreadId ? undefined : input.agentId?.trim(),
     workspacePath: remoteWorkspacePath,
     targetThreadId: hasTargetThreadInput ? targetThreadId || null : undefined,
     schedule: input.schedule,

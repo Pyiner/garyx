@@ -78,6 +78,38 @@ impl ProviderType {
     }
 }
 
+/// How the bridge absorbed a dispatched agent message.
+///
+/// A thread that is already streaming does not start a second concurrent run:
+/// the message is queued into the active run as follow-up input, and every
+/// downstream consumer (response subscriptions, run bookkeeping, automation
+/// activity) must attribute the reply to `effective_run_id`, not the run id
+/// the dispatch was requested with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentDispatchOutcome {
+    /// A fresh run started under the requested run id.
+    Started,
+    /// The message was queued into the thread's active streaming run.
+    QueuedToActiveRun {
+        /// The run that will actually produce the reply.
+        effective_run_id: String,
+        /// The pending-input record the queued message was staged as.
+        pending_input_id: String,
+    },
+}
+
+impl AgentDispatchOutcome {
+    /// The run id that owns the reply, when it differs from the requested one.
+    pub fn effective_run_id(&self) -> Option<&str> {
+        match self {
+            Self::Started => None,
+            Self::QueuedToActiveRun {
+                effective_run_id, ..
+            } => Some(effective_run_id),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentRunRequest {
     pub thread_id: String,

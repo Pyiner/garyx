@@ -55,7 +55,9 @@ export interface DesktopAutomationActivityFeed {
 export interface CreateAutomationInput {
   label: string;
   prompt: string;
-  agentId: string;
+  /// Omitted for thread-bound automations: the thread's own agent handles
+  /// each run, so an automation-level agent choice does not apply.
+  agentId?: string;
   workspacePath?: string;
   targetThreadId?: string | null;
   schedule: DesktopAutomationSchedule;

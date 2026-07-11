@@ -48,7 +48,7 @@ impl AgentDispatcher for MockDispatcher {
         &self,
         request: AgentRunRequest,
         _response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
-    ) -> Result<(), String> {
+    ) -> Result<garyx_models::provider::AgentDispatchOutcome, String> {
         if self.should_fail {
             return Err("mock dispatch failure".to_owned());
         }
@@ -62,6 +62,6 @@ impl AgentDispatcher for MockDispatcher {
             .lock()
             .await
             .push(request.requested_provider);
-        Ok(())
+        Ok(garyx_models::provider::AgentDispatchOutcome::Started)
     }
 }

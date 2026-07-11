@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use garyx_models::provider::{AgentRunRequest, StreamEvent};
+use garyx_models::provider::{AgentDispatchOutcome, AgentRunRequest, StreamEvent};
 use garyx_models::thread_logs::ThreadLogSink;
 use garyx_models::CustomAgentProfile;
 use garyx_router::{AgentDispatcher, ThreadHistoryRepository, ThreadStore};
@@ -230,7 +230,7 @@ impl AgentDispatcher for MultiProviderBridge {
         &self,
         request: AgentRunRequest,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
-    ) -> Result<(), String> {
+    ) -> Result<AgentDispatchOutcome, String> {
         self.start_agent_run(request, response_callback)
             .await
             .map_err(|e| e.to_string())

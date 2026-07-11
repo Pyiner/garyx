@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use garyx_models::messages::MessageMetadata;
-use garyx_models::provider::{AgentRunRequest, ImagePayload, StreamEvent};
+use garyx_models::provider::{AgentDispatchOutcome, AgentRunRequest, ImagePayload, StreamEvent};
 use serde_json::Value;
 
 use crate::{ThreadEnsureOptions, ThreadStore};
@@ -14,7 +14,7 @@ pub trait AgentDispatcher: Send + Sync {
         &self,
         request: AgentRunRequest,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
-    ) -> Result<(), String>;
+    ) -> Result<AgentDispatchOutcome, String>;
 }
 
 #[async_trait]
@@ -62,6 +62,9 @@ pub struct InboundResult {
     pub thread_id: String,
     pub metadata: MessageMetadata,
     pub local_reply: Option<String>,
+    /// How the bridge absorbed the dispatch. `None` when no bridge dispatch
+    /// happened (e.g. the message was answered by a local command).
+    pub dispatch_outcome: Option<AgentDispatchOutcome>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

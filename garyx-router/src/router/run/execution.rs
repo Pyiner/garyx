@@ -168,7 +168,7 @@ impl MessageRouter {
             .await;
         }
 
-        dispatcher
+        let dispatch_outcome = dispatcher
             .dispatch(
                 AgentRunRequest::new(
                     &thread_id,
@@ -189,6 +189,7 @@ impl MessageRouter {
             thread_id,
             metadata: message_metadata,
             local_reply: None,
+            dispatch_outcome: Some(dispatch_outcome),
         })
     }
 }

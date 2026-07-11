@@ -417,6 +417,7 @@ async fn dispatch_restart_wake_to_thread(
         },
     )
     .await
+    .map(|_outcome| ())
     .map_err(RestartWakeDispatchError::from_dispatch_error)
 }
 

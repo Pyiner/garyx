@@ -358,6 +358,7 @@ export function AutomationDialog({
             />
           </Field>
 
+          {draft.targetMode === 'existing_thread' ? null : (
           <Field>
             <FieldLabel>{t('Agent')}</FieldLabel>
             <Select
@@ -392,6 +393,7 @@ export function AutomationDialog({
               </SelectContent>
             </Select>
           </Field>
+          )}
 
           <Field>
             <FieldLabel>{t('Run In')}</FieldLabel>
@@ -427,7 +429,7 @@ export function AutomationDialog({
             </ToggleGroup>
             <FieldDescription>
               {draft.targetMode === 'existing_thread'
-                ? t('Each run posts the prompt into the selected thread.')
+                ? t("Each run posts the prompt into the selected thread, handled by the thread's own agent and workspace.")
                 : t('Each run creates a fresh automation thread in the selected directory.')}
             </FieldDescription>
           </Field>

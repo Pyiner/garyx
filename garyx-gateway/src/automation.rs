@@ -716,6 +716,17 @@ fn resolve_automation_workspace_input(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
+        // A thread-bound automation runs like a person sending a message
+        // into that thread: the thread's own workspace always applies, so a
+        // conflicting explicit workspace would silently be ignored — reject
+        // the combination instead.
+        if target_thread.is_some() {
+            return Err(
+                "workspace_dir cannot be combined with targetThreadId; a thread-bound \
+                 automation always uses the thread's workspace"
+                    .to_owned(),
+            );
+        }
         return Ok(workspace_dir.to_owned());
     }
     if let Some(fallback_workspace_dir) = fallback_workspace_dir

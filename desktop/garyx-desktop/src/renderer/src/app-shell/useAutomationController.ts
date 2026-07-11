@@ -208,13 +208,15 @@ export function useAutomationController({
       setError('Automation prompt is required.');
       return;
     }
-    if (!automationDialog.draft.agentId.trim()) {
-      setError('Choose an agent for this automation.');
-      return;
-    }
     const targetThreadId = automationDialog.draft.targetMode === 'existing_thread'
       ? automationDialog.draft.targetThreadId.trim()
       : '';
+    // A thread-bound automation runs under the thread's own agent; the agent
+    // picker only applies to generated-thread automations.
+    if (!targetThreadId && !automationDialog.draft.agentId.trim()) {
+      setError('Choose an agent for this automation.');
+      return;
+    }
     const workspacePath = automationDialog.draft.workspacePath.trim();
     if (automationDialog.draft.targetMode === 'existing_thread' && !targetThreadId) {
       setError('Choose the thread this automation should post into.');
@@ -250,7 +252,7 @@ export function useAutomationController({
         ? await window.garyxDesktop.createAutomation({
             label,
             prompt,
-            agentId: automationDialog.draft.agentId,
+            agentId: targetThreadId ? undefined : automationDialog.draft.agentId,
             workspacePath: targetThreadId ? undefined : workspacePath || undefined,
             targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,
@@ -259,7 +261,7 @@ export function useAutomationController({
             automationId: automationDialog.automationId || '',
             label,
             prompt,
-            agentId: automationDialog.draft.agentId,
+            agentId: targetThreadId ? undefined : automationDialog.draft.agentId,
             workspacePath: targetThreadId ? undefined : workspacePath || undefined,
             targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,

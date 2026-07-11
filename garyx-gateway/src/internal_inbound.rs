@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use garyx_models::MessageLifecycleStatus;
-use garyx_models::provider::ProviderType;
+use garyx_models::provider::{AgentDispatchOutcome, ProviderType};
 use garyx_models::routing::DeliveryContext;
 use garyx_router::{ChannelBinding, MessageRouter, ThreadMessageRequest, bindings_from_value};
 use serde_json::Value;
@@ -114,7 +114,7 @@ pub(crate) async fn dispatch_internal_message_to_thread(
     run_id: &str,
     message: &str,
     options: InternalDispatchOptions,
-) -> Result<(), String> {
+) -> Result<AgentDispatchOutcome, String> {
     let InternalDispatchOptions {
         mut extra_metadata,
         file_paths,
@@ -259,9 +259,30 @@ pub(crate) async fn dispatch_internal_message_to_thread(
         response_stream.abort();
         return Err("internal thread dispatch unexpectedly handled locally".to_owned());
     }
-    response_stream.detach();
+    let outcome = result
+        .dispatch_outcome
+        .unwrap_or(AgentDispatchOutcome::Started);
+    match &outcome {
+        AgentDispatchOutcome::Started => response_stream.detach(),
+        AgentDispatchOutcome::QueuedToActiveRun {
+            effective_run_id, ..
+        } => {
+            // The reply belongs to the thread's already-active run; this
+            // subscription is keyed to the fresh run id and would never see a
+            // terminal event — abort it instead of leaking it. Delivery
+            // follows whatever response wiring the active run already has,
+            // exactly like a user message queued into a busy thread.
+            tracing::info!(
+                thread_id = %target_thread_id,
+                run_id = %run_id,
+                effective_run_id = %effective_run_id,
+                "internal dispatch queued into active run"
+            );
+            response_stream.abort();
+        }
+    }
 
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(test)]

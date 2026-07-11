@@ -20,7 +20,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use garyx_models::MessageLifecycleStatus;
-use garyx_models::provider::{AgentRunRequest, StreamEvent};
+use garyx_models::provider::{AgentDispatchOutcome, AgentRunRequest, StreamEvent};
 use garyx_router::{THREAD_TRANSCRIPT_REPLAY_CAP, ThreadTranscriptRecord};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -380,8 +380,16 @@ async fn start_chat_run(
         .await;
 
     match start_result {
-        Ok(()) => {
-            bound_stream.detach();
+        Ok(outcome) => {
+            match &outcome {
+                AgentDispatchOutcome::Started => bound_stream.detach(),
+                AgentDispatchOutcome::QueuedToActiveRun { .. } => {
+                    // The reply belongs to the already-active run, which this
+                    // subscription (keyed to the fresh run id) will never see;
+                    // keep it alive and it leaks until process exit.
+                    bound_stream.abort();
+                }
+            }
             crate::runtime_diagnostics::record_message_ledger_event(
                 state,
                 MessageLifecycleStatus::RunStarted,

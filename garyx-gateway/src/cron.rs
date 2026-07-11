@@ -1769,6 +1769,7 @@ impl CronService {
             },
         )
         .await
+        .map(|_outcome| ())
         .map_err(|error| {
             // A thread deleted between the pre-check and dispatch surfaces here
             // as the dispatch sentinel — still a non-retryable drop.
@@ -1849,11 +1850,16 @@ impl CronService {
         .await;
 
         match result {
-            Ok(()) => {
+            Ok(outcome) => {
+                // When the thread was busy the prompt was queued into the
+                // already-active run — every downstream consumer (run
+                // bookkeeping, automation activity) must attribute the reply
+                // to that run, not the requested one.
+                let effective_run_id = outcome.effective_run_id().unwrap_or(run_id).to_owned();
                 active_agent_runs
                     .write()
                     .await
-                    .insert(job.id.clone(), run_id.to_owned());
+                    .insert(job.id.clone(), effective_run_id.clone());
                 runtime
                     .thread_logs
                     .record_event(
@@ -1864,6 +1870,11 @@ impl CronService {
                         )
                         .with_run_id(run_id.to_owned())
                         .with_field("job_id", serde_json::json!(job.id))
+                        .with_field("effective_run_id", serde_json::json!(effective_run_id))
+                        .with_field(
+                            "queued_into_active_run",
+                            serde_json::json!(outcome.effective_run_id().is_some()),
+                        )
                         .with_field("thread_id", serde_json::json!(thread_key)),
                     )
                     .await;
@@ -1921,6 +1932,9 @@ impl CronService {
                 .ok_or_else(|| format!("cron target thread not found: {thread_id}"))?;
             (thread_id.to_owned(), None, Some(thread_record))
         } else if let Some(target) = configured_target {
+            // An explicit target must resolve to an existing thread record;
+            // silently starting a bare run against a missing thread would
+            // both bypass the front door and fake a Success.
             if target.starts_with("thread:") || target.contains("::") {
                 let key = if target.starts_with("thread::") {
                     target.to_owned()
@@ -1932,14 +1946,24 @@ impl CronService {
                     resolve_delivery_target_with_recovery(&runtime.router, &thread_target)
                         .await
                         .map(|(_, ctx)| ctx);
-                let thread_record = runtime.thread_store.get(&key).await;
-                (key, delivery, thread_record)
+                let thread_record = runtime
+                    .thread_store
+                    .get(&key)
+                    .await
+                    .ok_or_else(|| format!("cron target thread not found: {key}"))?;
+                (key, delivery, Some(thread_record))
             } else {
                 let resolved = resolve_delivery_target_with_recovery(&runtime.router, target)
                     .await
                     .ok_or_else(|| format!("unable to resolve cron delivery target: {target}"))?;
-                let thread_record = runtime.thread_store.get(&resolved.0).await;
-                (resolved.0, Some(resolved.1), thread_record)
+                let thread_record =
+                    runtime.thread_store.get(&resolved.0).await.ok_or_else(|| {
+                        format!(
+                            "cron delivery target {target} resolved to missing thread {}",
+                            resolved.0
+                        )
+                    })?;
+                (resolved.0, Some(resolved.1), Some(thread_record))
             }
         } else {
             let delivery = resolve_delivery_target_with_recovery(&runtime.router, "last")

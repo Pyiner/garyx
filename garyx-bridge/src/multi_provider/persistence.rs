@@ -245,6 +245,11 @@ pub(super) struct PendingUserInput {
     pub queued_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_id: Option<String>,
+    /// Attribution metadata carried from the originating dispatch (e.g.
+    /// `source`/`automation_id` for scheduled turns queued into an active
+    /// run) and merged into the acknowledged user record.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, Value>,
     pub status: PendingUserInputStatus,
 }
 
@@ -698,6 +703,13 @@ impl StreamingRunSnapshot {
         if let Some(origin_id) = pending_input.origin_id.as_deref() {
             metadata.insert("origin_id".to_owned(), Value::String(origin_id.to_owned()));
         }
+        // Attribution carried from the originating dispatch; built-in queue
+        // markers above win on conflict.
+        for (key, value) in &pending_input.metadata {
+            metadata
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
         self.session_messages.push(ProviderMessage {
             role: ProviderMessageRole::User,
             content: pending_input.content.clone(),
@@ -1091,8 +1103,18 @@ fn build_run_record_drafts(
     drafts
 }
 
+/// Run metadata that exists only to configure the provider runtime and must
+/// never be persisted into transcript records: the gateway bearer token and
+/// the managed MCP server definitions (whose `env` blocks carry secrets).
+/// This is the single persistence chokepoint — every dispatch source (chat
+/// API, internal dispatch, scheduled turns) funnels through it.
+const RUNTIME_ONLY_METADATA_KEYS: &[&str] = &["garyx_mcp_auth_token", "remote_mcp_servers"];
+
 fn run_message_metadata(run: &PersistedRun<'_>) -> HashMap<String, Value> {
     let mut metadata = run.metadata.clone();
+    for key in RUNTIME_ONLY_METADATA_KEYS {
+        metadata.remove(*key);
+    }
     match run
         .sdk_session_id
         .map(str::trim)

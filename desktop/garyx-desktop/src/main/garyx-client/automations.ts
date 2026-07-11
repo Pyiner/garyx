@@ -159,7 +159,7 @@ export async function createRemoteAutomation(
   input: {
     label: string;
     prompt: string;
-    agentId: string;
+    agentId?: string;
     workspacePath?: string;
     targetThreadId?: string | null;
     schedule: DesktopAutomationSchedule;
@@ -174,7 +174,7 @@ export async function createRemoteAutomation(
       body: JSON.stringify({
         label: input.label,
         prompt: input.prompt,
-        agentId: input.agentId,
+        agentId: input.agentId || undefined,
         workspaceDir: input.workspacePath || undefined,
         targetThreadId: input.targetThreadId || undefined,
         schedule: input.schedule,

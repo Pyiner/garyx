@@ -669,6 +669,54 @@ async fn test_save_thread_messages_overrides_stale_metadata_sdk_session_id() {
     assert_eq!(stored["sdk_session_id"], "new-session");
 }
 
+#[tokio::test]
+async fn test_save_thread_messages_strips_runtime_only_metadata() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let history = make_history(store.clone());
+    let session_messages = vec![ProviderMessage::assistant_text("answer")];
+    let mut metadata = HashMap::new();
+    // Runtime-only provider wiring: the gateway bearer token and managed MCP
+    // definitions (whose env can carry secrets) must never reach transcript
+    // records. Synthetic placeholder values only.
+    metadata.insert("garyx_mcp_auth_token".to_owned(), json!("${TOKEN}"));
+    metadata.insert(
+        "remote_mcp_servers".to_owned(),
+        json!({ "example": { "command": "example-mcp", "env": { "API_KEY": "${SECRET}" } } }),
+    );
+    metadata.insert("source".to_owned(), json!("automation"));
+    metadata.insert("run_id".to_owned(), json!("run-runtime-only"));
+
+    save_thread_messages(
+        &store,
+        &history,
+        PersistedRun {
+            thread_id: "thread::runtime-only-metadata",
+            user_message: "scheduled prompt",
+            user_timestamp: Some("2026-03-01T00:00:00Z"),
+            user_images: &[],
+            assistant_response: "answer",
+            sdk_session_id: None,
+            provider_key: "provider::runtime-only",
+            provider_type: ProviderType::ClaudeCode,
+            session_messages: &session_messages,
+            metadata: &metadata,
+        },
+    )
+    .await;
+
+    let messages = committed_content(&history, "thread::runtime-only-metadata").await;
+    assert!(!messages.is_empty());
+    for message in &messages {
+        let raw = message.to_string();
+        assert!(
+            !raw.contains("garyx_mcp_auth_token") && !raw.contains("remote_mcp_servers"),
+            "runtime-only metadata leaked into transcript record: {raw}"
+        );
+    }
+    // Ordinary metadata still rides along.
+    assert_eq!(messages[0]["metadata"]["source"], "automation");
+}
+
 #[test]
 fn test_streaming_run_snapshot_splits_assistant_segments() {
     let mut snapshot = StreamingRunSnapshot::default();

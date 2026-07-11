@@ -122,6 +122,7 @@ impl MessageRouter {
             thread_id,
             metadata: message_metadata,
             local_reply: Some(local.reply_text),
+            dispatch_outcome: None,
         })
     }
 }

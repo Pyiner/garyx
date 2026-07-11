@@ -337,6 +337,7 @@ async fn dispatch_notification_to_thread_agent(
         },
     )
     .await
+    .map(|_outcome| ())
     .map_err(|error| {
         TaskNotificationError::new(
             event,

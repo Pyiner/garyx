@@ -466,9 +466,10 @@ garyx automation delete <automation-id>
 By default a scheduled automation creates a fresh automation thread for each
 run using `--workspace-dir`. Passing `--thread-id` instead binds the automation
 to an existing Garyx thread; each scheduled or manual run sends the configured
-prompt into that thread and keeps the transcript in one conversation. When an
-automation is bound to a thread, the thread's workspace is used unless an
-explicit workspace is provided.
+prompt into that thread exactly like a user message and keeps the transcript
+in one conversation. A thread-bound automation always uses the thread's own
+workspace — combining `--thread-id` with an explicit `--workspace-dir` is
+rejected.
 
 Automation schedules can be represented as hourly intervals, daily or weekday
 cron-style runs, one-shot timestamps, or monthly day-of-month runs. The mobile
