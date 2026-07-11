@@ -5,6 +5,7 @@ import {
   completeRecentThreadRequest,
   createRecentThreadFeedsState,
   failRecentThreadRequest,
+  ingestRecentThreadSummaries,
   noteRecentThreadFilterLocalMutation,
   removeThreadFromRecentFeeds,
   requestRecentThreadLoadMore,
@@ -310,4 +311,26 @@ test("the renderer adopts each server page verbatim and never post-filters threa
     threads: [summary("server-owned-row", "Server owned", "task")],
   });
   assert.deepEqual(state.feeds.nonTask.orderedThreadIds, ["server-owned-row"]);
+});
+
+test("canonical Recent membership never truncates the shared DesktopState cache", () => {
+  const desktopThreads = [
+    summary("task", "Task", "task"),
+    summary("chat", "Chat"),
+    summary("generated", "Automation generated"),
+    summary("hidden-side-chat", "Hidden side chat"),
+  ];
+  let state = createRecentThreadFeedsState("https://gateway.test");
+  state = ingestRecentThreadSummaries(state, desktopThreads);
+  state = refresh(state, "all", ["task", "chat"]);
+  state = refresh(state, "nonTask", ["chat"]);
+
+  assert.deepEqual(state.feeds.all.orderedThreadIds, ["task", "chat"]);
+  assert.deepEqual(state.feeds.nonTask.orderedThreadIds, ["chat"]);
+  assert.equal(state.summariesById.generated.title, "Automation generated");
+  assert.equal(state.summariesById["hidden-side-chat"].title, "Hidden side chat");
+  assert.deepEqual(
+    desktopThreads.map((thread) => thread.id),
+    ["task", "chat", "generated", "hidden-side-chat"],
+  );
 });
