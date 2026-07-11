@@ -1,5 +1,14 @@
 # Task Projection Table Design
 
+> **Superseded (2026-07, #TASK-2099).** Historical design record. The
+> shipped architecture differs: `thread_records` in SQLite is the truth
+> source (#TASK-1864), `task_projection` derives in the same transaction
+> as every record write (no rebuild/reconcile layer), the file-based
+> task counter was replaced by the transactional SQLite `task_counter`
+> row, and the in-memory TASK_INDEX plus registry-based readers were
+> removed in favor of the store-owned `TaskProjectionReader` seam. See
+> `docs/agents/repository-contracts.md` for the current contracts.
+
 Status: approved synthesis for implementation. The thread file record remains
 the only source of truth for task data; `task_projection` is a read-only derived
 SQLite projection.

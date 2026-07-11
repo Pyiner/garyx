@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use chrono::{SecondsFormat, Utc};
-use garyx_router::{is_thread_key, BindingThreadRow, KnownChannelEndpoint};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use garyx_router::{BindingThreadRow, KnownChannelEndpoint, is_thread_key};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
@@ -13,8 +13,8 @@ use uuid::Uuid;
 mod task_forest;
 
 pub use task_forest::{
-    TaskForestNode, TaskForestPage, TaskForestScope, TaskProjectionDraft,
-    CURRENT_TASK_PROJECTION_VERSION,
+    CURRENT_TASK_PROJECTION_VERSION, TaskForestNode, TaskForestPage, TaskForestScope,
+    TaskProjectionDraft,
 };
 
 const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 4;
@@ -233,13 +233,6 @@ pub struct ThreadMetaDraft {
     pub legacy_channel: Option<String>,
     pub legacy_account_id: Option<String>,
     pub legacy_has_account: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ThreadMetaProjectionSnapshot {
-    pub thread_meta: Vec<ThreadMetaDraft>,
-    pub channel_endpoints: Vec<KnownChannelEndpoint>,
-    pub message_routes: Vec<ThreadMessageRouteDraft>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1700,28 +1693,10 @@ impl GaryxDbService {
         Ok(records)
     }
 
-    pub fn sync_thread_meta_projection_snapshot(
-        &self,
-        snapshot: ThreadMetaProjectionSnapshot,
-    ) -> GaryxDbResult<()> {
-        let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
-        tx.execute("DELETE FROM thread_meta", [])?;
-        tx.execute("DELETE FROM thread_channel_endpoints", [])?;
-        tx.execute("DELETE FROM thread_message_routes", [])?;
-        for meta in snapshot.thread_meta {
-            upsert_thread_meta(&tx, &meta, &now_string())?;
-        }
-        for endpoint in snapshot.channel_endpoints {
-            upsert_thread_channel_endpoint(&tx, &endpoint, &now_string())?;
-        }
-        for route in snapshot.message_routes {
-            upsert_thread_message_route(&tx, &route, &now_string())?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
+    /// Test-fixture seeding only: production thread_meta rows derive in
+    /// the same transaction as the record write
+    /// (`write_thread_record_with_projections`).
+    #[cfg(test)]
     pub fn replace_thread_meta_projection(
         &self,
         draft: ThreadMetaProjectionDraft,
@@ -2152,6 +2127,10 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             projected_at TEXT NOT NULL
         ) STRICT;
 
+        -- Intentionally NON-unique: task identity is thread_id, and legacy
+        -- databases can hold duplicate numbers from the retired file-counter
+        -- era. The allocator only guarantees strictly-increasing output; the
+        -- read side dedupes by number (see task_forest.rs).
         CREATE INDEX IF NOT EXISTS idx_task_projection_number
             ON task_projection(number);
         CREATE INDEX IF NOT EXISTS idx_task_projection_updated
@@ -4055,12 +4034,16 @@ mod tests {
                 .expect("get"),
             Some(r#"{"thread_id":"thread::alpha"}"#.to_owned())
         );
-        assert!(service
-            .thread_record_exists("thread::alpha")
-            .expect("exists"));
-        assert!(!service
-            .thread_record_exists("thread::missing")
-            .expect("exists missing"));
+        assert!(
+            service
+                .thread_record_exists("thread::alpha")
+                .expect("exists")
+        );
+        assert!(
+            !service
+                .thread_record_exists("thread::missing")
+                .expect("exists missing")
+        );
         assert_eq!(
             service
                 .list_thread_record_keys(Some("thread::"))
@@ -4084,18 +4067,24 @@ mod tests {
                 None,
             )
             .expect("overwrite");
-        assert!(service
-            .get_thread_record_body("thread::alpha")
-            .expect("get v2")
-            .expect("body")
-            .contains("v2"));
+        assert!(
+            service
+                .get_thread_record_body("thread::alpha")
+                .expect("get v2")
+                .expect("body")
+                .contains("v2")
+        );
 
-        assert!(service
-            .delete_thread_record_with_projections("thread::alpha")
-            .expect("delete"));
-        assert!(!service
-            .delete_thread_record_with_projections("thread::alpha")
-            .expect("delete again"));
+        assert!(
+            service
+                .delete_thread_record_with_projections("thread::alpha")
+                .expect("delete")
+        );
+        assert!(
+            !service
+                .delete_thread_record_with_projections("thread::alpha")
+                .expect("delete again")
+        );
         assert_eq!(
             service
                 .get_thread_record_body("thread::alpha")
@@ -4475,10 +4464,12 @@ mod tests {
         drop(db);
 
         let reopened = GaryxDbService::open(&path).expect("cleanup is idempotent");
-        assert!(reopened
-            .get_thread_record_body("thread::ordinary")
-            .expect("ordinary record after reopen")
-            .is_some());
+        assert!(
+            reopened
+                .get_thread_record_body("thread::ordinary")
+                .expect("ordinary record after reopen")
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -4839,9 +4830,10 @@ mod tests {
         );
 
         assert!(db.delete_workspace("/workspace/repo-a").expect("delete"));
-        assert!(!db
-            .delete_workspace("/workspace/repo-a")
-            .expect("delete again"));
+        assert!(
+            !db.delete_workspace("/workspace/repo-a")
+                .expect("delete again")
+        );
         assert_eq!(db.count_workspace_rows().expect("count rows"), 2);
         assert_eq!(
             db.list_workspaces()
@@ -4856,18 +4848,20 @@ mod tests {
     #[test]
     fn workspace_seed_only_runs_before_any_workspace_row_exists() {
         let db = GaryxDbService::memory().expect("db opens");
-        assert!(db
-            .seed_workspaces_if_empty(vec![WorkspaceDraft {
+        assert!(
+            db.seed_workspaces_if_empty(vec![WorkspaceDraft {
                 name: None,
                 path: "/workspace/from-config".to_owned(),
             }])
-            .expect("seed initial"));
-        assert!(!db
-            .seed_workspaces_if_empty(vec![WorkspaceDraft {
+            .expect("seed initial")
+        );
+        assert!(
+            !db.seed_workspaces_if_empty(vec![WorkspaceDraft {
                 name: None,
                 path: "/workspace/ignored".to_owned(),
             }])
-            .expect("skip second seed"));
+            .expect("skip second seed")
+        );
         assert_eq!(
             db.list_workspaces()
                 .expect("list active")
@@ -4877,17 +4871,19 @@ mod tests {
             vec!["/workspace/from-config"],
         );
 
-        assert!(db
-            .delete_workspace("/workspace/from-config")
-            .expect("soft delete"));
+        assert!(
+            db.delete_workspace("/workspace/from-config")
+                .expect("soft delete")
+        );
         assert_eq!(db.count_workspace_rows().expect("count tombstone"), 1);
         assert!(db.list_workspaces().expect("list after delete").is_empty());
-        assert!(!db
-            .seed_workspaces_if_empty(vec![WorkspaceDraft {
+        assert!(
+            !db.seed_workspaces_if_empty(vec![WorkspaceDraft {
                 name: None,
                 path: "/workspace/from-config".to_owned(),
             }])
-            .expect("tombstone prevents reseed"));
+            .expect("tombstone prevents reseed")
+        );
         assert!(db.list_workspaces().expect("list remains empty").is_empty());
     }
 
@@ -5014,9 +5010,11 @@ mod tests {
         assert_eq!(thread_one[0].id, first_id);
         assert!(thread_one.iter().any(|record| record.id == first_id));
         assert!(thread_one.iter().any(|record| record.id == second_id));
-        assert!(thread_one
-            .iter()
-            .all(|record| record.thread_id.as_deref() == Some("thread::one")));
+        assert!(
+            thread_one
+                .iter()
+                .all(|record| record.thread_id.as_deref() == Some("thread::one"))
+        );
     }
 
     #[test]
@@ -5129,12 +5127,14 @@ mod tests {
         assert_eq!(offset[0].thread_id, "thread::newer");
         assert_eq!(db.count_recent_threads().expect("count recent threads"), 2);
 
-        assert!(db
-            .remove_recent_thread("thread::older")
-            .expect("remove older"));
-        assert!(!db
-            .remove_recent_thread("thread::older")
-            .expect("remove older again"));
+        assert!(
+            db.remove_recent_thread("thread::older")
+                .expect("remove older")
+        );
+        assert!(
+            !db.remove_recent_thread("thread::older")
+                .expect("remove older again")
+        );
         assert_eq!(
             db.list_recent_threads(10, 0)
                 .expect("list remaining recent threads")
@@ -5404,21 +5404,25 @@ mod tests {
         assert_eq!(routes[0].message_id, "message-1");
         assert_eq!(routes[0].thread_binding_key.as_deref(), Some("42"));
 
-        assert!(db
-            .remove_thread_meta_projection("thread::project")
-            .expect("remove projection"));
-        assert!(db
-            .list_thread_meta()
-            .expect("list meta after remove")
-            .is_empty());
-        assert!(db
-            .list_thread_channel_endpoints()
-            .expect("list endpoints after remove")
-            .is_empty());
-        assert!(db
-            .list_thread_message_routes()
-            .expect("list routes after remove")
-            .is_empty());
+        assert!(
+            db.remove_thread_meta_projection("thread::project")
+                .expect("remove projection")
+        );
+        assert!(
+            db.list_thread_meta()
+                .expect("list meta after remove")
+                .is_empty()
+        );
+        assert!(
+            db.list_thread_channel_endpoints()
+                .expect("list endpoints after remove")
+                .is_empty()
+        );
+        assert!(
+            db.list_thread_message_routes()
+                .expect("list routes after remove")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -5446,14 +5450,15 @@ mod tests {
             1
         );
 
-        assert!(db
-            .finish_automation_thread_run(
+        assert!(
+            db.finish_automation_thread_run(
                 "automation::daily",
                 "run-1",
                 "success",
                 "2026-05-28T00:00:05Z",
             )
-            .expect("finish"));
+            .expect("finish")
+        );
 
         let records = db
             .list_automation_thread_runs("automation::daily", Some("generated_thread"), 10, 0)

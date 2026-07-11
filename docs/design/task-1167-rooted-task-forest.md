@@ -1,5 +1,11 @@
 # Task 1167 Pinned-Thread Task Forest
 
+> **Partially superseded (2026-07, #TASK-2099).** The
+> `projectionCurrent`/warm-cache freshness concept described below no
+> longer exists: task rows derive in the same transaction as every
+> record write (#TASK-1864), so the projection is structurally current
+> and there is no staleness flag or rebuild path.
+
 ## Goal
 
 Change the Mac task forest into a pinned-thread operation room. The forest root

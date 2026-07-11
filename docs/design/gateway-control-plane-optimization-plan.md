@@ -1,5 +1,12 @@
 # Gateway Control Plane Optimization Plan
 
+> **Superseded (2026-07, #TASK-2099).** Historical plan. The measures
+> here were replaced by the #TASK-1864 truth-source inversion: all
+> thread condition queries answer from SQLite projections derived in
+> the same transaction as record writes; startup index rebuilds and
+> scan-based counts are gone. See
+> `docs/agents/repository-contracts.md` for the current contracts.
+
 Date: 2026-07-07
 Tracking: #TASK-1829
 Basis: `gateway-control-plane-performance-investigation.md` (2026-07-07) plus an

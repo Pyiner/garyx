@@ -1,5 +1,11 @@
 # Task Forest Console Implementation
 
+> **Partially superseded (2026-07, #TASK-2099).** The
+> `projectionCurrent`/warm-cache freshness concept described below no
+> longer exists: task rows derive in the same transaction as every
+> record write (#TASK-1864), so the projection is structurally current
+> and there is no staleness flag or rebuild path.
+
 ## Goal
 
 Land the finalized task-forest HTML demo as a real Garyx Mac app feature:

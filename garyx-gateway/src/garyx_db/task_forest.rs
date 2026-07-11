@@ -9,10 +9,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::task_tree::{RawTaskNode, layout_anchored_task_tree, task_node_id, thread_root_node_id};
 
-use super::{
-    GaryxDbError, GaryxDbResult, GaryxDbService, normalize_optional, normalize_thread_id,
-    now_string,
-};
+use super::{GaryxDbError, GaryxDbResult, GaryxDbService, normalize_optional, normalize_thread_id};
 
 pub const CURRENT_TASK_PROJECTION_VERSION: i64 = 1;
 
@@ -195,9 +192,18 @@ impl PinnedTaskForestRow {
 impl GaryxDbService {
     /// Allocate the next task number: bump the single-row counter while
     /// flooring it against the task projection's `MAX(number)`, all in
-    /// one transaction. The returned number is strictly greater than
-    /// every previously allocated number and every number currently in
-    /// the projection, so duplicates are structurally impossible.
+    /// one transaction. The allocator guarantee is strictly-increasing
+    /// output: the returned number is greater than every previously
+    /// allocated number and every number currently in the projection.
+    ///
+    /// This is NOT a database-level uniqueness guarantee on
+    /// `task_projection.number` (#TASK-2099 root review finding 5,
+    /// REFUTED for a UNIQUE constraint): task identity is `thread_id`,
+    /// legacy databases may already hold duplicate numbers from the
+    /// retired file-counter era, and a UNIQUE index would make those
+    /// existing rows unwritable. `idx_task_projection_number` stays
+    /// non-unique on purpose; the read side dedupes by number and logs
+    /// when duplicates are observed (see `list_task_summaries`).
     pub fn allocate_task_number(&self) -> GaryxDbResult<u64> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -256,11 +262,15 @@ impl GaryxDbService {
         Ok(true)
     }
 
+    /// Test-fixture seeding only: production task rows derive in the
+    /// same transaction as the record write
+    /// (`write_thread_record_with_projections`).
+    #[cfg(test)]
     pub fn replace_task_projection(&self, draft: TaskProjectionDraft) -> GaryxDbResult<()> {
         let thread_id = normalize_thread_id(&draft.thread_id)?;
         let mut draft = draft;
         draft.thread_id = thread_id;
-        let projected_at = now_string();
+        let projected_at = super::now_string();
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
         upsert_task_projection(&tx, &draft, &projected_at)?;
