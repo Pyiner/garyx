@@ -316,6 +316,11 @@ impl AppStateBuilder {
 
     pub fn build(self) -> Arc<AppState> {
         let start_time = Instant::now();
+        self.garyx_db
+            .run_thread_data_startup_migrations()
+            .unwrap_or_else(|error| {
+                panic!("failed to run thread-data startup migrations: {error}")
+            });
         let active_run_probe: Arc<dyn ActiveRunProbe> = self
             .active_run_probe
             .clone()

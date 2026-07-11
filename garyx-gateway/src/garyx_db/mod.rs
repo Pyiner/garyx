@@ -18,6 +18,8 @@ pub use task_forest::{
 };
 
 const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 4;
+pub(crate) const RECENT_TASK_THREAD_KIND_MIGRATION_NAME: &str = "recent_task_thread_kind_v1";
+const RECENT_TASK_THREAD_KIND_MIGRATION_VERSION: i64 = 1;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GaryxDbError {
@@ -36,6 +38,13 @@ pub enum GaryxDbError {
 }
 
 pub type GaryxDbResult<T> = Result<T, GaryxDbError>;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct OneShotMigrationSummary {
+    pub source_row_count: usize,
+    pub updated_row_count: usize,
+    pub already_completed: bool,
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PinnedThreadRecord {
@@ -726,6 +735,124 @@ impl GaryxDbService {
         let count: i64 =
             conn.query_row("SELECT COUNT(*) FROM recent_threads", [], |row| row.get(0))?;
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    /// Run every versioned thread-data migration that must complete after
+    /// the one-shot archive import and before the gateway starts serving.
+    pub(crate) fn run_thread_data_startup_migrations(&self) -> GaryxDbResult<()> {
+        self.migrate_recent_task_thread_kind_v1()?;
+        Ok(())
+    }
+
+    /// Persist task identity on legacy backing threads. The migration is a
+    /// one-shot, set-based transaction: canonical bodies and both type
+    /// projections move together, while activity timestamps and titles stay
+    /// untouched.
+    pub(crate) fn migrate_recent_task_thread_kind_v1(
+        &self,
+    ) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let completed_source_count = tx
+            .query_row(
+                "SELECT source_row_count
+                   FROM projection_states
+                  WHERE projection_name = ?1 AND projection_version = ?2",
+                params![
+                    RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
+                    RECENT_TASK_THREAD_KIND_MIGRATION_VERSION
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        let source_row_count: i64 = tx.query_row(
+            "SELECT COUNT(*)
+               FROM thread_records AS record
+              WHERE substr(record.key, 1, 8) = 'thread::'
+                AND (
+                    json_extract(record.body, '$.thread_kind') = 'task'
+                    OR json_extract(record.body, '$.thread_title_source') = 'task'
+                    OR EXISTS (
+                        SELECT 1
+                          FROM task_projection AS task
+                         WHERE task.thread_id = record.key
+                    )
+                )",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let updated_row_count = tx.execute(
+            "UPDATE thread_records
+                SET body = json_set(body, '$.thread_kind', 'task')
+              WHERE substr(key, 1, 8) = 'thread::'
+                AND (
+                    json_extract(body, '$.thread_kind') = 'task'
+                    OR json_extract(body, '$.thread_title_source') = 'task'
+                    OR EXISTS (
+                        SELECT 1
+                          FROM task_projection AS task
+                         WHERE task.thread_id = thread_records.key
+                    )
+                )
+                AND COALESCE(json_extract(body, '$.thread_kind'), '') <> 'task'",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE recent_threads
+                SET thread_type = 'task'
+              WHERE thread_id IN (
+                    SELECT key
+                      FROM thread_records
+                     WHERE substr(key, 1, 8) = 'thread::'
+                       AND json_extract(body, '$.thread_kind') = 'task'
+                )
+                AND thread_type <> 'task'",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE thread_meta
+                SET thread_type = 'task'
+              WHERE thread_id IN (
+                    SELECT key
+                      FROM thread_records
+                     WHERE substr(key, 1, 8) = 'thread::'
+                       AND json_extract(body, '$.thread_kind') = 'task'
+                )
+                AND thread_type <> 'task'",
+            [],
+        )?;
+        tx.execute(
+            "INSERT INTO projection_states (
+                projection_name, projection_version, source_row_count, projected_at
+             ) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(projection_name) DO UPDATE SET
+                projection_version = excluded.projection_version,
+                source_row_count = excluded.source_row_count,
+                projected_at = excluded.projected_at",
+            params![
+                RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
+                RECENT_TASK_THREAD_KIND_MIGRATION_VERSION,
+                source_row_count,
+                now_string(),
+            ],
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count,
+            already_completed: false,
+        })
     }
 
     pub fn projection_state_matches(
@@ -2764,6 +2891,245 @@ mod tests {
             updated_at: None,
             last_active_at: "2026-07-08T00:00:00Z".to_owned(),
         }
+    }
+
+    fn seed_task_kind_migration_row(
+        service: &GaryxDbService,
+        thread_id: &str,
+        body: &str,
+        has_task_projection: bool,
+    ) {
+        let conn = service.conn().expect("conn");
+        conn.execute(
+            "INSERT INTO thread_records (key, body, updated_at, recorded_at)
+             VALUES (?1, ?2, '2026-07-01T00:00:00Z', '2026-07-01T00:00:01Z')",
+            params![thread_id, body],
+        )
+        .expect("seed thread record");
+        conn.execute(
+            "INSERT INTO recent_threads (
+                thread_id, title, thread_type, last_active_at, recorded_at
+             ) VALUES (?1, 'Legacy title', 'chat',
+                       '2026-07-01T00:00:00Z', '2026-07-01T00:00:01Z')",
+            params![thread_id],
+        )
+        .expect("seed recent row");
+        conn.execute(
+            "INSERT INTO thread_meta (
+                thread_id, thread_type, thread_label, updated_at, projected_at
+             ) VALUES (?1, 'chat', 'Legacy title',
+                       '2026-07-01T00:00:00Z', '2026-07-01T00:00:01Z')",
+            params![thread_id],
+        )
+        .expect("seed meta row");
+        if has_task_projection {
+            conn.execute(
+                "INSERT INTO task_projection (
+                    thread_id, number, status, title, creator_json, creator_id,
+                    updated_by_json, created_at, updated_at, source_updated_at,
+                    source_events_len, projected_at
+                 ) VALUES (
+                    ?1, 41, 'todo', 'Legacy task',
+                    '{\"kind\":\"agent\",\"agent_id\":\"test-agent\"}',
+                    'test-agent',
+                    '{\"kind\":\"agent\",\"agent_id\":\"test-agent\"}',
+                    '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z',
+                    '2026-07-01T00:00:00Z', 1, '2026-07-01T00:00:01Z'
+                 )",
+                params![thread_id],
+            )
+            .expect("seed task projection");
+        }
+    }
+
+    #[test]
+    fn recent_task_thread_kind_migration_updates_canonical_and_type_projections() {
+        let service = GaryxDbService::memory().expect("memory db");
+        seed_task_kind_migration_row(
+            &service,
+            "thread::legacy-overlay",
+            r#"{"thread_id":"thread::legacy-overlay","label":"Overlay title","updated_at":"2026-07-01T00:00:00Z","task":{"number":41}}"#,
+            true,
+        );
+        seed_task_kind_migration_row(
+            &service,
+            "thread::legacy-title-source",
+            r#"{"thread_id":"thread::legacy-title-source","label":"Retained title","thread_title_source":"task","updated_at":"2026-07-01T00:00:00Z"}"#,
+            false,
+        );
+        seed_task_kind_migration_row(
+            &service,
+            "thread::already-durable",
+            r#"{"thread_id":"thread::already-durable","label":"Durable title","thread_kind":"task","updated_at":"2026-07-01T00:00:00Z"}"#,
+            false,
+        );
+        seed_task_kind_migration_row(
+            &service,
+            "thread::prefix-only",
+            r##"{"thread_id":"thread::prefix-only","label":"#TASK-99 ordinary chat","updated_at":"2026-07-01T00:00:00Z"}"##,
+            false,
+        );
+
+        let summary = service
+            .migrate_recent_task_thread_kind_v1()
+            .expect("migration succeeds");
+        assert_eq!(summary.source_row_count, 3);
+        assert_eq!(summary.updated_row_count, 2);
+        assert!(!summary.already_completed);
+
+        for thread_id in [
+            "thread::legacy-overlay",
+            "thread::legacy-title-source",
+            "thread::already-durable",
+        ] {
+            let body = service
+                .get_thread_record_body(thread_id)
+                .expect("read body")
+                .expect("body exists");
+            let body: Value = serde_json::from_str(&body).expect("valid body");
+            assert_eq!(body["thread_kind"], "task", "{thread_id}");
+            assert_eq!(body["updated_at"], "2026-07-01T00:00:00Z");
+        }
+        let prefix_body: Value = serde_json::from_str(
+            &service
+                .get_thread_record_body("thread::prefix-only")
+                .expect("read prefix body")
+                .expect("prefix body exists"),
+        )
+        .expect("valid prefix body");
+        assert!(prefix_body.get("thread_kind").is_none());
+
+        let conn = service.conn().expect("conn");
+        for thread_id in [
+            "thread::legacy-overlay",
+            "thread::legacy-title-source",
+            "thread::already-durable",
+        ] {
+            let recent: (String, String, String) = conn
+                .query_row(
+                    "SELECT thread_type, title, last_active_at
+                       FROM recent_threads WHERE thread_id = ?1",
+                    params![thread_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .expect("recent row");
+            assert_eq!(recent.0, "task", "{thread_id}");
+            assert_eq!(recent.1, "Legacy title");
+            assert_eq!(recent.2, "2026-07-01T00:00:00Z");
+            let meta_type: String = conn
+                .query_row(
+                    "SELECT thread_type FROM thread_meta WHERE thread_id = ?1",
+                    params![thread_id],
+                    |row| row.get(0),
+                )
+                .expect("meta row");
+            assert_eq!(meta_type, "task", "{thread_id}");
+        }
+        let prefix_type: String = conn
+            .query_row(
+                "SELECT thread_type FROM recent_threads WHERE thread_id = 'thread::prefix-only'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("prefix recent row");
+        assert_eq!(prefix_type, "chat");
+        drop(conn);
+        assert!(
+            service
+                .projection_state_matches(
+                    RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
+                    RECENT_TASK_THREAD_KIND_MIGRATION_VERSION,
+                    3,
+                )
+                .expect("marker")
+        );
+    }
+
+    #[test]
+    fn recent_task_thread_kind_migration_records_zero_and_never_reruns() {
+        let service = GaryxDbService::memory().expect("memory db");
+        let first = service
+            .migrate_recent_task_thread_kind_v1()
+            .expect("zero-row migration succeeds");
+        assert_eq!(first.source_row_count, 0);
+        assert_eq!(first.updated_row_count, 0);
+        assert!(!first.already_completed);
+
+        seed_task_kind_migration_row(
+            &service,
+            "thread::late-legacy-task",
+            r#"{"thread_id":"thread::late-legacy-task","thread_title_source":"task"}"#,
+            false,
+        );
+        let second = service
+            .migrate_recent_task_thread_kind_v1()
+            .expect("completed migration skips");
+        assert_eq!(second.source_row_count, 0);
+        assert_eq!(second.updated_row_count, 0);
+        assert!(second.already_completed);
+        let body: Value = serde_json::from_str(
+            &service
+                .get_thread_record_body("thread::late-legacy-task")
+                .expect("read body")
+                .expect("body exists"),
+        )
+        .expect("valid body");
+        assert!(body.get("thread_kind").is_none());
+    }
+
+    #[test]
+    fn recent_task_thread_kind_migration_is_atomic_on_projection_failure() {
+        let service = GaryxDbService::memory().expect("memory db");
+        seed_task_kind_migration_row(
+            &service,
+            "thread::atomic-legacy-task",
+            r#"{"thread_id":"thread::atomic-legacy-task","thread_title_source":"task"}"#,
+            false,
+        );
+        service
+            .conn()
+            .expect("conn")
+            .execute_batch(
+                "CREATE TRIGGER fail_task_kind_projection
+                 BEFORE UPDATE OF thread_type ON recent_threads
+                 WHEN NEW.thread_type = 'task'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'forced task-kind projection failure');
+                 END;",
+            )
+            .expect("install failure trigger");
+
+        assert!(
+            service.migrate_recent_task_thread_kind_v1().is_err(),
+            "projection failure must abort the migration"
+        );
+        let body: Value = serde_json::from_str(
+            &service
+                .get_thread_record_body("thread::atomic-legacy-task")
+                .expect("read body")
+                .expect("body exists"),
+        )
+        .expect("valid body");
+        assert!(body.get("thread_kind").is_none());
+        let conn = service.conn().expect("conn");
+        let recent_type: String = conn
+            .query_row(
+                "SELECT thread_type FROM recent_threads
+                  WHERE thread_id = 'thread::atomic-legacy-task'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("recent type");
+        assert_eq!(recent_type, "chat");
+        drop(conn);
+        assert!(
+            !service
+                .projection_state_exists(
+                    RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
+                    RECENT_TASK_THREAD_KIND_MIGRATION_VERSION,
+                )
+                .expect("marker lookup")
+        );
     }
 
     #[test]

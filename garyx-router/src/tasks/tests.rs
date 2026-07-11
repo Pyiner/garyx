@@ -249,6 +249,7 @@ async fn task_create_stores_task_overlay_without_task_messages() {
     assert!(task.number > 0);
     let record = service.thread_store.get(&thread_id).await.unwrap();
     assert!(record.get("task").is_some());
+    assert_eq!(record["thread_kind"], "task");
     // The body is no longer seeded into a record messages copy
     // (#TASK-1864 batch 1c): task.body is the canonical source and the
     // dispatch run writes it to the transcript.
@@ -1162,6 +1163,7 @@ async fn delete_task_removes_overlay_from_list_but_keeps_thread_record() {
         .await
         .expect("backing thread remains");
     assert!(record.get("task").is_none());
+    assert_eq!(record["thread_kind"], "task");
     let (listed, total, has_more) = service
         .list_tasks(TaskListFilter {
             include_done: true,

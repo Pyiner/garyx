@@ -18,7 +18,9 @@ use garyx_router::{ThreadStore, ThreadStoreError, ThreadTranscriptStore, is_thre
 use serde_json::Value;
 use tracing::warn;
 
-use crate::garyx_db::{GaryxDbService, ThreadRecordProjections, is_retired_workflow_thread_record};
+use crate::garyx_db::{
+    GaryxDbResult, GaryxDbService, ThreadRecordProjections, is_retired_workflow_thread_record,
+};
 use crate::recent_thread_projection::{
     ActiveRunProbe, is_recent_thread_excluded, recent_thread_draft_from_thread_data_with_active_run,
     resolve_active_run_id,
@@ -291,7 +293,7 @@ pub async fn assemble_sqlite_thread_store(
     transcript_store: Arc<ThreadTranscriptStore>,
     bridge: &Arc<garyx_bridge::MultiProviderBridge>,
     import_source: Arc<dyn ThreadStore>,
-) -> Arc<dyn ThreadStore> {
+) -> GaryxDbResult<Arc<dyn ThreadStore>> {
     let probe: Arc<dyn ActiveRunProbe> = Arc::new(
         crate::recent_thread_projection::BridgeActiveRunProbe::new(Arc::downgrade(bridge)),
     );
@@ -302,7 +304,10 @@ pub async fn assemble_sqlite_thread_store(
     );
     import_thread_records_if_needed(&garyx_db, &import_source, &sqlite_store, &transcript_store)
         .await;
-    Arc::new(sqlite_store)
+    garyx_db
+        .run_blocking(|db| db.run_thread_data_startup_migrations())
+        .await?;
+    Ok(Arc::new(sqlite_store))
 }
 
 pub(crate) const THREAD_RECORDS_IMPORT_NAME: &str = "thread_records_import";
@@ -475,7 +480,10 @@ pub(crate) async fn import_thread_records_if_needed(
 /// update/delete/list_keys/exists must agree (#TASK-1864 batch 2).
 #[cfg(test)]
 mod contract_tests {
-    use garyx_router::{FileThreadStore, InMemoryThreadStore};
+    use garyx_models::Principal;
+    use garyx_router::{
+        CreateTaskInput, FileThreadStore, InMemoryTaskCounterStore, InMemoryThreadStore, TaskService,
+    };
     use serde_json::json;
 
     use super::*;
@@ -719,6 +727,76 @@ mod contract_tests {
             import_thread_records_if_needed(&garyx_db, &source, &sqlite, &transcript_store).await;
         assert_eq!(summary.imported, 0);
         assert_eq!(summary.source_keys, 3);
+    }
+
+    #[tokio::test]
+    async fn assembly_migrates_task_kind_only_after_boot_import() {
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+        let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let task_service = TaskService::new(
+            Arc::clone(&source),
+            Arc::new(InMemoryTaskCounterStore::new()),
+        );
+        let (thread_id, _) = task_service
+            .create_task(CreateTaskInput {
+                title: Some("Imported legacy task".to_owned()),
+                body: Some("Verify startup ordering.".to_owned()),
+                assignee: None,
+                notification_target: None,
+                source: None,
+                executor: None,
+                start: false,
+                actor: Some(Principal::Agent {
+                    agent_id: "test-agent".to_owned(),
+                }),
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .expect("create source task");
+        let mut legacy = source.get(&thread_id).await.expect("source record");
+        legacy
+            .as_object_mut()
+            .expect("record object")
+            .remove("thread_kind");
+        source.set(&thread_id, legacy).await;
+
+        let bridge = Arc::new(garyx_bridge::MultiProviderBridge::new());
+        let store = assemble_sqlite_thread_store(
+            Arc::clone(&garyx_db),
+            Arc::clone(&transcript_store),
+            &bridge,
+            source,
+        )
+        .await
+        .expect("assemble store");
+
+        let imported = store.get(&thread_id).await.expect("imported task");
+        assert_eq!(imported["thread_kind"], "task");
+        let recent = garyx_db
+            .list_recent_threads(10, 0)
+            .expect("recent rows")
+            .into_iter()
+            .find(|row| row.thread_id == thread_id)
+            .expect("recent task row");
+        assert_eq!(recent.thread_type, "task");
+        let meta = garyx_db
+            .list_thread_meta()
+            .expect("meta rows")
+            .into_iter()
+            .find(|row| row.thread_id == thread_id)
+            .expect("meta task row");
+        assert_eq!(meta.thread_type, "task");
+        assert!(
+            garyx_db
+                .projection_state_exists(
+                    crate::garyx_db::RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
+                    1,
+                )
+                .expect("migration marker")
+        );
     }
 
     #[tokio::test]

@@ -82,7 +82,7 @@ impl RuntimeAssembler {
             &bridge,
             file_store.clone(),
         )
-        .await;
+        .await?;
         let thread_history = Arc::new(ThreadHistoryRepository::new(
             thread_store.clone(),
             transcript_store,

@@ -7222,6 +7222,25 @@ async fn task_delete_aborts_run_and_removes_task_overlay_but_retains_thread() {
         .await
         .expect("backing thread should remain");
     assert!(retained.get("task").is_none());
+    assert_eq!(retained["thread_kind"], "task");
+    let recent = state
+        .ops
+        .garyx_db
+        .list_recent_threads(100, 0)
+        .expect("recent rows")
+        .into_iter()
+        .find(|row| row.thread_id == thread_id)
+        .expect("retained recent row");
+    assert_eq!(recent.thread_type, "task");
+    let meta = state
+        .ops
+        .garyx_db
+        .list_thread_meta()
+        .expect("thread metadata")
+        .into_iter()
+        .find(|row| row.thread_id == thread_id)
+        .expect("retained metadata row");
+    assert_eq!(meta.thread_type, "task");
 
     let request = authed_request()
         .method("GET")

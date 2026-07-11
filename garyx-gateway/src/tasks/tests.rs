@@ -739,8 +739,27 @@ async fn agent_executor_creates_in_progress_task_and_dispatches_without_assignee
         .get(thread_id)
         .await
         .expect("stored thread");
+    assert_eq!(stored["thread_kind"], "task");
     assert_eq!(stored["agent_id"], "reviewer");
     assert_eq!(stored["provider_type"], "codex_app_server");
+    let recent = state
+        .ops
+        .garyx_db
+        .list_recent_threads(100, 0)
+        .expect("recent rows")
+        .into_iter()
+        .find(|row| row.thread_id == thread_id)
+        .expect("recent task row");
+    assert_eq!(recent.thread_type, "task");
+    let meta = state
+        .ops
+        .garyx_db
+        .list_thread_meta()
+        .expect("thread metadata")
+        .into_iter()
+        .find(|row| row.thread_id == thread_id)
+        .expect("task metadata row");
+    assert_eq!(meta.thread_type, "task");
 }
 
 #[tokio::test]

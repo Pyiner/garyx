@@ -295,6 +295,7 @@ impl TaskService {
                 workspace_mode,
                 worktree_base_dir,
                 agent_id: thread_agent_id,
+                thread_kind: Some("task".to_owned()),
                 ..Default::default()
             },
         )
@@ -1004,6 +1005,7 @@ fn set_task_on_record(record: &mut Value, task: &ThreadTask) -> Result<(), TaskS
     let obj = record
         .as_object_mut()
         .ok_or_else(|| TaskServiceError::Store("thread record is not an object".to_owned()))?;
+    obj.insert("thread_kind".to_owned(), Value::String("task".to_owned()));
     obj.insert("task".to_owned(), serde_json::to_value(task)?);
     obj.insert(
         "updated_at".to_owned(),
@@ -1048,6 +1050,7 @@ fn remove_task_from_record(record: &mut Value) -> Result<(), TaskServiceError> {
     let obj = record
         .as_object_mut()
         .ok_or_else(|| TaskServiceError::Store("thread record is not an object".to_owned()))?;
+    obj.insert("thread_kind".to_owned(), Value::String("task".to_owned()));
     obj.remove("task");
     obj.insert(
         "updated_at".to_owned(),
