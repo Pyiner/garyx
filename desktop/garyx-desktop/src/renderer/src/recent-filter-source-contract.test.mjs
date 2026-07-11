@@ -34,16 +34,25 @@ test("Recent tabs expose the required accessible segmented semantics", () => {
 
 test("AppShell owns the feed hook outside the conditional rail", () => {
   const hookOwner = appShell.indexOf("const recentThreadFeeds = useRecentThreadFeeds");
+  const recentRowsStart = appShell.indexOf("const recentThreadRows = useMemo");
+  const pinnedRowsStart = appShell.indexOf("const pinnedThreadRows = useMemo");
   const conditionalRail = appShell.indexOf("<RecentConversationSidebar");
   assert.ok(hookOwner >= 0);
+  assert.ok(recentRowsStart > hookOwner);
+  assert.ok(pinnedRowsStart > recentRowsStart);
   assert.ok(conditionalRail > hookOwner);
+  const recentRowsOwner = appShell.slice(recentRowsStart, pinnedRowsStart);
+  assert.match(
+    recentRowsOwner,
+    /recentThreadFeeds\.selectedThreads\.map\(\(thread\) => \(\{/,
+  );
+  assert.doesNotMatch(recentRowsOwner, /desktopState\?\.threads/);
   assert.match(hook, /resetRecentThreadFeedsScope/);
   assert.match(appShell, /gatewayScope: desktopState\?\.entitiesGatewayUrl \|\| ""/);
   assert.doesNotMatch(
     appShell,
     /gatewayScope:[\s\S]{0,160}desktopState\?\.settings\.gatewayUrl/,
   );
-  assert.doesNotMatch(appShell, /desktopState\?\.threads\s*\.filter/);
   assert.match(
     appShell,
     /onTaskCreated=\{\(\) => \{\s*recentThreadFeeds\.noteAllLocalMutation\(\);\s*recentThreadFeeds\.refreshAll\(\);/,
