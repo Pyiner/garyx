@@ -4,6 +4,7 @@ import type { DesktopThreadSummary } from "@shared/contracts";
 
 import {
   completeRecentThreadRequest,
+  consumeRecentThreadMutationFollowUp,
   createRecentThreadFeedsState,
   failRecentThreadRequest,
   ingestRecentThreadSummaries,
@@ -157,6 +158,31 @@ export function useRecentThreadFeeds({
       }
     }
   }, [issueRefresh, state]);
+
+  useEffect(() => {
+    let next = stateRef.current;
+    const tickets: RecentThreadRequestTicket[] = [];
+    for (const filter of FILTERS) {
+      for (const kind of ["refresh", "loadMore"] as const) {
+        const decision = consumeRecentThreadMutationFollowUp(
+          next,
+          filter,
+          kind,
+        );
+        next = decision.state;
+        if (decision.ticket) {
+          tickets.push(decision.ticket);
+        }
+      }
+    }
+    if (next !== stateRef.current) {
+      stateRef.current = next;
+      setState(next);
+    }
+    for (const ticket of tickets) {
+      void execute(ticket);
+    }
+  }, [execute, state]);
 
   const selectFilter = useCallback(
     (filter: RecentThreadFilter) => {

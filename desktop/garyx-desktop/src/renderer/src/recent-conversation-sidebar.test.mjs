@@ -55,6 +55,8 @@ function feed(overrides = {}) {
     loadMoreFailureRevision: 0,
     activeRefreshRequestId: null,
     activeLoadMoreRequestId: null,
+    refreshAfterMutation: false,
+    loadMoreAfterMutation: false,
     ...overrides,
   };
 }

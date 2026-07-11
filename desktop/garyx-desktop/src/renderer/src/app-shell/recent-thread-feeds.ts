@@ -24,6 +24,8 @@ export interface RecentThreadFeedState {
   loadMoreFailureRevision: number;
   activeRefreshRequestId: number | null;
   activeLoadMoreRequestId: number | null;
+  refreshAfterMutation: boolean;
+  loadMoreAfterMutation: boolean;
 }
 
 export interface RecentThreadFeedsState {
@@ -89,6 +91,8 @@ function createFeed(epoch = 0): RecentThreadFeedState {
     loadMoreFailureRevision: 0,
     activeRefreshRequestId: null,
     activeLoadMoreRequestId: null,
+    refreshAfterMutation: false,
+    loadMoreAfterMutation: false,
   };
 }
 
@@ -217,6 +221,7 @@ export function requestRecentThreadRefresh(
           isRefreshingHead: true,
           headFailure: null,
           activeRefreshRequestId: requestId,
+          refreshAfterMutation: false,
         },
       },
     },
@@ -262,6 +267,7 @@ export function requestRecentThreadLoadMore(
           ...feed,
           isLoadingMore: true,
           activeLoadMoreRequestId: requestId,
+          loadMoreAfterMutation: false,
         },
       },
     },
@@ -285,7 +291,10 @@ export function completeRecentThreadRequest(
     return state;
   }
   if (feed.localMutationSequence !== ticket.observedLocalMutationSequence) {
-    return clearOwnedRequest(state, ticket);
+    return markRecentThreadMutationFollowUp(
+      clearOwnedRequest(state, ticket),
+      ticket,
+    );
   }
 
   // A request issued after optimistic removal but before the archive commits
@@ -518,6 +527,44 @@ export function noteRecentThreadFilterLocalMutation(
   };
 }
 
+export function consumeRecentThreadMutationFollowUp(
+  state: RecentThreadFeedsState,
+  filter: RecentThreadFilter,
+  kind: RecentThreadRequestKind,
+): RecentThreadRequestDecision<RecentThreadRequestTicket> {
+  const feed = state.feeds[filter];
+  const requested =
+    kind === "refresh"
+      ? feed.refreshAfterMutation
+      : feed.loadMoreAfterMutation;
+  const active =
+    kind === "refresh" ? feed.isRefreshingHead : feed.isLoadingMore;
+  if (!requested || active) {
+    return { state, ticket: null };
+  }
+
+  const cleared: RecentThreadFeedsState = {
+    ...state,
+    feeds: {
+      ...state.feeds,
+      [filter]: {
+        ...feed,
+        ...(kind === "refresh"
+          ? { refreshAfterMutation: false }
+          : { loadMoreAfterMutation: false }),
+      },
+    },
+  };
+  if (kind === "refresh") {
+    return requestRecentThreadRefresh(cleared, filter);
+  }
+  return requestRecentThreadLoadMore(
+    cleared,
+    filter,
+    feed.loadGate === "failed",
+  );
+}
+
 export function selectedRecentThreadFeed(
   state: RecentThreadFeedsState,
 ): RecentThreadFeedState {
@@ -568,6 +615,25 @@ function clearOwnedRequest(
   return {
     ...state,
     feeds: { ...state.feeds, [ticket.filter]: nextFeed },
+  };
+}
+
+function markRecentThreadMutationFollowUp(
+  state: RecentThreadFeedsState,
+  ticket: RecentThreadRequestTicket,
+): RecentThreadFeedsState {
+  const feed = state.feeds[ticket.filter];
+  return {
+    ...state,
+    feeds: {
+      ...state.feeds,
+      [ticket.filter]: {
+        ...feed,
+        ...(ticket.kind === "refresh"
+          ? { refreshAfterMutation: true }
+          : { loadMoreAfterMutation: true }),
+      },
+    },
   };
 }
 

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   completeRecentThreadRequest,
+  consumeRecentThreadMutationFollowUp,
   createRecentThreadFeedsState,
   failRecentThreadRequest,
   ingestRecentThreadSummaries,
@@ -58,6 +59,8 @@ test("Recent feeds default to All and map both filters to explicit wire values",
   assert.equal(recentThreadTasksQuery("nonTask"), "exclude");
   assert.equal(state.feeds.all.isPrimed, false);
   assert.equal(state.feeds.nonTask.isPrimed, false);
+  assert.equal(state.feeds.all.refreshAfterMutation, false);
+  assert.equal(state.feeds.all.loadMoreAfterMutation, false);
 });
 
 test("filter tickets own independent rows and accept late completion into their own cache", () => {
@@ -301,6 +304,68 @@ test("new task invalidation is owned by All and leaves Chats requests current", 
     page(state.gatewayScope, ["chat", "new-chat"]),
   );
   assert.deepEqual(state.feeds.nonTask.orderedThreadIds, ["chat", "new-chat"]);
+});
+
+test("a refresh abandoned by local mutation structurally schedules a fresh ticket", () => {
+  let state = createRecentThreadFeedsState("https://gateway.test");
+  const stale = requestRecentThreadRefresh(state, "all");
+  state = noteRecentThreadFilterLocalMutation(stale.state, "all");
+  state = completeRecentThreadRequest(
+    state,
+    stale.ticket,
+    page(state.gatewayScope, ["stale-row"]),
+  );
+  assert.equal(state.feeds.all.isPrimed, false);
+  assert.equal(state.feeds.all.isRefreshingHead, false);
+  assert.equal(state.feeds.all.refreshAfterMutation, true);
+
+  const followUp = consumeRecentThreadMutationFollowUp(
+    state,
+    "all",
+    "refresh",
+  );
+  assert.ok(followUp.ticket);
+  assert.equal(followUp.state.feeds.all.isRefreshingHead, true);
+  assert.equal(followUp.state.feeds.all.refreshAfterMutation, false);
+  state = completeRecentThreadRequest(
+    followUp.state,
+    followUp.ticket,
+    page(state.gatewayScope, ["fresh-row"]),
+  );
+  assert.equal(state.feeds.all.isPrimed, true);
+  assert.deepEqual(state.feeds.all.orderedThreadIds, ["fresh-row"]);
+});
+
+test("a load-more abandoned by local mutation reissues its owned filter window", () => {
+  let state = createRecentThreadFeedsState("https://gateway.test");
+  state = refresh(state, "nonTask", ["chat-a", "chat-b"], {
+    count: 2,
+    total: 10,
+    hasMore: true,
+  });
+  const stale = requestRecentThreadLoadMore(state, "nonTask");
+  state = noteRecentThreadFilterLocalMutation(stale.state, "nonTask");
+  state = completeRecentThreadRequest(
+    state,
+    stale.ticket,
+    page(state.gatewayScope, ["chat-a", "chat-b", "stale-chat"], {
+      count: 3,
+      total: 10,
+      hasMore: true,
+    }),
+  );
+  assert.equal(state.feeds.nonTask.loadMoreAfterMutation, true);
+  assert.equal(state.feeds.nonTask.nextOffset, 2);
+
+  const followUp = consumeRecentThreadMutationFollowUp(
+    state,
+    "nonTask",
+    "loadMore",
+  );
+  assert.ok(followUp.ticket);
+  assert.equal(followUp.ticket.filter, "nonTask");
+  assert.equal(followUp.ticket.offset, 0);
+  assert.equal(followUp.state.feeds.nonTask.loadMoreAfterMutation, false);
 });
 
 test("the renderer adopts each server page verbatim and never post-filters thread kinds", () => {
