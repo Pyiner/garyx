@@ -136,7 +136,6 @@ export function useLayoutResizeController({
   }, [secondaryRailOpen]);
   const threadLayoutRef = useRef<HTMLDivElement | null>(null);
   const conversationRef = useRef<HTMLElement | null>(null);
-  const [conversationWidth, setConversationWidth] = useState(0);
   const [threadLayoutWidth, setThreadLayoutWidth] = useState(0);
   const threadLogsPanelWidthRef = useRef(
     DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
@@ -154,14 +153,9 @@ export function useLayoutResizeController({
 
   const desktopStateReady = desktopState !== null;
   useLayoutEffect(() => {
-    const conversation = conversationRef.current;
     const threadLayout = threadLayoutRef.current;
     const syncMeasuredWidths = () => {
-      const nextConversationWidth = conversation?.clientWidth || 0;
       const nextThreadLayoutWidth = threadLayout?.clientWidth || 0;
-      setConversationWidth((current) =>
-        current === nextConversationWidth ? current : nextConversationWidth,
-      );
       setThreadLayoutWidth((current) =>
         current === nextThreadLayoutWidth ? current : nextThreadLayoutWidth,
       );
@@ -176,9 +170,6 @@ export function useLayoutResizeController({
     }
 
     const observer = new ResizeObserver(syncMeasuredWidths);
-    if (conversation) {
-      observer.observe(conversation);
-    }
     if (threadLayout) {
       observer.observe(threadLayout);
     }
@@ -352,7 +343,6 @@ export function useLayoutResizeController({
       const measuredThreadLayoutWidth = currentThreadLayoutWidth() || 0;
       const measuredConversationWidth = currentConversationWidth() || 0;
       setThreadLayoutWidth(measuredThreadLayoutWidth);
-      setConversationWidth(measuredConversationWidth);
       const nextWidth = clampThreadLogsPanelWidth(
         threadLogsPanelWidthRef.current,
         measuredThreadLayoutWidth,
@@ -539,10 +529,6 @@ export function useLayoutResizeController({
     };
   }, [sideToolsResizing]);
 
-  const sideToolsDocked = isDockedSidePanel({
-    canvasWidth: conversationWidth,
-    panelWidth: sideToolsPanelWidth,
-  });
   const threadLogsDocked = isDockedSidePanel({
     canvasWidth: threadLayoutWidth,
     panelWidth: threadLogsPanelWidth,
@@ -562,7 +548,6 @@ export function useLayoutResizeController({
     sidebarCollapsed,
     sidebarResizing,
     sidebarWidth,
-    sideToolsDocked,
     sideToolsPanelWidth,
     sideToolsPanelWidthCustomizedRef,
     sideToolsPanelWidthRef,

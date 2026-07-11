@@ -13,11 +13,9 @@ export const MAX_GATEWAY_THREAD_LOG_LINES = 100;
 export const THREAD_LOG_PANEL_MIN_WIDTH = 280;
 export const THREAD_LOG_PANEL_MAX_WIDTH = 760;
 const DEFAULT_THREAD_LOG_PANEL_WIDTH = 360;
-export const SIDE_TOOLS_PANEL_MIN_WIDTH = 520;
+export const SIDE_TOOLS_PANEL_MIN_WIDTH = 320;
 export const SIDE_TOOLS_PANEL_MAX_WIDTH = 1180;
-export const SIDE_TOOLS_PANEL_DEFAULT_RATIO = 0.42;
-const SIDE_TOOLS_PANEL_DEFAULT_MAX_WIDTH = 720;
-const DEFAULT_SIDE_TOOLS_PANEL_WIDTH = 520;
+const DEFAULT_SIDE_TOOLS_PANEL_WIDTH = 320;
 const GATEWAY_OFFLINE_THRESHOLD = 3;
 
 export function keepRecentThreadLogLines(
@@ -112,16 +110,7 @@ export function clampSideToolsPanelWidth(
 }
 
 export function defaultSideToolsPanelWidth(layoutWidth?: number | null): number {
-  const baseWidth = layoutWidth && layoutWidth > 0
-    ? Math.min(
-        SIDE_TOOLS_PANEL_DEFAULT_MAX_WIDTH,
-        Math.max(
-          DEFAULT_SIDE_TOOLS_PANEL_WIDTH,
-          layoutWidth * SIDE_TOOLS_PANEL_DEFAULT_RATIO,
-        ),
-      )
-    : DEFAULT_SIDE_TOOLS_PANEL_WIDTH;
-  return clampSideToolsPanelWidth(baseWidth, layoutWidth);
+  return clampSideToolsPanelWidth(DEFAULT_SIDE_TOOLS_PANEL_WIDTH, layoutWidth);
 }
 
 export function computeGatewayIndicator(input: {

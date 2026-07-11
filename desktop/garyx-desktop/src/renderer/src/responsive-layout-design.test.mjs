@@ -60,20 +60,30 @@ test("task tree only reserves a rail when the full reading column fits", () => {
   assert.ok(css.includes("max-height: calc(100% - 24px)"));
 });
 
-test("right panels use measured dock or overlay state instead of a viewport guess", () => {
+test("side tools use one right-docked presentation at every width", () => {
   const appShellSource = read("app-shell/AppShell.tsx");
-  const threadPageSource = read("app-shell/components/ThreadPage.tsx");
   const controllerSource = read("app-shell/useLayoutResizeController.ts");
   const workspaceRailsCss = read("styles/workspace-rails.css");
+  const browserCss = read("styles/browser.css");
+
+  assert.ok(!appShellSource.includes("sideToolsDocked"));
+  assert.ok(!controllerSource.includes("sideToolsDocked"));
+  assert.ok(workspaceRailsCss.includes(".conversation.with-side-tools {"));
+  assert.ok(workspaceRailsCss.includes("minmax(320px, var(--side-tools-panel-width, 320px))"));
+  assert.ok(!workspaceRailsCss.includes("side-tools-docked"));
+  assert.ok(!workspaceRailsCss.includes("side-tools-overlay"));
+  assert.ok(!browserCss.includes(".conversation.with-side-tools {"));
+  assert.ok(!browserCss.includes(".thread-side-tools-panel {"));
+});
+
+test("thread logs use measured dock or overlay state instead of a viewport guess", () => {
+  const threadPageSource = read("app-shell/components/ThreadPage.tsx");
+  const controllerSource = read("app-shell/useLayoutResizeController.ts");
   const conversationCss = read("styles/conversation.css");
   const browserCss = read("styles/browser.css");
 
-  assert.ok(appShellSource.includes('sideToolsDocked ? "side-tools-docked" : "side-tools-overlay"'));
   assert.ok(threadPageSource.includes('threadLogsDocked ? "log-panel-docked" : "log-panel-overlay"'));
   assert.ok(controllerSource.includes("new ResizeObserver(syncMeasuredWidths)"));
-  assert.ok(workspaceRailsCss.includes(".conversation.with-side-tools.side-tools-overlay"));
   assert.ok(conversationCss.includes(".thread-layout.with-log-panel.log-panel-overlay"));
-  assert.ok(!browserCss.includes(".conversation.with-side-tools {"));
-  assert.ok(!browserCss.includes(".thread-side-tools-panel {"));
   assert.ok(!browserCss.includes(".thread-layout.with-log-panel {"));
 });
