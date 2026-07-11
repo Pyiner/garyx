@@ -212,4 +212,64 @@ mod tests {
         let old_record = store.get("thread::old").await.unwrap().expect("old record");
         assert!(garyx_router::bindings_from_value(&old_record).is_empty());
     }
+
+    /// Two thread records holding the SAME endpoint (legacy import or a
+    /// mid-bind race) must both be visible as holders and both be stripped
+    /// on the next bind — the projection stores one row per holder
+    /// (#TASK-2107 P1 regression).
+    #[tokio::test]
+    async fn duplicate_endpoint_holders_are_all_visible_and_all_removed_on_bind() {
+        let state = state();
+        let store: Arc<dyn ThreadStore> = state.threads.thread_store.clone();
+        store
+            .set("thread::old-a", bound_thread_record("thread::old-a", "42"))
+            .await
+            .unwrap();
+        store
+            .set("thread::old-b", bound_thread_record("thread::old-b", "42"))
+            .await
+            .unwrap();
+        store
+            .set("thread::new", json!({ "thread_id": "thread::new" }))
+            .await
+            .unwrap();
+
+        let projection = channel_endpoint_projection_for(&store);
+        let mut holders = projection
+            .endpoint_holders("telegram::main::42")
+            .await
+            .expect("holders before bind");
+        holders.sort();
+        assert_eq!(
+            holders,
+            vec!["thread::old-a".to_owned(), "thread::old-b".to_owned()],
+            "both duplicate holders must be visible in the projection"
+        );
+
+        let binding = garyx_router::ChannelBinding {
+            channel: "telegram".to_owned(),
+            account_id: "main".to_owned(),
+            binding_key: "42".to_owned(),
+            chat_id: "42".to_owned(),
+            ..Default::default()
+        };
+        garyx_router::bind_endpoint_to_thread(&store, "thread::new", binding)
+            .await
+            .expect("bind");
+
+        for old_thread in ["thread::old-a", "thread::old-b"] {
+            let record = store.get(old_thread).await.unwrap().expect("old record");
+            assert!(
+                garyx_router::bindings_from_value(&record).is_empty(),
+                "{old_thread} still holds a duplicate binding"
+            );
+        }
+        assert_eq!(
+            projection
+                .endpoint_holders("telegram::main::42")
+                .await
+                .expect("holders after bind"),
+            vec!["thread::new".to_owned()],
+        );
+    }
 }

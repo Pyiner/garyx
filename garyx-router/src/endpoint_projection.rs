@@ -22,8 +22,8 @@ use serde_json::Value;
 
 use crate::store::ThreadStore;
 use crate::threads::{
-    KnownChannelEndpoint, bindings_from_value, is_preferred_thread_binding, is_thread_key,
-    label_from_value, value_updated_at, workspace_dir_from_value,
+    KnownChannelEndpoint, bindings_from_value, is_thread_key, label_from_value, value_updated_at,
+    workspace_dir_from_value,
 };
 
 /// One persisted delivery context: the projection row behind
@@ -54,8 +54,10 @@ pub trait ChannelEndpointProjection: Send + Sync {
     /// Thread ids currently holding a channel binding for `endpoint_key`.
     async fn endpoint_holders(&self, endpoint_key: &str) -> Result<Vec<String>, String>;
 
-    /// Every bound endpoint with its holder-thread metadata (one entry per
-    /// endpoint key, preferring the most recently updated holder).
+    /// Every bound endpoint with its holder-thread metadata — one entry
+    /// per (endpoint, holder) pair, so duplicate holders stay visible.
+    /// Callers wanting one row per endpoint pick their preferred holder
+    /// (see `list_known_channel_endpoints`).
     async fn endpoints(&self) -> Result<Vec<KnownChannelEndpoint>, String>;
 
     /// Every thread with a persisted delivery context.
@@ -155,7 +157,7 @@ impl ChannelEndpointProjection for ScanChannelEndpointProjection {
     }
 
     async fn endpoints(&self) -> Result<Vec<KnownChannelEndpoint>, String> {
-        let mut endpoints: HashMap<String, KnownChannelEndpoint> = HashMap::new();
+        let mut endpoints = Vec::new();
         let keys = self
             .store
             .list_keys(None)
@@ -178,8 +180,8 @@ impl ChannelEndpointProjection for ScanChannelEndpointProjection {
                 let endpoint_key = binding.endpoint_key();
                 let delivery_target_type = binding.resolved_delivery_target_type();
                 let delivery_target_id = binding.resolved_delivery_target_id();
-                let candidate = KnownChannelEndpoint {
-                    endpoint_key: endpoint_key.clone(),
+                endpoints.push(KnownChannelEndpoint {
+                    endpoint_key,
                     channel: binding.channel,
                     account_id: binding.account_id,
                     binding_key: binding.binding_key,
@@ -193,21 +195,10 @@ impl ChannelEndpointProjection for ScanChannelEndpointProjection {
                     thread_updated_at: updated_at.clone(),
                     last_inbound_at: binding.last_inbound_at,
                     last_delivery_at: binding.last_delivery_at,
-                };
-                let should_replace = endpoints.get(&endpoint_key).is_none_or(|current| {
-                    is_preferred_thread_binding(
-                        candidate.thread_id.as_deref().unwrap_or_default(),
-                        candidate.thread_updated_at.as_deref(),
-                        current.thread_id.as_deref().unwrap_or_default(),
-                        current.thread_updated_at.as_deref(),
-                    )
                 });
-                if should_replace {
-                    endpoints.insert(endpoint_key, candidate);
-                }
             }
         }
-        Ok(endpoints.into_values().collect())
+        Ok(endpoints)
     }
 
     async fn delivery_contexts(&self) -> Result<Vec<DeliveryContextRow>, String> {

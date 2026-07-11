@@ -78,7 +78,34 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
         last_delivery_updated_at: last_delivery.and_then(|(_, updated_at)| updated_at),
         default_list_hidden: is_default_thread_list_hidden(data),
     };
-    let channel_endpoints = bindings_from_value(data)
+    let channel_endpoints = channel_endpoints_from_thread_data(thread_id, data);
+    let message_routes = message_routes_from_thread_data(thread_id, data);
+
+    Some(ThreadMetaProjectionDraft {
+        thread_id: thread_id.to_owned(),
+        thread_meta,
+        channel_endpoints,
+        message_routes,
+    })
+}
+
+/// Channel endpoint rows for one thread record: one row per binding the
+/// record currently holds. Shared by the write-path projection derivation
+/// and the one-shot holder-schema re-derivation (#TASK-2107).
+pub(crate) fn channel_endpoints_from_thread_data(
+    thread_id: &str,
+    data: &Value,
+) -> Vec<KnownChannelEndpoint> {
+    let thread_id = thread_id.trim();
+    let thread_label = label_from_value(data);
+    let workspace_dir = workspace_dir_from_value(data);
+    let thread_updated_at = data
+        .get("updated_at")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    bindings_from_value(data)
         .into_iter()
         .map(|binding| {
             let endpoint_key = binding.endpoint_key();
@@ -101,15 +128,7 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
                 last_delivery_at: binding.last_delivery_at,
             }
         })
-        .collect::<Vec<_>>();
-    let message_routes = message_routes_from_thread_data(thread_id, data);
-
-    Some(ThreadMetaProjectionDraft {
-        thread_id: thread_id.to_owned(),
-        thread_meta,
-        channel_endpoints,
-        message_routes,
-    })
+        .collect::<Vec<_>>()
 }
 
 fn message_routes_from_thread_data(thread_id: &str, data: &Value) -> Vec<ThreadMessageRouteDraft> {
