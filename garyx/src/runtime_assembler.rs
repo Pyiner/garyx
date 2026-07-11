@@ -39,8 +39,7 @@ impl RuntimeAssembler {
             .data_dir
             .clone()
             .unwrap_or_else(|| default_session_data_dir().to_string_lossy().to_string());
-        let file_store: Arc<dyn ThreadStore> = match FileThreadStore::new(&session_data_dir).await
-        {
+        let file_store: Arc<dyn ThreadStore> = match FileThreadStore::new(&session_data_dir).await {
             Ok(store) => {
                 tracing::info!(data_dir = %session_data_dir, "FileThreadStore initialized");
                 Arc::new(store)
@@ -76,6 +75,9 @@ impl RuntimeAssembler {
         )?);
         let assembled_garyx_db = Some(garyx_db.clone());
         tracing::info!("thread store backend: sqlite");
+        // One-shot migration of the retired file-based task counter into the
+        // SQLite allocator row (no-op once the row exists).
+        garyx_gateway::seed_task_counter_from_legacy(&garyx_db, Path::new(&session_data_dir));
         let thread_store: Arc<dyn ThreadStore> = garyx_gateway::assemble_sqlite_thread_store(
             garyx_db,
             transcript_store.clone(),

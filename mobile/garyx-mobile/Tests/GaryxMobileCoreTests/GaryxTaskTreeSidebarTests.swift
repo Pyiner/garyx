@@ -93,7 +93,6 @@ private let anchoredForestFixture = """
   ],
   "total": 4,
   "active_count": 2,
-  "projection_current": true,
   "root_thread_ids": ["thread::origin"],
   "skipped_pinned_thread_ids": []
 }
@@ -169,8 +168,7 @@ final class GaryxTaskTreeSidebarTests: XCTestCase {
             }
           ],
           "total": 1,
-          "projection_current": true,
-          "root_thread_ids": ["thread::standalone"],
+                  "root_thread_ids": ["thread::standalone"],
           "skipped_pinned_thread_ids": []
         }
         """

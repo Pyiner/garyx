@@ -28,9 +28,7 @@ use tempfile::{TempDir, tempdir};
 use tower::ServiceExt;
 
 use crate::cron::CronService;
-use crate::garyx_db::{
-    RecentThreadDraft, ThreadMetaDraft, ThreadMetaProjectionDraft, WorkspaceDraft,
-};
+use crate::garyx_db::{RecentThreadDraft, WorkspaceDraft};
 use crate::route_graph::build_router;
 use crate::server::AppStateBuilder;
 use crate::thread_logs::ThreadFileLogger;
@@ -118,7 +116,11 @@ fn render_state_ref_ids(render_state: &Value) -> Vec<String> {
         }
     }
     fn values<'a>(parent: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
-        parent.get(key).and_then(Value::as_array).into_iter().flatten()
+        parent
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
     }
     let mut ids = Vec::new();
     for row in values(render_state, "rows") {
@@ -1347,7 +1349,10 @@ async fn thread_stream_delta_oracle_holds_on_captured_fixture_streams() {
             // stream_input) whose `message` would be null.
             .filter(|record| record.get("message").is_some_and(|m| !m.is_null()))
             .collect();
-        assert!(records.len() >= 2, "fixture {fixture} too short for a live tail");
+        assert!(
+            records.len() >= 2,
+            "fixture {fixture} too short for a live tail"
+        );
 
         let state = AppStateBuilder::new(test_config()).build();
         let thread_id = format!("thread::delta-fixture-{}", fixture.replace(['/', '.'], "-"));
@@ -1361,7 +1366,9 @@ async fn thread_stream_delta_oracle_holds_on_captured_fixture_streams() {
             &thread_id,
             run_id,
             records[0]["message"].clone(),
-            records[0]["timestamp"].as_str().unwrap_or("2026-06-18T12:00:00Z"),
+            records[0]["timestamp"]
+                .as_str()
+                .unwrap_or("2026-06-18T12:00:00Z"),
         )
         .await;
         let delta_base = new_delta_base();
@@ -1386,7 +1393,9 @@ async fn thread_stream_delta_oracle_holds_on_captured_fixture_streams() {
                 &thread_id,
                 run_id,
                 record["message"].clone(),
-                record["timestamp"].as_str().unwrap_or("2026-06-18T12:00:01Z"),
+                record["timestamp"]
+                    .as_str()
+                    .unwrap_or("2026-06-18T12:00:01Z"),
             )
             .await;
             let (forward_seq, forward_payload) = committed_thread_stream_live_payload(
@@ -1418,8 +1427,9 @@ async fn thread_stream_delta_oracle_holds_on_captured_fixture_streams() {
                 held.rows_hash.map(|hash| hash.to_string()),
                 "fixture {fixture}: rows_hash chain broke at seq {seq}"
             );
-            held = apply_render_delta(&held, &delta)
-                .unwrap_or_else(|error| panic!("fixture {fixture}: delta rejected at seq {seq}: {error}"));
+            held = apply_render_delta(&held, &delta).unwrap_or_else(|error| {
+                panic!("fixture {fixture}: delta rejected at seq {seq}: {error}")
+            });
             let expected = state
                 .threads
                 .history
@@ -1435,7 +1445,6 @@ async fn thread_stream_delta_oracle_holds_on_captured_fixture_streams() {
         }
     }
 }
-
 
 /// Seeding rule, no-replay-seed arm: a live frame arriving before any
 /// full frame seeded the base goes out FULL (with the chain token) and
@@ -3634,67 +3643,12 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
 }
 
 #[tokio::test]
-async fn delete_thread_cleans_stale_projected_task_thread() {
+async fn delete_thread_without_record_is_plain_not_found() {
+    // Projections derive and delete in the same transaction as the
+    // record, so a missing record has no projection rows to repair —
+    // the route answers 404 without any cleanup pass.
     let state = AppStateBuilder::new(test_config()).build();
-    let thread_id = "thread::stale-task-route";
-    state
-        .ops
-        .garyx_db
-        .replace_thread_meta_projection(ThreadMetaProjectionDraft {
-            thread_id: thread_id.to_owned(),
-            thread_meta: ThreadMetaDraft {
-                thread_id: thread_id.to_owned(),
-                workspace_dir: Some("/Users/test/project".to_owned()),
-                thread_type: "task".to_owned(),
-                thread_label: Some("Task Thread".to_owned()),
-                agent_id: Some("codex".to_owned()),
-                provider_type: Some("codex".to_owned()),
-                created_at: Some("2026-06-05T08:00:00.000Z".to_owned()),
-                updated_at: Some("2026-06-05T08:10:00.000Z".to_owned()),
-                message_count: 1,
-                last_user_message: Some("start task".to_owned()),
-                last_assistant_message: None,
-                last_message_preview: Some("start task".to_owned()),
-                recent_run_id: None,
-                active_run_id: None,
-                worktree_json: None,
-                last_delivery_context_json: None,
-                last_delivery_updated_at: None,
-                default_list_hidden: false,
-                provider_key: None,
-                selected_model: None,
-                selected_model_reasoning_effort: None,
-                selected_model_service_tier: None,
-                sdk_session_id: None,
-            },
-            channel_endpoints: vec![],
-            message_routes: vec![],
-        })
-        .expect("seed stale task projection");
-    state
-        .ops
-        .garyx_db
-        .upsert_recent_thread(RecentThreadDraft {
-            thread_id: thread_id.to_owned(),
-            title: "Task Thread".to_owned(),
-            workspace_dir: Some("/Users/test/project".to_owned()),
-            thread_type: "task".to_owned(),
-            provider_type: Some("codex".to_owned()),
-            agent_id: Some("codex".to_owned()),
-            message_count: 1,
-            last_message_preview: "start task".to_owned(),
-            recent_run_id: None,
-            active_run_id: None,
-            run_state: "idle".to_owned(),
-            updated_at: Some("2026-06-05T08:10:00.000Z".to_owned()),
-            last_active_at: "2026-06-05T08:10:00.000Z".to_owned(),
-        })
-        .expect("seed stale recent task");
-    state
-        .ops
-        .garyx_db
-        .pin_thread(thread_id)
-        .expect("pin stale task thread");
+    let thread_id = "thread::never-existed";
     assert!(state.threads.thread_store.get(thread_id).await.is_none());
 
     let router = build_router(state.clone());
@@ -3704,38 +3658,12 @@ async fn delete_thread_cleans_stale_projected_task_thread() {
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
         .await
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["deleted"], true);
-    assert_eq!(payload["thread_id"], thread_id);
-    assert_eq!(payload["stale_projection"], true);
-    assert!(
-        state
-            .ops
-            .garyx_db
-            .list_thread_meta()
-            .expect("list thread meta")
-            .is_empty()
-    );
-    assert!(
-        state
-            .ops
-            .garyx_db
-            .list_recent_threads(10, 0)
-            .expect("list recent threads")
-            .is_empty()
-    );
-    assert!(
-        state
-            .ops
-            .garyx_db
-            .list_pinned_threads()
-            .expect("list pinned threads")
-            .is_empty()
-    );
+    assert_eq!(payload["deleted"], false);
 }
 
 #[tokio::test]

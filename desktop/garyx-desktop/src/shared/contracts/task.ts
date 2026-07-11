@@ -82,7 +82,6 @@ export interface DesktopTasksPage {
 export interface DesktopTaskForestPage {
   tasks: DesktopTaskForestNode[];
   total: number;
-  projectionCurrent: boolean;
   rootThreadIds: string[];
   skippedPinnedThreadIds: string[];
   // Server-computed active badge count in anchored mode; null elsewhere.

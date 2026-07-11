@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
@@ -11,11 +10,8 @@ use chrono::{DateTime, Local, Utc};
 use garyx_models::config::{
     AutomationScheduleView, CronAction, CronJobConfig, CronJobKind, CronSchedule,
 };
-use garyx_models::local_paths::default_session_data_dir;
 use garyx_models::{Principal, TaskNotificationTarget};
-use garyx_router::{
-    CreateTaskInput, FileTaskCounterStore, TaskRuntimeInput, TaskService, WorkspaceMode,
-};
+use garyx_router::{CreateTaskInput, TaskRuntimeInput, WorkspaceMode};
 use garyx_router::{history_message_count, is_thread_key, workspace_dir_from_value};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
@@ -515,11 +511,7 @@ pub(crate) async fn resolve_automation_agent_id(
     current: Option<&str>,
 ) -> Result<String, String> {
     let agent_id = selected_agent_reference_id(requested, current);
-    resolve_agent_reference_from_stores(
-        state.ops.custom_agents.as_ref(),
-        &agent_id,
-    )
-    .await?;
+    resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), &agent_id).await?;
     Ok(agent_id)
 }
 
@@ -1368,24 +1360,13 @@ async fn create_data_trigger_task(
     trigger: &AutomationDataTrigger,
     event: &AppDbEvent,
 ) -> Option<Value> {
-    let config = state.config_snapshot();
-    if !config.tasks.enabled {
+    let Some(task_service) = crate::tasks::task_service(state) else {
         return Some(json!({
             "triggerId": trigger.id,
             "status": "skipped",
             "reason": "tasks disabled"
         }));
-    }
-    let data_dir = config
-        .sessions
-        .data_dir
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(default_session_data_dir);
-    let task_service = TaskService::new(
-        state.threads.thread_store.clone(),
-        Arc::new(FileTaskCounterStore::new(data_dir)),
-    );
+    };
     let title = render_data_trigger_template(&trigger.title_template, event);
     let body = render_data_trigger_template(&trigger.body_template, event);
     let runtime = TaskRuntimeInput {

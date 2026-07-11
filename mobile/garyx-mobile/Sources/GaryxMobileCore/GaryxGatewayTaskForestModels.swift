@@ -8,20 +8,17 @@ public struct GaryxTaskForestPage: Decodable, Equatable, Sendable {
     public var nodes: [GaryxTaskForestNode]
     public var total: Int
     public var activeCount: Int?
-    public var projectionCurrent: Bool
     public var rootThreadIds: [String]
 
     public init(
         nodes: [GaryxTaskForestNode] = [],
         total: Int = 0,
         activeCount: Int? = nil,
-        projectionCurrent: Bool = true,
         rootThreadIds: [String] = []
     ) {
         self.nodes = nodes
         self.total = total
         self.activeCount = activeCount
-        self.projectionCurrent = projectionCurrent
         self.rootThreadIds = rootThreadIds
     }
 
@@ -30,8 +27,6 @@ public struct GaryxTaskForestPage: Decodable, Equatable, Sendable {
         case total
         case activeCount = "active_count"
         case activeCountCamel = "activeCount"
-        case projectionCurrent = "projection_current"
-        case projectionCurrentCamel = "projectionCurrent"
         case rootThreadIds = "root_thread_ids"
         case rootThreadIdsCamel = "rootThreadIds"
     }
@@ -41,9 +36,6 @@ public struct GaryxTaskForestPage: Decodable, Equatable, Sendable {
         nodes = try container.decodeIfPresent([GaryxTaskForestNode].self, forKey: .tasks) ?? []
         total = try container.decodeIfPresent(Int.self, forKey: .total) ?? nodes.count
         activeCount = try container.garyxDecodeFirstInt(.activeCount, .activeCountCamel)
-        projectionCurrent = try container.garyxDecodeFirstBool(
-            .projectionCurrent, .projectionCurrentCamel
-        ) ?? true
         rootThreadIds = try container.garyxDecodeFirstStringArray(
             .rootThreadIds, .rootThreadIdsCamel
         ) ?? []

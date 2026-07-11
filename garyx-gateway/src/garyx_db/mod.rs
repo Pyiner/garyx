@@ -13,8 +13,8 @@ use uuid::Uuid;
 mod task_forest;
 
 pub use task_forest::{
-    CURRENT_TASK_PROJECTION_VERSION, TASK_PROJECTION_NAME, TaskForestNode, TaskForestPage,
-    TaskForestScope, TaskProjectionDraft,
+    CURRENT_TASK_PROJECTION_VERSION, TaskForestNode, TaskForestPage, TaskForestScope,
+    TaskProjectionDraft,
 };
 
 const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 4;
@@ -1309,154 +1309,6 @@ impl GaryxDbService {
         Ok(())
     }
 
-    pub fn sync_recent_threads_snapshot(
-        &self,
-        drafts: Vec<RecentThreadDraft>,
-        max_records: usize,
-    ) -> GaryxDbResult<()> {
-        struct NormalizedRecentThreadDraft {
-            thread_id: String,
-            title: String,
-            workspace_dir: Option<String>,
-            thread_type: String,
-            provider_type: Option<String>,
-            agent_id: Option<String>,
-            message_count: u32,
-            last_message_preview: String,
-            recent_run_id: Option<String>,
-            active_run_id: Option<String>,
-            run_state: String,
-            updated_at: Option<String>,
-            last_active_at: String,
-            recorded_at: String,
-        }
-
-        let mut rows = Vec::new();
-        for draft in drafts {
-            let Ok(thread_id) = normalize_thread_id(&draft.thread_id) else {
-                continue;
-            };
-            let Ok(thread_type) = normalize_required("thread_type", &draft.thread_type) else {
-                continue;
-            };
-            let Ok(run_state) = normalize_required("run_state", &draft.run_state) else {
-                continue;
-            };
-            let Ok(last_active_at) = normalize_required("last_active_at", &draft.last_active_at)
-            else {
-                continue;
-            };
-            rows.push(NormalizedRecentThreadDraft {
-                thread_id,
-                title: draft.title.trim().to_owned(),
-                workspace_dir: normalize_optional(draft.workspace_dir.as_deref()),
-                thread_type,
-                provider_type: normalize_optional(draft.provider_type.as_deref()),
-                agent_id: normalize_optional(draft.agent_id.as_deref()),
-                message_count: draft.message_count,
-                last_message_preview: draft.last_message_preview.trim().to_owned(),
-                recent_run_id: normalize_optional(draft.recent_run_id.as_deref()),
-                active_run_id: normalize_optional(draft.active_run_id.as_deref()),
-                run_state,
-                updated_at: normalize_optional(draft.updated_at.as_deref()),
-                last_active_at,
-                recorded_at: now_string(),
-            });
-        }
-
-        let retained_thread_ids = rows
-            .iter()
-            .map(|row| row.thread_id.clone())
-            .collect::<Vec<_>>();
-        let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
-        for row in rows {
-            tx.execute(
-                "INSERT INTO recent_threads (
-                    thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
-                    message_count, last_message_preview, recent_run_id, active_run_id, run_state,
-                    updated_at, last_active_at, recorded_at
-                 )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-                 ON CONFLICT(thread_id) DO UPDATE SET
-                    title = excluded.title,
-                    workspace_dir = excluded.workspace_dir,
-                    thread_type = excluded.thread_type,
-                    provider_type = excluded.provider_type,
-                    agent_id = excluded.agent_id,
-                    message_count = excluded.message_count,
-                    last_message_preview = excluded.last_message_preview,
-                    recent_run_id = excluded.recent_run_id,
-                    active_run_id = excluded.active_run_id,
-                    run_state = excluded.run_state,
-                    updated_at = excluded.updated_at,
-                    last_active_at = excluded.last_active_at,
-                    recorded_at = excluded.recorded_at",
-                params![
-                    row.thread_id,
-                    row.title,
-                    row.workspace_dir,
-                    row.thread_type,
-                    row.provider_type,
-                    row.agent_id,
-                    row.message_count,
-                    row.last_message_preview,
-                    row.recent_run_id,
-                    row.active_run_id,
-                    row.run_state,
-                    row.updated_at,
-                    row.last_active_at,
-                    row.recorded_at,
-                ],
-            )?;
-        }
-
-        if retained_thread_ids.is_empty() {
-            tx.execute("DELETE FROM recent_threads", [])?;
-        } else {
-            tx.execute(
-                "CREATE TEMP TABLE IF NOT EXISTS recent_thread_sync_ids (
-                    thread_id TEXT PRIMARY KEY
-                 )",
-                [],
-            )?;
-            tx.execute("DELETE FROM recent_thread_sync_ids", [])?;
-            for thread_id in &retained_thread_ids {
-                tx.execute(
-                    "INSERT OR IGNORE INTO recent_thread_sync_ids (thread_id) VALUES (?1)",
-                    params![thread_id],
-                )?;
-            }
-            tx.execute(
-                "DELETE FROM recent_threads
-                  WHERE thread_id NOT IN (
-                    SELECT thread_id FROM recent_thread_sync_ids
-                  )",
-                [],
-            )?;
-            tx.execute("DELETE FROM recent_thread_sync_ids", [])?;
-        }
-
-        if max_records == 0 {
-            tx.execute("DELETE FROM recent_threads", [])?;
-        } else {
-            let max_records = i64::try_from(max_records).unwrap_or(i64::MAX);
-            tx.execute(
-                "DELETE FROM recent_threads
-                 WHERE thread_id IN (
-                    SELECT thread_id
-                      FROM recent_threads
-                     ORDER BY last_active_at DESC, thread_id ASC
-                     LIMIT -1 OFFSET ?1
-                 )",
-                params![max_records],
-            )?;
-        }
-
-        tx.commit()?;
-        Ok(())
-    }
-
     pub fn upsert_recent_thread(
         &self,
         draft: RecentThreadDraft,
@@ -1494,18 +1346,6 @@ impl GaryxDbService {
         let count: i64 =
             conn.query_row("SELECT COUNT(*) FROM thread_meta", [], |row| row.get(0))?;
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
-    }
-
-    pub fn thread_meta_projection_needs_backfill(&self) -> GaryxDbResult<bool> {
-        let conn = self.read_conn()?;
-        let (total, current): (i64, i64) = conn.query_row(
-            "SELECT COUNT(*),
-                    SUM(CASE WHEN projection_version = ?1 THEN 1 ELSE 0 END)
-             FROM thread_meta",
-            params![CURRENT_THREAD_META_PROJECTION_VERSION],
-            |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
-        )?;
-        Ok(total == 0 || current != total)
     }
 
     pub fn count_thread_channel_endpoints(&self) -> GaryxDbResult<usize> {
@@ -1760,7 +1600,6 @@ impl GaryxDbService {
                 recorded_at = excluded.recorded_at",
             params![key, body, updated_at, recorded_at],
         )?;
-        let mut task_projection_removed = false;
         if let Some(projections) = projections {
             match projections.thread_meta {
                 Some(draft) => replace_thread_meta_projection_tx(&tx, draft, &recorded_at)?,
@@ -1775,7 +1614,6 @@ impl GaryxDbService {
                 }
                 None => {
                     remove_task_projection_tx(&tx, &key)?;
-                    task_projection_removed = true;
                 }
             }
             match projections.recent {
@@ -1787,22 +1625,21 @@ impl GaryxDbService {
                 }
             }
         }
-        let _ = task_projection_removed;
         tx.commit()?;
         Ok(())
     }
 
-    /// Single-transaction delete of a thread record and all its projection
-    /// rows. Returns whether the record existed.
+    /// Single-transaction delete of a thread record, all its projection
+    /// rows, and its pin. Returns whether the record existed.
     pub fn delete_thread_record_with_projections(&self, key: &str) -> GaryxDbResult<bool> {
         let key = normalize_required("key", key)?;
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        let removed =
-            tx.execute("DELETE FROM thread_records WHERE key = ?1", params![key])? > 0;
+        let removed = tx.execute("DELETE FROM thread_records WHERE key = ?1", params![key])? > 0;
         remove_thread_meta_projection_tx(&tx, &key)?;
         remove_task_projection_tx(&tx, &key)?;
         remove_recent_thread_tx(&tx, &key)?;
+        tx.execute("DELETE FROM thread_pins WHERE thread_id = ?1", params![key])?;
         tx.commit()?;
         Ok(removed)
     }
@@ -2078,6 +1915,15 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             projection_version INTEGER NOT NULL,
             source_row_count INTEGER NOT NULL,
             projected_at TEXT NOT NULL
+        ) STRICT;
+
+        -- Task-number allocator (single row). Allocation happens in one
+        -- transaction that also floors the counter against the task
+        -- projection's MAX(number), so numbers are strictly increasing
+        -- and never reused even if this row lags or is reset.
+        CREATE TABLE IF NOT EXISTS task_counter (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            last_allocated INTEGER NOT NULL CHECK (last_allocated >= 0)
         ) STRICT;
 
         CREATE TABLE IF NOT EXISTS task_projection (
@@ -3766,8 +3612,7 @@ mod tests {
     #[test]
     fn thread_record_write_read_list_delete_round_trip() {
         let dir = tempfile::tempdir().expect("temp dir");
-        let service =
-            GaryxDbService::open(dir.path().join("garyx-db.sqlite3")).expect("db opens");
+        let service = GaryxDbService::open(dir.path().join("garyx-db.sqlite3")).expect("db opens");
 
         service
             .write_thread_record_with_projections(
@@ -3793,7 +3638,11 @@ mod tests {
                 .expect("get"),
             Some(r#"{"thread_id":"thread::alpha"}"#.to_owned())
         );
-        assert!(service.thread_record_exists("thread::alpha").expect("exists"));
+        assert!(
+            service
+                .thread_record_exists("thread::alpha")
+                .expect("exists")
+        );
         assert!(
             !service
                 .thread_record_exists("thread::missing")
@@ -3806,7 +3655,10 @@ mod tests {
             vec!["thread::alpha".to_owned()]
         );
         assert_eq!(
-            service.list_thread_record_keys(None).expect("list all").len(),
+            service
+                .list_thread_record_keys(None)
+                .expect("list all")
+                .len(),
             2
         );
 
@@ -3918,7 +3770,8 @@ mod tests {
             "record itself survives projection removal"
         );
 
-        // Deleting the record clears every projection row with it.
+        // Deleting the record clears every projection row and the pin
+        // with it, in the same transaction.
         service
             .write_thread_record_with_projections(
                 thread_id,
@@ -3931,6 +3784,7 @@ mod tests {
                 }),
             )
             .expect("write again");
+        service.pin_thread(thread_id).expect("pin");
         service
             .delete_thread_record_with_projections(thread_id)
             .expect("delete");
@@ -3941,6 +3795,14 @@ mod tests {
                 .iter()
                 .any(|row| row.thread_id == thread_id),
             "projection rows must not survive record deletion"
+        );
+        assert!(
+            !service
+                .list_pinned_threads()
+                .expect("list pins")
+                .iter()
+                .any(|pin| pin.thread_id == thread_id),
+            "the pin must be removed in the delete transaction"
         );
     }
 
@@ -4034,7 +3896,9 @@ mod tests {
             .execute_batch("BEGIN IMMEDIATE;")
             .expect("hold write lock");
         let second = GaryxDbService::open(&path).expect("second open under held write lock");
-        blocker.execute_batch("COMMIT;").expect("release write lock");
+        blocker
+            .execute_batch("COMMIT;")
+            .expect("release write lock");
 
         second
             .pin_thread("thread::contended-open")
@@ -4269,10 +4133,6 @@ mod tests {
 
         let db = GaryxDbService::open(&path).expect("open migrated db");
 
-        assert!(
-            db.thread_meta_projection_needs_backfill()
-                .expect("legacy projection needs backfill")
-        );
         let rows = db.list_thread_meta().expect("list legacy meta");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].thread_id, "thread::legacy");
@@ -4927,10 +4787,6 @@ mod tests {
     #[test]
     fn thread_meta_projection_round_trip_and_remove() {
         let db = GaryxDbService::memory().expect("db opens");
-        assert!(
-            db.thread_meta_projection_needs_backfill()
-                .expect("empty projection needs backfill")
-        );
         let delivery_json = r#"{"channel":"telegram","account_id":"main","chat_id":"42","user_id":"42","delivery_target_type":"chat_id","delivery_target_id":"42"}"#.to_owned();
         db.replace_thread_meta_projection(ThreadMetaProjectionDraft {
             thread_id: "thread::project".to_owned(),
@@ -4985,10 +4841,6 @@ mod tests {
             }],
         })
         .expect("project thread meta");
-        assert!(
-            !db.thread_meta_projection_needs_backfill()
-                .expect("current projection does not need backfill")
-        );
 
         let meta = db.list_thread_meta().expect("list meta");
         assert_eq!(meta.len(), 1);
@@ -5034,10 +4886,6 @@ mod tests {
             db.list_thread_message_routes()
                 .expect("list routes after remove")
                 .is_empty()
-        );
-        assert!(
-            db.thread_meta_projection_needs_backfill()
-                .expect("removed projection needs backfill")
         );
     }
 
@@ -5087,72 +4935,4 @@ mod tests {
             Some("Daily")
         );
     }
-
-    #[test]
-    fn recent_threads_snapshot_sync_prunes_absent_rows_and_batches_updates() {
-        let db = GaryxDbService::memory().expect("db opens");
-        db.upsert_recent_thread(RecentThreadDraft {
-            thread_id: "thread::stale".to_owned(),
-            title: "Stale".to_owned(),
-            workspace_dir: None,
-            thread_type: "chat".to_owned(),
-            provider_type: None,
-            agent_id: None,
-            message_count: 0,
-            last_message_preview: String::new(),
-            recent_run_id: None,
-            active_run_id: None,
-            run_state: "idle".to_owned(),
-            updated_at: Some("2026-05-23T08:00:00.000Z".to_owned()),
-            last_active_at: "2026-05-23T08:00:00.000Z".to_owned(),
-        })
-        .expect("seed stale");
-
-        db.sync_recent_threads_snapshot(
-            vec![
-                RecentThreadDraft {
-                    thread_id: "thread::kept".to_owned(),
-                    title: "Kept".to_owned(),
-                    workspace_dir: None,
-                    thread_type: "chat".to_owned(),
-                    provider_type: None,
-                    agent_id: None,
-                    message_count: 1,
-                    last_message_preview: "kept preview".to_owned(),
-                    recent_run_id: None,
-                    active_run_id: None,
-                    run_state: "idle".to_owned(),
-                    updated_at: Some("2026-05-23T10:00:00.000Z".to_owned()),
-                    last_active_at: "2026-05-23T10:00:00.000Z".to_owned(),
-                },
-                RecentThreadDraft {
-                    thread_id: "thread::pruned-by-limit".to_owned(),
-                    title: "Pruned".to_owned(),
-                    workspace_dir: None,
-                    thread_type: "chat".to_owned(),
-                    provider_type: None,
-                    agent_id: None,
-                    message_count: 1,
-                    last_message_preview: "old preview".to_owned(),
-                    recent_run_id: None,
-                    active_run_id: None,
-                    run_state: "idle".to_owned(),
-                    updated_at: Some("2026-05-23T09:00:00.000Z".to_owned()),
-                    last_active_at: "2026-05-23T09:00:00.000Z".to_owned(),
-                },
-            ],
-            1,
-        )
-        .expect("sync snapshot");
-
-        assert_eq!(
-            db.list_recent_threads(10, 0)
-                .expect("list synced recent threads")
-                .into_iter()
-                .map(|record| record.thread_id)
-                .collect::<Vec<_>>(),
-            vec!["thread::kept"],
-        );
-    }
-
 }

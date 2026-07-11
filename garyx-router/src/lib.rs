@@ -75,9 +75,7 @@ pub use router::{
 };
 pub use runtime_context::build_runtime_context_metadata;
 pub use store::{ThreadStore, ThreadStoreError};
-pub use task_counter::{
-    FileTaskCounterStore, InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore,
-};
+pub use task_counter::{InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore};
 pub use tasks::{
     CreateTaskInput, EnterReview, TaskHistoryPage, TaskId, TaskListFilter, TaskRuntimeInput,
     TaskService, TaskServiceError, TaskSummary, UpdateTaskStatusInput,

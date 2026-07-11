@@ -82,7 +82,6 @@ public struct GaryxArchiveThreadResult: Decodable, Equatable, Sendable {
     public var archived: Bool?
     public var deleted: Bool?
     public var threadId: String?
-    public var staleProjection: Bool?
     public var detachedEndpointKeys: [String]?
 
     enum CodingKeys: String, CodingKey {
@@ -90,8 +89,6 @@ public struct GaryxArchiveThreadResult: Decodable, Equatable, Sendable {
         case deleted
         case threadId = "thread_id"
         case threadIdCamel = "threadId"
-        case staleProjection = "stale_projection"
-        case staleProjectionCamel = "staleProjection"
         case detachedEndpointKeys = "detached_endpoint_keys"
         case detachedEndpointKeysCamel = "detachedEndpointKeys"
     }
@@ -101,7 +98,6 @@ public struct GaryxArchiveThreadResult: Decodable, Equatable, Sendable {
         archived = try container.decodeIfPresent(Bool.self, forKey: .archived)
         deleted = try container.decodeIfPresent(Bool.self, forKey: .deleted)
         threadId = try container.garyxDecodeFirstString(.threadId, .threadIdCamel)
-        staleProjection = try container.garyxDecodeFirstBool(.staleProjection, .staleProjectionCamel)
         detachedEndpointKeys = try container.garyxDecodeFirstStringArray(
             .detachedEndpointKeys,
             .detachedEndpointKeysCamel

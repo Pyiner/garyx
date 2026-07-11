@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use async_trait::async_trait;
@@ -12,10 +12,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{TaskCounterError, TaskCounterStore};
-use crate::{
-    ThreadEnsureOptions, ThreadStore, WorkspaceMode, agent_id_from_value, create_thread_record,
-    history_message_count, is_thread_key,
-};
+use crate::{ThreadEnsureOptions, ThreadStore, WorkspaceMode, create_thread_record, is_thread_key};
 
 const DEFAULT_TASK_LIST_LIMIT: usize = 50;
 const MAX_TASK_LIST_LIMIT: usize = 200;
@@ -23,20 +20,7 @@ const DEFAULT_TASK_AGENT_ID: &str = "claude";
 const TASK_THREAD_TITLE_SOURCE: &str = "task";
 type TaskThreadLock = Arc<tokio::sync::Mutex<()>>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct TaskIndexKey {
-    store_id: usize,
-    number: u64,
-}
-
-#[derive(Default)]
-struct TaskIndexState {
-    bootstrapped_stores: HashSet<usize>,
-    by_number: HashMap<TaskIndexKey, String>,
-}
-
 static TASK_THREAD_LOCKS: OnceLock<StdMutex<HashMap<String, TaskThreadLock>>> = OnceLock::new();
-static TASK_INDEX: OnceLock<StdMutex<TaskIndexState>> = OnceLock::new();
 static TASK_PROJECTION_READERS: OnceLock<StdMutex<HashMap<usize, Arc<dyn TaskProjectionReader>>>> =
     OnceLock::new();
 
@@ -161,21 +145,20 @@ pub struct TaskHistoryPage {
     pub has_more: bool,
 }
 
+/// Read seam over the SQL task projection (`task_projection` table).
+/// Projections derive in the same transaction as every record write
+/// (#TASK-1864), so readers are structurally current — there is no
+/// staleness gate and no repair path. Errors are backend failures
+/// (SQLite/IO) and must surface to the caller instead of degrading
+/// into empty results.
 #[async_trait]
 pub trait TaskProjectionReader: Send + Sync {
-    async fn is_current(&self) -> bool;
-    async fn ensure_current(&self) -> bool {
-        self.is_current().await
-    }
-    async fn task_index_rows(&self) -> Vec<(u64, String)>;
-    async fn thread_id_for_number(&self, number: u64) -> Option<String>;
-    async fn has_running_subtask_targeting(&self, thread_id: &str) -> bool;
+    async fn thread_id_for_number(&self, number: u64) -> Result<Option<String>, String>;
+    async fn has_running_subtask_targeting(&self, thread_id: &str) -> Result<bool, String>;
     async fn list_task_summaries(
         &self,
         filter: &TaskListFilter,
-    ) -> Option<(Vec<TaskSummary>, usize, bool)>;
-    async fn max_number(&self) -> Option<u64>;
-    async fn remove_thread(&self, _thread_id: &str) {}
+    ) -> Result<(Vec<TaskSummary>, usize, bool), String>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,14 +218,15 @@ impl TaskService {
         self
     }
 
-    fn index_store_id(&self) -> usize {
-        thread_store_id(&self.thread_store)
-    }
-
-    fn projection_reader(&self) -> Option<Arc<dyn TaskProjectionReader>> {
+    fn projection_reader(&self) -> Result<Arc<dyn TaskProjectionReader>, TaskServiceError> {
         self.projection_reader
             .clone()
-            .or_else(|| task_projection_reader_for_store_id(self.index_store_id()))
+            .or_else(|| task_projection_reader_for_store_id(thread_store_id(&self.thread_store)))
+            .ok_or_else(|| {
+                TaskServiceError::Store(
+                    "no task projection reader registered for this thread store".to_owned(),
+                )
+            })
     }
 
     pub async fn create_task(
@@ -346,7 +330,6 @@ impl TaskService {
         set_task_thread_title(&mut record, &task)?;
         set_task_on_record(&mut record, &task)?;
         self.thread_store.set(&thread_id, record).await;
-        task_index_upsert(self.index_store_id(), &thread_id, &task);
         Ok((thread_id, task))
     }
 
@@ -374,91 +357,10 @@ impl TaskService {
             offset: Some(offset),
             ..filter
         };
-        if let Some(reader) = self.projection_reader()
-            && reader.ensure_current().await
-            && let Some(page) = reader.list_task_summaries(&filter).await
-        {
-            return Ok(page);
-        }
-        self.ensure_task_index().await?;
-        let mut tasks = Vec::new();
-        let mut stale_index_keys = Vec::new();
-        let store_id = self.index_store_id();
-        for (index_key, key) in task_index_entries(store_id) {
-            let Some(record) = self.thread_store.get(&key).await else {
-                stale_index_keys.push(index_key);
-                continue;
-            };
-            let Some(task) = task_from_record(&record)? else {
-                stale_index_keys.push(index_key);
-                continue;
-            };
-            if task.number != index_key.number {
-                stale_index_keys.push(index_key);
-                continue;
-            };
-            if !filter.include_done && task.status == TaskStatus::Done {
-                continue;
-            }
-            if filter.status.is_some_and(|status| task.status != status) {
-                continue;
-            }
-            if filter
-                .assignee
-                .as_ref()
-                .is_some_and(|candidate| task.assignee.as_ref() != Some(candidate))
-            {
-                continue;
-            }
-            if filter
-                .creator
-                .as_ref()
-                .is_some_and(|creator| &task.creator != creator)
-            {
-                continue;
-            }
-            if filter
-                .source_thread_id
-                .as_deref()
-                .is_some_and(|source_thread_id| {
-                    !task_matches_source_thread(&task, source_thread_id)
-                })
-            {
-                continue;
-            }
-            if filter
-                .source_task_id
-                .as_deref()
-                .is_some_and(|source_task_id| !task_matches_source_task(&task, source_task_id))
-            {
-                continue;
-            }
-            if filter
-                .source_bot_id
-                .as_deref()
-                .is_some_and(|source_bot_id| !task_matches_source_bot(&task, source_bot_id))
-            {
-                continue;
-            }
-            tasks.push(TaskSummary::from_task(key, &record, &task));
-        }
-        for index_key in stale_index_keys {
-            task_index_remove(&index_key);
-        }
-        tasks.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| left.thread_id.cmp(&right.thread_id))
-        });
-        let total = tasks.len();
-        let page = tasks
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .collect::<Vec<_>>();
-        let has_more = offset.saturating_add(page.len()) < total;
-        Ok((page, total, has_more))
+        self.projection_reader()?
+            .list_task_summaries(&filter)
+            .await
+            .map_err(TaskServiceError::Store)
     }
 
     pub async fn task_history(
@@ -639,7 +541,6 @@ impl TaskService {
             .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
         remove_task_from_record(&mut record)?;
         self.thread_store.set(&thread_id, record).await;
-        task_index_remove_task(self.index_store_id(), &thread_id, &task);
         Ok((thread_id, task))
     }
 
@@ -683,7 +584,6 @@ impl TaskService {
         }
         set_task_on_record(&mut record, &task)?;
         self.thread_store.set(&thread_id, record).await;
-        task_index_upsert(self.index_store_id(), &thread_id, &task);
         Ok(task)
     }
 
@@ -704,47 +604,7 @@ impl TaskService {
         f(&mut task)?;
         set_task_on_record(&mut record, &task)?;
         self.thread_store.set(&thread_id, record).await;
-        task_index_upsert(self.index_store_id(), &thread_id, &task);
         Ok(task)
-    }
-
-    async fn ensure_task_index(&self) -> Result<(), TaskServiceError> {
-        let store_id = self.index_store_id();
-        if task_index_is_bootstrapped(store_id) {
-            return Ok(());
-        }
-
-        if let Some(reader) = self.projection_reader() {
-            if !reader.ensure_current().await {
-                return Err(TaskServiceError::Store(
-                    "task projection backfill did not complete".to_owned(),
-                ));
-            }
-            let rebuilt = reader
-                .task_index_rows()
-                .await
-                .into_iter()
-                .map(|(number, thread_id)| (TaskIndexKey { store_id, number }, thread_id))
-                .collect::<HashMap<_, _>>();
-            task_index_bootstrap(store_id, rebuilt);
-            return Ok(());
-        }
-
-        let mut rebuilt = HashMap::new();
-        for key in self.thread_store.list_keys(None).await {
-            if !is_thread_key(&key) {
-                continue;
-            }
-            let Some(record) = self.thread_store.get(&key).await else {
-                continue;
-            };
-            let Some(task) = task_from_record(&record)? else {
-                continue;
-            };
-            rebuilt.insert(task_index_key(store_id, &task), key);
-        }
-        task_index_bootstrap(store_id, rebuilt);
-        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -759,20 +619,11 @@ impl TaskService {
         executor: Option<TaskExecutor>,
         event_kind: TaskEventKind,
     ) -> Result<ThreadTask, TaskServiceError> {
-        self.ensure_task_index().await?;
-        let store_id = self.index_store_id();
-        let mut number = self.counter_store.allocate().await?;
-        let projected_max_number = if let Some(reader) = self.projection_reader() {
-            reader.max_number().await.unwrap_or(0)
-        } else {
-            0
-        };
-        while task_index_lookup(&TaskIndexKey { store_id, number }).is_some()
-            || number <= task_index_max_number(store_id)
-            || number <= projected_max_number
-        {
-            number = self.counter_store.allocate().await?;
-        }
+        // The counter store owns the uniqueness invariant: every
+        // allocation returns a number strictly greater than any number
+        // it has handed out before and any number present in the task
+        // projection (enforced atomically by the SQLite-backed store).
+        let number = self.counter_store.allocate().await?;
         let now = Utc::now();
         let mut task = ThreadTask {
             schema_version: TASK_SCHEMA_VERSION_V1,
@@ -812,33 +663,26 @@ impl TaskService {
     }
 
     async fn find_task_by_number(&self, number: u64) -> Result<(String, Value), TaskServiceError> {
-        if let Some(reader) = self.projection_reader()
-            && reader.ensure_current().await
-            && let Some(thread_id) = reader.thread_id_for_number(number).await
+        let thread_id = self
+            .projection_reader()?
+            .thread_id_for_number(number)
+            .await
+            .map_err(TaskServiceError::Store)?
+            .ok_or_else(|| TaskServiceError::NotFound(format!("#TASK-{number}")))?;
+        // Projections derive in the same write transaction as the record,
+        // so a projection row without a matching record body indicates a
+        // bug, not staleness — surface it as NotFound without repair.
+        if let Some(record) = self.thread_store.get(&thread_id).await
+            && let Some(task) = task_from_record(&record)?
+            && task.number == number
         {
-            if let Some(record) = self.thread_store.get(&thread_id).await
-                && let Some(task) = task_from_record(&record)?
-                && task.number == number
-            {
-                task_index_upsert(self.index_store_id(), &thread_id, &task);
-                return Ok((thread_id, record));
-            }
-            reader.remove_thread(&thread_id).await;
+            return Ok((thread_id, record));
         }
-        self.ensure_task_index().await?;
-        let index_key = TaskIndexKey {
-            store_id: self.index_store_id(),
+        tracing::warn!(
             number,
-        };
-        if let Some(thread_id) = task_index_lookup(&index_key) {
-            if let Some(record) = self.thread_store.get(&thread_id).await
-                && let Some(task) = task_from_record(&record)?
-                && task.number == number
-            {
-                return Ok((thread_id, record));
-            }
-            task_index_remove(&index_key);
-        }
+            thread_id = %thread_id,
+            "task projection row does not match its thread record"
+        );
         Err(TaskServiceError::NotFound(format!("#TASK-{number}")))
     }
 }
@@ -868,7 +712,7 @@ pub async fn mark_thread_task_in_review_if_in_progress(
     // Leaving the task in progress defers the ready-for-review transition
     // (and the parent notification it triggers) to the run that ends with no
     // running subtasks left.
-    if thread_task_has_running_subtasks(thread_store, thread_id).await {
+    if thread_task_has_running_subtasks(thread_store, thread_id).await? {
         tracing::info!(
             thread_id = %thread_id,
             task_id = %canonical_task_id(&task),
@@ -890,7 +734,6 @@ pub async fn mark_thread_task_in_review_if_in_progress(
     );
     set_task_on_record(&mut record, &task)?;
     thread_store.set(thread_id, record).await;
-    task_index_upsert(thread_store_id(thread_store), thread_id, &task);
     Ok(Some(EnterReview { task, handoff }))
 }
 
@@ -925,7 +768,6 @@ pub async fn mark_thread_task_in_progress_on_wake(
     );
     set_task_on_record(&mut record, &task)?;
     thread_store.set(thread_id, record).await;
-    task_index_upsert(thread_store_id(thread_store), thread_id, &task);
     Ok(Some(task))
 }
 
@@ -933,61 +775,20 @@ pub async fn mark_thread_task_in_progress_on_wake(
 /// completion notification. Such a task is a subtask of this thread's task:
 /// it was created from this thread and will call back into it when done.
 ///
-/// Candidates come from the in-memory task index, which is populated at task
-/// write time; right after a process restart the index is empty until the
-/// first task read warms it, in which case this conservatively reports no
-/// subtasks (pre-gate behavior).
+/// Answered by the SQL task projection. A store without a registered
+/// projection reader (router-only embedders, unit tests) has no subtask
+/// tracking and conservatively reports no subtasks.
 pub async fn thread_task_has_running_subtasks(
     thread_store: &Arc<dyn ThreadStore>,
     thread_id: &str,
-) -> bool {
-    let store_id = thread_store_id(thread_store);
-    if let Some(reader) = task_projection_reader_for_store_id(store_id)
-        && reader.ensure_current().await
-    {
-        return reader.has_running_subtask_targeting(thread_id).await;
-    }
-    for (_, candidate_thread_id) in task_index_entries(store_id) {
-        if candidate_thread_id == thread_id {
-            continue;
-        }
-        let Some(record) = thread_store.get(&candidate_thread_id).await else {
-            continue;
-        };
-        let Ok(Some(task)) = task_from_record(&record) else {
-            continue;
-        };
-        if task.status != TaskStatus::InProgress {
-            continue;
-        }
-        if matches!(
-            task.notification_target.as_ref(),
-            Some(TaskNotificationTarget::Thread { thread_id: target }) if target == thread_id
-        ) {
-            return true;
-        }
-    }
-    false
-}
-
-impl TaskSummary {
-    fn from_task(thread_id: String, record: &Value, task: &ThreadTask) -> Self {
-        Self {
-            thread_id,
-            task_id: canonical_task_id(task),
-            number: task.number,
-            title: task.title.clone(),
-            status: task.status,
-            creator: task.creator.clone(),
-            assignee: task.assignee.clone(),
-            source: task.source.clone(),
-            executor: task.executor.clone(),
-            updated_at: task.updated_at,
-            updated_by: task.updated_by.clone(),
-            runtime_agent_id: agent_id_from_value(record).unwrap_or_default(),
-            reply_count: u32::try_from(history_message_count(record)).unwrap_or(u32::MAX),
-        }
-    }
+) -> Result<bool, TaskServiceError> {
+    let Some(reader) = task_projection_reader_for_store_id(thread_store_id(thread_store)) else {
+        return Ok(false);
+    };
+    reader
+        .has_running_subtask_targeting(thread_id)
+        .await
+        .map_err(TaskServiceError::Store)
 }
 
 pub fn canonical_task_id(task: &ThreadTask) -> String {
@@ -1070,10 +871,6 @@ fn task_thread_lock(thread_id: &str) -> TaskThreadLock {
         .clone()
 }
 
-fn task_index_state() -> &'static StdMutex<TaskIndexState> {
-    TASK_INDEX.get_or_init(|| StdMutex::new(TaskIndexState::default()))
-}
-
 pub fn thread_store_id(thread_store: &Arc<dyn ThreadStore>) -> usize {
     Arc::as_ptr(thread_store) as *const () as usize
 }
@@ -1112,99 +909,6 @@ fn task_projection_reader_for_store_id(store_id: usize) -> Option<Arc<dyn TaskPr
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     readers.get(&store_id).cloned()
-}
-
-fn task_index_key(store_id: usize, task: &ThreadTask) -> TaskIndexKey {
-    TaskIndexKey {
-        store_id,
-        number: task.number,
-    }
-}
-
-fn task_index_is_bootstrapped(store_id: usize) -> bool {
-    let state = task_index_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.bootstrapped_stores.contains(&store_id)
-}
-
-fn task_index_bootstrap(store_id: usize, rebuilt: HashMap<TaskIndexKey, String>) {
-    let mut state = task_index_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if state.bootstrapped_stores.contains(&store_id) {
-        return;
-    }
-    state
-        .by_number
-        .retain(|index_key, _| index_key.store_id != store_id);
-    state.by_number.extend(rebuilt);
-    state.bootstrapped_stores.insert(store_id);
-}
-
-fn task_index_upsert(store_id: usize, thread_id: &str, task: &ThreadTask) {
-    let mut state = task_index_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state
-        .by_number
-        .insert(task_index_key(store_id, task), thread_id.to_owned());
-}
-
-fn task_index_lookup(index_key: &TaskIndexKey) -> Option<String> {
-    let state = task_index_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.by_number.get(index_key).cloned()
-}
-
-fn task_index_entries(store_id: usize) -> Vec<(TaskIndexKey, String)> {
-    let state = task_index_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut seen = HashSet::new();
-    state
-        .by_number
-        .iter()
-        .filter(|(key, _)| key.store_id == store_id)
-        .filter_map(|(key, thread_id)| {
-            if seen.insert(thread_id.clone()) {
-                Some((key.clone(), thread_id.clone()))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-fn task_index_max_number(store_id: usize) -> u64 {
-    let state = task_index_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state
-        .by_number
-        .keys()
-        .filter(|key| key.store_id == store_id)
-        .map(|key| key.number)
-        .max()
-        .unwrap_or(0)
-}
-
-fn task_index_remove(index_key: &TaskIndexKey) {
-    let mut state = task_index_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.by_number.remove(index_key);
-}
-
-fn task_index_remove_task(store_id: usize, thread_id: &str, task: &ThreadTask) {
-    let mut state = task_index_state()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let index_key = task_index_key(store_id, task);
-    state.by_number.retain(|key, value| {
-        !(key == &index_key || (key.store_id == store_id && value == thread_id))
-    });
 }
 
 fn push_event(
@@ -1311,43 +1015,6 @@ fn normalize_task_source(source: Option<TaskSource>) -> Option<TaskSource> {
         || source.channel.is_some()
         || source.account_id.is_some())
     .then_some(source)
-}
-
-fn task_matches_source_thread(task: &ThreadTask, source_thread_id: &str) -> bool {
-    let Some(source_thread_id) = normalized_nonempty_string(Some(source_thread_id)) else {
-        return true;
-    };
-    let Some(source) = task.source.as_ref() else {
-        return false;
-    };
-    source.thread_id.as_deref() == Some(source_thread_id.as_str())
-        || source.task_thread_id.as_deref() == Some(source_thread_id.as_str())
-}
-
-fn task_matches_source_task(task: &ThreadTask, source_task_id: &str) -> bool {
-    let Some(source_task_id) = normalized_nonempty_string(Some(source_task_id)) else {
-        return true;
-    };
-    task.source
-        .as_ref()
-        .and_then(|source| source.task_id.as_deref())
-        .is_some_and(|task_id| task_id.eq_ignore_ascii_case(&source_task_id))
-}
-
-fn task_matches_source_bot(task: &ThreadTask, source_bot_id: &str) -> bool {
-    let Some(source_bot_id) = normalized_nonempty_string(Some(source_bot_id)) else {
-        return true;
-    };
-    let Some(source) = task.source.as_ref() else {
-        return false;
-    };
-    if source.bot_id.as_deref() == Some(source_bot_id.as_str()) {
-        return true;
-    }
-    match (&source.channel, &source.account_id) {
-        (Some(channel), Some(account_id)) => format!("{channel}:{account_id}") == source_bot_id,
-        _ => false,
-    }
 }
 
 fn validate_principal(principal: &Principal) -> Result<(), TaskServiceError> {

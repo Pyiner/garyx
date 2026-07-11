@@ -15,7 +15,6 @@ use super::{
 };
 
 pub const CURRENT_TASK_PROJECTION_VERSION: i64 = 1;
-pub const TASK_PROJECTION_NAME: &str = "task_projection";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskProjectionDraft {
@@ -194,37 +193,67 @@ impl PinnedTaskForestRow {
 }
 
 impl GaryxDbService {
-    pub fn count_task_projection(&self) -> GaryxDbResult<usize> {
-        let conn = self.read_conn()?;
-        let count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM task_projection", [], |row| row.get(0))?;
-        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    /// Allocate the next task number: bump the single-row counter while
+    /// flooring it against the task projection's `MAX(number)`, all in
+    /// one transaction. The returned number is strictly greater than
+    /// every previously allocated number and every number currently in
+    /// the projection, so duplicates are structurally impossible.
+    pub fn allocate_task_number(&self) -> GaryxDbResult<u64> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO task_counter (id, last_allocated) VALUES (1, 0)
+             ON CONFLICT(id) DO NOTHING",
+            [],
+        )?;
+        let number: i64 = tx.query_row(
+            "UPDATE task_counter
+             SET last_allocated = MAX(
+                     last_allocated,
+                     (SELECT COALESCE(MAX(number), 0) FROM task_projection)
+                 ) + 1
+             WHERE id = 1
+             RETURNING last_allocated",
+            [],
+            |row| row.get(0),
+        )?;
+        tx.commit()?;
+        Ok(number.max(1) as u64)
     }
 
-    pub fn task_projection_needs_backfill(&self) -> GaryxDbResult<bool> {
-        let conn = self.read_conn()?;
-        let state = conn
-            .query_row(
-                "SELECT projection_version, source_row_count
-                 FROM projection_states
-                 WHERE projection_name = ?1",
-                params![TASK_PROJECTION_NAME],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-            )
+    /// One-shot migration seed for the task counter (pre-SQLite installs).
+    /// When no counter row exists yet, seed `last_allocated` with the
+    /// highest of: the caller-provided floor (the legacy file counter)
+    /// and the highest task number embedded in any thread record body
+    /// (covers archived threads and done tasks whose projections were
+    /// removed). Returns whether a row was seeded.
+    pub fn seed_task_counter_if_missing(&self, floor: u64) -> GaryxDbResult<bool> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let exists: Option<i64> = tx
+            .query_row("SELECT 1 FROM task_counter WHERE id = 1", [], |row| {
+                row.get(0)
+            })
             .optional()?;
-        let Some((version, source_row_count)) = state else {
-            return Ok(true);
-        };
-        if version != CURRENT_TASK_PROJECTION_VERSION {
-            return Ok(true);
+        if exists.is_some() {
+            tx.commit()?;
+            return Ok(false);
         }
-        let current_count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM task_projection", [], |row| row.get(0))?;
-        Ok(source_row_count > 0 && current_count == 0)
-    }
-
-    pub fn task_projection_is_current(&self) -> GaryxDbResult<bool> {
-        Ok(!self.task_projection_needs_backfill()?)
+        let records_max: i64 = tx.query_row(
+            "SELECT COALESCE(
+                 MAX(CAST(json_extract(body, '$.task.number') AS INTEGER)), 0
+             )
+             FROM thread_records",
+            [],
+            |row| row.get(0),
+        )?;
+        let seed = floor.max(records_max.max(0) as u64);
+        tx.execute(
+            "INSERT INTO task_counter (id, last_allocated) VALUES (1, ?1)",
+            params![i64::try_from(seed).unwrap_or(i64::MAX)],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     pub fn replace_task_projection(&self, draft: TaskProjectionDraft) -> GaryxDbResult<()> {
@@ -247,36 +276,6 @@ impl GaryxDbService {
             params![thread_id],
         )?;
         Ok(removed > 0)
-    }
-
-
-
-    pub fn task_index_rows(&self) -> GaryxDbResult<Vec<(u64, String)>> {
-        let conn = self.read_conn()?;
-        let mut stmt = conn.prepare(
-            "WITH ranked AS (
-                SELECT number, thread_id,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY number
-                           ORDER BY updated_at DESC, thread_id ASC
-                       ) AS rn
-                FROM task_projection
-                WHERE projection_version = ?1
-             )
-             SELECT number, thread_id
-             FROM ranked
-             WHERE rn = 1
-             ORDER BY number ASC",
-        )?;
-        let rows = stmt.query_map(params![CURRENT_TASK_PROJECTION_VERSION], |row| {
-            let number = row.get::<_, i64>(0)?;
-            Ok((number.max(0) as u64, row.get::<_, String>(1)?))
-        })?;
-        let mut values = Vec::new();
-        for row in rows {
-            values.push(row?);
-        }
-        Ok(values)
     }
 
     pub fn thread_id_for_number(&self, number: u64) -> GaryxDbResult<Option<String>> {
@@ -312,30 +311,6 @@ impl GaryxDbService {
             )
             .optional()?;
         Ok(found.is_some())
-    }
-
-    pub fn max_task_projection_number(&self) -> GaryxDbResult<Option<u64>> {
-        let conn = self.read_conn()?;
-        let value: Option<i64> = conn.query_row(
-            "SELECT MAX(number)
-             FROM task_projection
-             WHERE projection_version = ?1",
-            params![CURRENT_TASK_PROJECTION_VERSION],
-            |row| row.get(0),
-        )?;
-        Ok(value.map(|number| number.max(0) as u64))
-    }
-
-    pub fn list_task_projection_thread_ids(&self) -> GaryxDbResult<Vec<String>> {
-        let conn = self.read_conn()?;
-        let mut stmt =
-            conn.prepare("SELECT thread_id FROM task_projection ORDER BY thread_id ASC")?;
-        let rows = stmt.query_map([], |row| row.get(0))?;
-        let mut thread_ids = Vec::new();
-        for row in rows {
-            thread_ids.push(row?);
-        }
-        Ok(thread_ids)
     }
 
     pub fn list_task_summaries(

@@ -108,6 +108,70 @@ fn with_assignee(mut draft: TaskProjectionDraft, assignee: &Principal) -> TaskPr
 }
 
 #[test]
+fn allocate_task_number_is_unique_and_contiguous_under_concurrency() {
+    let db = std::sync::Arc::new(GaryxDbService::memory().expect("db opens"));
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let db = db.clone();
+        handles.push(std::thread::spawn(move || {
+            (0..5)
+                .map(|_| db.allocate_task_number().expect("allocate"))
+                .collect::<Vec<_>>()
+        }));
+    }
+    let mut numbers = Vec::new();
+    for handle in handles {
+        numbers.extend(handle.join().expect("allocator thread"));
+    }
+    numbers.sort_unstable();
+    assert_eq!(numbers, (1..=40).collect::<Vec<_>>());
+}
+
+#[test]
+fn allocate_task_number_floors_against_projection_max() {
+    let db = GaryxDbService::memory().expect("db opens");
+    db.replace_task_projection(task_projection_draft(
+        "thread::existing",
+        41,
+        TaskStatus::Todo,
+        "2026-06-01T00:00:00.000Z",
+        None,
+        1,
+    ))
+    .expect("seed projection");
+    assert_eq!(db.allocate_task_number().expect("allocate"), 42);
+    assert_eq!(db.allocate_task_number().expect("allocate again"), 43);
+}
+
+#[test]
+fn seed_task_counter_migrates_file_floor_and_record_bodies_once() {
+    let db = GaryxDbService::memory().expect("db opens");
+    // A record body with an embedded task (e.g. an archived thread whose
+    // projection rows were removed) must still floor the allocator.
+    db.write_thread_record_with_projections(
+        "thread::archived-task",
+        r#"{"task":{"number":7,"title":"old"}}"#,
+        None,
+        None,
+    )
+    .expect("write record");
+
+    assert!(
+        db.seed_task_counter_if_missing(5)
+            .expect("seed with file floor 5")
+    );
+    assert_eq!(
+        db.allocate_task_number().expect("allocate after seed"),
+        8,
+        "seed takes max(file floor, record-body task numbers)"
+    );
+
+    // Seeding is one-shot: an existing row is never overwritten.
+    assert!(!db.seed_task_counter_if_missing(100).expect("second seed"));
+    assert_eq!(db.allocate_task_number().expect("allocate again"), 9);
+}
+
+#[test]
 fn task_projection_list_filters_and_dedupes_duplicate_numbers() {
     let db = GaryxDbService::memory().expect("db opens");
     let source = TaskSource {

@@ -1,8 +1,6 @@
 use super::*;
 use crate::custom_agents::CustomAgentStore;
-use crate::garyx_db::{
-    CURRENT_TASK_PROJECTION_VERSION, RecentThreadDraft, TASK_PROJECTION_NAME, TaskProjectionDraft,
-};
+use crate::garyx_db::{RecentThreadDraft, TaskProjectionDraft};
 use crate::server::AppStateBuilder;
 use garyx_models::ProviderType;
 use garyx_models::config::GaryxConfig;
@@ -179,11 +177,6 @@ async fn list_task_forest_route_returns_projection_parent_and_run_state() {
             last_active_at: "2026-01-01T00:00:04.000Z".to_owned(),
         })
         .expect("insert route recent thread");
-    state
-        .ops
-        .garyx_db
-        .record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 2)
-        .expect("mark projection current");
 
     let (status, Json(payload)) = list_task_forest(
         State(state),
@@ -205,7 +198,6 @@ async fn list_task_forest_route_returns_projection_parent_and_run_state() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["total"], 2);
-    assert_eq!(payload["projection_current"], true);
     assert_eq!(
         payload["root_thread_ids"].as_array().expect("root ids"),
         &Vec::<Value>::new()
@@ -293,11 +285,6 @@ async fn list_task_forest_route_defaults_to_pinned_roots_with_metadata() {
         .garyx_db
         .pin_thread("thread::route-chat")
         .expect("pin chat");
-    state
-        .ops
-        .garyx_db
-        .record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 3)
-        .expect("mark projection current");
 
     let (status, Json(payload)) = list_task_forest(
         State(state),
@@ -319,7 +306,6 @@ async fn list_task_forest_route_defaults_to_pinned_roots_with_metadata() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["total"], 2);
-    assert_eq!(payload["projection_current"], true);
     assert_eq!(
         payload["root_thread_ids"],
         serde_json::json!(["thread::route-chat-root"])
@@ -372,11 +358,6 @@ async fn list_task_forest_route_supports_anchor_thread_id() {
             Some(route_task_source("thread::route-root", "#TASK-10")),
         ))
         .expect("insert child projection");
-    state
-        .ops
-        .garyx_db
-        .record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 2)
-        .expect("mark projection current");
 
     let (status, Json(payload)) = list_task_forest(
         State(state),
@@ -463,11 +444,6 @@ async fn list_task_forest_route_supports_conversation_anchor_thread_id() {
             Some(route_task_source("thread::route-derived-root", "#TASK-30")),
         ))
         .expect("insert derived child projection");
-    state
-        .ops
-        .garyx_db
-        .record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 2)
-        .expect("mark projection current");
 
     let (status, Json(payload)) = list_task_forest(
         State(state),
@@ -489,7 +465,6 @@ async fn list_task_forest_route_supports_conversation_anchor_thread_id() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(payload["total"], 3);
-    assert_eq!(payload["projection_current"], true);
     assert_eq!(
         payload["root_thread_ids"],
         serde_json::json!(["thread::route-origin-chat"])
@@ -587,11 +562,6 @@ async fn list_task_forest_route_returns_identical_forest_for_conversation_and_ta
             Some(route_task_source("thread::smoke-root", "#TASK-40")),
         ))
         .expect("insert smoke deep child");
-    state
-        .ops
-        .garyx_db
-        .record_projection_state(TASK_PROJECTION_NAME, CURRENT_TASK_PROJECTION_VERSION, 3)
-        .expect("mark projection current");
 
     let mut payloads = Vec::new();
     for anchor in ["thread::smoke-chat", "thread::smoke-deep-child"] {

@@ -112,8 +112,6 @@ interface TaskForestPayload {
   total?: number;
   active_count?: number | null;
   activeCount?: number | null;
-  projection_current?: boolean;
-  projectionCurrent?: boolean;
   root_thread_ids?: unknown[];
   rootThreadIds?: unknown[];
   skipped_pinned_thread_ids?: unknown[];
@@ -408,8 +406,6 @@ export async function listTaskForest(
       asFiniteNumber(payload.active_count) ??
       asFiniteNumber(payload.activeCount) ??
       null,
-    projectionCurrent:
-      payload.projection_current ?? payload.projectionCurrent ?? true,
     rootThreadIds: asStringList(payload.root_thread_ids ?? payload.rootThreadIds),
     skippedPinnedThreadIds: asStringList(
       payload.skipped_pinned_thread_ids ?? payload.skippedPinnedThreadIds,

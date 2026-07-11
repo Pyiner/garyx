@@ -802,10 +802,8 @@ async fn seed_imported_thread_history(
     // preview fields are derived from the imported content directly.
     for role in ["user", "assistant"] {
         if let Some(field) = garyx_models::message_preview::preview_field_for_role(role)
-            && let Some(preview) = garyx_models::message_preview::last_message_preview_for_role(
-                messages.iter(),
-                role,
-            )
+            && let Some(preview) =
+                garyx_models::message_preview::last_message_preview_for_role(messages.iter(), role)
         {
             object.insert(field.to_owned(), Value::String(preview));
         }
@@ -1119,34 +1117,6 @@ async fn purge_thread_from_indexes(state: &Arc<AppState>, thread_id: &str) {
     router.purge_thread_from_indexes(thread_id);
 }
 
-async fn remove_deleted_thread_projection_records(
-    state: &Arc<AppState>,
-    thread_id: &str,
-) -> bool {
-    let thread_id = thread_id.to_owned();
-    state
-        .ops
-        .garyx_db
-        .run_blocking(move |db| {
-            let mut removed = false;
-            if let Ok(value) = db.unpin_thread(&thread_id) {
-                removed |= value;
-            }
-            if let Ok(value) = db.remove_recent_thread(&thread_id) {
-                removed |= value;
-            }
-            if let Ok(value) = db.remove_thread_meta_projection(&thread_id) {
-                removed |= value;
-            }
-            if let Ok(value) = db.remove_task_projection(&thread_id) {
-                removed |= value;
-            }
-            Ok(removed)
-        })
-        .await
-        .unwrap_or(false)
-}
-
 async fn hard_delete_thread_record(
     state: &Arc<AppState>,
     thread_id: &str,
@@ -1170,8 +1140,9 @@ async fn hard_delete_thread_record(
         ));
     }
 
+    // Projection rows and the pin were removed in the same transaction as
+    // the record delete (delete_thread_record_with_projections).
     clear_deleted_thread_runtime_state(state, thread_id, provider_key.as_deref()).await;
-    remove_deleted_thread_projection_records(state, thread_id).await;
     purge_thread_from_indexes(state, thread_id).await;
     state.invalidate_gateway_sync_caches().await;
     Ok(())
@@ -1528,7 +1499,8 @@ pub async fn list_threads(
         .run_blocking(move |db| {
             let total = db.count_thread_meta_list(include_hidden, prefix.as_deref())?;
             let offset = requested_offset.min(total);
-            let records = db.list_thread_meta_page(limit, offset, include_hidden, prefix.as_deref())?;
+            let records =
+                db.list_thread_meta_page(limit, offset, include_hidden, prefix.as_deref())?;
             Ok((total, offset, records))
         })
         .await;
@@ -2975,6 +2947,8 @@ pub async fn archive_thread(
         );
     }
     let Some(thread_data) = state.threads.thread_store.get(trimmed).await else {
+        // No record: projections were removed with it in the same delete
+        // transaction, so only the tombstone and runtime state remain.
         let archive_id = trimmed.to_owned();
         if let Err(error) = state
             .ops
@@ -2984,7 +2958,6 @@ pub async fn archive_thread(
         {
             return archive_internal_error(error);
         }
-        let stale_projection = remove_deleted_thread_projection_records(&state, trimmed).await;
         clear_deleted_thread_runtime_state(&state, trimmed, None).await;
         purge_thread_from_indexes(&state, trimmed).await;
         state.invalidate_gateway_sync_caches().await;
@@ -2994,7 +2967,6 @@ pub async fn archive_thread(
                 "archived": true,
                 "deleted": true,
                 "thread_id": trimmed,
-                "stale_projection": stale_projection,
             })),
         );
     };
@@ -3060,23 +3032,9 @@ pub async fn delete_thread(
     Path(key): Path<String>,
 ) -> impl IntoResponse {
     let Some(thread_id) = ensure_existing_thread_id(&state, &key).await else {
-        let trimmed = key.trim();
-        if !trimmed.is_empty()
-            && is_thread_key(trimmed)
-            && remove_deleted_thread_projection_records(&state, trimmed).await
-        {
-            clear_deleted_thread_runtime_state(&state, trimmed, None).await;
-            purge_thread_from_indexes(&state, trimmed).await;
-            state.invalidate_gateway_sync_caches().await;
-            return (
-                StatusCode::OK,
-                Json(json!({
-                    "deleted": true,
-                    "thread_id": trimmed,
-                    "stale_projection": true,
-                })),
-            );
-        }
+        // Projections derive and delete in the same transaction as the
+        // record, so a missing record has no projection rows left to
+        // repair — this is a plain not-found.
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"deleted": false, "error": "thread not found"})),

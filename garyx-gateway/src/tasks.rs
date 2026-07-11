@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
@@ -8,15 +7,13 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use chrono::Utc;
-use garyx_models::local_paths::default_session_data_dir;
 use garyx_models::{
     AgentReference, Principal, TaskExecutor, TaskNotificationTarget, TaskSource, TaskStatus,
     ThreadTask,
 };
 use garyx_router::{
-    CreateTaskInput, FileTaskCounterStore, TaskListFilter, TaskRuntimeInput, TaskService,
-    TaskServiceError, UpdateTaskStatusInput, WorkspaceMode,
-    workspace_dir_from_value,
+    CreateTaskInput, TaskListFilter, TaskRuntimeInput, TaskService, TaskServiceError,
+    UpdateTaskStatusInput, WorkspaceMode, workspace_dir_from_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -471,9 +468,6 @@ pub async fn list_task_forest(
         Ok(filter) => filter,
         Err(error) => return task_error_response(error),
     };
-    // Projections derive in the same transaction as every record write
-    // (#TASK-1864): the read-time backfill gate is retired.
-    let projection_current = true;
     let forest_result = state
         .ops
         .garyx_db
@@ -487,7 +481,6 @@ pub async fn list_task_forest(
             let mut body = json!({
                 "tasks": page.tasks,
                 "total": page.total,
-                "projection_current": projection_current,
                 "root_thread_ids": page.root_thread_ids,
                 "skipped_pinned_thread_ids": page.skipped_pinned_thread_ids,
             });
@@ -720,15 +713,11 @@ pub(crate) fn task_service(state: &Arc<AppState>) -> Option<TaskService> {
     if !config.tasks.enabled {
         return None;
     }
-    let data_dir = config
-        .sessions
-        .data_dir
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(default_session_data_dir);
     Some(TaskService::new(
         state.threads.thread_store.clone(),
-        Arc::new(FileTaskCounterStore::new(data_dir)),
+        Arc::new(crate::task_projection::SqliteTaskCounterStore::new(
+            state.ops.garyx_db.clone(),
+        )),
     ))
 }
 
@@ -870,13 +859,10 @@ async fn default_workspace_dir_for_agent(
     state: &Arc<AppState>,
     agent_id: &str,
 ) -> Result<Option<String>, TaskServiceError> {
-    resolve_agent_reference_from_stores(
-        state.ops.custom_agents.as_ref(),
-        agent_id,
-    )
-    .await
-    .map(|reference| default_workspace_dir_from_agent_reference(&reference))
-    .map_err(TaskServiceError::UnknownAgent)
+    resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
+        .await
+        .map(|reference| default_workspace_dir_from_agent_reference(&reference))
+        .map_err(TaskServiceError::UnknownAgent)
 }
 
 async fn task_runtime_with_default_workspace(
@@ -910,12 +896,9 @@ async fn resolve_task_executor_agent(
     state: &Arc<AppState>,
     agent_id: &str,
 ) -> Result<AgentReference, TaskServiceError> {
-    let reference = resolve_agent_reference_from_stores(
-        state.ops.custom_agents.as_ref(),
-        agent_id,
-    )
-    .await
-    .map_err(TaskServiceError::UnknownAgent)?;
+    let reference = resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
+        .await
+        .map_err(TaskServiceError::UnknownAgent)?;
     Ok(reference)
 }
 
@@ -951,12 +934,9 @@ async fn validate_thread_runtime_allows_assignee(
     let Some(thread) = state.threads.thread_store.get(thread_id).await else {
         return Ok(());
     };
-    let reference = resolve_agent_reference_from_stores(
-        state.ops.custom_agents.as_ref(),
-        agent_id,
-    )
-    .await
-    .map_err(TaskServiceError::UnknownAgent)?;
+    let reference = resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
+        .await
+        .map_err(TaskServiceError::UnknownAgent)?;
 
     let thread_agent_id = thread
         .get("agent_id")
@@ -1001,12 +981,9 @@ async fn ensure_thread_workspace_from_assignee_default(
     let Some(mut updated) = state.threads.thread_store.get(thread_id).await else {
         return Ok(());
     };
-    let reference = resolve_agent_reference_from_stores(
-        state.ops.custom_agents.as_ref(),
-        agent_id,
-    )
-    .await
-    .map_err(TaskServiceError::UnknownAgent)?;
+    let reference = resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
+        .await
+        .map_err(TaskServiceError::UnknownAgent)?;
     let existing_workspace_dir = workspace_dir_from_value(&updated);
     let default_workspace_dir = if existing_workspace_dir.is_none() {
         default_workspace_dir_for_agent(state, agent_id).await?
@@ -1073,12 +1050,10 @@ pub(crate) async fn ensure_created_task_thread_provider_from_bound_agent(
     else {
         return Ok(());
     };
-    let reference = resolve_agent_reference_from_stores(
-        state.ops.custom_agents.as_ref(),
-        &agent_id,
-    )
-    .await
-    .map_err(TaskServiceError::UnknownAgent)?;
+    let reference =
+        resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), &agent_id)
+            .await
+            .map_err(TaskServiceError::UnknownAgent)?;
     {
         let Some(obj) = updated.as_object_mut() else {
             return Err(TaskServiceError::Store(format!(
@@ -1270,13 +1245,10 @@ async fn validate_runtime_agent(
     else {
         return Ok(());
     };
-    resolve_agent_reference_from_stores(
-        state.ops.custom_agents.as_ref(),
-        agent_id,
-    )
-    .await
-    .map(|_| ())
-    .map_err(TaskServiceError::UnknownAgent)
+    resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
+        .await
+        .map(|_| ())
+        .map_err(TaskServiceError::UnknownAgent)
 }
 
 async fn validate_task_assignee_agent(
@@ -1286,13 +1258,10 @@ async fn validate_task_assignee_agent(
     let Some(Principal::Agent { agent_id }) = assignee else {
         return Ok(());
     };
-    resolve_agent_reference_from_stores(
-        state.ops.custom_agents.as_ref(),
-        agent_id,
-    )
-    .await
-    .map(|_| ())
-    .map_err(TaskServiceError::UnknownAgent)
+    resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
+        .await
+        .map(|_| ())
+        .map_err(TaskServiceError::UnknownAgent)
 }
 
 async fn runtime_agent_id_for_thread(state: &Arc<AppState>, thread_id: &str) -> String {

@@ -258,7 +258,6 @@ test("listTaskForest maps parent and run-state fields", async () => {
           },
         ],
         total: 2,
-        projection_current: true,
         root_thread_ids: ["thread::forest-parent"],
         skipped_pinned_thread_ids: ["thread::plain-chat"],
       }),
@@ -286,7 +285,6 @@ test("listTaskForest maps parent and run-state fields", async () => {
       "http://127.0.0.1:31337/api/tasks/forest?status=in_progress&source_bot_id=test-bot&include_done=true&anchor_thread_id=thread%3A%3Aforest-child",
     );
     assert.equal(page.total, 2);
-    assert.equal(page.projectionCurrent, true);
     assert.deepEqual(page.rootThreadIds, ["thread::forest-parent"]);
     assert.deepEqual(page.skippedPinnedThreadIds, ["thread::plain-chat"]);
     assert.equal(page.tasks[0].kind, "thread");

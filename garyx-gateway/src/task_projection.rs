@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -7,7 +8,7 @@ use garyx_router::tasks::{
     TaskId, TaskListFilter, TaskProjectionReader, TaskSummary, register_task_projection_reader,
     task_from_record,
 };
-use garyx_router::{ThreadStore, is_thread_key};
+use garyx_router::{TaskCounterError, TaskCounterStore, ThreadStore, is_thread_key};
 use serde::Serialize;
 use serde_json::Value;
 use tracing::warn;
@@ -34,101 +35,79 @@ pub(crate) fn register_gateway_task_projection_reader(
     reader
 }
 
+/// Projections derive in the same transaction as every record write
+/// (#TASK-1864): the table is structurally current by construction, so
+/// this reader only translates queries — backend failures surface as
+/// errors instead of degrading into empty results.
 #[async_trait]
 impl TaskProjectionReader for SqlTaskProjectionReader {
-    async fn is_current(&self) -> bool {
-        // Projections derive in the same transaction as every record write
-        // (#TASK-1864): the table is structurally current by construction.
-        true
-    }
-
-    async fn ensure_current(&self) -> bool {
-        true
-    }
-
-    async fn task_index_rows(&self) -> Vec<(u64, String)> {
-        match self
-            .garyx_db
-            .run_blocking(|db| db.task_index_rows())
-            .await
-        {
-            Ok(rows) => rows,
-            Err(error) => {
-                warn!(error = %error, "failed to read task projection index rows");
-                Vec::new()
-            }
-        }
-    }
-
-    async fn thread_id_for_number(&self, number: u64) -> Option<String> {
-        match self
-            .garyx_db
+    async fn thread_id_for_number(&self, number: u64) -> Result<Option<String>, String> {
+        self.garyx_db
             .run_blocking(move |db| db.thread_id_for_number(number))
             .await
-        {
-            Ok(thread_id) => thread_id,
-            Err(error) => {
-                warn!(number, error = %error, "failed to read task projection number lookup");
-                None
-            }
-        }
+            .map_err(|error| error.to_string())
     }
 
-    async fn has_running_subtask_targeting(&self, thread_id: &str) -> bool {
+    async fn has_running_subtask_targeting(&self, thread_id: &str) -> Result<bool, String> {
         let owned_thread_id = thread_id.to_owned();
-        match self
-            .garyx_db
+        self.garyx_db
             .run_blocking(move |db| db.has_running_subtask_targeting(&owned_thread_id))
             .await
-        {
-            Ok(found) => found,
-            Err(error) => {
-                warn!(thread_id, error = %error, "failed to read task projection running-subtask gate");
-                false
-            }
-        }
+            .map_err(|error| error.to_string())
     }
 
     async fn list_task_summaries(
         &self,
         filter: &TaskListFilter,
-    ) -> Option<(Vec<TaskSummary>, usize, bool)> {
+    ) -> Result<(Vec<TaskSummary>, usize, bool), String> {
         let filter = filter.clone();
-        match self
-            .garyx_db
+        self.garyx_db
             .run_blocking(move |db| db.list_task_summaries(&filter))
             .await
-        {
-            Ok(page) => Some(page),
-            Err(error) => {
-                warn!(error = %error, "failed to list task projection summaries");
-                None
-            }
-        }
+            .map_err(|error| error.to_string())
     }
+}
 
-    async fn max_number(&self) -> Option<u64> {
-        match self
-            .garyx_db
-            .run_blocking(|db| db.max_task_projection_number())
-            .await
-        {
-            Ok(number) => number,
-            Err(error) => {
-                warn!(error = %error, "failed to read task projection max number");
-                None
-            }
-        }
+/// SQLite-owned task-number allocation (#TASK-2099): one transactional
+/// counter bump, floored against the task projection's `MAX(number)`.
+pub(crate) struct SqliteTaskCounterStore {
+    garyx_db: Arc<GaryxDbService>,
+}
+
+impl SqliteTaskCounterStore {
+    pub(crate) fn new(garyx_db: Arc<GaryxDbService>) -> Self {
+        Self { garyx_db }
     }
+}
 
-    async fn remove_thread(&self, thread_id: &str) {
-        let owned_thread_id = thread_id.to_owned();
-        if let Err(error) = self
-            .garyx_db
-            .run_blocking(move |db| db.remove_task_projection(&owned_thread_id).map(|_| ()))
+#[async_trait]
+impl TaskCounterStore for SqliteTaskCounterStore {
+    async fn allocate(&self) -> Result<u64, TaskCounterError> {
+        self.garyx_db
+            .run_blocking(|db| db.allocate_task_number())
             .await
-        {
-            warn!(thread_id, error = %error, "failed to remove stale task projection row");
+            .map_err(|error| TaskCounterError::Backend(error.to_string()))
+    }
+}
+
+/// One-shot migration of the retired file-based task counter
+/// (`<data_dir>/task-counters/global.txt` held the next number to hand
+/// out). Seeds the SQLite counter row when it does not exist yet; the
+/// seed also floors against every task number embedded in thread record
+/// bodies, covering archived threads whose projections were removed.
+pub fn seed_task_counter_from_legacy(garyx_db: &Arc<GaryxDbService>, data_dir: &Path) {
+    let file_floor = std::fs::read_to_string(data_dir.join("task-counters/global.txt"))
+        .ok()
+        .and_then(|contents| contents.trim().parse::<u64>().ok())
+        .map(|next| next.saturating_sub(1))
+        .unwrap_or(0);
+    match garyx_db.seed_task_counter_if_missing(file_floor) {
+        Ok(true) => {
+            tracing::info!(file_floor, "seeded sqlite task counter from legacy state");
+        }
+        Ok(false) => {}
+        Err(error) => {
+            warn!(error = %error, "failed to seed sqlite task counter");
         }
     }
 }
