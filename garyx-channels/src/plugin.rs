@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,7 +23,7 @@ use garyx_router::{KnownChannelEndpoint, endpoint_key};
 use crate::auth_flow::AuthFlowExecutor;
 use crate::channel_trait::{Channel, ChannelError};
 use crate::dispatcher::{
-    ChannelDispatcher, ChannelDispatcherImpl, OutboundMessage, SendMessageResult,
+    ChannelDispatcher, ChannelDispatcherImpl,
     SwappableDispatcher,
 };
 use crate::plugin_host::manifest::ManifestCapabilities;
@@ -191,16 +190,6 @@ pub trait ChannelPlugin: PluginLifecycle {
         AccountRootBehavior::OpenDefault
     }
 
-    /// Downcast hook: return `Some` iff this plugin is the built-in
-    /// `ManagedChannelPlugin`. Used by the manager's
-    /// `reload_builtin_senders` path to update per-account outbound
-    /// senders on config change without a full plugin rebuild.
-    /// Default `None` for subprocess plugins — they track their own
-    /// accounts via the manifest handshake.
-    fn as_managed(&self) -> Option<&ManagedChannelPlugin> {
-        None
-    }
-
     /// The plugin's capability bits (outbound / inbound / streaming
     /// / images / files / delivery_model). Built-in channels return
     /// their hardcoded [`crate::builtin_catalog::builtin_capabilities`]
@@ -262,36 +251,13 @@ pub trait ChannelPlugin: PluginLifecycle {
         )))
     }
 
-    /// Channel-blind outbound dispatch. Subprocess plugins forward
-    /// the request to the child's `dispatch_outbound` RPC;
-    /// [`ManagedChannelPlugin`] (built-in) currently delegates to
-    /// [`crate::dispatcher::SwappableDispatcher`] via the
-    /// per-channel sender maps — see the default impl below.
-    ///
-    /// This method is intentionally additive. The existing
-    /// dispatcher-driven path (`SwappableDispatcher::send_message`)
-    /// remains the production route for now; built-ins return
-    /// `Unsupported` here until the dispatcher is refactored to
-    /// call this trait method instead. Subprocess plugins work
-    /// end-to-end through it today.
-    async fn dispatch_outbound(
-        &self,
-        _msg: OutboundMessage,
-    ) -> Result<SendMessageResult, ChannelError> {
-        Err(ChannelError::Config(format!(
-            "plugin '{}' does not route outbound through the trait — \
-             use SwappableDispatcher::send_message instead",
-            self.metadata().id
-        )))
-    }
-
     /// Push the authoritative account list to the plugin (§6.5).
     /// Host owns `ChannelsConfig`; whenever the config changes, the
     /// gateway's `apply_runtime_config` iterates every registered
     /// plugin and calls this method. The plugin replaces its
     /// internal view — what that means depends on execution model:
-    /// - Built-in (`ManagedChannelPlugin`): rebuild the per-account
-    ///   `OutboundSender` map atomically via `ArcSwap`.
+    /// - Built-in (`ManagedChannelPlugin`): replace the account
+    ///   descriptor snapshot atomically via `ArcSwap`.
     /// - Subprocess (`SubprocessChannelPlugin`): forward as an
     ///   `accounts/reload` JSON-RPC call; the child replaces its
     ///   own account store.
@@ -366,19 +332,6 @@ pub struct ManagedChannelPlugin {
     auth_flow: Option<Arc<dyn AuthFlowExecutor>>,
     account_root_behavior: AccountRootBehavior,
     account_descriptors: arc_swap::ArcSwap<HashMap<String, AccountDescriptor>>,
-    /// Per-account outbound sender table, lock-free reads via
-    /// [`arc_swap::ArcSwap`]. Atomic replace on runtime-config
-    /// change so the gateway's `apply_runtime_config` path updates
-    /// the map in-place without tearing down the Channel's inbound
-    /// polling (§9.4 Codex review P1).
-    ///
-    /// An `Arc<HashMap::new()>` is the stable "no senders" state —
-    /// every `dispatch_outbound` lookup misses with "account not
-    /// registered" and the caller knows outbound routing is not
-    /// wired yet. No `Option` wrapper because the swap target must
-    /// always be a live `Arc`.
-    outbound_senders:
-        arc_swap::ArcSwap<HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>>>,
 }
 
 /// Builder-style options for [`ManagedChannelPlugin`]. Added so the
@@ -391,13 +344,6 @@ pub struct ManagedChannelPluginOptions {
     pub auth_flow: Option<Arc<dyn AuthFlowExecutor>>,
     pub account_root_behavior: AccountRootBehavior,
     pub accounts: Option<Vec<AccountDescriptor>>,
-    /// Per-account outbound senders. When `Some(map)`, the plugin
-    /// routes `dispatch_outbound` by looking up
-    /// `map[msg.account_id]` and delegating to
-    /// `OutboundSender::send_outbound`. `None` leaves the plugin's
-    /// dispatch path unwired — gateway `send_message` falls through
-    /// to the dispatcher's legacy per-channel sender maps.
-    pub outbound_senders: Option<HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>>>,
 }
 
 impl ManagedChannelPlugin {
@@ -418,7 +364,6 @@ impl ManagedChannelPlugin {
             auth_flow: None,
             account_root_behavior: AccountRootBehavior::OpenDefault,
             account_descriptors: arc_swap::ArcSwap::from_pointee(HashMap::new()),
-            outbound_senders: arc_swap::ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
@@ -460,23 +405,7 @@ impl ManagedChannelPlugin {
                     .map(|account| (account.id.clone(), account))
                     .collect(),
             ),
-            outbound_senders: arc_swap::ArcSwap::from_pointee(
-                opts.outbound_senders.unwrap_or_default(),
-            ),
         }
-    }
-
-    /// Atomically replace the per-account sender table. The gateway
-    /// calls this from `apply_runtime_config` after the user edits
-    /// the channel config so `dispatch_outbound` picks up new / edited
-    /// accounts without a full plugin teardown. Reads are lock-free —
-    /// any in-flight `dispatch_outbound` that already grabbed the old
-    /// Arc completes against that snapshot.
-    pub fn replace_outbound_senders(
-        &self,
-        senders: HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>>,
-    ) {
-        self.outbound_senders.store(Arc::new(senders));
     }
 
     fn account_descriptor(&self, account_id: &str) -> Option<AccountDescriptor> {
@@ -523,10 +452,6 @@ impl ChannelPlugin for ManagedChannelPlugin {
         self.account_root_behavior
     }
 
-    fn as_managed(&self) -> Option<&ManagedChannelPlugin> {
-        Some(self)
-    }
-
     fn capabilities(&self) -> ManifestCapabilities {
         self.capabilities.clone()
     }
@@ -555,146 +480,21 @@ impl ChannelPlugin for ManagedChannelPlugin {
         }
     }
 
-    async fn dispatch_outbound(
-        &self,
-        msg: crate::dispatcher::OutboundMessage,
-    ) -> Result<crate::dispatcher::SendMessageResult, ChannelError> {
-        // Trait-level routing for built-ins: atomic snapshot read
-        // of the per-account sender table (lock-free — `ArcSwap`
-        // hands back the inner Arc which we clone before releasing
-        // the guard). Unknown account id means the dispatch
-        // destination doesn't exist in the current config; a fresh
-        // Arc swap from `replace_outbound_senders` would reflect
-        // new accounts on the next call.
-        let snapshot = self.outbound_senders.load();
-        let sender = snapshot.get(&msg.account_id).cloned().ok_or_else(|| {
-            ChannelError::Config(format!(
-                "{} account '{}' not registered",
-                self.metadata.id, msg.account_id
-            ))
-        })?;
-        // Drop the guard before `await` so concurrent swaps don't
-        // race with a long send.
-        drop(snapshot);
-        sender.send_outbound(msg).await
-    }
-
-    /// Rebuild the per-account `OutboundSender` map from the
-    /// host-pushed account list. `AccountDescriptor.config` is the
-    /// plugin-schema-shaped JSON (e.g. `{"token": "…"}` for
-    /// telegram); deserialise it into the matching account struct
-    /// and construct a fresh sender. `ArcSwap::store` publishes
-    /// the new map atomically — an in-flight `dispatch_outbound`
-    /// that already loaded the old snapshot finishes against it.
-    ///
-    /// Dispatches by `self.metadata.id` because each built-in has
-    /// a different account-struct shape. An id we don't recognise
-    /// is a no-op (better than panicking: the caller may be
-    /// iterating every plugin including some not covered here).
+    /// Replace the account-descriptor snapshot from the host-pushed
+    /// account list. `ArcSwap::store` publishes the new map
+    /// atomically — in-flight readers (`resolve_main_endpoint` /
+    /// `resolve_account_ui`) that already loaded the old snapshot
+    /// finish against it. Outbound routing is unaffected: built-in
+    /// sends go through the dispatcher's per-channel sender maps,
+    /// which `apply_runtime_config` rebuilds separately via
+    /// `ChannelDispatcherImpl::from_config`.
     async fn reload_accounts(&self, accounts: Vec<AccountDescriptor>) -> Result<(), String> {
-        let mut out: HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> = HashMap::new();
-        match self.metadata.id.as_str() {
-            "telegram" => {
-                for acc in &accounts {
-                    let parsed: TelegramAccount = serde_json::from_value(acc.config.clone())
-                        .map_err(|e| {
-                            format!("telegram account '{}' config rejected: {e}", acc.id)
-                        })?;
-                    if !parsed.enabled && !acc.enabled {
-                        continue;
-                    }
-                    let sender: Arc<dyn crate::dispatcher::OutboundSender> =
-                        Arc::new(crate::dispatcher::TelegramSender {
-                            account_id: acc.id.clone(),
-                            token: parsed.token,
-                            http: reqwest::Client::new(),
-                            api_base: "https://api.telegram.org".to_owned(),
-                            is_running: false,
-                        });
-                    out.insert(acc.id.clone(), sender);
-                }
-            }
-            "discord" => {
-                for acc in &accounts {
-                    let parsed: DiscordAccount = serde_json::from_value(acc.config.clone())
-                        .map_err(|e| {
-                            format!("discord account '{}' config rejected: {e}", acc.id)
-                        })?;
-                    if !parsed.enabled && !acc.enabled {
-                        continue;
-                    }
-                    let sender: Arc<dyn crate::dispatcher::OutboundSender> =
-                        Arc::new(crate::dispatcher::DiscordSender {
-                            account_id: acc.id.clone(),
-                            token: parsed.token,
-                            http: reqwest::Client::new(),
-                            api_base: parsed.api_base,
-                            is_running: false,
-                        });
-                    out.insert(acc.id.clone(), sender);
-                }
-            }
-            "feishu" => {
-                for acc in &accounts {
-                    let parsed: FeishuAccount = serde_json::from_value(acc.config.clone())
-                        .map_err(|e| format!("feishu account '{}' config rejected: {e}", acc.id))?;
-                    if !parsed.enabled && !acc.enabled {
-                        continue;
-                    }
-                    let api_base = match parsed.domain {
-                        garyx_models::config::FeishuDomain::Feishu => {
-                            "https://open.feishu.cn/open-apis"
-                        }
-                        garyx_models::config::FeishuDomain::Lark => {
-                            "https://open.larksuite.com/open-apis"
-                        }
-                    };
-                    let sender: Arc<dyn crate::dispatcher::OutboundSender> =
-                        Arc::new(crate::dispatcher::FeishuSender::new(
-                            acc.id.clone(),
-                            parsed.app_id,
-                            parsed.app_secret,
-                            api_base.to_owned(),
-                            false,
-                        ));
-                    out.insert(acc.id.clone(), sender);
-                }
-            }
-            "weixin" => {
-                for acc in &accounts {
-                    let parsed: garyx_models::config::WeixinAccount =
-                        serde_json::from_value(acc.config.clone()).map_err(|e| {
-                            format!("weixin account '{}' config rejected: {e}", acc.id)
-                        })?;
-                    if !parsed.enabled && !acc.enabled {
-                        continue;
-                    }
-                    let sender: Arc<dyn crate::dispatcher::OutboundSender> =
-                        Arc::new(crate::dispatcher::WeixinSender {
-                            account_id: acc.id.clone(),
-                            account: parsed,
-                            http: reqwest::Client::new(),
-                            is_running: false,
-                            running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                        });
-                    out.insert(acc.id.clone(), sender);
-                }
-            }
-            _ => {
-                // Unknown built-in id — no sender builder registered.
-                // Leave the existing map in place rather than
-                // wiping it; a future channel author adds a case
-                // above when they ship.
-                return Ok(());
-            }
-        }
         self.account_descriptors.store(Arc::new(
             accounts
                 .into_iter()
                 .map(|account| (account.id.clone(), account))
                 .collect(),
         ));
-        self.outbound_senders.store(Arc::new(out));
         Ok(())
     }
 
@@ -2292,43 +2092,6 @@ impl ChannelPluginManager {
         })
     }
 
-    /// Refresh every built-in plugin's per-account outbound sender
-    /// table from a (possibly updated) `ChannelsConfig`. Called by
-    /// the gateway's `apply_runtime_config` path after the user
-    /// edits their channel config — `dispatch_outbound` picks up
-    /// the new / edited accounts atomically (lock-free read via
-    /// `ArcSwap`) without tearing down any Channel's polling loop.
-    ///
-    /// Subprocess plugins are left alone; their account set is
-    /// driven by the manifest handshake + respawn path, not the
-    /// host's `ChannelsConfig`.
-    pub fn reload_builtin_senders(&self, channels: &ChannelsConfig) {
-        let telegram = resolved_telegram_config(channels);
-        let discord = resolved_discord_config(channels);
-        let feishu = resolved_feishu_config(channels);
-        let weixin = resolved_weixin_config(channels);
-        for (id, entry) in &self.plugins {
-            let Some(managed) = entry.plugin.as_managed() else {
-                continue; // subprocess plugin — leave it alone
-            };
-            let new_map = match id.as_str() {
-                "telegram" => build_telegram_senders(&telegram),
-                "discord" => build_discord_senders(&discord),
-                "feishu" => build_feishu_senders(&feishu),
-                "weixin" => {
-                    let running = self
-                        .dispatcher
-                        .as_ref()
-                        .and_then(|dispatcher| dispatcher.channel_running_handle("weixin"))
-                        .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicBool::new(false)));
-                    build_weixin_senders(&weixin, running)
-                }
-                _ => continue, // unknown built-in id — don't touch
-            };
-            managed.replace_outbound_senders(new_map);
-        }
-    }
-
     /// Push the fresh per-plugin account snapshot through every
     /// registered plugin's `ChannelPlugin::reload_accounts` method.
     /// Channel-blind: the manager iterates the unified plugin map
@@ -3267,15 +3030,6 @@ fn rasterize_svg_icon(bytes: &[u8], path: &std::path::Path) -> Option<Vec<u8>> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Built-in outbound sender builders
-// ---------------------------------------------------------------------------
-//
-// Shared between `BuiltInPluginDiscoverer::discover` (initial
-// registration) and `ChannelPluginManager::reload_builtin_senders`
-// (runtime config updates). Single source of truth so adding a new
-// built-in account doesn't leave the two paths out of sync.
-
 /// Shape `channels.{telegram,feishu,weixin,…}.accounts` into the
 /// wire-compatible
 /// `Vec<AccountDescriptor>` the `ChannelPlugin::reload_accounts`
@@ -3374,95 +3128,6 @@ fn resolved_weixin_config(channels: &ChannelsConfig) -> WeixinConfig {
         warn!(error = %error, "failed to resolve weixin accounts from channels config");
         WeixinConfig::default()
     })
-}
-
-fn build_telegram_senders(
-    cfg: &garyx_models::config::TelegramConfig,
-) -> HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> {
-    let mut out: HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> = HashMap::new();
-    for (id, acc) in &cfg.accounts {
-        if !acc.enabled {
-            continue;
-        }
-        let sender: Arc<dyn crate::dispatcher::OutboundSender> =
-            Arc::new(crate::dispatcher::TelegramSender {
-                account_id: id.clone(),
-                token: acc.token.clone(),
-                http: reqwest::Client::new(),
-                api_base: "https://api.telegram.org".to_owned(),
-                is_running: false,
-            });
-        out.insert(id.clone(), sender);
-    }
-    out
-}
-
-fn build_discord_senders(
-    cfg: &garyx_models::config::DiscordConfig,
-) -> HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> {
-    let mut out: HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> = HashMap::new();
-    for (id, acc) in &cfg.accounts {
-        if !acc.enabled {
-            continue;
-        }
-        let sender: Arc<dyn crate::dispatcher::OutboundSender> =
-            Arc::new(crate::dispatcher::DiscordSender {
-                account_id: id.clone(),
-                token: acc.token.clone(),
-                http: reqwest::Client::new(),
-                api_base: acc.api_base.clone(),
-                is_running: false,
-            });
-        out.insert(id.clone(), sender);
-    }
-    out
-}
-
-fn build_feishu_senders(
-    cfg: &garyx_models::config::FeishuConfig,
-) -> HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> {
-    let mut out: HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> = HashMap::new();
-    for (id, acc) in &cfg.accounts {
-        if !acc.enabled {
-            continue;
-        }
-        let api_base = match acc.domain {
-            garyx_models::config::FeishuDomain::Feishu => "https://open.feishu.cn/open-apis",
-            garyx_models::config::FeishuDomain::Lark => "https://open.larksuite.com/open-apis",
-        };
-        let sender: Arc<dyn crate::dispatcher::OutboundSender> =
-            Arc::new(crate::dispatcher::FeishuSender::new(
-                id.clone(),
-                acc.app_id.clone(),
-                acc.app_secret.clone(),
-                api_base.to_owned(),
-                false,
-            ));
-        out.insert(id.clone(), sender);
-    }
-    out
-}
-
-fn build_weixin_senders(
-    cfg: &garyx_models::config::WeixinConfig,
-    running: Arc<std::sync::atomic::AtomicBool>,
-) -> HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> {
-    let mut out: HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> = HashMap::new();
-    for (id, acc) in &cfg.accounts {
-        if !acc.enabled {
-            continue;
-        }
-        let sender: Arc<dyn crate::dispatcher::OutboundSender> =
-            Arc::new(crate::dispatcher::WeixinSender {
-                account_id: id.clone(),
-                account: acc.clone(),
-                http: reqwest::Client::new(),
-                is_running: false,
-                running: running.clone(),
-            });
-        out.insert(id.clone(), sender);
-    }
-    out
 }
 
 /// Resolve a manifest-declared icon path (relative to the plugin's
@@ -3620,10 +3285,6 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                 self.bridge.clone(),
                 self.dispatcher.clone(),
             );
-            // Build one `TelegramSender` per enabled account so the
-            // plugin's trait-level `dispatch_outbound` can route
-            // without consulting the dispatcher's legacy map.
-            let telegram_senders = build_telegram_senders(&telegram);
             let descriptor = crate::builtin_catalog::builtin_channel_descriptor("telegram")
                 .expect("builtin telegram descriptor");
             plugins.push(Box::new(ManagedChannelPlugin::with_options(
@@ -3635,7 +3296,6 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                     auth_flow: builtin_auth_flow_executor(descriptor.id),
                     account_root_behavior: descriptor.account_root_behavior,
                     accounts: Some(build_accounts_for_plugin("telegram", &self.channels)),
-                    outbound_senders: Some(telegram_senders),
                 },
             )));
         }
@@ -3647,7 +3307,6 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                 self.bridge.clone(),
                 self.dispatcher.clone(),
             );
-            let discord_senders = build_discord_senders(&discord);
             let descriptor = crate::builtin_catalog::builtin_channel_descriptor("discord")
                 .expect("builtin discord descriptor");
             plugins.push(Box::new(ManagedChannelPlugin::with_options(
@@ -3659,7 +3318,6 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                     auth_flow: builtin_auth_flow_executor(descriptor.id),
                     account_root_behavior: descriptor.account_root_behavior,
                     accounts: Some(build_accounts_for_plugin("discord", &self.channels)),
-                    outbound_senders: Some(discord_senders),
                 },
             )));
         }
@@ -3672,7 +3330,6 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                 self.dispatcher.clone(),
                 self.public_url.clone(),
             );
-            let feishu_senders = build_feishu_senders(&feishu);
             let descriptor = crate::builtin_catalog::builtin_channel_descriptor("feishu")
                 .expect("builtin feishu descriptor");
             plugins.push(Box::new(ManagedChannelPlugin::with_options(
@@ -3684,7 +3341,6 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                     auth_flow: builtin_auth_flow_executor(descriptor.id),
                     account_root_behavior: descriptor.account_root_behavior,
                     accounts: Some(build_accounts_for_plugin("feishu", &self.channels)),
-                    outbound_senders: Some(feishu_senders),
                 },
             )));
         }
@@ -3699,9 +3355,8 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                 self.router.clone(),
                 self.bridge.clone(),
                 self.dispatcher.clone(),
-                weixin_running.clone(),
+                weixin_running,
             );
-            let weixin_senders = build_weixin_senders(&weixin, weixin_running);
             let descriptor = crate::builtin_catalog::builtin_channel_descriptor("weixin")
                 .expect("builtin weixin descriptor");
             plugins.push(Box::new(ManagedChannelPlugin::with_options(
@@ -3713,115 +3368,10 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                     auth_flow: builtin_auth_flow_executor(descriptor.id),
                     account_root_behavior: descriptor.account_root_behavior,
                     accounts: Some(build_accounts_for_plugin("weixin", &self.channels)),
-                    outbound_senders: Some(weixin_senders),
                 },
             )));
         }
 
-        Ok(plugins)
-    }
-}
-
-pub struct LocalDescriptorDiscoverer {
-    pub descriptor_dir: Option<PathBuf>,
-}
-
-impl LocalDescriptorDiscoverer {
-    pub fn from_env() -> Self {
-        Self {
-            descriptor_dir: std::env::var_os("GARYX_CHANNEL_PLUGIN_DIR").map(PathBuf::from),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct LocalPluginDescriptor {
-    id: String,
-    #[serde(default)]
-    aliases: Vec<String>,
-    #[serde(default)]
-    display_name: String,
-    #[serde(default)]
-    version: String,
-    #[serde(default)]
-    description: String,
-    /// Optional list of [`crate::auth_flow::ConfigMethod`] the plugin
-    /// advertises. Absent ⇒ empty vec (legacy descriptors predating
-    /// §11 keep parsing cleanly).
-    #[serde(default)]
-    config_methods: Vec<crate::auth_flow::ConfigMethod>,
-}
-
-struct LocalPlaceholderPlugin {
-    metadata: PluginMetadata,
-}
-
-#[async_trait]
-impl PluginLifecycle for LocalPlaceholderPlugin {
-    async fn initialize(&self) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn start(&self) -> Result<(), String> {
-        Err("local plugin runtime is not implemented yet".to_owned())
-    }
-
-    async fn stop(&self) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn cleanup(&self) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-impl ChannelPlugin for LocalPlaceholderPlugin {
-    fn metadata(&self) -> &PluginMetadata {
-        &self.metadata
-    }
-}
-
-impl PluginDiscoverer for LocalDescriptorDiscoverer {
-    fn discover(&self) -> Result<Vec<Box<dyn ChannelPlugin>>, String> {
-        let Some(dir) = &self.descriptor_dir else {
-            return Ok(Vec::new());
-        };
-        if !dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut plugins: Vec<Box<dyn ChannelPlugin>> = Vec::new();
-        let entries = fs::read_dir(dir).map_err(|e| e.to_string())?;
-        for entry in entries {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
-
-            let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            let descriptor: LocalPluginDescriptor =
-                serde_json::from_str(&content).map_err(|e| e.to_string())?;
-            plugins.push(Box::new(LocalPlaceholderPlugin {
-                metadata: PluginMetadata {
-                    id: descriptor.id.clone(),
-                    aliases: descriptor.aliases,
-                    display_name: if descriptor.display_name.is_empty() {
-                        descriptor.id
-                    } else {
-                        descriptor.display_name
-                    },
-                    version: if descriptor.version.is_empty() {
-                        "0.0.0".to_owned()
-                    } else {
-                        descriptor.version
-                    },
-                    description: descriptor.description,
-                    source: format!("local:{}", path.display()),
-                    config_methods: descriptor.config_methods,
-                },
-            }));
-        }
         Ok(plugins)
     }
 }

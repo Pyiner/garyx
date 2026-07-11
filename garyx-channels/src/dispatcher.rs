@@ -474,15 +474,12 @@ pub fn build_stream_dispatch_callback(
 
 /// A clone-cheap, per-account outbound sender. Every built-in
 /// channel's sender handle (`TelegramSender`, `FeishuSender`,
-/// `WeixinSender`) implements this so [`crate::plugin::ChannelPlugin::dispatch_outbound`]
-/// can delegate without a `match channel` branch.
+/// `WeixinSender`) implements this so the dispatcher's per-channel
+/// sender maps can delegate uniformly.
 ///
 /// The trait's `send_outbound` method owns every channel-specific
 /// wire quirk: Telegram's integer id parsing, Feishu's reply-target
 /// resolution, Weixin's `context_token` retry + queue-on-failure.
-/// `dispatcher.rs::send_message` progressively migrates away from
-/// its hand-written branches towards calling this method through
-/// the `ChannelPlugin` trait.
 #[async_trait]
 pub trait OutboundSender: Send + Sync {
     /// Send one outbound message. `request.account_id` is

@@ -52,7 +52,7 @@ pub use dispatcher::{
 pub use feishu::FeishuChannel;
 pub use garyx_models::ChannelOutboundContent;
 pub use plugin::{
-    BuiltInPluginDiscoverer, ChannelPluginManager, LocalDescriptorDiscoverer, PluginMetadata,
+    BuiltInPluginDiscoverer, ChannelPluginManager, PluginMetadata,
     PluginState, PluginStatus, SubprocessPluginCatalogEntry, SubprocessPluginError,
     builtin_plugin_metadata, builtin_plugin_metadata_list,
 };

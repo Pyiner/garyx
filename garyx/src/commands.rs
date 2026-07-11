@@ -21,7 +21,7 @@ use garyx_channels::plugin_host::{
     SubprocessAuthFlowExecutor, SubprocessPlugin,
 };
 use garyx_channels::{
-    BuiltInPluginDiscoverer, ChannelPluginManager, LocalDescriptorDiscoverer, PluginMetadata,
+    BuiltInPluginDiscoverer, ChannelPluginManager, PluginMetadata,
     WeixinAuthExecutor, builtin_plugin_metadata_list,
 };
 use garyx_gateway::server::AppState;

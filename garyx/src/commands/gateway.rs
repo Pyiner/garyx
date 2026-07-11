@@ -47,9 +47,6 @@ async fn rebuild_channel_plugins(
             );
             replacement.discover_and_register(&built_in_discoverer)?;
 
-            let local_discoverer = LocalDescriptorDiscoverer::from_env();
-            replacement.discover_and_register(&local_discoverer)?;
-
             replacement.initialize_all().await;
             replacement.start_all().await;
         }

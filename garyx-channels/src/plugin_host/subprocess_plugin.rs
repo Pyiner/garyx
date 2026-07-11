@@ -4,8 +4,10 @@
 //! This is the Scheme-A mirror of [`crate::plugin::ManagedChannelPlugin`]:
 //! same trait, same semantics, different execution model. Everything
 //! the trait exposes (metadata / capabilities / schema / auth_flow /
-//! dispatch_outbound / account validation) is forwarded over JSON-RPC
-//! to the child process through [`crate::plugin_host::PluginRpcClient`].
+//! account validation) is forwarded over JSON-RPC to the child
+//! process through [`crate::plugin_host::PluginRpcClient`]. Outbound
+//! dispatch does not go through the trait: the dispatcher routes to
+//! the [`PluginSenderHandle`] published at registration time.
 //!
 //! Account state is deliberately NOT part of the `ChannelPlugin`
 //! trait: the host owns `ChannelsConfig`, plugins merely reflect
@@ -30,8 +32,6 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::auth_flow::AuthFlowExecutor;
-use crate::channel_trait::ChannelError;
-use crate::dispatcher::{OutboundMessage, SendMessageResult};
 use crate::plugin::{
     AccountValidationResult, ChannelPlugin, LIFECYCLE_RPC_TIMEOUT, PluginAccountUi,
     PluginConversationEndpoint, PluginConversationNode, PluginLifecycle, PluginMetadata,
@@ -39,7 +39,7 @@ use crate::plugin::{
 use crate::plugin_host::auth_flow_bridge::SubprocessAuthFlowExecutor;
 use crate::plugin_host::manifest::{AccountRootBehavior, ManifestCapabilities};
 use crate::plugin_host::protocol::{
-    AccountDescriptor, CapabilitiesResponse, DispatchOutbound, DispatchOutboundResult,
+    AccountDescriptor, CapabilitiesResponse,
     PluginErrorCode, ReloadAccountsParams, ResolveAccountUiParams, ResolveAccountUiResult,
     UiConversationNode, UiEndpointDescriptor, ValidateAccountParams, ValidateAccountResult,
 };
@@ -48,7 +48,7 @@ use crate::plugin_host::{PluginRpcClient, PluginSenderHandle, RpcError};
 /// Thin `ChannelPlugin` façade over a subprocess plugin. All trait
 /// methods either return data captured at registration time (metadata
 /// / schema / capabilities) or forward over the current live client
-/// (auth_flow / dispatch_outbound).
+/// (auth_flow / account validation / reload).
 ///
 /// `client` is behind a `Mutex` so respawn can swap it without
 /// tearing an in-flight caller: each trait method grabs a cloned
@@ -204,29 +204,6 @@ impl ChannelPlugin for SubprocessChannelPlugin {
             } else {
                 result.message
             },
-        })
-    }
-
-    async fn dispatch_outbound(
-        &self,
-        msg: OutboundMessage,
-    ) -> Result<SendMessageResult, ChannelError> {
-        // Reuse the existing sender handle — same capability gate,
-        // same error mapping, same timeout contract. Converting
-        // `OutboundMessage` to the plugin_host DTO shape is a
-        // field-copy since both types were designed alongside.
-        let req = DispatchOutbound {
-            account_id: msg.account_id,
-            chat_id: msg.chat_id,
-            delivery_target_type: msg.delivery_target_type,
-            delivery_target_id: msg.delivery_target_id,
-            content: msg.content,
-            reply_to: msg.reply_to,
-            thread_id: msg.thread_id,
-        };
-        let result: DispatchOutboundResult = self.sender.dispatch(req).await?;
-        Ok(SendMessageResult {
-            message_ids: result.message_ids,
         })
     }
 
