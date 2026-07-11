@@ -235,6 +235,14 @@ async fn deliver_notification_to_bot(
 ) -> Result<(), TaskNotificationError> {
     let endpoint = crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id)
         .await
+        .map_err(|error| {
+            TaskNotificationError::new(
+                event,
+                format!(
+                    "thread store error resolving notification bot target {channel}:{account_id}: {error}"
+                ),
+            )
+        })?
         .ok_or_else(|| {
             TaskNotificationError::new(
                 event,

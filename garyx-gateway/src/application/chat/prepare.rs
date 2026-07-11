@@ -560,19 +560,32 @@ async fn resolve_chat_target(
                 })),
             ));
         };
-        let Some(endpoint) =
-            crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id).await
-        else {
-            return Err(ChatPreparationError::InvalidRequest(
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "runId": "",
-                    "threadId": Value::Null,
-                    "response": Value::Null,
-                    "error": format!("bot '{bot}' has no resolved main endpoint"),
-                })),
-            ));
-        };
+        let endpoint =
+            match crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id).await {
+                Ok(Some(endpoint)) => endpoint,
+                Ok(None) => {
+                    return Err(ChatPreparationError::InvalidRequest(
+                        StatusCode::NOT_FOUND,
+                        Json(json!({
+                            "runId": "",
+                            "threadId": Value::Null,
+                            "response": Value::Null,
+                            "error": format!("bot '{bot}' has no resolved main endpoint"),
+                        })),
+                    ));
+                }
+                Err(error) => {
+                    return Err(ChatPreparationError::InvalidRequest(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "runId": "",
+                            "threadId": Value::Null,
+                            "response": Value::Null,
+                            "error": format!("thread store error: {error}"),
+                        })),
+                    ));
+                }
+            };
         if let Some(thread_id) = endpoint
             .thread_id
             .as_deref()

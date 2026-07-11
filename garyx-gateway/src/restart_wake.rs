@@ -645,6 +645,9 @@ async fn resolve_bot_thread_id(state: &Arc<AppState>, bot: &str) -> Result<Strin
     };
     let endpoint = crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id)
         .await
+        .map_err(|error| {
+            format!("thread store error resolving restart wake bot target {bot}: {error}")
+        })?
         .ok_or_else(|| format!("restart wake bot target has no main endpoint: {bot}"))?;
     if let Some(thread_id) = endpoint
         .thread_id

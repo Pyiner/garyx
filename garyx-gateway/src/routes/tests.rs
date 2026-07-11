@@ -3742,9 +3742,16 @@ async fn thread_store_backend_failure_answers_500_not_404() {
     // History list mode must not degrade a store failure into a
     // successful empty listing (#TASK-2123): both the summary and the
     // include_messages variants surface the backend failure as 500.
+    // The endpoint-projection boundaries do the same (#TASK-2128): a
+    // store outage must never read as "no endpoints" or an unresolved
+    // bot.
     for uri in [
         "/api/threads/history",
         "/api/threads/history?include_messages=true",
+        "/api/channel-endpoints",
+        "/api/configured-bots?include_endpoints=true",
+        "/api/bot-consoles",
+        "/api/bot/status?bot_id=telegram:main",
     ] {
         let request = authed_request().uri(uri).body(Body::empty()).unwrap();
         let response = router.clone().oneshot(request).await.unwrap();
@@ -6412,7 +6419,7 @@ async fn cached_channel_endpoints_reuses_snapshot_until_invalidated() {
         .await
         .unwrap();
 
-    let initial = state.cached_channel_endpoints().await;
+    let initial = state.cached_channel_endpoints().await.expect("endpoints");
     assert_eq!(initial.len(), 1);
     assert_eq!(initial[0].display_label, "Initial Chat");
 
@@ -6438,11 +6445,11 @@ async fn cached_channel_endpoints_reuses_snapshot_until_invalidated() {
         .await
         .unwrap();
 
-    let cached = state.cached_channel_endpoints().await;
+    let cached = state.cached_channel_endpoints().await.expect("endpoints");
     assert_eq!(cached[0].display_label, "Initial Chat");
 
     state.invalidate_channel_endpoint_cache().await;
-    let refreshed = state.cached_channel_endpoints().await;
+    let refreshed = state.cached_channel_endpoints().await.expect("endpoints");
     assert_eq!(refreshed[0].display_label, "Updated Chat");
 }
 

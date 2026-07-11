@@ -240,11 +240,18 @@ impl GaryMcpServer {
         if let Some(bot) = requested_bot.as_ref()
             && !explicit_target
         {
-            let Some(endpoint) =
-                crate::routes::resolve_main_endpoint_by_bot(state, &bot.channel, &bot.account_id)
-                    .await
-            else {
-                return Err(format!("bot '{}' has no resolved main endpoint", bot.bot));
+            let endpoint = match crate::routes::resolve_main_endpoint_by_bot(
+                state,
+                &bot.channel,
+                &bot.account_id,
+            )
+            .await
+            {
+                Ok(Some(endpoint)) => endpoint,
+                Ok(None) => {
+                    return Err(format!("bot '{}' has no resolved main endpoint", bot.bot));
+                }
+                Err(error) => return Err(format!("thread store error: {error}")),
             };
 
             return Ok(ResolvedMessageTarget {

@@ -171,7 +171,14 @@ impl AppState {
         self.threads.thread_store.count_keys(Some("thread::")).await
     }
 
-    pub async fn cached_channel_endpoints(&self) -> Vec<KnownChannelEndpoint> {
+    /// Endpoint snapshot for request boundaries: store/projection
+    /// failures propagate as `Err` (and are never cached), so routes
+    /// surface a backend outage as 500 instead of an empty listing
+    /// (#TASK-2128). Fire-and-forget callers opt into degradation
+    /// explicitly at their own call sites.
+    pub async fn cached_channel_endpoints(
+        &self,
+    ) -> Result<Vec<KnownChannelEndpoint>, garyx_router::ThreadStoreError> {
         let now = Instant::now();
         let mut cache = self.ops.channel_endpoint_snapshot.lock().await;
         if let Some(snapshot) = cache.as_ref()
@@ -181,15 +188,15 @@ impl AppState {
                 endpoint_count = snapshot.endpoints.len(),
                 "channel endpoint snapshot cache hit"
             );
-            return snapshot.endpoints.clone();
+            return Ok(snapshot.endpoints.clone());
         }
 
         let started = Instant::now();
         // Projection rows + known-endpoint registry, via the router's
         // projection-backed listing (the SQL endpoint projection is
-        // registered for this store at bootstrap).
+        // store-owned for the SQLite store).
         let endpoints =
-            garyx_router::list_known_channel_endpoints(&self.threads.thread_store).await;
+            garyx_router::list_known_channel_endpoints(&self.threads.thread_store).await?;
         let elapsed_ms = started.elapsed().as_millis() as u64;
         debug!(
             elapsed_ms,
@@ -200,7 +207,7 @@ impl AppState {
             endpoints: endpoints.clone(),
             expires_at: Instant::now() + GATEWAY_SYNC_SNAPSHOT_TTL,
         });
-        endpoints
+        Ok(endpoints)
     }
 
     pub async fn invalidate_channel_endpoint_cache(&self) {
@@ -239,7 +246,13 @@ impl AppState {
                 warn!(error = %error, "failed to count thread records at startup");
                 0
             });
-            let endpoints = state.cached_channel_endpoints().await.len();
+            let endpoints = match state.cached_channel_endpoints().await {
+                Ok(endpoints) => endpoints.len(),
+                Err(error) => {
+                    warn!(error = %error, "failed to warm channel endpoint snapshot at startup");
+                    0
+                }
+            };
             debug!(
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 thread_count = threads,

@@ -366,16 +366,29 @@ pub async fn thread_diagnostics(
 pub async fn bot_status(
     State(state): State<Arc<AppState>>,
     Query(params): Query<BotStatusParams>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let bot_id = params.bot_id.trim();
     if bot_id.is_empty() {
         return Json(json!({
             "ok": false,
             "reason": "missing-bot-id",
-        }));
+        }))
+        .into_response();
     }
 
-    Json(build_bot_status_payload(&state, bot_id).await)
+    match build_bot_status_payload(&state, bot_id).await {
+        Ok(payload) => Json(payload).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "ok": false,
+                "bot_id": bot_id,
+                "reason": "thread-store-error",
+                "error": error.to_string(),
+            })),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn bot_bind(
@@ -440,21 +453,36 @@ pub async fn bot_bind(
         }
     };
 
-    let Some(endpoint) =
-        crate::routes::resolve_main_endpoint_by_bot(&state, channel, account_id).await
-    else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "ok": false,
-                "bot_id": &bot_id,
-                "channel": channel,
-                "account_id": account_id,
-                "reason": "main-endpoint-unresolved",
-                "error": format!("bot '{bot_id}' has no resolved main endpoint"),
-            })),
-        );
-    };
+    let endpoint =
+        match crate::routes::resolve_main_endpoint_by_bot(&state, channel, account_id).await {
+            Ok(Some(endpoint)) => endpoint,
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "ok": false,
+                        "bot_id": &bot_id,
+                        "channel": channel,
+                        "account_id": account_id,
+                        "reason": "main-endpoint-unresolved",
+                        "error": format!("bot '{bot_id}' has no resolved main endpoint"),
+                    })),
+                );
+            }
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "ok": false,
+                        "bot_id": &bot_id,
+                        "channel": channel,
+                        "account_id": account_id,
+                        "reason": "thread-store-error",
+                        "error": error.to_string(),
+                    })),
+                );
+            }
+        };
 
     if let Err(error) =
         validate_thread_accepts_bot_binding(thread_id, &thread_data, channel, account_id)
@@ -493,7 +521,20 @@ pub async fn bot_bind(
         }
     };
 
-    let mut payload = build_bot_status_payload(&state, &bot_id).await;
+    let mut payload = match build_bot_status_payload(&state, &bot_id).await {
+        Ok(payload) => payload,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "ok": false,
+                    "bot_id": &bot_id,
+                    "reason": "thread-store-error",
+                    "error": error.to_string(),
+                })),
+            );
+        }
+    };
     enrich_bot_binding_payload(
         &mut payload,
         "bind",
@@ -526,21 +567,36 @@ pub async fn bot_unbind(
     };
     let bot_id = format!("{channel}:{account_id}");
 
-    let Some(endpoint) =
-        crate::routes::resolve_main_endpoint_by_bot(&state, channel, account_id).await
-    else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "ok": false,
-                "bot_id": &bot_id,
-                "channel": channel,
-                "account_id": account_id,
-                "reason": "main-endpoint-unresolved",
-                "error": format!("bot '{bot_id}' has no resolved main endpoint"),
-            })),
-        );
-    };
+    let endpoint =
+        match crate::routes::resolve_main_endpoint_by_bot(&state, channel, account_id).await {
+            Ok(Some(endpoint)) => endpoint,
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "ok": false,
+                        "bot_id": &bot_id,
+                        "channel": channel,
+                        "account_id": account_id,
+                        "reason": "main-endpoint-unresolved",
+                        "error": format!("bot '{bot_id}' has no resolved main endpoint"),
+                    })),
+                );
+            }
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "ok": false,
+                        "bot_id": &bot_id,
+                        "channel": channel,
+                        "account_id": account_id,
+                        "reason": "thread-store-error",
+                        "error": error.to_string(),
+                    })),
+                );
+            }
+        };
 
     let result =
         match crate::routes::detach_channel_endpoint_key(&state, &endpoint.endpoint_key).await {
@@ -558,7 +614,20 @@ pub async fn bot_unbind(
             }
         };
 
-    let mut payload = build_bot_status_payload(&state, &bot_id).await;
+    let mut payload = match build_bot_status_payload(&state, &bot_id).await {
+        Ok(payload) => payload,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "ok": false,
+                    "bot_id": &bot_id,
+                    "reason": "thread-store-error",
+                    "error": error.to_string(),
+                })),
+            );
+        }
+    };
     enrich_bot_binding_payload(
         &mut payload,
         "unbind",
@@ -619,20 +688,26 @@ fn enrich_bot_binding_payload(
     );
 }
 
-async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value {
+async fn build_bot_status_payload(
+    state: &Arc<AppState>,
+    bot_id: &str,
+) -> Result<Value, garyx_router::ThreadStoreError> {
     let Some((channel, account_id)) = bot_id.split_once(':') else {
-        return json!({
+        return Ok(json!({
             "ok": false,
             "bot_id": bot_id,
             "reason": "invalid-bot-id",
             "error": "bot_id must be `channel:account_id`",
-        });
+        }));
     };
 
+    // `unresolved` means the bot genuinely has no main endpoint; a store
+    // failure propagates instead of masquerading as unresolved
+    // (#TASK-2128).
     let Some(endpoint) =
-        crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id).await
+        crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id).await?
     else {
-        return json!({
+        return Ok(json!({
             "ok": true,
             "bot_id": bot_id,
             "channel": channel,
@@ -648,12 +723,14 @@ async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value 
             "current_thread_id": Value::Null,
             "current_thread": Value::Null,
             "thread_runtime": build_thread_runtime_summary(state, None).await,
-        });
+        }));
     };
 
     let current_thread_id = endpoint.thread_id.clone();
+    // Bound thread bodies feed decision-making in this payload: a store
+    // failure propagates instead of reporting the thread as missing.
     let current_thread = match current_thread_id.as_deref() {
-        Some(thread_id) => state.threads.thread_store.get_logged(thread_id).await,
+        Some(thread_id) => state.threads.thread_store.get(thread_id).await?,
         None => None,
     };
     let current_thread_status = if current_thread_id.is_some() {
@@ -664,7 +741,7 @@ async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value 
     let default_workspace_mode =
         default_workspace_mode_for_channel_account(&state.config_snapshot(), channel, account_id);
 
-    json!({
+    Ok(json!({
         "ok": true,
         "bot_id": bot_id,
         "channel": channel,
@@ -676,7 +753,7 @@ async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value 
         "current_thread_id": current_thread_id,
         "current_thread": current_thread,
         "thread_runtime": build_thread_runtime_summary(state, current_thread.as_ref()).await,
-    })
+    }))
 }
 
 pub(crate) async fn thread_history_for_key(
@@ -2570,13 +2647,24 @@ pub async fn send_message(
     };
 
     // Resolve main endpoint for the bot.
-    let Some(endpoint) =
-        crate::routes::resolve_main_endpoint_by_bot(&state, channel, account_id).await
-    else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "ok": false, "error": format!("no main endpoint for bot '{bot}'") })),
-        );
+    let endpoint = match crate::routes::resolve_main_endpoint_by_bot(&state, channel, account_id)
+        .await
+    {
+        Ok(Some(endpoint)) => endpoint,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "ok": false, "error": format!("no main endpoint for bot '{bot}'") })),
+            );
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(
+                    json!({ "ok": false, "reason": "thread-store-error", "error": error.to_string() }),
+                ),
+            );
+        }
     };
 
     // Send.

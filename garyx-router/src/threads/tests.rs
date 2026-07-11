@@ -114,7 +114,9 @@ async fn list_known_channel_endpoints_includes_thread_metadata() {
         .await
         .unwrap();
 
-    let endpoints = list_known_channel_endpoints(&store).await;
+    let endpoints = list_known_channel_endpoints(&store)
+        .await
+        .expect("list endpoints");
     assert_eq!(endpoints.len(), 1);
 
     let endpoint = &endpoints[0];
@@ -153,7 +155,9 @@ async fn list_known_channel_endpoints_backfills_delivery_target_from_binding_key
         .await
         .unwrap();
 
-    let endpoints = list_known_channel_endpoints(&store).await;
+    let endpoints = list_known_channel_endpoints(&store)
+        .await
+        .expect("list endpoints");
     assert_eq!(endpoints.len(), 1);
     let endpoint = &endpoints[0];
     assert_eq!(endpoint.binding_key, "1000000001");
@@ -190,7 +194,9 @@ async fn list_known_channel_endpoints_orders_by_endpoint_key_not_activity() {
             .unwrap();
     }
 
-    let endpoints = list_known_channel_endpoints(&store).await;
+    let endpoints = list_known_channel_endpoints(&store)
+        .await
+        .expect("list endpoints");
     let endpoint_keys: Vec<_> = endpoints
         .iter()
         .map(|endpoint| endpoint.endpoint_key.as_str())
@@ -242,7 +248,9 @@ async fn list_known_channel_endpoints_prefers_latest_thread_binding_when_duplica
         .await
         .unwrap();
 
-    let endpoints = list_known_channel_endpoints(&store).await;
+    let endpoints = list_known_channel_endpoints(&store)
+        .await
+        .expect("list endpoints");
     assert_eq!(endpoints.len(), 1);
     let endpoint = &endpoints[0];
     assert_eq!(endpoint.endpoint_key, "telegram::main::12345678");

@@ -571,17 +571,17 @@ pub(crate) async fn resolve_main_endpoint_by_bot(
     state: &Arc<AppState>,
     channel: &str,
     account_id: &str,
-) -> Option<ResolvedMainEndpoint> {
-    let endpoints = state.cached_channel_endpoints().await;
-    resolve_main_endpoint_with_endpoints(state, channel, account_id, &endpoints).await
+) -> Result<Option<ResolvedMainEndpoint>, garyx_router::ThreadStoreError> {
+    let endpoints = state.cached_channel_endpoints().await?;
+    Ok(resolve_main_endpoint_with_endpoints(state, channel, account_id, &endpoints).await)
 }
 
 async fn resolve_main_endpoint_by_key(
     state: &Arc<AppState>,
     endpoint_key_value: &str,
-) -> Option<ResolvedMainEndpoint> {
+) -> Result<Option<ResolvedMainEndpoint>, garyx_router::ThreadStoreError> {
     let config = state.config_snapshot();
-    let endpoints = state.cached_channel_endpoints().await;
+    let endpoints = state.cached_channel_endpoints().await?;
 
     for account in configured_channel_accounts(&config.channels) {
         let Some(endpoint) = resolve_main_endpoint_with_endpoints(
@@ -595,11 +595,11 @@ async fn resolve_main_endpoint_by_key(
             continue;
         };
         if endpoint.endpoint_key == endpoint_key_value {
-            return Some(endpoint);
+            return Ok(Some(endpoint));
         }
     }
 
-    None
+    Ok(None)
 }
 
 /// GET /health - basic health check
@@ -1233,6 +1233,12 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
     let known_endpoint = state
         .cached_channel_endpoints()
         .await
+        .map_err(|error| {
+            ChannelEndpointMutationError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("thread store error: {error}"),
+            )
+        })?
         .into_iter()
         .find(|endpoint| endpoint_key_matches(&endpoint.endpoint_key, &requested_endpoint_key));
 
@@ -1240,6 +1246,12 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
         binding_from_known_endpoint(endpoint)
     } else if let Some(binding) = resolve_main_endpoint_by_key(state, &requested_endpoint_key)
         .await
+        .map_err(|error| {
+            ChannelEndpointMutationError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("thread store error: {error}"),
+            )
+        })?
         .map(|endpoint| endpoint.to_binding())
     {
         binding
@@ -2973,12 +2985,12 @@ async fn endpoint_keys_for_archive(
     thread_id: &str,
     thread_data: &Value,
     client_endpoint_keys: Vec<String>,
-) -> Vec<String> {
+) -> Result<Vec<String>, garyx_router::ThreadStoreError> {
     let mut endpoint_keys = BTreeSet::new();
     for binding in bindings_from_value(thread_data) {
         endpoint_keys.insert(binding.endpoint_key());
     }
-    for endpoint in state.cached_channel_endpoints().await {
+    for endpoint in state.cached_channel_endpoints().await? {
         if endpoint.thread_id.as_deref() == Some(thread_id) {
             endpoint_keys.insert(endpoint.endpoint_key);
         }
@@ -2989,7 +3001,7 @@ async fn endpoint_keys_for_archive(
             endpoint_keys.insert(normalized);
         }
     }
-    endpoint_keys.into_iter().collect()
+    Ok(endpoint_keys.into_iter().collect())
 }
 
 fn archive_internal_error(error: impl std::fmt::Display) -> (StatusCode, Json<Value>) {
@@ -3052,7 +3064,10 @@ pub async fn archive_thread(
     }
 
     let endpoint_keys =
-        endpoint_keys_for_archive(&state, trimmed, &thread_data, body.endpoint_keys).await;
+        match endpoint_keys_for_archive(&state, trimmed, &thread_data, body.endpoint_keys).await {
+            Ok(endpoint_keys) => endpoint_keys,
+            Err(error) => return archive_internal_error(error),
+        };
     let mut detached_endpoint_keys = Vec::new();
     for endpoint_key in endpoint_keys {
         match detach_channel_endpoint_key(&state, &endpoint_key).await {
@@ -3172,11 +3187,32 @@ pub async fn delete_thread(
 }
 
 /// GET /api/channel-endpoints - list known channel endpoints
-pub async fn list_channel_endpoints(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let endpoints = state.cached_channel_endpoints().await;
-    Json(json!({
-        "endpoints": endpoints.iter().map(channel_endpoint_response_value).collect::<Vec<_>>(),
-    }))
+pub async fn list_channel_endpoints(
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    // A store/projection failure must surface as 500, never as an empty
+    // endpoint listing (#TASK-2128).
+    match state.cached_channel_endpoints().await {
+        Ok(endpoints) => Json(json!({
+            "endpoints": endpoints.iter().map(channel_endpoint_response_value).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(error) => thread_store_error_response(&error).into_response(),
+    }
+}
+
+/// Uniform 500 body for store/projection failures at request boundaries.
+fn thread_store_error_response(
+    error: &garyx_router::ThreadStoreError,
+) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "ok": false,
+            "reason": "thread-store-error",
+            "error": error.to_string(),
+        })),
+    )
 }
 
 /// GET /api/workspaces/git-status - report whether a workspace can use worktree mode
@@ -3200,10 +3236,13 @@ pub async fn workspace_git_status(
 pub async fn list_configured_bots(
     State(state): State<Arc<AppState>>,
     Query(params): Query<BotListParams>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let config = state.config_snapshot();
     let endpoints = if params.include_endpoints {
-        state.cached_channel_endpoints().await
+        match state.cached_channel_endpoints().await {
+            Ok(endpoints) => endpoints,
+            Err(error) => return thread_store_error_response(&error).into_response(),
+        }
     } else {
         Vec::new()
     };
@@ -3267,16 +3306,19 @@ pub async fn list_configured_bots(
         }));
     }
 
-    Json(json!({ "bots": bots }))
+    Json(json!({ "bots": bots })).into_response()
 }
 
 /// GET /api/bot-consoles - list aggregated bot console summaries
 pub async fn list_bot_consoles(
     State(state): State<Arc<AppState>>,
     Query(_params): Query<BotListParams>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     let config = state.config_snapshot();
-    let endpoints = state.cached_channel_endpoints().await;
+    let endpoints = match state.cached_channel_endpoints().await {
+        Ok(endpoints) => endpoints,
+        Err(error) => return thread_store_error_response(&error).into_response(),
+    };
     let mut groups = Vec::<Value>::new();
     let mut group_indexes = HashMap::<String, usize>::new();
 
@@ -3408,7 +3450,7 @@ pub async fn list_bot_consoles(
         }
     }
 
-    Json(json!({ "bots": groups }))
+    Json(json!({ "bots": groups })).into_response()
 }
 
 /// GET /api/skills - list skills from local and project registries.

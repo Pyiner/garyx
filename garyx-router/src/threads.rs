@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use crate::store::ThreadStoreExt;
+use crate::store::ThreadStoreError;
 use crate::{DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, ThreadStore};
 use crate::{WorkspaceMode, prepare_thread_worktree};
 
@@ -842,11 +842,13 @@ pub async fn sync_endpoint_delivery_timestamp(
 /// thread records. Cheap: reads a single store key.
 pub async fn list_registry_channel_endpoints(
     store: &Arc<dyn ThreadStore>,
-) -> Vec<KnownChannelEndpoint> {
-    let Some(registry) = store.get_logged(KNOWN_CHANNEL_ENDPOINTS_KEY).await else {
-        return Vec::new();
+) -> Result<Vec<KnownChannelEndpoint>, ThreadStoreError> {
+    let registry = match store.get(KNOWN_CHANNEL_ENDPOINTS_KEY).await {
+        Ok(Some(registry)) => registry,
+        Ok(None) | Err(ThreadStoreError::NotFound(_)) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
     };
-    bindings_from_value(&registry)
+    Ok(bindings_from_value(&registry)
         .into_iter()
         .map(|binding| {
             let endpoint_key = binding.endpoint_key();
@@ -869,28 +871,26 @@ pub async fn list_registry_channel_endpoints(
                 last_delivery_at: binding.last_delivery_at,
             }
         })
-        .collect()
+        .collect())
 }
 
+/// Registry + projection endpoint listing. Store or projection failures
+/// propagate as `Err` so request boundaries surface them as errors
+/// instead of an empty listing (#TASK-2128); fire-and-forget callers
+/// must opt into degradation explicitly.
 pub async fn list_known_channel_endpoints(
     store: &Arc<dyn ThreadStore>,
-) -> Vec<KnownChannelEndpoint> {
+) -> Result<Vec<KnownChannelEndpoint>, ThreadStoreError> {
     let mut endpoints = HashMap::new();
 
-    for endpoint in list_registry_channel_endpoints(store).await {
+    for endpoint in list_registry_channel_endpoints(store).await? {
         endpoints.insert(endpoint.endpoint_key.clone(), endpoint);
     }
 
-    let projected = match crate::endpoint_projection::channel_endpoint_projection_for(store)
+    let projected = crate::endpoint_projection::channel_endpoint_projection_for(store)
         .endpoints()
         .await
-    {
-        Ok(projected) => projected,
-        Err(error) => {
-            tracing::warn!(error = %error, "failed to read channel endpoint projection");
-            Vec::new()
-        }
-    };
+        .map_err(ThreadStoreError::Backend)?;
     for candidate in projected {
         let should_replace = endpoints
             .get(&candidate.endpoint_key)
@@ -909,7 +909,7 @@ pub async fn list_known_channel_endpoints(
     }
     let mut endpoints: Vec<_> = endpoints.into_values().collect();
     endpoints.sort_by(|left, right| left.endpoint_key.cmp(&right.endpoint_key));
-    endpoints
+    Ok(endpoints)
 }
 
 pub fn default_workspace_for_channel_account(
