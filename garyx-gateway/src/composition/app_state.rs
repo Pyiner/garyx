@@ -171,11 +171,33 @@ impl AppState {
         self.threads.thread_store.count_keys(Some("thread::")).await
     }
 
-    /// Endpoint snapshot for request boundaries: store/projection
-    /// failures propagate as `Err` (and are never cached), so routes
-    /// surface a backend outage as 500 instead of an empty listing
-    /// (#TASK-2128). Fire-and-forget callers opt into degradation
-    /// explicitly at their own call sites.
+    /// Fresh, uncached endpoint read for request boundaries whose
+    /// response IS the endpoint data: a live store/projection failure
+    /// must surface even when a snapshot was cached moments ago
+    /// (#TASK-2134). On success the snapshot cache is refreshed so hot
+    /// resolution paths benefit.
+    pub async fn channel_endpoints_fresh(
+        &self,
+    ) -> Result<Vec<KnownChannelEndpoint>, garyx_router::ThreadStoreError> {
+        let endpoints =
+            garyx_router::list_known_channel_endpoints(&self.threads.thread_store).await?;
+        let mut cache = self.ops.channel_endpoint_snapshot.lock().await;
+        *cache = Some(ChannelEndpointSnapshotCache {
+            endpoints: endpoints.clone(),
+            expires_at: Instant::now() + GATEWAY_SYNC_SNAPSHOT_TTL,
+        });
+        Ok(endpoints)
+    }
+
+    /// Snapshot-cached endpoint listing for hot resolution paths
+    /// (message dispatch, bind/unbind target resolution): a cache hit
+    /// may serve a snapshot up to the TTL old, and the actions taken on
+    /// it surface storage failures themselves when they touch the
+    /// store. Failures are never cached and propagate as `Err`
+    /// (#TASK-2128). Request boundaries that RETURN endpoint data must
+    /// use `channel_endpoints_fresh` instead (#TASK-2134); fire-and-
+    /// forget callers opt into degradation explicitly at their own call
+    /// sites.
     pub async fn cached_channel_endpoints(
         &self,
     ) -> Result<Vec<KnownChannelEndpoint>, garyx_router::ThreadStoreError> {

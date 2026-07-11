@@ -3763,6 +3763,112 @@ async fn thread_store_backend_failure_answers_500_not_404() {
     }
 }
 
+/// Delegating store with a failure toggle: healthy requests populate
+/// the endpoint snapshot cache, then the store starts failing.
+struct ToggleFailingThreadStore {
+    inner: garyx_router::InMemoryThreadStore,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+impl ToggleFailingThreadStore {
+    fn new() -> Self {
+        Self {
+            inner: garyx_router::InMemoryThreadStore::new(),
+            failing: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn fail(&self) -> Result<(), garyx_router::ThreadStoreError> {
+        if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            Err(garyx_router::ThreadStoreError::Backend(
+                "simulated backend failure".to_owned(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl garyx_router::ThreadStore for ToggleFailingThreadStore {
+    async fn get(&self, thread_id: &str) -> Result<Option<Value>, garyx_router::ThreadStoreError> {
+        self.fail()?;
+        self.inner.get(thread_id).await
+    }
+    async fn set(
+        &self,
+        thread_id: &str,
+        data: Value,
+    ) -> Result<(), garyx_router::ThreadStoreError> {
+        self.fail()?;
+        self.inner.set(thread_id, data).await
+    }
+    async fn delete(&self, thread_id: &str) -> Result<bool, garyx_router::ThreadStoreError> {
+        self.fail()?;
+        self.inner.delete(thread_id).await
+    }
+    async fn list_keys(
+        &self,
+        prefix: Option<&str>,
+    ) -> Result<Vec<String>, garyx_router::ThreadStoreError> {
+        self.fail()?;
+        self.inner.list_keys(prefix).await
+    }
+    async fn exists(&self, thread_id: &str) -> Result<bool, garyx_router::ThreadStoreError> {
+        self.fail()?;
+        self.inner.exists(thread_id).await
+    }
+    async fn update(
+        &self,
+        thread_id: &str,
+        updates: Value,
+    ) -> Result<(), garyx_router::ThreadStoreError> {
+        self.fail()?;
+        self.inner.update(thread_id, updates).await
+    }
+}
+
+/// A live outage must not hide behind a recent endpoint snapshot cache
+/// hit (#TASK-2134): the listing boundaries read fresh, so the request
+/// after the store starts failing answers 500 even inside the cache
+/// TTL.
+#[tokio::test]
+async fn endpoint_listing_surfaces_live_outage_despite_recent_cache_hit() {
+    let store = Arc::new(ToggleFailingThreadStore::new());
+    let state = AppStateBuilder::new(test_config())
+        .with_thread_store(store.clone())
+        .build();
+    let router = build_router(state.clone());
+
+    // Healthy first request populates the snapshot cache.
+    let request = authed_request()
+        .uri("/api/channel-endpoints")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The store starts failing; the next request is inside the TTL and
+    // must surface the outage instead of the cached snapshot.
+    store
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    for uri in [
+        "/api/channel-endpoints",
+        "/api/configured-bots?include_endpoints=true",
+        "/api/bot-consoles",
+        "/api/bot/status?bot_id=telegram:main",
+    ] {
+        let request = authed_request().uri(uri).body(Body::empty()).unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "GET {uri} must not serve a stale cached snapshot through a live outage"
+        );
+    }
+}
+
 #[tokio::test]
 async fn delete_thread_without_record_is_plain_not_found() {
     // Projections derive and delete in the same transaction as the

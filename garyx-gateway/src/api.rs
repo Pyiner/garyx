@@ -703,9 +703,10 @@ async fn build_bot_status_payload(
 
     // `unresolved` means the bot genuinely has no main endpoint; a store
     // failure propagates instead of masquerading as unresolved
-    // (#TASK-2128).
+    // (#TASK-2128), and the status response never rides a recent
+    // snapshot cache hit through a live outage (#TASK-2134).
     let Some(endpoint) =
-        crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id).await?
+        crate::routes::resolve_main_endpoint_by_bot_fresh(state, channel, account_id).await?
     else {
         return Ok(json!({
             "ok": true,

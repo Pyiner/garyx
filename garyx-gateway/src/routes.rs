@@ -576,6 +576,18 @@ pub(crate) async fn resolve_main_endpoint_by_bot(
     Ok(resolve_main_endpoint_with_endpoints(state, channel, account_id, &endpoints).await)
 }
 
+/// Fresh-read variant for status surfaces whose response IS the
+/// resolution result (#TASK-2134): never satisfied from the snapshot
+/// cache, so a live storage outage cannot hide behind a recent hit.
+pub(crate) async fn resolve_main_endpoint_by_bot_fresh(
+    state: &Arc<AppState>,
+    channel: &str,
+    account_id: &str,
+) -> Result<Option<ResolvedMainEndpoint>, garyx_router::ThreadStoreError> {
+    let endpoints = state.channel_endpoints_fresh().await?;
+    Ok(resolve_main_endpoint_with_endpoints(state, channel, account_id, &endpoints).await)
+}
+
 async fn resolve_main_endpoint_by_key(
     state: &Arc<AppState>,
     endpoint_key_value: &str,
@@ -3192,8 +3204,9 @@ pub async fn list_channel_endpoints(
     State(state): State<Arc<AppState>>,
 ) -> axum::response::Response {
     // A store/projection failure must surface as 500, never as an empty
-    // endpoint listing (#TASK-2128).
-    match state.cached_channel_endpoints().await {
+    // endpoint listing (#TASK-2128) — and never be satisfied from the
+    // snapshot cache during a live outage (#TASK-2134).
+    match state.channel_endpoints_fresh().await {
         Ok(endpoints) => Json(json!({
             "endpoints": endpoints.iter().map(channel_endpoint_response_value).collect::<Vec<_>>(),
         }))
@@ -3240,7 +3253,7 @@ pub async fn list_configured_bots(
 ) -> axum::response::Response {
     let config = state.config_snapshot();
     let endpoints = if params.include_endpoints {
-        match state.cached_channel_endpoints().await {
+        match state.channel_endpoints_fresh().await {
             Ok(endpoints) => endpoints,
             Err(error) => return thread_store_error_response(&error).into_response(),
         }
@@ -3316,7 +3329,7 @@ pub async fn list_bot_consoles(
     Query(_params): Query<BotListParams>,
 ) -> axum::response::Response {
     let config = state.config_snapshot();
-    let endpoints = match state.cached_channel_endpoints().await {
+    let endpoints = match state.channel_endpoints_fresh().await {
         Ok(endpoints) => endpoints,
         Err(error) => return thread_store_error_response(&error).into_response(),
     };
