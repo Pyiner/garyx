@@ -77,6 +77,9 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   top-level concepts.
 - Use native platform patterns: Electron/shadcn-style desktop surfaces where
   appropriate, and native grouped iOS management surfaces on mobile.
+- Desktop app-shell chrome must keep its complete geometry and state recipe in
+  an always-loaded owner stylesheet. Never place global shell component rules
+  in a removable feature stylesheet; pin the owner import with a contract test.
 - Mobile route state, presentation mapping, formatting, and business-rule
   transformations should live in `GaryxMobileCore` with SwiftPM tests.
 - Message, transcript, and tool-row display is server-render-state first:

@@ -1,4 +1,45 @@
-/* Gateway presence glyph badge. */
+/* Bottom-left gateway identity / switcher and shared presence glyphs.
+ *
+ * This is app-shell chrome, so its complete layout recipe must stay in this
+ * always-loaded owner stylesheet. Do not move pieces into removable feature
+ * stylesheets: deleting the old workflow feature once left the trigger with
+ * only its child styles and collapsed it into a vertical, content-width stack.
+ */
+
+.gateway-identity-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 46px;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.gateway-identity-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  height: 29px;
+  min-width: 0;
+  padding: 0 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-token-text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  font-weight: 445;
+  line-height: 21px;
+  text-align: left;
+  cursor: default;
+}
+
+.gateway-identity-main:hover,
+.gateway-identity-main[data-state='open'] {
+  background: var(--color-token-row-hover);
+}
 
 /* Avatar-like gateway glyph with a presence badge on its corner. */
 .gateway-identity-glyph,
@@ -67,4 +108,76 @@
 
 .gateway-glyph-badge.is-offline {
   background: var(--color-token-error-foreground);
+}
+
+.gateway-identity-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.gateway-identity-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gateway-identity-gear {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 32px;
+  height: 32px;
+  padding: 4px 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-token-description-foreground);
+  font: 445 16px/24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  cursor: default;
+}
+
+.gateway-identity-gear:hover {
+  background: var(--color-token-row-hover);
+  color: var(--color-token-description-foreground);
+}
+
+.gateway-switcher-popover {
+  /* Hug the identity bar below. Surface identity comes from the shared
+     .menu-popover-surface recipe in styles/menus.css. */
+  width: var(--radix-popover-trigger-width);
+  min-width: 208px;
+  padding: 8px;
+}
+
+.gateway-switcher-list {
+  display: grid;
+  gap: 2px;
+}
+
+/* Row visuals come from the shared two-line menu variant in styles/menus.css;
+   only gateway-specific chrome lives here. */
+.gateway-switcher-item-state {
+  flex: none;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs-plus);
+}
+
+.gateway-switcher-check {
+  flex: none;
+  color: var(--color-token-text-primary);
+}
+
+.gateway-switcher-error {
+  margin: 4px 0 0;
+  padding: 0 10px;
+  color: #9b3d3d;
+  font-size: 11.5px;
 }

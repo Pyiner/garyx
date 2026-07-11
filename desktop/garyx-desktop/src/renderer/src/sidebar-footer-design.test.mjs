@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 // insets and gap, a 29px identity row, and a 32px trailing utility button.
 
 const rendererDir = path.dirname(fileURLToPath(import.meta.url));
+const stylesDir = path.join(rendererDir, 'styles');
 const read = (relativePath) =>
   readFileSync(path.join(rendererDir, relativePath), 'utf8');
 
@@ -57,13 +58,13 @@ test('sidebar footer pins the Codex frame and divider geometry', () => {
 });
 
 test('gateway and settings controls pin the Codex footer alignment', () => {
-  const layoutCss = read('styles/workflows.css');
-  expectRule(layoutCss, '.gateway-identity-bar', [
+  const ownerCss = read('styles/gateway-status.css');
+  expectRule(ownerCss, '.gateway-identity-bar', [
     'gap: 8px',
     'height: 46px',
     'padding: 0 8px',
   ]);
-  expectRule(layoutCss, '.gateway-identity-main', [
+  expectRule(ownerCss, '.gateway-identity-main', [
     'gap: 8px',
     'height: 29px',
     'padding: 0 8px',
@@ -73,17 +74,16 @@ test('gateway and settings controls pin the Codex footer alignment', () => {
     'font-weight: 445',
     'line-height: 21px',
   ]);
-  expectRule(layoutCss, '.gateway-identity-main:hover', [
+  expectRule(ownerCss, '.gateway-identity-main:hover', [
     'background: var(--color-token-row-hover)',
   ]);
 
-  const controlsCss = read('styles/task-forest.css');
-  expectRule(controlsCss, '.gateway-identity-name', [
+  expectRule(ownerCss, '.gateway-identity-name', [
     'font-size: inherit',
     'font-weight: inherit',
     'line-height: inherit',
   ]);
-  expectRule(controlsCss, '.gateway-identity-gear', [
+  expectRule(ownerCss, '.gateway-identity-gear', [
     'gap: 4px',
     'width: 32px',
     'height: 32px',
@@ -93,7 +93,7 @@ test('gateway and settings controls pin the Codex footer alignment', () => {
     'color: var(--color-token-description-foreground)',
     'font: 445 16px/24px -apple-system',
   ]);
-  expectRule(controlsCss, '.gateway-identity-gear:hover', [
+  expectRule(ownerCss, '.gateway-identity-gear:hover', [
     'background: var(--color-token-row-hover)',
   ]);
 });
@@ -121,4 +121,27 @@ test('gateway identity keeps Codex icon scale while preserving status semantics'
     source.includes("${t('Switch gateway')}: ${currentLabel} · ${toneLabel}"),
   );
   assert.ok(!source.includes('gateway-identity-status'));
+});
+
+test('gateway switcher recipe is always loaded and has one stylesheet owner', () => {
+  const entryCss = read('styles.css');
+  assert.equal(
+    entryCss.match(/@import "\.\/styles\/gateway-status\.css";/g)?.length,
+    1,
+    'the renderer entrypoint must import the gateway owner stylesheet exactly once',
+  );
+  assert.ok(
+    !entryCss.includes('workflows.css'),
+    'app-shell gateway chrome must not depend on the removed workflow feature',
+  );
+
+  const gatewaySelector = /\.(?:gateway-identity|gateway-switcher|gateway-row-glyph|gateway-glyph-badge)(?:[-\w]*)/;
+  const offenders = readdirSync(stylesDir)
+    .filter((fileName) => fileName.endsWith('.css') && fileName !== 'gateway-status.css')
+    .filter((fileName) => gatewaySelector.test(read(`styles/${fileName}`)));
+  assert.deepEqual(
+    offenders,
+    [],
+    `gateway switcher selectors escaped their owner stylesheet: ${offenders.join(', ')}`,
+  );
 });

@@ -32,6 +32,16 @@
 - Menu shortcut hints use the shared `DropdownMenuShortcut` component, not
   local spans.
 
+## App-Shell Chrome Ownership
+
+- Global shell components must own one complete, always-loaded CSS recipe.
+  Do not scatter required layout declarations across unrelated feature files.
+- The bottom-left gateway identity, settings control, presence glyph, and
+  switcher popover are owned by `styles/gateway-status.css`. A contract test
+  must fail if those selectors escape that file or its root import disappears.
+- Deleting an optional feature must not remove styles required by navigation,
+  the conversation header, the sidebar footer, or other persistent chrome.
+
 ## Responsive Conversation Layout
 
 - Keep the desktop app shell horizontal at every supported window width.
