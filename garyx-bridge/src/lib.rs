@@ -2,14 +2,12 @@ pub mod antigravity_provider;
 pub mod claude_provider;
 pub mod codex_provider;
 mod gary_prompt;
-pub mod garyx_native_provider;
 pub mod graph_engine;
 mod memory_context;
 pub mod multi_provider;
-mod native_capabilities;
 mod native_slash;
 pub mod provider_trait;
 pub mod run_graph;
 
 pub use multi_provider::MultiProviderBridge;
-pub use provider_trait::{AgentLoopProvider, BridgeError, HealthStatus, ProviderHealth};
+pub use provider_trait::{BridgeError, HealthStatus, ProviderHealth, ProviderRuntime};

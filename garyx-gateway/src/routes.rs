@@ -725,7 +725,7 @@ fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<Provide
         .map(Some)
         .ok_or_else(|| {
             format!(
-                "Unsupported sdkSessionProviderHint '{value}'. Use claude, codex, antigravity, gpt, anthropic, or google."
+                "Unsupported sdkSessionProviderHint '{value}'. Use claude, codex, traex, or antigravity."
             )
         })
 }
@@ -736,9 +736,6 @@ fn provider_hint_label(value: &ProviderType) -> &'static str {
         ProviderType::CodexAppServer => "Codex",
         ProviderType::Traex => "Traex",
         ProviderType::AntigravityCli => "Antigravity",
-        ProviderType::Gpt => "GPT",
-        ProviderType::ClaudeLlm => "Claude",
-        ProviderType::GeminiLlm => "Gemini",
     }
 }
 

@@ -4,7 +4,6 @@ import type { CSSProperties, ReactNode } from 'react';
 import type {
   DesktopApiProviderType,
   DesktopCodingUsage,
-  DesktopCustomAgent,
   DesktopProviderModelOption,
   DesktopProviderModels,
   DesktopProviderUsage,
@@ -50,7 +49,7 @@ import {
   usageProviderIdForModelProviderKey,
   usageResetText,
 } from '../provider-usage';
-import { classNames, noopAsync } from './shared';
+import { classNames } from './shared';
 import { SettingsControlRow } from './shared-components';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
@@ -63,18 +62,13 @@ type FixedModelProviderKey =
   | 'claude_code'
   | 'codex_app_server'
   | 'antigravity'
-  | 'traex'
-  | 'gpt'
-  | 'anthropic'
-  | 'google';
+  | 'traex';
 
 type FixedModelProviderRow = {
   key: FixedModelProviderKey;
   agentId: string;
-  legacyAgentIds?: string[];
   label: string;
   providerType: DesktopApiProviderType;
-  group: 'default' | 'native';
   defaultModel: string;
   usageProviderId?: string;
 };
@@ -85,13 +79,9 @@ type ModelProviderConfigDraft = {
   claudeCliPath: string;
   model: string;
   modelReasoningEffort: string;
-  modelServiceTier: string;
-  authSource: string;
-  apiKey: string;
-  baseUrl: string;
 };
 
-type ProviderAuthState = 'ready' | 'empty' | 'error';
+type ProviderAuthState = 'ready' | 'error';
 
 type ProviderRowDetails = {
   status: string;
@@ -109,7 +99,6 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
     agentId: 'claude',
     label: 'Claude Code',
     providerType: 'claude_code',
-    group: 'default',
     defaultModel: '(provider default)',
     usageProviderId: usageProviderIdForModelProviderKey('claude_code'),
   },
@@ -118,7 +107,6 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
     agentId: 'codex',
     label: 'Codex',
     providerType: 'codex_app_server',
-    group: 'default',
     defaultModel: '(provider default)',
     usageProviderId: usageProviderIdForModelProviderKey('codex_app_server'),
   },
@@ -127,7 +115,6 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
     agentId: 'antigravity',
     label: 'Antigravity',
     providerType: 'antigravity',
-    group: 'default',
     defaultModel: 'Claude Opus 4.6 (Thinking)',
     usageProviderId: usageProviderIdForModelProviderKey('antigravity'),
   },
@@ -136,34 +123,7 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
     agentId: 'traex',
     label: 'Traex',
     providerType: 'traex',
-    group: 'default',
     defaultModel: '(provider default)',
-  },
-  {
-    key: 'gpt',
-    agentId: 'gpt',
-    label: 'GPT',
-    providerType: 'gpt',
-    group: 'native',
-    defaultModel: 'gpt-5.5',
-  },
-  {
-    key: 'anthropic',
-    agentId: 'anthropic',
-    legacyAgentIds: ['claude_llm'],
-    label: 'Claude',
-    providerType: 'anthropic',
-    group: 'native',
-    defaultModel: 'claude-sonnet-4-6',
-  },
-  {
-    key: 'google',
-    agentId: 'google',
-    legacyAgentIds: ['gemini_llm'],
-    label: 'Gemini',
-    providerType: 'google',
-    group: 'native',
-    defaultModel: 'gemini-3-flash-preview',
   },
 ];
 
@@ -239,16 +199,6 @@ function reasoningEffortOptionsForModel(
   ];
 }
 
-function serviceTierOptionsForModel(
-  providerModels: DesktopProviderModels | null | undefined,
-  modelId: string,
-): DesktopProviderModelOption[] {
-  const selectedModel = providerModels?.models.find((model) => model.id === modelId.trim());
-  return selectedModel?.serviceTiers?.length
-    ? selectedModel.serviceTiers
-    : providerModels?.serviceTiers || [];
-}
-
 function highestReasoningEffort(options: DesktopProviderModelOption[]): string {
   return options.reduce((best, option) => {
     if (!best) {
@@ -274,7 +224,6 @@ function applyProviderCatalogDefaults(
       ...draft,
       model: '',
       modelReasoningEffort: '',
-      modelServiceTier: '',
     };
   }
   const reasoningOptions = reasoningEffortOptionsForModel(
@@ -294,50 +243,12 @@ function applyProviderCatalogDefaults(
   };
 }
 
-function apiKeyEnvName(value: DesktopApiProviderType): string | null {
-  if (value === 'gpt') {
-    return 'OPENAI_API_KEY';
-  }
-  if (value === 'anthropic' || value === 'claude_llm') {
-    return 'ANTHROPIC_API_KEY';
-  }
-  if (value === 'google' || value === 'gemini_llm') {
-    return 'GEMINI_API_KEY';
-  }
-  return null;
-}
-
-function defaultNativeAuthSource(value: DesktopApiProviderType): string {
-  return value === 'gpt' ? 'codex' : 'api_key';
-}
-
-function apiKeyFromProviderAgent(agent: DesktopCustomAgent | null | undefined): string {
-  if (!agent) {
-    return '';
-  }
-  const envName = apiKeyEnvName(agent.providerType);
-  return envName ? agent.providerEnv?.[envName] || '' : '';
-}
-
-function configuredProviderAgent(
-  agents: DesktopCustomAgent[],
-  key: FixedModelProviderKey,
-): DesktopCustomAgent | null {
-  const row = fixedModelProviderRow(key);
-  if (row.group !== 'native') {
-    return null;
-  }
-  return agents.find((agent) => agent.agentId === row.agentId && !agent.builtIn)
-    || agents.find((agent) => (row.legacyAgentIds || []).includes(agent.agentId) && !agent.builtIn)
-    || null;
-}
-
 function providerAgentConfig(gatewayDraft: any, key: FixedModelProviderKey): Record<string, any> {
   const row = fixedModelProviderRow(key);
   const agentsConfig = gatewayDraft && typeof gatewayDraft === 'object' && gatewayDraft.agents && typeof gatewayDraft.agents === 'object'
     ? gatewayDraft.agents
     : {};
-  const candidates = Array.from(new Set([row.agentId, ...(row.legacyAgentIds || []), row.key]));
+  const candidates = Array.from(new Set([row.agentId, row.key]));
   for (const candidate of candidates) {
     const value = agentsConfig[candidate];
     if (value && typeof value === 'object' && !Array.isArray(value)) {
@@ -345,39 +256,6 @@ function providerAgentConfig(gatewayDraft: any, key: FixedModelProviderKey): Rec
     }
   }
   return {};
-}
-
-function providerConfigEnv(providerConfig: Record<string, any>): Record<string, string> {
-  const env = providerConfig.env;
-  if (!env || typeof env !== 'object' || Array.isArray(env)) {
-    return {};
-  }
-  return Object.fromEntries(
-    Object.entries(env)
-      .filter(([, value]) => typeof value === 'string')
-      .map(([key, value]) => [key, value as string]),
-  );
-}
-
-function apiKeyFromProviderConfig(
-  providerConfig: Record<string, any>,
-  providerType: DesktopApiProviderType,
-): string {
-  const envName = apiKeyEnvName(providerType);
-  return envName ? providerConfigEnv(providerConfig)[envName] || '' : '';
-}
-
-function providerConfigHasNativeSettings(providerConfig: Record<string, any>): boolean {
-  const keys = [
-    'provider_type',
-    'default_model',
-    'model_reasoning_effort',
-    'model_service_tier',
-    'auth_source',
-    'base_url',
-  ];
-  return keys.some((key) => String(providerConfig[key] || '').trim().length > 0)
-    || Object.keys(providerConfigEnv(providerConfig)).length > 0;
 }
 
 function claudeAgentConfig(gatewayDraft: any): Record<string, any> {
@@ -400,43 +278,22 @@ function emptyModelProviderConfigDraft(key: FixedModelProviderKey = 'claude_code
     claudeCliPath: '',
     model: row.defaultModel.startsWith('(') ? '' : row.defaultModel,
     modelReasoningEffort: '',
-    modelServiceTier: '',
-    authSource: defaultNativeAuthSource(row.providerType),
-    apiKey: '',
-    baseUrl: '',
   };
 }
 
 function modelProviderDraftFromState(
   key: FixedModelProviderKey,
-  agents: DesktopCustomAgent[],
   gatewayDraft: any,
 ): ModelProviderConfigDraft {
-  const row = fixedModelProviderRow(key);
-  const agent = configuredProviderAgent(agents, key);
   const providerConfig = providerAgentConfig(gatewayDraft, key);
   const configModel = String(providerConfig.default_model || '');
   const configReasoning = String(providerConfig.model_reasoning_effort || '');
-  const configServiceTier = String(providerConfig.model_service_tier || '');
   return {
     key,
     claudeCliMode: normalizeClaudeCliMode(providerConfig.claude_cli_mode),
     claudeCliPath: String(providerConfig.claude_cli_path || ''),
-    model: row.group === 'native'
-      ? configModel || agent?.model || ''
-      : configModel,
-    modelReasoningEffort: row.group === 'native'
-      ? configReasoning || agent?.modelReasoningEffort || ''
-      : configReasoning,
-    modelServiceTier: row.group === 'native'
-      ? configServiceTier || agent?.modelServiceTier || ''
-      : configServiceTier,
-    authSource: String(providerConfig.auth_source || '').trim()
-      || agent?.authSource
-      || defaultNativeAuthSource(row.providerType),
-    apiKey: apiKeyFromProviderConfig(providerConfig, row.providerType)
-      || apiKeyFromProviderAgent(agent),
-    baseUrl: String(providerConfig.base_url || '') || agent?.baseUrl || '',
+    model: configModel,
+    modelReasoningEffort: configReasoning,
   };
 }
 
@@ -506,19 +363,15 @@ function AgentProviderFields({
 }
 
 type ProviderSettingsPanelProps = {
-  agents?: DesktopCustomAgent[];
   gatewayDraft?: any;
   onMutateGatewayDraft?: DraftMutator;
   onSaveGatewaySettings?: (options?: GatewaySettingsSaveOptions) => Promise<boolean>;
-  onRefreshAgentTargets?: () => Promise<void>;
 };
 
 export function ProviderSettingsPanel({
-  agents = [],
   gatewayDraft,
   onMutateGatewayDraft = () => {},
   onSaveGatewaySettings = async () => true,
-  onRefreshAgentTargets = noopAsync,
 }: ProviderSettingsPanelProps) {
   const { t } = useI18n();
   const [providerConfigKey, setProviderConfigKey] = useState<FixedModelProviderKey | null>(null);
@@ -542,14 +395,6 @@ export function ProviderSettingsPanel({
   const [codingUsageLoading, setCodingUsageLoading] = useState(false);
   const [codingUsageError, setCodingUsageError] = useState<string | null>(null);
   const providerConfigRow = providerConfigKey ? fixedModelProviderRow(providerConfigKey) : null;
-  const providerConfigAgent = providerConfigKey
-    ? configuredProviderAgent(agents, providerConfigKey)
-    : null;
-  const providerConfigRuntime = providerConfigKey
-    ? providerAgentConfig(gatewayDraft, providerConfigKey)
-    : {};
-  const providerConfigHasSettings = providerConfigRow?.group === 'native'
-    && (providerConfigHasNativeSettings(providerConfigRuntime) || Boolean(providerConfigAgent));
   const activeProviderModels = providerConfigRow
     ? providerModelsByType[providerConfigRow.providerType] || null
     : null;
@@ -564,10 +409,6 @@ export function ProviderSettingsPanel({
     activeProviderModels,
     providerConfigDraft.model,
     providerConfigDraft.modelReasoningEffort,
-  );
-  const activeServiceTierOptions = serviceTierOptionsForModel(
-    activeProviderModels,
-    providerConfigDraft.model,
   );
   const codingUsageByProviderId = useMemo(() => {
     const map: Record<string, DesktopProviderUsage> = {};
@@ -655,7 +496,7 @@ export function ProviderSettingsPanel({
       }
       return applyProviderCatalogDefaults(current, providerConfigRow, activeProviderModels);
     });
-  }, [providerConfigRow?.key, providerConfigRow?.group, activeProviderModels]);
+  }, [providerConfigRow?.key, activeProviderModels]);
   function providerRowDetails(row: FixedModelProviderRow): ProviderRowDetails {
     const runtimeConfig = providerAgentConfig(gatewayDraft, row.key);
     const configuredDefaultModel = String(runtimeConfig.default_model || '').trim();
@@ -716,37 +557,21 @@ export function ProviderSettingsPanel({
         serviceTier: configuredServiceTier,
       });
     }
-    const agent = configuredProviderAgent(agents, row.key);
-    const authSource = String(runtimeConfig.auth_source || '').trim()
-      || agent?.authSource
-      || defaultNativeAuthSource(row.providerType);
-    const configuredApiKey = apiKeyFromProviderConfig(runtimeConfig, row.providerType)
-      || apiKeyFromProviderAgent(agent);
-    const usesGptToken = row.providerType === 'gpt' && authSource === 'codex';
-    const authState: ProviderAuthState = usesGptToken || configuredApiKey ? 'ready' : 'empty';
     return finalize({
-      status: providerConfigHasNativeSettings(runtimeConfig) || agent ? t('Configured') : t('Not configured'),
-      auth: usesGptToken
-        ? t('GPT token')
-        : configuredApiKey
-          ? t('API Key')
-          : t('Missing key'),
-      authState,
-      model: configuredDefaultModel || agent?.model || row.defaultModel,
-      reasoning: configuredReasoning || agent?.modelReasoningEffort || '',
-      serviceTier: configuredServiceTier || agent?.modelServiceTier || '',
+      status: t('Default'),
+      auth: t('CLI'),
+      authState: 'ready',
+      model: configuredDefaultModel || row.defaultModel,
+      reasoning: configuredReasoning,
+      serviceTier: configuredServiceTier,
     });
-  }
-
-  function providerGroupLabel(row: FixedModelProviderRow): string {
-    return row.group === 'native' ? t('Native agent loop') : t('Default CLI');
   }
 
   function providerModelLabel(value: string): string {
     return value === '(provider default)' ? t('Provider default') : value;
   }
 
-  function renderProviderDefaultChips(row: FixedModelProviderRow, details: ProviderRowDetails): ReactNode {
+  function renderProviderDefaultChips(details: ProviderRowDetails): ReactNode {
     const chips = [
       {
         key: 'model',
@@ -759,7 +584,7 @@ export function ProviderSettingsPanel({
         title: t('Reasoning: {value}', { value: details.reasoning || t('Provider default') }),
       },
     ];
-    const tier = details.serviceTier || (row.providerType === 'gpt' ? t('Standard') : '');
+    const tier = details.serviceTier;
     if (tier) {
       chips.push({
         key: 'tier',
@@ -1080,7 +905,7 @@ export function ProviderSettingsPanel({
 
   function openProviderConfigDialog(key: FixedModelProviderKey) {
     const row = fixedModelProviderRow(key);
-    const draft = modelProviderDraftFromState(key, agents, gatewayDraft);
+    const draft = modelProviderDraftFromState(key, gatewayDraft);
     ensureProviderModels(row.providerType, { retry: true });
     setProviderConfigDraft(applyProviderCatalogDefaults(draft, row, providerModelsByType[row.providerType]));
     setProviderConfigKey(key);
@@ -1109,44 +934,8 @@ export function ProviderSettingsPanel({
         model_reasoning_effort: draft.modelReasoningEffort.trim(),
       };
       delete nextConfig.model;
-      if (row.providerType === 'gpt') {
-        nextConfig.model_service_tier = draft.modelServiceTier.trim();
-      } else {
-        delete nextConfig.model_service_tier;
-      }
-      if (row.group === 'native') {
-        const envName = apiKeyEnvName(row.providerType);
-        const env = providerConfigEnv(current);
-        if (envName) {
-          const apiKey = draft.apiKey.trim();
-          if (apiKey) {
-            env[envName] = apiKey;
-          } else {
-            delete env[envName];
-          }
-        }
-        if (Object.keys(env).length > 0) {
-          nextConfig.env = env;
-        } else {
-          delete nextConfig.env;
-        }
-        nextConfig.auth_source = draft.authSource.trim()
-          || defaultNativeAuthSource(row.providerType);
-        nextConfig.base_url = draft.baseUrl.trim();
-      }
+      delete nextConfig.model_service_tier;
       next.agents[row.agentId] = nextConfig;
-    });
-  }
-
-  function mutateClearNativeProviderConfig(row: FixedModelProviderRow) {
-    onMutateGatewayDraft((next) => {
-      if (!next.agents || typeof next.agents !== 'object') {
-        return;
-      }
-      delete next.agents[row.agentId];
-      for (const legacyAgentId of row.legacyAgentIds || []) {
-        delete next.agents[legacyAgentId];
-      }
     });
   }
 
@@ -1181,51 +970,12 @@ export function ProviderSettingsPanel({
         }
         return;
       }
-      if (providerConfigRow.group === 'default') {
-        // CLI providers (Codex, TRAE, Antigravity) authenticate through
-        // their own CLI login or agent/provider env; persist model defaults only.
-        mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
-        if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
-          closeProviderConfigDialog();
-        }
-        return;
-      }
-      if (providerConfigRow.group === 'native') {
-        mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
-        if (!(await onSaveGatewaySettings({ refreshDesktopState: 'background' }))) {
-          return;
-        }
-        if (providerConfigAgent) {
-          await window.garyxDesktop.deleteCustomAgent({ agentId: providerConfigAgent.agentId });
-          await onRefreshAgentTargets();
-        }
+      // CLI providers authenticate through their own login or provider env;
+      // this surface persists model defaults only.
+      mutateGatewayProviderModelDefaults(providerConfigRow, providerConfigDraft);
+      if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
         closeProviderConfigDialog();
-        return;
       }
-
-    } finally {
-      setProviderConfigSaving(false);
-    }
-  }
-
-  async function handleClearProviderConfig() {
-    if (!providerConfigRow || providerConfigRow.group !== 'native' || !providerConfigHasSettings) {
-      return;
-    }
-    if (!window.confirm(t('Clear configuration for {name}?', { name: providerConfigRow.label }))) {
-      return;
-    }
-    setProviderConfigSaving(true);
-    try {
-      mutateClearNativeProviderConfig(providerConfigRow);
-      if (!(await onSaveGatewaySettings({ refreshDesktopState: 'background' }))) {
-        return;
-      }
-      if (providerConfigAgent) {
-        await window.garyxDesktop.deleteCustomAgent({ agentId: providerConfigAgent.agentId });
-        await onRefreshAgentTargets();
-      }
-      closeProviderConfigDialog();
     } finally {
       setProviderConfigSaving(false);
     }
@@ -1249,10 +999,6 @@ export function ProviderSettingsPanel({
           <TableBody>
             {MODEL_PROVIDER_ROWS.map((row) => {
               const details = providerRowDetails(row);
-              const runtimeConfig = providerAgentConfig(gatewayDraft, row.key);
-              const rowReady = row.group === 'default'
-                || providerConfigHasNativeSettings(runtimeConfig)
-                || Boolean(configuredProviderAgent(agents, row.key));
               return (
                 <TableRow key={row.key}>
                   <TableCell className="provider-config-col-provider">
@@ -1268,7 +1014,7 @@ export function ProviderSettingsPanel({
                         <span className="provider-config-name">{row.label}</span>
                         <span className="provider-config-subtitle">
                           <code>{row.providerType}</code>
-                          <span>{providerGroupLabel(row)}</span>
+                          <span>{t('Default CLI')}</span>
                         </span>
                       </div>
                     </div>
@@ -1284,12 +1030,12 @@ export function ProviderSettingsPanel({
                     </Badge>
                   </TableCell>
                   <TableCell className="provider-config-col-default">
-                    {renderProviderDefaultChips(row, details)}
+                    {renderProviderDefaultChips(details)}
                   </TableCell>
                   <TableCell className="provider-config-col-status">
                     <Badge
                       className="provider-config-status"
-                      data-state={rowReady ? 'ready' : 'empty'}
+                      data-state={details.authState === 'error' ? 'empty' : 'ready'}
                       variant="outline"
                     >
                       {details.status}
@@ -1332,7 +1078,7 @@ export function ProviderSettingsPanel({
         >
           <DialogHeader className="commands-dialog-header">
             <Badge variant="outline" className="commands-dialog-badge">
-              {providerConfigRow?.group === 'native' ? t('Native Provider') : t('Default Provider')}
+              {t('Default Provider')}
             </Badge>
             <div className="provider-config-dialog-heading">
               {providerConfigRow ? (
@@ -1352,7 +1098,7 @@ export function ProviderSettingsPanel({
                   {providerConfigRow ? (
                     <span className="provider-config-header-meta">
                       <code>{providerConfigRow.providerType}</code>
-                      <span>{providerGroupLabel(providerConfigRow)}</span>
+                      <span>{t('Default CLI')}</span>
                     </span>
                   ) : null}
                   <span>{t('Provider rows are fixed. Configuration controls whether each provider is ready to use.')}</span>
@@ -1410,54 +1156,9 @@ export function ProviderSettingsPanel({
 
             {providerConfigRow ? (
               <>
-                {providerConfigRow.group === 'native' && providerConfigRow.providerType === 'gpt' ? (
-                  <div className="commands-field">
-                    <Label className="commands-field-label">{t('Auth')}</Label>
-                    <Select
-                      value={providerConfigDraft.authSource || 'codex'}
-                      onValueChange={(value) => {
-                        setProviderConfigDraft((current) => ({
-                          ...current,
-                          authSource: value,
-                          apiKey: value === 'codex' ? '' : current.apiKey,
-                        }));
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="codex">{t('Use GPT token')}</SelectItem>
-                          <SelectItem value="api_key">{t('Use API key')}</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : null}
-                {providerConfigRow.group === 'native' && (providerConfigRow.providerType !== 'gpt' || providerConfigDraft.authSource === 'api_key') ? (
-                  <div className="commands-field">
-                    <Label className="commands-field-label" htmlFor="provider-native-api-key">{t('API Key')}</Label>
-                    <Input
-                      autoCapitalize="off"
-                      autoComplete="off"
-                      id="provider-native-api-key"
-                      placeholder={apiKeyEnvName(providerConfigRow.providerType) || 'API_KEY'}
-                      spellCheck={false}
-                      type="password"
-                      value={providerConfigDraft.apiKey}
-                      onChange={(event) => {
-                        setProviderConfigDraft((current) => ({
-                          ...current,
-                          apiKey: event.target.value,
-                        }));
-                      }}
-                    />
-                  </div>
-                ) : null}
                 <div className="provider-config-grid">
                   <div className="commands-field">
-                    <Label className="commands-field-label" htmlFor="provider-native-model">{t('Model')}</Label>
+                    <Label className="commands-field-label" htmlFor="provider-model">{t('Model')}</Label>
                     {activeProviderModelOptions.length > 0 ? (
                       <Select
                         value={providerConfigDraft.model.trim() || PROVIDER_DEFAULT_MODEL_VALUE}
@@ -1473,12 +1174,11 @@ export function ProviderSettingsPanel({
                               ...current,
                               model: nextModel,
                               modelReasoningEffort: nextModel ? highestReasoningEffort(reasoningOptions) : '',
-                              modelServiceTier: '',
                             };
                           });
                         }}
                       >
-                        <SelectTrigger id="provider-native-model">
+                        <SelectTrigger id="provider-model">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1494,7 +1194,7 @@ export function ProviderSettingsPanel({
                       </Select>
                     ) : (
                       <Input
-                        id="provider-native-model"
+                        id="provider-model"
                         placeholder={activeProviderModelsLoading ? t('Loading models...') : providerConfigRow.defaultModel}
                         value={providerConfigDraft.model}
                         onChange={(event) => {
@@ -1542,82 +1242,12 @@ export function ProviderSettingsPanel({
                     )}
                   </div>
                 </div>
-                {providerConfigRow.group === 'native' && providerConfigRow.providerType === 'gpt' ? (
-                  <div className="commands-field">
-                    <Label className="commands-field-label" htmlFor="provider-native-service-tier">{t('Speed')}</Label>
-                    {activeServiceTierOptions.length > 0 ? (
-                      <Select
-                        value={providerConfigDraft.modelServiceTier || '__standard__'}
-                        onValueChange={(value) => {
-                          setProviderConfigDraft((current) => ({
-                            ...current,
-                            modelServiceTier: value === '__standard__' ? '' : value,
-                          }));
-                        }}
-                      >
-                        <SelectTrigger id="provider-native-service-tier">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            <SelectItem value="__standard__">{t('Standard')}</SelectItem>
-                            {activeServiceTierOptions.map((option) => (
-                              <SelectItem key={option.id} value={option.id}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <Input
-                        id="provider-native-service-tier"
-                        placeholder={t('Standard')}
-                        value={providerConfigDraft.modelServiceTier}
-                        onChange={(event) => {
-                          setProviderConfigDraft((current) => ({
-                            ...current,
-                            modelServiceTier: event.target.value,
-                          }));
-                        }}
-                      />
-                    )}
-                  </div>
-                ) : null}
-                {providerConfigRow.group === 'native' ? (
-                  <div className="commands-field">
-                    <Label className="commands-field-label" htmlFor="provider-native-base-url">{t('Base URL')}</Label>
-                    <Input
-                      id="provider-native-base-url"
-                      placeholder={t('Provider default')}
-                      value={providerConfigDraft.baseUrl}
-                      onChange={(event) => {
-                        setProviderConfigDraft((current) => ({
-                          ...current,
-                          baseUrl: event.target.value,
-                        }));
-                      }}
-                    />
-                  </div>
-                ) : null}
               </>
             ) : null}
           </div>
 
           <DialogFooter className="commands-dialog-footer">
-            <div className="provider-config-footer-left">
-              {providerConfigRow?.group === 'native' && providerConfigHasSettings ? (
-                <Button
-                  className="commands-dialog-button danger"
-                  disabled={providerConfigSaving}
-                  onClick={() => { void handleClearProviderConfig(); }}
-                  type="button"
-                  variant="outline"
-                >
-                  {t('Clear')}
-                </Button>
-              ) : null}
-            </div>
+            <div className="provider-config-footer-left" />
             <div className="provider-config-footer-actions">
               <Button
                 className="commands-dialog-button secondary"

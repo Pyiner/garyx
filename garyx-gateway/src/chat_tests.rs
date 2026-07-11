@@ -6,7 +6,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
 use garyx_channels::{
     ChannelDispatcher, ChannelInfo, OutboundMessage, SendMessageResult, StreamDispatchCallback,
     StreamingDispatchTarget,
@@ -106,7 +106,7 @@ impl ChannelDispatcher for RecordingDispatcher {
 }
 
 #[async_trait]
-impl AgentLoopProvider for ReadyProvider {
+impl ProviderRuntime for ReadyProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -151,7 +151,7 @@ impl AgentLoopProvider for ReadyProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for BlockingReplyProvider {
+impl ProviderRuntime for BlockingReplyProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -202,7 +202,7 @@ impl AgentLoopProvider for BlockingReplyProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for SlowProvider {
+impl ProviderRuntime for SlowProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -248,7 +248,7 @@ impl AgentLoopProvider for SlowProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for WorkspaceRecordingProvider {
+impl ProviderRuntime for WorkspaceRecordingProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }

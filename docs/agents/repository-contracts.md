@@ -137,10 +137,6 @@ reinterpreted in feature code.
   current reply segment and starts subsequent assistant output in a new message.
 - Discord REST writes retry 429, transient network, and 5xx responses with
   backoff.
-- Garyx in-process native model providers load Garyx-managed Skills from
-  `~/.garyx/skills` and managed MCP from gateway-injected
-  `remote_mcp_servers`; they should not read downstream Claude/Codex Skill or
-  MCP config files.
 
 ## Time And Timezone
 

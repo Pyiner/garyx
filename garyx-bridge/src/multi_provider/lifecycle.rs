@@ -150,33 +150,12 @@ impl MultiProviderBridge {
             }
         };
 
-        let mut default_provider_configs = vec![
+        let default_provider_configs = vec![
             default_agent_cfg.clone(),
             codex_default_agent_cfg.clone(),
             traex_default_agent_cfg.clone(),
             antigravity_default_agent_cfg.clone(),
         ];
-        default_provider_configs.extend(
-            [
-                configured_provider_config(
-                    config,
-                    ProviderType::Gpt,
-                    &["gpt", "openai", "garyx", "garyx_native", "native"],
-                ),
-                configured_provider_config(
-                    config,
-                    ProviderType::ClaudeLlm,
-                    &["anthropic", "claude_llm"],
-                ),
-                configured_provider_config(
-                    config,
-                    ProviderType::GeminiLlm,
-                    &["google", "gemini_llm"],
-                ),
-            ]
-            .into_iter()
-            .flatten(),
-        );
         self.replace_default_provider_configs(default_provider_configs)
             .await;
 
@@ -405,18 +384,6 @@ impl MultiProviderBridge {
                 self.default_provider_config_for_type(ProviderType::AntigravityCli)
                     .await,
             ),
-            "gpt" | "openai" | "garyx" | "garyx_native" | "native" => {
-                self.configured_provider_config_for_type(ProviderType::Gpt)
-                    .await
-            }
-            "anthropic" | "claude_llm" => {
-                self.configured_provider_config_for_type(ProviderType::ClaudeLlm)
-                    .await
-            }
-            "google" | "gemini_llm" => {
-                self.configured_provider_config_for_type(ProviderType::GeminiLlm)
-                    .await
-            }
             _ => None,
         }
     }
@@ -445,18 +412,6 @@ impl MultiProviderBridge {
             .get(&provider_type)
             .cloned()
             .unwrap_or_else(|| default_provider_config(provider_type))
-    }
-
-    async fn configured_provider_config_for_type(
-        &self,
-        provider_type: ProviderType,
-    ) -> Option<AgentProviderConfig> {
-        self.inner
-            .default_provider_configs
-            .read()
-            .await
-            .get(&provider_type)
-            .cloned()
     }
 
     /// Backfill run metadata with the thread's runtime configuration: the
@@ -618,44 +573,6 @@ impl MultiProviderBridge {
             }
         }
         keys
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) async fn provider_type_for_agent(&self, agent_id: &str) -> Option<ProviderType> {
-        let normalized = agent_id.trim();
-        if normalized.is_empty() {
-            return None;
-        }
-        let agent_profiles = self
-            .inner
-            .agent_profiles
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        if let Ok(reference) = resolve_agent_reference(normalized, &agent_profiles) {
-            return Some(reference.provider_type());
-        }
-        match normalized {
-            "codex" => Some(ProviderType::CodexAppServer),
-            "traex" | "trae" | "trae_cli" | "traecli" => Some(ProviderType::Traex),
-            "claude" | "claude-tty" | "claude_tty" => Some(ProviderType::ClaudeCode),
-            "antigravity" | "agy" | "antigravity_cli" => Some(ProviderType::AntigravityCli),
-            "gpt" | "openai" | "garyx" | "garyx_native" | "native" => self
-                .configured_provider_config_for_type(ProviderType::Gpt)
-                .await
-                .map(|_| ProviderType::Gpt),
-            "anthropic" | "claude_llm" => self
-                .configured_provider_config_for_type(ProviderType::ClaudeLlm)
-                .await
-                .map(|_| ProviderType::ClaudeLlm),
-            "google" | "gemini_llm" => self
-                .configured_provider_config_for_type(ProviderType::GeminiLlm)
-                .await
-                .map(|_| ProviderType::GeminiLlm),
-            _ => None,
-        }
     }
 
     /// Shutdown all providers and cancel active tasks.

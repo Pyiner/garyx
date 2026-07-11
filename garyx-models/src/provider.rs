@@ -30,20 +30,6 @@ pub enum ProviderType {
     /// OAuth-backed CLI session and transcript files.
     #[serde(rename = "antigravity", alias = "agy", alias = "antigravity_cli")]
     AntigravityCli,
-    /// OpenAI GPT model backend served through Garyx's in-process agent loop.
-    #[serde(alias = "garyx_native", alias = "garyx", alias = "native")]
-    Gpt,
-    /// Anthropic Claude model backend served through Garyx's in-process agent loop.
-    #[serde(rename = "anthropic", alias = "claude_llm", alias = "claude_model")]
-    ClaudeLlm,
-    /// Google Gemini model backend served through Garyx's in-process agent loop.
-    #[serde(
-        rename = "google",
-        alias = "gemini_llm",
-        alias = "google_gemini",
-        alias = "gemini_model"
-    )]
-    GeminiLlm,
 }
 
 impl ProviderType {
@@ -53,9 +39,6 @@ impl ProviderType {
             Self::CodexAppServer => "codex_app_server",
             Self::Traex => "traex",
             Self::AntigravityCli => "antigravity",
-            Self::Gpt => "gpt",
-            Self::ClaudeLlm => "anthropic",
-            Self::GeminiLlm => "google",
         }
     }
 
@@ -65,11 +48,6 @@ impl ProviderType {
             "codex" | "codex_app_server" => Some(Self::CodexAppServer),
             "traex" | "trae" | "trae_cli" | "traecli" => Some(Self::Traex),
             "antigravity" | "agy" | "antigravity_cli" => Some(Self::AntigravityCli),
-            "gpt" | "openai" | "openai_gpt" | "garyx" | "garyx_native" | "native" => {
-                Some(Self::Gpt)
-            }
-            "anthropic" | "claude_llm" | "claude_model" => Some(Self::ClaudeLlm),
-            "google" | "gemini_llm" | "google_gemini" | "gemini_model" => Some(Self::GeminiLlm),
             _ => None,
         }
     }
@@ -666,79 +644,6 @@ impl Default for AntigravityCliConfig {
             antigravity_brain_root: String::new(),
             model: String::new(),
             env: HashMap::new(),
-        }
-    }
-}
-
-/// Configuration for the Garyx-native in-process agent loop.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct GaryxNativeConfig {
-    #[serde(default = "default_garyx_native_provider_type")]
-    pub provider_type: ProviderType,
-
-    #[serde(default = "default_garyx_native_model")]
-    pub default_model: String,
-    #[serde(default)]
-    pub model: String,
-    #[serde(default)]
-    pub model_reasoning_effort: String,
-    #[serde(default)]
-    pub model_service_tier: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_turns: Option<i64>,
-    #[serde(default)]
-    pub timeout_seconds: f64,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub env: HashMap<String, String>,
-
-    #[serde(default = "default_garyx_native_auth_source")]
-    pub auth_source: String,
-    #[serde(default)]
-    pub base_url: String,
-    #[serde(default)]
-    pub codex_home: String,
-    #[serde(default = "default_garyx_native_max_tool_iterations")]
-    pub max_tool_iterations: u32,
-    #[serde(default = "default_request_timeout")]
-    pub request_timeout_seconds: f64,
-}
-
-fn default_garyx_native_provider_type() -> ProviderType {
-    ProviderType::Gpt
-}
-
-fn default_garyx_native_model() -> String {
-    "gpt-5.5".to_owned()
-}
-
-fn default_garyx_native_auth_source() -> String {
-    "codex".to_owned()
-}
-
-fn default_garyx_native_max_tool_iterations() -> u32 {
-    32
-}
-
-impl Default for GaryxNativeConfig {
-    fn default() -> Self {
-        Self {
-            provider_type: ProviderType::Gpt,
-            default_model: default_garyx_native_model(),
-            model: String::new(),
-            model_reasoning_effort: String::new(),
-            model_service_tier: String::new(),
-            max_turns: None,
-            timeout_seconds: 0.0,
-            workspace_dir: None,
-            env: HashMap::new(),
-            auth_source: default_garyx_native_auth_source(),
-            base_url: String::new(),
-            codex_home: String::new(),
-            max_tool_iterations: default_garyx_native_max_tool_iterations(),
-            request_timeout_seconds: default_request_timeout(),
         }
     }
 }

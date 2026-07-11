@@ -285,7 +285,7 @@ final class GaryxClaudeCodeAuthTests: XCTestCase {
         XCTAssertEqual(entry.accountText, "Test Org")
     }
 
-    func testClaudeCodeProviderDefaultsNeverWriteAuthSourceOrTokenSettings() throws {
+    func testClaudeCodeProviderDefaultsWriteOnlyDefaultFields() throws {
         let provider = try XCTUnwrap(GaryxModelProviderDefaults.provider(for: "claude_code"))
         var settings: [String: GaryxJSONValue] = [:]
 
@@ -293,16 +293,13 @@ final class GaryxClaudeCodeAuthTests: XCTestCase {
             settings: &settings,
             provider: provider,
             model: "Claude Sonnet 4.6",
-            reasoningEffort: "medium",
-            authSource: "api_key",
-            baseUrl: "https://example.invalid",
-            apiKey: .set("${TOKEN}")
+            reasoningEffort: "medium"
         )
 
         let config = GaryxModelProviderDefaults.providerConfig(in: settings, provider: provider)
         XCTAssertEqual(config["provider_type"], .string("claude_code"))
-        XCTAssertNil(config["auth_source"])
-        XCTAssertNil(config["base_url"])
+        XCTAssertEqual(config["default_model"], .string("Claude Sonnet 4.6"))
+        XCTAssertEqual(config["model_reasoning_effort"], .string("medium"))
         XCTAssertNil(config["env"])
     }
 }

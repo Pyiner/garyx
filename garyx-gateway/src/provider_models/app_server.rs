@@ -16,7 +16,7 @@ pub(super) fn app_server_model_bin(provider_type: &ProviderType) -> &'static str
 pub(super) async fn fetch_app_server_models(
     codex_bin: &str,
     source: &'static str,
-) -> Result<GptModelDiscovery, String> {
+) -> Result<CodexModelDiscovery, String> {
     #[cfg(test)]
     if std::env::var_os("GARYX_ALLOW_REAL_APP_SERVER_MODEL_FETCH").is_none() {
         return Err("app-server model fetch disabled in tests".to_owned());
@@ -87,7 +87,7 @@ pub(super) async fn fetch_app_server_models(
 }
 
 /// Parse a `model/list` response (`{ data: [Model] }`) into a model discovery.
-pub(super) fn parse_app_server_models(result: &Value, source: &'static str) -> GptModelDiscovery {
+pub(super) fn parse_app_server_models(result: &Value, source: &'static str) -> CodexModelDiscovery {
     let entries = result
         .get("data")
         .and_then(Value::as_array)
@@ -230,7 +230,7 @@ pub(super) fn parse_app_server_models(result: &Value, source: &'static str) -> G
         first_service_tiers
     };
 
-    GptModelDiscovery {
+    CodexModelDiscovery {
         models,
         default_model,
         reasoning_efforts,
@@ -312,7 +312,7 @@ pub(super) fn parse_app_server_reasoning_efforts(
                         .and_then(Value::as_str)
                         .map(str::trim)
                         .filter(|value| !value.is_empty())?;
-                    let metadata = native_reasoning_effort_metadata(effort);
+                    let metadata = reasoning_effort_metadata(effort);
                     let label = metadata
                         .map(|(_, label, _)| label.to_owned())
                         .unwrap_or_else(|| effort.to_owned());

@@ -22,7 +22,7 @@ use crate::gary_prompt::{
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{
-    AgentLoopProvider, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
+    ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
@@ -1181,7 +1181,7 @@ impl AntigravityCliProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for AntigravityCliProvider {
+impl ProviderRuntime for AntigravityCliProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::AntigravityCli
     }

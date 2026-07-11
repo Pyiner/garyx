@@ -5,7 +5,7 @@ use garyx_models::agent::RunState;
 use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, StreamEvent};
 
 use crate::graph_engine::{Graph, GraphBuildError, GraphError, GraphTransition, NodeFuture};
-use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use crate::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
 
 // ---------------------------------------------------------------------------
 // RunPhase — state machine phases
@@ -119,7 +119,7 @@ impl RunGraphState {
 type RunGraphOutput = Result<ProviderRunResult, BridgeError>;
 
 struct RunGraphExecution<'a> {
-    provider: &'a dyn AgentLoopProvider,
+    provider: &'a dyn ProviderRuntime,
     state: &'a mut RunGraphState,
     response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
     exec_result: Option<Result<ProviderRunResult, BridgeError>>,
@@ -369,7 +369,7 @@ fn map_graph_runtime_error(err: GraphError<RunGraphNode, BridgeError>) -> Bridge
 
 /// Execute an agent run through the run graph.
 pub async fn execute_agent_run(
-    provider: &dyn AgentLoopProvider,
+    provider: &dyn ProviderRuntime,
     state: &mut RunGraphState,
     response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
 ) -> Result<ProviderRunResult, BridgeError> {

@@ -26,7 +26,7 @@ use crate::gary_prompt::{
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{
-    AgentLoopProvider, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
+    ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
 
 // ---------------------------------------------------------------------------
@@ -2247,7 +2247,7 @@ impl MessageSource for tokio::sync::mpsc::Receiver<claude_agent_sdk::Result<Mess
 }
 
 #[async_trait]
-impl AgentLoopProvider for ClaudeCliProvider {
+impl ProviderRuntime for ClaudeCliProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }

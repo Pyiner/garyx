@@ -26,16 +26,6 @@ interface CustomAgentPayload {
   provider_env?: Record<string, string> | null;
   providerEnv?: Record<string, string> | null;
   env?: Record<string, string> | null;
-  auth_source?: string | null;
-  authSource?: string | null;
-  base_url?: string | null;
-  baseUrl?: string | null;
-  codex_home?: string | null;
-  codexHome?: string | null;
-  max_tool_iterations?: number | null;
-  maxToolIterations?: number | null;
-  request_timeout_seconds?: number | null;
-  requestTimeoutSeconds?: number | null;
   default_workspace_dir?: string | null;
   defaultWorkspaceDir?: string | null;
   avatar_data_url?: string | null;
@@ -107,13 +97,6 @@ function mapCustomAgent(value: CustomAgentPayload): DesktopCustomAgent {
     modelServiceTier: value.model_service_tier || value.modelServiceTier || "",
     providerEnv:
       value.provider_env || value.providerEnv || value.env || {},
-    authSource: value.auth_source || value.authSource || "",
-    baseUrl: value.base_url || value.baseUrl || "",
-    codexHome: value.codex_home || value.codexHome || "",
-    maxToolIterations:
-      value.max_tool_iterations || value.maxToolIterations || 32,
-    requestTimeoutSeconds:
-      value.request_timeout_seconds || value.requestTimeoutSeconds || 300,
     defaultWorkspaceDir:
       value.default_workspace_dir ??
       value.defaultWorkspaceDir ??
@@ -166,11 +149,6 @@ export async function createCustomAgent(
         model_reasoning_effort: input.modelReasoningEffort,
         model_service_tier: input.modelServiceTier,
         provider_env: input.providerEnv ?? null,
-        auth_source: input.authSource ?? null,
-        base_url: input.baseUrl ?? null,
-        codex_home: input.codexHome ?? null,
-        max_tool_iterations: input.maxToolIterations ?? null,
-        request_timeout_seconds: input.requestTimeoutSeconds ?? null,
         default_workspace_dir: input.defaultWorkspaceDir,
         avatar_data_url: input.avatarDataUrl ?? null,
         system_prompt: input.systemPrompt,
@@ -199,11 +177,6 @@ export async function updateCustomAgent(
         model_reasoning_effort: input.modelReasoningEffort,
         model_service_tier: input.modelServiceTier,
         provider_env: input.providerEnv ?? null,
-        auth_source: input.authSource ?? null,
-        base_url: input.baseUrl ?? null,
-        codex_home: input.codexHome ?? null,
-        max_tool_iterations: input.maxToolIterations ?? null,
-        request_timeout_seconds: input.requestTimeoutSeconds ?? null,
         default_workspace_dir: input.defaultWorkspaceDir,
         avatar_data_url: input.avatarDataUrl ?? null,
         system_prompt: input.systemPrompt,

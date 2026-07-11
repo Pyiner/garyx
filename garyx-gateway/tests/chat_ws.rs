@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
 use garyx_gateway::garyx_db::GaryxDbService;
 use garyx_gateway::server::AppStateBuilder;
 use garyx_models::config::{ApiAccount, GaryxConfig};
@@ -53,7 +53,7 @@ impl WsAckBeforeInputResponseProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for WsTestProvider {
+impl ProviderRuntime for WsTestProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -102,7 +102,7 @@ impl AgentLoopProvider for WsTestProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for WsAckBeforeInputResponseProvider {
+impl ProviderRuntime for WsAckBeforeInputResponseProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::CodexAppServer
     }
@@ -177,7 +177,7 @@ async fn start_test_gateway() -> SocketAddr {
 
 async fn start_test_gateway_with_provider(
     provider_key: &str,
-    provider: Arc<dyn AgentLoopProvider>,
+    provider: Arc<dyn ProviderRuntime>,
 ) -> SocketAddr {
     let mut config = GaryxConfig::default();
     config.gateway.auth_token = TEST_GATEWAY_TOKEN.to_owned();

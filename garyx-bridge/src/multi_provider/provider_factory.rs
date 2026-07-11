@@ -4,15 +4,14 @@ use std::sync::Arc;
 
 use garyx_models::config::AgentProviderConfig;
 use garyx_models::provider::{
-    AntigravityCliConfig, ClaudeCodeConfig, CodexAppServerConfig, GaryxNativeConfig, ProviderType,
+    AntigravityCliConfig, ClaudeCodeConfig, CodexAppServerConfig, ProviderType,
     default_antigravity_model, default_claude_cli_mode,
 };
 
 use crate::antigravity_provider::AntigravityCliProvider;
 use crate::claude_provider::ClaudeCliProvider;
 use crate::codex_provider::CodexAgentProvider;
-use crate::garyx_native_provider::GaryxNativeProvider;
-use crate::provider_trait::{AgentLoopProvider, BridgeError};
+use crate::provider_trait::{BridgeError, ProviderRuntime};
 
 /// Build a `ClaudeCodeConfig` from an agent runtime config.
 fn build_claude_config(
@@ -105,69 +104,10 @@ fn build_antigravity_config(
     }
 }
 
-/// Build the native-loop GPT backend config from an agent runtime config.
-fn build_garyx_native_config(
-    agent_cfg: &AgentProviderConfig,
-    default_workspace: &Option<String>,
-) -> GaryxNativeConfig {
-    let provider_type = garyx_native_provider_type(agent_cfg);
-    let default_model = if agent_cfg.default_model.trim().is_empty() {
-        garyx_native_default_model(&provider_type).to_owned()
-    } else {
-        agent_cfg.default_model.clone()
-    };
-    GaryxNativeConfig {
-        provider_type,
-        workspace_dir: agent_cfg
-            .workspace_dir
-            .clone()
-            .or_else(|| default_workspace.clone()),
-        default_model,
-        model: if agent_cfg.model.is_empty() {
-            agent_cfg.default_model.clone()
-        } else {
-            agent_cfg.model.clone()
-        },
-        model_reasoning_effort: agent_cfg.model_reasoning_effort.clone(),
-        model_service_tier: agent_cfg.model_service_tier.clone(),
-        max_turns: agent_cfg.max_turns,
-        timeout_seconds: agent_cfg.timeout_seconds,
-        env: agent_cfg.env.clone(),
-        auth_source: agent_cfg.auth_source.clone(),
-        base_url: agent_cfg.base_url.clone(),
-        codex_home: agent_cfg.codex_home.clone(),
-        max_tool_iterations: agent_cfg.max_tool_iterations,
-        request_timeout_seconds: agent_cfg.request_timeout_seconds,
-    }
-}
-
-fn garyx_native_provider_type(agent_cfg: &AgentProviderConfig) -> ProviderType {
-    match ProviderType::from_slug(&agent_cfg.provider_type) {
-        Some(ProviderType::ClaudeLlm) => ProviderType::ClaudeLlm,
-        Some(ProviderType::GeminiLlm) => ProviderType::GeminiLlm,
-        _ => ProviderType::Gpt,
-    }
-}
-
-fn garyx_native_default_model(provider_type: &ProviderType) -> &'static str {
-    match provider_type {
-        ProviderType::ClaudeLlm => "claude-sonnet-4-6",
-        ProviderType::GeminiLlm => "gemini-3-flash-preview",
-        _ => "gpt-5.5",
-    }
-}
-
 pub(super) fn agent_provider_requires_dedicated_key(agent_cfg: &AgentProviderConfig) -> bool {
-    let Some(provider_type) = ProviderType::from_slug(&agent_cfg.provider_type) else {
+    if ProviderType::from_slug(&agent_cfg.provider_type).is_none() {
         return false;
-    };
-    if matches!(
-        provider_type,
-        ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm
-    ) {
-        return true;
     }
-
     let claude_cli_mode = agent_cfg.claude_cli_mode.trim();
     let custom_claude_cli_mode =
         !claude_cli_mode.is_empty() && claude_cli_mode != default_claude_cli_mode();
@@ -216,7 +156,7 @@ pub(super) fn compute_provider_key(
 pub(super) async fn create_provider(
     agent_cfg: &AgentProviderConfig,
     default_workspace: &Option<String>,
-) -> Result<Arc<dyn AgentLoopProvider>, BridgeError> {
+) -> Result<Arc<dyn ProviderRuntime>, BridgeError> {
     match ProviderType::from_slug(&agent_cfg.provider_type).unwrap_or(ProviderType::ClaudeCode) {
         ProviderType::ClaudeCode => {
             let config = build_claude_config(agent_cfg, default_workspace);
@@ -247,24 +187,6 @@ pub(super) async fn create_provider(
         ProviderType::AntigravityCli => {
             let config = build_antigravity_config(agent_cfg, default_workspace);
             let mut provider = AntigravityCliProvider::new(config);
-            provider.initialize().await?;
-            Ok(Arc::new(provider))
-        }
-        ProviderType::Gpt => {
-            let config = build_garyx_native_config(agent_cfg, default_workspace);
-            let mut provider = GaryxNativeProvider::new_gpt(config);
-            provider.initialize().await?;
-            Ok(Arc::new(provider))
-        }
-        ProviderType::ClaudeLlm => {
-            let config = build_garyx_native_config(agent_cfg, default_workspace);
-            let mut provider = GaryxNativeProvider::new_claude(config);
-            provider.initialize().await?;
-            Ok(Arc::new(provider))
-        }
-        ProviderType::GeminiLlm => {
-            let config = build_garyx_native_config(agent_cfg, default_workspace);
-            let mut provider = GaryxNativeProvider::new_gemini(config);
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }

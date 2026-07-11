@@ -21,7 +21,7 @@ features:
   - title: Channel gateway
     details: Telegram, Feishu / Lark, WeChat, subprocess channel plugins, and a local API channel all share the same routing model.
   - title: Provider bridge
-    details: Route threads to Claude Code, Codex, Traex, Antigravity, native model backends, or custom agents while keeping channel setup stable.
+    details: Route threads to Claude Code, Codex, Traex, Antigravity, or custom agents while keeping channel setup stable.
   - title: Persistent threads
     details: Conversations keep transcript history, endpoint bindings, provider resume state, and workspace context across surfaces.
   - title: Scoped MCP
@@ -41,7 +41,7 @@ runtime.
 Telegram / Feishu / WeChat / CLI / Desktop / HTTP / WebSocket
   -> Garyx gateway
   -> Threads, transcripts, endpoint bindings, tasks, automations
-  -> Claude Code / Codex / Traex / Antigravity / native models / custom agents
+  -> Claude Code / Codex / Traex / Antigravity / custom agents
   -> Garyx MCP tools and configured upstream MCP servers
 ```
 
@@ -93,7 +93,7 @@ garyx gateway restart --no-wake
 
 <div class="garyx-panel">
 <strong>Use provider CLIs directly</strong>
-<p>Garyx launches Claude Code, Codex, Traex, and Antigravity through their local CLIs, while native model backends run in process.</p>
+<p>Garyx launches Claude Code, Codex, Traex, and Antigravity through their local CLIs.</p>
 </div>
 
 <div class="garyx-panel">

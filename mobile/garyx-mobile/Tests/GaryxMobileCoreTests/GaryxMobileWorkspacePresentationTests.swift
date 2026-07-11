@@ -10,7 +10,6 @@ final class GaryxMobileWorkspacePresentationTests: XCTestCase {
                 "/workspace/.garyx/worktrees/hidden",
                 "/workspace/shared-worktree",
                 "/tmp",
-                "/tmp/garyx-agent-loop-smoke.4TKK7O",
             ],
             threadWorktreePaths: [
                 "/workspace/shared-worktree",
@@ -27,7 +26,6 @@ final class GaryxMobileWorkspacePresentationTests: XCTestCase {
                 "",
                 " /workspace/project-delta ",
                 "/private/tmp",
-                "/workspace/garyx-agent-loop-smoke.qZWS5r",
             ]
         )
 
@@ -68,7 +66,5 @@ final class GaryxMobileWorkspacePresentationTests: XCTestCase {
         XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/workspace/.codex/worktrees/session"))
         XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/tmp"))
         XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/private/tmp"))
-        XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/tmp/garyx-agent-loop-smoke.4TKK7O"))
-        XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/workspace/garyx-agent-loop-smoke.qZWS5r"))
     }
 }

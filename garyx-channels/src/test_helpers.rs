@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use garyx_bridge::provider_trait::StreamCallback;
-use garyx_bridge::{AgentLoopProvider, BridgeError, MultiProviderBridge};
+use garyx_bridge::{ProviderRuntime, BridgeError, MultiProviderBridge};
 use garyx_models::config::GaryxConfig;
 use garyx_models::provider::{
     PromptAttachment, PromptAttachmentKind, ProviderRunOptions, ProviderRunResult, ProviderType,
@@ -314,7 +314,7 @@ pub async fn wait_for_thread_delivery_persistence(store: &Arc<dyn ThreadStore>, 
 }
 
 #[async_trait]
-impl AgentLoopProvider for ConfigurableTestProvider {
+impl ProviderRuntime for ConfigurableTestProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -391,7 +391,7 @@ pub fn make_router() -> Arc<Mutex<MessageRouter>> {
 }
 
 /// Create a bridge with a given provider registered as default.
-pub async fn make_bridge_with(provider: Arc<dyn AgentLoopProvider>) -> Arc<MultiProviderBridge> {
+pub async fn make_bridge_with(provider: Arc<dyn ProviderRuntime>) -> Arc<MultiProviderBridge> {
     let bridge = Arc::new(MultiProviderBridge::new());
     attach_test_bridge_runtime(&bridge).await;
     bridge.register_provider("test-provider", provider).await;
@@ -401,7 +401,7 @@ pub async fn make_bridge_with(provider: Arc<dyn AgentLoopProvider>) -> Arc<Multi
 
 /// Create a bridge with thread store attached (for persistence tests).
 pub async fn make_bridge_with_store(
-    provider: Arc<dyn AgentLoopProvider>,
+    provider: Arc<dyn ProviderRuntime>,
     store: Arc<dyn ThreadStore>,
 ) -> Arc<MultiProviderBridge> {
     let bridge = Arc::new(MultiProviderBridge::new());

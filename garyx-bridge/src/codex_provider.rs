@@ -1,7 +1,7 @@
 //! Codex app-server agent provider.
 //!
 //! Rust port of `the original codex_provider.py`.
-//! Implements `AgentLoopProvider` backed by `codex_sdk::CodexClient`,
+//! Implements `ProviderRuntime` backed by `codex_sdk::CodexClient`,
 //! managing thread/turn lifecycle and streaming notifications.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -34,7 +34,7 @@ use crate::gary_prompt::{
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{
-    AgentLoopProvider, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
+    ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
 
 const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
@@ -2472,7 +2472,7 @@ impl CodexAgentProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for CodexAgentProvider {
+impl ProviderRuntime for CodexAgentProvider {
     fn provider_type(&self) -> ProviderType {
         // Codex and Traex share this provider implementation; report the
         // configured identity so thread affinity, presentation, and session

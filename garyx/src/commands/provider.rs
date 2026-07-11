@@ -89,9 +89,6 @@ fn provider_model_config_key(provider_type: &ProviderType) -> Result<&'static st
         ProviderType::CodexAppServer => Ok("codex"),
         ProviderType::Traex => Ok("traex"),
         ProviderType::AntigravityCli => Ok("antigravity"),
-        ProviderType::Gpt => Ok("gpt"),
-        ProviderType::ClaudeLlm => Ok("anthropic"),
-        ProviderType::GeminiLlm => Ok("google"),
     }
 }
 
@@ -124,21 +121,6 @@ fn provider_descriptors() -> Vec<ProviderDescriptor> {
             provider_type: ProviderType::AntigravityCli,
             key: "antigravity",
         },
-        ProviderDescriptor {
-            label: "GPT",
-            provider_type: ProviderType::Gpt,
-            key: "gpt",
-        },
-        ProviderDescriptor {
-            label: "Anthropic",
-            provider_type: ProviderType::ClaudeLlm,
-            key: "anthropic",
-        },
-        ProviderDescriptor {
-            label: "Google",
-            provider_type: ProviderType::GeminiLlm,
-            key: "google",
-        },
     ]
 }
 
@@ -154,9 +136,6 @@ fn provider_descriptor_for_slug(provider: &str) -> Result<ProviderDescriptor, St
 fn provider_default_model_fallback(provider_type: &ProviderType) -> Option<String> {
     match provider_type {
         ProviderType::AntigravityCli => Some(garyx_models::provider::default_antigravity_model()),
-        ProviderType::Gpt => Some("gpt-5.5".to_owned()),
-        ProviderType::ClaudeLlm => Some("claude-sonnet-4-6".to_owned()),
-        ProviderType::GeminiLlm => Some("gemini-3-flash-preview".to_owned()),
         _ => None,
     }
 }
@@ -225,21 +204,7 @@ fn provider_config_default_model_label(descriptor: &ProviderDescriptor, config: 
         .unwrap_or_else(|| "(provider default)".to_owned())
 }
 
-fn provider_config_auth_label(
-    descriptor: &ProviderDescriptor,
-    config: &Value,
-    usage: Option<&Value>,
-) -> String {
-    let env = provider_config_env(config);
-    let has_api_key = api_key_env_name(Some(descriptor.provider_type.clone()))
-        .and_then(|key| env.get(key))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    if has_api_key {
-        return "api key".to_owned();
-    }
-
+fn provider_config_auth_label(descriptor: &ProviderDescriptor, usage: Option<&Value>) -> String {
     match descriptor.provider_type {
         ProviderType::ClaudeCode | ProviderType::CodexAppServer | ProviderType::AntigravityCli => {
             if usage
@@ -253,14 +218,6 @@ fn provider_config_auth_label(
             }
         }
         ProviderType::Traex => "local CLI".to_owned(),
-        ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm => {
-            let auth_source = provider_config_string(config, "auth_source");
-            if auth_source.is_empty() {
-                "not set".to_owned()
-            } else {
-                auth_source.to_owned()
-            }
-        }
     }
 }
 
@@ -534,7 +491,7 @@ fn provider_list_rows(settings: &Value, usage: Option<&Value>) -> Vec<Value> {
                 "provider": descriptor.label,
                 "type": descriptor.provider_type.as_slug(),
                 "key": descriptor.key,
-                "auth": provider_config_auth_label(descriptor, &config, usage),
+                "auth": provider_config_auth_label(descriptor, usage),
                 "default_model": provider_config_default_model_label(descriptor, &config),
                 "usage": provider_usage_summary(descriptor, usage, now),
                 "status": provider_status_summary(usage),
@@ -597,19 +554,7 @@ fn format_provider_show_table(descriptor: &ProviderDescriptor, config: &Value) -
     )
     .expect("write string");
     writeln!(output).expect("write string");
-    writeln!(output, "Auth").expect("write string");
-    writeln!(
-        output,
-        "  Auth source: {}",
-        display_or_default(provider_config_string(config, "auth_source"), "(default)")
-    )
-    .expect("write string");
-    writeln!(
-        output,
-        "  Base URL: {}",
-        display_or_default(provider_config_string(config, "base_url"), "(default)")
-    )
-    .expect("write string");
+    writeln!(output, "Runtime").expect("write string");
     writeln!(output, "  Env keys: {env_keys}").expect("write string");
     writeln!(output).expect("write string");
     writeln!(output, "Defaults").expect("write string");
@@ -683,9 +628,6 @@ pub(crate) struct ProviderSetOptions {
     pub reasoning: Option<String>,
     pub clear_reasoning: bool,
     pub service_tier: Option<String>,
-    pub base_url: Option<String>,
-    pub api_key: Option<String>,
-    pub auth_source: Option<String>,
     pub claude_cli_mode: Option<String>,
     pub claude_cli_path: Option<String>,
     pub env: Vec<String>,
@@ -718,15 +660,12 @@ fn build_provider_set_patch(
         || options.reasoning.is_some()
         || options.clear_reasoning
         || options.service_tier.is_some()
-        || options.base_url.is_some()
-        || options.api_key.is_some()
-        || options.auth_source.is_some()
         || has_claude_cli_update
         || !options.env.is_empty()
         || !options.clear_env.is_empty();
     if !touched {
         return Err(
-            "set --model, --clear-model, --reasoning, --clear-reasoning, --service-tier, --base-url, --api-key, --auth-source, --claude-cli-mode, --claude-cli-path, --env, or --clear-env"
+            "set --model, --clear-model, --reasoning, --clear-reasoning, --service-tier, --claude-cli-mode, --claude-cli-path, --env, or --clear-env"
                 .into(),
         );
     }
@@ -758,15 +697,6 @@ fn build_provider_set_patch(
             Value::String(service_tier.to_owned()),
         );
     }
-    if let Some(base_url) = options.base_url.as_deref().map(str::trim) {
-        provider_config.insert("base_url".to_owned(), Value::String(base_url.to_owned()));
-    }
-    if let Some(auth_source) = options.auth_source.as_deref().map(str::trim) {
-        provider_config.insert(
-            "auth_source".to_owned(),
-            Value::String(auth_source.to_owned()),
-        );
-    }
     if let Some(mode) = options.claude_cli_mode.as_deref().map(str::trim) {
         provider_config.insert("claude_cli_mode".to_owned(), Value::String(mode.to_owned()));
     }
@@ -787,17 +717,6 @@ fn build_provider_set_patch(
     for pair in &options.env {
         let (key, value) = parse_env_pair(pair)?;
         env.insert(key, Value::String(value));
-    }
-    if let Some(api_key) = options.api_key.as_deref() {
-        let env_name = api_key_env_name(Some(provider_type.clone()))
-            .ok_or("--api-key is only supported for gpt, anthropic, or google providers")?;
-        env.insert(env_name.to_owned(), Value::String(api_key.to_owned()));
-        if provider_type == ProviderType::Gpt && !provider_config.contains_key("auth_source") {
-            provider_config.insert(
-                "auth_source".to_owned(),
-                Value::String("api_key".to_owned()),
-            );
-        }
     }
     if !env.is_empty() {
         provider_config.insert("env".to_owned(), Value::Object(env));
@@ -890,13 +809,8 @@ pub(crate) async fn cmd_provider_set(
             .get("model_service_tier")
             .and_then(Value::as_str)
             .unwrap_or("<unchanged>");
-        let auth_source = patch
-            .provider_config
-            .get("auth_source")
-            .and_then(Value::as_str)
-            .unwrap_or("<unchanged>");
         println!(
-            "Updated provider defaults: {} (key={}, model={default_model}, reasoning={effort}, service_tier={service_tier}, auth_source={auth_source})",
+            "Updated provider defaults: {} (key={}, model={default_model}, reasoning={effort}, service_tier={service_tier})",
             patch.provider_type.as_slug(),
             patch.provider_key
         );
@@ -1175,46 +1089,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cmd_config_provider_model_clears_native_provider_defaults() {
-        let requests = StdArc::new(Mutex::new(Vec::new()));
-        let (base_url, handle) = spawn_settings_update_http_test_server(requests.clone()).await;
-        let dir = tempdir().expect("tempdir");
-        let config_path = write_test_gateway_config(&dir, &base_url);
-
-        cmd_config_provider_model(
-            config_path.to_str().expect("config path"),
-            "anthropic",
-            None,
-            true,
-            None,
-            true,
-            None,
-            false,
-            None,
-            false,
-            true,
-        )
-        .await
-        .expect("provider model clear should succeed");
-
-        handle.abort();
-
-        let records = requests.lock().expect("request lock");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].method, "PUT");
-        assert_eq!(records[0].path, "/api/settings?merge=true");
-        assert_eq!(
-            records[0].body["agents"]["anthropic"]["provider_type"],
-            "anthropic"
-        );
-        assert_eq!(records[0].body["agents"]["anthropic"]["default_model"], "");
-        assert_eq!(
-            records[0].body["agents"]["anthropic"]["model_reasoning_effort"],
-            ""
-        );
-    }
-
-    #[tokio::test]
     async fn cmd_config_provider_model_rejects_unknown_provider_without_request() {
         let requests = StdArc::new(Mutex::new(Vec::new()));
         let (base_url, handle) = spawn_settings_update_http_test_server(requests.clone()).await;
@@ -1337,53 +1211,35 @@ mod tests {
             provider_model_config_key(&ProviderType::AntigravityCli).unwrap(),
             "antigravity"
         );
-        assert_eq!(
-            provider_model_config_key(&ProviderType::Gpt).unwrap(),
-            "gpt"
-        );
-        assert_eq!(
-            provider_model_config_key(&ProviderType::ClaudeLlm).unwrap(),
-            "anthropic"
-        );
-        assert_eq!(
-            provider_model_config_key(&ProviderType::GeminiLlm).unwrap(),
-            "google"
-        );
     }
 
     #[test]
-    fn provider_set_patch_writes_native_api_key_env_shape() {
+    fn provider_set_patch_writes_cli_provider_env_shape() {
         let patch = build_provider_set_patch(&ProviderSetOptions {
-            provider: "gpt".to_owned(),
+            provider: "codex_app_server".to_owned(),
             model: Some("gpt-5.5".to_owned()),
             reasoning: Some("high".to_owned()),
             service_tier: Some("priority".to_owned()),
-            base_url: Some("https://example.invalid/v1".to_owned()),
-            api_key: Some("sk-openai-EXAMPLE".to_owned()),
-            auth_source: Some("api_key".to_owned()),
-            env: vec!["OPENAI_ORG=org-test".to_owned()],
+            env: vec!["CODEX_HOME=/tmp/test-codex-home".to_owned()],
             clear_env: vec!["OLD_KEY".to_owned()],
             json_output: true,
             ..ProviderSetOptions::default()
         })
         .expect("provider set patch");
 
-        assert_eq!(patch.provider_key, "gpt");
+        assert_eq!(patch.provider_key, "codex");
         assert_eq!(
             patch.patch,
             json!({
                 "agents": {
-                    "gpt": {
-                        "provider_type": "gpt",
+                    "codex": {
+                        "provider_type": "codex_app_server",
                         "default_model": "gpt-5.5",
                         "model_reasoning_effort": "high",
                         "model_service_tier": "priority",
-                        "base_url": "https://example.invalid/v1",
-                        "auth_source": "api_key",
                         "env": {
                             "OLD_KEY": "",
-                            "OPENAI_ORG": "org-test",
-                            "OPENAI_API_KEY": "sk-openai-EXAMPLE"
+                            "CODEX_HOME": "/tmp/test-codex-home"
                         }
                     }
                 }
@@ -1401,10 +1257,10 @@ mod tests {
         cmd_provider_set(
             config_path.to_str().expect("config path"),
             ProviderSetOptions {
-                provider: "anthropic".to_owned(),
-                model: Some("claude-sonnet-4-6".to_owned()),
+                provider: "codex_app_server".to_owned(),
+                model: Some("gpt-5.5".to_owned()),
                 clear_reasoning: true,
-                api_key: Some("sk-ant-EXAMPLE".to_owned()),
+                env: vec!["CODEX_HOME=/tmp/test-codex-home".to_owned()],
                 json_output: true,
                 ..ProviderSetOptions::default()
             },
@@ -1419,20 +1275,20 @@ mod tests {
         assert_eq!(records[0].method, "PUT");
         assert_eq!(records[0].path, "/api/settings?merge=true");
         assert_eq!(
-            records[0].body["agents"]["anthropic"]["provider_type"],
-            "anthropic"
+            records[0].body["agents"]["codex"]["provider_type"],
+            "codex_app_server"
         );
         assert_eq!(
-            records[0].body["agents"]["anthropic"]["default_model"],
-            "claude-sonnet-4-6"
+            records[0].body["agents"]["codex"]["default_model"],
+            "gpt-5.5"
         );
         assert_eq!(
-            records[0].body["agents"]["anthropic"]["model_reasoning_effort"],
+            records[0].body["agents"]["codex"]["model_reasoning_effort"],
             ""
         );
         assert_eq!(
-            records[0].body["agents"]["anthropic"]["env"]["ANTHROPIC_API_KEY"],
-            "sk-ant-EXAMPLE"
+            records[0].body["agents"]["codex"]["env"]["CODEX_HOME"],
+            "/tmp/test-codex-home"
         );
     }
 
@@ -1545,13 +1401,9 @@ mod tests {
     fn provider_list_rows_include_all_model_providers() {
         let settings = json!({
             "agents": {
-                "gpt": {
-                    "provider_type": "gpt",
-                    "default_model": "gpt-5.5",
-                    "auth_source": "api_key",
-                    "env": {
-                        "OPENAI_API_KEY": "sk-openai-EXAMPLE"
-                    }
+                "codex": {
+                    "provider_type": "codex_app_server",
+                    "default_model": "codex-test-model"
                 }
             }
         });
@@ -1572,14 +1424,14 @@ mod tests {
 
         let rows = provider_list_rows(&settings, Some(&usage));
 
-        assert_eq!(rows.len(), 7);
+        assert_eq!(rows.len(), 4);
         assert_eq!(rows[0]["provider"], "Claude Code");
         assert_eq!(rows[0]["usage"], "73% wk");
-        let gpt = rows
+        let codex = rows
             .iter()
-            .find(|row| row["type"] == "gpt")
-            .expect("gpt row");
-        assert_eq!(gpt["auth"], "api key");
-        assert_eq!(gpt["default_model"], "gpt-5.5");
+            .find(|row| row["type"] == "codex_app_server")
+            .expect("codex row");
+        assert_eq!(codex["auth"], "not signed in");
+        assert_eq!(codex["default_model"], "codex-test-model");
     }
 }

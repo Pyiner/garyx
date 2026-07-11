@@ -10,13 +10,10 @@ import type {
 
 import { Database, Sparkles, Trash, Upload as UploadIcon } from 'lucide-react';
 import {
-  apiKeyValueFromRows,
   buildProviderEnvPayload,
   envRowsHaveInvalidKey,
   formatEnvText,
-  isNativeModelProvider,
   parseEnvText,
-  setApiKeyInRows,
 } from './agent-env-editor';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -47,7 +44,6 @@ import {
   PROVIDER_DEFAULT_MODEL_VALUE,
   PROVIDER_DEFAULT_REASONING_VALUE,
   PROVIDER_DEFAULT_SERVICE_TIER_VALUE,
-  defaultAuthSource,
   providerLabel,
   providerModelsWithCurrent,
   reasoningEffortsWithCurrent,
@@ -131,8 +127,7 @@ export function AgentFormDialog({
     agentDraft.modelServiceTier,
   );
   const agentSupportsServiceTierSelection =
-    agentDraft.providerType === 'gpt'
-    && (activeAgentProviderModels?.supportsServiceTierSelection === true || agentDraft.modelServiceTier.trim().length > 0)
+    (activeAgentProviderModels?.supportsServiceTierSelection === true || agentDraft.modelServiceTier.trim().length > 0)
     && agentServiceTierOptions.length > 0;
   const viewAgentProviderModels = selectedAgent
     ? providerModelsByType[selectedAgent.providerType]
@@ -157,10 +152,7 @@ export function AgentFormDialog({
     }
     setSaving(true);
     try {
-      const nativeProvider = isNativeModelProvider(agentDraft.providerType);
-      // The KV editor is the single source of env (the API-key field writes into
-      // it). Send the whole map, which preserves keys the API-key shortcut used
-      // to drop.
+      // The KV editor is the single source of provider environment variables.
       const providerEnv = buildProviderEnvPayload(agentDraft.env);
       const payload: CreateCustomAgentInput = {
         agentId: agentDraft.agentId.trim(),
@@ -170,10 +162,6 @@ export function AgentFormDialog({
         modelReasoningEffort: agentSupportsReasoningEffortSelection ? agentDraft.modelReasoningEffort.trim() : '',
         modelServiceTier: agentSupportsServiceTierSelection ? agentDraft.modelServiceTier.trim() : '',
         providerEnv,
-        authSource: nativeProvider
-          ? (agentDraft.authSource.trim() || defaultAuthSource(agentDraft.providerType))
-          : null,
-        baseUrl: nativeProvider ? agentDraft.baseUrl.trim() : null,
         defaultWorkspaceDir: agentDraft.defaultWorkspaceDir.trim(),
         avatarDataUrl,
         systemPrompt: agentDraft.systemPrompt.trim(),
@@ -318,12 +306,10 @@ export function AgentFormDialog({
                       ...current,
                       providerType: value,
                       model: '',
-                      modelReasoningEffort: value === 'codex_app_server' || value === 'traex' || isNativeModelProvider(value)
+                      modelReasoningEffort: value === 'codex_app_server' || value === 'traex'
                         ? current.modelReasoningEffort
                         : '',
-                      modelServiceTier: value === 'gpt' ? current.modelServiceTier : '',
-                      authSource: isNativeModelProvider(value) ? defaultAuthSource(value) : '',
-                      baseUrl: '',
+                      modelServiceTier: value === 'codex_app_server' ? current.modelServiceTier : '',
                     }));
                     void ensureProviderModels(value);
                   }}
@@ -338,9 +324,6 @@ export function AgentFormDialog({
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="antigravity">Antigravity</SelectItem>
                       <SelectItem value="traex">Trae</SelectItem>
-                      <SelectItem value="gpt">GPT</SelectItem>
-                      <SelectItem value="anthropic">Claude</SelectItem>
-                      <SelectItem value="google">Gemini</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -434,89 +417,6 @@ export function AgentFormDialog({
                 </div>
               ) : null}
             </div>
-
-            {isNativeModelProvider(agentDraft.providerType) ? (
-              <>
-                {agentDraft.providerType === 'gpt' ? (
-                  <div className="codex-form-field">
-                    <Label className="codex-form-label">{t('GPT auth')}</Label>
-                    <Select
-                      onValueChange={(value) => {
-                        setAgentDraft((current) => ({
-                          ...current,
-                          authSource: value,
-                          env:
-                            value === 'codex'
-                              ? setApiKeyInRows(current.env, current.providerType, '')
-                              : current.env,
-                        }));
-                      }}
-                      value={agentDraft.authSource || 'codex'}
-                    >
-                      <SelectTrigger className="agents-hub-model-select">
-                        <SelectValue placeholder={t('Select auth')} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="codex">{t('Use GPT token')}</SelectItem>
-                          <SelectItem value="api_key">{t('Use API key')}</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                ) : null}
-
-                {agentDraft.providerType !== 'gpt' || agentDraft.authSource === 'api_key' ? (
-                  <div className="codex-form-field">
-                    <Label className="codex-form-label" htmlFor="agent-dialog-api-key">
-                      {t('API Key')}
-                    </Label>
-                    <Input
-                      autoCapitalize="off"
-                      autoComplete="off"
-                      id="agent-dialog-api-key"
-                      onChange={(event) => {
-                        const nextApiKey = event.target.value;
-                        setAgentDraft((current) => ({
-                          ...current,
-                          env: setApiKeyInRows(current.env, current.providerType, nextApiKey),
-                        }));
-                      }}
-                      placeholder={
-                        agentDraft.providerType === 'anthropic' || agentDraft.providerType === 'claude_llm'
-                          ? 'ANTHROPIC_API_KEY'
-                          : agentDraft.providerType === 'google' || agentDraft.providerType === 'gemini_llm'
-                            ? 'GEMINI_API_KEY'
-                            : 'OPENAI_API_KEY'
-                      }
-                      spellCheck={false}
-                      type="text"
-                      value={apiKeyValueFromRows(agentDraft.env, agentDraft.providerType)}
-                    />
-                    <span className="codex-form-hint">
-                      {t('Stored on this custom provider config.')}
-                    </span>
-                  </div>
-                ) : null}
-
-                <div className="codex-form-field">
-                  <Label className="codex-form-label" htmlFor="agent-dialog-base-url">
-                    {t('Base URL')}
-                  </Label>
-                  <Input
-                    autoCapitalize="off"
-                    autoComplete="off"
-                    id="agent-dialog-base-url"
-                    onChange={(event) => {
-                      setAgentDraft((current) => ({ ...current, baseUrl: event.target.value }));
-                    }}
-                    placeholder={t('(provider default)')}
-                    spellCheck={false}
-                    value={agentDraft.baseUrl}
-                  />
-                </div>
-              </>
-            ) : null}
 
             <div className="codex-form-field">
               <div
@@ -732,14 +632,6 @@ export function AgentFormDialog({
                     {viewAgentEffortLabel || t('(provider default)')}
                   </div>
                 </div>
-                {selectedAgent && isNativeModelProvider(selectedAgent.providerType as ProviderType) ? (
-                  <div className="agents-hub-detail-item">
-                    <div className="agents-hub-detail-term">{t('Auth')}</div>
-                    <div className="agents-hub-detail-value">
-                      {selectedAgent.authSource || defaultAuthSource(selectedAgent.providerType as ProviderType)}
-                    </div>
-                  </div>
-                ) : null}
                 {selectedAgent?.modelServiceTier.trim() ? (
                   <div className="agents-hub-detail-item">
                     <div className="agents-hub-detail-term">{t('Service tier')}</div>

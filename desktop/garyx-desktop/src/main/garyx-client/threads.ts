@@ -198,25 +198,10 @@ function parseThreadProviderType(
     value === "claude_tty" ||
     value === "codex_app_server" ||
     value === "antigravity" ||
-    value === "traex" ||
-    value === "gpt" ||
-    value === "anthropic" ||
-    value === "google" ||
-    value === "claude_llm" ||
-    value === "gemini_llm" ||
-    value === "garyx_native"
+    value === "traex"
   ) {
     if (value === "claude_tty") {
       return "claude_code";
-    }
-    if (value === "garyx_native") {
-      return "gpt";
-    }
-    if (value === "claude_llm") {
-      return "anthropic";
-    }
-    if (value === "gemini_llm") {
-      return "google";
     }
     return value;
   }
@@ -235,14 +220,6 @@ function providerLabelForThread(
       return "Antigravity";
     case "traex":
       return "Traex";
-    case "gpt":
-      return "GPT";
-    case "anthropic":
-    case "claude_llm":
-      return "Claude";
-    case "google":
-    case "gemini_llm":
-      return "Gemini";
     default:
       return null;
   }

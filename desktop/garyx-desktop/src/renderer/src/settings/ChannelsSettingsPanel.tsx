@@ -117,12 +117,6 @@ function preferredStandaloneAgentId(
     normalizedProviderType = 'antigravity';
   } else if (providerType === 'traex') {
     normalizedProviderType = 'traex';
-  } else if (providerType === 'gpt') {
-    normalizedProviderType = 'gpt';
-  } else if (providerType === 'anthropic' || providerType === 'claude_llm') {
-    normalizedProviderType = 'anthropic';
-  } else if (providerType === 'google' || providerType === 'gemini_llm') {
-    normalizedProviderType = 'google';
   }
 
   let builtInId = 'claude';
@@ -132,12 +126,6 @@ function preferredStandaloneAgentId(
     builtInId = 'antigravity';
   } else if (normalizedProviderType === 'traex') {
     builtInId = 'traex';
-  } else if (normalizedProviderType === 'gpt') {
-    builtInId = 'gpt';
-  } else if (normalizedProviderType === 'anthropic') {
-    builtInId = 'anthropic';
-  } else if (normalizedProviderType === 'google') {
-    builtInId = 'google';
   }
 
   return agents.find((agent) => agent.agentId === builtInId)?.agentId

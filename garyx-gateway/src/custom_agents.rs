@@ -2,9 +2,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use garyx_models::config::{
-    default_garyx_native_max_tool_iterations, default_native_request_timeout,
-};
 use garyx_models::{CustomAgentProfile, ProviderType, builtin_provider_agent_profiles};
 use serde::Deserialize;
 use tokio::sync::RwLock;
@@ -25,16 +22,6 @@ pub struct UpsertCustomAgentRequest {
     pub model_service_tier: Option<String>,
     #[serde(default, alias = "env", alias = "providerEnv")]
     pub provider_env: Option<HashMap<String, String>>,
-    #[serde(default, alias = "authSource")]
-    pub auth_source: Option<String>,
-    #[serde(default, alias = "baseUrl")]
-    pub base_url: Option<String>,
-    #[serde(default, alias = "codexHome")]
-    pub codex_home: Option<String>,
-    #[serde(default, alias = "maxToolIterations")]
-    pub max_tool_iterations: Option<u32>,
-    #[serde(default, alias = "requestTimeoutSeconds")]
-    pub request_timeout_seconds: Option<u32>,
     #[serde(
         default,
         alias = "defaultWorkspaceDir",
@@ -181,9 +168,6 @@ impl CustomAgentStore {
                 })
                 .collect::<HashMap<_, _>>()
         });
-        let auth_source = request.auth_source.map(|value| value.trim().to_owned());
-        let base_url = request.base_url.map(|value| value.trim().to_owned());
-        let codex_home = request.codex_home.map(|value| value.trim().to_owned());
         let requested_system_prompt = request
             .system_prompt
             .map(|value| normalize_system_prompt(&value));
@@ -248,26 +232,9 @@ impl CustomAgentStore {
         let provider_env = provider_env
             .or_else(|| existing.map(|profile| profile.provider_env.clone()))
             .unwrap_or_default();
-        let auth_source = auth_source
-            .or_else(|| existing.map(|profile| profile.auth_source.clone()))
-            .unwrap_or_default();
-        let base_url = base_url
-            .or_else(|| existing.map(|profile| profile.base_url.clone()))
-            .unwrap_or_default();
-        let codex_home = codex_home
-            .or_else(|| existing.map(|profile| profile.codex_home.clone()))
-            .unwrap_or_default();
         let system_prompt = requested_system_prompt
             .or_else(|| existing.map(|profile| profile.system_prompt.clone()))
             .unwrap_or_default();
-        let max_tool_iterations = request
-            .max_tool_iterations
-            .or_else(|| existing.map(|profile| profile.max_tool_iterations))
-            .unwrap_or_else(default_garyx_native_max_tool_iterations);
-        let request_timeout_seconds = request
-            .request_timeout_seconds
-            .or_else(|| existing.map(|profile| profile.request_timeout_seconds))
-            .unwrap_or(default_native_request_timeout() as u32);
         let profile = CustomAgentProfile {
             agent_id: agent_id.to_owned(),
             display_name: display_name.to_owned(),
@@ -276,11 +243,6 @@ impl CustomAgentStore {
             model_reasoning_effort,
             model_service_tier,
             provider_env,
-            auth_source,
-            base_url,
-            codex_home,
-            max_tool_iterations,
-            request_timeout_seconds,
             default_workspace_dir,
             avatar_data_url,
             system_prompt,

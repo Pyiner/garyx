@@ -1,6 +1,6 @@
 use super::*;
 use async_trait::async_trait;
-use garyx_bridge::{AgentLoopProvider, BridgeError};
+use garyx_bridge::{ProviderRuntime, BridgeError};
 use garyx_channels::{ChannelDispatcher, ChannelDispatcherImpl, ChannelInfo, OutboundMessage};
 use garyx_models::config::{CronAction, CronConfig, CronJobConfig, CronSchedule};
 use garyx_models::provider::{
@@ -75,7 +75,7 @@ struct MetadataRecordingProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for MetadataRecordingProvider {
+impl ProviderRuntime for MetadataRecordingProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -157,7 +157,7 @@ async fn wire_front_door_state(
 }
 
 #[async_trait]
-impl AgentLoopProvider for SuccessfulAutomationProvider {
+impl ProviderRuntime for SuccessfulAutomationProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -219,7 +219,7 @@ impl CountingAutomationProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for CountingAutomationProvider {
+impl ProviderRuntime for CountingAutomationProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -2274,7 +2274,7 @@ async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn()
     // criterion that closes the schedule→tick→dispatch loop.
     use crate::composition::app_bootstrap::AppStateBuilder;
     use crate::mcp::tools::schedule_followup::followup_job_id;
-    use garyx_bridge::{AgentLoopProvider, BridgeError};
+    use garyx_bridge::{ProviderRuntime, BridgeError};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
@@ -2287,7 +2287,7 @@ async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn()
     }
 
     #[async_trait]
-    impl AgentLoopProvider for RecordingProvider {
+    impl ProviderRuntime for RecordingProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }

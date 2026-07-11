@@ -82,8 +82,6 @@ Each provider implementation should reuse its existing request builders/helpers:
   `resolve_codex_request_reasoning_effort`, and
   `resolve_codex_request_service_tier`.
 - Antigravity: its existing `model_id` helper.
-- Native GPT/Claude/Gemini: the same `model_id` and request option resolution
-  used to build `AgentLoopRunRequest`.
 
 This keeps the snapshot tied to the value Garyx actually requests from the
 provider. If a provider does not send a concrete value, leave that field unset

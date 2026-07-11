@@ -13,7 +13,7 @@ Each thread carries:
 | --- | --- |
 | `thread_id` | Stable identifier, e.g. `thread::<uuid>`. Used in URLs and the CLI. |
 | `agent_id` | Which agent handles runs on this thread. |
-| `provider_type` | Which provider currently backs the agent (`claude_code`, `codex_app_server`, `traex`, `antigravity`, or a native model provider). |
+| `provider_type` | Which provider currently backs the agent (`claude_code`, `codex_app_server`, `traex`, or `antigravity`). |
 | `workspace_dir` | Filesystem root the agent operates in. May be `null` for chat-only threads. |
 | `channel_bindings` | Channel endpoints attached to this thread (Telegram chat id, Feishu chat id, etc.). |
 | `recent_run_id` | The last agent run dispatched to this thread; useful for live debugging. |
@@ -83,8 +83,7 @@ each WeChat / Telegram bot uses its own thread per conversation by default.
 ## Workspace directories
 
 `workspace_dir` is what the agent actually sees as its working directory
-when it executes tool calls. CLI provider transports receive it as their cwd;
-native model providers use the same path for tool execution.
+when it executes tool calls. Provider transports receive it as their cwd.
 
 Garyx does not treat a workspace as a separate domain entity. A
 `workspace_dir` is just a directory path recorded on the thread (or supplied

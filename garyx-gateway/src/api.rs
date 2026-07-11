@@ -73,12 +73,10 @@ const RESTART_COOLDOWN_SECS: u64 = 30;
 
 fn provider_icon_descriptor(provider_type: &ProviderType) -> Option<Value> {
     let (key, label) = match provider_type {
-        ProviderType::ClaudeCode | ProviderType::ClaudeLlm => ("claude", "Claude"),
+        ProviderType::ClaudeCode => ("claude", "Claude"),
         ProviderType::CodexAppServer => ("codex", "Codex"),
         ProviderType::Traex => ("traex", "Traex"),
-        ProviderType::GeminiLlm => ("gemini", "Gemini"),
         ProviderType::AntigravityCli => ("gemini", "Antigravity"),
-        ProviderType::Gpt => return None,
     };
     Some(json!({
         "key": key,
@@ -187,16 +185,6 @@ pub struct CustomAgentUpsertPayload {
     pub model_service_tier: Option<String>,
     #[serde(default, alias = "env", alias = "providerEnv")]
     pub provider_env: Option<HashMap<String, String>>,
-    #[serde(default, alias = "authSource")]
-    pub auth_source: Option<String>,
-    #[serde(default, alias = "baseUrl")]
-    pub base_url: Option<String>,
-    #[serde(default, alias = "codexHome")]
-    pub codex_home: Option<String>,
-    #[serde(default, alias = "maxToolIterations")]
-    pub max_tool_iterations: Option<u32>,
-    #[serde(default, alias = "requestTimeoutSeconds")]
-    pub request_timeout_seconds: Option<u32>,
     #[serde(
         default,
         alias = "defaultWorkspaceDir",
@@ -2859,11 +2847,6 @@ pub async fn create_custom_agent(
                 model_reasoning_effort: payload.model_reasoning_effort,
                 model_service_tier: payload.model_service_tier,
                 provider_env: payload.provider_env,
-                auth_source: payload.auth_source,
-                base_url: payload.base_url,
-                codex_home: payload.codex_home,
-                max_tool_iterations: payload.max_tool_iterations,
-                request_timeout_seconds: payload.request_timeout_seconds,
                 default_workspace_dir: payload.default_workspace_dir,
                 avatar_data_url: payload.avatar_data_url,
                 system_prompt: payload.system_prompt,
@@ -2920,11 +2903,6 @@ pub async fn update_custom_agent(
                 model_reasoning_effort: payload.model_reasoning_effort,
                 model_service_tier: payload.model_service_tier,
                 provider_env: payload.provider_env,
-                auth_source: payload.auth_source,
-                base_url: payload.base_url,
-                codex_home: payload.codex_home,
-                max_tool_iterations: payload.max_tool_iterations,
-                request_timeout_seconds: payload.request_timeout_seconds,
                 default_workspace_dir: payload.default_workspace_dir,
                 avatar_data_url: payload.avatar_data_url,
                 system_prompt: payload.system_prompt,

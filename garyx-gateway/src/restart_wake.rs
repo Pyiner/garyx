@@ -709,7 +709,7 @@ mod tests {
 
     use async_trait::async_trait;
     use garyx_bridge::MultiProviderBridge;
-    use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+    use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
@@ -727,7 +727,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for RecordingProvider {
+    impl ProviderRuntime for RecordingProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }

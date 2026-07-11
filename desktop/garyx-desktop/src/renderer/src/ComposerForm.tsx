@@ -146,15 +146,6 @@ function providerOptionLabel(providerType: DesktopApiProviderType): string {
   if (providerType === 'traex') {
     return 'Traex';
   }
-  if (providerType === 'gpt') {
-    return 'GPT';
-  }
-  if (providerType === 'anthropic' || providerType === 'claude_llm') {
-    return 'Claude';
-  }
-  if (providerType === 'google' || providerType === 'gemini_llm') {
-    return 'Gemini';
-  }
   return 'Claude';
 }
 

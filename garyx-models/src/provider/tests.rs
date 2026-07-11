@@ -17,30 +17,6 @@ fn test_provider_type_serde() {
     assert_eq!(back, ProviderType::AntigravityCli);
     let alias: ProviderType = serde_json::from_str("\"agy\"").unwrap();
     assert_eq!(alias, ProviderType::AntigravityCli);
-
-    let pt = ProviderType::Gpt;
-    let json = serde_json::to_string(&pt).unwrap();
-    assert_eq!(json, "\"gpt\"");
-    let back: ProviderType = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, ProviderType::Gpt);
-    let legacy: ProviderType = serde_json::from_str("\"garyx_native\"").unwrap();
-    assert_eq!(legacy, ProviderType::Gpt);
-
-    let pt = ProviderType::ClaudeLlm;
-    let json = serde_json::to_string(&pt).unwrap();
-    assert_eq!(json, "\"anthropic\"");
-    let back: ProviderType = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, ProviderType::ClaudeLlm);
-    let alias: ProviderType = serde_json::from_str("\"claude_llm\"").unwrap();
-    assert_eq!(alias, ProviderType::ClaudeLlm);
-
-    let pt = ProviderType::GeminiLlm;
-    let json = serde_json::to_string(&pt).unwrap();
-    assert_eq!(json, "\"google\"");
-    let back: ProviderType = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, ProviderType::GeminiLlm);
-    let alias: ProviderType = serde_json::from_str("\"gemini_llm\"").unwrap();
-    assert_eq!(alias, ProviderType::GeminiLlm);
 }
 
 #[test]
@@ -50,9 +26,6 @@ fn test_provider_type_slug_round_trip() {
         ProviderType::CodexAppServer,
         ProviderType::Traex,
         ProviderType::AntigravityCli,
-        ProviderType::Gpt,
-        ProviderType::ClaudeLlm,
-        ProviderType::GeminiLlm,
     ] {
         assert_eq!(
             ProviderType::from_slug(provider_type.as_slug()),
@@ -73,23 +46,6 @@ fn test_provider_type_slug_round_trip() {
         Some(ProviderType::ClaudeCode)
     );
     assert_eq!(ProviderType::from_slug("unknown-provider"), None);
-    assert_eq!(ProviderType::from_slug("gpt"), Some(ProviderType::Gpt));
-    assert_eq!(
-        ProviderType::from_slug("garyx_native"),
-        Some(ProviderType::Gpt)
-    );
-    assert_eq!(
-        ProviderType::from_slug("anthropic"),
-        Some(ProviderType::ClaudeLlm)
-    );
-    assert_eq!(
-        ProviderType::from_slug("google"),
-        Some(ProviderType::GeminiLlm)
-    );
-    assert_eq!(
-        ProviderType::from_slug("google_gemini"),
-        Some(ProviderType::GeminiLlm)
-    );
     assert_eq!(
         ProviderType::from_slug("agy"),
         Some(ProviderType::AntigravityCli)
@@ -314,17 +270,6 @@ fn test_codex_config_defaults() {
     assert_eq!(cfg.provider_type, ProviderType::CodexAppServer);
     assert_eq!(cfg.approval_policy, "never");
     assert_eq!(cfg.sandbox_mode, "danger-full-access");
-    assert!((cfg.request_timeout_seconds - 300.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn test_native_gpt_config_defaults() {
-    let cfg = GaryxNativeConfig::default();
-    assert_eq!(cfg.provider_type, ProviderType::Gpt);
-    assert_eq!(cfg.default_model, "gpt-5.5");
-    assert_eq!(cfg.model, "");
-    assert_eq!(cfg.auth_source, "codex");
-    assert_eq!(cfg.max_tool_iterations, 32);
     assert!((cfg.request_timeout_seconds - 300.0).abs() < f64::EPSILON);
 }
 

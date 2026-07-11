@@ -13,11 +13,6 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
     public var modelReasoningEffort: String
     public var modelServiceTier: String
     public var providerEnv: [String: String]
-    public var authSource: String
-    public var baseUrl: String
-    public var codexHome: String
-    public var maxToolIterations: Int?
-    public var requestTimeoutSeconds: Int?
     public var defaultWorkspaceDir: String
     public var avatarDataUrl: String
     public var systemPrompt: String
@@ -34,11 +29,6 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
         modelReasoningEffort: String = "",
         modelServiceTier: String = "",
         providerEnv: [String: String] = [:],
-        authSource: String = "",
-        baseUrl: String = "",
-        codexHome: String = "",
-        maxToolIterations: Int? = nil,
-        requestTimeoutSeconds: Int? = nil,
         defaultWorkspaceDir: String = "",
         avatarDataUrl: String = "",
         systemPrompt: String = "",
@@ -54,11 +44,6 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
         self.modelReasoningEffort = modelReasoningEffort
         self.modelServiceTier = modelServiceTier
         self.providerEnv = providerEnv
-        self.authSource = authSource
-        self.baseUrl = baseUrl
-        self.codexHome = codexHome
-        self.maxToolIterations = maxToolIterations
-        self.requestTimeoutSeconds = requestTimeoutSeconds
         self.defaultWorkspaceDir = defaultWorkspaceDir
         self.avatarDataUrl = avatarDataUrl
         self.systemPrompt = systemPrompt
@@ -83,16 +68,6 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
         case providerEnv = "provider_env"
         case providerEnvCamel = "providerEnv"
         case env
-        case authSource = "auth_source"
-        case authSourceCamel = "authSource"
-        case baseUrl = "base_url"
-        case baseUrlCamel = "baseUrl"
-        case codexHome = "codex_home"
-        case codexHomeCamel = "codexHome"
-        case maxToolIterations = "max_tool_iterations"
-        case maxToolIterationsCamel = "maxToolIterations"
-        case requestTimeoutSeconds = "request_timeout_seconds"
-        case requestTimeoutSecondsCamel = "requestTimeoutSeconds"
         case defaultWorkspaceDir = "default_workspace_dir"
         case defaultWorkspaceDirCamel = "defaultWorkspaceDir"
         case workspaceDir = "workspace_dir"
@@ -124,11 +99,6 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
             ?? container.decodeIfPresent([String: String].self, forKey: .providerEnvCamel)
             ?? container.decodeIfPresent([String: String].self, forKey: .env)
             ?? [:]
-        authSource = try container.garyxDecodeFirstString(.authSource, .authSourceCamel) ?? ""
-        baseUrl = try container.garyxDecodeFirstString(.baseUrl, .baseUrlCamel) ?? ""
-        codexHome = try container.garyxDecodeFirstString(.codexHome, .codexHomeCamel) ?? ""
-        maxToolIterations = try container.garyxDecodeFirstInt(.maxToolIterations, .maxToolIterationsCamel)
-        requestTimeoutSeconds = try container.garyxDecodeFirstInt(.requestTimeoutSeconds, .requestTimeoutSecondsCamel)
         defaultWorkspaceDir = try container.garyxDecodeFirstString(
             .defaultWorkspaceDir,
             .defaultWorkspaceDirCamel,
@@ -474,11 +444,6 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
     public var modelReasoningEffort: String?
     public var modelServiceTier: String?
     public var providerEnv: [String: String]?
-    public var authSource: String?
-    public var baseUrl: String?
-    public var codexHome: String?
-    public var maxToolIterations: Int?
-    public var requestTimeoutSeconds: Int?
     public var defaultWorkspaceDir: String?
     public var avatarDataUrl: String?
     public var systemPrompt: String?
@@ -494,11 +459,6 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
         modelReasoningEffort: String? = nil,
         modelServiceTier: String? = nil,
         providerEnv: [String: String]? = nil,
-        authSource: String? = nil,
-        baseUrl: String? = nil,
-        codexHome: String? = nil,
-        maxToolIterations: Int? = nil,
-        requestTimeoutSeconds: Int? = nil,
         defaultWorkspaceDir: String? = nil,
         avatarDataUrl: String? = nil,
         systemPrompt: String? = nil,
@@ -511,11 +471,6 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
         self.modelReasoningEffort = modelReasoningEffort
         self.modelServiceTier = modelServiceTier
         self.providerEnv = providerEnv
-        self.authSource = authSource
-        self.baseUrl = baseUrl
-        self.codexHome = codexHome
-        self.maxToolIterations = maxToolIterations
-        self.requestTimeoutSeconds = requestTimeoutSeconds
         self.defaultWorkspaceDir = defaultWorkspaceDir
         self.avatarDataUrl = avatarDataUrl
         self.systemPrompt = systemPrompt
@@ -530,11 +485,6 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
         case modelReasoningEffort = "model_reasoning_effort"
         case modelServiceTier = "model_service_tier"
         case providerEnv = "provider_env"
-        case authSource = "auth_source"
-        case baseUrl = "base_url"
-        case codexHome = "codex_home"
-        case maxToolIterations = "max_tool_iterations"
-        case requestTimeoutSeconds = "request_timeout_seconds"
         case defaultWorkspaceDir = "default_workspace_dir"
         case avatarDataUrl = "avatar_data_url"
         case systemPrompt = "system_prompt"

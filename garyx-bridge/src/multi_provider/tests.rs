@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, Notify, mpsc};
 
 use super::MultiProviderBridge;
 use crate::provider_trait::{
-    AgentLoopProvider, BridgeError, ProviderRuntimeSelection, StreamCallback,
+    BridgeError, ProviderRuntime, ProviderRuntimeSelection, StreamCallback,
 };
 
 fn run_request(
@@ -108,11 +108,6 @@ fn custom_agent(
         model_reasoning_effort: String::new(),
         model_service_tier: String::new(),
         provider_env: Default::default(),
-        auth_source: String::new(),
-        base_url: String::new(),
-        codex_home: String::new(),
-        max_tool_iterations: garyx_models::config::default_garyx_native_max_tool_iterations(),
-        request_timeout_seconds: garyx_models::config::default_native_request_timeout() as u32,
         default_workspace_dir: None,
         avatar_data_url: None,
         system_prompt: system_prompt.to_owned(),
@@ -282,7 +277,7 @@ impl CheckpointingProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for SegmentedResponseProvider {
+impl ProviderRuntime for SegmentedResponseProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::CodexAppServer
     }
@@ -495,7 +490,7 @@ impl Drop for ActiveRunCounter<'_> {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for MockProvider {
+impl ProviderRuntime for MockProvider {
     fn provider_type(&self) -> ProviderType {
         self.ptype.clone()
     }
@@ -566,7 +561,7 @@ impl AgentLoopProvider for MockProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for TitleProvider {
+impl ProviderRuntime for TitleProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -615,7 +610,7 @@ impl AgentLoopProvider for TitleProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for ClearSessionProvider {
+impl ProviderRuntime for ClearSessionProvider {
     fn provider_type(&self) -> ProviderType {
         self.ptype.clone()
     }
@@ -656,7 +651,7 @@ impl AgentLoopProvider for ClearSessionProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for CheckpointingProvider {
+impl ProviderRuntime for CheckpointingProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -711,7 +706,7 @@ impl AgentLoopProvider for CheckpointingProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for QueuedInputProvider {
+impl ProviderRuntime for QueuedInputProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -799,7 +794,7 @@ impl AgentLoopProvider for QueuedInputProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for CapsuleStreamingProvider {
+impl ProviderRuntime for CapsuleStreamingProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -872,7 +867,7 @@ impl AgentLoopProvider for CapsuleStreamingProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for FailingCheckpointProvider {
+impl ProviderRuntime for FailingCheckpointProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -916,7 +911,7 @@ impl AgentLoopProvider for FailingCheckpointProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for EmptyResponseProvider {
+impl ProviderRuntime for EmptyResponseProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -962,7 +957,7 @@ impl AgentLoopProvider for EmptyResponseProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for FailedResultProvider {
+impl ProviderRuntime for FailedResultProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -1013,7 +1008,7 @@ impl AgentLoopProvider for FailedResultProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for DelayedQueuedInputProvider {
+impl ProviderRuntime for DelayedQueuedInputProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -1130,7 +1125,7 @@ impl AgentLoopProvider for DelayedQueuedInputProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for InterruptingFollowUpProvider {
+impl ProviderRuntime for InterruptingFollowUpProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::AntigravityCli
     }
@@ -1278,78 +1273,6 @@ async fn built_in_agent_uses_configured_default_provider_model() {
         .await
         .expect("legacy built-in claude alias config");
     assert_eq!(legacy_provider_config.default_model, "claude-opus-4-8");
-}
-
-#[tokio::test]
-async fn configured_native_provider_default_is_addressable() {
-    let bridge = MultiProviderBridge::new();
-    bridge
-        .replace_agent_profiles(builtin_provider_agent_profiles())
-        .await;
-    assert_eq!(bridge.provider_type_for_agent("gpt").await, None);
-
-    let mut config = GaryxConfig::default();
-    config.agents.insert(
-        "gpt".to_owned(),
-        json!({
-            "provider_type": "gpt",
-            "default_model": "gpt-5.4",
-            "model_reasoning_effort": "high"
-        }),
-    );
-
-    bridge.reload_from_config(&config).await.unwrap();
-
-    assert_eq!(
-        bridge.provider_type_for_agent("gpt").await,
-        Some(ProviderType::Gpt)
-    );
-    let provider_config = bridge
-        .provider_config_for_agent("gpt")
-        .await
-        .expect("configured gpt provider config");
-    assert_eq!(provider_config.default_model, "gpt-5.4");
-    assert_eq!(provider_config.model_reasoning_effort, "high");
-}
-
-#[tokio::test]
-async fn test_configured_native_model_agent_gets_dedicated_provider_key() {
-    let bridge = MultiProviderBridge::new();
-    bridge
-        .replace_agent_profiles({
-            let mut profiles = builtin_provider_agent_profiles();
-            profiles.push(custom_agent(
-                "budget-gpt",
-                "Budget GPT",
-                ProviderType::Gpt,
-                "gpt-5.5",
-                "Use the native GPT model backend.",
-            ));
-            profiles
-        })
-        .await;
-
-    assert_eq!(
-        bridge.provider_type_for_agent("budget-gpt").await,
-        Some(ProviderType::Gpt)
-    );
-    assert_eq!(bridge.provider_type_for_agent("gpt").await, None);
-
-    let config = GaryxConfig::default();
-    bridge.reload_from_config(&config).await.unwrap();
-
-    assert!(
-        bridge.get_provider("agent:budget-gpt").await.is_some(),
-        "configured native model agents get provider instances"
-    );
-    assert!(
-        bridge.get_provider("gpt").await.is_none(),
-        "native GPT is not a default provider"
-    );
-    assert!(bridge.get_provider("anthropic").await.is_none());
-    assert!(bridge.get_provider("google").await.is_none());
-    assert!(bridge.get_provider("claude_llm").await.is_none());
-    assert!(bridge.get_provider("gemini_llm").await.is_none());
 }
 
 #[tokio::test]

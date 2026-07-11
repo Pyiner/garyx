@@ -58,7 +58,7 @@ pub(crate) enum Commands {
     /// Coding-assistant quota usage (also shown in `garyx provider list`)
     #[command(display_order = 44)]
     Usage {
-        /// Optional provider filter: claude_code, codex, antigravity, gpt, anthropic, or google
+        /// Optional provider filter: claude_code, codex, or antigravity
         provider: Option<String>,
         /// Output as JSON
         #[arg(long)]
@@ -337,7 +337,7 @@ pub(crate) enum ConfigAction {
     },
     /// Set the gateway default model for a model provider
     ProviderModel {
-        /// Provider type: claude_code, codex_app_server, traex, antigravity, gpt, anthropic, or google
+        /// Provider type: claude_code, codex_app_server, traex, or antigravity
         provider: String,
         /// Default model id. Omit to leave unchanged.
         #[arg(long, conflicts_with = "clear_model")]
@@ -395,7 +395,7 @@ pub(crate) enum ProviderAction {
     /// Show one provider default configuration
     #[command(visible_alias = "get")]
     Show {
-        /// Provider type: claude_code, codex_app_server, traex, antigravity, gpt, anthropic, or google
+        /// Provider type: claude_code, codex_app_server, traex, or antigravity
         provider: String,
         /// Output as JSON
         #[arg(long)]
@@ -404,7 +404,7 @@ pub(crate) enum ProviderAction {
     /// Edit one provider's default configuration. Fields you omit keep their current values.
     #[command(visible_alias = "update")]
     Set {
-        /// Provider type: claude_code, codex_app_server, traex, antigravity, gpt, anthropic, or google
+        /// Provider type: claude_code, codex_app_server, traex, or antigravity
         provider: String,
         /// Default model id. Omit to leave unchanged.
         #[arg(long, conflicts_with = "clear_model")]
@@ -421,15 +421,6 @@ pub(crate) enum ProviderAction {
         /// Default service tier. Omit to leave unchanged.
         #[arg(long)]
         service_tier: Option<String>,
-        /// Native-provider API base URL. Omit to leave unchanged.
-        #[arg(long)]
-        base_url: Option<String>,
-        /// Native-provider API key. Stored in the provider env map.
-        #[arg(long)]
-        api_key: Option<String>,
-        /// Native-provider auth source. Omit to leave unchanged.
-        #[arg(long)]
-        auth_source: Option<String>,
         /// Claude Code CLI mode. Only valid when provider is claude_code.
         #[arg(long, value_parser = ["cctty", "native"])]
         claude_cli_mode: Option<String>,
@@ -1173,7 +1164,7 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, codex_app_server, traex, antigravity, gpt, anthropic, or google
+        /// Provider type: claude_code, codex_app_server, traex, or antigravity
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.
@@ -1185,12 +1176,6 @@ pub(crate) enum AgentAction {
         /// Optional model service tier override, for example priority for Fast mode.
         #[arg(long)]
         model_service_tier: Option<String>,
-        /// Native model auth source, for example codex or api_key.
-        #[arg(long, alias = "auth-source")]
-        provider_auth_source: Option<String>,
-        /// Native model API key. Stored on the custom agent provider config.
-        #[arg(long, alias = "api-key")]
-        provider_api_key: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent.
         #[arg(long)]
         default_workspace_dir: Option<String>,
@@ -1219,7 +1204,7 @@ pub(crate) enum AgentAction {
         /// Display name. Omit to keep the current value.
         #[arg(long, alias = "name")]
         display_name: Option<String>,
-        /// Provider type: claude_code, codex_app_server, traex, antigravity, gpt, anthropic, or google. Omit to keep the current value.
+        /// Provider type: claude_code, codex_app_server, traex, or antigravity. Omit to keep the current value.
         #[arg(long)]
         provider: Option<String>,
         /// Optional model override. Omit to preserve the existing value.
@@ -1234,12 +1219,6 @@ pub(crate) enum AgentAction {
         /// Optional model service tier override, for example priority for Fast mode. Pass an empty string to clear it.
         #[arg(long)]
         model_service_tier: Option<String>,
-        /// Native model auth source, for example codex or api_key.
-        #[arg(long, alias = "auth-source")]
-        provider_auth_source: Option<String>,
-        /// Native model API key. Stored on the custom agent provider config.
-        #[arg(long, alias = "api-key")]
-        provider_api_key: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
         #[arg(long)]
         default_workspace_dir: Option<String>,
@@ -1268,7 +1247,7 @@ pub(crate) enum AgentAction {
         /// Display name. Required when creating; omit on update to keep the current value.
         #[arg(long, alias = "name")]
         display_name: Option<String>,
-        /// Provider type: claude_code, codex_app_server, traex, antigravity, gpt, anthropic, or google. Omit to keep the current value (claude_code when creating).
+        /// Provider type: claude_code, codex_app_server, traex, or antigravity. Omit to keep the current value (claude_code when creating).
         #[arg(long)]
         provider: Option<String>,
         /// Optional model override. Omit to preserve an existing value, or use the provider default on create.
@@ -1283,12 +1262,6 @@ pub(crate) enum AgentAction {
         /// Optional model service tier override, for example priority for Fast mode. Pass an empty string to clear it.
         #[arg(long)]
         model_service_tier: Option<String>,
-        /// Native model auth source, for example codex or api_key.
-        #[arg(long, alias = "auth-source")]
-        provider_auth_source: Option<String>,
-        /// Native model API key. Stored on the custom agent provider config.
-        #[arg(long, alias = "api-key")]
-        provider_api_key: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
         #[arg(long)]
         default_workspace_dir: Option<String>,

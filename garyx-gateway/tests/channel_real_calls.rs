@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
 use garyx_gateway::api::thread_history;
 use garyx_gateway::app_db::AppDbService;
 use garyx_gateway::automation::{
@@ -52,7 +52,7 @@ impl RecordingProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for RecordingProvider {
+impl ProviderRuntime for RecordingProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }

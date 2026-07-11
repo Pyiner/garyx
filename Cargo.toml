@@ -2,7 +2,6 @@
 members = [
     "garyx-models",
     "garyx-core",
-    "garyx-agent-loop",
     "garyx-router",
     "garyx-bridge",
     "garyx-channels",
@@ -50,7 +49,6 @@ codex-sdk = { path = "codex-sdk" }
 cctty = { git = "https://github.com/Pyiner/cctty.git", rev = "221537fe35e1b9ae8d0cdc2494f992cbad8ae13d" }
 garyx-models = { path = "garyx-models" }
 garyx-core = { path = "garyx-core" }
-garyx-agent-loop = { path = "garyx-agent-loop" }
 garyx-router = { path = "garyx-router" }
 garyx-bridge = { path = "garyx-bridge" }
 garyx-channels = { path = "garyx-channels" }

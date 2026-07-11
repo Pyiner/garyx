@@ -3,7 +3,7 @@ use super::*;
 use async_trait::async_trait;
 use chrono::Utc;
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
 use garyx_channels::{ChannelDispatcher, ChannelInfo};
 use garyx_models::config::{GaryxConfig, OwnerTargetConfig, TelegramAccount};
 use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent};
@@ -34,7 +34,7 @@ impl RecordingProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for RecordingProvider {
+impl ProviderRuntime for RecordingProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }

@@ -4,7 +4,7 @@ use crate::recent_thread_projection::ActiveRunProbe;
 use async_trait::async_trait;
 use axum::body::Body;
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
 use garyx_models::config::{GaryxConfig, TelegramAccount};
 use garyx_models::provider::{
     AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
@@ -87,7 +87,7 @@ struct HoldingProvider {
 }
 
 #[async_trait]
-impl AgentLoopProvider for HoldingProvider {
+impl ProviderRuntime for HoldingProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }

@@ -646,7 +646,7 @@ mod forum_thread_tests {
 mod dispatch_tests {
     use super::*;
     use garyx_bridge::provider_trait::StreamCallback;
-    use garyx_bridge::{AgentLoopProvider, BridgeError, MultiProviderBridge};
+    use garyx_bridge::{ProviderRuntime, BridgeError, MultiProviderBridge};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
@@ -668,7 +668,7 @@ mod dispatch_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for TestProvider {
+    impl ProviderRuntime for TestProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -994,7 +994,7 @@ mod dispatch_tests {
 mod e2e_tests {
     use super::*;
     use crate::test_helpers::*;
-    use garyx_bridge::{AgentLoopProvider, BridgeError};
+    use garyx_bridge::{ProviderRuntime, BridgeError};
     use garyx_models::config::{GaryxConfig, TelegramAccount};
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent,
@@ -1665,7 +1665,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingFirstChunkProvider {
+    impl ProviderRuntime for StreamingFirstChunkProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -1730,7 +1730,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingToolPlaceholderProvider {
+    impl ProviderRuntime for StreamingToolPlaceholderProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -1823,7 +1823,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingChildToolPlaceholderProvider {
+    impl ProviderRuntime for StreamingChildToolPlaceholderProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -1902,7 +1902,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingSuppressedStructuredProvider {
+    impl ProviderRuntime for StreamingSuppressedStructuredProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -1973,7 +1973,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingImageGenerationProvider {
+    impl ProviderRuntime for StreamingImageGenerationProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -2060,7 +2060,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingToolOnlyProvider {
+    impl ProviderRuntime for StreamingToolOnlyProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -2140,7 +2140,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingToolBoundaryProvider {
+    impl ProviderRuntime for StreamingToolBoundaryProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -2225,7 +2225,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingSegmentBoundaryProvider {
+    impl ProviderRuntime for StreamingSegmentBoundaryProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -2283,7 +2283,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingAssistantSegmentProvider {
+    impl ProviderRuntime for StreamingAssistantSegmentProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -2389,7 +2389,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingOverflowProvider {
+    impl ProviderRuntime for StreamingOverflowProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -2446,7 +2446,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingOverflowBoundaryProvider {
+    impl ProviderRuntime for StreamingOverflowBoundaryProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -2507,7 +2507,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingSlowProvider {
+    impl ProviderRuntime for StreamingSlowProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -2558,7 +2558,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingDelayedFlushProvider {
+    impl ProviderRuntime for StreamingDelayedFlushProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -2632,7 +2632,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingInterruptAwareProvider {
+    impl ProviderRuntime for StreamingInterruptAwareProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }

@@ -21,7 +21,7 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function buildResumeCommand(threadId: string | null, threadInfo: ThreadRuntimeInfo | null): string | null {
+function buildResumeCommand(threadInfo: ThreadRuntimeInfo | null): string | null {
   const sessionId = threadInfo?.sdkSessionId?.trim() || '';
   if (!sessionId) {
     return null;
@@ -34,13 +34,6 @@ function buildResumeCommand(threadId: string | null, threadInfo: ThreadRuntimeIn
       break;
     case 'codex_app_server':
       command = `codex -a never -s danger-full-access resume ${shellEscape(sessionId)}`;
-      break;
-    case 'gpt':
-    case 'anthropic':
-    case 'google':
-    case 'claude_llm':
-    case 'gemini_llm':
-      command = threadId ? `garyx thread send thread ${shellEscape(threadId)} continue` : '';
       break;
     default:
       return null;
@@ -96,7 +89,7 @@ export function ThreadInfoPopover({
   const [copyState, setCopyState] = useState<'idle' | 'command' | 'session'>('idle');
   const shellRef = useRef<HTMLDivElement | null>(null);
   const sessionId = threadInfo?.sdkSessionId?.trim() || '';
-  const resumeCommand = buildResumeCommand(threadId, threadInfo);
+  const resumeCommand = buildResumeCommand(threadInfo);
   const bindings = threadInfo?.channelBindings || [];
 
   useEffect(() => {

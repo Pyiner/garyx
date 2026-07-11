@@ -9,11 +9,10 @@ use garyx_models::provider::{
     FORK_FROM_SDK_SESSION_ID_METADATA_KEY, FilePayload, ImagePayload, MODEL_METADATA_KEY,
     MODEL_OVERRIDE_METADATA_KEY, MODEL_REASONING_EFFORT_METADATA_KEY,
     MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY, MODEL_SERVICE_TIER_METADATA_KEY,
-    MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY, PromptAttachment, ProviderMessage,
-    ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
-    SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamEvent,
-    attachments_from_metadata, build_user_content_from_parts, stage_file_payloads_for_prompt,
-    stage_image_payloads_for_prompt,
+    MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY, PromptAttachment, ProviderRunOptions,
+    ProviderRunResult, ProviderType, QueuedUserInput, SDK_SESSION_FORK_METADATA_KEY,
+    SDK_SESSION_ID_METADATA_KEY, StreamEvent, attachments_from_metadata,
+    build_user_content_from_parts, stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
 use garyx_models::{Principal, final_assistant_text_from_render_records};
@@ -26,18 +25,17 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep};
 
-use crate::provider_trait::{AgentLoopProvider, BridgeError, ProviderRuntimeSelection};
+use crate::provider_trait::{BridgeError, ProviderRuntime, ProviderRuntimeSelection};
 use crate::run_graph::{RunGraphState, execute_agent_run};
 
 use super::MultiProviderBridge;
 use super::persistence::{
-    MAX_SESSION_MESSAGES, PendingUserInput, PendingUserInputStatus, PersistedRun, RunControlRecord,
-    StreamingRunSnapshot, TerminalRunControl, ThreadPersistenceCommand,
-    capsule_attached_control_record, save_failed_thread_messages_with_terminal_control,
-    save_streaming_partial, save_thread_messages_with_terminal_control,
+    PendingUserInput, PendingUserInputStatus, PersistedRun, RunControlRecord, StreamingRunSnapshot,
+    TerminalRunControl, ThreadPersistenceCommand, capsule_attached_control_record,
+    save_failed_thread_messages_with_terminal_control, save_streaming_partial,
+    save_thread_messages_with_terminal_control,
 };
 use super::state::{self, ActiveThreadPersistence};
-use crate::garyx_native_provider::SESSION_MESSAGES_METADATA_KEY;
 
 mod persistence_worker;
 mod session_resolve;
@@ -223,7 +221,7 @@ async fn has_active_streaming_run_for_thread(inner: &super::state::Inner, thread
 
 async fn queue_streaming_input_with_retry(
     inner: &super::state::Inner,
-    provider: Arc<dyn AgentLoopProvider>,
+    provider: Arc<dyn ProviderRuntime>,
     thread_id: &str,
     input: QueuedUserInput,
 ) -> bool {
@@ -402,7 +400,7 @@ impl MultiProviderBridge {
         account_id: &str,
         metadata: &mut HashMap<String, Value>,
         requested_provider: Option<ProviderType>,
-    ) -> Result<(String, Arc<dyn AgentLoopProvider>, Option<ProviderType>), BridgeError> {
+    ) -> Result<(String, Arc<dyn ProviderRuntime>, Option<ProviderType>), BridgeError> {
         let _ = restore_thread_affinity_from_store(self, thread_id).await;
         // Every dispatch funnels through here, so the thread's bound agent
         // configuration is backfilled once at this chokepoint instead of at
@@ -661,14 +659,6 @@ impl MultiProviderBridge {
             && let Some(session_data) = store.get_logged(&thread_id).await
         {
             let resolved_provider_type = provider.provider_type();
-            let history = self.inner.thread_history.read().await.clone();
-            attach_native_session_messages(
-                &mut options,
-                history.as_ref(),
-                &thread_id,
-                &resolved_provider_type,
-            )
-            .await;
             attach_provider_sdk_session_metadata(
                 &mut options,
                 &session_data,
@@ -1345,14 +1335,6 @@ impl MultiProviderBridge {
             && let Some(session_data) = store.get_logged(thread_id).await
         {
             let resolved_provider_type = provider.provider_type();
-            let history = self.inner.thread_history.read().await.clone();
-            attach_native_session_messages(
-                &mut options,
-                history.as_ref(),
-                thread_id,
-                &resolved_provider_type,
-            )
-            .await;
             attach_provider_sdk_session_metadata(
                 &mut options,
                 &session_data,

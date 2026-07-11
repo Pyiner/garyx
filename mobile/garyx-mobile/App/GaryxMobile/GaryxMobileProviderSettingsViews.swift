@@ -5,9 +5,8 @@ import WidgetKit
 
 // Model-provider settings surfaces: the provider list (topped by the Quota
 // hero, with the shared §4 usage visualization inline) and the provider
-// detail sheet with sectioned editing. Business rules (patch shape, env-key
-// map, usage display models) live in GaryxMobileCore; these views dumb-render
-// Core models.
+// detail sheet with sectioned editing. Business rules (patch shape and usage
+// display models) live in GaryxMobileCore; these views dumb-render Core models.
 
 struct GaryxSettingsProviderContent: View {
     @EnvironmentObject private var model: GaryxMobileModel
@@ -364,11 +363,6 @@ struct GaryxModelProviderDefaultsSheet: View {
     @State private var reasoningEffort = ""
     @State private var serviceTier = ""
     @State private var showsClaudeLoginSheet = false
-    @State private var authSource = ""
-    @State private var baseUrl = ""
-    @State private var apiKey = ""
-    /// The authoritative key echoed at open; drives set/blank/keep on save.
-    @State private var originalApiKey = ""
     @State private var isHydrated = false
     @State private var hydrationFailed = false
     @State private var isSaving = false
@@ -469,45 +463,6 @@ struct GaryxModelProviderDefaultsSheet: View {
             GaryxClaudeCodeAuthEntryRow(entry: claudeCodeAuthEntry) {
                 showsClaudeLoginSheet = true
             }
-        case .native:
-            Section {
-                // Every native provider gets the auth-source row (D1). Only
-                // GPT has a second source (the shared Codex OAuth token);
-                // Anthropic/Google expose their single API-key source so the
-                // saved auth_source is always visible, never written silently.
-                GaryxFormMenuRow(title: "Auth", value: authSourceLabel) {
-                    if GaryxProviderSettingsPresentation.offersGptTokenAuthSource(provider) {
-                        Button("Use GPT token") { selectAuthSource("codex") }
-                    }
-                    Button("Use API key") { selectAuthSource("api_key") }
-                }
-                if showsApiKeyField {
-                    GaryxFormTextFieldRow(
-                        title: "API key",
-                        text: $apiKey,
-                        placeholder: apiKeyPlaceholder,
-                        valuePlacement: .below,
-                        keyboardType: .asciiCapable,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
-                    )
-                }
-                GaryxFormTextFieldRow(
-                    title: "Base URL",
-                    text: $baseUrl,
-                    placeholder: "Provider default",
-                    valuePlacement: .below,
-                    keyboardType: .URL,
-                    autocapitalization: .never,
-                    autocorrectionDisabled: true,
-                    wrapsValue: true
-                )
-            } header: {
-                Text("Authentication")
-                    .textCase(nil)
-            } footer: {
-                Text("The API key is stored on the gateway as \(apiKeyPlaceholder) and shown here in plain text. Clearing it blanks the key; remove it fully from the Mac app.")
-            }
         case .managedOAuth:
             GaryxFormGroupedSection(title: "Authentication") {
                 GaryxFormReadOnlyRow(title: "OAuth", value: "Managed on the Mac app")
@@ -583,22 +538,6 @@ struct GaryxModelProviderDefaultsSheet: View {
         )
     }
 
-    private var effectiveAuthSource: String {
-        GaryxProviderSettingsPresentation.effectiveAuthSource(provider: provider, draft: authSource)
-    }
-
-    private var authSourceLabel: String {
-        GaryxProviderSettingsPresentation.authSourceLabel(effectiveAuthSource: effectiveAuthSource)
-    }
-
-    private var showsApiKeyField: Bool {
-        GaryxProviderSettingsPresentation.showsApiKeyField(provider: provider, effectiveAuthSource: effectiveAuthSource)
-    }
-
-    private var apiKeyPlaceholder: String {
-        GaryxProviderSettingsPresentation.apiKeyPlaceholder(for: provider)
-    }
-
     private var defaultModelLabel: String {
         GaryxProviderSettingsPresentation.defaultModelLabel(provider: provider, catalog: catalog)
     }
@@ -619,13 +558,6 @@ struct GaryxModelProviderDefaultsSheet: View {
         }
     }
 
-    private func selectAuthSource(_ source: String) {
-        authSource = source
-        // Switching GPT back to the shared token clears the draft key, like Mac;
-        // save then blanks a previously stored key.
-        apiKey = GaryxProviderSettingsPresentation.apiKeyDraft(afterSelectingAuthSource: source, current: apiKey)
-    }
-
     private func fillDraft() {
         let draft = GaryxProviderSettingsPresentation.Draft.make(
             settings: model.gatewaySettingsDocument,
@@ -634,10 +566,6 @@ struct GaryxModelProviderDefaultsSheet: View {
         modelName = draft.modelName
         reasoningEffort = draft.reasoningEffort
         serviceTier = draft.serviceTier
-        authSource = draft.authSource
-        baseUrl = draft.baseUrl
-        apiKey = draft.apiKey
-        originalApiKey = draft.apiKey
     }
 
     private func saveDefaults() {
@@ -651,11 +579,7 @@ struct GaryxModelProviderDefaultsSheet: View {
                     catalog: catalog,
                     modelName: modelName,
                     reasoningEffort: reasoningEffort,
-                    serviceTier: serviceTier,
-                    authSourceDraft: authSource,
-                    baseUrl: baseUrl,
-                    apiKeyDraft: apiKey,
-                    originalApiKey: originalApiKey
+                    serviceTier: serviceTier
                 )
             )
             await MainActor.run {

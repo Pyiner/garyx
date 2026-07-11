@@ -19,7 +19,7 @@ final class GaryxAgentTargetListPresentationTests: XCTestCase {
             agent("antigravity", builtIn: true),
             agent("gary"),
             agent("quant"),
-            agent("native"),
+            agent("custom"),
         ]
 
         let primary = GaryxAgentTargetListPresentation.primary(targets, selectedId: "claude")
@@ -27,11 +27,11 @@ final class GaryxAgentTargetListPresentationTests: XCTestCase {
 
         let withHiddenSelection = GaryxAgentTargetListPresentation.primary(
             targets,
-            selectedId: "native"
+            selectedId: "custom"
         )
         XCTAssertEqual(
             withHiddenSelection.map(\.id),
-            ["claude", "codex", "antigravity", "gary", "native"]
+            ["claude", "codex", "antigravity", "gary", "custom"]
         )
         XCTAssertEqual(GaryxAgentTargetListPresentation.overflowCount(targets), 1)
     }

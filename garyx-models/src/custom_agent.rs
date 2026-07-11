@@ -2,23 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{
-    AgentProviderConfig, default_garyx_native_auth_source,
-    default_garyx_native_max_tool_iterations, default_native_request_timeout,
-};
+use crate::config::AgentProviderConfig;
 use crate::provider::ProviderType;
-
-fn is_default_max_tool_iterations(value: &u32) -> bool {
-    *value == default_garyx_native_max_tool_iterations()
-}
-
-fn default_native_request_timeout_u32() -> u32 {
-    default_native_request_timeout() as u32
-}
-
-fn is_default_request_timeout_u32(value: &u32) -> bool {
-    *value == default_native_request_timeout_u32()
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CustomAgentProfile {
@@ -39,28 +24,6 @@ pub struct CustomAgentProfile {
         skip_serializing_if = "HashMap::is_empty"
     )]
     pub provider_env: HashMap<String, String>,
-    #[serde(
-        default,
-        alias = "authSource",
-        skip_serializing_if = "String::is_empty"
-    )]
-    pub auth_source: String,
-    #[serde(default, alias = "baseUrl", skip_serializing_if = "String::is_empty")]
-    pub base_url: String,
-    #[serde(default, alias = "codexHome", skip_serializing_if = "String::is_empty")]
-    pub codex_home: String,
-    #[serde(
-        default = "default_garyx_native_max_tool_iterations",
-        alias = "maxToolIterations",
-        skip_serializing_if = "is_default_max_tool_iterations"
-    )]
-    pub max_tool_iterations: u32,
-    #[serde(
-        default = "default_native_request_timeout_u32",
-        alias = "requestTimeoutSeconds",
-        skip_serializing_if = "is_default_request_timeout_u32"
-    )]
-    pub request_timeout_seconds: u32,
     #[serde(
         default,
         alias = "defaultWorkspaceDir",
@@ -96,15 +59,6 @@ impl CustomAgentProfile {
             model_reasoning_effort: self.model_reasoning_effort.clone(),
             model_service_tier: self.model_service_tier.clone(),
             env: self.provider_env.clone(),
-            auth_source: if self.auth_source.trim().is_empty() {
-                default_garyx_native_auth_source()
-            } else {
-                self.auth_source.trim().to_owned()
-            },
-            base_url: self.base_url.trim().to_owned(),
-            codex_home: self.codex_home.trim().to_owned(),
-            max_tool_iterations: self.max_tool_iterations,
-            request_timeout_seconds: f64::from(self.request_timeout_seconds),
             ..Default::default()
         }
     }
@@ -133,11 +87,6 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
             provider_env: HashMap::new(),
-            auth_source: String::new(),
-            base_url: String::new(),
-            codex_home: String::new(),
-            max_tool_iterations: default_garyx_native_max_tool_iterations(),
-            request_timeout_seconds: default_native_request_timeout_u32(),
             default_workspace_dir: None,
             avatar_data_url: Some(builtin_avatar_data_url(BUILTIN_CLAUDE_AVATAR_PNG)),
             system_prompt: String::new(),
@@ -154,11 +103,6 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
             provider_env: HashMap::new(),
-            auth_source: String::new(),
-            base_url: String::new(),
-            codex_home: String::new(),
-            max_tool_iterations: default_garyx_native_max_tool_iterations(),
-            request_timeout_seconds: default_native_request_timeout_u32(),
             default_workspace_dir: None,
             avatar_data_url: Some(builtin_avatar_data_url(BUILTIN_CODEX_AVATAR_PNG)),
             system_prompt: String::new(),
@@ -175,11 +119,6 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
             provider_env: HashMap::new(),
-            auth_source: String::new(),
-            base_url: String::new(),
-            codex_home: String::new(),
-            max_tool_iterations: default_garyx_native_max_tool_iterations(),
-            request_timeout_seconds: default_native_request_timeout_u32(),
             default_workspace_dir: None,
             // TRAE CLI is a Codex fork; reuse the Codex avatar until a dedicated
             // Trae asset is provided.
@@ -198,11 +137,6 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
             provider_env: HashMap::new(),
-            auth_source: String::new(),
-            base_url: String::new(),
-            codex_home: String::new(),
-            max_tool_iterations: default_garyx_native_max_tool_iterations(),
-            request_timeout_seconds: default_native_request_timeout_u32(),
             default_workspace_dir: None,
             // Antigravity is a Google CLI surface; reuse the Gemini avatar
             // until a dedicated Antigravity asset is added.

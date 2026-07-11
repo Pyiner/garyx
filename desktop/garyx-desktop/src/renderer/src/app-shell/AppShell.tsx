@@ -492,19 +492,8 @@ function inferProviderTypeForThread(
     runtimeProvider === "claude_code" ||
     runtimeProvider === "codex_app_server" ||
     runtimeProvider === "antigravity" ||
-    runtimeProvider === "traex" ||
-    runtimeProvider === "gpt" ||
-    runtimeProvider === "anthropic" ||
-    runtimeProvider === "google" ||
-    runtimeProvider === "claude_llm" ||
-    runtimeProvider === "gemini_llm"
+    runtimeProvider === "traex"
   ) {
-    if (runtimeProvider === "claude_llm") {
-      return "anthropic";
-    }
-    if (runtimeProvider === "gemini_llm") {
-      return "google";
-    }
     return runtimeProvider;
   }
 

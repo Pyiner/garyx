@@ -34,9 +34,6 @@ pub(crate) fn provider_label(provider_type: &ProviderType) -> &'static str {
         ProviderType::CodexAppServer => "Codex",
         ProviderType::Traex => "Traex",
         ProviderType::AntigravityCli => "Antigravity",
-        ProviderType::Gpt => "GPT",
-        ProviderType::ClaudeLlm => "Claude",
-        ProviderType::GeminiLlm => "Gemini",
     }
 }
 
@@ -64,9 +61,6 @@ fn provider_default_config_keys(provider_type: &ProviderType) -> &'static [&'sta
         ProviderType::CodexAppServer => &["codex", "codex_app_server"],
         ProviderType::Traex => &["traex", "trae", "trae_cli", "traecli"],
         ProviderType::AntigravityCli => &["antigravity", "agy", "antigravity_cli"],
-        ProviderType::Gpt => &["gpt", "openai", "garyx", "garyx_native", "native"],
-        ProviderType::ClaudeLlm => &["anthropic", "claude_llm"],
-        ProviderType::GeminiLlm => &["google", "gemini_llm"],
     }
 }
 

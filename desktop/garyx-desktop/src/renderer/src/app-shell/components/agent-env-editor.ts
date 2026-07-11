@@ -2,36 +2,9 @@
 // editor. Kept out of the .tsx component so `node --test` (which cannot load
 // .tsx) can exercise the merge/serialize logic directly.
 //
-// The KV rows are the single source of truth for env. The native-provider API
-// key field is a derived view over the well-known key's row (read + write); it
-// is never serialized separately, so it cannot override or resurrect a row.
+// The KV rows are the single source of truth for provider env.
 
 export type EnvRow = { key: string; value: string };
-
-/** Providers whose credentials are resolved in-process from an env var. */
-export function isNativeModelProvider(value: string): boolean {
-  return (
-    value === 'gpt' ||
-    value === 'anthropic' ||
-    value === 'google' ||
-    value === 'claude_llm' ||
-    value === 'gemini_llm'
-  );
-}
-
-/** The well-known env var that carries a native provider's API key, if any. */
-export function apiKeyEnvName(value: string): string | null {
-  if (value === 'gpt') {
-    return 'OPENAI_API_KEY';
-  }
-  if (value === 'anthropic' || value === 'claude_llm') {
-    return 'ANTHROPIC_API_KEY';
-  }
-  if (value === 'google' || value === 'gemini_llm') {
-    return 'GEMINI_API_KEY';
-  }
-  return null;
-}
 
 /** Whether a string is a valid POSIX-style env var name. */
 export function isValidEnvKey(key: string): boolean {
@@ -55,38 +28,6 @@ export function envRowsFromEnvMap(env: Record<string, string> | null | undefined
   return Object.keys(map)
     .sort()
     .map((key) => ({ key, value: map[key] ?? '' }));
-}
-
-/** The API-key shortcut's displayed value: the well-known key's row value. */
-export function apiKeyValueFromRows(env: EnvRow[], providerType: string): string {
-  const name = apiKeyEnvName(providerType);
-  if (!name) {
-    return '';
-  }
-  const row = env.find((entry) => entry.key.trim() === name);
-  return row ? row.value : '';
-}
-
-/**
- * Write the API-key shortcut back into the rows: upsert the well-known key's row
- * with the given value, or remove it when the value is empty. Keeps the rows the
- * single source so the shortcut and the KV list can never diverge.
- */
-export function setApiKeyInRows(env: EnvRow[], providerType: string, value: string): EnvRow[] {
-  const name = apiKeyEnvName(providerType);
-  if (!name) {
-    return env;
-  }
-  const trimmed = value.trim();
-  const withoutKey = env.filter((entry) => entry.key.trim() !== name);
-  if (!trimmed) {
-    return withoutKey;
-  }
-  const existing = env.find((entry) => entry.key.trim() === name);
-  if (existing) {
-    return env.map((entry) => (entry.key.trim() === name ? { ...entry, value: trimmed } : entry));
-  }
-  return [...withoutKey, { key: name, value: trimmed }];
 }
 
 /**

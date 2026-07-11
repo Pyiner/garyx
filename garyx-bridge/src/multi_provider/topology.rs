@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use garyx_models::provider::ProviderType;
 
-use crate::provider_trait::{AgentLoopProvider, ProviderHealth};
+use crate::provider_trait::{ProviderRuntime, ProviderHealth};
 
 use super::MultiProviderBridge;
 use super::resolver::resolve_provider_impl;
@@ -14,7 +14,7 @@ impl MultiProviderBridge {
     pub async fn register_provider(
         &self,
         key: impl Into<String>,
-        provider: Arc<dyn AgentLoopProvider>,
+        provider: Arc<dyn ProviderRuntime>,
     ) {
         self.inner
             .topology
@@ -33,7 +33,7 @@ impl MultiProviderBridge {
     pub fn register_provider_blocking(
         &self,
         key: impl Into<String>,
-        provider: Arc<dyn AgentLoopProvider>,
+        provider: Arc<dyn ProviderRuntime>,
     ) -> Result<(), &'static str> {
         let mut guard = self
             .inner
@@ -45,7 +45,7 @@ impl MultiProviderBridge {
     }
 
     /// Get a reference-counted handle to a provider by key.
-    pub async fn get_provider(&self, key: &str) -> Option<Arc<dyn AgentLoopProvider>> {
+    pub async fn get_provider(&self, key: &str) -> Option<Arc<dyn ProviderRuntime>> {
         self.inner
             .topology
             .read()

@@ -3,7 +3,7 @@ import type {
   DesktopProviderModels,
 } from '@shared/contracts';
 
-export type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
+export type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex';
 export type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 export type AvatarStyleId = 'clean_glyph' | 'soft_3d' | 'glass_icon' | 'pixel_badge' | 'ink_line' | 'paper_cut' | 'blueprint' | 'enamel_sticker' | 'custom';
 
@@ -14,8 +14,6 @@ export type AgentDraft = {
   model: string;
   modelReasoningEffort: string;
   modelServiceTier: string;
-  authSource: string;
-  baseUrl: string;
   defaultWorkspaceDir: string;
   avatarDataUrl: string;
   env: Array<{ key: string; value: string }>;
@@ -95,8 +93,6 @@ export function emptyAgentDraft(): AgentDraft {
     model: '',
     modelReasoningEffort: '',
     modelServiceTier: '',
-    authSource: 'codex',
-    baseUrl: '',
     defaultWorkspaceDir: '',
     avatarDataUrl: '',
     env: [],
@@ -123,20 +119,7 @@ export function providerLabel(value: ProviderType): string {
   if (value === 'traex') {
     return 'Traex';
   }
-  if (value === 'gpt') {
-    return 'GPT';
-  }
-  if (value === 'anthropic' || value === 'claude_llm') {
-    return 'Claude';
-  }
-  if (value === 'google' || value === 'gemini_llm') {
-    return 'Gemini';
-  }
   return 'Claude';
-}
-
-export function defaultAuthSource(value: ProviderType): string {
-  return value === 'gpt' ? 'codex' : 'api_key';
 }
 
 export function previewText(value: string | null | undefined, fallback: string): string {

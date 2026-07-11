@@ -195,15 +195,6 @@ function providerTypeLabel(provider: any): string {
   if (value === 'traex') {
     return 'traex';
   }
-  if (value === 'gpt') {
-    return 'gpt';
-  }
-  if (value === 'anthropic' || value === 'claude_llm') {
-    return 'anthropic';
-  }
-  if (value === 'google' || value === 'gemini_llm') {
-    return 'google';
-  }
   return 'claude';
 }
 
@@ -1255,11 +1246,9 @@ export function GatewaySettingsPanel({
     case 'provider':
       tabContent = (
         <ProviderSettingsPanel
-          agents={agents}
           gatewayDraft={gatewayDraft}
           onMutateGatewayDraft={onMutateGatewayDraft}
           onSaveGatewaySettings={onSaveGatewaySettings}
-          onRefreshAgentTargets={onRefreshAgentTargets}
         />
       );
       break;

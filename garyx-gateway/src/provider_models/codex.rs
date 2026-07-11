@@ -1,53 +1,7 @@
 use super::*;
 
-pub(super) async fn fetch_gpt_codex_models(
-    config: &GaryxConfig,
-) -> Result<GptModelDiscovery, String> {
-    #[cfg(test)]
-    if std::env::var_os("GARYX_ALLOW_REAL_CODEX_MODEL_FETCH").is_none() {
-        return Err("Codex model catalog fetch disabled in tests".to_owned());
-    }
-
-    let gpt_config = configured_gpt_config(config);
-    let auth =
-        resolve_codex_auth(&gpt_config, &gpt_config.env).map_err(|error| error.to_string())?;
-    let client_version = resolve_codex_models_client_version().await;
-    let response = reqwest::Client::new()
-        .get(models_endpoint(&auth.base_url, &client_version))
-        .bearer_auth(&auth.bearer_token)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .header(
-            reqwest::header::USER_AGENT,
-            format!("garyx-provider-models/{}", env!("CARGO_PKG_VERSION")),
-        );
-    let response = if let Some(account_id) = auth.account_id.as_deref()
-        && !account_id.trim().is_empty()
-    {
-        response.header("ChatGPT-Account-ID", account_id)
-    } else {
-        response
-    };
-    let response = timeout(Duration::from_secs(10), response.send())
-        .await
-        .map_err(|_| "Codex model catalog request timed out".to_owned())?
-        .map_err(|error| format!("Codex model catalog request failed: {error}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!(
-            "Codex model catalog request failed with {status}: {body}"
-        ));
-    }
-    let catalog = response
-        .json::<CodexModelsResponse>()
-        .await
-        .map_err(|error| format!("Codex model catalog response was invalid: {error}"))?;
-    let presets = available_codex_model_presets(catalog.models, auth.uses_codex_backend());
-    Ok(gpt_discovery_from_presets(presets, "codex_models", None))
-}
-
-pub(super) fn gpt_builtin_models(error: Option<String>) -> GptModelDiscovery {
-    gpt_discovery_from_presets(codex_builtin_model_presets(), "codex_builtin", error)
+pub(super) fn codex_builtin_models(error: Option<String>) -> CodexModelDiscovery {
+    codex_discovery_from_presets(codex_builtin_model_presets(), "codex_builtin", error)
 }
 
 pub(super) fn traex_unavailable_models(error: String) -> ProviderModelDiscovery {
@@ -61,10 +15,10 @@ pub(super) fn traex_unavailable_models(error: String) -> ProviderModelDiscovery 
     }
 }
 
-pub(super) fn apply_default_model_to_gpt_discovery(
-    mut discovery: GptModelDiscovery,
+pub(super) fn apply_default_model_to_codex_discovery(
+    mut discovery: CodexModelDiscovery,
     default_model: Option<String>,
-) -> GptModelDiscovery {
+) -> CodexModelDiscovery {
     let Some(default_model) = default_model else {
         return discovery;
     };
@@ -85,11 +39,11 @@ pub(super) fn apply_default_model_to_gpt_discovery(
     discovery
 }
 
-pub(super) fn gpt_discovery_from_presets(
+pub(super) fn codex_discovery_from_presets(
     presets: Vec<CodexModelPreset>,
     source: &'static str,
     error: Option<String>,
-) -> GptModelDiscovery {
+) -> CodexModelDiscovery {
     let default_model = presets
         .iter()
         .find(|preset| preset.is_default)
@@ -112,7 +66,7 @@ pub(super) fn gpt_discovery_from_presets(
         .map(provider_model_option_from_codex_preset)
         .collect();
 
-    GptModelDiscovery {
+    CodexModelDiscovery {
         models,
         default_model,
         reasoning_efforts,
@@ -182,69 +136,4 @@ pub(super) fn provider_service_tier_options(
             })
         })
         .collect()
-}
-
-pub(super) async fn resolve_codex_models_client_version() -> String {
-    // Explicit override: honored verbatim (escape hatch to pin a catalog
-    // generation, including one below the floor).
-    if let Ok(value) = std::env::var("CODEX_CLIENT_VERSION")
-        && let Some(version) = parse_codex_cli_version(&value)
-    {
-        return version;
-    }
-    // The local CLI version is only a hint for this direct catalog fetch; an
-    // old or missing CLI must not hide models Garyx itself supports, so the
-    // detected version is clamped up to the catalog-capability floor.
-    let version = timeout(
-        Duration::from_secs(2),
-        Command::new("codex").arg("--version").output(),
-    )
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .and_then(|output| String::from_utf8(output.stdout).ok())
-    .and_then(|output| parse_codex_cli_version(&output));
-    effective_codex_models_client_version(version.as_deref())
-}
-
-pub(super) fn configured_gpt_config(config: &GaryxConfig) -> GaryxNativeConfig {
-    for key in ["gpt", "openai", "garyx", "garyx_native", "native"] {
-        if let Some(value) = config.agents.get(key)
-            && let Some(config) = gpt_config_from_agent_config(value)
-        {
-            return config;
-        }
-    }
-    for value in config.agents.values() {
-        if let Some(config) = gpt_config_from_agent_config(value) {
-            return config;
-        }
-    }
-    GaryxNativeConfig::default()
-}
-
-pub(super) fn gpt_config_from_agent_config(value: &Value) -> Option<GaryxNativeConfig> {
-    let config = serde_json::from_value::<AgentProviderConfig>(value.clone()).ok()?;
-    if !matches!(
-        config.provider_type.as_str(),
-        "gpt" | "openai" | "openai_gpt" | "garyx_native" | "garyx" | "native"
-    ) {
-        return None;
-    }
-    Some(GaryxNativeConfig {
-        default_model: config.default_model,
-        model: config.model,
-        model_reasoning_effort: config.model_reasoning_effort,
-        model_service_tier: config.model_service_tier,
-        max_turns: config.max_turns,
-        timeout_seconds: config.timeout_seconds,
-        workspace_dir: config.workspace_dir,
-        env: config.env,
-        auth_source: config.auth_source,
-        base_url: config.base_url,
-        codex_home: config.codex_home,
-        max_tool_iterations: config.max_tool_iterations,
-        request_timeout_seconds: config.request_timeout_seconds,
-        ..Default::default()
-    })
 }

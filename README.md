@@ -16,7 +16,7 @@ control plane.
 | --- | --- |
 | Local-first gateway | The gateway runs on your machine or server; config and transcripts live under `~/.garyx/`. |
 | Multi-channel agents | Built-in Telegram, Feishu / Lark, WeChat, and local API channels share one routing model. |
-| Provider choice | Route threads to Claude Code, Codex, Traex, Antigravity, native model backends, or custom agent definitions without changing channel setup. |
+| Provider choice | Route threads to Claude Code, Codex, Traex, Antigravity, or custom agent definitions without changing channel setup. |
 | Persistent threads | A chat, desktop tab, task, or CLI send can resume the same thread and provider session. |
 | Workspace-aware runs | Each thread records the directory the agent should operate in, with optional isolated Git worktrees. |
 | MCP integration | Each run gets a scoped Garyx MCP endpoint plus any upstream MCP servers from your config. |
@@ -192,7 +192,7 @@ See [docs/security.md](docs/security.md) for the longer checklist.
 | [Your first bot](docs/first-bot.md) | Telegram, Feishu / Lark, and WeChat setup |
 | [Threads & workspaces](docs/concepts/threads-and-workspaces.md) | Thread routing, workspace inheritance, provider sessions |
 | [Channels](docs/concepts/channels.md) | Built-in channels, plugin channels, endpoint bindings |
-| [Providers](docs/concepts/providers.md) | CLI and native model providers, auth, fallback behavior |
+| [Providers](docs/concepts/providers.md) | Provider CLIs, auth, and fallback behavior |
 | [MCP integration](docs/concepts/mcp.md) | Garyx MCP tools and upstream MCP server config |
 | [CLI commands](docs/reference/cli.md) | Every supported `garyx` command group |
 | [Security](docs/security.md) | Secret handling, logs, local runtime boundaries |
@@ -233,7 +233,7 @@ garyx/                  CLI binary and gateway runtime assembly
 garyx-models/           Shared config, provider, and thread data types
 garyx-core/             Pure routing, key, label, and slash-command logic
 garyx-router/           Thread records, transcripts, endpoint routing
-garyx-bridge/           CLI and native model provider orchestration
+garyx-bridge/           Provider orchestration
 garyx-channels/         Built-in channel runtimes and plugin host protocol
 garyx-gateway/          HTTP API, MCP server, automations, skills, desktop API
 desktop/garyx-desktop/  macOS Electron desktop app

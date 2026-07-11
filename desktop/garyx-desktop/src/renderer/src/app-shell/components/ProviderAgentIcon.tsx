@@ -2,14 +2,13 @@ import AntigravityColor from '@lobehub/icons/es/Antigravity/components/Color';
 import ClaudeCodeColor from '@lobehub/icons/es/ClaudeCode/components/Color';
 import CodexColor from '@lobehub/icons/es/Codex/components/Color';
 import GeminiColor from '@lobehub/icons/es/Gemini/components/Color';
-import OpenAIMono from '@lobehub/icons/es/OpenAI/components/Mono';
 
 import type {
   DesktopApiProviderType,
   DesktopProviderIconDescriptor,
 } from '@shared/contracts';
 
-type BuiltInAgentIconKey = 'antigravity' | 'claude' | 'codex' | 'traex' | 'gemini' | 'openai';
+type BuiltInAgentIconKey = 'antigravity' | 'claude' | 'codex' | 'traex' | 'gemini';
 
 const BUILT_IN_AGENT_ICONS = {
   antigravity: AntigravityColor,
@@ -18,7 +17,6 @@ const BUILT_IN_AGENT_ICONS = {
   // TRAE CLI is a Codex fork; reuse the Codex glyph until a dedicated icon exists.
   traex: CodexColor,
   gemini: GeminiColor,
-  openai: OpenAIMono,
 };
 
 function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | null {
@@ -26,14 +24,11 @@ function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | nul
   if (!normalized) {
     return null;
   }
-  if (normalized === 'claude' || normalized === 'claude_code' || normalized === 'anthropic' || normalized === 'claude_llm') {
+  if (normalized === 'claude' || normalized === 'claude_code') {
     return 'claude';
   }
   if (normalized === 'codex' || normalized === 'codex_app_server') {
     return 'codex';
-  }
-  if (normalized === 'gpt' || normalized === 'openai' || normalized === 'openai_llm') {
-    return 'openai';
   }
   if (normalized === 'traex' || normalized === 'trae' || normalized === 'trae_cli' || normalized === 'traecli') {
     return 'traex';
@@ -41,11 +36,7 @@ function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | nul
   if (normalized === 'antigravity' || normalized === 'agy') {
     return 'antigravity';
   }
-  if (
-    normalized === 'gemini'
-    || normalized === 'google'
-    || normalized === 'gemini_llm'
-  ) {
+  if (normalized === 'gemini') {
     return 'gemini';
   }
   return null;

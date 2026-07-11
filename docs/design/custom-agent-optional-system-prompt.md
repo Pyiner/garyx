@@ -124,10 +124,6 @@ For a custom agent with no prompt:
 This is the Codex equivalent of not passing a custom system prompt and lets the
 provider use its default instructions.
 
-Other native provider paths already receive custom-agent prompts through
-metadata that omits blank `system_prompt` values, so their behavior is unchanged
-by this design.
-
 ## Desktop
 
 The Mac app is the IA and copy source of truth:

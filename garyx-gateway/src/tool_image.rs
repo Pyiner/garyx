@@ -249,7 +249,7 @@ mod tests {
 
     use axum::body::{Body, to_bytes};
     use garyx_bridge::MultiProviderBridge;
-    use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+    use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{ProviderRunOptions, ProviderRunResult};
     use serde_json::json;
@@ -312,7 +312,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl AgentLoopProvider for ImageProvider {
+    impl ProviderRuntime for ImageProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::CodexAppServer
         }

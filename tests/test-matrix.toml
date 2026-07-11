@@ -2,7 +2,7 @@ version = 1
 
 [tier1]
 name = "fast"
-description = "Local/agent-loop fast deterministic validation"
+description = "Fast deterministic validation"
 commands = [
   "cargo test -p garyx-models --all-targets",
   "cargo test -p garyx-core --all-targets",

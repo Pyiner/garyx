@@ -16,11 +16,6 @@ fn model_contract_request(
         model_reasoning_effort: model_reasoning_effort.map(str::to_owned),
         model_service_tier: model_service_tier.map(str::to_owned),
         provider_env: None,
-        auth_source: None,
-        base_url: None,
-        codex_home: None,
-        max_tool_iterations: None,
-        request_timeout_seconds: None,
         default_workspace_dir: None,
         avatar_data_url: None,
         system_prompt: Some("Review carefully.".to_owned()),
@@ -41,7 +36,11 @@ async fn lists_only_provider_builtin_agents() {
             .as_deref()
             .is_some_and(|value| value.starts_with("data:image/png;base64,"))
     }));
-    assert!(!agents.iter().any(|agent| agent.agent_id == "gpt"));
+    assert!(
+        !agents
+            .iter()
+            .any(|agent| agent.agent_id == "removed-provider")
+    );
     assert!(!agents.iter().any(|agent| agent.agent_id == "planner"));
     assert!(!agents.iter().any(|agent| agent.agent_id == "generator"));
     assert!(!agents.iter().any(|agent| agent.agent_id == "reviewer"));
@@ -100,11 +99,6 @@ async fn rejects_builtin_agent_modification() {
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: Some("Override".to_owned()),
@@ -300,11 +294,6 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             model_reasoning_effort: Some("high".to_owned()),
             model_service_tier: Some("priority".to_owned()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: Some("  /tmp/reviewer  ".to_owned()),
             avatar_data_url: None,
             system_prompt: Some("Review carefully.".to_owned()),
@@ -327,11 +316,6 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: Some("Review carefully.".to_owned()),
@@ -352,11 +336,6 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: Some("  ".to_owned()),
             avatar_data_url: None,
             system_prompt: Some("Review carefully.".to_owned()),
@@ -378,11 +357,6 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: Some("  data:image/png;base64,dGVzdA==  ".to_owned()),
             system_prompt: Some("Design carefully.".to_owned()),
@@ -403,11 +377,6 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: Some("Design carefully.".to_owned()),
@@ -428,11 +397,6 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: Some("  ".to_owned()),
             system_prompt: Some("Design carefully.".to_owned()),
@@ -440,76 +404,6 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
         .await
         .expect("clear agent avatar");
     assert!(cleared.avatar_data_url.is_none());
-}
-
-#[tokio::test]
-async fn upsert_persists_and_preserves_provider_auth_config() {
-    let store = CustomAgentStore::new();
-    let created = store
-        .upsert_agent_for_test(UpsertCustomAgentRequest {
-            agent_id: "budget-gpt".to_owned(),
-            display_name: "Budget GPT".to_owned(),
-            provider_type: ProviderType::Gpt,
-            model: Some("gpt-5.5".to_owned()),
-            model_reasoning_effort: Some("medium".to_owned()),
-            model_service_tier: Some(String::new()),
-            provider_env: Some(HashMap::from([(
-                " OPENAI_API_KEY ".to_owned(),
-                " test-api-key ".to_owned(),
-            )])),
-            auth_source: Some(" api_key ".to_owned()),
-            base_url: Some(" https://example.invalid/v1 ".to_owned()),
-            codex_home: None,
-            max_tool_iterations: Some(24),
-            request_timeout_seconds: Some(120),
-            default_workspace_dir: None,
-            avatar_data_url: None,
-            system_prompt: Some("Use GPT.".to_owned()),
-        })
-        .await
-        .expect("create native agent");
-
-    assert_eq!(created.auth_source, "api_key");
-    assert_eq!(created.base_url, "https://example.invalid/v1");
-    assert_eq!(created.max_tool_iterations, 24);
-    assert_eq!(created.request_timeout_seconds, 120);
-    assert_eq!(
-        created
-            .provider_env
-            .get("OPENAI_API_KEY")
-            .map(String::as_str),
-        Some("test-api-key")
-    );
-
-    let updated = store
-        .upsert_agent_for_test(UpsertCustomAgentRequest {
-            agent_id: "budget-gpt".to_owned(),
-            display_name: "Budget GPT".to_owned(),
-            provider_type: ProviderType::Gpt,
-            model: Some("gpt-5.5".to_owned()),
-            model_reasoning_effort: Some(String::new()),
-            model_service_tier: Some(String::new()),
-            provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
-            default_workspace_dir: None,
-            avatar_data_url: None,
-            system_prompt: Some("Use GPT.".to_owned()),
-        })
-        .await
-        .expect("update native agent");
-
-    assert_eq!(updated.auth_source, "api_key");
-    assert_eq!(
-        updated
-            .provider_env
-            .get("OPENAI_API_KEY")
-            .map(String::as_str),
-        Some("test-api-key")
-    );
 }
 
 /// Regression guard for the 2026-07-06 gary incident: mutations used to

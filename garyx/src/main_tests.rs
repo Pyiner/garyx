@@ -626,21 +626,15 @@ fn parse_provider_set() {
         "garyx",
         "provider",
         "set",
-        "gpt",
+        "codex_app_server",
         "--model",
         "gpt-5.5",
         "--reasoning",
         "high",
         "--service-tier",
         "priority",
-        "--base-url",
-        "https://example.invalid/v1",
-        "--api-key",
-        "sk-test-EXAMPLE",
-        "--auth-source",
-        "api_key",
         "--env",
-        "OPENAI_ORG=org-test",
+        "CODEX_HOME=/tmp/test-codex-home",
         "--clear-env",
         "OLD_KEY",
         "--json",
@@ -655,9 +649,6 @@ fn parse_provider_set() {
                     reasoning,
                     clear_reasoning,
                     service_tier,
-                    base_url,
-                    api_key,
-                    auth_source,
                     claude_cli_mode,
                     claude_cli_path,
                     env,
@@ -665,18 +656,15 @@ fn parse_provider_set() {
                     json,
                 },
         }) => {
-            assert_eq!(provider, "gpt");
+            assert_eq!(provider, "codex_app_server");
             assert_eq!(model.as_deref(), Some("gpt-5.5"));
             assert!(!clear_model);
             assert_eq!(reasoning.as_deref(), Some("high"));
             assert!(!clear_reasoning);
             assert_eq!(service_tier.as_deref(), Some("priority"));
-            assert_eq!(base_url.as_deref(), Some("https://example.invalid/v1"));
-            assert_eq!(api_key.as_deref(), Some("sk-test-EXAMPLE"));
-            assert_eq!(auth_source.as_deref(), Some("api_key"));
             assert_eq!(claude_cli_mode, None);
             assert_eq!(claude_cli_path, None);
-            assert_eq!(env, vec!["OPENAI_ORG=org-test"]);
+            assert_eq!(env, vec!["CODEX_HOME=/tmp/test-codex-home"]);
             assert_eq!(clear_env, vec!["OLD_KEY"]);
             assert!(json);
         }
@@ -1402,8 +1390,6 @@ fn parse_agent_create() {
                     model,
                     model_reasoning_effort,
                     model_service_tier,
-                    provider_auth_source,
-                    provider_api_key,
                     env: _,
                     unset_env: _,
                     env_clear: _,
@@ -1418,8 +1404,6 @@ fn parse_agent_create() {
             assert_eq!(model.as_deref(), Some("gpt-5"));
             assert_eq!(model_reasoning_effort.as_deref(), Some("high"));
             assert_eq!(model_service_tier.as_deref(), Some("priority"));
-            assert_eq!(provider_auth_source, None);
-            assert_eq!(provider_api_key, None);
             assert_eq!(default_workspace_dir.as_deref(), Some("/tmp/spec-review"));
             assert_eq!(system_prompt.as_deref(), Some("Review specs carefully."));
             assert!(json);
@@ -1570,8 +1554,6 @@ fn parse_agent_update_without_model() {
                     clear_model,
                     model_reasoning_effort,
                     model_service_tier,
-                    provider_auth_source,
-                    provider_api_key,
                     env: _,
                     unset_env: _,
                     env_clear: _,
@@ -1587,8 +1569,6 @@ fn parse_agent_update_without_model() {
             assert!(!clear_model);
             assert_eq!(model_reasoning_effort, None);
             assert_eq!(model_service_tier, None);
-            assert_eq!(provider_auth_source, None);
-            assert_eq!(provider_api_key, None);
             assert_eq!(default_workspace_dir, None);
             assert_eq!(system_prompt.as_deref(), Some("Review specs carefully."));
             assert!(!json);
@@ -1724,8 +1704,6 @@ fn parse_agent_upsert() {
                     clear_model,
                     model_reasoning_effort,
                     model_service_tier,
-                    provider_auth_source,
-                    provider_api_key,
                     env: _,
                     unset_env: _,
                     env_clear: _,
@@ -1741,8 +1719,6 @@ fn parse_agent_upsert() {
             assert!(!clear_model);
             assert_eq!(model_reasoning_effort.as_deref(), Some("xhigh"));
             assert_eq!(model_service_tier, None);
-            assert_eq!(provider_auth_source, None);
-            assert_eq!(provider_api_key, None);
             assert_eq!(default_workspace_dir.as_deref(), Some("/tmp/spec-review"));
             assert_eq!(system_prompt.as_deref(), Some("Review specs carefully."));
             assert!(json);

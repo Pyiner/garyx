@@ -10,7 +10,6 @@ description = "Provider adapters for the garyx AI chat gateway"
 [dependencies]
 garyx-models = { workspace = true }
 garyx-router = { workspace = true }
-garyx-agent-loop = { workspace = true }
 claude-agent-sdk = { workspace = true }
 codex-sdk = { workspace = true }
 serde = { workspace = true }
@@ -27,13 +26,6 @@ iana-time-zone = { workspace = true }
 regex = { workspace = true }
 toml = "0.8"
 reqwest = { workspace = true }
-rmcp = { version = "0.17", features = [
-    "client",
-    "transport-child-process",
-    "transport-streamable-http-client-reqwest",
-] }
-http = "1"
-serde_yaml = "0.9"
 
 [dev-dependencies]
 chrono-tz = "0.10"

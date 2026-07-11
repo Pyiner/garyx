@@ -200,15 +200,6 @@ export function presentProviderReadyError(
   if (providerType === "traex") {
     return "Traex is not ready on this Mac. Check that the traex CLI is installed, logged in, and available on the Garyx gateway PATH.";
   }
-  if (providerType === "gpt") {
-    return "GPT provider is not ready on this Mac. Check the gateway status and Codex/OpenAI auth configuration.";
-  }
-  if (providerType === "anthropic" || providerType === "claude_llm") {
-    return "Claude model provider is not ready on this Mac. Check the gateway status and Anthropic auth configuration.";
-  }
-  if (providerType === "google" || providerType === "gemini_llm") {
-    return "Gemini model provider is not ready on this Mac. Check the gateway status and Gemini auth configuration.";
-  }
   if (providerType === "claude_code") {
     return "Claude Code is not ready on this Mac. Check the local Claude CLI auth and environment settings.";
   }

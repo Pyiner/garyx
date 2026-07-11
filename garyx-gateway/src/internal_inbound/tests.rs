@@ -3,7 +3,7 @@ use std::sync::Mutex as StdMutex;
 
 use async_trait::async_trait;
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
 use garyx_models::config::GaryxConfig;
 use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent};
 use garyx_router::MessageRouter;
@@ -56,7 +56,7 @@ fn single_bound_endpoint_identity_does_not_guess_with_multiple_bindings() {
 }
 
 #[async_trait]
-impl AgentLoopProvider for RecordingProvider {
+impl ProviderRuntime for RecordingProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -288,11 +288,6 @@ async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_me
             model_reasoning_effort: Some("xhigh".to_owned()),
             model_service_tier: Some(String::new()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: Some("Review carefully.".to_owned()),

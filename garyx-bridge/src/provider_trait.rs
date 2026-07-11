@@ -79,7 +79,7 @@ fn runtime_metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Opti
 /// `compute_provider_key`) so thread affinity and persisted SDK session ids
 /// stay stable across default-model edits. Reconciling a reload therefore
 /// must not recreate the provider; instead these fields are pushed onto the
-/// existing instance via [`AgentLoopProvider::update_model_defaults`].
+/// existing instance via [`ProviderRuntime::update_model_defaults`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProviderModelDefaults {
     pub model: String,
@@ -100,15 +100,12 @@ impl From<&garyx_models::config::AgentProviderConfig> for ProviderModelDefaults 
 }
 
 // ---------------------------------------------------------------------------
-// AgentLoopProvider trait
+// ProviderRuntime trait
 // ---------------------------------------------------------------------------
 
-/// Trait that all agent-loop providers must implement.
-///
-/// This is the Rust equivalent of `AgentLoopProvider` in
-/// `src/garyx/agent_bridge/provider_protocol.py`.
+/// Common runtime contract implemented by every provider adapter.
 #[async_trait]
-pub trait AgentLoopProvider: Send + Sync {
+pub trait ProviderRuntime: Send + Sync {
     /// Return the provider type identifier.
     fn provider_type(&self) -> ProviderType;
 

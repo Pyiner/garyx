@@ -164,8 +164,6 @@ navigation.rs:681 / threads.rs:443 三处 `messages: []` 初始化。
 
 | 读方 | 读什么 | 裁决 | 换源 |
 |---|---|---|---|
-| bridge `persisted_provider_messages_from_thread`(session_resolve.rs:148-184)→ `garyx_native_provider.rs:709` 冷启动播种 | 整个快照 → `ProviderMessage`,原生 LLM provider(Gpt/ClaudeLlm/GeminiLlm)每 run 附带、agent-loop 会话为空时(gateway 重启后)重建 ≤100 轮上下文 | **真需要内容**(最高优先;Claude Code/Codex 走 `sdk_session_id` 自有会话,不经此路) | 读 transcript 尾窗 `type=message` 记录,同构解析,字节级等价 |
-| gateway 同名**重复实现**(agent_identity.rs:126-145,prepare.rs:183 调用) | 同上 | 同上;顺带消重 | 与上共用一个 transcript 实现 |
 | bridge 快照重建读回(persistence.rs:1428) | 旧快照做 run-id 去重 | 写方自读,随写方退役 | —— |
 | thread_meta 投影 `last_message_preview_for_role`(thread_meta_projection.rs:333-357) | 尾部 user/assistant 预览 ≤160 字符 → 3 个列 | 惯性——写时可派生 | 写点维护 `last_user_preview`/`last_assistant_preview` 小字段 |
 | recent 投影同款(recent_thread_projection.rs:574-603) | 同上 → `last_message_preview` 列 | 惯性 | 同上小字段 |
@@ -423,8 +421,7 @@ garyx-db 打开加 WAL/NORMAL/busy_timeout;GaryxDbService 增
 CLI 任务进度删补充分支;(c) 停止全部 8 处写入点(线程导入只保留
 transcript 半边);(d) 拆 `ThreadRecord.messages` /
 `SessionEntry.messages` 类型化载体与 30+ 处测试 fixture。验收:全仓无
-生产代码读写 record `messages`(迁移导入除外);原生 provider 多轮
-续聊回归(真实 Gpt/ClaudeLlm 线程 gateway 重启后续聊上下文完整);
+生产代码读写 record `messages`(迁移导入除外);
 团队群聊 prompt 快照回归;新消息后 recent 列表预览正确;线程导入回归;
 档案文件尺寸停涨。
 

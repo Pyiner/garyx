@@ -385,9 +385,9 @@ pub(crate) async fn cmd_thread_history(
 fn provider_type_display(value: Option<&str>) -> &'static str {
     match value.unwrap_or("").trim() {
         "codex_app_server" => "Codex",
-        "gpt" => "GPT",
-        "garyx_native" => "GPT",
         "claude_code" => "Claude",
+        "traex" => "Traex",
+        "antigravity" => "Antigravity",
         _ => "-",
     }
 }

@@ -4,9 +4,7 @@ public enum GaryxProviderIdentityKind: String, Equatable {
     case antigravity
     case codex
     case traex
-    case openAI
     case claude
-    case gemini
     case generic
 }
 
@@ -99,14 +97,8 @@ public struct GaryxProviderPresentation: Equatable {
         if source.contains("traex") || source.contains("trae") {
             return .traex
         }
-        if source.contains("openai") || source.contains("gpt") {
-            return .openAI
-        }
-        if source.contains("claude") || source.contains("anthropic") {
+        if source.contains("claude") {
             return .claude
-        }
-        if source.contains("gemini") || source.contains("google") {
-            return .gemini
         }
         return .generic
     }
@@ -120,12 +112,8 @@ public struct GaryxProviderPresentation: Equatable {
         case .traex:
             // Reuse the Codex glyph; TRAE CLI is a Codex fork.
             "chevron.left.forwardslash.chevron.right"
-        case .openAI:
-            "circle.hexagongrid.fill"
         case .claude:
             "sparkles"
-        case .gemini:
-            "diamond.fill"
         case .generic:
             nil
         }
@@ -137,12 +125,8 @@ public struct GaryxProviderPresentation: Equatable {
             GaryxProviderFallbackRGB(red: 0.15, green: 0.36, blue: 0.30)
         case .codex, .traex:
             GaryxProviderFallbackRGB(red: 0.08, green: 0.10, blue: 0.12)
-        case .openAI:
-            GaryxProviderFallbackRGB(red: 0.10, green: 0.47, blue: 0.40)
         case .claude:
             GaryxProviderFallbackRGB(red: 0.50, green: 0.37, blue: 0.26)
-        case .gemini:
-            GaryxProviderFallbackRGB(red: 0.23, green: 0.38, blue: 0.86)
         case .generic:
             GaryxProviderFallbackRGB(red: 0.95, green: 0.95, blue: 0.97)
         }
@@ -154,12 +138,8 @@ public struct GaryxProviderPresentation: Equatable {
             0.36
         case .codex, .traex:
             0.32
-        case .openAI:
-            0.42
         case .claude:
             0.40
-        case .gemini:
-            0.34
         case .generic:
             0.36
         }
@@ -180,12 +160,6 @@ public struct GaryxProviderPresentation: Equatable {
             return "Traex"
         case "claude_code":
             return "Claude Code"
-        case "gpt":
-            return "OpenAI"
-        case "anthropic", "claude_llm":
-            return "Anthropic"
-        case "google", "gemini_llm":
-            return "Google"
         default:
             let words = normalized
                 .replacingOccurrences(of: "_", with: " ")
@@ -204,12 +178,8 @@ public struct GaryxProviderPresentation: Equatable {
                 return "Codex"
             case .traex:
                 return "Traex"
-            case .openAI:
-                return "OpenAI"
             case .claude:
                 return "Claude"
-            case .gemini:
-                return "Gemini"
             case .generic:
                 return "Provider"
             }

@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use garyx_bridge::claude_provider::ClaudeCliProvider;
 use garyx_bridge::codex_provider::CodexAgentProvider;
-use garyx_bridge::provider_trait::AgentLoopProvider;
+use garyx_bridge::provider_trait::ProviderRuntime;
 use garyx_models::config::{GaryxConfig, McpServerConfig};
 use garyx_models::provider::{
     ClaudeCodeConfig, CodexAppServerConfig, ProviderRunOptions, ProviderRunResult, StreamEvent,

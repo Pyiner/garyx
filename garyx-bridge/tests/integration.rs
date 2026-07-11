@@ -1,7 +1,7 @@
 //! Integration tests for garyx-bridge providers.
 //!
 //! These tests exercise the real Claude CLI and Codex app-server through
-//! the bridge's `AgentLoopProvider` trait.
+//! the bridge's `ProviderRuntime` trait.
 //!
 //! Run with: `cargo test -p garyx-bridge --test integration -- --ignored`
 //!
@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use garyx_bridge::claude_provider::ClaudeCliProvider;
 use garyx_bridge::codex_provider::CodexAgentProvider;
-use garyx_bridge::provider_trait::AgentLoopProvider;
+use garyx_bridge::provider_trait::ProviderRuntime;
 use garyx_models::local_paths::{
     agent_memory_dir_for_gary_home, agent_memory_root_file_for_gary_home, gary_home_dir,
 };

@@ -23,9 +23,7 @@ public enum GaryxAgentProviderPickerPresentation {
         "claude_code",
         "codex_app_server",
         "traex",
-        "gpt",
-        "anthropic",
-        "google",
+        "antigravity",
     ]
 
     public static var standardOptions: [GaryxAgentProviderPickerOption] {

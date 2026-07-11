@@ -38,7 +38,7 @@ impl MockProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for MockProvider {
+impl ProviderRuntime for MockProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }

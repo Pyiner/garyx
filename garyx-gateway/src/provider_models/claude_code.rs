@@ -186,7 +186,7 @@ pub(super) fn parse_claude_code_model_reasoning_efforts(
             if !supported {
                 return None;
             }
-            native_reasoning_effort_metadata(id).map(|(id, label, description)| {
+            reasoning_effort_metadata(id).map(|(id, label, description)| {
                 ProviderReasoningEffortOption {
                     id: id.to_owned(),
                     label: label.to_owned(),

@@ -75,35 +75,6 @@ pub(crate) async fn cmd_agent_get(
     Ok(())
 }
 
-/// Map a native-model provider to the well-known env var that carries its API key.
-pub(super) fn api_key_env_name(provider_type: Option<ProviderType>) -> Option<&'static str> {
-    match provider_type {
-        Some(ProviderType::Gpt) => Some("OPENAI_API_KEY"),
-        Some(ProviderType::ClaudeLlm) => Some("ANTHROPIC_API_KEY"),
-        Some(ProviderType::GeminiLlm) => Some("GEMINI_API_KEY"),
-        _ => None,
-    }
-}
-
-/// Resolve the `--provider-api-key` shortcut to `(env_name, value)`.
-///
-/// Returns `Ok(None)` when no non-empty key was given; errors when a key is
-/// supplied for a provider that has no well-known API-key env var.
-fn resolve_api_key_env(
-    provider: &str,
-    provider_api_key: Option<&str>,
-) -> Result<Option<(&'static str, String)>, Box<dyn std::error::Error>> {
-    let Some(key) = provider_api_key
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(None);
-    };
-    let env_name = api_key_env_name(ProviderType::from_slug(provider.trim()))
-        .ok_or("--provider-api-key is only supported for gpt, anthropic, or google providers")?;
-    Ok(Some((env_name, key.to_owned())))
-}
-
 /// Parse a `KEY=VALUE` CLI env pair, splitting on the first `=`. The value may
 /// contain `=` and may be empty; the key must be a valid env name.
 pub(super) fn parse_env_pair(pair: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
@@ -124,15 +95,14 @@ pub(super) fn parse_env_pair(pair: &str) -> Result<(String, String), Box<dyn std
 /// `provider_env` and the gateway preserves the stored value. Returns
 /// `Ok(Some(map))` with the full desired map otherwise (`{}` clears all env).
 /// Merge order: start from `{}` when `env_clear` else the existing map, then
-/// remove `--unset-env` keys, then apply `--env` upserts, then the api-key key.
+/// remove `--unset-env` keys, then apply `--env` upserts.
 fn resolve_cli_provider_env(
     existing: &Map<String, Value>,
     env_sets: &[String],
     unset_env: &[String],
     env_clear: bool,
-    api_key: Option<(&str, &str)>,
 ) -> Result<Option<Value>, Box<dyn std::error::Error>> {
-    let touched = !env_sets.is_empty() || !unset_env.is_empty() || env_clear || api_key.is_some();
+    let touched = !env_sets.is_empty() || !unset_env.is_empty() || env_clear;
     if !touched {
         return Ok(None);
     }
@@ -147,9 +117,6 @@ fn resolve_cli_provider_env(
     for pair in env_sets {
         let (key, value) = parse_env_pair(pair)?;
         map.insert(key, Value::String(value));
-    }
-    if let Some((name, value)) = api_key {
-        map.insert(name.to_owned(), Value::String(value.to_owned()));
     }
     Ok(Some(Value::Object(map)))
 }
@@ -268,8 +235,6 @@ fn build_agent_mutation_body(
     clear_model: bool,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
-    provider_auth_source: Option<String>,
-    api_key_present: bool,
     provider_env: Option<Value>,
     default_workspace_dir: Option<String>,
     system_prompt: Option<String>,
@@ -297,21 +262,6 @@ fn build_agent_mutation_body(
     if let Some(tier) = model_service_tier.as_deref().map(str::trim) {
         body["model_service_tier"] = Value::String(tier.to_owned());
     }
-    let provider_type = ProviderType::from_slug(provider.trim());
-    let auth_source = provider_auth_source
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(auth_source) = auth_source {
-        body["auth_source"] = Value::String(auth_source.to_owned());
-    }
-    // A native-model API key implies api_key auth for GPT unless an explicit
-    // auth source was given. The key value itself is folded into `provider_env`
-    // by the caller (read-modify-write merge), keeping one env source of truth.
-    if api_key_present && matches!(provider_type, Some(ProviderType::Gpt)) && auth_source.is_none()
-    {
-        body["auth_source"] = Value::String("api_key".to_owned());
-    }
     if let Some(provider_env) = provider_env {
         body["provider_env"] = provider_env;
     }
@@ -329,8 +279,6 @@ pub(crate) async fn cmd_agent_create(
     model: Option<String>,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
-    provider_auth_source: Option<String>,
-    provider_api_key: Option<String>,
     env: Vec<String>,
     unset_env: Vec<String>,
     env_clear: bool,
@@ -339,17 +287,8 @@ pub(crate) async fn cmd_agent_create(
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
-    let api_key = resolve_api_key_env(&provider, provider_api_key.as_deref())?;
     // New agents start from an empty env, so no existing-env fetch is needed.
-    let provider_env = resolve_cli_provider_env(
-        &Map::new(),
-        &env,
-        &unset_env,
-        env_clear,
-        api_key
-            .as_ref()
-            .map(|(name, value)| (*name, value.as_str())),
-    )?;
+    let provider_env = resolve_cli_provider_env(&Map::new(), &env, &unset_env, env_clear)?;
     let body = build_agent_mutation_body(
         agent_id,
         display_name,
@@ -358,8 +297,6 @@ pub(crate) async fn cmd_agent_create(
         false,
         model_reasoning_effort,
         model_service_tier,
-        provider_auth_source,
-        api_key.is_some(),
         provider_env,
         default_workspace_dir,
         system_prompt,
@@ -381,8 +318,6 @@ pub(crate) async fn cmd_agent_update(
     clear_model: bool,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
-    provider_auth_source: Option<String>,
-    provider_api_key: Option<String>,
     env: Vec<String>,
     unset_env: Vec<String>,
     env_clear: bool,
@@ -406,15 +341,11 @@ pub(crate) async fn cmd_agent_update(
         }
     })?;
     let (display_name, provider) = merge_agent_identity(Some(&existing), display_name, provider)?;
-    let api_key = resolve_api_key_env(&provider, provider_api_key.as_deref())?;
     let provider_env = resolve_cli_provider_env(
         &existing_provider_env(Some(&existing)),
         &env,
         &unset_env,
         env_clear,
-        api_key
-            .as_ref()
-            .map(|(name, value)| (*name, value.as_str())),
     )?;
     let mut body = build_agent_mutation_body(
         agent_id.clone(),
@@ -424,8 +355,6 @@ pub(crate) async fn cmd_agent_update(
         clear_model,
         model_reasoning_effort,
         model_service_tier,
-        provider_auth_source,
-        api_key.is_some(),
         provider_env,
         default_workspace_dir,
         system_prompt,
@@ -452,8 +381,6 @@ pub(crate) async fn cmd_agent_upsert(
     clear_model: bool,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
-    provider_auth_source: Option<String>,
-    provider_api_key: Option<String>,
     env: Vec<String>,
     unset_env: Vec<String>,
     env_clear: bool,
@@ -464,15 +391,11 @@ pub(crate) async fn cmd_agent_upsert(
     let gateway = gateway_endpoint(config_path)?;
     let existing = fetch_existing_agent(&gateway, &agent_id).await?;
     let (display_name, provider) = merge_agent_identity(existing.as_ref(), display_name, provider)?;
-    let api_key = resolve_api_key_env(&provider, provider_api_key.as_deref())?;
     let provider_env = resolve_cli_provider_env(
         &existing_provider_env(existing.as_ref()),
         &env,
         &unset_env,
         env_clear,
-        api_key
-            .as_ref()
-            .map(|(name, value)| (*name, value.as_str())),
     )?;
     let mut body = build_agent_mutation_body(
         agent_id.clone(),
@@ -482,8 +405,6 @@ pub(crate) async fn cmd_agent_upsert(
         clear_model,
         model_reasoning_effort,
         model_service_tier,
-        provider_auth_source,
-        api_key.is_some(),
         provider_env,
         default_workspace_dir,
         system_prompt,
@@ -720,7 +641,7 @@ mod tests {
                         Json(json!({
                             "agent_id": agent_id,
                             "display_name": "Existing Agent",
-                            "provider_type": "gpt",
+                            "provider_type": "codex_app_server",
                             "model": "",
                             "system_prompt": "",
                             "provider_env": env,
@@ -827,8 +748,6 @@ mod tests {
             Some("gpt-5".to_owned()),
             Some("high".to_owned()),
             Some("priority".to_owned()),
-            None,
-            None,
             Vec::new(),
             Vec::new(),
             false,
@@ -870,8 +789,6 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
             Vec::new(),
             Vec::new(),
             false,
@@ -905,8 +822,6 @@ mod tests {
             None,
             None,
             false,
-            None,
-            None,
             None,
             None,
             Vec::new(),
@@ -958,8 +873,6 @@ mod tests {
             true,
             None,
             None,
-            None,
-            None,
             Vec::new(),
             Vec::new(),
             false,
@@ -998,8 +911,6 @@ mod tests {
             false,
             None,
             None,
-            None,
-            None,
             Vec::new(),
             Vec::new(),
             false,
@@ -1031,11 +942,9 @@ mod tests {
             config_path.to_str().expect("config path"),
             "spec-review".to_owned(),
             Some("Spec Review".to_owned()),
-            Some("google".to_owned()),
-            Some("gemini-3.1-pro-preview".to_owned()),
+            Some("antigravity".to_owned()),
+            Some("Claude Opus 4.6 (Thinking)".to_owned()),
             false,
-            None,
-            None,
             None,
             None,
             Vec::new(),
@@ -1054,8 +963,8 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].method, "POST");
         assert_eq!(records[0].path, "/api/custom-agents");
-        assert_eq!(records[0].body["model"], "gemini-3.1-pro-preview");
-        assert_eq!(records[0].body["provider_type"], "google");
+        assert_eq!(records[0].body["model"], "Claude Opus 4.6 (Thinking)");
+        assert_eq!(records[0].body["provider_type"], "antigravity");
     }
 
     #[tokio::test]
@@ -1073,8 +982,6 @@ mod tests {
             None,
             Some("gpt-5".to_owned()),
             false,
-            None,
-            None,
             None,
             None,
             Vec::new(),
@@ -1115,8 +1022,6 @@ mod tests {
             false,
             None,
             None,
-            None,
-            None,
             Vec::new(),
             Vec::new(),
             false,
@@ -1153,8 +1058,6 @@ mod tests {
             false,
             None,
             None,
-            None,
-            None,
             Vec::new(),
             Vec::new(),
             false,
@@ -1170,51 +1073,10 @@ mod tests {
         assert!(records.is_empty(), "no mutation may be sent: {records:?}");
     }
 
-    #[tokio::test]
-    async fn cmd_agent_create_posts_native_provider_api_key_payload() {
-        let requests = StdArc::new(Mutex::new(Vec::new()));
-        let (base_url, handle) =
-            spawn_agent_http_test_server(requests.clone(), StatusCode::OK, StatusCode::NOT_FOUND)
-                .await;
-        let dir = tempdir().expect("tempdir");
-        let config_path = write_test_gateway_config(&dir, &base_url);
-
-        cmd_agent_create(
-            config_path.to_str().expect("config path"),
-            "budget-gpt".to_owned(),
-            "Budget GPT".to_owned(),
-            "gpt".to_owned(),
-            Some("gpt-5.5".to_owned()),
-            Some("medium".to_owned()),
-            None,
-            None,
-            Some("test-openai-api-key".to_owned()),
-            Vec::new(),
-            Vec::new(),
-            false,
-            None,
-            Some("Use GPT.".to_owned()),
-            false,
-        )
-        .await
-        .expect("agent create should succeed");
-
-        handle.abort();
-
-        let records = requests.lock().expect("request lock");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].body["provider_type"], "gpt");
-        assert_eq!(records[0].body["auth_source"], "api_key");
-        assert_eq!(
-            records[0].body["provider_env"]["OPENAI_API_KEY"],
-            "test-openai-api-key"
-        );
-    }
-
     #[test]
     fn resolve_cli_provider_env_returns_none_when_untouched() {
         let existing = Map::new();
-        let out = resolve_cli_provider_env(&existing, &[], &[], false, None).expect("ok");
+        let out = resolve_cli_provider_env(&existing, &[], &[], false).expect("ok");
         assert!(
             out.is_none(),
             "no env flags must omit provider_env (preserve)"
@@ -1226,7 +1088,7 @@ mod tests {
         let mut existing = Map::new();
         existing.insert("OLD_KEY".to_owned(), Value::String("old".to_owned()));
         let sets = vec!["NEW_KEY=new".to_owned(), "OLD_KEY=updated".to_owned()];
-        let out = resolve_cli_provider_env(&existing, &sets, &[], false, None)
+        let out = resolve_cli_provider_env(&existing, &sets, &[], false)
             .expect("ok")
             .expect("some");
         assert_eq!(out["OLD_KEY"], "updated");
@@ -1239,38 +1101,21 @@ mod tests {
         existing.insert("A".to_owned(), Value::String("1".to_owned()));
         existing.insert("B".to_owned(), Value::String("2".to_owned()));
 
-        let out = resolve_cli_provider_env(&existing, &[], &["A".to_owned()], false, None)
+        let out = resolve_cli_provider_env(&existing, &[], &["A".to_owned()], false)
             .expect("ok")
             .expect("some");
         assert!(out.get("A").is_none());
         assert_eq!(out["B"], "2");
 
-        let cleared = resolve_cli_provider_env(&existing, &[], &[], true, None)
+        let cleared = resolve_cli_provider_env(&existing, &[], &[], true)
             .expect("ok")
             .expect("some");
         assert_eq!(cleared, json!({}));
 
-        let cleared_set = resolve_cli_provider_env(&existing, &["C=3".to_owned()], &[], true, None)
+        let cleared_set = resolve_cli_provider_env(&existing, &["C=3".to_owned()], &[], true)
             .expect("ok")
             .expect("some");
         assert_eq!(cleared_set, json!({ "C": "3" }));
-    }
-
-    #[test]
-    fn resolve_cli_provider_env_api_key_merges_without_dropping_keys() {
-        let mut existing = Map::new();
-        existing.insert("OTHER".to_owned(), Value::String("keep".to_owned()));
-        let out = resolve_cli_provider_env(
-            &existing,
-            &[],
-            &[],
-            false,
-            Some(("OPENAI_API_KEY", "test-openai-api-key")),
-        )
-        .expect("ok")
-        .expect("some");
-        assert_eq!(out["OTHER"], "keep");
-        assert_eq!(out["OPENAI_API_KEY"], "test-openai-api-key");
     }
 
     #[test]
@@ -1302,8 +1147,6 @@ mod tests {
             "envy".to_owned(),
             "Envy".to_owned(),
             "claude_code".to_owned(),
-            None,
-            None,
             None,
             None,
             None,
@@ -1340,8 +1183,6 @@ mod tests {
             Some("claude_code".to_owned()),
             None,
             false,
-            None,
-            None,
             None,
             None,
             Vec::new(),
@@ -1384,8 +1225,6 @@ mod tests {
             false,
             None,
             None,
-            None,
-            None,
             vec!["NEW_KEY=new-value".to_owned()],
             Vec::new(),
             false,
@@ -1404,53 +1243,6 @@ mod tests {
             .expect("put recorded");
         assert_eq!(put.body["provider_env"]["EXISTING_KEY"], "keep-me");
         assert_eq!(put.body["provider_env"]["NEW_KEY"], "new-value");
-    }
-
-    #[tokio::test]
-    async fn cmd_agent_update_api_key_merges_without_dropping_existing_env() {
-        let requests = StdArc::new(Mutex::new(Vec::new()));
-        let (base_url, handle) = spawn_agent_http_test_server_with_env(
-            requests.clone(),
-            json!({ "CUSTOM_TOKEN": "keep-me" }),
-        )
-        .await;
-        let dir = tempdir().expect("tempdir");
-        let config_path = write_test_gateway_config(&dir, &base_url);
-
-        cmd_agent_update(
-            config_path.to_str().expect("config path"),
-            "budget-gpt".to_owned(),
-            Some("Budget GPT".to_owned()),
-            Some("gpt".to_owned()),
-            None,
-            false,
-            None,
-            None,
-            None,
-            Some("test-openai-api-key".to_owned()),
-            Vec::new(),
-            Vec::new(),
-            false,
-            None,
-            Some("Prompt.".to_owned()),
-            false,
-        )
-        .await
-        .expect("agent update should succeed");
-
-        handle.abort();
-        let records = requests.lock().expect("request lock");
-        let put = records
-            .iter()
-            .find(|record| record.method == "PUT")
-            .expect("put recorded");
-        // The api-key shortcut merges into the existing map instead of replacing it.
-        assert_eq!(put.body["provider_env"]["CUSTOM_TOKEN"], "keep-me");
-        assert_eq!(
-            put.body["provider_env"]["OPENAI_API_KEY"],
-            "test-openai-api-key"
-        );
-        assert_eq!(put.body["auth_source"], "api_key");
     }
 
     #[tokio::test]
@@ -1473,8 +1265,6 @@ mod tests {
             Some("claude_code".to_owned()),
             None,
             false,
-            None,
-            None,
             None,
             None,
             vec!["NEW=1".to_owned()],

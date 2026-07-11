@@ -510,8 +510,8 @@ Use a built-in provider agent:
 ```
 
 Custom agents can set `provider_type` to `claude_code`, `codex_app_server`,
-`traex`, `antigravity`, `gpt`, `anthropic`, or `google`. `claude_tty` is
-deprecated and is treated as `claude_code` when encountered in older records.
+`traex`, or `antigravity`. `claude_tty` is deprecated and is treated as
+`claude_code` when encountered in older records.
 
 Claude has one provider path: the Claude Agent SDK. Configure which executable
 the SDK launches with `agents.claude`:
@@ -547,142 +547,6 @@ Custom agents may also set `model`, `model_reasoning_effort`, and
 `model_service_tier`. These values are injected into the thread runtime metadata
 when the agent is selected, so provider-specific defaults can be overridden per
 agent.
-
-`gpt`, `anthropic`, and `google` are model backends running on Garyx's
-in-process agent loop. They are not exposed as built-in agents or default
-runtime providers. Create a custom agent with the model backend provider type
-to make one selectable:
-
-```json
-{
-  "agent_id": "gpt-reviewer",
-  "display_name": "GPT Reviewer",
-  "provider_type": "gpt",
-  "model": "gpt-5.5"
-}
-```
-
-```json
-{
-  "agent_id": "anthropic-reviewer",
-  "display_name": "Claude Reviewer",
-  "provider_type": "anthropic",
-  "model": "claude-sonnet-4-6"
-}
-```
-
-```json
-{
-  "agent_id": "google-reviewer",
-  "display_name": "Gemini Reviewer",
-  "provider_type": "google",
-  "model": "gemini-3-flash-preview"
-}
-```
-
-The GPT provider uses Codex-compatible auth by default. It checks
-`CODEX_API_KEY`, then `OPENAI_API_KEY`, then Codex auth at
-`$CODEX_HOME/auth.json` or `~/.codex/auth.json`. Codex auth files with
-`OPENAI_API_KEY` use the OpenAI Responses API; auth files with
-`tokens.access_token` use the ChatGPT Codex backend and forward the stored
-ChatGPT account id when present. Codex `agent_identity`-only auth is not
-duplicated by the GPT backend.
-
-For GPT custom agents, set `"auth_source": "codex"` to reuse the local Codex /
-GPT token, or `"auth_source": "api_key"` with `provider_env.OPENAI_API_KEY` to
-use a key supplied for that custom provider. `api_key` mode does not fall back
-to the Codex token when the key is missing.
-
-The CLI exposes the same path:
-
-```bash
-garyx agent create \
-  --agent budget-gpt \
-  --display-name "Budget GPT" \
-  --provider gpt \
-  --auth-source codex \
-  --system-prompt "Use GPT for this agent."
-
-garyx agent create \
-  --agent keyed-gpt \
-  --display-name "Keyed GPT" \
-  --provider gpt \
-  --api-key "${OPENAI_API_KEY}" \
-  --system-prompt "Use this provider key."
-```
-
-Optional GPT-provider fields on an agent/provider config:
-
-```json
-{
-  "provider_type": "gpt",
-  "default_model": "gpt-5.5",
-  "model": "",
-  "model_reasoning_effort": "medium",
-  "model_service_tier": "",
-  "auth_source": "codex",
-  "provider_env": {
-    "OPENAI_API_KEY": "${OPENAI_API_KEY}"
-  },
-  "base_url": "",
-  "codex_home": "",
-  "max_tool_iterations": 32,
-  "request_timeout_seconds": 300
-}
-```
-
-`model` can be left empty to use the provider default. The gateway exposes
-GPT model choices through `/api/provider-models/gpt` by reading the same Codex
-`/models` catalog used by the local Codex CLI. If that request is unavailable,
-Garyx falls back to a minimal copy of Codex's bundled model catalog so the
-picker can still show the Codex default (`gpt-5.5`) and the standard GPT coding
-models. `garyx_native`, `garyx`, and `native` are accepted as legacy provider
-slug aliases for `gpt`; they do not create agent id aliases.
-
-The in-process agent loop exposes Garyx-managed capabilities directly. It reads
-enabled skills from `~/.garyx/skills` and makes them available through
-`load_skill` / `read_skill_file`. It also exposes Garyx-managed MCP servers
-through `list_mcp_tools` / `call_mcp_tool` when those servers are present in the
-thread metadata injected by the gateway.
-
-`model_reasoning_effort` accepts the reasoning
-levels advertised by the selected Codex model, for example `low`, `medium`,
-`high`, or `xhigh`; lower values favor faster responses, while higher values
-spend more reasoning time. `model_service_tier` accepts the selected model's
-advertised service tier ids, for example `priority` for Codex's Fast tier; leave
-it empty to use the backend default.
-
-`anthropic` uses Anthropic Messages API-compatible auth from
-`ANTHROPIC_API_KEY` or `CLAUDE_API_KEY`. It can also use
-`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_OAUTH_TOKEN` as a
-bearer token. `ANTHROPIC_BASE_URL` or `CLAUDE_BASE_URL` can override the
-endpoint, and `ANTHROPIC_VERSION` / `ANTHROPIC_BETA` can override request
-headers. `claude_llm` and `claude_model` are accepted as legacy provider slug
-aliases.
-For a custom `anthropic` agent, the desktop provider manager and CLI
-`--api-key` store the key as `provider_env.ANTHROPIC_API_KEY`.
-
-`google` uses Google Gemini API auth from `GEMINI_API_KEY` or
-`GOOGLE_API_KEY`. It can also use an explicitly configured
-`GEMINI_OAUTH_ACCESS_TOKEN` or `GOOGLE_OAUTH_ACCESS_TOKEN`. OAuth requests use
-the Gemini Code Assist transport and resolve the Code Assist project with
-`loadCodeAssist`. Set
-`GEMINI_CODE_ASSIST_PROJECT`, `GOOGLE_CLOUD_PROJECT`, or
-`GOOGLE_CLOUD_PROJECT_ID` to force a project id. `GEMINI_BASE_URL`,
-`GOOGLE_GENERATIVE_AI_BASE_URL`, or `GOOGLE_API_BASE_URL` can override the API
-key endpoint; `GEMINI_CODE_ASSIST_BASE_URL`, `GOOGLE_CODE_ASSIST_BASE_URL`,
-`CODE_ASSIST_BASE_URL`, or `CODE_ASSIST_ENDPOINT` plus
-`CODE_ASSIST_API_VERSION` can override the OAuth endpoint. If a direct
-Generative Language bearer token is required, set `GOOGLE_GENERATIVE_AI_ACCESS_TOKEN`.
-`gemini_llm`, `google_gemini`, and `gemini_model` are accepted as legacy
-provider slug aliases.
-For a custom `google` agent, the desktop provider manager and CLI
-`--api-key` store the key as `provider_env.GEMINI_API_KEY`.
-
-The gateway exposes built-in picker catalogs for `/api/provider-models/anthropic`
-and `/api/provider-models/google`, including per-model reasoning effort choices.
-These two providers ignore `model_service_tier`; use `model_reasoning_effort`
-for lower-latency or higher-depth model behavior.
 
 Garyx does not expose a persistent `/goal` command or thread-level
 auto-continuation loop mode. Use normal thread turns, tasks, or automations for
@@ -836,15 +700,10 @@ provider, MCP, channel, and Skill editing on the Mac app where the local
 runtime and secrets live.
 
 The desktop Providers tab shows a fixed provider table rather than an arbitrary
-add-provider form. `Claude Code`, `Codex`, `Traex`, and `Antigravity` are always
-listed at the top as built-in provider agents; their Configure dialogs edit
-desktop-local auth and environment overrides. The same table also lists Garyx
-native-loop model backends (`GPT`, `Claude`, and `Gemini`). Configuring one of those rows
-creates or updates its deterministic custom agent (`gpt`, `anthropic`, or
-`google`), making it selectable like any other agent.
-Clearing the row removes that custom agent. The page does not support adding
-extra provider rows; additional named personas still belong in the Agents tab
-or CLI custom-agent commands.
+add-provider form. `Claude Code`, `Codex`, `Traex`, and `Antigravity` are listed
+as built-in provider agents; their Configure dialogs edit provider defaults and
+host-managed runtime settings. Additional named personas belong in the Agents
+tab or CLI custom-agent commands.
 
 The desktop app mirrors its current view into the window URL hash. For example,
 thread pages use `#/thread/<thread-id>`, new-thread drafts can use

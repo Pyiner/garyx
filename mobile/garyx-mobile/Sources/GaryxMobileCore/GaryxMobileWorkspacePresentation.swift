@@ -47,12 +47,6 @@ enum GaryxMobileWorkspacePresentation {
         if normalized == "/tmp" || normalized == "/private/tmp" {
             return false
         }
-        let pathComponents = normalized
-            .split(separator: "/", omittingEmptySubsequences: true)
-            .map(String.init)
-        if pathComponents.contains(where: { $0.hasPrefix("garyx-agent-loop-smoke.") }) {
-            return false
-        }
         return true
     }
 

@@ -4,7 +4,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn maps_codex_presets_with_model_specific_reasoning() {
-    let discovery = gpt_builtin_models(None);
+    let discovery = codex_builtin_models(None);
 
     assert_eq!(discovery.source, "codex_builtin");
     assert_eq!(discovery.default_model.as_deref(), Some("gpt-5.5"));
@@ -23,35 +23,15 @@ fn maps_codex_presets_with_model_specific_reasoning() {
 }
 
 #[test]
-fn gpt_configured_unknown_default_model_does_not_reuse_previous_options() {
-    let discovery = apply_default_model_to_gpt_discovery(
-        gpt_builtin_models(None),
+fn codex_configured_unknown_default_model_does_not_reuse_previous_options() {
+    let discovery = apply_default_model_to_codex_discovery(
+        codex_builtin_models(None),
         Some("gpt-6-turbo".to_owned()),
     );
 
     assert_eq!(discovery.default_model.as_deref(), Some("gpt-6-turbo"));
     assert!(discovery.reasoning_efforts.is_empty());
     assert!(discovery.service_tiers.is_empty());
-}
-
-#[test]
-fn configured_default_model_does_not_scan_non_default_agent_keys() {
-    let mut config = GaryxConfig::default();
-    config.agents.insert(
-        "custom-gpt".to_owned(),
-        json!({
-            "provider_type": "gpt",
-            "default_model": "gpt-custom-shadow"
-        }),
-    );
-
-    let default_model = configured_default_model(
-        &config,
-        ProviderType::Gpt,
-        &["gpt", "openai", "garyx", "garyx_native", "native"],
-    );
-
-    assert_eq!(default_model, None);
 }
 
 #[tokio::test]
@@ -405,7 +385,7 @@ fn discover_or_fallback_prefers_stale_success_before_builtin_preset() {
             description: None,
             recommended: false,
             default_reasoning_effort: None,
-            supported_reasoning_efforts: native_reasoning_efforts("low", &["low"]),
+            supported_reasoning_efforts: reasoning_efforts("low", &["low"]),
             service_tiers: Vec::new(),
         }],
         default_model: None,
@@ -673,117 +653,4 @@ async fn codex_app_server_real_discovery_lists_models_with_reasoning() {
     // them (e.g. Fast/priority).
     assert!(response.supports_service_tier_selection);
     assert!(!response.service_tiers.is_empty());
-}
-
-#[tokio::test]
-async fn native_claude_model_catalog_supports_selection_and_reasoning() {
-    let response = list_provider_models(&GaryxConfig::default(), ProviderType::ClaudeLlm).await;
-
-    assert_eq!(response.provider_type, ProviderType::ClaudeLlm);
-    assert!(response.supports_model_selection);
-    assert!(response.supports_reasoning_effort_selection);
-    assert_eq!(response.default_model.as_deref(), Some("claude-sonnet-4-6"));
-    assert_eq!(response.models[0].id, "claude-sonnet-4-6");
-    assert!(response.models[0].recommended);
-    assert_eq!(
-        response.models[0]
-            .supported_reasoning_efforts
-            .iter()
-            .map(|effort| effort.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["off", "minimal", "low", "medium", "high"]
-    );
-    assert!(
-        response
-            .models
-            .iter()
-            .find(|model| model.id == "claude-opus-4-7")
-            .expect("opus model")
-            .supported_reasoning_efforts
-            .iter()
-            .any(|effort| effort.id == "xhigh")
-    );
-    assert_eq!(
-        response
-            .reasoning_efforts
-            .last()
-            .map(|effort| effort.id.as_str()),
-        Some("high")
-    );
-}
-
-#[tokio::test]
-async fn native_claude_catalog_uses_configured_provider_default_model() {
-    let mut config = GaryxConfig::default();
-    config.agents.insert(
-        "anthropic".to_owned(),
-        json!({
-            "provider_type": "anthropic",
-            "default_model": "claude-opus-4-7"
-        }),
-    );
-
-    let response = list_provider_models(&config, ProviderType::ClaudeLlm).await;
-
-    assert_eq!(response.default_model.as_deref(), Some("claude-opus-4-7"));
-    assert_eq!(
-        response
-            .reasoning_efforts
-            .last()
-            .map(|effort| effort.id.as_str()),
-        Some("xhigh")
-    );
-}
-
-#[tokio::test]
-async fn native_gemini_model_catalog_supports_selection_and_reasoning() {
-    let response = list_provider_models(&GaryxConfig::default(), ProviderType::GeminiLlm).await;
-
-    assert_eq!(response.provider_type, ProviderType::GeminiLlm);
-    assert!(response.supports_model_selection);
-    assert!(response.supports_reasoning_effort_selection);
-    assert_eq!(
-        response.default_model.as_deref(),
-        Some("gemini-3-flash-preview")
-    );
-    assert_eq!(response.models[0].id, "gemini-3-flash-preview");
-    assert!(response.models[0].recommended);
-    assert_eq!(
-        response.models[0]
-            .supported_reasoning_efforts
-            .iter()
-            .map(|effort| effort.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["minimal", "low", "medium", "high"]
-    );
-    assert_eq!(
-        response
-            .models
-            .iter()
-            .find(|model| model.id == "gemini-3.1-pro-preview")
-            .expect("gemini pro preview model")
-            .supported_reasoning_efforts
-            .iter()
-            .map(|effort| effort.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["low", "high"]
-    );
-}
-
-#[test]
-fn reads_configured_gpt_codex_home() {
-    let mut config = GaryxConfig::default();
-    config.agents.insert(
-        "custom-gpt".to_owned(),
-        json!({
-            "provider_type": "gpt",
-            "codex_home": "/tmp/test-codex-home",
-            "base_url": "https://example.invalid/codex"
-        }),
-    );
-
-    let gpt = configured_gpt_config(&config);
-
-    assert_eq!(gpt.codex_home, "/tmp/test-codex-home");
-    assert_eq!(gpt.base_url, "https://example.invalid/codex");
 }

@@ -493,7 +493,7 @@ fn test_permission_notice_cooldown() {
 mod dispatch_tests {
     use super::*;
     use garyx_bridge::provider_trait::StreamCallback;
-    use garyx_bridge::{AgentLoopProvider, BridgeError, MultiProviderBridge};
+    use garyx_bridge::{ProviderRuntime, BridgeError, MultiProviderBridge};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
@@ -521,7 +521,7 @@ mod dispatch_tests {
     }
 
     #[async_trait::async_trait]
-    impl AgentLoopProvider for TestProvider {
+    impl ProviderRuntime for TestProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -1184,7 +1184,7 @@ mod e2e_tests {
     use crate::test_helpers::*;
     use async_trait::async_trait;
     use garyx_bridge::provider_trait::StreamCallback;
-    use garyx_bridge::{AgentLoopProvider, BridgeError};
+    use garyx_bridge::{ProviderRuntime, BridgeError};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind,
@@ -1201,7 +1201,7 @@ mod e2e_tests {
     struct FeishuUserAckBoundaryProvider;
 
     #[async_trait]
-    impl AgentLoopProvider for FeishuUserAckBoundaryProvider {
+    impl ProviderRuntime for FeishuUserAckBoundaryProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -1260,7 +1260,7 @@ mod e2e_tests {
     struct FeishuAssistantSegmentProvider;
 
     #[async_trait]
-    impl AgentLoopProvider for FeishuAssistantSegmentProvider {
+    impl ProviderRuntime for FeishuAssistantSegmentProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -1319,7 +1319,7 @@ mod e2e_tests {
     struct FeishuToolThenAssistantProvider;
 
     #[async_trait]
-    impl AgentLoopProvider for FeishuToolThenAssistantProvider {
+    impl ProviderRuntime for FeishuToolThenAssistantProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::CodexAppServer
         }
@@ -1429,7 +1429,7 @@ mod e2e_tests {
     struct FeishuAssistantThenTrailingToolProvider;
 
     #[async_trait]
-    impl AgentLoopProvider for FeishuAssistantThenTrailingToolProvider {
+    impl ProviderRuntime for FeishuAssistantThenTrailingToolProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::CodexAppServer
         }
@@ -1507,7 +1507,7 @@ mod e2e_tests {
     struct FeishuMultipleAssistantSegmentsThenTrailingToolProvider;
 
     #[async_trait]
-    impl AgentLoopProvider for FeishuMultipleAssistantSegmentsThenTrailingToolProvider {
+    impl ProviderRuntime for FeishuMultipleAssistantSegmentsThenTrailingToolProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::CodexAppServer
         }
@@ -1579,7 +1579,7 @@ mod e2e_tests {
     struct FeishuTitleUpdateAfterAssistantProvider;
 
     #[async_trait]
-    impl AgentLoopProvider for FeishuTitleUpdateAfterAssistantProvider {
+    impl ProviderRuntime for FeishuTitleUpdateAfterAssistantProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::CodexAppServer
         }
@@ -1638,7 +1638,7 @@ mod e2e_tests {
     struct FeishuReasoningThenImageViewProvider;
 
     #[async_trait]
-    impl AgentLoopProvider for FeishuReadFileProvider {
+    impl ProviderRuntime for FeishuReadFileProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::CodexAppServer
         }
@@ -1709,7 +1709,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for FeishuImageGenerationProvider {
+    impl ProviderRuntime for FeishuImageGenerationProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::CodexAppServer
         }
@@ -1784,7 +1784,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for FeishuReasoningThenImageViewProvider {
+    impl ProviderRuntime for FeishuReasoningThenImageViewProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::CodexAppServer
         }

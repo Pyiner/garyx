@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use axum::body::Body;
 use futures_util::StreamExt;
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
 use garyx_models::config::{
     ApiAccount, CronAction, CronJobConfig, CronJobKind, CronSchedule, GaryxConfig,
     PluginAccountEntry,
@@ -2361,7 +2361,7 @@ fn endpoint_conversation_details_marks_discord_channel_as_group() {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for SlowDeleteProvider {
+impl ProviderRuntime for SlowDeleteProvider {
     fn provider_type(&self) -> ProviderType {
         ProviderType::ClaudeCode
     }
@@ -2421,7 +2421,7 @@ impl AgentLoopProvider for SlowDeleteProvider {
 }
 
 #[async_trait::async_trait]
-impl AgentLoopProvider for RecordingTaskProvider {
+impl ProviderRuntime for RecordingTaskProvider {
     fn provider_type(&self) -> ProviderType {
         self.provider_type.clone()
     }
@@ -4588,56 +4588,6 @@ async fn thread_summary_routes_include_runtime_summary() {
 }
 
 #[tokio::test]
-async fn thread_history_runtime_reports_provider_default_alias() {
-    let mut config = test_config();
-    config.agents.insert(
-        "openai".to_owned(),
-        json!({
-            "provider_type": "gpt",
-            "default_model": "gpt-5.4",
-            "model_reasoning_effort": "high",
-        }),
-    );
-    let state = AppStateBuilder::new(config)
-        .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
-        .build();
-    let thread_id = "thread::runtime-provider-default";
-    state
-        .threads
-        .thread_store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "label": "Runtime provider default",
-                "agent_id": "gpt",
-                "provider_type": "gpt",
-                "metadata": {},
-            }),
-        )
-        .await
-        .unwrap();
-
-    let router = build_router(state);
-    let request = authed_request()
-        .uri("/api/threads/history?thread_id=thread%3A%3Aruntime-provider-default&limit=1")
-        .body(Body::empty())
-        .unwrap();
-    let response = router.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["thread_runtime"]["agent_id"], "gpt");
-    assert_eq!(payload["thread_runtime"]["provider_type"], "gpt");
-    assert_eq!(payload["thread_runtime"]["model"], "gpt-5.4");
-    assert_eq!(payload["thread_runtime"]["model_reasoning_effort"], "high");
-    assert!(payload["thread_runtime"]["model_override"].is_null());
-    assert!(payload["thread_runtime"]["model_reasoning_effort_override"].is_null());
-}
-
-#[tokio::test]
 async fn thread_history_runtime_prefers_thread_snapshot_over_current_agent_profile() {
     let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
     custom_agents
@@ -4649,11 +4599,6 @@ async fn thread_history_runtime_prefers_thread_snapshot_over_current_agent_profi
             model_reasoning_effort: Some("max".to_owned()),
             model_service_tier: Some("auto".to_owned()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: Some("Synthetic test agent.".to_owned()),
@@ -4746,46 +4691,6 @@ async fn thread_history_runtime_leaves_cli_provider_defaults_empty() {
         assert!(payload["thread_runtime"]["model"].is_null());
         assert!(payload["thread_runtime"]["model_reasoning_effort"].is_null());
     }
-}
-
-#[tokio::test]
-async fn thread_history_runtime_reports_native_builtin_provider_default() {
-    let (state, _logger, _dir) = test_state().await;
-    let thread_id = "thread::runtime-native-builtin-default";
-    state
-        .threads
-        .thread_store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "label": "Runtime native builtin default",
-                "agent_id": "gpt",
-                "provider_type": "gpt",
-                "metadata": {},
-            }),
-        )
-        .await
-        .unwrap();
-
-    let router = build_router(state);
-    let request = authed_request()
-        .uri("/api/threads/history?thread_id=thread%3A%3Aruntime-native-builtin-default&limit=1")
-        .body(Body::empty())
-        .unwrap();
-    let response = router.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["thread_runtime"]["agent_id"], "gpt");
-    assert_eq!(payload["thread_runtime"]["provider_type"], "gpt");
-    assert_eq!(payload["thread_runtime"]["model"], "gpt-5.5");
-    assert_eq!(
-        payload["thread_runtime"]["model_reasoning_effort"],
-        "medium"
-    );
 }
 
 #[tokio::test]
@@ -4895,26 +4800,20 @@ async fn seed_imported_thread_history_persists_transcript_and_thread_state() {
 async fn create_thread_rejects_unknown_agent_id() {
     let (state, _logger, _dir) = test_state().await;
     let router = build_router(state);
-    for agent_id in ["definitely-not-real", "gpt"] {
-        let request = authed_request()
-            .method("POST")
-            .uri("/api/threads")
-            .header("content-type", "application/json")
-            .body(Body::from(
-                json!({
-                    "label": "Bad thread",
-                    "agentId": agent_id
-                })
-                .to_string(),
-            ))
-            .unwrap();
-        let response = router.clone().oneshot(request).await.unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::BAD_REQUEST,
-            "{agent_id} should not resolve as an agent id"
-        );
-    }
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/threads")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "label": "Bad thread",
+                "agentId": "definitely-not-real"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -7609,11 +7508,6 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: Some("/tmp/agent-route-default".to_owned()),
             avatar_data_url: None,
             system_prompt: Some("Review the assigned task.".to_owned()),
@@ -7947,11 +7841,6 @@ async fn task_assign_queues_dispatch_with_original_body() {
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: Some("/tmp/agent-route-default".to_owned()),
             avatar_data_url: None,
             system_prompt: Some("Review the assigned task.".to_owned()),
@@ -8186,11 +8075,6 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
             provider_env: None,
-            auth_source: None,
-            base_url: None,
-            codex_home: None,
-            max_tool_iterations: None,
-            request_timeout_seconds: None,
             default_workspace_dir: Some("/tmp/late-antigravity-default".to_owned()),
             avatar_data_url: None,
             system_prompt: Some("Work normally.".to_owned()),

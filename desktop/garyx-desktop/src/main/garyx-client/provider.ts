@@ -106,15 +106,6 @@ export function normalizeDesktopProviderType(value: unknown): DesktopApiProvider
   if (value === "traex" || value === "trae" || value === "trae_cli" || value === "traecli") {
     return "traex";
   }
-  if (value === "gpt" || value === "openai" || value === "garyx_native") {
-    return "gpt";
-  }
-  if (value === "anthropic" || value === "claude_llm" || value === "claude_model") {
-    return "anthropic";
-  }
-  if (value === "google" || value === "gemini_llm" || value === "google_gemini" || value === "gemini_model") {
-    return "google";
-  }
   return "claude_code";
 }
 

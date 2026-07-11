@@ -2,12 +2,7 @@ export type DesktopApiProviderType =
   | "claude_code"
   | "codex_app_server"
   | "antigravity"
-  | "traex"
-  | "gpt"
-  | "anthropic"
-  | "google"
-  | "claude_llm"
-  | "gemini_llm";
+  | "traex";
 
 export type DesktopProviderIconKey = "claude" | "codex" | "traex" | "gemini";
 

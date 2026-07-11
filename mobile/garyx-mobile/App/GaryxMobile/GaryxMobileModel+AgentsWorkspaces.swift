@@ -702,11 +702,6 @@ extension GaryxMobileModel {
                     modelReasoningEffort: nextReasoningEffort,
                     modelServiceTier: baseAgent.modelServiceTier,
                     providerEnv: providerEnvRequestValue,
-                    authSource: baseAgent.authSource.isEmpty ? nil : baseAgent.authSource,
-                    baseUrl: baseAgent.baseUrl.isEmpty ? nil : baseAgent.baseUrl,
-                    codexHome: baseAgent.codexHome.isEmpty ? nil : baseAgent.codexHome,
-                    maxToolIterations: baseAgent.maxToolIterations,
-                    requestTimeoutSeconds: baseAgent.requestTimeoutSeconds,
                     defaultWorkspaceDir: nextWorkspace.isEmpty ? nil : nextWorkspace,
                     avatarDataUrl: requestAvatarDataUrl,
                     systemPrompt: nextSystemPrompt,
@@ -777,9 +772,9 @@ extension GaryxMobileModel {
     }
 
     /// Fetches the authoritative gateway settings document before opening a
-    /// provider editor, so the sheet echoes the real current API key / base URL
-    /// / auth source instead of a possibly cache-restored projection (the
-    /// mobile-ui "fetch authoritative data before saving" contract).
+    /// provider editor, so the sheet echoes the authoritative defaults instead
+    /// of a possibly cache-restored projection (the mobile-ui "fetch
+    /// authoritative data before saving" contract).
     func refreshAuthoritativeGatewaySettings() async -> Bool {
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
@@ -808,10 +803,7 @@ extension GaryxMobileModel {
                 provider: provider,
                 model: nextModel,
                 reasoningEffort: nextReasoningEffort,
-                serviceTier: request.serviceTier,
-                authSource: request.authSource,
-                baseUrl: request.baseUrl,
-                apiKey: request.apiKey
+                serviceTier: request.serviceTier
             )
             _ = try await client().saveGatewaySettings(patch, merge: true)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
@@ -820,10 +812,7 @@ extension GaryxMobileModel {
                 provider: provider,
                 model: nextModel,
                 reasoningEffort: nextReasoningEffort,
-                serviceTier: request.serviceTier,
-                authSource: request.authSource,
-                baseUrl: request.baseUrl,
-                apiKey: request.apiKey
+                serviceTier: request.serviceTier
             )
             providerModelsByType.removeValue(forKey: provider.providerType)
             await loadProviderModels(providerType: provider.providerType, runtimeGeneration: runtimeGeneration)
