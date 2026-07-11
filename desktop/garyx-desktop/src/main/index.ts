@@ -61,6 +61,7 @@ import type {
   GatewaySettingsSaveRequestOptions,
   DeleteTaskInput,
   ListTaskForestInput,
+  ListRecentThreadsInput,
   ListProviderRecentSessionsInput,
   ListTasksInput,
   ListWorkspaceFilesInput,
@@ -128,6 +129,7 @@ import {
   fetchGatewaySettings,
   fetchThreadHistory,
   fetchThreadLogs,
+  fetchRecentThreads,
   getCodingUsage,
   getCapsule,
   getCapsuleHtml,
@@ -164,9 +166,11 @@ import {
   updateSlashCommand,
   updateTaskStatus,
   assignTask,
+  assertRecentThreadGatewayScope,
   unassignTask,
   updateTaskTitle,
   updateRemoteThread,
+  validateListRecentThreadsInput,
 } from "./gary-client";
 import { wireGatewayTransport } from "./gateway-transport";
 import {
@@ -1215,6 +1219,16 @@ function registerIpcHandlers(): void {
       }
       await updateRemoteThread(settings, threadId, patch);
       return fetchThreadHistory(settings, { threadId });
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:list-recent-threads",
+    async (_event, rawInput: unknown) => {
+      const input = validateListRecentThreadsInput(rawInput);
+      const settings = await resolveSettings();
+      assertRecentThreadGatewayScope(settings, input.gatewayScope);
+      return fetchRecentThreads(settings, input);
     },
   );
 

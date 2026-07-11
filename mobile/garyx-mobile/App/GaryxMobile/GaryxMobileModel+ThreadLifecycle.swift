@@ -235,6 +235,7 @@ extension GaryxMobileModel {
                 )
             )
             threads.insert(thread, at: 0)
+            recentThreadFeeds.upsertChat(threadId: thread.id)
             threadHistoryLoadedIds.insert(thread.id)
             selectedThread = thread
             clearPendingNewThreadAgentTarget()

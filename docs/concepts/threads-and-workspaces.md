@@ -50,6 +50,13 @@ Unknown values return HTTP 400. `total`, `offset`, and `has_more` always
 describe the selected domain. Existing clients that omit `tasks` retain the
 same member set, ordering, pagination, envelope, and row schema.
 
+The Mac Recent rail and the iOS Home Recent section expose this domain as an
+`All` / `Chats` segmented filter. Both clients send the filter explicitly on
+every page (`tasks=include` for All and `tasks=exclude` for Chats); filtering
+is never performed after a page reaches the client. Each tab owns its own
+pagination state. On iOS, Home follows the selected tab while the Recent
+widget and Automation thread picker continue to use the canonical All feed.
+
 Channel bots use this same projection for thread management. The
 `/threads [page|next|prev]` command browses recent non-task threads in pages of
 10, and `/bindthread <n>` binds an absolute row number from pages that endpoint

@@ -33,10 +33,11 @@ extension GaryxMobileModel {
     }
 
     func refreshHomeObservationPaginationSnapshot() {
+        let pager = recentThreadFeeds.selectedPager
         homeObservationStore.applyPagination(
-            isLoadingMoreThreads: threadListPager.isLoadingMore,
-            hasMoreThreadSummaries: threadListPager.hasMoreThreadSummaries,
-            loadMoreFooterState: threadListPager.footerState
+            isLoadingMoreThreads: pager.isLoadingMore,
+            hasMoreThreadSummaries: pager.hasMoreThreadSummaries,
+            loadMoreFooterState: pager.footerState
         )
     }
 
@@ -133,13 +134,15 @@ extension GaryxMobileModel {
     var homeProjectionCapture: HomeProjectionCapture {
         HomeProjectionCapture(
             threads: threads,
-            recentThreadIds: recentThreadIds,
+            recentThreadIds: visibleRecentThreadIds,
             agents: agents,
             automations: automations,
             pinnedThreadIds: pinnedThreadIds,
             selectedThreadId: selectedThread?.id,
             isLoadingThreads: isLoadingThreads,
             isHomeVisible: isHomeVisible,
+            selectedRecentFilter: recentThreadFeeds.selectedFilter,
+            recentFeedPresentation: recentThreadFeeds.selectedPresentation,
             runTrackerBusyThreadIds: runTracker.busyThreadIds,
             committedRunStateBusyByThreadId: runStateByThread.mapValues { $0.busy }
         )
@@ -161,12 +164,14 @@ extension GaryxMobileModel {
                 agents: agents,
                 automations: automations,
                 pinnedThreadIds: pinnedThreadIds,
-                recentThreadIds: recentThreadIds,
+                recentThreadIds: visibleRecentThreadIds,
                 selectedThreadId: selectedThread?.id
             ),
             runningThreadIds: homeThreadRunningThreadIds,
             isLoadingThreads: isLoadingThreads,
-            isHomeVisible: isHomeVisible
+            isHomeVisible: isHomeVisible,
+            selectedRecentFilter: recentThreadFeeds.selectedFilter,
+            recentFeedPresentation: recentThreadFeeds.selectedPresentation
         )
     }
 
@@ -420,7 +425,9 @@ extension GaryxMobileModel {
             )
         }
         pinnedThreadIds = (0..<6).map { "thread-\($0)" }
-        recentThreadIds = (0..<50).map { "thread-\($0)" }
+        for threadId in (0..<50).reversed().map({ "thread-\($0)" }) {
+            recentThreadFeeds.upsertChat(threadId: threadId)
+        }
         connectionState = .ready(version: "debug-home-scroll-probe")
         emitHomeProjectionSnapshot()
     }
@@ -433,9 +440,6 @@ extension GaryxMobileModel {
             return selectedThread
         }
         if let thread = threads.first(where: { $0.id == normalizedId }) {
-            return thread
-        }
-        if let thread = recentThreads.first(where: { $0.id == normalizedId }) {
             return thread
         }
         if let thread = pinnedThreads.first(where: { $0.id == normalizedId }) {
@@ -566,11 +570,19 @@ extension GaryxMobileModel {
         return pinnedThreadIds.compactMap { byId[$0] }
     }
 
-    var recentThreads: [GaryxThreadSummary] {
+    var allRecentThreads: [GaryxThreadSummary] {
         var byId: [String: GaryxThreadSummary] = [:]
         for thread in threads {
             byId[thread.id] = thread
         }
-        return recentThreadIds.compactMap { byId[$0] }
+        return allRecentThreadIds.compactMap { byId[$0] }
+    }
+
+    var visibleRecentThreads: [GaryxThreadSummary] {
+        var byId: [String: GaryxThreadSummary] = [:]
+        for thread in threads {
+            byId[thread.id] = thread
+        }
+        return visibleRecentThreadIds.compactMap { byId[$0] }
     }
 }

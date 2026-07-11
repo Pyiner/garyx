@@ -360,7 +360,7 @@ struct GaryxCreateAutomationSheet: View {
     }
 
     private var threadOptions: [GaryxThreadSummary] {
-        garyxAutomationThreadOptions(recentThreads: model.recentThreads, cachedThreads: model.threads)
+        garyxAutomationThreadOptions(recentThreads: model.allRecentThreads, cachedThreads: model.threads)
     }
 
     private var effectiveWorkspacePath: String {
@@ -504,7 +504,7 @@ struct GaryxEditAutomationSheet: View {
     }
 
     private var editThreadOptions: [GaryxThreadSummary] {
-        garyxAutomationThreadOptions(recentThreads: model.recentThreads, cachedThreads: model.threads)
+        garyxAutomationThreadOptions(recentThreads: model.allRecentThreads, cachedThreads: model.threads)
     }
 
     private func fillDraft() {
@@ -954,7 +954,7 @@ struct GaryxAutomationThreadPickerSheet: View {
     }
 
     private var recentThreadOptions: [GaryxThreadSummary] {
-        var result = garyxAutomationThreadOptions(recentThreads: model.recentThreads, cachedThreads: model.threads)
+        var result = garyxAutomationThreadOptions(recentThreads: model.allRecentThreads, cachedThreads: model.threads)
         let seen = Set(result.map(\.id))
         if !selectedThreadId.isEmpty,
            !seen.contains(selectedThreadId),

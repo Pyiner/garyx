@@ -1,11 +1,9 @@
 import XCTest
 @testable import GaryxMobile
 
-/// TASK-1802: the head-refresh commit is a synchronous MainActor unit that
-/// re-filters every pre-await snapshot against the commit-point archive
-/// state. Pins these review #TASK-1804 interleavings without a network:
-/// the test plays the model exactly as `refreshThreads` does — capture
-/// page/pins/fetched threads, suspend (archive happens), then commit.
+/// TASK-1802: head refresh owns its filter-keyed pager ticket through the
+/// final pre-commit await. Pins the #TASK-1804 archive interleavings without
+/// a network by playing the model exactly as `refreshThreads` does.
 @MainActor
 final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
     func testCommitDoesNotResurrectThreadArchivedDuringBackfillAwait() throws {
@@ -15,47 +13,47 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let incoming = makeThread(id: "thread-new", title: "New arrival")
         model.threads = [pinned, recent]
         model.pinnedThreadIds = [pinned.id]
-        model.recentThreadIds = [pinned.id, recent.id]
+        primeRecentFeed(model, ids: [pinned.id, recent.id], filter: .all)
+
+        // The refresh ticket is captured before the archive races the
+        // pre-await page snapshot.
+        let ticket = model.recentThreadFeeds.requestRefresh(filter: .all)!
 
         // Pre-await captures, exactly like refreshThreads: the page and the
         // pins arrived while `thread-pinned` was still live.
         let page = try makeRecentThreadsPage(threads: [pinned, recent, incoming])
-        let fetchedThreads = [pinned, recent, incoming]
 
         // Backfill await window: the user archives the pinned thread. The
         // archive flow marks it pending and removes it locally before its
         // gateway call completes.
         model.pendingThreadArchives.startArchive(threadId: pinned.id)
-        model.threads.removeAll { $0.id == pinned.id }
-        model.pinnedThreadIds.removeAll { $0 == pinned.id }
-        model.recentThreadIds.removeAll { $0 == pinned.id }
+        model.removeArchivedThreadLocally(pinned.id)
 
-        // The refresh resumes and commits its pre-await snapshots.
-        model.commitRefreshedRecentThreadsPage(
-            page: page,
-            pinsPageThreadIds: [pinned.id],
-            application: .replaceHead,
-            fetchedThreads: fetchedThreads,
-            previousThreadSummaries: [pinned, recent],
-            previouslyRemoteBusyThreadIds: [],
-            selectionIdForThisRefresh: nil,
-            runtimeGeneration: model.gatewayRuntimeGeneration
+        // The refresh resumes, but the filter-owned pager rejects every
+        // pre-await snapshot before the app-layer commit can run.
+        let completion = model.recentThreadFeeds.completeRefresh(
+            ticket,
+            pageIds: page.threads.map(\.id),
+            pageOffset: page.offset,
+            pageCount: page.count,
+            hasMore: page.hasMore
         )
+        XCTAssertEqual(completion, .abandonedLocalMutation)
 
         XCTAssertFalse(
             model.pinnedThreadIds.contains(pinned.id),
             "a pre-await pins snapshot must not resurrect an archived thread"
         )
         XCTAssertFalse(
-            model.recentThreadIds.contains(pinned.id),
+            model.allRecentThreadIds.contains(pinned.id),
             "a pre-await page snapshot must not resurrect an archived thread"
         )
         XCTAssertFalse(
             model.threads.contains { $0.id == pinned.id },
             "pre-await fetched summaries must not resurrect an archived thread"
         )
-        XCTAssertEqual(model.recentThreadIds, [recent.id, incoming.id])
-        XCTAssertTrue(model.threads.contains { $0.id == incoming.id })
+        XCTAssertEqual(model.allRecentThreadIds, [recent.id])
+        XCTAssertFalse(model.threads.contains { $0.id == incoming.id })
     }
 
     func testCommitAppliesPinsPageAndThreadsWithoutPendingArchives() throws {
@@ -64,10 +62,18 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let recent = makeThread(id: "thread-recent", title: "Recent chat")
         let page = try makeRecentThreadsPage(threads: [pinned, recent])
 
+        let ticket = model.recentThreadFeeds.requestRefresh(filter: .all)!
+        let completion = model.recentThreadFeeds.completeRefresh(
+            ticket,
+            pageIds: page.threads.map(\.id),
+            pageOffset: page.offset,
+            pageCount: page.count,
+            hasMore: page.hasMore
+        )
+        XCTAssertEqual(completion, .apply(.replaceHead))
+
         model.commitRefreshedRecentThreadsPage(
-            page: page,
             pinsPageThreadIds: [pinned.id],
-            application: .replaceHead,
             fetchedThreads: [pinned, recent],
             previousThreadSummaries: [],
             previouslyRemoteBusyThreadIds: [],
@@ -76,7 +82,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         )
 
         XCTAssertEqual(model.pinnedThreadIds, [pinned.id])
-        XCTAssertEqual(model.recentThreadIds, [pinned.id, recent.id])
+        XCTAssertEqual(model.allRecentThreadIds, [pinned.id, recent.id])
         XCTAssertEqual(model.threads.map(\.id).sorted(), [pinned.id, recent.id].sorted())
     }
 
@@ -88,21 +94,64 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let thread = makeThread(id: "thread-surgery", title: "Doomed")
         model.threads = [thread]
         model.pinnedThreadIds = [thread.id]
-        model.recentThreadIds = [thread.id]
+        primeRecentFeed(model, ids: [thread.id], filter: .all)
+        primeRecentFeed(model, ids: [thread.id], filter: .nonTask)
 
-        let base = model.threadListPager.localMutationSequence
+        let allBase = model.recentThreadFeeds.allFeed.pager.localMutationSequence
+        let chatsBase = model.recentThreadFeeds.nonTaskFeed.pager.localMutationSequence
         model.removeArchivedThreadLocally(thread.id)
         XCTAssertGreaterThan(
-            model.threadListPager.localMutationSequence, base,
-            "archive/delete local removal must invalidate in-flight refresh commits"
+            model.recentThreadFeeds.allFeed.pager.localMutationSequence,
+            allBase,
+            "archive/delete local removal must invalidate the All feed"
+        )
+        XCTAssertGreaterThan(
+            model.recentThreadFeeds.nonTaskFeed.pager.localMutationSequence,
+            chatsBase,
+            "archive/delete local removal must invalidate the Chats feed"
         )
 
-        let afterRemove = model.threadListPager.localMutationSequence
+        let allAfterRemove = model.recentThreadFeeds.allFeed.pager.localMutationSequence
+        let chatsAfterRemove = model.recentThreadFeeds.nonTaskFeed.pager.localMutationSequence
         model.removePinnedThreadIdLocally(thread.id)
         XCTAssertGreaterThan(
-            model.threadListPager.localMutationSequence, afterRemove,
-            "pin removal must invalidate in-flight refresh commits"
+            model.recentThreadFeeds.allFeed.pager.localMutationSequence,
+            allAfterRemove,
+            "pin removal must invalidate the All feed"
         )
+        XCTAssertGreaterThan(
+            model.recentThreadFeeds.nonTaskFeed.pager.localMutationSequence,
+            chatsAfterRemove,
+            "pin removal must invalidate the Chats feed"
+        )
+    }
+
+    func testAllOwnedConsumersAndSidebarSummaryIgnoreTheVisibleChatsFilter() throws {
+        let model = makeModel()
+        let task = makeThread(id: "thread-task", title: "Task backing thread")
+        let chat = makeThread(id: "thread-chat", title: "Chat thread")
+        model.threads = [task, chat]
+        primeRecentFeed(model, ids: [task.id, chat.id], filter: .all)
+        primeRecentFeed(model, ids: [chat.id], filter: .nonTask)
+        model.recentThreadFeeds.select(.nonTask)
+
+        XCTAssertEqual(model.visibleRecentThreads.map(\.id), [chat.id])
+        XCTAssertEqual(model.allRecentThreads.map(\.id), [task.id, chat.id])
+        XCTAssertEqual(try XCTUnwrap(model.sidebarThreadSummary(for: task.id)).id, task.id)
+    }
+
+    func testSummaryOnlyTitleUpdateDoesNotRebuildEitherFeedOrder() {
+        let model = makeModel()
+        let task = makeThread(id: "thread-task", title: "Old task title")
+        let chat = makeThread(id: "thread-chat", title: "Chat thread")
+        model.threads = [task, chat]
+        primeRecentFeed(model, ids: [task.id, chat.id], filter: .all)
+        primeRecentFeed(model, ids: [chat.id], filter: .nonTask)
+
+        XCTAssertTrue(model.applyThreadTitleUpdate(threadId: task.id, title: "New task title"))
+        XCTAssertEqual(model.allRecentThreadIds, [task.id, chat.id])
+        XCTAssertEqual(model.recentThreadFeeds.nonTaskFeed.orderedThreadIds, [chat.id])
+        XCTAssertEqual(model.threads.first(where: { $0.id == task.id })?.title, "New task title")
     }
 
     private func makeModel() -> GaryxMobileModel {
@@ -129,6 +178,23 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
             runState: nil,
             worktreePath: nil
         )
+    }
+
+    private func primeRecentFeed(
+        _ model: GaryxMobileModel,
+        ids: [String],
+        filter: GaryxRecentThreadFilter
+    ) {
+        var feeds = model.recentThreadFeeds
+        let ticket = feeds.requestRefresh(filter: filter)!
+        feeds.completeRefresh(
+            ticket,
+            pageIds: ids,
+            pageOffset: 0,
+            pageCount: ids.count,
+            hasMore: false
+        )
+        model.recentThreadFeeds = feeds
     }
 
     /// Decodes the same wire shape the gateway returns so the commit sees a

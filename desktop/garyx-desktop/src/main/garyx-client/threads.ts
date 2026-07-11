@@ -1,8 +1,10 @@
 import type {
   DesktopSettings,
+  DesktopRecentThreadsPage,
   DesktopThreadProviderType,
   DesktopThreadSummary,
   GetThreadHistoryInput,
+  ListRecentThreadsInput,
   PendingThreadInput,
   ThreadActiveRunInfo,
   ThreadChannelBindingInfo,
@@ -11,7 +13,7 @@ import type {
   ThreadTranscript,
   TranscriptMessage,
 } from "@shared/contracts";
-import { REMOTE_STATE_FETCH_TIMEOUT_MS, asBoolean, asFiniteNumber, asString, parseRecord, requestJson } from "./http.ts";
+import { REMOTE_STATE_FETCH_TIMEOUT_MS, asBoolean, asFiniteNumber, asString, normalizeGatewayUrl, parseRecord, requestJson } from "./http.ts";
 
 const DEFAULT_THREAD_HISTORY_PAGE_SIZE = 100;
 
@@ -20,6 +22,8 @@ const DEFAULT_THREAD_HISTORY_USER_QUERY_LIMIT = 10;
 const MAX_THREAD_HISTORY_PAGE_SIZE = 500;
 
 const MAX_THREAD_HISTORY_USER_QUERY_LIMIT = 50;
+
+const MAX_RECENT_THREAD_PAGE_SIZE = 200;
 
 interface HistoryPayload {
   ok?: boolean;
@@ -165,6 +169,16 @@ export interface ThreadSummaryPayload {
 interface ThreadsPayload {
   threads?: ThreadSummaryPayload[];
   sessions?: ThreadSummaryPayload[];
+}
+
+interface RecentThreadsPayload {
+  threads?: ThreadSummaryPayload[];
+  count?: number;
+  total?: number;
+  limit?: number;
+  offset?: number;
+  has_more?: boolean;
+  hasMore?: boolean;
 }
 
 interface ThreadPinsPayload {
@@ -761,6 +775,95 @@ export async function fetchThreads(
       ? payload.sessions
       : [];
   return threads.map(mapThreadSummary);
+}
+
+export function validateListRecentThreadsInput(
+  value: unknown,
+): ListRecentThreadsInput {
+  const input = parseRecord(value);
+  const gatewayScope = normalizeGatewayUrl(asString(input.gatewayScope) || "");
+  if (!gatewayScope) {
+    throw new Error("gatewayScope is required");
+  }
+  const tasks = input.tasks;
+  if (tasks !== "include" && tasks !== "exclude") {
+    throw new Error("tasks must be include or exclude");
+  }
+  const limit = input.limit;
+  if (
+    typeof limit !== "number" ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > MAX_RECENT_THREAD_PAGE_SIZE
+  ) {
+    throw new Error("limit must be an integer between 1 and 200");
+  }
+  const offset = input.offset;
+  if (
+    typeof offset !== "number" ||
+    !Number.isSafeInteger(offset) ||
+    offset < 0
+  ) {
+    throw new Error("offset must be a non-negative integer");
+  }
+  return { gatewayScope, tasks, limit, offset };
+}
+
+export function assertRecentThreadGatewayScope(
+  settings: DesktopSettings,
+  expectedGatewayScope: string,
+): string {
+  const gatewayScope = normalizeGatewayUrl(settings.gatewayUrl);
+  if (gatewayScope !== expectedGatewayScope) {
+    throw new Error("Gateway changed before the Recent request started");
+  }
+  return gatewayScope;
+}
+
+export async function fetchRecentThreads(
+  settings: DesktopSettings,
+  options: Pick<ListRecentThreadsInput, "tasks" | "limit" | "offset">,
+): Promise<DesktopRecentThreadsPage> {
+  const query = new URLSearchParams({
+    tasks: options.tasks,
+    limit: String(options.limit),
+    offset: String(options.offset),
+  });
+  const payload = await requestJson<RecentThreadsPayload>(
+    settings,
+    `/api/recent-threads?${query.toString()}`,
+    {
+      signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
+    },
+  );
+  const threads = Array.isArray(payload.threads)
+    ? payload.threads.map(mapThreadSummary)
+    : [];
+  const count = payloadInteger(payload.count, threads.length);
+  const limit = payloadInteger(payload.limit, options.limit);
+  const offset = payloadInteger(payload.offset, options.offset);
+  const total = payloadInteger(payload.total, offset + count);
+  const hasMore =
+    typeof payload.has_more === "boolean"
+      ? payload.has_more
+      : typeof payload.hasMore === "boolean"
+        ? payload.hasMore
+        : offset + count < total;
+  return {
+    gatewayScope: normalizeGatewayUrl(settings.gatewayUrl),
+    threads,
+    count,
+    total,
+    limit,
+    offset,
+    hasMore,
+  };
+}
+
+function payloadInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : fallback;
 }
 
 /**

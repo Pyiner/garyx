@@ -136,22 +136,22 @@ final class GaryxMobileModel: ObservableObject {
     var composerDraftStore = GaryxComposerDraftStore()
     @Published var composerContextVersion = 0
     @Published var composerAttachments: [GaryxMobileComposerAttachment] = []
-    @Published var isLoadingThreads = false {
-        didSet { emitHomeProjectionSnapshot() }
-    }
-    /// Recent-list paging state machine (TASK-1802): head-refresh and
-    /// load-more in-flight tracks, load-more gate, server cursor, and the
-    /// footer projection. Pure Core state — every mutation republishes the
-    /// observation-store pagination snapshot.
-    var threadListPager = GaryxHomeThreadListPager(
+    /// Filter-keyed Recent feeds. Each filter owns a pager/cursor/failure
+    /// gate; All remains the canonical Widget/Automation feed while the
+    /// selected feed alone drives Home presentation.
+    var recentThreadFeeds = GaryxRecentThreadFeeds(
         pageLimit: GaryxMobileModel.threadListPageLimit,
         overlap: GaryxMobileModel.threadListPageOverlap
     ) {
         didSet {
-            if oldValue != threadListPager {
+            if oldValue != recentThreadFeeds {
                 refreshHomeObservationPaginationSnapshot()
+                emitHomeProjectionSnapshot()
             }
         }
+    }
+    var isLoadingThreads: Bool {
+        recentThreadFeeds.selectedPresentation.showsInitialSkeleton
     }
     /// Identity for the conversation scroll container (see
     /// GaryxMobileConversationViews). Refreshed on real selection changes,
@@ -221,9 +221,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var pinnedThreadIds: [String] = [] {
         didSet { emitHomeProjectionSnapshot() }
     }
-    @Published var recentThreadIds: [String] = [] {
-        didSet { emitHomeProjectionSnapshot() }
-    }
+    var allRecentThreadIds: [String] { recentThreadFeeds.allRecentThreadIds }
+    var visibleRecentThreadIds: [String] { recentThreadFeeds.visibleRecentThreadIds }
     @Published var agents: [GaryxAgentSummary] = [] {
         didSet {
             predecodeAgentAvatarImages()

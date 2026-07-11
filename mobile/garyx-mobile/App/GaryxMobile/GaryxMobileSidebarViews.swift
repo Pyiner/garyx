@@ -20,6 +20,7 @@ struct GaryxRootNavigationView: View, Equatable {
     let onRefreshSidebarThreads: () async -> Void
     let onLoadMoreThreads: (GaryxThreadListLoadMoreTrigger) async -> Void
     let onRetryLoadMoreThreads: () async -> Void
+    let onSelectRecentFilter: (GaryxRecentThreadFilter) -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
@@ -46,6 +47,7 @@ struct GaryxRootNavigationView: View, Equatable {
                 onRefreshSidebarThreads: onRefreshSidebarThreads,
                 onLoadMoreThreads: onLoadMoreThreads,
                 onRetryLoadMoreThreads: onRetryLoadMoreThreads,
+                onSelectRecentFilter: onSelectRecentFilter,
                 onStartNewChat: onStartNewChat,
                 onOpenThread: onOpenThread,
                 onTogglePinnedThread: onTogglePinnedThread,
@@ -150,6 +152,7 @@ struct GaryxHomeThreadListView: View, Equatable {
     let onRefreshSidebarThreads: () async -> Void
     let onLoadMoreThreads: (GaryxThreadListLoadMoreTrigger) async -> Void
     let onRetryLoadMoreThreads: () async -> Void
+    let onSelectRecentFilter: (GaryxRecentThreadFilter) -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
@@ -191,6 +194,10 @@ struct GaryxHomeThreadListView: View, Equatable {
         .listStyle(.plain)
         .environment(\.defaultMinListRowHeight, 0)
         .scrollContentBackground(.hidden)
+        // The List and its rows intentionally hide their UIKit backgrounds.
+        // Keep one opaque SwiftUI backing layer so Reduce Transparency never
+        // exposes the hosting window's clear surface between recycled cells.
+        .background(GaryxTheme.background)
         .scrollDisabled(isSidebarDragActive)
         .scrollDismissesKeyboard(.interactively)
         .refreshable {
@@ -248,11 +255,27 @@ struct GaryxHomeThreadListView: View, Equatable {
             .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
             .padding(.bottom, 4)
 
+        GaryxRecentThreadFilterPicker(
+            selection: snapshot.selectedRecentFilter,
+            onSelect: onSelectRecentFilter
+        )
+
         switch snapshot.recentPlaceholder {
         case .loadingSkeleton(let rowCount):
             GaryxSidebarSkeletonRows(rowCount: rowCount)
         case .empty:
-            GaryxSidebarEmptyRow(title: "No recent threads")
+            GaryxSidebarEmptyRow(
+                title: snapshot.selectedRecentFilter == .all
+                    ? "No recent threads"
+                    : "No recent chats"
+            )
+        case .unavailable:
+            Button {
+                Task { await onRefreshSidebarThreads() }
+            } label: {
+                GaryxSidebarEmptyRow(title: "Recent threads unavailable · Tap to retry")
+            }
+            .buttonStyle(.plain)
         case .none:
             // Near-tail prefetch: the row K places from the end starts the
             // next page before the user reaches the bottom. The trigger is
@@ -278,6 +301,16 @@ struct GaryxHomeThreadListView: View, Equatable {
         }
 
         spacerRow(height: 10)
+
+        if snapshot.recentFeedPresentation.headFailure,
+           snapshot.recentFeedPresentation.isPrimed {
+            Button {
+                Task { await onRefreshSidebarThreads() }
+            } label: {
+                GaryxSidebarEmptyRow(title: "Couldn't refresh · Tap to retry")
+            }
+            .buttonStyle(.plain)
+        }
 
         GaryxSidebarThreadAutoLoadFooter()
             .environment(\.garyxLoadMoreThreads, onLoadMoreThreads)
@@ -402,6 +435,9 @@ struct GaryxHomeHeaderView: View {
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 8)
+        // Match the page color while giving Reduce Transparency an opaque
+        // surface behind the title and the two glass controls.
+        .background(GaryxTheme.header)
     }
 }
 

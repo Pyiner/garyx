@@ -121,7 +121,7 @@ extension GaryxMobileModel {
     }
 
     func resetThreadListPagination() {
-        threadListPager.reset()
+        recentThreadFeeds.reset()
     }
 
     func syncVisibleMessages(for threadId: String) {

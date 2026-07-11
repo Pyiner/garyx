@@ -42,10 +42,16 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         // Drive a home pagination write through the real path: priming the
         // pager flips hasMoreThreadSummaries/footer state, and the pager's
         // didSet republishes the observation-store pagination snapshot.
-        var pager = model.threadListPager
-        let ticket = pager.requestRefresh()!
-        pager.completeRefresh(ticket, pageOffset: 0, pageCount: 30, hasMore: true)
-        model.threadListPager = pager
+        var feeds = model.recentThreadFeeds
+        let ticket = feeds.requestRefresh(filter: .all)!
+        feeds.completeRefresh(
+            ticket,
+            pageIds: [],
+            pageOffset: 0,
+            pageCount: 30,
+            hasMore: true
+        )
+        model.recentThreadFeeds = feeds
 
         XCTAssertEqual(homeInvalidations, 1)
     }
@@ -59,7 +65,7 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         let thread = makeThread(id: "thread-actor-home")
 
         model.threads = [thread]
-        model.recentThreadIds = [thread.id]
+        primeRecentFeed(model, ids: [thread.id])
         await model.homeProjectionGateway.waitForIdleForTesting()
 
         XCTAssertEqual(model.homeThreadListStore.snapshot.sections.allRows.map(\.id), [thread.id])
@@ -82,7 +88,7 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         let thread = makeThread(id: "thread-committed-delta")
 
         model.threads = [thread]
-        model.recentThreadIds = [thread.id]
+        primeRecentFeed(model, ids: [thread.id])
         await model.homeProjectionGateway.waitForIdleForTesting()
         let baselineEmitCount = model.homeProjectionGateway.snapshotEmitCount
 
@@ -124,6 +130,19 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
             runState: nil,
             worktreePath: nil
         )
+    }
+
+    private func primeRecentFeed(_ model: GaryxMobileModel, ids: [String]) {
+        var feeds = model.recentThreadFeeds
+        let ticket = feeds.requestRefresh(filter: .all)!
+        feeds.completeRefresh(
+            ticket,
+            pageIds: ids,
+            pageOffset: 0,
+            pageCount: ids.count,
+            hasMore: false
+        )
+        model.recentThreadFeeds = feeds
     }
 
     private func trackStaticHomeReads(

@@ -45,6 +45,9 @@ struct GaryxRootView: View {
                     onRetryLoadMoreThreads: {
                         await model.retryLoadMoreThreads()
                     },
+                    onSelectRecentFilter: { filter in
+                        model.selectRecentThreadFilter(filter)
+                    },
                     onStartNewChat: {
                         model.openNewThreadDraft()
                     },
@@ -487,6 +490,7 @@ struct GaryxShellView: View, Equatable {
     let onRefreshSidebarThreads: () async -> Void
     let onLoadMoreThreads: (GaryxThreadListLoadMoreTrigger) async -> Void
     let onRetryLoadMoreThreads: () async -> Void
+    let onSelectRecentFilter: (GaryxRecentThreadFilter) -> Void
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
@@ -610,6 +614,7 @@ struct GaryxShellView: View, Equatable {
                     onRefreshSidebarThreads: onRefreshSidebarThreads,
                     onLoadMoreThreads: onLoadMoreThreads,
                     onRetryLoadMoreThreads: onRetryLoadMoreThreads,
+                    onSelectRecentFilter: onSelectRecentFilter,
                     onStartNewChat: onStartNewChat,
                     onOpenThread: onOpenThread,
                     onTogglePinnedThread: onTogglePinnedThread,

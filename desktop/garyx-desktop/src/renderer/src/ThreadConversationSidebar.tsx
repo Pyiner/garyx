@@ -11,6 +11,7 @@ import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './components/ui/tooltip';
 import { useI18n } from './i18n';
 import type { ThreadAvatarIdentity } from './thread-avatar';
+import { threadRailIsNearListEnd } from './thread-conversation-sidebar-model';
 
 export type ThreadRailRow = {
   /** Stable React key and inline-confirm key. */
@@ -41,6 +42,12 @@ type ThreadConversationSidebarProps = {
   collapseLabel: string;
   /** Shown when there are no rows. Omit to render an empty list silently. */
   emptyLabel?: string;
+  /** Optional domain-owned control rendered between the title and list. */
+  headerAccessory?: ReactNode;
+  /** Optional domain-owned footer rendered inside the shared scroll area. */
+  listFooter?: ReactNode;
+  /** Called when the shared scroll area reaches its near-tail threshold. */
+  onNearListEnd?: () => void;
   rowClassName?: string;
   rows: ThreadRailRow[];
   formatThreadTimestamp: (value?: string | null) => string;
@@ -62,6 +69,9 @@ export function ThreadConversationSidebar({
   titleTooltip,
   collapseLabel,
   emptyLabel,
+  headerAccessory,
+  listFooter,
+  onNearListEnd,
   rowClassName,
   rows,
   formatThreadTimestamp,
@@ -72,6 +82,7 @@ export function ThreadConversationSidebar({
   const { t } = useI18n();
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!confirmKey) {
@@ -86,6 +97,13 @@ export function ThreadConversationSidebar({
       }
     };
   }, [confirmKey]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (onNearListEnd && list && threadRailIsNearListEnd(list)) {
+      onNearListEnd();
+    }
+  }, [listFooter, onNearListEnd, rows.length]);
 
   return (
     <TooltipProvider>
@@ -110,7 +128,17 @@ export function ThreadConversationSidebar({
         </button>
       </div>
 
-      <div className="bot-conversation-list">
+      {headerAccessory ?? null}
+
+      <div
+        className="bot-conversation-list"
+        onScroll={(event) => {
+          if (onNearListEnd && threadRailIsNearListEnd(event.currentTarget)) {
+            onNearListEnd();
+          }
+        }}
+        ref={listRef}
+      >
         {rows.length ? (
           rows.map((row) => {
             const hasAction = Boolean(row.onArchive);
@@ -210,6 +238,7 @@ export function ThreadConversationSidebar({
         ) : emptyLabel ? (
           <p className="workspace-empty-note">{emptyLabel}</p>
         ) : null}
+        {listFooter ?? null}
       </div>
       {onRailResizeStart ? (
         <div

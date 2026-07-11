@@ -9,6 +9,8 @@ struct HomeProjectionCapture: Equatable, Sendable {
     var selectedThreadId: String?
     var isLoadingThreads: Bool
     var isHomeVisible: Bool
+    var selectedRecentFilter: GaryxRecentThreadFilter
+    var recentFeedPresentation: GaryxRecentThreadFeedPresentation
     var runTrackerBusyThreadIds: Set<String>
     var committedRunStateBusyByThreadId: [String: Bool]
 
@@ -21,6 +23,8 @@ struct HomeProjectionCapture: Equatable, Sendable {
         selectedThreadId: String?,
         isLoadingThreads: Bool,
         isHomeVisible: Bool,
+        selectedRecentFilter: GaryxRecentThreadFilter = .all,
+        recentFeedPresentation: GaryxRecentThreadFeedPresentation = .init(isPrimed: true),
         runTrackerBusyThreadIds: Set<String> = [],
         committedRunStateBusyByThreadId: [String: Bool] = [:]
     ) {
@@ -32,6 +36,8 @@ struct HomeProjectionCapture: Equatable, Sendable {
         self.selectedThreadId = selectedThreadId
         self.isLoadingThreads = isLoadingThreads
         self.isHomeVisible = isHomeVisible
+        self.selectedRecentFilter = selectedRecentFilter
+        self.recentFeedPresentation = recentFeedPresentation
         self.runTrackerBusyThreadIds = Self.normalizedThreadIdSet(runTrackerBusyThreadIds)
         self.committedRunStateBusyByThreadId = Self.normalizedBusyMap(committedRunStateBusyByThreadId)
     }
@@ -50,6 +56,8 @@ struct HomeProjectionCapture: Equatable, Sendable {
             selectedThreadId: input.sectionsInput.selectedThreadId,
             isLoadingThreads: input.isLoadingThreads,
             isHomeVisible: input.isHomeVisible,
+            selectedRecentFilter: input.selectedRecentFilter,
+            recentFeedPresentation: input.recentFeedPresentation,
             runTrackerBusyThreadIds: runTrackerBusyThreadIds,
             committedRunStateBusyByThreadId: committedRunStateBusyByThreadId
         )
@@ -74,6 +82,8 @@ struct HomeProjectionCapture: Equatable, Sendable {
                 recentThreadIds: recentThreadIds,
                 agents: agents,
                 automations: automations,
+                selectedRecentFilter: selectedRecentFilter,
+                recentFeedPresentation: recentFeedPresentation,
                 recentRunStateEpoch: epoch
             ))
         }
@@ -100,7 +110,9 @@ struct HomeProjectionCapture: Equatable, Sendable {
             threads: threads,
             recentThreadIds: recentThreadIds,
             agents: agents,
-            automations: automations
+            automations: automations,
+            selectedRecentFilter: selectedRecentFilter,
+            recentFeedPresentation: recentFeedPresentation
         )
     }
 
@@ -204,12 +216,16 @@ struct HomeProjectionCheckpoint: Equatable, Sendable {
     var sections: GaryxHomeThreadSections
     var isLoadingThreads: Bool
     var isHomeVisible: Bool
+    var selectedRecentFilter: GaryxRecentThreadFilter
+    var recentFeedPresentation: GaryxRecentThreadFeedPresentation
     var counters: HomeProjectionSnapshotCounters
 
     init(snapshot: HomeSnapshot) {
         sections = snapshot.sections
         isLoadingThreads = snapshot.isLoadingThreads
         isHomeVisible = snapshot.isHomeVisible
+        selectedRecentFilter = snapshot.selectedRecentFilter
+        recentFeedPresentation = snapshot.recentFeedPresentation
         counters = HomeProjectionSnapshotCounters(sections: snapshot.sections)
     }
 
@@ -217,6 +233,8 @@ struct HomeProjectionCheckpoint: Equatable, Sendable {
         sections = snapshot.sections
         isLoadingThreads = snapshot.isLoadingThreads
         isHomeVisible = snapshot.isHomeVisible
+        selectedRecentFilter = snapshot.selectedRecentFilter
+        recentFeedPresentation = snapshot.recentFeedPresentation
         counters = HomeProjectionSnapshotCounters(sections: snapshot.sections)
     }
 }
@@ -520,4 +538,6 @@ private struct HomeProjectionDisplayPayload: Equatable, Sendable {
     var recentThreadIds: [String]
     var agents: [GaryxAgentSummary]
     var automations: [GaryxAutomationSummary]
+    var selectedRecentFilter: GaryxRecentThreadFilter
+    var recentFeedPresentation: GaryxRecentThreadFeedPresentation
 }

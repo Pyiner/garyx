@@ -386,6 +386,7 @@ export async function ensureThread(input: {
   setPendingModelReasoningEffort?: (value: string | null) => void;
   setPendingModelServiceTier?: (value: string | null) => void;
   setError: (value: string | null) => void;
+  onThreadCreated?: (thread: DesktopThreadSummary) => void;
 }): Promise<string | null> {
   let threadId = input.selectedThreadId || null;
   if (threadId) {
@@ -418,6 +419,7 @@ export async function ensureThread(input: {
       modelServiceTier: input.pendingModelServiceTier?.trim() || undefined,
     });
     input.setDesktopState(created.state);
+    input.onThreadCreated?.(created.thread);
     input.setSelectedThreadId(created.thread.id);
     input.initializeThreadMessages(created.thread.id);
     threadId = created.thread.id;

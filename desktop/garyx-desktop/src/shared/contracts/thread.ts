@@ -25,6 +25,27 @@ export interface DesktopThreadSummary {
   worktree?: ThreadWorktreeInfo | null;
 }
 
+export type RecentThreadTaskFilter = "include" | "exclude";
+
+export interface ListRecentThreadsInput {
+  /** Normalized Gateway URL expected by the renderer-owned feed ticket. */
+  gatewayScope: string;
+  tasks: RecentThreadTaskFilter;
+  limit: number;
+  offset: number;
+}
+
+export interface DesktopRecentThreadsPage {
+  /** Normalized Gateway URL actually used by the main-process request. */
+  gatewayScope: string;
+  threads: DesktopThreadSummary[];
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}
+
 export interface ThreadWorktreeInfo {
   mode?: string | null;
   enabled?: boolean | null;

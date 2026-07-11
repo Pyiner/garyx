@@ -258,11 +258,10 @@ extension GaryxMobileModel {
 
         let runtimeGeneration = gatewayRuntimeGeneration
         let previousPinnedThreadIds = pinnedThreadIds
-        let previousRecentThreadIds = recentThreadIds
         let previousThreads = threads
         let previousLastOpenedThreadId = persistedLastOpenedThreadId
         pendingThreadArchives.startArchive(threadId: normalizedThreadId)
-        removeArchivedThreadLocally(normalizedThreadId)
+        let recentRollback = removeArchivedThreadLocally(normalizedThreadId)
         if selectedThread?.id == normalizedThreadId {
             openNewThreadDraft()
         }
@@ -299,11 +298,8 @@ extension GaryxMobileModel {
             let transactionId = homeProjectionGateway.beginTransaction(label: "archive-rollback")
             defer { homeProjectionGateway.endTransaction(transactionId) }
             pinnedThreadIds = previousPinnedThreadIds
-            recentThreadIds = previousRecentThreadIds
+            recentThreadFeeds.rollbackRemoval(recentRollback)
             threads = previousThreads
-            // Rollback is list surgery too: invalidate any refresh that
-            // captured its pages while the archive was pending.
-            threadListPager.noteLocalMutation()
             restorePersistedLastOpenedThreadId(previousLastOpenedThreadId)
             persistRecentThreadsWidgetSnapshot()
             lastError = displayMessage(for: error)

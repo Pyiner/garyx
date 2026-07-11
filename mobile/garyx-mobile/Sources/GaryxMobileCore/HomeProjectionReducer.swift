@@ -22,6 +22,8 @@ enum HomeProjectionEvent: Sendable {
         recentThreadIds: [String],
         agents: [GaryxAgentSummary],
         automations: [GaryxAutomationSummary],
+        selectedRecentFilter: GaryxRecentThreadFilter,
+        recentFeedPresentation: GaryxRecentThreadFeedPresentation,
         recentRunStateEpoch: Int
     )
     case pinsChanged(pinnedThreadIds: [String])
@@ -56,17 +58,23 @@ struct HomeSnapshot: Equatable, Sendable {
     var sections: GaryxHomeThreadSections
     var isLoadingThreads: Bool
     var isHomeVisible: Bool
+    var selectedRecentFilter: GaryxRecentThreadFilter
+    var recentFeedPresentation: GaryxRecentThreadFeedPresentation
 
     init(
         appliedSeq: Int = 0,
         sections: GaryxHomeThreadSections = GaryxHomeThreadSections(),
         isLoadingThreads: Bool = false,
-        isHomeVisible: Bool = false
+        isHomeVisible: Bool = false,
+        selectedRecentFilter: GaryxRecentThreadFilter = .all,
+        recentFeedPresentation: GaryxRecentThreadFeedPresentation = .init(isPrimed: true)
     ) {
         self.appliedSeq = appliedSeq
         self.sections = sections
         self.isLoadingThreads = isLoadingThreads
         self.isHomeVisible = isHomeVisible
+        self.selectedRecentFilter = selectedRecentFilter
+        self.recentFeedPresentation = recentFeedPresentation
     }
 }
 
@@ -79,6 +87,8 @@ struct HomeProjectionState: Equatable, Sendable {
     var selectedThreadId: String?
     var isLoadingThreads = false
     var isHomeVisible = false
+    var selectedRecentFilter: GaryxRecentThreadFilter = .all
+    var recentFeedPresentation = GaryxRecentThreadFeedPresentation(isPrimed: true)
 
     fileprivate(set) var appliedSeq = 0
     fileprivate(set) var baseSections = GaryxHomeThreadSections()
@@ -111,7 +121,9 @@ struct HomeProjectionState: Equatable, Sendable {
             sectionsInput: sectionsInput,
             runningThreadIds: resolvedRunningThreadIds,
             isLoadingThreads: isLoadingThreads,
-            isHomeVisible: isHomeVisible
+            isHomeVisible: isHomeVisible,
+            selectedRecentFilter: selectedRecentFilter,
+            recentFeedPresentation: recentFeedPresentation
         )
     }
 
@@ -154,11 +166,21 @@ enum HomeProjectionReducer {
         var evaluatesRowDifference = false
 
         switch event {
-        case let .recentThreadsIngested(threads, recentThreadIds, agents, automations, recentRunStateEpoch):
+        case let .recentThreadsIngested(
+            threads,
+            recentThreadIds,
+            agents,
+            automations,
+            selectedRecentFilter,
+            recentFeedPresentation,
+            recentRunStateEpoch
+        ):
             next.threads = threads
             next.recentThreadIds = normalizedThreadIds(recentThreadIds)
             next.agents = agents
             next.automations = automations
+            next.selectedRecentFilter = selectedRecentFilter
+            next.recentFeedPresentation = recentFeedPresentation
             applyRecentRunStateSlots(to: &next, threads: threads, epoch: recentRunStateEpoch)
             rebuildBaseSectionsIfNeeded(&next)
             rebuildSnapshotFromBase(&next)
@@ -216,7 +238,9 @@ enum HomeProjectionReducer {
                 appliedSeq: next.appliedSeq,
                 sections: next.snapshot.sections,
                 isLoadingThreads: next.isLoadingThreads,
-                isHomeVisible: next.isHomeVisible
+                isHomeVisible: next.isHomeVisible,
+                selectedRecentFilter: next.selectedRecentFilter,
+                recentFeedPresentation: next.recentFeedPresentation
             )
 
         case let .homeVisibilityChanged(isVisible):
@@ -225,7 +249,9 @@ enum HomeProjectionReducer {
                 appliedSeq: next.appliedSeq,
                 sections: next.snapshot.sections,
                 isLoadingThreads: next.isLoadingThreads,
-                isHomeVisible: next.isHomeVisible
+                isHomeVisible: next.isHomeVisible,
+                selectedRecentFilter: next.selectedRecentFilter,
+                recentFeedPresentation: next.recentFeedPresentation
             )
         }
 
@@ -260,7 +286,9 @@ enum HomeProjectionReducer {
                 runningThreadIds: state.resolvedRunningThreadIds
             ),
             isLoadingThreads: state.isLoadingThreads,
-            isHomeVisible: state.isHomeVisible
+            isHomeVisible: state.isHomeVisible,
+            selectedRecentFilter: state.selectedRecentFilter,
+            recentFeedPresentation: state.recentFeedPresentation
         )
     }
 

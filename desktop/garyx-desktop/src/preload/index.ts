@@ -198,6 +198,8 @@ const api: GaryxDesktopApi = {
   renameThread: (input) => ipcRenderer.invoke("garyx:rename-thread", input),
   updateThreadRuntimeSettings: (input) =>
     ipcRenderer.invoke("garyx:update-thread-runtime-settings", input),
+  listRecentThreads: (input) =>
+    ipcRenderer.invoke("garyx:list-recent-threads", input),
   archiveThread: (input) => ipcRenderer.invoke("garyx:archive-thread", input),
   deleteThread: (input) => ipcRenderer.invoke("garyx:delete-thread", input),
   setThreadPinned: (input) =>

@@ -86,7 +86,7 @@ import {
 } from "./components/SideToolsPanel";
 import { BotConversationSidebar } from "../BotConversationSidebar";
 import { WorkspaceConversationSidebar } from "../WorkspaceConversationSidebar";
-import { ThreadConversationSidebar } from "../ThreadConversationSidebar";
+import { RecentConversationSidebar } from "../RecentConversationSidebar";
 import { ComposerQueue } from "../ComposerQueue";
 import { ConversationHeaderActions } from "../ConversationHeaderActions";
 import {
@@ -254,6 +254,7 @@ import {
   DesktopRouteStore,
   createBrowserRouteHost,
 } from "./desktop-route-store";
+import { useRecentThreadFeeds } from "./useRecentThreadFeeds";
 
 
 type ThreadEntrySelectionSource =
@@ -310,6 +311,7 @@ const CapsulesPanel = lazy(() =>
   })),
 );
 const EMPTY_UI_TRANSCRIPT_MESSAGES: UiTranscriptMessage[] = [];
+const EMPTY_DESKTOP_THREAD_SUMMARIES: DesktopThreadSummary[] = [];
 
 
 function formatThreadTimestamp(value?: string | null): string {
@@ -1712,11 +1714,21 @@ export function AppShell() {
     visibleThreadEntrySelectionSource === "workspace-conversation"
       ? visibleSelectedThreadId
       : null;
+  const recentThreadFeeds = useRecentThreadFeeds({
+    enabled: shouldShowConversationRail && recentThreadsRailOpen,
+    gatewayScope:
+      desktopState?.entitiesGatewayUrl ||
+      desktopState?.settings.gatewayUrl ||
+      "",
+    sharedSummaries:
+      desktopState?.threads || EMPTY_DESKTOP_THREAD_SUMMARIES,
+  });
   const recentThreadRows = useMemo(
     () =>
-      // `desktopState.threads` is the full recency-sorted set the app loads
-      // (gateway caps it at 1000). Show all of it; the rail list scrolls.
-      (desktopState?.threads || []).map((thread) => ({
+      // Ordering and membership come only from the server-filtered Recent
+      // feed. DesktopState.threads remains the full cache for every other
+      // Workspace/Bot/Pinned/Automation consumer.
+      recentThreadFeeds.selectedThreads.map((thread) => ({
         thread,
         isActive:
           visibleThreadEntrySelectionSource === "recent" &&
@@ -1724,7 +1736,7 @@ export function AppShell() {
         isBusy: threadRunStateIsRunning(thread),
       })),
     [
-      desktopState?.threads,
+      recentThreadFeeds.selectedThreads,
       visibleSelectedThreadId,
       visibleThreadEntrySelectionSource,
     ],
@@ -1768,6 +1780,7 @@ export function AppShell() {
     if (!normalizedId) {
       return;
     }
+    recentThreadFeeds.noteLocalMutation();
     setDesktopState((current) =>
       current
         ? {
@@ -2965,6 +2978,7 @@ export function AppShell() {
       setPendingModelReasoningEffort,
       setPendingModelServiceTier,
       setError,
+      onThreadCreated: recentThreadFeeds.upsertChat,
     });
   }
 
@@ -2984,6 +2998,7 @@ export function AppShell() {
         sdkSessionProviderHint: providerHint || undefined,
       });
       setDesktopState(created.state);
+      recentThreadFeeds.upsertChat(created.thread);
       // Selection + view flip is the thread-route application (6c-2a).
       desktopRouteStore.navigate(
         { kind: "thread", threadId: created.thread.id },
@@ -3481,6 +3496,7 @@ export function AppShell() {
 
     setDeletingThreadId(targetThreadId);
     setError(null);
+    const recentRollback = recentThreadFeeds.removeThread(targetThreadId);
     setDesktopState((current) =>
       current ? desktopStateWithoutThread(current, targetThreadId) : current,
     );
@@ -3507,6 +3523,7 @@ export function AppShell() {
       if (isArchiveAlreadyApplied(archiveError)) {
         return;
       }
+      recentThreadFeeds.rollbackRemoval(recentRollback);
       setError(
         archiveError instanceof Error
           ? archiveError.message
@@ -4454,11 +4471,9 @@ export function AppShell() {
           threadAvatarCatalog={threadAvatarCatalog}
         />
       ) : shouldShowConversationRail && recentThreadsRailOpen ? (
-        <ThreadConversationSidebar
-          ariaLabel={t("Recent threads")}
-          className="recent-conversation-rail"
+        <RecentConversationSidebar
           collapseLabel={t("Collapse recent threads")}
-          emptyLabel={t("No recent threads")}
+          feed={recentThreadFeeds.selectedFeed}
           formatThreadTimestamp={formatThreadTimestamp}
           logo={
             <span className="recent-conversation-logo">
@@ -4468,9 +4483,11 @@ export function AppShell() {
           onClose={() => {
             setRecentThreadsRailOpen(false);
           }}
+          onLoadMore={recentThreadFeeds.loadMore}
           onRailResizeStart={handleRailResizeStart}
+          onRetry={recentThreadFeeds.retry}
+          onSelectFilter={recentThreadFeeds.selectFilter}
           railResizing={railResizing}
-          rowClassName="recent-conversation-row-shell"
           rows={recentThreadRows.map((row) => ({
             key: row.thread.id,
             title: row.thread.title,
@@ -4487,7 +4504,7 @@ export function AppShell() {
                   void handleDeleteThread(row.thread.id);
                 },
           }))}
-          title={t("Recent")}
+          selectedFilter={recentThreadFeeds.state.selectedFilter}
         />
       ) : null}
       <AddBotDialogRoot
@@ -4774,6 +4791,10 @@ export function AppShell() {
                 onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenThread={(threadId) => {
                   void openExistingThread(threadId);
+                }}
+                onTaskCreated={() => {
+                  recentThreadFeeds.noteAllLocalMutation();
+                  recentThreadFeeds.refreshAll();
                 }}
                 onToast={pushToast}
                 workspaces={workspacePickerWorkspaces}

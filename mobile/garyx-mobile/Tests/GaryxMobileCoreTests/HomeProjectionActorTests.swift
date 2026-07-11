@@ -166,6 +166,51 @@ final class HomeProjectionActorTests: XCTestCase {
         XCTAssertEqual(gateway.snapshotEmitCount, 0)
         XCTAssertEqual(gateway.parityMismatchCount, 0)
     }
+
+    func testFilterAndPhasePublishWhenBothFeedsHaveIdenticalIds() async throws {
+        let fixture = GaryxHomeListFixture.makeInputs(
+            threadCount: 2,
+            pinnedCount: 0,
+            runningCount: 0
+        )
+        let sectionsInput = GaryxHomeThreadSectionsInput(fixture)
+        let actor = HomeProjectionActor()
+        let all = GaryxHomeThreadListInput(
+            sectionsInput: sectionsInput,
+            runningThreadIds: [],
+            isLoadingThreads: false,
+            isHomeVisible: true,
+            selectedRecentFilter: .all,
+            recentFeedPresentation: .init(isPrimed: true, footerState: .idle)
+        )
+        _ = await actor.applyBoundary(
+            capture: HomeProjectionCapture(legacyInput: all),
+            transactionId: 1
+        )
+        let chats = GaryxHomeThreadListInput(
+            sectionsInput: sectionsInput,
+            runningThreadIds: [],
+            isLoadingThreads: false,
+            isHomeVisible: true,
+            selectedRecentFilter: .nonTask,
+            recentFeedPresentation: .init(
+                isPrimed: false,
+                isRefreshingHead: false,
+                headFailure: true,
+                footerState: .hidden
+            )
+        )
+
+        let result = await actor.applyBoundary(
+            capture: HomeProjectionCapture(legacyInput: chats),
+            transactionId: 2
+        )
+
+        XCTAssertEqual(result.snapshot.selectedRecentFilter, .nonTask)
+        XCTAssertTrue(result.snapshot.recentFeedPresentation.headFailure)
+        XCTAssertEqual(result.snapshot.sections.recent.map(\.id), fixture.recentThreadIds)
+        XCTAssertEqual(result.parityMismatchCount, 0)
+    }
 }
 
 private extension GaryxHomeThreadSectionsInput {

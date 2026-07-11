@@ -219,12 +219,16 @@ struct GaryxHomeThreadListInput: Equatable, Sendable {
     var runningThreadIds: Set<String>
     var isLoadingThreads: Bool
     var isHomeVisible: Bool
+    var selectedRecentFilter: GaryxRecentThreadFilter
+    var recentFeedPresentation: GaryxRecentThreadFeedPresentation
 
     init(
         sectionsInput: GaryxHomeThreadSectionsInput,
         runningThreadIds: Set<String>,
         isLoadingThreads: Bool,
-        isHomeVisible: Bool
+        isHomeVisible: Bool,
+        selectedRecentFilter: GaryxRecentThreadFilter = .all,
+        recentFeedPresentation: GaryxRecentThreadFeedPresentation = .init(isPrimed: true)
     ) {
         self.sectionsInput = sectionsInput
         self.runningThreadIds = Set(
@@ -235,6 +239,8 @@ struct GaryxHomeThreadListInput: Equatable, Sendable {
         )
         self.isLoadingThreads = isLoadingThreads
         self.isHomeVisible = isHomeVisible
+        self.selectedRecentFilter = selectedRecentFilter
+        self.recentFeedPresentation = recentFeedPresentation
     }
 
     static func == (lhs: GaryxHomeThreadListInput, rhs: GaryxHomeThreadListInput) -> Bool {
@@ -246,12 +252,16 @@ struct GaryxHomeThreadListInput: Equatable, Sendable {
         var runningThreadIds: Set<String>
         var isLoadingThreads: Bool
         var isHomeVisible: Bool
+        var selectedRecentFilter: GaryxRecentThreadFilter
+        var recentFeedPresentation: GaryxRecentThreadFeedPresentation
 
         init(_ input: GaryxHomeThreadListInput) {
             sections = GaryxHomeThreadSectionsIdentityKey(input.sectionsInput)
             runningThreadIds = input.runningThreadIds
             isLoadingThreads = input.isLoadingThreads
             isHomeVisible = input.isHomeVisible
+            selectedRecentFilter = input.selectedRecentFilter
+            recentFeedPresentation = input.recentFeedPresentation
         }
     }
 }
@@ -260,9 +270,16 @@ struct GaryxHomeThreadListSnapshot: Equatable, Sendable {
     var sections = GaryxHomeThreadSections()
     var isLoadingThreads = false
     var isHomeVisible = false
+    var selectedRecentFilter: GaryxRecentThreadFilter = .all
+    var recentFeedPresentation = GaryxRecentThreadFeedPresentation(isPrimed: true)
 
     var recentPlaceholder: GaryxHomeRecentPlaceholder {
         guard sections.recent.isEmpty else { return .none }
+        if !recentFeedPresentation.isPrimed {
+            return recentFeedPresentation.headFailure
+                ? .unavailable
+                : .loadingSkeleton(rowCount: 6)
+        }
         return isLoadingThreads ? .loadingSkeleton(rowCount: 6) : .empty
     }
 
@@ -273,6 +290,7 @@ enum GaryxHomeRecentPlaceholder: Equatable, Sendable {
     case none
     case loadingSkeleton(rowCount: Int)
     case empty
+    case unavailable
 }
 
 struct GaryxHomeThreadRow: Identifiable, Equatable, Sendable {
@@ -468,7 +486,9 @@ final class GaryxHomeThreadListStore: ObservableObject {
         let next = GaryxHomeThreadListSnapshot(
             sections: Self.sections(baseSections, runningThreadIds: input.runningThreadIds),
             isLoadingThreads: input.isLoadingThreads,
-            isHomeVisible: input.isHomeVisible
+            isHomeVisible: input.isHomeVisible,
+            selectedRecentFilter: input.selectedRecentFilter,
+            recentFeedPresentation: input.recentFeedPresentation
         )
         guard snapshot != next else {
             return false
@@ -489,7 +509,9 @@ final class GaryxHomeThreadListStore: ObservableObject {
         let next = GaryxHomeThreadListSnapshot(
             sections: actorSnapshot.sections,
             isLoadingThreads: actorSnapshot.isLoadingThreads,
-            isHomeVisible: actorSnapshot.isHomeVisible
+            isHomeVisible: actorSnapshot.isHomeVisible,
+            selectedRecentFilter: actorSnapshot.selectedRecentFilter,
+            recentFeedPresentation: actorSnapshot.recentFeedPresentation
         )
         guard snapshot != next else {
             return false

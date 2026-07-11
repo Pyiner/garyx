@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  assertRecentThreadGatewayScope,
   ThreadStreamGapError,
   createTask,
   updateCustomAgent,
+  fetchRecentThreads,
   fetchThreadHistory,
   getTask,
   listTaskForest,
@@ -13,6 +15,7 @@ import {
   setGatewayFetch,
   setGatewayStreamFetch,
   streamThreadEvents,
+  validateListRecentThreadsInput,
 } from "./gary-client.ts";
 
 test("fetchThreadHistory preserves kind parity fields for committed reducers", async () => {
@@ -1031,6 +1034,131 @@ test("fetchThreads keeps the full limit by default and honors a fast page limit"
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("fetchRecentThreads sends an explicit task filter and maps the filtered page", async () => {
+  const urls = [];
+  setGatewayFetch(async (url) => {
+    urls.push(String(url));
+    return new Response(
+      JSON.stringify({
+        threads: [
+          {
+            thread_id: "thread::chat-page",
+            title: "Chat page",
+            thread_type: "chat",
+            last_active_at: "2026-07-11T12:00:00Z",
+            run_state: "running",
+            thread_runtime: { provider_type: "codex" },
+          },
+        ],
+        count: 1,
+        total: 101,
+        limit: 100,
+        offset: 5,
+        has_more: true,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+  try {
+    const settings = {
+      gatewayUrl: "https://garyx.example.test/",
+      gatewayAuthToken: "",
+    };
+    const all = await fetchRecentThreads(settings, {
+      tasks: "include",
+      limit: 100,
+      offset: 5,
+    });
+    const chats = await fetchRecentThreads(settings, {
+      tasks: "exclude",
+      limit: 30,
+      offset: 0,
+    });
+
+    assert.equal(
+      urls[0],
+      "https://garyx.example.test/api/recent-threads?tasks=include&limit=100&offset=5",
+    );
+    assert.equal(
+      urls[1],
+      "https://garyx.example.test/api/recent-threads?tasks=exclude&limit=30&offset=0",
+    );
+    assert.equal(all.gatewayScope, "https://garyx.example.test");
+    assert.equal(all.threads[0].id, "thread::chat-page");
+    assert.equal(all.threads[0].title, "Chat page");
+    assert.equal(all.threads[0].createdAt, "2026-07-11T12:00:00Z");
+    assert.equal(all.hasMore, true);
+    assert.equal(chats.count, 1);
+  } finally {
+    setGatewayFetch(null);
+  }
+});
+
+test("validateListRecentThreadsInput rejects renderer-selected URLs and invalid pages", () => {
+  assert.deepEqual(
+    validateListRecentThreadsInput({
+      gatewayScope: "https://garyx.example.test///",
+      tasks: "exclude",
+      limit: 100,
+      offset: 0,
+    }),
+    {
+      gatewayScope: "https://garyx.example.test",
+      tasks: "exclude",
+      limit: 100,
+      offset: 0,
+    },
+  );
+  assert.throws(
+    () =>
+      validateListRecentThreadsInput({
+        gatewayScope: "",
+        tasks: "include",
+        limit: 100,
+        offset: 0,
+      }),
+    /gatewayScope is required/,
+  );
+  assert.throws(
+    () =>
+      validateListRecentThreadsInput({
+        gatewayScope: "https://garyx.example.test",
+        tasks: "only",
+        limit: 100,
+        offset: 0,
+      }),
+    /tasks must be include or exclude/,
+  );
+  assert.throws(
+    () =>
+      validateListRecentThreadsInput({
+        gatewayScope: "https://garyx.example.test",
+        tasks: "include",
+        limit: 201,
+        offset: -1,
+      }),
+    /limit must be an integer between 1 and 200/,
+  );
+});
+
+test("Recent IPC ownership rejects an expected/actual Gateway scope mismatch", () => {
+  assert.equal(
+    assertRecentThreadGatewayScope(
+      { gatewayUrl: "https://gateway-a.test/", gatewayAuthToken: "" },
+      "https://gateway-a.test",
+    ),
+    "https://gateway-a.test",
+  );
+  assert.throws(
+    () =>
+      assertRecentThreadGatewayScope(
+        { gatewayUrl: "https://gateway-b.test", gatewayAuthToken: "" },
+        "https://gateway-a.test",
+      ),
+    /Gateway changed before the Recent request started/,
+  );
 });
 
 test("fetchThreadSummary maps a metadata payload and resolves null on miss", async () => {

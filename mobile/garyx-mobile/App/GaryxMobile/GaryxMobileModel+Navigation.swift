@@ -512,7 +512,6 @@ extension GaryxMobileModel {
         connectionState = .ready(version: "debug")
         debugShowsWorkspaceModeSheet = false
         debugShowsGatewaySwitcher = false
-        isLoadingThreads = false
         resetThreadListPagination()
         remoteStateLoadPhase = .loaded
         agentTargetsLoadPhase = .loaded

@@ -128,7 +128,9 @@ import type {
   DesktopThreadSummary,
   GetThreadHistoryInput,
   InterruptResult,
+  ListRecentThreadsInput,
   OpenChatStreamResult,
+  DesktopRecentThreadsPage,
   RenameThreadInput,
   SendMessageInput,
   SendStreamingInputResult,
@@ -387,6 +389,9 @@ export interface GaryxDesktopApi {
   updateThreadRuntimeSettings: (
     input: UpdateThreadRuntimeSettingsInput,
   ) => Promise<ThreadTranscript>;
+  listRecentThreads: (
+    input: ListRecentThreadsInput,
+  ) => Promise<DesktopRecentThreadsPage>;
   archiveThread: (input: ArchiveThreadInput) => Promise<DesktopState>;
   deleteThread: (input: DeleteThreadInput) => Promise<DesktopState>;
   setThreadPinned: (input: SetThreadPinnedInput) => Promise<DesktopState>;

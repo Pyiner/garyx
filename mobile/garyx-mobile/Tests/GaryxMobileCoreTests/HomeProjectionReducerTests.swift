@@ -345,6 +345,8 @@ final class HomeProjectionReducerTests: XCTestCase {
             recentThreadIds: input.recentThreadIds,
             agents: input.agents,
             automations: input.automations,
+            selectedRecentFilter: .all,
+            recentFeedPresentation: .init(isPrimed: true),
             recentRunStateEpoch: epoch
         )
     }

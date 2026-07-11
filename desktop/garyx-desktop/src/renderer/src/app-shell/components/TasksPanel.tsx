@@ -85,6 +85,7 @@ type TasksPanelProps = {
   workspaceMutation: string | null;
   onAddWorkspace: (path: string) => Promise<DesktopWorkspace | null>;
   onOpenThread: (threadId: string) => void;
+  onTaskCreated?: () => void;
   onToast: (message: string, tone?: ToastTone) => void;
 };
 
@@ -239,6 +240,7 @@ export function TasksPanel({
   workspaceMutation,
   onAddWorkspace,
   onOpenThread,
+  onTaskCreated,
   onToast,
 }: TasksPanelProps) {
   const { t } = useI18n();
@@ -574,6 +576,7 @@ export function TasksPanel({
         workspaceMode: draftWorkspaceMode,
         notificationTarget,
       });
+      onTaskCreated?.();
       resetDraft();
       await loadTasks({ silent: true });
       onToast(t('Task created.'), 'success');

@@ -68,15 +68,15 @@ extension GaryxMobileModel {
             threadId: normalizedId,
             pinned: pinned
         )
-        threadListPager.noteLocalMutation()
+        recentThreadFeeds.noteLocalMutation()
         do {
             let page = try await client().setThreadPinned(threadId: normalizedId, pinned: pinned)
             applyPinnedThreadIds(page.threadIds)
-            threadListPager.noteLocalMutation()
+            recentThreadFeeds.noteLocalMutation()
             persistRecentThreadsWidgetSnapshot()
         } catch {
             pinnedThreadIds = previousIds
-            threadListPager.noteLocalMutation()
+            recentThreadFeeds.noteLocalMutation()
             persistRecentThreadsWidgetSnapshot()
             lastError = displayMessage(for: error)
         }
@@ -94,23 +94,30 @@ extension GaryxMobileModel {
     func removePinnedThreadIdLocally(_ threadId: String) {
         let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         pinnedThreadIds.removeAll { $0 == normalizedId }
-        threadListPager.noteLocalMutation()
+        recentThreadFeeds.noteLocalMutation()
     }
 
-    func removeArchivedThreadLocally(_ threadId: String) {
+    @discardableResult
+    func removeArchivedThreadLocally(_ threadId: String) -> GaryxRecentThreadRemovalRollback {
         let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedId.isEmpty else { return }
+        guard !normalizedId.isEmpty else {
+            return GaryxRecentThreadRemovalRollback(
+                threadId: "",
+                allPosition: nil,
+                nonTaskPosition: nil
+            )
+        }
         let transactionId = homeProjectionGateway.beginTransaction(label: "archive-local-remove")
         defer { homeProjectionGateway.endTransaction(transactionId) }
         pinnedThreadIds.removeAll { $0 == normalizedId }
-        recentThreadIds.removeAll { $0 == normalizedId }
+        let rollback = recentThreadFeeds.removeThread(normalizedId)
         threads.removeAll { $0.id == normalizedId }
         // Any in-flight refresh captured this thread before the removal;
         // invalidate its commit so stale snapshots cannot resurrect the row
         // even after the archive tombstone resolves (review #TASK-1804).
-        threadListPager.noteLocalMutation()
         clearPersistedLastOpenedThreadId(ifMatches: normalizedId)
         persistRecentThreadsWidgetSnapshot()
+        return rollback
     }
 
     // MARK: - Last opened thread restore

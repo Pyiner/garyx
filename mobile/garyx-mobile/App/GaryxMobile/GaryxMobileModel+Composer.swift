@@ -583,6 +583,7 @@ extension GaryxMobileModel {
             )
         )
         threads.insert(thread, at: 0)
+        recentThreadFeeds.upsertChat(threadId: thread.id)
         threadHistoryLoadedIds.insert(thread.id)
         let canAdoptSelection = !adoptIfDraftStillCurrent
             || (selectedThread == nil && selectedThreadDraftGeneration == draftGeneration)

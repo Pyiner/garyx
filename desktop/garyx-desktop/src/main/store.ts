@@ -42,6 +42,7 @@ import {
   fetchThreads,
   fetchWorkspaces,
   mapChannelEndpoint,
+  normalizeGatewayUrl,
   runRemoteAutomationNow,
   setRemoteThreadPinned,
   updateRemoteAutomation,
@@ -490,9 +491,10 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
   // Entity slices are gateway-scoped: state persisted while another gateway
   // was selected must not leak into this gateway's view.
   const entitiesGatewayUrl = typeof value?.entitiesGatewayUrl === 'string'
-    ? value.entitiesGatewayUrl.trim()
+    ? normalizeGatewayUrl(value.entitiesGatewayUrl)
     : '';
-  const entityScopeMatches = entitiesGatewayUrl === (settings.gatewayUrl || '').trim();
+  const normalizedGatewayUrl = normalizeGatewayUrl(settings.gatewayUrl || '');
+  const entityScopeMatches = entitiesGatewayUrl === normalizedGatewayUrl;
   const legacyBotBindings =
     value && typeof value === 'object' && 'botBindings' in value
       ? (value as Partial<DesktopState> & { botBindings?: Record<string, string> }).botBindings
@@ -524,7 +526,7 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
   return {
     settings,
     gatewayProfiles,
-    entitiesGatewayUrl: (settings.gatewayUrl || '').trim(),
+    entitiesGatewayUrl: normalizedGatewayUrl,
     workspaces,
     selectedWorkspacePath: entityScopeMatches ? (value?.selectedWorkspacePath ?? null) : null,
     pinnedThreadIds: entityScopeMatches ? normalizePinnedThreadIds(value?.pinnedThreadIds) : [],

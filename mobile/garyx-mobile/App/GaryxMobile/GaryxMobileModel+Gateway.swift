@@ -105,7 +105,6 @@ extension GaryxMobileModel {
         connectionState = .disconnected
         threads = []
         pinnedThreadIds = []
-        recentThreadIds = []
         pendingThreadArchives = GaryxPendingThreadArchiveState()
         GaryxMobileWidgetStore.clear()
         WidgetCenter.shared.reloadTimelines(ofKind: GaryxRecentThreadsWidgetConstants.kind)
@@ -162,7 +161,6 @@ extension GaryxMobileModel {
         selectedAutomationEditor = nil
         selectedAgentDetail = nil
         routeNotFoundStore.selection = nil
-        isLoadingThreads = false
         remoteStateLoadPhase = .idle
         isLoadingSelectedThreadHistory = false
     }

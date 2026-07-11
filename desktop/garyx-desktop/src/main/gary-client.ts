@@ -18,6 +18,7 @@ export * from "./garyx-client/gateway.ts";
 
 export {
   GatewayRequestError,
+  normalizeGatewayUrl,
   requestJson,
   requestText,
   setGatewayFetch,

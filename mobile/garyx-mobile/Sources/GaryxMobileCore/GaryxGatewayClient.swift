@@ -322,10 +322,15 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func listRecentThreads(limit: Int = 30, offset: Int = 0) async throws -> GaryxRecentThreadsPage {
+    public func listRecentThreads(
+        filter: GaryxRecentThreadFilter = .all,
+        limit: Int = 30,
+        offset: Int = 0
+    ) async throws -> GaryxRecentThreadsPage {
         try await get(
             "/api/recent-threads",
             queryItems: [
+                URLQueryItem(name: "tasks", value: filter.tasksQueryValue),
                 URLQueryItem(name: "limit", value: String(limit)),
                 URLQueryItem(name: "offset", value: String(offset)),
             ]
