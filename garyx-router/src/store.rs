@@ -12,6 +12,17 @@ use crate::tasks::TaskProjectionReader;
 /// support various backends, and every method surfaces backend failures as
 /// [`ThreadStoreError`] — a read returning `Ok(None)` really means "absent",
 /// and a write returning `Ok(())` really means "persisted".
+/// One record's top-level field merge inside an atomic multi-record
+/// mutation (see [`ThreadStore::update_many_atomic`]).
+#[derive(Debug, Clone)]
+pub struct AtomicRecordMerge {
+    pub thread_id: String,
+    pub fields: Value,
+    /// Missing records normally abort the mutation; registry-style
+    /// records owned by the mutation itself are created on first write.
+    pub create_if_missing: bool,
+}
+
 #[async_trait]
 pub trait ThreadStore: Send + Sync {
     /// Retrieve thread data by key. `Ok(None)` means the thread does not
@@ -42,6 +53,40 @@ pub trait ThreadStore: Send + Sync {
     /// Returns [`ThreadStoreError::NotFound`] if the thread does not exist
     /// and [`ThreadStoreError::Archived`] if it is tombstoned.
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError>;
+
+    /// Apply top-level field merges to SEVERAL records as one
+    /// all-or-nothing mutation. Multi-record state transitions (moving an
+    /// endpoint binding touches the previous owner, the target, and the
+    /// known-endpoint registry) must never commit partially: a storage
+    /// failure mid-mutation would otherwise lose the active binding
+    /// (#TASK-2099 root final review).
+    ///
+    /// A missing record aborts the whole mutation with
+    /// [`ThreadStoreError::NotFound`] unless the entry sets
+    /// `create_if_missing` (the known-endpoint registry record is created
+    /// on first bind); vanished thread records are never resurrected as
+    /// skeletons.
+    ///
+    /// Transactional backends override this with a single-transaction
+    /// implementation covering every record and its derived projections.
+    /// The default merges under whatever guarantees `update`/`set`
+    /// provide and exists only for simple in-memory stores; production
+    /// mutation paths run on the SQLite store.
+    async fn update_many_atomic(
+        &self,
+        entries: Vec<AtomicRecordMerge>,
+    ) -> Result<(), ThreadStoreError> {
+        for entry in entries {
+            match self.update(&entry.thread_id, entry.fields.clone()).await {
+                Ok(()) => {}
+                Err(ThreadStoreError::NotFound(_)) if entry.create_if_missing => {
+                    self.set(&entry.thread_id, entry.fields).await?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
 
     /// Count keys, optionally filtered by prefix. Backends with SQL
     /// storage override this with a COUNT query; the default lists keys.

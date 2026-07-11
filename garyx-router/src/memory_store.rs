@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use crate::store::{ThreadStore, ThreadStoreError};
+use crate::store::{AtomicRecordMerge, ThreadStore, ThreadStoreError};
 
 /// In-memory thread storage using a `HashMap` behind a [`RwLock`].
 ///
@@ -73,6 +73,33 @@ impl ThreadStore for InMemoryThreadStore {
         if let (Some(existing), Some(new_fields)) = (entry.as_object_mut(), updates.as_object()) {
             for (k, v) in new_fields {
                 existing.insert(k.clone(), v.clone());
+            }
+        }
+        Ok(())
+    }
+
+    async fn update_many_atomic(
+        &self,
+        entries: Vec<AtomicRecordMerge>,
+    ) -> Result<(), ThreadStoreError> {
+        // One write guard across validation and application: either every
+        // entry applies or none do.
+        let mut guard = self.store.write().await;
+        for entry in &entries {
+            if !entry.create_if_missing && !guard.contains_key(&entry.thread_id) {
+                return Err(ThreadStoreError::NotFound(entry.thread_id.clone()));
+            }
+        }
+        for entry in entries {
+            let record = guard
+                .entry(entry.thread_id)
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let (Some(existing), Some(new_fields)) =
+                (record.as_object_mut(), entry.fields.as_object())
+            {
+                for (k, v) in new_fields {
+                    existing.insert(k.clone(), v.clone());
+                }
             }
         }
         Ok(())

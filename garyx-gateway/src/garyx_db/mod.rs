@@ -1657,58 +1657,43 @@ impl GaryxDbService {
         updated_at: Option<&str>,
         projections: Option<ThreadRecordProjections>,
     ) -> GaryxDbResult<()> {
-        let key = normalize_required("key", key)?;
         let recorded_at = now_string();
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        // Archived threads reject writes inside the same transaction that
-        // would persist them — a tombstone committed by a racing archive
-        // can never be overtaken by a write that passed an earlier check.
-        if garyx_router::is_thread_key(&key) {
-            let archived: Option<i64> = tx
-                .query_row(
-                    "SELECT 1 FROM archived_threads WHERE thread_id = ?1",
-                    params![key],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            if archived.is_some() {
-                return Err(GaryxDbError::ThreadArchived(key));
-            }
-        }
-        tx.execute(
-            "INSERT INTO thread_records (key, body, updated_at, recorded_at)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(key) DO UPDATE SET
-                body = excluded.body,
-                updated_at = excluded.updated_at,
-                recorded_at = excluded.recorded_at",
-            params![key, body, updated_at, recorded_at],
+        write_thread_record_with_projections_tx(
+            &tx,
+            key,
+            body,
+            updated_at,
+            projections,
+            &recorded_at,
         )?;
-        if let Some(projections) = projections {
-            match projections.thread_meta {
-                Some(draft) => replace_thread_meta_projection_tx(&tx, draft, &recorded_at)?,
-                None => {
-                    remove_thread_meta_projection_tx(&tx, &key)?;
-                }
-            }
-            match projections.task {
-                Some(mut draft) => {
-                    draft.thread_id = normalize_thread_id(&draft.thread_id)?;
-                    task_forest::upsert_task_projection(&tx, &draft, &recorded_at)?;
-                }
-                None => {
-                    remove_task_projection_tx(&tx, &key)?;
-                }
-            }
-            match projections.recent {
-                Some(draft) => {
-                    upsert_recent_thread_tx(&tx, draft, &recorded_at)?;
-                }
-                None => {
-                    remove_recent_thread_tx(&tx, &key)?;
-                }
-            }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// All-or-nothing write of MULTIPLE thread records plus their derived
+    /// projections in one transaction (#TASK-2099 root final review):
+    /// endpoint binding mutations touch the previous owner, the target,
+    /// and the known-endpoint registry together — either every record and
+    /// projection commits or none do, so a mid-mutation storage failure
+    /// can never lose the active binding.
+    pub fn write_thread_records_with_projections_atomic(
+        &self,
+        entries: Vec<ThreadRecordWrite>,
+    ) -> GaryxDbResult<()> {
+        let recorded_at = now_string();
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        for entry in entries {
+            write_thread_record_with_projections_tx(
+                &tx,
+                &entry.key,
+                &entry.body,
+                entry.updated_at.as_deref(),
+                entry.projections,
+                &recorded_at,
+            )?;
         }
         tx.commit()?;
         Ok(())
@@ -2497,6 +2482,75 @@ pub struct ThreadRecordProjections {
     pub thread_meta: Option<ThreadMetaProjectionDraft>,
     pub task: Option<TaskProjectionDraft>,
     pub recent: Option<RecentThreadDraft>,
+}
+
+/// One record write inside an atomic multi-record batch.
+pub struct ThreadRecordWrite {
+    pub key: String,
+    pub body: String,
+    pub updated_at: Option<String>,
+    pub projections: Option<ThreadRecordProjections>,
+}
+
+fn write_thread_record_with_projections_tx(
+    tx: &Transaction<'_>,
+    key: &str,
+    body: &str,
+    updated_at: Option<&str>,
+    projections: Option<ThreadRecordProjections>,
+    recorded_at: &str,
+) -> GaryxDbResult<()> {
+    let key = normalize_required("key", key)?;
+    // Archived threads reject writes inside the same transaction that
+    // would persist them — a tombstone committed by a racing archive
+    // can never be overtaken by a write that passed an earlier check.
+    if garyx_router::is_thread_key(&key) {
+        let archived: Option<i64> = tx
+            .query_row(
+                "SELECT 1 FROM archived_threads WHERE thread_id = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if archived.is_some() {
+            return Err(GaryxDbError::ThreadArchived(key));
+        }
+    }
+    tx.execute(
+        "INSERT INTO thread_records (key, body, updated_at, recorded_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(key) DO UPDATE SET
+            body = excluded.body,
+            updated_at = excluded.updated_at,
+            recorded_at = excluded.recorded_at",
+        params![key, body, updated_at, recorded_at],
+    )?;
+    if let Some(projections) = projections {
+        match projections.thread_meta {
+            Some(draft) => replace_thread_meta_projection_tx(tx, draft, recorded_at)?,
+            None => {
+                remove_thread_meta_projection_tx(tx, &key)?;
+            }
+        }
+        match projections.task {
+            Some(mut draft) => {
+                draft.thread_id = normalize_thread_id(&draft.thread_id)?;
+                task_forest::upsert_task_projection(tx, &draft, recorded_at)?;
+            }
+            None => {
+                remove_task_projection_tx(tx, &key)?;
+            }
+        }
+        match projections.recent {
+            Some(draft) => {
+                upsert_recent_thread_tx(tx, draft, recorded_at)?;
+            }
+            None => {
+                remove_recent_thread_tx(tx, &key)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Escape `%`/`_`/`\` so a caller-supplied prefix matches literally in a

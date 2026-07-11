@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use garyx_router::{
-    ChannelBinding, EndpointBindResult, EndpointBindingMutationError, EndpointBindingMutator,
-    EndpointBindingOwner, EndpointDetachResult, KnownChannelEndpoint, ThreadStore,
-    bindings_from_value, remove_binding, upsert_binding, upsert_known_channel_endpoint,
-    validate_thread_accepts_bot_binding,
+    AtomicRecordMerge, ChannelBinding, EndpointBindResult, EndpointBindingMutationError,
+    EndpointBindingMutator, EndpointBindingOwner, EndpointDetachResult,
+    KNOWN_CHANNEL_ENDPOINTS_KEY, KnownChannelEndpoint, ThreadStore, ThreadStoreError,
+    bindings_from_value, remove_binding, upsert_binding, validate_thread_accepts_bot_binding,
 };
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
@@ -46,30 +46,68 @@ impl SqlEndpointBindingMutator {
             .map_err(|error| EndpointBindingMutationError::Projection(error.to_string()))
     }
 
-    async fn write_binding_fields(
+    /// The registry record merge for one binding upsert, computed from a
+    /// fresh read so it can join the atomic batch instead of being a
+    /// separate trailing write.
+    async fn registry_merge(
         &self,
-        thread_id: &str,
-        record: &Value,
-    ) -> Result<(), EndpointBindingMutationError> {
-        let mut updates = Map::new();
-        updates.insert(
-            "channel_bindings".to_owned(),
-            record
-                .get("channel_bindings")
-                .cloned()
-                .unwrap_or_else(|| Value::Array(Vec::new())),
-        );
-        if let Some(updated_at) = record.get("updated_at") {
-            updates.insert("updated_at".to_owned(), updated_at.clone());
-        }
-        self.thread_store
-            .update(thread_id, Value::Object(updates))
+        binding: &ChannelBinding,
+    ) -> Result<AtomicRecordMerge, EndpointBindingMutationError> {
+        let mut registry = self
+            .thread_store
+            .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
             .await
             .map_err(|error| EndpointBindingMutationError::WriteFailed {
-                thread_id: thread_id.to_owned(),
+                thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+                message: error.to_string(),
+            })?
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        upsert_binding(&mut registry, binding.clone());
+        Ok(AtomicRecordMerge {
+            thread_id: KNOWN_CHANNEL_ENDPOINTS_KEY.to_owned(),
+            fields: binding_fields_of(&registry),
+            create_if_missing: true,
+        })
+    }
+
+    /// Commit every record merge of one binding mutation as a single
+    /// all-or-nothing write (#TASK-2099 root final review): the previous
+    /// owner, the target, and the known-endpoint registry either all
+    /// commit — records and projections alike — or none do, so a storage
+    /// failure mid-mutation can never lose the active binding.
+    async fn commit_atomic(
+        &self,
+        subject_thread_id: &str,
+        entries: Vec<AtomicRecordMerge>,
+    ) -> Result<(), EndpointBindingMutationError> {
+        self.thread_store
+            .update_many_atomic(entries)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: match &error {
+                    ThreadStoreError::NotFound(id) | ThreadStoreError::Archived(id) => id.clone(),
+                    ThreadStoreError::Serialization { thread_id, .. } => thread_id.clone(),
+                    ThreadStoreError::Backend(_) => subject_thread_id.to_owned(),
+                },
                 message: error.to_string(),
             })
     }
+}
+
+/// `channel_bindings` + `updated_at` as a top-level merge for one record.
+fn binding_fields_of(record: &Value) -> Value {
+    let mut updates = Map::new();
+    updates.insert(
+        "channel_bindings".to_owned(),
+        record
+            .get("channel_bindings")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())),
+    );
+    if let Some(updated_at) = record.get("updated_at") {
+        updates.insert("updated_at".to_owned(), updated_at.clone());
+    }
+    Value::Object(updates)
 }
 
 fn binding_from_endpoint(endpoint: &KnownChannelEndpoint) -> ChannelBinding {
@@ -155,12 +193,16 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
             .as_deref()
             .filter(|previous| *previous != target_thread_id)
             .map(ToOwned::to_owned);
+        let mut entries = Vec::new();
         if let Some(previous_thread_id) = previous_thread_id.as_deref() {
             match self.thread_store.get(previous_thread_id).await {
                 Ok(Some(mut previous)) => {
                     if remove_binding(&mut previous, &endpoint_key) {
-                        self.write_binding_fields(previous_thread_id, &previous)
-                            .await?;
+                        entries.push(AtomicRecordMerge {
+                            thread_id: previous_thread_id.to_owned(),
+                            fields: binding_fields_of(&previous),
+                            create_if_missing: false,
+                        });
                     } else {
                         return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
                             previous_thread_id.to_owned(),
@@ -188,14 +230,14 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
         let changed = previous_thread_id.is_some() || target_changed;
         if changed {
             upsert_binding(&mut target, binding.clone());
-            self.write_binding_fields(target_thread_id, &target).await?;
+            entries.push(AtomicRecordMerge {
+                thread_id: target_thread_id.to_owned(),
+                fields: binding_fields_of(&target),
+                create_if_missing: false,
+            });
         }
-        upsert_known_channel_endpoint(&self.thread_store, &binding)
-            .await
-            .map_err(|message| EndpointBindingMutationError::WriteFailed {
-                thread_id: "meta::known_channel_endpoints".to_owned(),
-                message,
-            })?;
+        entries.push(self.registry_merge(&binding).await?);
+        self.commit_atomic(target_thread_id, entries).await?;
 
         Ok(EndpointBindResult {
             thread_id: target_thread_id.to_owned(),
@@ -220,12 +262,17 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
         };
         let binding = binding_from_endpoint(&owner);
         let previous_thread_id = owner.thread_id.clone();
-        if let Some(previous_thread_id) = previous_thread_id.as_deref() {
+        let mut entries = Vec::new();
+        let subject = if let Some(previous_thread_id) = previous_thread_id.as_deref() {
             match self.thread_store.get(previous_thread_id).await {
                 Ok(Some(mut previous)) => {
                     if remove_binding(&mut previous, endpoint_key) {
-                        self.write_binding_fields(previous_thread_id, &previous)
-                            .await?;
+                        entries.push(AtomicRecordMerge {
+                            thread_id: previous_thread_id.to_owned(),
+                            fields: binding_fields_of(&previous),
+                            create_if_missing: false,
+                        });
+                        previous_thread_id.to_owned()
                     } else {
                         return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
                             previous_thread_id.to_owned(),
@@ -248,13 +295,9 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
             return Err(EndpointBindingMutationError::Projection(format!(
                 "endpoint projection '{endpoint_key}' has no owner"
             )));
-        }
-        upsert_known_channel_endpoint(&self.thread_store, &binding)
-            .await
-            .map_err(|message| EndpointBindingMutationError::WriteFailed {
-                thread_id: "meta::known_channel_endpoints".to_owned(),
-                message,
-            })?;
+        };
+        entries.push(self.registry_merge(&binding).await?);
+        self.commit_atomic(&subject, entries).await?;
 
         Ok(EndpointDetachResult {
             previous_thread_id,
@@ -341,6 +384,26 @@ mod tests {
                 return Err(ThreadStoreError::NotFound(thread_id.to_owned()));
             }
             self.inner.update(thread_id, updates).await
+        }
+
+        async fn update_many_atomic(
+            &self,
+            entries: Vec<AtomicRecordMerge>,
+        ) -> Result<(), ThreadStoreError> {
+            // Mirror the transactional contract: a failure injected for ANY
+            // record in the batch fails the WHOLE mutation before anything
+            // is written.
+            for entry in &entries {
+                if self
+                    .failed_updates
+                    .lock()
+                    .unwrap()
+                    .contains(&entry.thread_id)
+                {
+                    return Err(ThreadStoreError::NotFound(entry.thread_id.clone()));
+                }
+            }
+            self.inner.update_many_atomic(entries).await
         }
     }
 
@@ -500,6 +563,24 @@ mod tests {
             EndpointBindingMutationError::WriteFailed { ref thread_id, .. }
                 if thread_id == "thread::failed"
         ));
+        // All-or-nothing (#TASK-2099 root final review): the failed move
+        // must leave the previous owner's binding AND its projection
+        // untouched — a mid-mutation storage failure never loses the
+        // active binding.
+        assert_eq!(
+            bindings_from_value(&store.get("thread::old").await.unwrap().unwrap()),
+            vec![binding()],
+            "old owner keeps its binding after a failed move"
+        );
+        assert_eq!(
+            db.get_thread_channel_endpoint("telegram::main::1000000001")
+                .unwrap()
+                .unwrap()
+                .thread_id
+                .as_deref(),
+            Some("thread::old"),
+            "projection owner is unchanged after a failed move"
+        );
         assert_eq!(store.list_calls.load(Ordering::SeqCst), 0);
     }
 
@@ -542,6 +623,104 @@ mod tests {
             EndpointBindingMutationError::TargetNotFound(ref thread_id)
                 if thread_id == "thread::missing"
         ));
+    }
+
+    /// The trailing known-endpoint registry write is part of the same
+    /// all-or-nothing mutation: failing it must leave the previous owner,
+    /// the target, and the projection exactly as before the bind
+    /// (#TASK-2099 root final review).
+    #[tokio::test]
+    async fn bind_registry_write_failure_leaves_owner_and_target_untouched() {
+        let (db, store, mutator) = fixture();
+        seed_thread(&store, "thread::old").await;
+        seed_thread(&store, "thread::target").await;
+        mutator
+            .bind_endpoint("thread::old", binding())
+            .await
+            .expect("initial bind");
+
+        store.fail_update("meta::known_channel_endpoints");
+        let error = mutator
+            .bind_endpoint("thread::target", binding())
+            .await
+            .expect_err("registry write failure must fail the whole mutation");
+        assert!(matches!(
+            error,
+            EndpointBindingMutationError::WriteFailed { ref thread_id, .. }
+                if thread_id == "meta::known_channel_endpoints"
+        ));
+        assert_eq!(
+            bindings_from_value(&store.get("thread::old").await.unwrap().unwrap()),
+            vec![binding()],
+            "old owner keeps its binding"
+        );
+        assert!(
+            bindings_from_value(&store.get("thread::target").await.unwrap().unwrap()).is_empty(),
+            "target gains nothing from the failed mutation"
+        );
+        assert_eq!(
+            db.get_thread_channel_endpoint("telegram::main::1000000001")
+                .unwrap()
+                .unwrap()
+                .thread_id
+                .as_deref(),
+            Some("thread::old"),
+            "projection owner is unchanged"
+        );
+
+        store.failed_updates.lock().unwrap().clear();
+        let moved = mutator
+            .bind_endpoint("thread::target", binding())
+            .await
+            .expect("mutation succeeds once storage recovers");
+        assert_eq!(moved.previous_thread_id.as_deref(), Some("thread::old"));
+    }
+
+    /// Detach is the symmetric all-or-nothing mutation: an owner-write or
+    /// trailing registry-write failure must leave the binding attached
+    /// and projected (#TASK-2099 root final review).
+    #[tokio::test]
+    async fn detach_write_failures_leave_binding_attached() {
+        let (db, store, mutator) = fixture();
+        seed_thread(&store, "thread::owner").await;
+        mutator
+            .bind_endpoint("thread::owner", binding())
+            .await
+            .expect("initial bind");
+
+        for failed_key in ["thread::owner", "meta::known_channel_endpoints"] {
+            store.fail_update(failed_key);
+            let error = mutator
+                .detach_endpoint("telegram::main::1000000001")
+                .await
+                .expect_err("detach must fail as a whole");
+            assert!(matches!(
+                error,
+                EndpointBindingMutationError::WriteFailed { ref thread_id, .. }
+                    if thread_id == failed_key
+            ));
+            assert_eq!(
+                bindings_from_value(&store.get("thread::owner").await.unwrap().unwrap()),
+                vec![binding()],
+                "owner keeps its binding after a failed detach ({failed_key})"
+            );
+            assert_eq!(
+                db.get_thread_channel_endpoint("telegram::main::1000000001")
+                    .unwrap()
+                    .unwrap()
+                    .thread_id
+                    .as_deref(),
+                Some("thread::owner"),
+                "projection owner survives a failed detach ({failed_key})"
+            );
+            store.failed_updates.lock().unwrap().clear();
+        }
+
+        let detached = mutator
+            .detach_endpoint("telegram::main::1000000001")
+            .await
+            .expect("detach succeeds once storage recovers");
+        assert!(detached.changed);
     }
 
     #[tokio::test]

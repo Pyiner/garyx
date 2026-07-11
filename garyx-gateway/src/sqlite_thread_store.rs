@@ -243,6 +243,74 @@ impl ThreadStore for SqliteThreadStore {
         }
         self.write_record(thread_id, data).await
     }
+
+    async fn update_many_atomic(
+        &self,
+        entries: Vec<garyx_router::AtomicRecordMerge>,
+    ) -> Result<(), ThreadStoreError> {
+        // All-or-nothing multi-record merge (#TASK-2099 root final
+        // review): every per-key lock is held in sorted order across the
+        // read-merge-derive-write cycle (no writer can interleave, no
+        // lock-order deadlock), and every record plus its derived
+        // projections commit in ONE SQLite transaction — a failure on any
+        // record rolls the whole mutation back.
+        let mut keys: Vec<&str> = entries
+            .iter()
+            .map(|entry| entry.thread_id.as_str())
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        let locks: Vec<_> = keys.iter().map(|key| self.key_lock(key)).collect();
+        let mut guards = Vec::with_capacity(locks.len());
+        for lock in &locks {
+            guards.push(lock.lock().await);
+        }
+
+        let mut writes = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let key = entry.thread_id;
+            let current = self.get(&key).await?;
+            let mut data = match current {
+                Some(data) => data,
+                None if entry.create_if_missing => Value::Object(serde_json::Map::new()),
+                None => return Err(ThreadStoreError::NotFound(key)),
+            };
+            if let (Some(target), Some(updates)) = (data.as_object_mut(), entry.fields.as_object())
+            {
+                for (field, value) in updates {
+                    target.insert(field.clone(), value.clone());
+                }
+            }
+            strip_retired_record_fields(&mut data);
+            let body =
+                serde_json::to_string(&data).map_err(|error| ThreadStoreError::Serialization {
+                    thread_id: key.clone(),
+                    message: error.to_string(),
+                })?;
+            let updated_at = data
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let projections = self.derive_projections(&key, &data).await;
+            writes.push(crate::garyx_db::ThreadRecordWrite {
+                key,
+                body,
+                updated_at,
+                projections,
+            });
+        }
+
+        let garyx_db = Arc::clone(&self.garyx_db);
+        garyx_db
+            .run_blocking(move |db| db.write_thread_records_with_projections_atomic(writes))
+            .await
+            .map_err(|error| match error {
+                crate::garyx_db::GaryxDbError::ThreadArchived(thread_id) => {
+                    ThreadStoreError::Archived(thread_id)
+                }
+                other => ThreadStoreError::Backend(other.to_string()),
+            })
+    }
 }
 
 /// Assemble the SQLite-backed thread store for runtime wiring

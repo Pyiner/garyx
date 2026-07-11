@@ -78,7 +78,7 @@ pub use router::{
     command_catalog_for_config, is_native_command_text, reserved_command_names,
 };
 pub use runtime_context::build_runtime_context_metadata;
-pub use store::{ThreadStore, ThreadStoreError, ThreadStoreExt};
+pub use store::{AtomicRecordMerge, ThreadStore, ThreadStoreError, ThreadStoreExt};
 pub use task_counter::{InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore};
 pub use tasks::{
     CreateTaskInput, EnterReview, ScanTaskProjectionReader, TaskHistoryPage, TaskId,
