@@ -257,6 +257,17 @@ test("local archive surgery blocks stale pages and rollback restores both feed o
   );
   assert.deepEqual(state.feeds.all.orderedThreadIds, ["task", "tail"]);
 
+  // A page requested after local removal can still race the server commit.
+  // The session tombstone must reject that row too, not just tickets issued
+  // before the mutation sequence changed.
+  const postRemoval = requestRecentThreadRefresh(state, "nonTask");
+  state = completeRecentThreadRequest(
+    postRemoval.state,
+    postRemoval.ticket,
+    page(state.gatewayScope, ["chat", "tail"]),
+  );
+  assert.deepEqual(state.feeds.nonTask.orderedThreadIds, ["tail"]);
+
   state = rollbackRecentThreadRemoval(state, removed.rollback);
   assert.deepEqual(state.feeds.all.orderedThreadIds, ["task", "chat", "tail"]);
   assert.deepEqual(state.feeds.nonTask.orderedThreadIds, ["chat", "tail"]);

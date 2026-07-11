@@ -31,6 +31,8 @@ export interface RecentThreadFeedsState {
   selectedFilter: RecentThreadFilter;
   feeds: Record<RecentThreadFilter, RecentThreadFeedState>;
   summariesById: Record<string, DesktopThreadSummary>;
+  /** Session tombstones for successful or still-pending local archives. */
+  removedThreadIds: Record<string, true>;
   nextRequestId: number;
 }
 
@@ -101,6 +103,7 @@ export function createRecentThreadFeedsState(
       nonTask: createFeed(),
     },
     summariesById: {},
+    removedThreadIds: {},
     nextRequestId: 1,
   };
 }
@@ -130,6 +133,7 @@ export function resetRecentThreadFeedsScope(
       nonTask: createFeed(state.feeds.nonTask.epoch + 1),
     },
     summariesById: {},
+    removedThreadIds: {},
     nextRequestId: state.nextRequestId,
   };
 }
@@ -284,8 +288,20 @@ export function completeRecentThreadRequest(
     return clearOwnedRequest(state, ticket);
   }
 
-  const pageIds = uniqueThreadIds(page.threads.map((thread) => thread.id));
-  const withSummaries = ingestRecentThreadSummaries(state, page.threads);
+  // A request issued after optimistic removal but before the archive commits
+  // may still observe the old server row. Keep a session tombstone after
+  // success (scope reset clears it); rollback is the only path that restores
+  // membership. This is mutation protection, not task-filter fallback.
+  const visiblePageThreads = page.threads.filter(
+    (thread) => !state.removedThreadIds[thread.id.trim()],
+  );
+  const pageIds = uniqueThreadIds(
+    visiblePageThreads.map((thread) => thread.id),
+  );
+  const withSummaries = ingestRecentThreadSummaries(
+    state,
+    visiblePageThreads,
+  );
   const currentFeed = withSummaries.feeds[ticket.filter];
   const returnedEnd = page.offset + page.count;
 
@@ -401,7 +417,13 @@ export function removeThreadFromRecentFeeds(
     };
   }
   return {
-    state: { ...state, feeds },
+    state: {
+      ...state,
+      feeds,
+      removedThreadIds: normalizedId
+        ? { ...state.removedThreadIds, [normalizedId]: true }
+        : state.removedThreadIds,
+    },
     rollback: {
       gatewayScope: state.gatewayScope,
       threadId: normalizedId,
@@ -440,7 +462,9 @@ export function rollbackRecentThreadRemoval(
       localMutationSequence: feed.localMutationSequence + 1,
     };
   }
-  return { ...state, feeds };
+  const removedThreadIds = { ...state.removedThreadIds };
+  delete removedThreadIds[rollback.threadId];
+  return { ...state, feeds, removedThreadIds };
 }
 
 export function upsertChatInRecentFeeds(
