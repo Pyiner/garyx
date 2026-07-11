@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use serde_json::Value;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::store::ThreadStore;
 
@@ -230,59 +230,36 @@ impl MessageRoutingIndex {
         info!("Cleared all message routing entries");
     }
 
-    /// Rebuild index from a thread store on startup.
+    /// Rebuild index from the outbound-route projection.
     pub async fn rebuild_from_store(
         &mut self,
-        thread_store: &dyn ThreadStore,
+        thread_store: &Arc<dyn ThreadStore>,
         channel: &str,
     ) -> usize {
-        let mut count: usize = 0;
-        let keys = thread_store.list_keys(None).await;
-
-        for thread_id in &keys {
-            let Some(session_data) = thread_store.get(thread_id).await else {
-                continue;
-            };
-
-            let Some(outbound_ids) = session_data.get("outbound_message_ids") else {
-                continue;
-            };
-            let Some(records) = outbound_ids.as_array() else {
-                continue;
-            };
-
-            for record in records {
-                if let Some(obj) = record.as_object() {
-                    let rec_channel = obj
-                        .get("channel")
-                        .and_then(Value::as_str)
-                        .unwrap_or(channel);
-                    let rec_account = obj.get("account_id").and_then(Value::as_str).unwrap_or("");
-                    let rec_chat_id = obj.get("chat_id").and_then(Value::as_str).unwrap_or("");
-                    let rec_thread_binding_key = obj
-                        .get("thread_binding_key")
-                        .or_else(|| obj.get("thread_scope"))
-                        .and_then(Value::as_str);
-                    if let Some(rec_msg_id) = obj.get("message_id").and_then(Value::as_str) {
-                        self.record_outbound(
-                            thread_id,
-                            rec_channel,
-                            rec_account,
-                            rec_chat_id,
-                            rec_thread_binding_key,
-                            rec_msg_id,
-                        );
-                        count += 1;
-                    }
-                }
+        let routes = match crate::endpoint_projection::channel_endpoint_projection_for(thread_store)
+            .outbound_routes()
+            .await
+        {
+            Ok(routes) => routes,
+            Err(error) => {
+                warn!(error = %error, "failed to read outbound route projection");
+                return 0;
             }
+        };
+        let mut count: usize = 0;
+        for route in routes {
+            self.record_outbound(
+                &route.thread_id,
+                route.channel.as_deref().unwrap_or(channel),
+                &route.account_id,
+                &route.chat_id,
+                route.thread_binding_key.as_deref(),
+                &route.message_id,
+            );
+            count += 1;
         }
 
-        info!(
-            "Rebuilt message routing index: {} entries from {} threads",
-            count,
-            keys.len()
-        );
+        info!("Rebuilt message routing index: {} entries", count);
         count
     }
 

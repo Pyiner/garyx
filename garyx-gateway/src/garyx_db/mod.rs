@@ -1422,6 +1422,45 @@ impl GaryxDbService {
         Ok(records)
     }
 
+    /// Thread ids currently holding a channel binding for one endpoint key.
+    pub fn thread_ids_for_channel_endpoint(
+        &self,
+        endpoint_key: &str,
+    ) -> GaryxDbResult<Vec<String>> {
+        let conn = self.read_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT thread_id
+             FROM thread_channel_endpoints
+             WHERE endpoint_key = ?1 AND thread_id IS NOT NULL
+             ORDER BY thread_id ASC",
+        )?;
+        let rows = stmt.query_map(params![endpoint_key], |row| row.get(0))?;
+        let mut thread_ids = Vec::new();
+        for row in rows {
+            thread_ids.push(row?);
+        }
+        Ok(thread_ids)
+    }
+
+    /// Per-thread persisted delivery contexts from the thread_meta projection.
+    pub fn list_thread_delivery_contexts(
+        &self,
+    ) -> GaryxDbResult<Vec<(String, String, Option<String>)>> {
+        let conn = self.read_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT thread_id, last_delivery_context_json, last_delivery_updated_at
+             FROM thread_meta
+             WHERE last_delivery_context_json IS NOT NULL
+             ORDER BY thread_id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
     pub fn count_thread_meta_list(
         &self,
         include_hidden: bool,

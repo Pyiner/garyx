@@ -5907,7 +5907,7 @@ async fn delete_thread_clears_in_memory_reply_routing() {
         let mut router = state.threads.router.lock().await;
         router
             .message_routing_index_mut()
-            .rebuild_from_store(state.threads.thread_store.as_ref(), "telegram")
+            .rebuild_from_store(&state.threads.thread_store, "telegram")
             .await;
         assert_eq!(
             router.resolve_reply_thread_for_chat(

@@ -276,7 +276,7 @@ impl MessageRouter {
     pub async fn rebuild_routing_index(&mut self, channel: &str) -> usize {
         self.reply_routing
             .message_routing_index
-            .rebuild_from_store(self.threads.as_ref(), channel)
+            .rebuild_from_store(&self.threads, channel)
             .await
     }
 

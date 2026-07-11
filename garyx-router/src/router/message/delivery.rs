@@ -419,19 +419,25 @@ impl MessageRouter {
             return None;
         }
 
-        let keys = thread_store.list_keys(None).await;
+        // "last" is a recency condition query: answered by the endpoint
+        // projection (thread_meta delivery-context rows), never by a scan.
+        let rows = match crate::endpoint_projection::channel_endpoint_projection_for(&thread_store)
+            .delivery_contexts()
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to read delivery context projection");
+                return None;
+            }
+        };
         let mut best: Option<(String, DeliveryContext, Option<DateTime<Utc>>)> = None;
-        for thread_id in keys {
-            let Some(thread_data) = thread_store.get(&thread_id).await else {
+        for row in rows {
+            let Some(ctx) = Self::delivery_context_from_projected_json(&row.context_json) else {
                 continue;
             };
-            let Some(obj) = thread_data.as_object() else {
-                continue;
-            };
-            let Some(ctx) = Self::extract_delivery_context(obj) else {
-                continue;
-            };
-            let updated_at = Self::extract_delivery_updated_at(obj);
+            let updated_at = Self::parse_delivery_updated_at(row.updated_at.as_deref());
+            let thread_id = row.thread_id;
             match &best {
                 None => best = Some((thread_id, ctx, updated_at)),
                 Some((best_key, _, best_ts)) => {
@@ -449,6 +455,23 @@ impl MessageRouter {
         }
 
         best.map(|(thread_id, ctx, _)| (thread_id, ctx))
+    }
+
+    /// Parse and normalize a projected delivery-context JSON payload through
+    /// the same extractor the record-field path uses (target type/id
+    /// inference, thread-id sanitizing, metadata copy).
+    fn delivery_context_from_projected_json(context_json: &str) -> Option<DeliveryContext> {
+        let parsed: Value = serde_json::from_str(context_json).ok()?;
+        let wrapper = serde_json::json!({ "delivery_context": parsed });
+        Self::extract_delivery_context(wrapper.as_object()?)
+    }
+
+    fn parse_delivery_updated_at(raw: Option<&str>) -> Option<DateTime<Utc>> {
+        raw.and_then(|raw| {
+            DateTime::parse_from_rfc3339(raw.trim())
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        })
     }
 
     /// Resolve a delivery target, rebuilding the in-memory delivery cache on miss.
@@ -486,19 +509,23 @@ impl MessageRouter {
         self.delivery_ctx.last_delivery.clear();
         self.delivery_ctx.last_delivery_order.clear();
 
+        // Cache rebuild reads the endpoint projection's delivery-context
+        // rows instead of walking every record body.
+        let rows = match crate::endpoint_projection::channel_endpoint_projection_for(&self.threads)
+            .delivery_contexts()
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to read delivery context projection");
+                return 0;
+            }
+        };
         let mut rebuilt_entries: Vec<(String, DeliveryContext, Option<DateTime<Utc>>)> = Vec::new();
-        let keys = self.threads.list_keys(None).await;
-        for thread_id in keys {
-            let Some(thread_data) = self.threads.get(&thread_id).await else {
-                continue;
-            };
-            let Some(obj) = thread_data.as_object() else {
-                continue;
-            };
-
-            if let Some(ctx) = Self::extract_delivery_context(obj) {
-                let updated_at = Self::extract_delivery_updated_at(obj);
-                rebuilt_entries.push((thread_id, ctx, updated_at));
+        for row in rows {
+            if let Some(ctx) = Self::delivery_context_from_projected_json(&row.context_json) {
+                let updated_at = Self::parse_delivery_updated_at(row.updated_at.as_deref());
+                rebuilt_entries.push((row.thread_id, ctx, updated_at));
             }
         }
 
@@ -515,17 +542,6 @@ impl MessageRouter {
         }
 
         rebuilt
-    }
-
-    fn extract_delivery_updated_at(obj: &serde_json::Map<String, Value>) -> Option<DateTime<Utc>> {
-        let updated_at = Self::value_as_string(obj.get("lastUpdatedAt"))
-            .or_else(|| Self::value_as_string(obj.get("updated_at")))
-            .or_else(|| Self::value_as_string(obj.get("last_updated_at")));
-        updated_at.and_then(|raw| {
-            DateTime::parse_from_rfc3339(raw.trim())
-                .ok()
-                .map(|dt| dt.with_timezone(&Utc))
-        })
     }
 
     fn sanitize_persisted_delivery_thread_id(

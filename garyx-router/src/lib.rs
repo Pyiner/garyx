@@ -1,3 +1,4 @@
+pub mod endpoint_projection;
 pub mod file_store;
 pub mod endpoint_binding;
 pub mod memory_store;
@@ -87,6 +88,11 @@ pub use thread_history::{
     ThreadHistoryRepository, ThreadHistorySnapshot, ThreadTranscriptRecord, ThreadTranscriptStore,
     ThreadTranscriptWindow, TranscriptAppendRecordsResult, count_user_query_messages,
     extract_run_id, history_message_count, is_user_query_message, message_text,
+};
+pub use endpoint_projection::{
+    ChannelEndpointProjection, DeliveryContextRow, OutboundRouteRow,
+    ScanChannelEndpointProjection, channel_endpoint_projection_for,
+    register_channel_endpoint_projection, remove_channel_endpoint_projection,
 };
 pub use threads::{
     ChannelBinding, KNOWN_CHANNEL_ENDPOINTS_KEY, KnownChannelEndpoint, ThreadEnsureOptions,

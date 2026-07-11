@@ -340,6 +340,10 @@ impl AppStateBuilder {
             ))
         });
         register_gateway_task_projection_reader(&thread_store, &self.garyx_db);
+        crate::endpoint_projection::register_gateway_channel_endpoint_projection(
+            &thread_store,
+            &self.garyx_db,
+        );
         let thread_history = ThreadHistoryRepository::new(
             thread_store.clone(),
             self.thread_history.transcript_store(),

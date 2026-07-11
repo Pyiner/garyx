@@ -16,6 +16,7 @@ mod custom_agents;
 pub mod dashboard;
 mod delivery_target;
 mod endpoint_binding_mutator;
+mod endpoint_projection;
 pub mod garyx_db;
 pub mod gateway_auth;
 pub mod health;

@@ -1,64 +1,16 @@
 use garyx_models::routing::{
     DeliveryContext, infer_delivery_target_id, infer_delivery_target_type,
 };
-use std::sync::Arc;
 
 use garyx_router::{
-    KnownChannelEndpoint, ThreadStore, agent_id_from_value, bindings_from_value,
-    history_message_count, is_default_thread_list_hidden, is_thread_key, label_from_value,
-    list_registry_channel_endpoints, workspace_dir_from_value,
+    KnownChannelEndpoint, agent_id_from_value, bindings_from_value, history_message_count,
+    is_default_thread_list_hidden, is_thread_key, label_from_value, workspace_dir_from_value,
 };
 use serde_json::Value;
-use tracing::warn;
 
-use crate::garyx_db::{
-    GaryxDbService, ThreadMessageRouteDraft, ThreadMetaDraft, ThreadMetaProjectionDraft,
-};
+use crate::garyx_db::{ThreadMessageRouteDraft, ThreadMetaDraft, ThreadMetaProjectionDraft};
 use crate::thread_runtime::selected_model_cells_from_thread_value;
 use crate::thread_type::thread_summary_type_from_record;
-
-/// Channel endpoints for gateway sync: the projection rows (bound
-/// endpoints, derived in the same transaction as every record write)
-/// merged with the known-endpoint registry (channels the gateway has
-/// seen, kept even when unbound). The former read-time backfill gate is
-/// retired (#TASK-1864 closing batch).
-pub(crate) async fn list_channel_endpoints_with_registry(
-    thread_store: &Arc<dyn ThreadStore>,
-    garyx_db: &Arc<GaryxDbService>,
-) -> Vec<KnownChannelEndpoint> {
-    let projected = match garyx_db
-        .run_blocking(|db| db.list_thread_channel_endpoints())
-        .await
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            warn!(error = %error, "failed to list channel endpoint projection");
-            Vec::new()
-        }
-    };
-    let known = list_registry_channel_endpoints(thread_store).await;
-    merge_projected_and_known_channel_endpoints(projected, known)
-}
-
-fn merge_projected_and_known_channel_endpoints(
-    mut projected: Vec<KnownChannelEndpoint>,
-    known: Vec<KnownChannelEndpoint>,
-) -> Vec<KnownChannelEndpoint> {
-    for endpoint in known {
-        match projected
-            .iter_mut()
-            .find(|candidate| candidate.endpoint_key == endpoint.endpoint_key)
-        {
-            Some(existing) if existing.thread_id.is_none() && endpoint.thread_id.is_some() => {
-                *existing = endpoint;
-            }
-            Some(_) => {}
-            None => projected.push(endpoint),
-        }
-    }
-    projected.sort_by(|left, right| left.endpoint_key.cmp(&right.endpoint_key));
-    projected
-}
 
 pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
     thread_id: &str,

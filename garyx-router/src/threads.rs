@@ -344,14 +344,14 @@ fn parse_updated_at(raw: Option<&str>) -> Option<DateTime<Utc>> {
     })
 }
 
-fn value_updated_at(value: &Value) -> Option<String> {
+pub(crate) fn value_updated_at(value: &Value) -> Option<String> {
     value
         .get("updated_at")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
 }
 
-fn is_preferred_thread_binding(
+pub(crate) fn is_preferred_thread_binding(
     candidate_thread_id: &str,
     candidate_updated_at: Option<&str>,
     current_thread_id: &str,
@@ -766,36 +766,20 @@ pub async fn list_known_channel_endpoints(
         endpoints.insert(endpoint.endpoint_key.clone(), endpoint);
     }
 
-    let keys = store.list_keys(None).await;
-    for key in keys {
-        if !is_thread_key(&key) {
-            continue;
+    let projected = match crate::endpoint_projection::channel_endpoint_projection_for(store)
+        .endpoints()
+        .await
+    {
+        Ok(projected) => projected,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to read channel endpoint projection");
+            Vec::new()
         }
-        let Some(value) = store.get(&key).await else {
-            continue;
-        };
-        let updated_at = value_updated_at(&value);
-        for binding in bindings_from_value(&value) {
-            let endpoint_key = binding.endpoint_key();
-            let delivery_target_type = binding.resolved_delivery_target_type();
-            let delivery_target_id = binding.resolved_delivery_target_id();
-            let candidate = KnownChannelEndpoint {
-                endpoint_key: endpoint_key.clone(),
-                channel: binding.channel,
-                account_id: binding.account_id,
-                binding_key: binding.binding_key,
-                chat_id: binding.chat_id,
-                delivery_target_type,
-                delivery_target_id,
-                display_label: binding.display_label,
-                thread_id: Some(key.clone()),
-                thread_label: label_from_value(&value),
-                workspace_dir: workspace_dir_from_value(&value),
-                thread_updated_at: updated_at.clone(),
-                last_inbound_at: binding.last_inbound_at,
-                last_delivery_at: binding.last_delivery_at,
-            };
-            let should_replace = endpoints.get(&endpoint_key).is_none_or(|current| {
+    };
+    for candidate in projected {
+        let should_replace = endpoints
+            .get(&candidate.endpoint_key)
+            .is_none_or(|current| {
                 current.thread_id.is_none()
                     || is_preferred_thread_binding(
                         candidate.thread_id.as_deref().unwrap_or_default(),
@@ -804,9 +788,8 @@ pub async fn list_known_channel_endpoints(
                         current.thread_updated_at.as_deref(),
                     )
             });
-            if should_replace {
-                endpoints.insert(endpoint_key, candidate);
-            }
+        if should_replace {
+            endpoints.insert(candidate.endpoint_key.clone(), candidate);
         }
     }
     let mut endpoints: Vec<_> = endpoints.into_values().collect();

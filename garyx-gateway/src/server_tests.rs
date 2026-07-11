@@ -807,7 +807,7 @@ async fn test_detach_channel_endpoint_clears_endpoint_runtime_routing() {
         let mut router = state.threads.router.lock().await;
         router
             .message_routing_index_mut()
-            .rebuild_from_store(state.threads.thread_store.as_ref(), "telegram")
+            .rebuild_from_store(&state.threads.thread_store, "telegram")
             .await;
         router.set_last_delivery(
             "thread::bound",
@@ -920,7 +920,7 @@ async fn test_detach_channel_endpoint_preserves_other_topic_routing_in_same_chat
         let mut router = state.threads.router.lock().await;
         router
             .message_routing_index_mut()
-            .rebuild_from_store(state.threads.thread_store.as_ref(), "telegram")
+            .rebuild_from_store(&state.threads.thread_store, "telegram")
             .await;
         router.rebuild_last_delivery_cache().await;
         assert_eq!(
@@ -1063,7 +1063,7 @@ async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat
         let mut router = state.threads.router.lock().await;
         router
             .message_routing_index_mut()
-            .rebuild_from_store(state.threads.thread_store.as_ref(), "telegram")
+            .rebuild_from_store(&state.threads.thread_store, "telegram")
             .await;
         router.rebuild_last_delivery_cache().await;
         assert_eq!(

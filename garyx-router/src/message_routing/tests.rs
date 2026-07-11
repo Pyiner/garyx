@@ -162,7 +162,8 @@ fn test_clear_thread_chat_for_topic_preserves_primary_routes() {
 
 #[tokio::test]
 async fn test_rebuild_from_store() {
-    let store = InMemoryThreadStore::new();
+    let store: std::sync::Arc<dyn crate::ThreadStore> =
+        std::sync::Arc::new(InMemoryThreadStore::new());
     store
         .set(
             "s1",
@@ -190,7 +191,8 @@ async fn test_rebuild_from_store() {
 
 #[tokio::test]
 async fn test_rebuild_from_store_restores_chat_scoped_routing() {
-    let store = InMemoryThreadStore::new();
+    let store: std::sync::Arc<dyn crate::ThreadStore> =
+        std::sync::Arc::new(InMemoryThreadStore::new());
     store
         .set(
             "s1",

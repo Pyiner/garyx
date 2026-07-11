@@ -195,11 +195,11 @@ impl AppState {
         }
 
         let started = Instant::now();
-        let endpoints = crate::thread_meta_projection::list_channel_endpoints_with_registry(
-            &self.threads.thread_store,
-            &self.ops.garyx_db,
-        )
-        .await;
+        // Projection rows + known-endpoint registry, via the router's
+        // projection-backed listing (the SQL endpoint projection is
+        // registered for this store at bootstrap).
+        let endpoints =
+            garyx_router::list_known_channel_endpoints(&self.threads.thread_store).await;
         let elapsed_ms = started.elapsed().as_millis() as u64;
         debug!(
             elapsed_ms,
@@ -228,8 +228,9 @@ impl AppState {
         let state = Arc::clone(self);
         tokio::spawn(async move {
             let started = Instant::now();
-            // The router's endpoint routing map still needs its in-memory
-            // rebuild; the former projection backfill/prune/reconcile chain
+            // The router's in-memory endpoint routing map warms up from the
+            // channel-endpoint projection (one SQL read — no record body
+            // scan); the former projection backfill/prune/reconcile chain
             // is retired (#TASK-1864 closing batch) — projections are
             // derived inside the same transaction as every record write,
             // so a repair pass has nothing left to repair.
