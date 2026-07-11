@@ -13,7 +13,7 @@ export function TextareaPlaceholder() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 420 }}>
       <Label>Task instructions</Label>
-      <Textarea placeholder="Describe the workflow task in plain text. The first workflow step will structure it." />
+      <Textarea placeholder="Describe what the assigned agent should do." />
     </div>
   )
 }

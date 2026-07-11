@@ -32,7 +32,7 @@ export type UiTranscriptMessage = TranscriptMessage & {
 
 export type MessageMap = Record<string, UiTranscriptMessage[]>;
 export type PendingThreadInputMap = Record<string, PendingThreadInput[]>;
-export type ContentView = 'thread' | 'browser' | 'bots' | 'automation' | 'capsules' | 'agents' | 'skills' | 'tasks' | 'workflow' | 'settings';
+export type ContentView = 'thread' | 'browser' | 'bots' | 'automation' | 'capsules' | 'agents' | 'skills' | 'tasks' | 'settings';
 
 export const LIVE_STREAM_STATUSES = [
   'connecting',

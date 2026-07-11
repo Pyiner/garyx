@@ -152,15 +152,6 @@ import type {
   DesktopUpdateStatusListener,
 } from "./update.ts";
 import type {
-  DesktopWorkflowDefinition,
-  DesktopWorkflowRunDrilldown,
-  DesktopWorkflowSourceDocument,
-  GetWorkflowDefinitionSourceInput,
-  GetWorkflowRunInput,
-  StartWorkflowThreadInput,
-  StartWorkflowThreadResult,
-} from "./workflow.ts";
-import type {
   AddWorkspaceByPathInput,
   CommitWorkspaceChangesInput,
   DesktopLocalDirectoryListing,
@@ -264,16 +255,6 @@ export interface GaryxDesktopApi {
   ) => Promise<DesktopTaskForestPage>;
   getTask: (input: GetTaskInput) => Promise<DesktopTaskSummary>;
   createTask: (input: CreateTaskInput) => Promise<DesktopTaskSummary>;
-  listWorkflowDefinitions: () => Promise<DesktopWorkflowDefinition[]>;
-  getWorkflowDefinitionSource: (
-    input: GetWorkflowDefinitionSourceInput,
-  ) => Promise<DesktopWorkflowSourceDocument>;
-  getWorkflowRun: (
-    input: GetWorkflowRunInput,
-  ) => Promise<DesktopWorkflowRunDrilldown>;
-  startWorkflowThread: (
-    input: StartWorkflowThreadInput,
-  ) => Promise<StartWorkflowThreadResult>;
   getWorkspaceGitStatus: (input: {
     workspacePath: string;
   }) => Promise<DesktopWorkspaceGitStatus>;

@@ -8,8 +8,6 @@ TARGET_BINARY="${REPO_ROOT}/target/release/garyx"
 
 cd "$REPO_ROOT"
 
-# Garyx no longer bundles a Bun runtime; workflows resolve `bun` from PATH and
-# error with install instructions when it is missing.
 cargo build --release -p garyx
 bash scripts/codesign-macos-cli.sh "$TARGET_BINARY"
 "$TARGET_BINARY" --version

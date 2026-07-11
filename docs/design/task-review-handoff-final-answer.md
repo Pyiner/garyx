@@ -21,8 +21,7 @@ delivery or notification routing.
 
 Choose the bridge stopped-run layer for agent runs.
 
-The gateway can derive render snapshots from committed transcript records, but
-it also handles workflow handoffs that do not have an agent run transcript. The
+The gateway can derive render snapshots from committed transcript records. The
 bridge is the place that creates the wrong value by passing the accumulated
 provider response as the transient `handoff` carried by `EnterReview`; the task
 record itself does not store that handoff.
@@ -75,7 +74,7 @@ After terminal persistence, compute a task handoff for successful agent runs:
 The task should still only move from `in_progress` to `in_review` when the run
 is successful and there is non-empty handoff text, preserving the current gate.
 
-## Gateway And Workflow Compatibility
+## Gateway Contract
 
 Keep the event contract unchanged:
 
@@ -89,18 +88,12 @@ Keep the event contract unchanged:
 }
 ```
 
-Workflow lifecycle code already passes `outputText` or an explicit workflow
-handoff directly to `deliver_task_review_handoff`. Those handoffs do not have a
-provider run transcript, so gateway delivery should continue to accept the
-provided handoff.
-
 ## Length Limit
 
-Add one notification-body cap shared by all task-ready handoffs before
-formatting the notification. The cap applies after final-answer extraction and
-after workflow handoff selection, so agent and workflow notifications have the
-same maximum size. It should be large enough for a normal final summary but
-prevent progress dumps or pasted logs from dominating a review channel.
+Add one notification-body cap to task-ready handoffs before formatting the
+notification. Apply it after final-answer extraction. It should be large enough
+for a normal final summary but prevent progress dumps or pasted logs from
+dominating a review channel.
 
 Logging can keep its existing short summaries because logs are not the user
 notification body.
@@ -127,8 +120,7 @@ Add model tests for the helper:
 - single assistant reply returns that reply;
 - no assistant reply returns `None`.
 
-Add gateway coverage for the shared cap so workflow handoffs are constrained by
-the same limit without needing an agent run id.
+Add gateway coverage for the shared cap.
 
 ## Validation
 

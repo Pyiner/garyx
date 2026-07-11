@@ -18,7 +18,7 @@ use garyx_router::{ThreadStore, ThreadStoreError, ThreadTranscriptStore, is_thre
 use serde_json::Value;
 use tracing::warn;
 
-use crate::garyx_db::{GaryxDbService, ThreadRecordProjections};
+use crate::garyx_db::{GaryxDbService, ThreadRecordProjections, is_retired_workflow_thread_record};
 use crate::recent_thread_projection::{
     ActiveRunProbe, is_recent_thread_excluded, recent_thread_draft_from_thread_data_with_active_run,
     resolve_active_run_id,
@@ -375,6 +375,16 @@ pub(crate) async fn import_thread_records_if_needed(
             summary.skipped += 1;
             continue;
         };
+        // The file store is only an upgrade archive. Removed product records
+        // are destroyed here instead of being imported into SQLite and then
+        // requiring a compatibility decoder.
+        if is_thread_key(key) && is_retired_workflow_thread_record(&data) {
+            summary.skipped += 1;
+            if let Err(error) = transcript_store.delete(key).await {
+                warn!(key, error = %error, "failed to delete retired workflow transcript during import");
+            }
+            continue;
+        }
         let legacy_messages = data
             .get("messages")
             .and_then(Value::as_array)
@@ -709,6 +719,73 @@ mod contract_tests {
             import_thread_records_if_needed(&garyx_db, &source, &sqlite, &transcript_store).await;
         assert_eq!(summary.imported, 0);
         assert_eq!(summary.source_keys, 3);
+    }
+
+    #[tokio::test]
+    async fn boot_import_discards_retired_workflow_records() {
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+        let sqlite = SqliteThreadStore::new(
+            Arc::clone(&garyx_db),
+            Arc::clone(&transcript_store),
+            Arc::new(AlwaysActiveRunProbe),
+        );
+        let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+
+        source
+            .set(
+                "thread::legacy-workflow-task",
+                json!({
+                    "thread_id": "thread::legacy-workflow-task",
+                    "task": {
+                        "executor": {"type": "workflow", "workflow_id": "unit"}
+                    },
+                    "messages": [{"role": "user", "content": "retired task"}],
+                }),
+            )
+            .await;
+        source
+            .set(
+                "thread::legacy-workflow-child",
+                json!({
+                    "thread_id": "thread::legacy-workflow-child",
+                    "source": "workflow",
+                    "workflow_child_run_id": "child::legacy",
+                    "messages": [{"role": "assistant", "content": "retired child"}],
+                }),
+            )
+            .await;
+        source
+            .set(
+                "thread::ordinary",
+                json!({
+                    "thread_id": "thread::ordinary",
+                    "label": "Discuss the ordinary deployment workflow",
+                }),
+            )
+            .await;
+        transcript_store
+            .append_committed_messages(
+                "thread::legacy-workflow-task",
+                Some("run::legacy"),
+                &[json!({"role": "user", "content": "stale transcript"})],
+            )
+            .await
+            .expect("seed retired transcript");
+
+        let summary =
+            import_thread_records_if_needed(&garyx_db, &source, &sqlite, &transcript_store).await;
+        assert_eq!(summary.source_keys, 3);
+        assert_eq!(summary.imported, 1);
+        assert_eq!(summary.skipped, 2);
+        assert!(sqlite.get("thread::legacy-workflow-task").await.is_none());
+        assert!(sqlite.get("thread::legacy-workflow-child").await.is_none());
+        assert!(sqlite.get("thread::ordinary").await.is_some());
+        assert!(
+            !transcript_store
+                .exists("thread::legacy-workflow-task")
+                .await
+        );
     }
 
     #[tokio::test]

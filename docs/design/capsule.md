@@ -16,7 +16,7 @@ Capsule 是 agent 通过 MCP 工具创建 / 更新的**自包含单文件 HTML**
 
 依据：`garyx_db`（`garyx-gateway/src/garyx_db/mod.rs`）已有两类表——(a) router thread 数据的 write-time
 投影（`recent_threads` / `task_projection` / `thread_meta`）；(b) gateway 自有、无 router 拥有的目录表
-（`workspaces` / `workflow_runs` / `automation_thread_runs`）。Capsule 属于 (b)，
+（`workspaces` / `automation_thread_runs`）。Capsule 属于 (b)，
 **照 `workspaces` 先例**：一张扁平权威表 + CRUD，保持 gateway→router 单向依赖。创建它的 thread / agent
 仅作**快照列**记录（write-time 从 MCP 请求上下文取，非活引用）。
 
@@ -38,7 +38,7 @@ Capsule 是 agent 通过 MCP 工具创建 / 更新的**自包含单文件 HTML**
 - **单文件** `~/.garyx/capsules/<id>.html`（不是目录）——硬保"单 HTML 自包含可运行"；元数据全在 DB，无 sidecar。
 - 路径助手：在 `garyx-models/src/local_paths.rs` 加 `default_capsules_dir() -> PathBuf { gary_home_dir().join("capsules") }`
   （照 `default_skills_dir()`）。
-- **id = 小写 UUIDv7**（root `Cargo.toml` 已启用 `uuid` v7 feature），时间可排序、无 namespace 前缀（合 workflow-id 约定）。
+- **id = 小写 UUIDv7**（root `Cargo.toml` 已启用 `uuid` v7 feature），时间可排序、无 namespace 前缀。
   文件名 `<id>.html`。所有 serve / get / delete 路径**先**用 `Uuid::parse_str` 严格校验再碰文件系统 ⇒ 路径穿越结构上不可能。
 
 ---
@@ -103,7 +103,7 @@ Rust（照 `WorkspaceRecord` / `upsert_workspace`，`garyx_db/mod.rs`）：
 - `html_path`：agent 常先把 HTML 写进工作区文件，给绝对路径避免大文档挤 tool 通道；gateway 照 `workspace_files.rs` 纪律
   `canonicalize` + 必须是常规文件后读取。
 - **静态校验**（create/update 都做）：拒绝本地 `file://` 引用 / 相对 sidecar 资源引用（保"自包含"）；HTML 解析出的 bytes
-  **5 MB 上限**（照 workflows `validate_json_size`），超限明确报错。allow inline / `data:` / `blob:` / `https:` CDN。
+  **5 MB 上限**，超限明确报错。allow inline / `data:` / `blob:` / `https:` CDN。
 - **`agent_id` / `provider_type`** 一律从 `thread_store.get(thread_id)` 的 thread 记录推导，**不信任工具参数**。
 
 返回 JSON（照 text 工具惯例返回字符串）：

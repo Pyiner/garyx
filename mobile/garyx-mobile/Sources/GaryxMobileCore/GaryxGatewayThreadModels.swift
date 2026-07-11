@@ -100,8 +100,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var worktreePath: String?
     public var automationId: String?
     public var automationThreadMode: String?
-    public var threadType: String?
-    public var workflowRunId: String?
     public var excludeFromRecent: Bool
     public var threadRuntime: GaryxThreadRuntimeSummary?
 
@@ -121,8 +119,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         worktreePath: String?,
         automationId: String? = nil,
         automationThreadMode: String? = nil,
-        threadType: String? = nil,
-        workflowRunId: String? = nil,
         excludeFromRecent: Bool = false,
         threadRuntime: GaryxThreadRuntimeSummary? = nil
     ) {
@@ -141,8 +137,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         self.worktreePath = worktreePath
         self.automationId = automationId
         self.automationThreadMode = automationThreadMode
-        self.threadType = threadType
-        self.workflowRunId = workflowRunId
         self.excludeFromRecent = excludeFromRecent
         self.threadRuntime = threadRuntime
     }
@@ -186,12 +180,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         case automationIdCamel = "automationId"
         case automationThreadMode = "automation_thread_mode"
         case automationThreadModeCamel = "automationThreadMode"
-        case threadType = "thread_type"
-        case threadTypeCamel = "threadType"
-        case threadKind = "thread_kind"
-        case threadKindCamel = "threadKind"
-        case workflowRunId = "workflow_run_id"
-        case workflowRunIdCamel = "workflowRunId"
         case excludeFromRecent = "exclude_from_recent"
         case excludeFromRecentCamel = "excludeFromRecent"
         case threadRuntime = "thread_runtime"
@@ -225,13 +213,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
             .visiblePath
         automationId = try container.garyxDecodeFirstString(.automationId, .automationIdCamel)
         automationThreadMode = try container.garyxDecodeFirstString(.automationThreadMode, .automationThreadModeCamel)
-        threadType = try container.garyxDecodeFirstString(
-            .threadType,
-            .threadTypeCamel,
-            .threadKind,
-            .threadKindCamel
-        )
-        workflowRunId = try container.garyxDecodeFirstString(.workflowRunId, .workflowRunIdCamel)
         excludeFromRecent = try container.decodeIfPresent(Bool.self, forKey: .excludeFromRecentCamel)
             ?? container.decodeIfPresent(Bool.self, forKey: .excludeFromRecent)
             ?? false

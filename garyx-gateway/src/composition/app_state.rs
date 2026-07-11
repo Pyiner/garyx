@@ -1,4 +1,3 @@
-use chrono::{SecondsFormat, Utc};
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::BridgeError;
 use garyx_channels::{
@@ -33,7 +32,6 @@ use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 
 use crate::wikis::WikiStore;
-use crate::workflows::WorkflowScheduler;
 
 pub struct RuntimeState {
     pub start_time: Instant,
@@ -64,7 +62,6 @@ pub struct OpsState {
     pub wikis: Arc<WikiStore>,
     pub app_db: Arc<AppDbService>,
     pub garyx_db: Arc<GaryxDbService>,
-    pub workflow_scheduler: Arc<WorkflowScheduler>,
     pub provider_auth_sessions: Arc<ClaudeAuthSessionStore>,
     pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
 }
@@ -229,7 +226,6 @@ impl AppState {
 
     pub fn spawn_gateway_sync_cache_warmup(self: &Arc<Self>) {
         let state = Arc::clone(self);
-        let workflow_reconcile_cutoff = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         tokio::spawn(async move {
             let started = Instant::now();
             // The router's endpoint routing map still needs its in-memory
@@ -252,11 +248,6 @@ impl AppState {
                     warn!(error = %error, "failed to clear stale active runs at startup");
                     0
                 });
-            let reconciled_workflows = crate::workflows::reconcile_interrupted_workflows(
-                &state,
-                &workflow_reconcile_cutoff,
-            )
-            .await;
             let threads = state.thread_record_count().await;
             let endpoints = state.cached_channel_endpoints().await.len();
             debug!(
@@ -265,7 +256,6 @@ impl AppState {
                 endpoint_count = endpoints,
                 thread_index_endpoint_bindings = thread_index_stats.endpoint_bindings,
                 cleared_orphan_runs,
-                workflow_reconcile_count = reconciled_workflows,
                 "gateway sync snapshots warmed"
             );
         });
@@ -394,7 +384,6 @@ impl AppState {
                 wikis: self.ops.wikis.clone(),
                 app_db: self.ops.app_db.clone(),
                 garyx_db: self.ops.garyx_db.clone(),
-                workflow_scheduler: self.ops.workflow_scheduler.clone(),
                 provider_auth_sessions: self.ops.provider_auth_sessions.clone(),
                 channel_endpoint_snapshot: Mutex::new(None),
             },

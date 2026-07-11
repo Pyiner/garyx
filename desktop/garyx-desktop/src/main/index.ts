@@ -55,8 +55,6 @@ import type {
   DesktopSettings,
   GenerateCustomAgentAvatarInput,
   GetTaskInput,
-  GetWorkflowDefinitionSourceInput,
-  GetWorkflowRunInput,
   GetThreadHistoryInput,
   GetSkillEditorInput,
   GatewayConfigDocument,
@@ -85,7 +83,6 @@ import type {
   ThreadTranscript,
   DeleteSlashCommandInput,
   StopTaskInput,
-  StartWorkflowThreadInput,
   ToggleSkillInput,
   ToggleMcpServerInput,
   UploadChatAttachmentsInput,
@@ -135,14 +132,11 @@ import {
   getCapsule,
   getCapsuleHtml,
   getTask,
-  getWorkflowDefinitionSource,
-  getWorkflowRun,
   getWorkspaceGitStatus,
   interruptThread,
   listCapsules,
   listTaskForest,
   listTasks,
-  listWorkflowDefinitions,
   listProviderRecentSessions,
   listCustomAgents,
   listProviderModels,
@@ -216,7 +210,6 @@ import {
   saveDesktopSettings,
   selectDesktopAutomation,
   selectDesktopWorkspace,
-  startDesktopWorkflowThread,
   updateDesktopAutomation,
   removeDesktopWorkspace,
   setDesktopBotBinding,
@@ -836,39 +829,11 @@ function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle("garyx:list-workflow-definitions", async () => {
-    const settings = await resolveSettings();
-    return listWorkflowDefinitions(settings);
-  });
-
   ipcMain.handle(
     "garyx:list-provider-recent-sessions",
     async (_event, input?: ListProviderRecentSessionsInput) => {
       const settings = await resolveSettings();
       return listProviderRecentSessions(settings, input || {});
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:get-workflow-definition-source",
-    async (_event, input: GetWorkflowDefinitionSourceInput) => {
-      const settings = await resolveSettings();
-      return getWorkflowDefinitionSource(settings, input);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:get-workflow-run",
-    async (_event, input: GetWorkflowRunInput) => {
-      const settings = await resolveSettings();
-      return getWorkflowRun(settings, input);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:start-workflow-thread",
-    async (_event, input: StartWorkflowThreadInput) => {
-      return startDesktopWorkflowThread(input);
     },
   );
 

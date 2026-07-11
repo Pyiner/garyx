@@ -1063,18 +1063,16 @@ async fn test_thread_history_detail_with_thread_id_and_tool_messages() {
 }
 
 #[tokio::test]
-async fn test_thread_history_detail_preserves_workflow_thread_type() {
+async fn test_thread_history_detail_preserves_task_thread_type() {
     let state = test_state();
     seed_transcript_backed_thread(
         &state,
-        "thread::workflow-history",
+        "thread::task-history",
         json!({
-            "thread_kind": "workflow_run",
-            "workflow_run_id": "thread::workflow-history",
-            "workflow_definition_id": "test-workflow",
-            "label": "Synthetic workflow run",
+            "thread_kind": "task",
+            "label": "Synthetic task run",
             "messages": [
-                {"role": "assistant", "content": "workflow output", "timestamp": "2026-03-01T00:00:01Z"}
+                {"role": "assistant", "content": "task output", "timestamp": "2026-03-01T00:00:01Z"}
             ]
         }),
     )
@@ -1083,7 +1081,7 @@ async fn test_thread_history_detail_preserves_workflow_thread_type() {
     let router = api_router(state);
 
     let req = Request::builder()
-        .uri("/api/threads/history?thread_id=thread%3A%3Aworkflow-history&limit=10")
+        .uri("/api/threads/history?thread_id=thread%3A%3Atask-history&limit=10")
         .body(Body::empty())
         .unwrap();
 
@@ -1095,10 +1093,10 @@ async fn test_thread_history_detail_preserves_workflow_thread_type() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ok"], true);
-    assert_eq!(json["thread"]["thread_type"], "workflow_run");
-    assert_eq!(json["session"]["thread_type"], "workflow_run");
-    assert_eq!(json["thread"]["session_type"], "workflow_run");
-    assert_eq!(json["session"]["session_type"], "workflow_run");
+    assert_eq!(json["thread"]["thread_type"], "task");
+    assert_eq!(json["session"]["thread_type"], "task");
+    assert_eq!(json["thread"]["session_type"], "task");
+    assert_eq!(json["session"]["session_type"], "task");
 }
 
 #[tokio::test]

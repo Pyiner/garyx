@@ -80,7 +80,7 @@ that also serves lightweight HTTP and desktop/mobile control-plane requests.
 ### Shared Runtime For Heavy Runs And Light HTTP
 
 Provider runs, MCP handling, event ledger writes, render/projection updates, SSE
-fanout, workflow operations, and HTTP control-plane routes all share the gateway
+fanout, background operations, and HTTP control-plane routes all share the gateway
 process and Tokio runtime. When a large run is active, lightweight requests can
 still be delayed by worker scheduling, shared locks, DB access, or CPU-heavy
 serialization.
@@ -97,23 +97,6 @@ The codebase contains several places that can reduce async concurrency benefits:
 
 These are not necessarily bugs individually, but under large run pressure they
 can turn 16 async workers into a queue behind a few shared bottlenecks.
-
-### Workflow Definition Warning Noise
-
-The local `development-loop` workflow package had a manifest pointing to
-`workflow.mjs`, while current gateway workflow definition discovery requires a
-fixed root `workflow.ts`.
-
-That produced repeated warnings:
-
-```text
-workflow.ts is required in workflow package
-```
-
-This has been fixed locally by renaming `workflow.mjs` to `workflow.ts` and
-removing the stale `entrypoint` field from the manifest. After the change,
-`garyx workflow definition list` includes `development-loop` and no new warning
-lines were emitted during verification.
 
 ## CLI Amplification
 
@@ -170,7 +153,6 @@ Agent/runtime data plane
   MCP calls
   transcript ingestion
   render/projection jobs
-  workflow child runs
 ```
 
 The first step does not need to be a separate process. It can start as separate
@@ -180,7 +162,5 @@ gateway only submit work and read committed state.
 
 ## Immediate Local State
 
-- `development-loop` workflow package has been repaired locally.
-- The gateway still deserves a retry/priority/observability pass; the workflow
-  fix removes repeated warning noise but does not address the larger runtime
-  contention issue.
+- The gateway still deserves a retry/priority/observability pass to address
+  runtime contention.

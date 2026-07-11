@@ -1303,14 +1303,12 @@
 }
 
 .conversation.capsules-view,
-.conversation.tasks-view,
-.conversation.workflow-view {
+.conversation.tasks-view {
   grid-template-rows: minmax(0, 1fr);
 }
 
 .conversation.capsules-view .conversation-body,
-.conversation.tasks-view .conversation-body,
-.conversation.workflow-view .conversation-body {
+.conversation.tasks-view .conversation-body {
   padding: 0;
 }
 

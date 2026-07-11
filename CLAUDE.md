@@ -77,12 +77,6 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   top-level concepts.
 - Use native platform patterns: Electron/shadcn-style desktop surfaces where
   appropriate, and native grouped iOS management surfaces on mobile.
-- Workflow task creation in product UI is text-first: accept one plain-text
-  input, not a generated JSON/schema form. If a workflow needs structured data,
-  its first workflow step should structure the text.
-- Workflow definition IDs and workflow run IDs are plain IDs, such as
-  `development-loop` or a UUID. Do not add typed namespace prefixes, and do not
-  add compatibility stripping for legacy prefixed IDs.
 - Mobile route state, presentation mapping, formatting, and business-rule
   transformations should live in `GaryxMobileCore` with SwiftPM tests.
 - Message, transcript, and tool-row display is server-render-state first:
@@ -120,25 +114,7 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
   not trigger TestFlight unless the user explicitly asks in the current turn.
 - Do not wire iOS uploads into version-tag release jobs unless the user
   explicitly asks for that coupling.
-- Garyx workflows are SDK-first: user TypeScript owns control flow; the gateway
-  provides observability, child-thread execution, and structured results. Do not
-  add a workflow-script interpreter.
-- WorkflowRun exposes two result channels: `result` for machine-readable JSON
-  and `outputText` for the human-readable final Markdown. Do not use `summary`
-  as the WorkflowRun output contract.
-- Garyx-managed workflow packages use `garyx.workflow.json` for metadata and a
-  fixed root `workflow.ts` source file. Do not add per-package entrypoint
-  configuration.
-- Gateway-managed workflow execution runs on the user's system Bun: resolve
-  `bun` from `GARYX_WORKFLOW_BUN_BIN`, a bundled sibling, then `PATH`, and error
-  at workflow execution with install instructions when none is found. The release
-  binary does not embed Bun (that keeps it under the size gate); do not re-bundle
-  it.
-- Structured results are a thread-run capability: store the required result
-  schema in thread metadata, expose `submit_result` dynamically from the current
-  MCP thread context, and do not introduce workflow-specific result tokens.
-
-Detailed runtime, SDK, and workflow rules:
+Detailed runtime and SDK rules:
 @docs/agents/gateway-runtime.md, @docs/agents/claude-sdk.md, and
 @docs/agents/working-loop.md.
 

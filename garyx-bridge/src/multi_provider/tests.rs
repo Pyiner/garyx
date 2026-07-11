@@ -3314,14 +3314,6 @@ async fn test_non_work_run_wake_does_not_revive_reviewed_or_done_task() {
         "done",
     )
     .await;
-    assert_non_work_run_does_not_revive_task(
-        "sess::tg::workflow-child-wake-reviewed-task",
-        "run-workflow-child",
-        HashMap::from([("workflow_child_run_id".to_owned(), json!("child-1"))]),
-        TaskStatus::InReview,
-        "in_review",
-    )
-    .await;
 }
 
 #[tokio::test]

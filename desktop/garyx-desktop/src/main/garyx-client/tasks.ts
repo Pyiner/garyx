@@ -55,10 +55,6 @@ interface TaskExecutorPayload {
   type?: string | null;
   agent_id?: string | null;
   agentId?: string | null;
-  workflow_id?: string | null;
-  workflowId?: string | null;
-  workflow_version?: number | null;
-  workflowVersion?: number | null;
 }
 
 interface TaskSourcePayload {
@@ -182,21 +178,6 @@ function mapTaskExecutor(value: unknown): DesktopTaskSummary["executor"] {
   if (type === "agent") {
     const agentId = asString(record.agent_id) || asString(record.agentId);
     return agentId ? { type: "agent", agentId } : null;
-  }
-  if (type === "workflow") {
-    const workflowId =
-      asString(record.workflow_id) || asString(record.workflowId);
-    if (!workflowId) {
-      return null;
-    }
-    return {
-      type: "workflow",
-      workflowId,
-      workflowVersion:
-        asFiniteNumber(record.workflow_version) ??
-        asFiniteNumber(record.workflowVersion) ??
-        null,
-    };
   }
   return null;
 }
@@ -461,16 +442,7 @@ export async function createTask(
   const executorPayload =
     input.executor?.type === "agent" && input.executor.agentId.trim()
       ? { type: "agent", agent_id: input.executor.agentId.trim() }
-      : input.executor?.type === "workflow" && input.executor.workflowId.trim()
-        ? {
-            type: "workflow",
-            workflow_id: input.executor.workflowId.trim(),
-            ...(input.executor.input === undefined
-              ? {}
-              : { input: input.executor.input ?? null }),
-          }
-        : null;
-  const isWorkflowExecutor = executorPayload?.type === "workflow";
+      : null;
   const assignee = input.assignee?.trim()
     ? principalPayload(input.assignee)
     : null;
@@ -492,10 +464,10 @@ export async function createTask(
       executor: executorPayload,
       assignee: executorPayload ? null : assignee,
       start: input.start === true || executorPayload !== null || assignee !== null,
-      workspace_dir: isWorkflowExecutor ? workspaceDir || null : null,
+      workspace_dir: null,
       runtime: {
         agent_id: runtimeAgentId || null,
-        workspace_dir: isWorkflowExecutor ? null : workspaceDir || null,
+        workspace_dir: workspaceDir || null,
         workspace_mode: input.workspaceMode || "local",
       },
       notification_target: taskNotificationTargetPayload(input.notificationTarget),

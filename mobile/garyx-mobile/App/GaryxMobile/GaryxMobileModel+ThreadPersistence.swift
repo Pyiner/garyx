@@ -126,17 +126,6 @@ extension GaryxMobileModel {
         defaults.set(normalizedId, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.lastOpenedThreadId))
     }
 
-    func persistOpenedThreadDestination(_ destination: GaryxWorkflowRunDestination) {
-        let previousThreadId = persistedLastOpenedThreadId
-        guard let nextThreadId = GaryxLastOpenedThreadRestorationPolicy.persistedThreadId(
-            afterOpening: destination,
-            previousThreadId: previousThreadId
-        ) else {
-            return
-        }
-        persistLastOpenedThreadId(nextThreadId)
-    }
-
     func clearPersistedLastOpenedThreadId(ifMatches threadId: String) {
         let key = scopedSettingsKey(GaryxMobileSettingsKeys.lastOpenedThreadId)
         guard defaults.string(forKey: key) == threadId else { return }
@@ -161,8 +150,7 @@ extension GaryxMobileModel {
         #endif
         let onThread = GaryxLastOpenedThreadRestorationPolicy.isCurrentSessionRestorable(
             navigationState: navigationState,
-            selectedThreadId: selectedThread?.id,
-            activeWorkflowRunId: workflowRunPanelState.activeWorkflowRunId
+            selectedThreadId: selectedThread?.id
         )
         defaults.set(onThread, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.lastSessionOnThread))
     }

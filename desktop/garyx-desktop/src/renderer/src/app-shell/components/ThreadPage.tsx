@@ -51,7 +51,6 @@ import {
 import {
   ComposerForm,
   type ComposerAgentOption,
-  type ComposerWorkflowOption,
 } from "../../ComposerForm";
 import { ComposerQueue } from "../../ComposerQueue";
 import { RateLimitBanner } from "./RateLimitBanner";
@@ -225,8 +224,6 @@ type ThreadPageProps = {
   activePendingAckIntents: MessageIntent[];
   agentLabel?: string | null;
   composerAgentOptions?: ComposerAgentOption[];
-  composerWorkflowOptions?: ComposerWorkflowOption[];
-  composerWorkflowOptionsLoading?: boolean;
   activePendingAutomationRun: PendingAutomationRun | null;
   activeToolGroupId: string | null;
   activeQueue: MessageIntent[];
@@ -263,7 +260,6 @@ type ThreadPageProps = {
   canSteerQueuedPrompt: boolean;
   messagesRef: RefObject<HTMLDivElement | null>;
   newThreadSelectedAgentId: string;
-  newThreadSelectedWorkflowId?: string | null;
   newThreadProviderModels?: DesktopProviderModels | null;
   newThreadAgentConfiguredModel?: string | null;
   newThreadSelectedModel?: string | null;
@@ -294,7 +290,6 @@ type ThreadPageProps = {
   threadAvatarCatalog: ThreadAvatarCatalog;
   visibleRemoteAwaitingAckInputs: PendingThreadInput[];
   visibleRemotePendingInputs: PendingThreadInput[];
-  workflowRunContent?: ReactNode;
   workspaceMutation: string | null;
   composerTextareaRef: RefObject<HTMLTextAreaElement | null>;
   isComposingRef: MutableRefObject<boolean>;
@@ -339,7 +334,6 @@ type ThreadPageProps = {
   onSelectThreadModel?: (model: string | null) => void;
   onSelectThreadReasoningEffort?: (effort: string | null) => void;
   onSelectThreadServiceTier?: (tier: string | null) => void;
-  onSelectNewThreadWorkflow: (workflowId: string) => void;
   onSelectNewThreadWorkspaceMode: (mode: DesktopWorkspaceMode) => void;
   onResumeProviderSession: (sessionId: string) => Promise<void>;
   onRetryFailedMessage?: (message: UiTranscriptMessage) => void;
@@ -360,8 +354,6 @@ export function ThreadPage({
   surfaceVariant = "default",
   agentLabel,
   composerAgentOptions,
-  composerWorkflowOptions,
-  composerWorkflowOptionsLoading,
   activeMessages,
   activePendingAckIntents,
   activePendingAutomationRun,
@@ -403,7 +395,6 @@ export function ThreadPage({
   isComposingRef,
   messagesRef,
   newThreadSelectedAgentId,
-  newThreadSelectedWorkflowId,
   newThreadProviderModels,
   newThreadAgentConfiguredModel,
   newThreadSelectedModel,
@@ -445,7 +436,6 @@ export function ThreadPage({
   onSelectThreadModel,
   onSelectThreadReasoningEffort,
   onSelectThreadServiceTier,
-  onSelectNewThreadWorkflow,
   onSelectNewThreadWorkspaceMode,
   onResumeProviderSession,
   onRetryFailedMessage,
@@ -474,7 +464,6 @@ export function ThreadPage({
   threadAvatarCatalog,
   visibleRemoteAwaitingAckInputs,
   visibleRemotePendingInputs,
-  workflowRunContent,
   workspaceMutation,
 }: ThreadPageProps) {
   const { t } = useI18n();
@@ -548,8 +537,6 @@ export function ThreadPage({
     !historyLoading &&
     !showAutomationRunInitialPlaceholder;
   const newThreadPromptTitle = "What do you want Garyx to build?";
-  const hasWorkflowRunContent = Boolean(workflowRunContent);
-
   useLayoutEffect(() => {
     const threadMain = threadMainRef.current;
     const composerShellWrap = composerShellWrapRef.current;
@@ -597,11 +584,10 @@ export function ThreadPage({
       style={threadLayoutStyle}
     >
       <div
-        className={`thread-main ${isSideChatSurface ? "thread-main--side-chat" : ""} ${emptyNewThread ? "new-thread-centered" : ""} ${hasWorkflowRunContent ? "has-workflow-run-content" : ""}`}
+        className={`thread-main ${isSideChatSurface ? "thread-main--side-chat" : ""} ${emptyNewThread ? "new-thread-centered" : ""}`}
         ref={threadMainRef}
       >
         {shouldShowThreadTaskTreePopover({
-          hasWorkflowRunContent,
           inspectorOpen,
           selectedThreadId,
           threadLogsOpen,
@@ -612,14 +598,7 @@ export function ThreadPage({
             onOpenThread={onOpenThreadById}
           />
         ) : null}
-        {hasWorkflowRunContent ? (
-          <div className="workflow-thread-content">
-            {workflowRunContent}
-          </div>
-        ) : null}
-
-        {!hasWorkflowRunContent ? (
-          <MessageScrollerProvider autoScroll>
+        <MessageScrollerProvider autoScroll>
           <MessageScroller className="messages-scroller">
           <MessageScrollerViewport
             className="messages"
@@ -988,10 +967,8 @@ export function ThreadPage({
           />
           </MessageScroller>
           </MessageScrollerProvider>
-        ) : null}
 
-        {!hasWorkflowRunContent ? (
-          <div className="composer-shell-wrap" ref={composerShellWrapRef}>
+        <div className="composer-shell-wrap" ref={composerShellWrapRef}>
             {emptyNewThread ? (
               <h1 className="new-thread-prompt-title">
                 {newThreadPromptTitle}
@@ -1033,14 +1010,6 @@ export function ThreadPage({
               selectedAgentId={composerSelectedAgentId}
               onSelectAgent={
                 !selectedThreadId ? onSelectNewThreadAgent : undefined
-              }
-              workflowOptions={composerWorkflowOptions}
-              selectedWorkflowId={
-                !selectedThreadId ? newThreadSelectedWorkflowId : null
-              }
-              workflowOptionsLoading={composerWorkflowOptionsLoading}
-              onSelectWorkflow={
-                !selectedThreadId ? onSelectNewThreadWorkflow : undefined
               }
               newThreadProviderModels={
                 !selectedThreadId ? newThreadProviderModels : null
@@ -1175,7 +1144,6 @@ export function ThreadPage({
             ) : null}
             </div>
           </div>
-        ) : null}
       </div>
 
       {threadLogsOpen ? (

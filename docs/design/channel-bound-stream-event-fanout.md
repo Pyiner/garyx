@@ -105,7 +105,7 @@ Channel 层负责保证 `Endpoint Identity` 的语义正确：
 
 origin target 没有语义特权。迁移期如果还存在 direct callback，只有 `Endpoint Identity` 相等时才能排除重复。Gateway/router 不能退回去比较任何 channel 内部字段。
 
-hidden child thread 和 workflow child thread 不能隐式继承父线程 channel 绑定；fanout 只看子线程自己的 persisted bindings。
+hidden child thread 不能隐式继承父线程 channel 绑定；fanout 只看子线程自己的 persisted bindings。
 
 ## Dispatcher 契约
 

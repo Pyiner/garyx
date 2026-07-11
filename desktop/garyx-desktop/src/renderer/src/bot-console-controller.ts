@@ -205,7 +205,7 @@ type ActivateBotDraftThreadInput = {
   /**
    * The draft-entry COMMAND with the bot binding (review #TASK-1621):
    * runs the full entry even when the draft route equals the current one,
-   * and keeps the user's agent/workflow picks (async fallbacks must not
+   * and keeps the user's agent pick (async fallbacks must not
    * write stale closure values back). The hash syncs from the state fold.
    */
   enterBotDraft: (workspacePath: string | null, botId: string) => void;

@@ -471,38 +471,6 @@ async fn task_create_stores_source_and_list_filters_it() {
 }
 
 #[tokio::test]
-async fn task_create_persists_workflow_executor() {
-    let service = service();
-    let (_thread_id, task) = service
-        .create_task(CreateTaskInput {
-            title: Some("Run deep research".to_owned()),
-            body: None,
-            assignee: None,
-            notification_target: None,
-            source: None,
-            executor: Some(TaskExecutor::Workflow {
-                workflow_id: "deep-research".to_owned(),
-                workflow_version: Some(3),
-            }),
-            start: true,
-            actor: None,
-            agent_id: None,
-            workspace_dir: None,
-            runtime: None,
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        task.executor,
-        Some(TaskExecutor::Workflow {
-            workflow_id: "deep-research".to_owned(),
-            workflow_version: Some(3),
-        })
-    );
-    assert_eq!(task.status, TaskStatus::InProgress);
-}
-
-#[tokio::test]
 async fn task_create_binds_agent_executor_to_thread() {
     let service = service();
     let (thread_id, task) = service

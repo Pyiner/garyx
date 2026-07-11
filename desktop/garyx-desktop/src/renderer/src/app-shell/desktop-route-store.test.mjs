@@ -185,7 +185,7 @@ test("desktopRoutesEqual normalizes optional null/undefined fields", () => {
   );
 });
 
-test("default-agent and workflow new-thread navigations dedupe their own echo (canonical commit)", () => {
+test("default-agent new-thread navigations dedupe their own echo (canonical commit)", () => {
   const host = fakeHost("#/thread");
   const store = new DesktopRouteStore(host);
   let notified = 0;
@@ -199,41 +199,13 @@ test("default-agent and workflow new-thread navigations dedupe their own echo (c
     kind: "new-thread",
     workspacePath: "/Users/test/repo",
     agentId: "claude",
-    workflowId: null,
   });
   assert.equal(notified, 1, "default-agent navigate commits exactly once");
   assert.deepEqual(store.getSnapshot().route, {
     kind: "new-thread",
     workspacePath: "/Users/test/repo",
     agentId: null,
-    workflowId: null,
   });
-
-  // A workflow route drops the agent param entirely.
-  store.navigate({
-    kind: "new-thread",
-    workspacePath: "/Users/test/repo",
-    agentId: "codex",
-    workflowId: "development-loop",
-  });
-  assert.equal(notified, 2, "workflow navigate commits exactly once");
-  assert.deepEqual(store.getSnapshot().route, {
-    kind: "new-thread",
-    workspacePath: "/Users/test/repo",
-    agentId: null,
-    workflowId: "development-loop",
-  });
-
-  // Re-navigating with the non-canonical spelling is a full no-op.
-  const logBefore = host.log.length;
-  store.navigate({
-    kind: "new-thread",
-    workspacePath: "/Users/test/repo",
-    agentId: "gemini",
-    workflowId: "development-loop",
-  });
-  assert.equal(notified, 2);
-  assert.equal(host.log.length, logBefore);
   store.dispose();
 });
 
@@ -257,7 +229,7 @@ test("subscribeCommits delivers every commit synchronously with origin and settl
   });
   // Internal navigation: origin 'navigate', canonical route committed.
   store.navigate(
-    { kind: "new-thread", workspacePath: null, agentId: "claude", workflowId: null },
+    { kind: "new-thread", workspacePath: null, agentId: "claude" },
     { replace: true },
   );
   assert.deepEqual(order, ["plain", "commit"], "navigate: plain then commit, no external");
@@ -271,7 +243,7 @@ test("subscribeCommits delivers every commit synchronously with origin and settl
   // Equal-route navigate is a no-op: no commit event.
   order.length = 0;
   store.navigate(
-    { kind: "new-thread", workspacePath: null, agentId: null, workflowId: null },
+    { kind: "new-thread", workspacePath: null, agentId: null },
     { replace: true },
   );
   assert.deepEqual(order, [], "equal route: no notifications at all");

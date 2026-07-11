@@ -24,7 +24,6 @@
     "dist:mac:release": "node ./scripts/build-mac-release.mjs",
     "test:unit": "node ./scripts/run-unit-tests.mjs",
     "test:smoke": "npm run dist:dir && node ./scripts/electron-smoke.mjs",
-    "test:workflow-text-smoke": "npm run build:ui && node ./scripts/workflow-text-smoke.mjs",
     "test:i18n-literals": "node ./scripts/check-i18n-literals.mjs",
     "verify:mac:release": "node ./scripts/verify-mac-release.mjs",
     "test:stream-pool": "NODE_OPTIONS=--experimental-strip-types electron scripts/stream-pool-smoke.mjs"

@@ -57,9 +57,9 @@ We only care about the **thread itself**, not sub-tasks. A thread is serial:
 sending a new message first `abort_thread_runs` the in-flight run
 (`run_management.rs:1451`), and `max_concurrent_runs` is a global cap, not
 per-thread. So a thread has at most one of its own runs at a time → the field
-is a boolean (has its own active run / not). Sub-agent / workflow child runs
-live on their own child threads (already `exclude_from_recent`) and never
-aggregate onto the parent row.
+is a boolean (has its own active run / not). Child runs live on their own
+threads (already `exclude_from_recent`) and never aggregate onto the parent
+row.
 
 - **Open → running:** `run_start` (your message, automation, another device).
 - **Close → idle:** `run_complete` (status completed / error / interrupted /

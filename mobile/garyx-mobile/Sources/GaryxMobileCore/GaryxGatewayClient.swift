@@ -581,10 +581,6 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func getWorkflowRun(workflowRunId: String) async throws -> GaryxWorkflowRunDrilldown {
-        try await get("/api/workflows/\(workflowRunId.urlPathEncoded)")
-    }
-
     public func listAutomations() async throws -> [GaryxAutomationSummary] {
         let page: GaryxAutomationsPage = try await get("/api/automations")
         return page.automations

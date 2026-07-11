@@ -3332,9 +3332,9 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
 }
 
 #[tokio::test]
-async fn delete_thread_cleans_stale_projected_workflow_thread() {
+async fn delete_thread_cleans_stale_projected_task_thread() {
     let state = AppStateBuilder::new(test_config()).build();
-    let thread_id = "thread::stale-workflow-route";
+    let thread_id = "thread::stale-task-route";
     state
         .ops
         .garyx_db
@@ -3343,16 +3343,16 @@ async fn delete_thread_cleans_stale_projected_workflow_thread() {
             thread_meta: ThreadMetaDraft {
                 thread_id: thread_id.to_owned(),
                 workspace_dir: Some("/Users/test/project".to_owned()),
-                thread_type: "workflow_run".to_owned(),
-                thread_label: Some("Workflow Run".to_owned()),
-                agent_id: Some("deep-research".to_owned()),
-                provider_type: Some("workflow".to_owned()),
+                thread_type: "task".to_owned(),
+                thread_label: Some("Task Thread".to_owned()),
+                agent_id: Some("codex".to_owned()),
+                provider_type: Some("codex".to_owned()),
                 created_at: Some("2026-06-05T08:00:00.000Z".to_owned()),
                 updated_at: Some("2026-06-05T08:10:00.000Z".to_owned()),
                 message_count: 1,
-                last_user_message: Some("start workflow".to_owned()),
+                last_user_message: Some("start task".to_owned()),
                 last_assistant_message: None,
-                last_message_preview: Some("start workflow".to_owned()),
+                last_message_preview: Some("start task".to_owned()),
                 recent_run_id: None,
                 active_run_id: None,
                 worktree_json: None,
@@ -3368,31 +3368,31 @@ async fn delete_thread_cleans_stale_projected_workflow_thread() {
             channel_endpoints: vec![],
             message_routes: vec![],
         })
-        .expect("seed stale workflow projection");
+        .expect("seed stale task projection");
     state
         .ops
         .garyx_db
         .upsert_recent_thread(RecentThreadDraft {
             thread_id: thread_id.to_owned(),
-            title: "Workflow Run".to_owned(),
+            title: "Task Thread".to_owned(),
             workspace_dir: Some("/Users/test/project".to_owned()),
-            thread_type: "workflow_run".to_owned(),
-            provider_type: Some("workflow".to_owned()),
-            agent_id: Some("deep-research".to_owned()),
+            thread_type: "task".to_owned(),
+            provider_type: Some("codex".to_owned()),
+            agent_id: Some("codex".to_owned()),
             message_count: 1,
-            last_message_preview: "start workflow".to_owned(),
+            last_message_preview: "start task".to_owned(),
             recent_run_id: None,
             active_run_id: None,
             run_state: "idle".to_owned(),
             updated_at: Some("2026-06-05T08:10:00.000Z".to_owned()),
             last_active_at: "2026-06-05T08:10:00.000Z".to_owned(),
         })
-        .expect("seed stale recent workflow");
+        .expect("seed stale recent task");
     state
         .ops
         .garyx_db
         .pin_thread(thread_id)
-        .expect("pin stale workflow thread");
+        .expect("pin stale task thread");
     assert!(state.threads.thread_store.get(thread_id).await.is_none());
 
     let router = build_router(state.clone());
@@ -3547,7 +3547,7 @@ async fn threads_route_filters_default_hidden_threads_from_meta_projection() {
             json!({
                 "thread_id": "thread::hidden-meta",
                 "label": "Hidden",
-                "workflow_child_run_id": "workflow-child::1",
+                "hidden": true,
                 "updated_at": "2026-05-23T10:00:00.000Z"
             }),
         )
@@ -6574,9 +6574,9 @@ async fn bot_consoles_route_ignores_unconfigured_endpoint_accounts() {
 }
 
 #[tokio::test]
-async fn thread_metadata_preserves_workflow_thread_type() {
+async fn thread_metadata_preserves_task_thread_type() {
     let (state, _logger, _dir) = test_state().await;
-    let thread_id = "thread::workflow-metadata";
+    let thread_id = "thread::task-metadata";
     state
         .threads
         .thread_store
@@ -6584,9 +6584,7 @@ async fn thread_metadata_preserves_workflow_thread_type() {
             thread_id,
             json!({
                 "thread_id": thread_id,
-                "thread_kind": "workflow_run",
-                "workflow_run_id": thread_id,
-                "workflow_definition_id": "test-workflow",
+                "thread_kind": "task",
             }),
         )
         .await;
@@ -6598,7 +6596,7 @@ async fn thread_metadata_preserves_workflow_thread_type() {
         .await
         .expect("thread data");
     let response = thread_metadata_response(&state, thread_id, &data).await;
-    assert_eq!(response["thread_type"], "workflow_run");
+    assert_eq!(response["thread_type"], "task");
 }
 
 #[tokio::test]

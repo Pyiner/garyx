@@ -127,11 +127,6 @@
   overflow: hidden;
 }
 
-.agents-hub-avatar-sm.workflow {
-  background: rgba(26, 28, 31, 0.06);
-  color: var(--color-token-text-secondary);
-}
-
 .agents-hub-avatar-sm.builtin {
   background: var(--color-token-bg-warning);
   color: var(--color-token-warning-foreground);
@@ -209,11 +204,6 @@
   height: 100%;
   border-radius: inherit;
   object-fit: cover;
-}
-
-.agents-hub-avatar-centered.workflow {
-  background: var(--color-token-bg-success);
-  color: var(--color-accent-green);
 }
 
 .agents-hub-avatar-centered.builtin {
@@ -660,79 +650,6 @@
   overflow: auto;
   font-size: 12px;
   line-height: 1.5;
-}
-
-.agents-hub-workflow-dialog[data-slot="dialog-content"] {
-  --app-dialog-card-width: min(980px, var(--app-dialog-available-width));
-}
-
-.agents-hub-workflow-meta-strip,
-.agents-hub-workflow-footnote {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  color: var(--color-token-text-secondary);
-  font-size: var(--text-xs);
-}
-
-.agents-hub-workflow-meta-strip span,
-.agents-hub-workflow-footnote span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agents-hub-workflow-source {
-  display: grid;
-  overflow: hidden;
-  border: 1px solid var(--color-token-border-light);
-  border-radius: var(--radius-xl);
-  background: var(--color-token-bg-secondary);
-}
-
-.agents-hub-workflow-source-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-width: 0;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--color-token-border-light);
-  background: var(--color-token-bg);
-}
-
-.agents-hub-workflow-source-path {
-  color: var(--color-token-text-secondary);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-.agents-hub-workflow-code {
-  min-height: 480px;
-  max-height: min(62vh, 720px);
-  margin: 0;
-  overflow: auto;
-  padding: 18px 20px;
-  color: var(--color-token-text-primary);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.7;
-  tab-size: 2;
-  white-space: pre;
-}
-
-.agents-hub-workflow-code.error {
-  color: var(--color-token-error-foreground);
-}
-
-.agents-hub-workflow-footnote {
-  justify-content: flex-end;
-}
-
-.agents-hub-workflow-footnote span:first-child {
-  margin-right: auto;
 }
 
 .agents-hub-chip-list {

@@ -187,7 +187,7 @@ function renderThreadPage(options?: {
 The default thread route calls this helper with no options. Forest passes
 `surfaceVariant="side-chat"` and wraps it in the widened detail panel. This
 keeps transcript rows, tool grouping, composer, queued prompts, attachments,
-runtime settings, and workflow run content exactly single-sourced.
+runtime settings, and task content exactly single-sourced.
 
 This helper aligns with the already existing side-chat surface and refs rather
 than creating a second transcript/composer variant.

@@ -93,7 +93,6 @@ extension GaryxMobileModel {
         cancelSelectedThreadReconcileLoop()
         cancelBackgroundCommittedRunReconcileLoop()
         stopSelectedThreadStream()
-        cancelWorkflowRunPolling()
         resetClaudeCodeAuthFlow()
         selectedThreadActivitySignatures = [:]
         clearActiveRunState()
@@ -113,8 +112,6 @@ extension GaryxMobileModel {
         GaryxUsageWidgetStore.clear()
         WidgetCenter.shared.reloadTimelines(ofKind: GaryxCodingUsageWidgetConstants.kind)
         selectedThread = nil
-        selectedWorkflowRunThread = nil
-        workflowRunPanelState.clear()
         messages = []
         messagesByThread = [:]
         messageSignaturesByThread = [:]
@@ -310,7 +307,6 @@ extension GaryxMobileModel {
                         startSelectedThreadStream(for: selectedThreadId)
                     }
                 }
-                startWorkflowRunPollingIfNeeded()
                 guard !Task.isCancelled else { return }
                 await refreshCodingUsageWidget()
             }
@@ -323,7 +319,6 @@ extension GaryxMobileModel {
             cancelSelectedThreadReconcileLoop()
             cancelBackgroundCommittedRunReconcileLoop()
             stopSelectedThreadStream()
-            cancelWorkflowRunPolling()
         default:
             break
         }

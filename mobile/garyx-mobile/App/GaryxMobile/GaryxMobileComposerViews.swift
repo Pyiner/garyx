@@ -99,8 +99,7 @@ struct GaryxComposer: View {
     }
 
     /// Composer affordances as a pure function of the thread's real run state +
-    /// local draft (#TASK-1453 problem A). Workflow-run threads present a
-    /// separate surface with no composer, so run state alone gates this.
+    /// local draft (#TASK-1453 problem A).
     private var composerPresentation: GaryxComposerPresentation {
         GaryxComposerPresentationResolver.resolve(
             isThreadBusy: model.isSelectedThreadSending,

@@ -123,42 +123,25 @@ public struct GaryxTaskSummary: Decodable, Identifiable, Equatable, Sendable {
 public struct GaryxTaskExecutor: Decodable, Equatable, Sendable {
     public var type: String
     public var agentId: String?
-    public var workflowId: String?
-    public var workflowVersion: Int?
 
     public init(
         type: String,
-        agentId: String? = nil,
-        workflowId: String? = nil,
-        workflowVersion: Int? = nil
+        agentId: String? = nil
     ) {
         self.type = type
         self.agentId = agentId
-        self.workflowId = workflowId
-        self.workflowVersion = workflowVersion
-    }
-
-    public var isWorkflow: Bool {
-        type.caseInsensitiveCompare("workflow") == .orderedSame
     }
 
     enum CodingKeys: String, CodingKey {
         case type
         case agentId = "agent_id"
         case agentIdCamel = "agentId"
-        case workflowId = "workflow_id"
-        case workflowIdCamel = "workflowId"
-        case workflowVersion = "workflow_version"
-        case workflowVersionCamel = "workflowVersion"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         type = try container.garyxDecodeFirstString(.type) ?? ""
         agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel)
-        workflowId = try container.garyxDecodeFirstString(.workflowId, .workflowIdCamel)
-        workflowVersion = try container.decodeIfPresent(Int.self, forKey: .workflowVersion)
-            ?? container.decodeIfPresent(Int.self, forKey: .workflowVersionCamel)
     }
 }
 

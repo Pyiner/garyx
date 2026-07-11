@@ -285,7 +285,6 @@ test("root and catalog snapshots are stable and refresh atomically per domain", 
   const services = {
     getState: async () => desktopState,
     listCustomAgents: async () => [{ id: "agent-a" }],
-    listWorkflowDefinitions: async () => [{ id: "wf-1" }],
   };
   const mirror = new GatewayMirror(services);
 
@@ -309,7 +308,6 @@ test("root and catalog snapshots are stable and refresh atomically per domain", 
 
   const catalog2 = mirror.getCatalogSnapshot();
   assert.equal(catalog2.agents.length, 1);
-  assert.equal(catalog2.workflows.length, 1);
   assert.ok(rootNotified >= 1);
   assert.ok(catalogNotified >= 1);
 
@@ -408,7 +406,6 @@ test("syncThreadUiMessages bridges local rows and applyRemote preserves them via
   const mirror = new GatewayMirror({
     getState: async () => ({}),
     listCustomAgents: async () => [],
-    listWorkflowDefinitions: async () => [],
     getThreadHistory: async () => {
       throw new Error("unused");
     },
@@ -726,7 +723,6 @@ test("dual-run: a committed rewrite control skips mapping and triggers the lifec
   const mirror = new GatewayMirror({
     getState: async () => ({}),
     listCustomAgents: async () => [],
-    listWorkflowDefinitions: async () => [],
     getThreadHistory: async () => {
       throw new Error("unused");
     },
@@ -831,7 +827,6 @@ test("dual-run: fetchOlderThreadHistoryPage matches the legacy older-page apply"
   const mirror = new GatewayMirror({
     getState: async () => ({}),
     listCustomAgents: async () => [],
-    listWorkflowDefinitions: async () => [],
     getThreadHistory: async (input) => {
       historyCalls.push(input);
       return olderPage;
@@ -951,7 +946,6 @@ test("applyOlderHistoryPage (dual-write entry) matches the fetch-owning path", a
   const fetchMirror = new GatewayMirror({
     getState: async () => ({}),
     listCustomAgents: async () => [],
-    listWorkflowDefinitions: async () => [],
     getThreadHistory: async () => olderPage,
   });
   fetchMirror.applyRemoteTranscript(threadId, fullTranscript);
@@ -972,7 +966,6 @@ test("fetchOlderThreadHistoryPage guards: no pagination, in-flight, and fetch er
   const mirror = new GatewayMirror({
     getState: async () => ({}),
     listCustomAgents: async () => [],
-    listWorkflowDefinitions: async () => [],
     getThreadHistory: () => {
       calls += 1;
       return new Promise((resolve) => {
@@ -1036,7 +1029,6 @@ test("fetchOlderThreadHistoryPage guards: no pagination, in-flight, and fetch er
   const errorMirror = new GatewayMirror({
     getState: async () => ({}),
     listCustomAgents: async () => [],
-    listWorkflowDefinitions: async () => [],
     getThreadHistory: async () => {
       throw new Error("history endpoint down");
     },

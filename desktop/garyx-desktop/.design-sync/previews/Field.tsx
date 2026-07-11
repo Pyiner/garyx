@@ -71,21 +71,21 @@ export function FieldSetGroup() {
   return (
     <div style={{ maxWidth: 460 }}>
       <FieldSet>
-        <FieldLegend>Workflow task</FieldLegend>
+        <FieldLegend>Agent task</FieldLegend>
         <FieldDescription>
-          Configure how this development-loop run executes.
+          Configure who should execute this task.
         </FieldDescription>
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="wf-input">Input</FieldLabel>
-            <Textarea id="wf-input" placeholder="Plain-text task description" />
+            <FieldLabel htmlFor="task-body">Instructions</FieldLabel>
+            <Textarea id="task-body" placeholder="Describe the task" />
           </Field>
           <FieldSeparator>Advanced</FieldSeparator>
           <Field>
-            <FieldLabel htmlFor="wf-bun">Bun binary</FieldLabel>
-            <Input id="wf-bun" placeholder="$GARYX_WORKFLOW_BUN_BIN" />
+            <FieldLabel htmlFor="task-agent">Agent ID</FieldLabel>
+            <Input id="task-agent" placeholder="claude" />
             <FieldDescription>
-              Resolved from env, a bundled sibling, then PATH.
+              The agent starts when the task is created.
             </FieldDescription>
           </Field>
         </FieldGroup>
@@ -98,10 +98,9 @@ export function FieldTitleCard() {
   return (
     <div style={{ maxWidth: 420 }}>
       <Field>
-        <FieldTitle>Structured results</FieldTitle>
+        <FieldTitle>Review handoff</FieldTitle>
         <FieldDescription>
-          The child thread carries the result schema; submit_result is exposed
-          dynamically from the current MCP thread context.
+          The task moves to review when its agent run stops.
         </FieldDescription>
       </Field>
     </div>

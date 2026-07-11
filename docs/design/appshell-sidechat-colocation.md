@@ -158,7 +158,7 @@ PRIVATE state today, so the shell command cannot flip the tab directly.
 The panel grows one narrow prop, `pendingOpenToolRequest:
 { tool: ThreadSideToolId; requestId: number } | null`, consumed by a
 panel effect that runs the EXISTING `openTool(tool)` path and acks by
-requestId (the pendingWorkflowTaskHint mailbox pattern; requestId makes
+requestId (the existing request-mailbox pattern; requestId makes
 repeat opens of the same tool re-fire). The command therefore does:
 store write → set dock open → publish `{ tool: "chat", requestId: n }`.
 Because the store binding is written first, the auto-open inside

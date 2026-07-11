@@ -10,63 +10,9 @@ import XCTest
 ///
 /// IMPORTANT: these are reproduction artifacts, NOT acceptance gates. Where a
 /// test models an App-target formula (e.g. the header spinner condition), it
-/// mirrors that formula in a LOCAL variable, so a fix that rewires the App
-/// surfaces does not touch these locals — the characterization documents the
-/// bug but does not gate it. The acceptance gates (red specs) are listed in
-/// `docs/design/mobile-message-state-parity.md`.
+/// mirrors that formula in a LOCAL variable so a fix that rewires App surfaces
+/// does not silently rewrite the characterization.
 final class GaryxMobileMessageStateParityReproTests: XCTestCase {
-
-    // MARK: Symptom 1 — conversation surface "kind" is entry-path dependent
-
-    /// The recent-list row tap carries the full summary, so the kind classifies
-    /// to `.chat` immediately. The widget / deep-link by-id open has no summary
-    /// at open time, so the same thread classifies to `.unresolved` — which the
-    /// App layer renders via the workflow ("Workflow Run") surface
-    /// (`showResolvingWorkflowThread` → `workflowRunPanelState.beginResolving`).
-    /// Same thread, two entry points, two surfaces ⇒ oracle violation.
-    func testThreadKindClassificationDivergesByEntryPath() {
-        let byId = GaryxWorkflowRunDestination.destination(threadId: "thread::T", summary: nil)
-        let bySummary = GaryxWorkflowRunDestination.destination(for: chatSummary("thread::T"))
-
-        XCTAssertEqual(byId, .unresolved(threadId: "thread::T"), "by-id open (no summary) cannot classify yet")
-        XCTAssertEqual(bySummary, .chat(threadId: "thread::T"), "by-summary open classifies the chat thread")
-
-        // ORACLE: the rendered surface kind must be identical for the same thread
-        // regardless of entry path. The classifier outputs differ, and the App
-        // maps `.unresolved` to the workflow surface but `.chat` to chat.
-        XCTAssertNotEqual(
-            byId, bySummary,
-            "BUG: same thread classifies differently by entry path; App renders .unresolved as workflow surface"
-        )
-
-        // The objective type is always decidable from server data (thread_type
-        // defaults to "chat"); a real workflow thread is the only workflow kind.
-        XCTAssertEqual(
-            GaryxWorkflowRunDestination.destination(for: workflowSummary("thread::W", runId: "wfr::1")),
-            .workflowRun(runId: "wfr::1")
-        )
-    }
-
-    /// `beginResolving` (entered for any by-id open before the type is known)
-    /// puts the panel into a non-idle mode with NO actual workflow run, yet the
-    /// App's `isWorkflowRunSurfaceActive` is `mode != .idle` — so an unclassified
-    /// chat thread is presented as a workflow surface.
-    func testResolvingAnUnknownThreadActivatesWorkflowSurfaceWithoutAWorkflowRun() {
-        var state = GaryxWorkflowRunPanelState()
-        XCTAssertEqual(state.mode, .idle)
-
-        state.beginResolving(threadId: "thread::T")
-
-        XCTAssertNil(state.activeWorkflowRunId, "resolving a thread by id is not a workflow run")
-        let isWorkflowRunSurfaceActive = state.mode != .idle // mirrors GaryxMobileModel+WorkflowRuns.swift:7-14
-        XCTAssertTrue(
-            isWorkflowRunSurfaceActive,
-            "BUG: resolving an unclassified thread activates the workflow surface despite no workflow run"
-        )
-        // ORACLE: an unclassified by-id open is a neutral chat-loading state and
-        // must NOT activate the workflow surface.
-    }
-
     // MARK: Symptom 3 — loading indicator stays stuck after the transcript renders
 
     /// The top spinner is a LOADING indicator (initial history / render
@@ -139,31 +85,4 @@ final class GaryxMobileMessageStateParityReproTests: XCTestCase {
         )
     }
 
-    private func chatSummary(_ id: String) -> GaryxThreadSummary {
-        summary(id: id, threadType: "chat", workflowRunId: nil)
-    }
-
-    private func workflowSummary(_ id: String, runId: String) -> GaryxThreadSummary {
-        summary(id: id, threadType: "workflow_run", workflowRunId: runId)
-    }
-
-    private func summary(id: String, threadType: String, workflowRunId: String?) -> GaryxThreadSummary {
-        GaryxThreadSummary(
-            id: id,
-            title: "Test Thread",
-            createdAt: nil,
-            updatedAt: nil,
-            lastMessagePreview: "",
-            workspacePath: nil,
-            messageCount: nil,
-            agentId: nil,
-            providerType: nil,
-            recentRunId: nil,
-            activeRunId: nil,
-            runState: nil,
-            worktreePath: nil,
-            threadType: threadType,
-            workflowRunId: workflowRunId
-        )
-    }
 }

@@ -723,45 +723,6 @@ async fn test_capsule_update_rewrites_file_and_list_filters_thread() {
     assert_eq!(capsules[0]["id"], capsule_id);
 }
 
-#[tokio::test]
-async fn test_submit_result_tool_schema_is_dynamic_from_thread_metadata() {
-    let server = test_server();
-    let thread_id = "thread::structured-result";
-    server
-        .app_state
-        .threads
-        .thread_store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "metadata": {
-                    "workflow_id": "run",
-                    "workflow_child_run_id": "workflow-child::one",
-                    "structured_result_schema": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["summary"],
-                        "properties": {
-                            "summary": { "type": "string" }
-                        }
-                    }
-                }
-            }),
-        )
-        .await;
-
-    let tool = server
-        .submit_result_tool_for_thread(thread_id)
-        .await
-        .expect("dynamic tool")
-        .expect("submit_result tool");
-    assert_eq!(tool.name.as_ref(), "submit_result");
-    assert_eq!(tool.input_schema["required"][0], "summary");
-    assert!(tool.input_schema["properties"]["payload"].is_null());
-    assert_eq!(tool.input_schema["properties"]["summary"]["type"], "string");
-}
-
 #[test]
 fn test_mcp_image_gen_route_is_absent() {
     let server = test_server();

@@ -294,7 +294,7 @@ AND thread_id <> ?
 LIMIT 1
 ```
 
-This is required for bridge/workflow parent-task gating after restart.
+This is required for bridge parent-task gating after restart.
 
 ## SQL List Semantics
 
@@ -350,7 +350,6 @@ Reader coverage must include:
 - `TaskService` used by task routes.
 - Automation task service creation.
 - Bridge `run_management` free functions.
-- Workflow lifecycle free functions.
 
 `app_state.rs` must run task projection backfill in sync warmup and run one
 task projection reconcile pass immediately after successful backfill. The

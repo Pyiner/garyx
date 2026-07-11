@@ -36,7 +36,6 @@ use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 use crate::task_projection::register_gateway_task_projection_reader;
 use crate::wikis::WikiStore;
-use crate::workflows::WorkflowScheduler;
 
 /// Load a persistent `Store` from the given on-disk path, falling back to an
 /// empty in-memory instance **only** if loading fails — but shout about the
@@ -164,8 +163,8 @@ impl AppStateBuilder {
     /// This is the production boot path's explicit opt-in. `new()`
     /// deliberately stays fully in-memory so that tests (unit *and*
     /// integration, where `cfg(test)` gating on the library does not apply)
-    /// can never read or clobber live user data by default — a workflow
-    /// test's whole-file persist through these defaults is what erased a
+    /// can never read or clobber live user data by default — a test's
+    /// whole-file persist through these defaults is what erased a
     /// real custom agent on 2026-07-06.
     pub fn with_persistent_local_stores(mut self) -> Self {
         if let Err(error) = self.skills.seed_builtin_skills() {
@@ -429,7 +428,6 @@ impl AppStateBuilder {
                 wikis: self.wikis,
                 app_db: self.app_db,
                 garyx_db: self.garyx_db,
-                workflow_scheduler: Arc::new(WorkflowScheduler::default()),
                 provider_auth_sessions: Arc::new(ClaudeAuthSessionStore::default()),
                 channel_endpoint_snapshot: Mutex::new(None),
             },
@@ -474,7 +472,7 @@ mod tests {
     /// Regression guard for the 2026-07-06 gary incident: the builder used to
     /// bind the real `~/.garyx` stores (custom agents / wikis / app
     /// db) by default, so every test constructing an `AppState` read and
-    /// *wrote* live user data — a workflow test's whole-file persist
+    /// *wrote* live user data — a test's whole-file persist
     /// overwrote `custom-agents.json` and vaporized a real agent definition.
     ///
     /// Defaults must be in-memory. Production opts into disk-backed stores

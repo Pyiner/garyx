@@ -102,7 +102,7 @@ Common flags on `channels add`:
 | Command | Use it for |
 | --- | --- |
 | `garyx task list [--status <status>] [--limit <n>] [--offset <n>]` | List tasks, done tasks included. Filter with `--status todo\|in_progress\|in_review\|done`; page with `--limit` / `--offset`. |
-| `garyx task create [--title <title>] [--body <body>] (--agent <id> \| --workflow <id>) [--workspace-dir <path>] [--notify <target>]` | Delegate work through a task thread backed by an Agent or Workflow executor. An executor is required and the run starts immediately. `--notify` defaults to the current thread (or `none` outside a thread); override with `current-thread`, `thread <thread_id>`, `bot <channel:account_id>`, or `none`. |
+| `garyx task create [--title <title>] [--body <body>] --agent <id> [--workspace-dir <path>] [--notify <target>]` | Delegate work through a task thread backed by an Agent executor. An executor is required and the run starts immediately. `--notify` defaults to the current thread (or `none` outside a thread); override with `current-thread`, `thread <thread_id>`, `bot <channel:account_id>`, or `none`. |
 | `garyx task get <task_ref>` | Fetch one task. |
 | `garyx task update <task_ref> --status <status> [--note <note>]` | Move a task through its lifecycle. Garyx moves an in-progress task to review when its agent run stops; only mark `done` after explicit approval. |
 | `garyx task stop <task_ref>` | Interrupt the active run on the task's backing thread, if one exists, then release the task back to a non-running state. |
@@ -114,14 +114,6 @@ Common flags on `channels add`:
 | Command | Use it for |
 | --- | --- |
 | `garyx agent list / get / create / update / upsert / delete` | CRUD on custom agents. `create/update/upsert` accept `--model`, `--model-reasoning-effort`, `--model-service-tier`, and `--default-workspace-dir <path>` for new bot/task threads. |
-
-## Workflows
-
-| Command | Use it for |
-| --- | --- |
-| `garyx workflow definition list / get / upsert --file <package>` | Manage global file-backed workflow packages rooted by `garyx.workflow.json`. |
-| `garyx task create --workflow <workflow_id> --input '<text>'` | Execute a workflow definition through a Task executor. `--input` is a single plain-text string; a workflow that needs structured data parses it in its first step. |
-| `garyx workflow list / get / events / cancel` | Inspect or cancel existing workflow runs. Runs are execution records under Tasks, not standalone product entries. |
 
 ## Tools
 

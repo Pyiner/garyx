@@ -32,16 +32,12 @@ import {
   type DesktopSettings,
   type DesktopSessionProviderHint,
   type DesktopState,
-  type DesktopTaskSummary,
   type DesktopThreadSummary,
   type DesktopWorkspace,
   type DesktopWorkspaceFileEntry,
   type DesktopWorkspaceFileListing,
   type DesktopWorkspaceFilePreview,
-  type DesktopWorkflowDefinition,
   type DesktopWorkspaceMode,
-  type MessageFileAttachment,
-  type MessageImageAttachment,
   type SlashCommand,
   type ThreadRuntimeInfo,
   type ThreadTranscript,
@@ -91,7 +87,6 @@ import {
 import { BotConversationSidebar } from "../BotConversationSidebar";
 import { WorkspaceConversationSidebar } from "../WorkspaceConversationSidebar";
 import { ThreadConversationSidebar } from "../ThreadConversationSidebar";
-import { buildComposerWorkflowOptions } from "../ComposerForm";
 import { ComposerQueue } from "../ComposerQueue";
 import { ConversationHeaderActions } from "../ConversationHeaderActions";
 import {
@@ -129,7 +124,6 @@ import {
   buildWorkspaceThreadGroups,
   endpointThreadTitle,
   isSelectableNewThreadWorkspace,
-  mergeThread,
   newThreadWorkspaceOptions,
   pickPreferredWorkspace,
   selectedAutomation,
@@ -146,7 +140,6 @@ import {
 import {
   bindEndpointToThread,
   detachEndpointFromThread,
-  ensureWorkspaceForNewThread,
   ensureThread,
   scheduleThreadHistoryRefresh,
   selectWorkspaceForThread,
@@ -314,11 +307,6 @@ const TasksPanel = lazy(() =>
 const CapsulesPanel = lazy(() =>
   import("./components/CapsulesPanel").then((module) => ({
     default: module.CapsulesPanel,
-  })),
-);
-const WorkflowRunsPanel = lazy(() =>
-  import("./components/WorkflowRunsPanel").then((module) => ({
-    default: module.WorkflowRunsPanel,
   })),
 );
 const EMPTY_UI_TRANSCRIPT_MESSAGES: UiTranscriptMessage[] = [];
@@ -567,8 +555,6 @@ export function AppShell() {
       new GatewayMirror({
         getState: () => window.garyxDesktop.getState(),
         listCustomAgents: () => window.garyxDesktop.listCustomAgents(),
-        listWorkflowDefinitions: () =>
-          window.garyxDesktop.listWorkflowDefinitions(),
         getThreadHistory: (input) => window.garyxDesktop.getThreadHistory(input),
         getThreadHistoryFull: (threadId) =>
           window.garyxDesktop.getThreadHistory(threadId),
@@ -594,11 +580,6 @@ export function AppShell() {
   const [sideChatSessions] = useState(() => new SideChatSessions());
   const [desktopState, setDesktopState] = useState<DesktopState | null>(null);
   const [desktopAgents, setDesktopAgents] = useState<DesktopCustomAgent[]>([]);
-  const [desktopWorkflows, setDesktopWorkflows] = useState<
-    DesktopWorkflowDefinition[]
-  >([]);
-  const [workflowDefinitionsLoading, setWorkflowDefinitionsLoading] =
-    useState(false);
   const [connection, setConnection] = useState<ConnectionStatus | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() =>
     initialRouteValue.kind === "thread" ? initialRouteValue.threadId : null,
@@ -613,13 +594,6 @@ export function AppShell() {
   // request to activate a capsule's tab (consumed by the panel).
   const [openCapsuleTabs, setOpenCapsuleTabs] = useState<SideCapsuleTab[]>([]);
   const [pendingActiveCapsuleId, setPendingActiveCapsuleId] = useState<
-    string | null
-  >(null);
-  const [selectedWorkflowTask, setSelectedWorkflowTask] =
-    useState<DesktopTaskSummary | null>(null);
-  // Batch 6c-2c: the workflow task id is a selector over the committed
-  // route (declared below the route snapshot).
-  const [selectedWorkflowRunId, setSelectedWorkflowRunId] = useState<
     string | null
   >(null);
   const [threadEntrySelectionSource, setThreadEntrySelectionSource] =
@@ -652,12 +626,6 @@ export function AppShell() {
   const [providerModelsByType, setProviderModelsByType] = useState<
     Record<string, DesktopProviderModels | null>
   >({});
-  const [pendingWorkflowId, setPendingWorkflowId] = useState<string | null>(
-    initialRouteValue.kind === "new-thread" && initialRouteValue.workflowId
-      ? initialRouteValue.workflowId
-      : null,
-  );
-  const [workflowThreadStarting, setWorkflowThreadStarting] = useState(false);
   // Batch 3d: read-side cutover — the 5 per-thread transcript maps are
   // read from the mirror's aggregate transcript-maps domain through
   // useSyncExternalStore (the 3a/3c-1 pattern: AppShell subscribes on its
@@ -725,10 +693,6 @@ export function AppShell() {
   const capsulePreviewId =
     routeSnapshot.route.kind === "capsule"
       ? routeSnapshot.route.capsuleId
-      : null;
-  const selectedWorkflowTaskId =
-    routeSnapshot.route.kind === "workflow-task"
-      ? routeSnapshot.route.taskId
       : null;
   // Settings tab: route-selected with last-active stickiness — plain
   // #/settings shows the previously active tab (design contract:
@@ -937,7 +901,6 @@ export function AppShell() {
     setConnection,
     setDesktopAgents,
     setDesktopState,
-    setDesktopWorkflows,
     setError,
     setGatewaySettingsStatus,
     setLocalSettingsStatus,
@@ -1145,42 +1108,6 @@ export function AppShell() {
     () => buildAgentOptions(desktopAgents),
     [desktopAgents],
   );
-  const composerWorkflowOptions = useMemo(
-    () => buildComposerWorkflowOptions(desktopWorkflows),
-    [desktopWorkflows],
-  );
-  useEffect(() => {
-    if (!newThreadDraftActive) {
-      return undefined;
-    }
-    let cancelled = false;
-    setWorkflowDefinitionsLoading(true);
-    void window.garyxDesktop
-      .listWorkflowDefinitions()
-      .then((workflows) => {
-        if (cancelled) {
-          return;
-        }
-        startTransition(() => {
-          setDesktopWorkflows(workflows);
-        });
-      })
-      .catch(() => {
-        if (!cancelled) {
-          startTransition(() => {
-            setDesktopWorkflows([]);
-          });
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setWorkflowDefinitionsLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [newThreadDraftActive]);
   const addBotAgentTargets = useMemo(() => {
     const options = buildAgentTargetOptions(desktopAgents);
     return options.length
@@ -1191,9 +1118,6 @@ export function AppShell() {
     pendingAgent?.displayName?.trim() ||
     pendingAgentId ||
     null;
-  const pendingWorkflow =
-    composerWorkflowOptions.find((workflow) => workflow.id === pendingWorkflowId) ||
-    null;
   const activeAgentLabel =
     activeAgent?.displayName ||
     activeThread?.agentId ||
@@ -1203,7 +1127,7 @@ export function AppShell() {
     : pendingAgent?.providerType || "claude_code";
   const composerAgentLabel = selectedThreadId
     ? activeAgentLabel
-    : pendingWorkflow?.label || pendingAgentLabel;
+    : pendingAgentLabel;
   const gatewayIndicator = computeGatewayIndicator({
     status: connection,
     failureCount: gatewayFailureCount,
@@ -1680,7 +1604,7 @@ export function AppShell() {
     renderTailActivity: activeRenderState?.tailActivity ?? null,
     renderActiveToolGroupId: activeToolGroupId,
   });
-  const composerEditingLocked = isDraftSendingThread || workflowThreadStarting;
+  const composerEditingLocked = isDraftSendingThread;
   const botGroups = useMemo(
     () =>
       buildBotGroups(
@@ -1767,11 +1691,6 @@ export function AppShell() {
   const isAgentsView = contentView === "agents";
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
-  const isWorkflowView = contentView === "workflow";
-  const activeWorkflowRunThreadId =
-    contentView === "thread" && activeThread?.threadType === "workflow_run"
-      ? activeThread.id
-      : null;
   const shouldShowConversationRail = contentView === "thread";
   const visibleSelectedThreadId = shouldShowConversationRail ? selectedThreadId : null;
   const visibleThreadEntrySelectionSource = shouldShowConversationRail
@@ -1974,7 +1893,6 @@ export function AppShell() {
     !isCapsulesView &&
     !isSkillsView &&
     !isTasksView &&
-    !isWorkflowView &&
     !isBotsView &&
     !isAgentsView,
   );
@@ -2352,14 +2270,12 @@ export function AppShell() {
     dispatchMessageState,
     ensureSelectedThreadId,
     ensureThreadBotRouting,
-    handleStartWorkflowThreadFromComposer,
     intentForId,
     interruptThread,
     isActiveSendingThread,
     isDraftSendingThread,
     messageStateRef,
     newThreadInitialDispatchLockRef,
-    pendingWorkflowId,
     pendingWorkspacePath,
     preferredWorkspaceForNewThread,
     queueDrainInFlightByThreadRef,
@@ -2375,7 +2291,6 @@ export function AppShell() {
     t,
     updateLiveStreamState,
     updateMessagesByThread,
-    workflowThreadStarting,
   });
   const providerSelectorLocked = Boolean(
     composerLocked ||
@@ -2391,8 +2306,6 @@ export function AppShell() {
       ? "Local and project skill registry"
     : isTasksView
         ? "Global task board"
-      : isWorkflowView
-        ? "Workflow run detail"
       : isAgentsView
         ? "Reusable agents"
         : isBotsView
@@ -2578,36 +2491,20 @@ export function AppShell() {
     return true;
   }
 
-  // Callers already holding the full task summary pass it through this
-  // mailbox so the workflow-task route application seeds it instead of
-  // clearing and re-fetching by id (6c-2a).
-  const pendingWorkflowTaskHintRef = useRef<DesktopTaskSummary | null>(null);
   // Thread openers with a selection source (bot-root, endpoint, recent…)
   // hand it through this mailbox; the bridge's openExistingThread wrapper
   // consumes it so the thread-route application tags the selection.
   const pendingThreadEntrySourceHintRef =
     useRef<ThreadEntrySelectionSource | null>(null);
 
-  function openWorkflowTask(task: DesktopTaskSummary) {
-    const taskId = task.taskId || `#TASK-${task.number}`;
-    setError(null);
-    pendingWorkflowTaskHintRef.current = task;
-    desktopRouteStore.navigate(
-      { kind: "workflow-task", taskId },
-      { replace: true },
-    );
-  }
-
   useRouteEffectBridge({
     clearComposerDraft,
-    contentView,
     desktopState,
     desktopRouteStore,
     ensureThreadOpenable,
     handleResumeProviderSession,
     handleSelectAutomation,
     handleSelectSettingsTab,
-    loading,
     // The thread-route application consumes the entry-source mailbox so
     // navigations from bot roots / endpoints / recents tag the selection.
     openExistingThread: (threadId: string) => {
@@ -2616,24 +2513,17 @@ export function AppShell() {
       return openExistingThread(threadId, entrySource);
     },
     enterNewThreadDraft,
-    pendingWorkflowTaskHintRef,
     pushToast,
     requestComposerFocus,
     selectedThreadId,
-    selectedWorkflowRunId,
-    selectedWorkflowTaskId,
     selectThreadRequestSequenceRef,
     setConnection,
-    setError,
     setNewThreadDraftActive,
     setPendingAgentId,
     setPendingBotId,
-    setPendingWorkflowId,
     setPendingWorkspaceMode,
     setPendingWorkspacePath,
     setSelectedThreadId,
-    setSelectedWorkflowRunId,
-    setSelectedWorkflowTask,
   });
 
   useEffect(() => {
@@ -2725,16 +2615,13 @@ export function AppShell() {
 
           // Fast hydration: the threads slice is a recent page (pinned ids
           // repaired by id). The full set follows below, off the paint path.
-          const [nextState, nextStatus, nextAgents, nextWorkflows] =
+          const [nextState, nextStatus, nextAgents] =
             await Promise.all([
               window.garyxDesktop.getStateFast(),
               window.garyxDesktop.checkConnection(),
               window.garyxDesktop
                 .listCustomAgents()
                 .catch(() => [] as DesktopCustomAgent[]),
-              window.garyxDesktop
-                .listWorkflowDefinitions()
-                .catch(() => [] as DesktopWorkflowDefinition[]),
             ]);
           if (cancelled) {
             return;
@@ -2745,7 +2632,6 @@ export function AppShell() {
           startTransition(() => {
             setDesktopState(nextState);
             setDesktopAgents(nextAgents);
-            setDesktopWorkflows(nextWorkflows);
             setSettingsDraft(nextState.settings);
             setConnection(nextStatus);
           });
@@ -2799,7 +2685,6 @@ export function AppShell() {
           setPendingWorkspacePath(startupRoute.workspacePath || null);
           setPendingWorkspaceMode("local");
           setPendingAgentId(startupRoute.agentId || "claude");
-          setPendingWorkflowId(startupRoute.workflowId || null);
         } else {
           setSelectedThreadId((current) =>
             isKnownThreadId(hydratedState, current)
@@ -3027,7 +2912,7 @@ export function AppShell() {
         desktopRouteStore.navigate(route, { replace: true });
       },
       enterDraft: (nextWorkspacePath) => {
-        // Keep the user's agent/workflow picks (undefined = keep).
+        // Keep the user's agent pick (undefined = keep).
         enterNewThreadDraft({ workspacePath: nextWorkspacePath });
       },
       setDesktopState,
@@ -3234,7 +3119,7 @@ export function AppShell() {
       selectedNewThreadWorkspaceEntry,
       setError,
       enterDraft: (workspacePath) => {
-        enterNewThreadDraft({ workspacePath, agentId: null, workflowId: null });
+        enterNewThreadDraft({ workspacePath, agentId: null });
       },
       syncComposerPhase,
     });
@@ -3246,13 +3131,12 @@ export function AppShell() {
    * call this directly — an equal new-thread route through navigate would
    * no-op and swallow those side effects (review #TASK-1621). The hash
    * syncs from the state fold; external #/new entries reach this through
-   * the bridge's new-thread application. `agentId`/`workflowId` undefined
-   * keep the user's current pick (bot drafts, workspace drafts).
+   * the bridge's new-thread application. `agentId` undefined keeps the
+   * user's current pick (bot drafts, workspace drafts).
    */
   function enterNewThreadDraft(input: {
     workspacePath: string | null;
     agentId?: string | null;
-    workflowId?: string | null;
     botId?: string | null;
   }) {
     setError(null);
@@ -3264,9 +3148,6 @@ export function AppShell() {
     if (input.agentId !== undefined) {
       setPendingAgentId(input.agentId || "claude");
     }
-    if (input.workflowId !== undefined) {
-      setPendingWorkflowId(input.workflowId);
-    }
     clearComposerDraft();
     requestComposerFocus();
     // The contentView selector flips through this commit (6c-2b). Kept
@@ -3276,8 +3157,6 @@ export function AppShell() {
       kind: "new-thread",
       workspacePath: input.workspacePath || null,
       agentId: input.agentId !== undefined ? input.agentId : pendingAgentId,
-      workflowId:
-        input.workflowId !== undefined ? input.workflowId : pendingWorkflowId,
     });
   }
 
@@ -3295,8 +3174,8 @@ export function AppShell() {
   }
 
   /**
-   * Draft-route sync for in-draft mutations (6c-2c): agent/workflow/
-   * workspace picks change the folded new-thread route, so sync it
+   * Draft-route sync for in-draft mutations (6c-2c): agent and workspace
+   * picks change the folded new-thread route, so sync it
    * directly (overrides carry the just-picked values; the rest folds from
    * the current render). Guarded by the same predicate the fold uses for
    * the new-thread shape — outside the draft these pendings do not drive
@@ -3305,7 +3184,6 @@ export function AppShell() {
   function syncDraftRoute(overrides: {
     workspacePath?: string | null;
     agentId?: string | null;
-    workflowId?: string | null;
   }) {
     // Base on the committed route, not render closures: the guard (route
     // IS the draft) and the untouched params stay correct even when the
@@ -3324,10 +3202,6 @@ export function AppShell() {
         overrides.agentId !== undefined
           ? overrides.agentId
           : (route.agentId ?? null),
-      workflowId:
-        overrides.workflowId !== undefined
-          ? overrides.workflowId
-          : (route.workflowId ?? null),
     });
   }
 
@@ -3341,7 +3215,6 @@ export function AppShell() {
     enterNewThreadDraft({
       workspacePath: nextWorkspace?.path || null,
       agentId,
-      workflowId: null,
     });
     syncComposerPhase("");
   }
@@ -3378,9 +3251,9 @@ export function AppShell() {
         !composerHasPayloadRef.current,
       setError,
       enterBotDraft: (workspacePath, botId) => {
-        // agentId/workflowId stay undefined: the legacy bot draft left the
-        // user's picks untouched, and an async fallback must not write a
-        // stale closure value back (review #TASK-1621).
+        // agentId stays undefined: the legacy bot draft left the user's pick
+        // untouched, and an async fallback must not write a stale closure
+        // value back (review #TASK-1621).
         enterNewThreadDraft({ workspacePath, botId });
       },
       // Background workspace correction for an already-open bot draft: the
@@ -3406,7 +3279,6 @@ export function AppShell() {
         enterNewThreadDraft({
           workspacePath: nextWorkspacePath,
           agentId: null,
-          workflowId: null,
         });
       },
       syncComposerPhase,
@@ -3472,7 +3344,6 @@ export function AppShell() {
           kind: "new-thread",
           workspacePath: workspace.path,
           agentId: pendingAgentId,
-          workflowId: pendingWorkflowId,
         });
       }
       closeAddWorkspaceDialog(workspace);
@@ -3776,81 +3647,6 @@ export function AppShell() {
     return gatewayMirror.steerQueuedIntent(latestIntent, options);
   }
 
-  async function handleStartWorkflowThreadFromComposer(input: {
-    prompt: string;
-    promptFiles: MessageFileAttachment[];
-    promptImages: MessageImageAttachment[];
-    workflowId: string;
-  }) {
-    if (input.promptFiles.length > 0 || input.promptImages.length > 0) {
-      setError("Remove attachments before starting a workflow.");
-      return;
-    }
-
-    newThreadInitialDispatchLockRef.current = true;
-    setWorkflowThreadStarting(true);
-    try {
-      const workspacePath =
-        pendingWorkspacePath ||
-        (await ensureWorkspaceForNewThread({
-          api: getDesktopApi(),
-          preferredWorkspacePath: preferredWorkspaceForNewThread?.available
-            ? preferredWorkspaceForNewThread.path
-            : null,
-          selectableWorkspaceCount: selectableNewThreadWorkspaces.length,
-          onAddWorkspace: handleAddWorkspaceForNewThread,
-          setWorkspaceMutation,
-          setDesktopState,
-          setError,
-        }));
-      if (!workspacePath) {
-        return;
-      }
-
-      setError(null);
-      const started = await window.garyxDesktop.startWorkflowThread({
-        workflowId: input.workflowId,
-        input: input.prompt,
-        workspacePath,
-        workspaceMode: pendingWorkspaceMode,
-      });
-      setDesktopState((current) => {
-        const baseState = current || started.state;
-        return {
-          ...baseState,
-          threads: mergeThread(baseState.threads, started.thread),
-          sessions: mergeThread(baseState.sessions, started.thread),
-        };
-      });
-      updateMessagesByThread((current) => ({
-        ...current,
-        [started.thread.id]: current[started.thread.id] || [],
-      }));
-      setPendingWorkspacePath(null);
-      setPendingWorkspaceMode("local");
-      setPendingBotId(null);
-      setPendingWorkflowId(null);
-      setPendingAgentId("claude");
-      clearComposerDraft();
-      // Selection + draft exit + view flip is the thread-route application
-      // (6c-2a; it also resets the entry-selection source).
-      desktopRouteStore.navigate(
-        { kind: "thread", threadId: started.thread.id },
-        { replace: true },
-      );
-      scheduleHistoryRefresh(started.thread.id, 4, 500);
-    } catch (workflowError) {
-      setError(
-        workflowError instanceof Error
-          ? workflowError.message
-          : "Failed to start workflow thread",
-      );
-    } finally {
-      setWorkflowThreadStarting(false);
-      newThreadInitialDispatchLockRef.current = false;
-    }
-  }
-
   const selectedSideToolWorkspaceFile: SideToolWorkspaceFile | null =
     selectedWorkspaceFile &&
     selectedWorkspaceFileEntry?.entryType === "file" &&
@@ -3886,8 +3682,6 @@ export function AppShell() {
       sessions={sideChatSessions}
       activeThread={activeThread}
       composerAgentOptions={composerAgentOptions}
-      composerWorkflowOptions={composerWorkflowOptions}
-      composerWorkflowOptionsLoading={workflowDefinitionsLoading}
       availableWorkspaceCount={availableWorkspaceCount}
       newThreadWorkspaceEntry={newThreadWorkspaceEntry}
       newThreadWorkspaceMode={pendingWorkspaceMode}
@@ -4019,7 +3813,6 @@ export function AppShell() {
     isAgentsView ? "agents-view" : null,
     isSkillsView ? "skills-view" : null,
     isTasksView ? "tasks-view" : null,
-    isWorkflowView ? "workflow-view" : null,
     showConversationSideTools ? "with-side-tools" : null,
     sideToolsResizing ? "side-tools-resizing" : null,
   ]
@@ -4043,8 +3836,6 @@ export function AppShell() {
         surfaceVariant={options.surfaceVariant}
         agentLabel={composerAgentLabel}
         composerAgentOptions={composerAgentOptions}
-        composerWorkflowOptions={composerWorkflowOptions}
-        composerWorkflowOptionsLoading={workflowDefinitionsLoading}
         activeMessages={activeMessages}
         activePendingAckIntents={visiblePendingAckIntents}
         activePendingAutomationRun={activePendingAutomationRun}
@@ -4086,7 +3877,6 @@ export function AppShell() {
         isComposingRef={isComposingRef}
         messagesRef={messagesRef}
         newThreadSelectedAgentId={pendingAgentId}
-        newThreadSelectedWorkflowId={pendingWorkflowId}
         newThreadProviderModels={pendingProviderModels}
         newThreadAgentConfiguredModel={pendingAgent?.model || null}
         newThreadSelectedModel={pendingModel}
@@ -4152,8 +3942,7 @@ export function AppShell() {
         onReorderQueuedIntent={reorderQueuedIntent}
         onSelectNewThreadAgent={(agentId) => {
           setPendingAgentId(agentId);
-          setPendingWorkflowId(null);
-          syncDraftRoute({ agentId, workflowId: null });
+          syncDraftRoute({ agentId });
         }}
         onSelectNewThreadModel={setPendingModel}
         onSelectNewThreadReasoningEffort={setPendingModelReasoningEffort}
@@ -4170,11 +3959,6 @@ export function AppShell() {
           void handleUpdateActiveThreadRuntimeSettings({
             modelServiceTier,
           });
-        }}
-        onSelectNewThreadWorkflow={(workflowId) => {
-          setPendingWorkflowId(workflowId);
-          setPendingAgentId("claude");
-          syncDraftRoute({ agentId: "claude", workflowId });
         }}
         onSelectNewThreadWorkspaceMode={setPendingWorkspaceMode}
         onResumeProviderSession={handleResumeProviderSession}
@@ -4266,18 +4050,6 @@ export function AppShell() {
         threadAvatarCatalog={threadAvatarCatalog}
         visibleRemoteAwaitingAckInputs={visibleRemoteAwaitingAckInputs}
         visibleRemotePendingInputs={visibleRemotePendingInputs}
-        workflowRunContent={
-          !embedded && activeWorkflowRunThreadId ? (
-            <WorkflowRunsPanel
-              onOpenThread={(threadId) => {
-                void openExistingThread(threadId);
-              }}
-              onToast={pushToast}
-              t={t}
-              workflowRunId={activeWorkflowRunThreadId}
-            />
-          ) : null
-        }
         workspaceMutation={workspaceMutation}
       />
     );
@@ -4518,7 +4290,7 @@ export function AppShell() {
         isBrowserView={isBrowserView}
         isSettingsView={isSettingsView}
         isSkillsView={isSkillsView}
-        isTasksView={isTasksView || isWorkflowView}
+        isTasksView={isTasksView}
         recentRailOpen={shouldShowConversationRail && recentThreadsRailOpen}
         onBackToThreads={() => {
           desktopRouteStore.navigate({ kind: "thread-home" }, { replace: true });
@@ -4751,7 +4523,7 @@ export function AppShell() {
           ref={conversationRef}
           style={conversationStyle}
         >
-          {isCapsulesView || isTasksView || isWorkflowView ? null : showStaticWindowToolbar ? (
+          {isCapsulesView || isTasksView ? null : showStaticWindowToolbar ? (
             <div aria-hidden="true" className="settings-window-toolbar" />
           ) : (
             <header className="conversation-header">
@@ -4950,7 +4722,6 @@ export function AppShell() {
               />
             ) : isAgentsView ? (
               <AgentsHubPanel
-                initialTab="agents"
                 workspaces={workspacePickerWorkspaces}
                 onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenMemory={(agent) => {
@@ -4997,47 +4768,10 @@ export function AppShell() {
                 onOpenThread={(threadId) => {
                   void openExistingThread(threadId);
                 }}
-                onOpenWorkflowTask={(task) => {
-                  openWorkflowTask(task);
-                }}
                 onToast={pushToast}
                 workspaces={workspacePickerWorkspaces}
                 workspaceMutation={workspaceMutation}
               />
-            ) : isWorkflowView && selectedWorkflowTaskId ? (
-              selectedWorkflowRunId ? (
-                <WorkflowRunsPanel
-                  onOpenTasks={() => {
-                    desktopRouteStore.navigate({ kind: "view", view: "tasks" }, { replace: true });
-                  }}
-                  onOpenThread={(threadId) => {
-                    void openExistingThread(threadId);
-                  }}
-                  onToast={pushToast}
-                  t={t}
-                  task={selectedWorkflowTask}
-                  workflowRunId={selectedWorkflowRunId}
-                />
-              ) : (
-                <div className="workflow-runs-page">
-                  <section
-                    aria-label={t("Workflow runs")}
-                    className="workflow-runs-panel"
-                  >
-                    <div className="workflow-runs-body">
-                      <div
-                        className={
-                          error
-                            ? "workflow-runs-state workflow-runs-state-error"
-                            : "workflow-runs-state"
-                        }
-                      >
-                        {error || t("Loading workflow runs…")}
-                      </div>
-                    </div>
-                  </section>
-                </div>
-              )
             ) : isBotsView ? (
               <BotConsolePage
                 busyBotId={

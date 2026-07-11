@@ -244,19 +244,12 @@ type UseMessageDispatchControllerArgs = {
   dispatchMessageState: (action: MessageMachineAction) => void;
   ensureSelectedThreadId: () => Promise<string | null>;
   ensureThreadBotRouting: (threadId: string) => Promise<boolean>;
-  handleStartWorkflowThreadFromComposer: (input: {
-    prompt: string;
-    promptFiles: MessageFileAttachment[];
-    promptImages: MessageImageAttachment[];
-    workflowId: string;
-  }) => Promise<void>;
   intentForId: (intentId: string) => MessageIntent | null;
   interruptThread: (threadId: string | null | undefined) => Promise<void>;
   isActiveSendingThread: boolean;
   isDraftSendingThread: boolean;
   messageStateRef: React.MutableRefObject<MessageMachineState>;
   newThreadInitialDispatchLockRef: React.MutableRefObject<boolean>;
-  pendingWorkflowId: string | null;
   pendingWorkspacePath: string | null;
   preferredWorkspaceForNewThread: DesktopWorkspace | null;
   queueDrainInFlightByThreadRef: React.MutableRefObject<
@@ -297,7 +290,6 @@ type UseMessageDispatchControllerArgs = {
   updateMessagesByThread: (
     updater: (current: MessageMap) => MessageMap,
   ) => MessageMap;
-  workflowThreadStarting: boolean;
 };
 
 export function useMessageDispatchController({
@@ -311,14 +303,12 @@ export function useMessageDispatchController({
   dispatchMessageState,
   ensureSelectedThreadId,
   ensureThreadBotRouting,
-  handleStartWorkflowThreadFromComposer,
   intentForId,
   interruptThread,
   isActiveSendingThread,
   isDraftSendingThread,
   messageStateRef,
   newThreadInitialDispatchLockRef,
-  pendingWorkflowId,
   pendingWorkspacePath,
   preferredWorkspaceForNewThread,
   queueDrainInFlightByThreadRef,
@@ -334,7 +324,6 @@ export function useMessageDispatchController({
   t,
   updateLiveStreamState,
   updateMessagesByThread,
-  workflowThreadStarting,
 }: UseMessageDispatchControllerArgs) {
   const [composer, setComposer] = useState("");
   const [composerResetKey, setComposerResetKey] = useState(0);
@@ -394,8 +383,7 @@ export function useMessageDispatchController({
 
   const composerLocked =
     composerAttachmentUploadPending ||
-    isDraftSendingThread ||
-    workflowThreadStarting;
+    isDraftSendingThread;
 
   const composerHasText = composerTextPresent;
   const composerHasImages = composerImages.length > 0;
@@ -981,19 +969,6 @@ export function useMessageDispatchController({
       if (composerAttachmentUploadPending) {
         setError("Attachments are still uploading to gateway.");
       }
-      return;
-    }
-
-    if (startingNewThread && pendingWorkflowId) {
-      if (!hasPromptPayload) {
-        return;
-      }
-      await handleStartWorkflowThreadFromComposer({
-        prompt,
-        promptFiles,
-        promptImages,
-        workflowId: pendingWorkflowId,
-      });
       return;
     }
 

@@ -98,8 +98,6 @@ export interface SideChatPanelProps {
   activeThread: DesktopThreadSummary | null;
   /** Shell-truth chrome shared with the main ThreadPage instance. */
   composerAgentOptions: ThreadPageProps["composerAgentOptions"];
-  composerWorkflowOptions: ThreadPageProps["composerWorkflowOptions"];
-  composerWorkflowOptionsLoading: boolean;
   availableWorkspaceCount: number;
   newThreadWorkspaceEntry: ThreadPageProps["newThreadWorkspaceEntry"];
   newThreadWorkspaceMode: DesktopWorkspaceMode;
@@ -164,8 +162,6 @@ export function SideChatPanel({
   sessions,
   activeThread,
   composerAgentOptions,
-  composerWorkflowOptions,
-  composerWorkflowOptionsLoading,
   availableWorkspaceCount,
   newThreadWorkspaceEntry,
   newThreadWorkspaceMode,
@@ -711,8 +707,6 @@ export function SideChatPanel({
       surfaceVariant="side-chat"
       agentLabel={sideChatAgentLabel}
       composerAgentOptions={composerAgentOptions}
-      composerWorkflowOptions={composerWorkflowOptions}
-      composerWorkflowOptionsLoading={composerWorkflowOptionsLoading}
       activeMessages={sideChatMessages}
       activePendingAckIntents={sideChatVisiblePendingAckIntents}
       activePendingAutomationRun={null}
@@ -755,7 +749,6 @@ export function SideChatPanel({
       isComposingRef={sideIsComposingRef}
       messagesRef={sideChatMessagesRef}
       newThreadSelectedAgentId={sideChatThreadSummary?.agentId || pendingAgentId}
-      newThreadSelectedWorkflowId={null}
       newThreadWorkspaceEntry={newThreadWorkspaceEntry}
       newThreadWorkspaceMode={newThreadWorkspaceMode}
       onAddWorkspace={onAddWorkspace}
@@ -828,7 +821,6 @@ export function SideChatPanel({
       }}
       onReorderQueuedIntent={onReorderQueuedIntent}
       onSelectNewThreadAgent={() => {}}
-      onSelectNewThreadWorkflow={() => {}}
       onSelectNewThreadWorkspaceMode={() => {}}
       onResumeProviderSession={onResumeProviderSession}
       onRetryFailedMessage={(message) => {
@@ -869,7 +861,6 @@ export function SideChatPanel({
       threadAvatarCatalog={threadAvatarCatalog}
       visibleRemoteAwaitingAckInputs={sideChatVisibleRemotePendingInputs}
       visibleRemotePendingInputs={sideChatVisibleRemotePendingInputs}
-      workflowRunContent={null}
       workspaceMutation={workspaceMutation}
     />
   );

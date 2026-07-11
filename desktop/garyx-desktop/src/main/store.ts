@@ -22,8 +22,6 @@ import {
   type DesktopWorkspace,
   type DesktopChannelEndpoint,
   type DesktopSessionProviderHint,
-  type StartWorkflowThreadInput,
-  type StartWorkflowThreadResult,
 } from '@shared/contracts';
 import { desktopStateWithoutThread } from '@shared/desktop-state';
 import { normalizeGatewayHeadersBlock } from '../shared/gateway-headers.ts';
@@ -46,7 +44,6 @@ import {
   mapChannelEndpoint,
   runRemoteAutomationNow,
   setRemoteThreadPinned,
-  startWorkflowThread,
   updateRemoteAutomation,
   updateRemoteThread,
 } from './gary-client';
@@ -1420,43 +1417,6 @@ export async function createDesktopThread(input?: {
     state,
     thread,
     session: thread,
-  };
-}
-
-export async function startDesktopWorkflowThread(
-  input: StartWorkflowThreadInput,
-): Promise<StartWorkflowThreadResult> {
-  const current = await getLocalDesktopState();
-  const explicitWorkspacePath = normalizeWorkspacePathInput(input.workspacePath);
-  let workspacePath = explicitWorkspacePath || current.selectedWorkspacePath?.trim() || null;
-  if (workspacePath) {
-    const requestedWorkspacePath = workspacePath;
-    const knownWorkspace = current.workspaces.find((workspace) => (
-      normalizeWorkspacePathKey(workspace.path || '') === normalizeWorkspacePathKey(requestedWorkspacePath)
-    ));
-    if (knownWorkspace && (!knownWorkspace.available || !knownWorkspace.path)) {
-      throw new Error('Choose an available folder before starting a workflow.');
-    }
-    workspacePath = knownWorkspace?.path || workspacePath;
-  }
-
-  const started = await startWorkflowThread(current.settings, {
-    ...input,
-    workspacePath,
-  });
-  let state = current;
-  const thread = started.thread;
-  state = withSortedEntities({
-    ...state,
-    threads: [
-      thread,
-      ...state.threads.filter((entry) => entry.id !== thread.id),
-    ],
-  });
-  return {
-    ...started,
-    state,
-    thread,
   };
 }
 

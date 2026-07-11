@@ -98,26 +98,7 @@ pub(crate) async fn cmd_task_get(
         Some(fetch) => fetch.await,
         None => None,
     };
-    let workflow_run_payload = payload
-        .get("thread_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|thread_id| async move {
-            fetch_gateway_json(
-                &gateway,
-                &format!("/api/workflows/{}", urlencoding::encode(thread_id)),
-            )
-            .await
-            .ok()
-        });
-    let workflow_run_payload = match workflow_run_payload {
-        Some(fetch) => fetch.await,
-        None => None,
-    };
-    let mut output = format_task_progress(&payload, history_payload.as_ref());
-    append_task_workflow_run(&mut output, workflow_run_payload.as_ref());
-    print!("{output}");
+    print!("{}", format_task_progress(&payload, history_payload.as_ref()));
     Ok(())
 }
 
@@ -128,12 +109,10 @@ pub(crate) async fn cmd_task_create(
     workspace_dir: Option<String>,
     worktree: bool,
     agent: Option<String>,
-    workflow: Option<String>,
-    input: Option<String>,
     notify: Vec<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let executor = task_executor_payload(agent, workflow, input)?;
+    let executor = task_executor_payload(agent)?;
     let notification_target = task_notification_target_payload(notify)?;
     let notify_current_thread = notification_targets_current_thread(&notification_target);
     let source = task_source_payload_from_env();
@@ -141,18 +120,12 @@ pub(crate) async fn cmd_task_create(
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let gateway = gateway_endpoint(config_path)?;
-    let workflow_workspace_dir = if executor.get("type").and_then(Value::as_str) == Some("workflow")
-    {
-        workspace_dir.clone()
-    } else {
-        None
-    };
     let request = json!({
         "title": title,
         "body": body,
         "assignee": Value::Null,
         "start": true,
-        "workspace_dir": workflow_workspace_dir,
+        "workspace_dir": Value::Null,
         "executor": executor,
         "runtime": {
             "agent_id": Value::Null,
@@ -192,44 +165,20 @@ fn notification_targets_current_thread(target: &Value) -> bool {
     }
 }
 
-fn task_executor_payload(
-    agent: Option<String>,
-    workflow: Option<String>,
-    input: Option<String>,
-) -> Result<Value, Box<dyn std::error::Error>> {
+fn task_executor_payload(agent: Option<String>) -> Result<Value, Box<dyn std::error::Error>> {
     let agent_id = agent
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
-    let workflow_id = workflow
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    let executor_count = usize::from(agent_id.is_some()) + usize::from(workflow_id.is_some());
-    if executor_count > 1 {
-        return Err("choose only one task executor: --agent or --workflow".into());
-    }
     if let Some(agent_id) = agent_id {
         return Ok(json!({
             "type": "agent",
             "agentId": agent_id,
         }));
     }
-    let Some(workflow_id) = workflow_id else {
-        return Err(
-            "Task creation is a delegation feature, so you must specify an Agent with --agent."
-                .into(),
-        );
-    };
-    // Workflow input is a single plain-text string; a workflow that needs
-    // structured data parses this text in its first step.
-    let input = match trim_optional_cli(input) {
-        Some(text) => Value::String(text),
-        None => Value::Null,
-    };
-    Ok(json!({
-        "type": "workflow",
-        "workflowId": workflow_id,
-        "input": input,
-    }))
+    Err(
+        "Task creation is a delegation feature, so you must specify an Agent with --agent."
+            .into(),
+    )
 }
 
 fn task_source_payload_from_env() -> Option<Value> {
@@ -775,81 +724,6 @@ fn format_task_progress(task_payload: &Value, history_payload: Option<&Value>) -
     output
 }
 
-fn append_task_workflow_run(output: &mut String, workflow_run_payload: Option<&Value>) {
-    let Some(run) = workflow_run_payload else {
-        return;
-    };
-    output.push('\n');
-    output.push_str("Workflow Run:\n");
-    let workflow = run.get("workflow").unwrap_or(run);
-    let workflow_id = workflow
-        .get("workflowRunId")
-        .or_else(|| workflow.get("workflowId"))
-        .and_then(Value::as_str)
-        .unwrap_or("-");
-    let status = workflow
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("-");
-    let definition_id = workflow
-        .get("workflowDefinitionId")
-        .and_then(Value::as_str)
-        .unwrap_or("-");
-    let definition_version = workflow
-        .get("workflowDefinitionVersion")
-        .and_then(Value::as_u64)
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "-".to_owned());
-    let total_children = workflow
-        .get("totalChildren")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let completed_children = workflow
-        .get("completedChildren")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let failed_children = workflow
-        .get("failedChildren")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let _ = writeln!(
-        output,
-        "- {workflow_id} [{status}] definition {definition_id}@{definition_version} children {completed_children}/{total_children} failed {failed_children}"
-    );
-    if let Some(output_text) = workflow
-        .get("outputText")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let _ = writeln!(output, "  Output: {output_text}");
-    }
-    if let Some(error) = workflow
-        .get("error")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let _ = writeln!(output, "  Error: {error}");
-    }
-    let Some(children) = run.get("children").and_then(Value::as_array) else {
-        return;
-    };
-    for child in children {
-        let label = child.get("label").and_then(Value::as_str).unwrap_or("-");
-        let child_status = child.get("status").and_then(Value::as_str).unwrap_or("-");
-        let thread_id = child.get("threadId").and_then(Value::as_str).unwrap_or("-");
-        let phase_title = child
-            .get("phaseTitle")
-            .and_then(Value::as_str)
-            .unwrap_or("-");
-        let _ = writeln!(
-            output,
-            "  - {label} [{child_status}] phase {phase_title} thread {thread_id}"
-        );
-    }
-}
-
 fn turn_timestamp_label(turn: &TaskProgressTurn) -> String {
     turn.user_timestamp
         .as_deref()
@@ -1088,7 +962,7 @@ mod tests {
     #[test]
     fn task_executor_payload_requires_a_delegation_target() {
         for agent in [None, Some(" \t".to_owned())] {
-            let error = task_executor_payload(agent, None, None)
+            let error = task_executor_payload(agent)
                 .expect_err("task creation without an executor should fail");
 
             assert_eq!(
@@ -1112,8 +986,6 @@ mod tests {
             Some("/tmp/garyx-repo".to_owned()),
             true,
             Some("claude".to_owned()),
-            None,
-            None,
             vec!["none".to_owned()],
             true,
         )
@@ -1148,8 +1020,6 @@ mod tests {
             Some("/tmp/garyx-repo".to_owned()),
             false,
             Some("claude".to_owned()),
-            None,
-            None,
             vec!["none".to_owned()],
             true,
         )
@@ -1167,78 +1037,6 @@ mod tests {
         assert_eq!(
             records[0].body["runtime"]["workspace_dir"],
             "/tmp/garyx-repo"
-        );
-    }
-
-    #[tokio::test]
-    async fn cmd_task_create_posts_workflow_workspace_at_top_level() {
-        let requests = StdArc::new(Mutex::new(Vec::new()));
-        let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
-        let dir = tempdir().expect("tempdir");
-        let config_path = write_test_gateway_config(&dir, &base_url);
-
-        cmd_task_create(
-            config_path.to_str().expect("config path"),
-            Some("Workflow task".to_owned()),
-            None,
-            Some("/tmp/garyx-workflow".to_owned()),
-            false,
-            None,
-            Some("smoke".to_owned()),
-            Some("smoke question".to_owned()),
-            vec!["none".to_owned()],
-            true,
-        )
-        .await
-        .expect("task create should succeed");
-
-        handle.abort();
-
-        let records = requests.lock().expect("request lock");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].method, "POST");
-        assert_eq!(records[0].path, "/api/tasks");
-        assert_eq!(records[0].body["executor"]["type"], "workflow");
-        assert_eq!(records[0].body["executor"]["workflowId"], "smoke");
-        assert_eq!(records[0].body["executor"]["input"], "smoke question");
-        assert_eq!(records[0].body["workspace_dir"], "/tmp/garyx-workflow");
-        assert_eq!(
-            records[0].body["runtime"]["workspace_dir"],
-            "/tmp/garyx-workflow"
-        );
-    }
-
-    #[tokio::test]
-    async fn cmd_task_create_posts_workflow_plain_text_input() {
-        let requests = StdArc::new(Mutex::new(Vec::new()));
-        let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
-        let dir = tempdir().expect("tempdir");
-        let config_path = write_test_gateway_config(&dir, &base_url);
-
-        cmd_task_create(
-            config_path.to_str().expect("config path"),
-            Some("Workflow text task".to_owned()),
-            None,
-            None,
-            false,
-            None,
-            Some("smoke".to_owned()),
-            Some("Summarize this bug report".to_owned()),
-            vec!["none".to_owned()],
-            true,
-        )
-        .await
-        .expect("task create should succeed");
-
-        handle.abort();
-
-        let records = requests.lock().expect("request lock");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].body["executor"]["type"], "workflow");
-        assert_eq!(records[0].body["executor"]["workflowId"], "smoke");
-        assert_eq!(
-            records[0].body["executor"]["input"],
-            "Summarize this bug report"
         );
     }
 
@@ -1430,43 +1228,6 @@ mod tests {
         assert!(rendered.contains(
             "Full thread with tool calls: garyx thread history thread::task-42 --limit 200 --json"
         ));
-    }
-
-    #[test]
-    fn append_task_workflow_run_renders_run_and_child_summary() {
-        let mut output = String::from("Task: #TASK-42\n");
-        let workflow_run = json!({
-            "workflow": {
-                "workflowRunId": "run-abc",
-                "workflowId": "run-abc",
-                "status": "succeeded",
-                "workflowDefinitionId": "deep-research",
-                "workflowDefinitionVersion": 2,
-                "totalChildren": 2,
-                "completedChildren": 2,
-                "failedChildren": 0,
-                "outputText": "Done"
-            },
-            "children": [
-                {
-                    "label": "Search",
-                    "status": "succeeded",
-                    "phaseTitle": "Search",
-                    "threadId": "thread::child"
-                }
-            ],
-            "events": []
-        });
-
-        append_task_workflow_run(&mut output, Some(&workflow_run));
-
-        assert!(output.contains("Workflow Run:"));
-        assert!(
-            output
-                .contains("- run-abc [succeeded] definition deep-research@2 children 2/2 failed 0")
-        );
-        assert!(output.contains("Output: Done"));
-        assert!(output.contains("- Search [succeeded] phase Search thread thread::child"));
     }
 
     #[test]

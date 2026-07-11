@@ -36,16 +36,6 @@ pub enum TaskExecutor {
         #[serde(alias = "agentId")]
         agent_id: String,
     },
-    Workflow {
-        #[serde(alias = "workflowId")]
-        workflow_id: String,
-        #[serde(
-            default,
-            alias = "workflowVersion",
-            skip_serializing_if = "Option::is_none"
-        )]
-        workflow_version: Option<u64>,
-    },
 }
 
 fn default_task_schema_version() -> u32 {

@@ -3,7 +3,7 @@ use garyx_models::provider::ProviderMessage;
 use garyx_router::InMemoryThreadStore;
 
 #[test]
-fn task_work_run_wake_excludes_notification_internal_system_and_workflow_runs() {
+fn task_work_run_wake_excludes_notification_internal_and_system_runs() {
     assert!(is_task_work_run_wake("run-1", &HashMap::new()));
     assert!(!is_task_work_run_wake("task-notify-42", &HashMap::new()));
     assert!(!is_task_work_run_wake(
@@ -17,10 +17,6 @@ fn task_work_run_wake_excludes_notification_internal_system_and_workflow_runs() 
     assert!(!is_task_work_run_wake(
         "run-1",
         &HashMap::from([("system".to_owned(), json!(true))])
-    ));
-    assert!(!is_task_work_run_wake(
-        "run-1",
-        &HashMap::from([("workflow_child_run_id".to_owned(), json!("child-1"))])
     ));
 }
 
@@ -333,4 +329,3 @@ fn test_resolve_persisted_sdk_session_id_for_provider_ignores_other_provider_leg
 
     assert!(resolved.is_none());
 }
-

@@ -32,12 +32,6 @@ visible line break for both user and assistant messages:
   fails the user and assistant single-newline cases with rendered HTML like
   `<p>第一行\n第二行</p>` and no `<br>`. The hard-break, blank paragraph, list,
   and fenced-code controls already pass.
-- `WorkflowRunsPanel` already uses `remarkBreaks` with `ReactMarkdown`, which is
-  the local precedent for this product behavior in markdown-like desktop output.
-  Evidence:
-  `desktop/garyx-desktop/src/renderer/src/app-shell/components/WorkflowRunsPanel.tsx:3-5`,
-  `:481-485`, and `:1478-1481`.
-
 ## Streamdown Extension Point
 
 Streamdown v2.5.0 supports two different extension surfaces:
@@ -135,9 +129,7 @@ changed.
    config.
 5. Add the new test file to `npm run test:unit`.
 6. Add `remark-breaks` as a direct desktop dependency because the code imports
-   it directly. It is already available transitively through Streamdown's
-   dependency tree and is already directly imported by `WorkflowRunsPanel`, but
-   direct declaration keeps the dependency contract explicit.
+   it directly; direct declaration keeps the dependency contract explicit.
 
 ## Validation Plan
 

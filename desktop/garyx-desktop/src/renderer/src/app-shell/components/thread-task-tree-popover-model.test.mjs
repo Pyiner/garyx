@@ -222,7 +222,6 @@ test("current node matching applies to thread and task rows by thread id", () =>
 test("task tree popover yields to inspector panel", () => {
   assert.equal(
     shouldShowThreadTaskTreePopover({
-      hasWorkflowRunContent: false,
       inspectorOpen: false,
       selectedThreadId: "thread::current",
       threadLogsOpen: false,
@@ -231,7 +230,6 @@ test("task tree popover yields to inspector panel", () => {
   );
   assert.equal(
     shouldShowThreadTaskTreePopover({
-      hasWorkflowRunContent: false,
       inspectorOpen: true,
       selectedThreadId: "thread::current",
       threadLogsOpen: false,
@@ -240,16 +238,6 @@ test("task tree popover yields to inspector panel", () => {
   );
   assert.equal(
     shouldShowThreadTaskTreePopover({
-      hasWorkflowRunContent: true,
-      inspectorOpen: false,
-      selectedThreadId: "thread::current",
-      threadLogsOpen: false,
-    }),
-    false,
-  );
-  assert.equal(
-    shouldShowThreadTaskTreePopover({
-      hasWorkflowRunContent: false,
       inspectorOpen: false,
       selectedThreadId: "thread::current",
       threadLogsOpen: true,
@@ -258,7 +246,6 @@ test("task tree popover yields to inspector panel", () => {
   );
   assert.equal(
     shouldShowThreadTaskTreePopover({
-      hasWorkflowRunContent: false,
       inspectorOpen: false,
       selectedThreadId: null,
       threadLogsOpen: false,

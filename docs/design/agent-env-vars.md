@@ -109,7 +109,7 @@ profile 字段 → 运行期 config → 每个子进程 `Command`：
 - 全量相关测试绿；三端语义一致；不破坏 agent update 的合并语义（未传字段保留，含头像）。
 
 **非目标**
-- 不重写 bridge 注入（已工作）。不引入 workflow / channel 层 env。不改 `garyx.json agents.*` 的编辑面。
+- 不重写 bridge 注入（已工作）。不引入 channel 层 env。不改 `garyx.json agents.*` 的编辑面。
 - 不给内建 agent 加 env（架构边界）。不做 env 的服务端加密存储（config = 普通应用状态）。
 - 不做 env 引用/插值/模板（值就是字面字符串）。
 - 不做 provider 输出（transcript/thread-log）里 env **值**的自动 redaction（见 Q4 取舍）。

@@ -78,7 +78,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       isComposingRef={isComposingRef}
       messagesRef={messagesRef}
       newThreadSelectedAgentId="claude"
-      newThreadSelectedWorkflowId={null}
       newThreadWorkspaceEntry={null}
       newThreadWorkspaceMode="local"
       onAddWorkspace={noop}
@@ -98,7 +97,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       onRemoveComposerBrowserAnnotation={noop}
       onReorderQueuedIntent={noop}
       onSelectNewThreadAgent={noop}
-      onSelectNewThreadWorkflow={noop}
       onSelectNewThreadWorkspaceMode={noop}
       onResumeProviderSession={async () => {}}
       onRetryFailedMessage={noop}
@@ -123,7 +121,6 @@ function ThreadStage({ step }: { step: StoryStep }) {
       threadAvatarCatalog={EMPTY_THREAD_AVATAR_CATALOG}
       visibleRemoteAwaitingAckInputs={[]}
       visibleRemotePendingInputs={[]}
-      workflowRunContent={null}
       workspaceMutation={null}
     />
   );

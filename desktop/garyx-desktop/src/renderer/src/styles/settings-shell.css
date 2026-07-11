@@ -332,23 +332,6 @@
   bottom: calc(var(--composer-scroll-clip-height, 72px) + 12px);
 }
 
-.workflow-thread-content {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  height: 100%;
-  width: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.workflow-thread-content > .workflow-runs-page {
-  flex: 1 1 auto;
-  height: 100%;
-  min-height: 0;
-  width: 100%;
-}
-
 .message-history-page-spinner {
   width: 16px;
   height: 16px;

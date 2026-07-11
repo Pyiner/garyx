@@ -8,7 +8,6 @@ export * from "./garyx-client/threads.ts";
 export * from "./garyx-client/workspaces.ts";
 export * from "./garyx-client/tasks.ts";
 export * from "./garyx-client/automations.ts";
-export * from "./garyx-client/workflows.ts";
 export * from "./garyx-client/capsules.ts";
 export * from "./garyx-client/agents.ts";
 export * from "./garyx-client/catalog.ts";

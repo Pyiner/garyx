@@ -730,8 +730,8 @@ impl CronService {
             // failure and make the job claimable again -- otherwise
             // `claim_job_for_execution` skips it forever and the schedule
             // silently stops firing with no recovery via the UI. This mirrors
-            // the startup reconciliation that repairs interrupted threads,
-            // tasks, and workflows.
+            // the startup reconciliation that repairs interrupted threads
+            // and tasks.
             if job.last_status == JobRunStatus::Running {
                 tracing::warn!(
                     job_id = %job.id,

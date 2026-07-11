@@ -4945,7 +4945,7 @@ mod e2e_tests {
 
         wait_for_counter_at_least(&provider.call_count, 1).await;
 
-        // Verify thread store has user + assistant messages
+        // Verify the thread record exists and the transcript owns messages.
         let thread_id = {
             let calls = provider.calls.lock().unwrap();
             calls[0].thread_id.clone()
@@ -4953,7 +4953,12 @@ mod e2e_tests {
         let data = store.get(&thread_id).await;
         assert!(data.is_some(), "thread data should be persisted");
         let data = data.unwrap();
-        let messages = data["messages"].as_array().unwrap();
+        assert!(data.get("messages").is_none());
+        let history = bridge.thread_history().await.expect("thread history");
+        let messages = history
+            .provider_session_tail(&thread_id, 100)
+            .await
+            .expect("provider session tail");
         assert_eq!(messages.len(), 2, "should have user + assistant messages");
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(messages[0]["content"], "persist me");

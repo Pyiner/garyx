@@ -59,15 +59,10 @@ The list is sorted by `recent_threads` recency order and de-duplicated by
 thread id. Capturing by `recent_threads` intentionally matches the mobile list
 that currently shows stale typing state.
 
-Generated automation threads and workflow child threads are already excluded
-from `recent_threads` by projection rules (`exclude_from_recent`,
-`automation_thread_mode=generated_thread`, `source=workflow`, or
-`workflow_child_run_id`). Wake-all does not add a hidden-thread scan. Visible
-top-level agent/task threads are included even if their executor metadata later
-routes to an agent or workflow-backed task. Interrupted workflow runs are
-already reconciled by the workflow lifecycle startup pass; waking hidden child
-threads would create a second recovery policy and is out of scope for this
-restart feature.
+Generated automation threads are already excluded from `recent_threads` by
+projection rules (`exclude_from_recent` or
+`automation_thread_mode=generated_thread`). Wake-all does not add a hidden-thread
+scan. Visible top-level agent/task threads remain included.
 
 Completed threads are not included unless their projection still claims
 `running` or carries a non-empty `active_run_id`. In that stale case wake-all

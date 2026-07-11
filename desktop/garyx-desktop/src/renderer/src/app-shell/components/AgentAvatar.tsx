@@ -1,7 +1,7 @@
 import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
 
 /**
- * Circular avatar for an agent participating in a workflow run.
+ * Circular avatar for an agent.
  * Shows built-in provider marks when available, otherwise falls back to initials.
  * Color is injected via --agent-bg CSS custom property; all layout is in styles.css.
  */

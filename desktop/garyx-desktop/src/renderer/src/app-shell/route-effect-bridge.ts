@@ -13,16 +13,13 @@ import type {
   DesktopDeepLinkEvent,
   DesktopSessionProviderHint,
   DesktopState,
-  DesktopTaskSummary,
   DesktopWorkspaceMode,
 } from "@shared/contracts";
 
-import { getDesktopApi } from "../platform/desktop-api";
 import type { SettingsTabId } from "../settings-tabs";
 import type { ToastTone } from "../toast";
 import type { DesktopRoute } from "./desktop-route";
 import type { DesktopRouteStore } from "./desktop-route-store";
-import type { ContentView } from "./types";
 
 import { isKnownThreadId } from "../thread-model";
 export { isKnownThreadId };
@@ -37,7 +34,6 @@ export function waitForMs(ms: number): Promise<void> {
 
 type RouteEffectBridgeArgs = {
   clearComposerDraft: () => void;
-  contentView: ContentView;
   desktopState: DesktopState | null;
   desktopRouteStore: DesktopRouteStore;
   ensureThreadOpenable: (threadId: string) => Promise<boolean>;
@@ -47,7 +43,6 @@ type RouteEffectBridgeArgs = {
   ) => Promise<void>;
   handleSelectAutomation: (automationId: string | null) => Promise<void>;
   handleSelectSettingsTab: (nextTab: SettingsTabId) => Promise<boolean>;
-  loading: boolean;
   openExistingThread: (threadId: string) => Promise<boolean>;
   /**
    * The shared draft-entry command (review #TASK-1621): draft entry must
@@ -58,19 +53,11 @@ type RouteEffectBridgeArgs = {
   enterNewThreadDraft: (input: {
     workspacePath: string | null;
     agentId?: string | null;
-    workflowId?: string | null;
     botId?: string | null;
   }) => void;
-  /**
-   * Task-summary hand-off from callers that already hold the object
-   * (openWorkflowTask): the workflow-task application seeds from it
-   * instead of clearing and re-fetching by id (6c-2a).
-   */
-  pendingWorkflowTaskHintRef: React.MutableRefObject<DesktopTaskSummary | null>;
   pushToast: (message: string, tone?: ToastTone, durationMs?: number) => void;
   requestComposerFocus: () => void;
   selectedThreadId: string | null;
-  selectedWorkflowRunId: string | null;
   /**
    * The shell's thread-selection request sequence (the stale guard inside
    * selectExistingThreadInPlace). The deep-link open reads it to tell
@@ -78,54 +65,38 @@ type RouteEffectBridgeArgs = {
    * user navigation.
    */
   selectThreadRequestSequenceRef: React.MutableRefObject<number>;
-  selectedWorkflowTaskId: string | null;
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
-  setError: React.Dispatch<React.SetStateAction<string | null>>;
   setNewThreadDraftActive: React.Dispatch<React.SetStateAction<boolean>>;
   setPendingAgentId: React.Dispatch<React.SetStateAction<string>>;
   setPendingBotId: React.Dispatch<React.SetStateAction<string | null>>;
-  setPendingWorkflowId: React.Dispatch<React.SetStateAction<string | null>>;
   setPendingWorkspaceMode: React.Dispatch<
     React.SetStateAction<DesktopWorkspaceMode>
   >;
   setPendingWorkspacePath: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedThreadId: React.Dispatch<React.SetStateAction<string | null>>;
-  setSelectedWorkflowRunId: React.Dispatch<React.SetStateAction<string | null>>;
-  setSelectedWorkflowTask: React.Dispatch<
-    React.SetStateAction<DesktopTaskSummary | null>
-  >;
 };
 
 export function useRouteEffectBridge({
   clearComposerDraft,
-  contentView,
   desktopState,
   desktopRouteStore,
   ensureThreadOpenable,
   handleResumeProviderSession,
   handleSelectAutomation,
   handleSelectSettingsTab,
-  loading,
   openExistingThread,
   enterNewThreadDraft,
-  pendingWorkflowTaskHintRef,
   pushToast,
   requestComposerFocus,
   selectedThreadId,
-  selectedWorkflowRunId,
   selectThreadRequestSequenceRef,
-  selectedWorkflowTaskId,
   setConnection,
-  setError,
   setNewThreadDraftActive,
   setPendingAgentId,
   setPendingBotId,
-  setPendingWorkflowId,
   setPendingWorkspaceMode,
   setPendingWorkspacePath,
   setSelectedThreadId,
-  setSelectedWorkflowRunId,
-  setSelectedWorkflowTask,
 }: RouteEffectBridgeArgs): void {
   const deepLinkEventHandlerRef = useRef<(event: DesktopDeepLinkEvent) => void>(
     () => {},
@@ -186,7 +157,6 @@ export function useRouteEffectBridge({
           enterNewThreadDraft({
             workspacePath: route.workspacePath || null,
             agentId: route.agentId || null,
-            workflowId: route.workflowId || null,
             botId: null,
           });
           return;
@@ -200,25 +170,6 @@ export function useRouteEffectBridge({
             await handleSelectSettingsTab(route.tabId);
           }
           return;
-        case "workflow-task": {
-          setError(null);
-          // A caller that already holds the task summary seeds it through
-          // the mailbox (openWorkflowTask); route-only entries (external
-          // hash, deep link) clear and let the fetch effect load it.
-          const taskHint = pendingWorkflowTaskHintRef.current;
-          pendingWorkflowTaskHintRef.current = null;
-          if (
-            taskHint &&
-            (taskHint.taskId || `#TASK-${taskHint.number}`) === route.taskId
-          ) {
-            setSelectedWorkflowTask(taskHint);
-            setSelectedWorkflowRunId(taskHint.threadId || null);
-          } else {
-            setSelectedWorkflowTask(null);
-            setSelectedWorkflowRunId(null);
-          }
-          return;
-        }
         case "capsule":
           // The preview id is a route selector (6c-2c); nothing to apply.
           return;
@@ -259,60 +210,6 @@ export function useRouteEffectBridge({
       selectedThreadId,
     ],
   );
-
-  useEffect(() => {
-    if (
-      loading ||
-      contentView !== "workflow" ||
-      !selectedWorkflowTaskId ||
-      selectedWorkflowRunId
-    ) {
-      return;
-    }
-    let cancelled = false;
-    const taskId = selectedWorkflowTaskId;
-    void (async () => {
-      try {
-        const task = await getDesktopApi().getTask({ taskId });
-        if (cancelled) {
-          return;
-        }
-        setSelectedWorkflowTask(task);
-        // Sync the route to the server-confirmed task id (normalization,
-        // 6c-2c) — the id itself is a route selector now.
-        desktopRouteStore.syncRoute({
-          kind: "workflow-task",
-          taskId: task.taskId || taskId,
-        });
-        if (task.executor?.type !== "workflow") {
-          setError(`Task is not workflow-backed: ${task.taskId || taskId}`);
-          return;
-        }
-        if (!task.threadId) {
-          setError(`Workflow task has no thread: ${task.taskId || taskId}`);
-          return;
-        }
-        setSelectedWorkflowRunId(task.threadId);
-        setError(null);
-      } catch (routeError) {
-        if (!cancelled) {
-          setError(
-            routeError instanceof Error
-              ? routeError.message
-              : `Failed to load workflow task: ${taskId}`,
-          );
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    contentView,
-    loading,
-    selectedWorkflowRunId,
-    selectedWorkflowTaskId,
-  ]);
 
   // Batch 6c-2a: the route application transaction. Every navigate and
   // external commit is applied through applyDesktopRoute (sync commits are

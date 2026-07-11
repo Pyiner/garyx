@@ -27,8 +27,8 @@ function formatTimestamp(value?: string | null): string {
   return date.toLocaleString(undefined, { hour12: false });
 }
 
-function threadKindLabel(thread: DesktopThreadSummary): string {
-  return thread.threadType === 'workflow_run' ? 'Workflow' : 'Thread';
+function threadKindLabel(_thread: DesktopThreadSummary): string {
+  return 'Thread';
 }
 
 export function ThreadsListPage({

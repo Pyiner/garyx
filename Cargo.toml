@@ -63,9 +63,8 @@ filetime = "0.2"
 
 # ---------------------------------------------------------------------------
 # Release profile tuning. `strip` drops symbol tables, while `opt-level = "s"`
-# keeps the SDK-first workflow runtime embedded without making the release
-# binary visibly large or pushing build time into heavy LTO territory. Measured
-# on 2026-06-02 macOS arm64 with Bun embedded: 56.5MB → 50.6MB.
+# keeps the release binary compact without pushing build time into heavy LTO
+# territory.
 # ---------------------------------------------------------------------------
 [profile.release]
 strip = "symbols"

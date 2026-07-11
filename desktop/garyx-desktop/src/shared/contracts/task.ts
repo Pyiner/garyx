@@ -62,9 +62,7 @@ export type DesktopTaskForestNode =
   | DesktopTaskForestTaskNode
   | DesktopTaskForestThreadNode;
 
-export type DesktopTaskExecutor =
-  | { type: 'agent'; agentId: string }
-  | { type: 'workflow'; workflowId: string; workflowVersion?: number | null };
+export type DesktopTaskExecutor = { type: 'agent'; agentId: string };
 
 export interface DesktopTaskSource {
   threadId?: string | null;
@@ -130,9 +128,7 @@ export interface CreateTaskInput {
   notificationTarget: DesktopTaskNotificationTarget;
 }
 
-export type CreateTaskExecutorInput =
-  | { type: 'agent'; agentId: string }
-  | { type: 'workflow'; workflowId: string; input?: unknown };
+export type CreateTaskExecutorInput = { type: 'agent'; agentId: string };
 
 export interface UpdateTaskStatusInput {
   taskId: string;

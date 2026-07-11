@@ -69,7 +69,7 @@ State classification measured on the post-T13 tree (AppShell 5681 lines,
 
 | Class | ~Share | Examples | End-state owner |
 | --- | --- | --- | --- |
-| Server/gateway mirror | 40% | messagesByThread, renderStateByThread, liveStreamStateByThread, threadInfoByThread, historyPaginationByThread, pendingRemoteInputs, desktopState, agents/workflows, providerModels, connection | `GatewayMirror` |
+| Server/gateway mirror | 40% | messagesByThread, renderStateByThread, liveStreamStateByThread, threadInfoByThread, historyPaginationByThread, pendingRemoteInputs, desktopState, agents, providerModels, connection | `GatewayMirror` |
 | Derived | 20% | activeThread, activeMessages, queue/activity projections, route-derived view | selectors over mirror/route snapshots |
 | Local UI | 25% | composer draft/attachments, drag targets, dialogs, layout widths, scroll anchors, thread logs | colocated feature components |
 | True global | 15% | route (today split across contentView + selectedThreadId + hash), mirror/store instances, stable services | `DesktopRouteStore`, contexts |
@@ -80,7 +80,7 @@ A class (factory-constructed, not a module singleton — tests need isolated
 instances and teardown of timers/stream consumers). Pure TypeScript, zero React
 imports.
 
-Owns: root gateway state (DesktopState, connection, agents, workflows,
+Owns: root gateway state (DesktopState, connection, agents,
 provider model catalogs, refresh status); per-thread committed message body
 cache; per-thread server `RenderState` accepted only monotonically by
 `based_on_seq`; per-thread runtime info, pending remote inputs, pending
@@ -144,7 +144,6 @@ export interface GatewayRootSnapshot {
 export interface CatalogSnapshot {
   readonly version: number;
   readonly agents: readonly DesktopCustomAgent[];
-  readonly workflows: readonly DesktopWorkflowDefinition[];
   readonly providerModelsByType: Readonly<
     Record<string, DesktopProviderModels | null>
   >;
@@ -288,7 +287,7 @@ pre-T13 baseline during batch-6 acceptance).
 End state:
 
 - `DesktopRouteStore.getSnapshot().route` is the only route state; contentView,
-  selected thread/automation/workflow-task/capsule ids, and new-thread params
+  selected thread/automation/capsule ids, and new-thread params
   are selectors.
 - `navigate(route, { replace })` is the only hash writer. External `hashchange`
   updates the store first; route effects may load data or surface an error but
@@ -367,7 +366,7 @@ high-churn). Additive modules + temporary adapters, legacy deletion last.
 | Batch | Scope | Validation | Rollback |
 | --- | --- | --- | --- |
 | 0. Contract harness | No-React mirror test fixtures. Frame sources: (a) electron-smoke mock-gateway frames are real `thread_render_frame` wire envelopes and can be replayed as-is; (b) `test-fixtures/render-layer/render-state-cases.json` is a **reducer case set** (`records` ledger → expected `RenderState`), not wire frames — reusing it for mirror ingestion requires wrapping each case into a synthesized frame envelope (events + render_state); that wrapping cost belongs to this batch. Lock getSnapshot reference stability, per-thread notify isolation, monotonic render apply, frontier separation. | New mirror tests + existing render-view-model/thread-activity/desktop-route suites. | Delete additive tests. |
-| 1. Mirror shell + root/catalog domains | `GatewayMirror` class, root+catalog snapshots, contexts, AppShell adapter feeding legacy props. desktopState/connection/agents/workflows/providerModels refresh moves in. | `npm run test:unit`, `npm run build:ui`. | Revert adapter wiring. |
+| 1. Mirror shell + root/catalog domains | `GatewayMirror` class, root+catalog snapshots, contexts, AppShell adapter feeding legacy props. desktopState/connection/agents/providerModels refresh moves in. | `npm run test:unit`, `npm run build:ui`. | Revert adapter wiring. |
 | 2. Thread transcript domain | Transcript caches, stream ingestion, render snapshots, pending inputs, thread info, pagination → mirror. `useThreadMirror` feeds the same view-model inputs. | **Dual-run comparison**: same recorded event sequences into legacy helpers and mirror, assert identical messagesByThread/renderState/pending/pagination. Plus unit suite + build:ui. | Adapter flag returns ThreadPage to legacy controller. |
 | 3. Dispatch + queue domain | Message machine, send/steer/interrupt, queue drain, runtime convergence → mirror. Composer draft stays put for now. | Message-machine + pending-inputs + thread-activity suites; dual-run comparison strictly on **recorded ack/event sequences** — replay the same recorded gateway responses into legacy and mirror state machines and compare transitions; never live-double-send (dispatch has real gateway side effects). CDP script: send, queued follow-up, steer, interrupt. | Adapter routes composer actions back to legacy hook. |
 | 4. Route store | `DesktopRouteStore`; contentView becomes selector; `applyDesktopRoute` → route effects; fallback hash rewrite removed (intentional changes above). | desktop-route + main deep-link suites; CDP route script incl. unknown-thread hash. | Route store read-only; re-enable legacy state-to-hash effect. |

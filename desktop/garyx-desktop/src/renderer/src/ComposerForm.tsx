@@ -22,7 +22,6 @@ import type {
   DesktopBotConsoleSummary,
   DesktopApiProviderType,
   DesktopProviderModels,
-  DesktopWorkflowDefinition,
   MessageFileAttachment,
   MessageImageAttachment,
   SlashCommand,
@@ -62,12 +61,6 @@ import { resolveComposerModelControlState } from './composer-model-control';
 
 export type { ComposerAgentOption };
 
-export type ComposerWorkflowOption = {
-  id: string;
-  label: string;
-  description?: string;
-};
-
 import { ChannelLogo } from './channel-logo';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { buildMessageImageDataUrl, ImageZoomDialog } from './message-rich-content';
@@ -99,10 +92,6 @@ type ComposerFormProps = {
   agentOptions?: ComposerAgentOption[];
   selectedAgentId?: string;
   onSelectAgent?: (agentId: string) => void;
-  workflowOptions?: ComposerWorkflowOption[];
-  selectedWorkflowId?: string | null;
-  workflowOptionsLoading?: boolean;
-  onSelectWorkflow?: (workflowId: string) => void;
   /** Provider model catalog for the pending agent; enables the new-thread model override control. */
   newThreadProviderModels?: DesktopProviderModels | null;
   /** The pending agent's configured model; filters thinking levels when no override is chosen. */
@@ -301,12 +290,6 @@ const AGENT_PROVIDER_GLYPH = (
   </span>
 );
 
-const WORKFLOW_PROVIDER_GLYPH = (
-  <span aria-hidden className="composer-provider-workflow-icon">
-    <GitBranch size={16} strokeWidth={1.8} />
-  </span>
-);
-
 function renderComposerAgentOptionIcon(option: ComposerAgentOption) {
   return (
     <AgentOptionAvatar
@@ -327,43 +310,6 @@ function renderComposerProviderTriggerIcon(option?: ComposerAgentOption) {
   }
 
   return renderComposerAgentOptionIcon(option);
-}
-
-function workflowOptionFromDefinition(
-  definition: DesktopWorkflowDefinition,
-): ComposerWorkflowOption {
-  return {
-    id: definition.workflowId,
-    label: definition.name?.trim() || definition.workflowId,
-    description: definition.description?.trim() || definition.workflowId,
-  };
-}
-
-export function buildComposerWorkflowOptions(
-  definitions: DesktopWorkflowDefinition[],
-): ComposerWorkflowOption[] {
-  return [...definitions]
-    .sort((left, right) => {
-      const leftName = (left.name || left.workflowId).trim();
-      const rightName = (right.name || right.workflowId).trim();
-      return leftName.localeCompare(rightName) ||
-        left.workflowId.localeCompare(right.workflowId);
-    })
-    .map(workflowOptionFromDefinition);
-}
-
-function ComposerWorkflowOptionRow({ option }: { option: ComposerWorkflowOption }) {
-  return (
-    <span className="composer-workflow-option-row">
-      {WORKFLOW_PROVIDER_GLYPH}
-      <span className="composer-workflow-option-copy">
-        <span className="composer-workflow-option-label">{option.label}</span>
-        {option.description ? (
-          <span className="composer-workflow-option-detail">{option.description}</span>
-        ) : null}
-      </span>
-    </span>
-  );
 }
 
 function browserAnnotationChipLabel(
@@ -575,10 +521,6 @@ function renderComposerProviderControl({
   agentOptions,
   selectedAgentId,
   onSelectAgent,
-  workflowOptions,
-  selectedWorkflowId,
-  workflowOptionsLoading,
-  onSelectWorkflow,
   t,
 }: {
   composerProviderType: DesktopApiProviderType;
@@ -586,35 +528,19 @@ function renderComposerProviderControl({
   agentOptions?: ComposerAgentOption[];
   selectedAgentId?: string;
   onSelectAgent?: (agentId: string) => void;
-  workflowOptions?: ComposerWorkflowOption[];
-  selectedWorkflowId?: string | null;
-  workflowOptionsLoading?: boolean;
-  onSelectWorkflow?: (workflowId: string) => void;
   t: Translate;
 }) {
   const selectedOption = agentOptions?.find((option) => option.id === selectedAgentId);
-  const selectedWorkflow = workflowOptions?.find(
-    (option) => option.id === selectedWorkflowId,
-  );
-  const providerIcon = selectedWorkflow
-    ? WORKFLOW_PROVIDER_GLYPH
-    : renderComposerProviderTriggerIcon(selectedOption);
-  const providerLabel = selectedWorkflow?.label ||
-    agentLabel ||
-    providerOptionLabel(composerProviderType);
+  const providerIcon = renderComposerProviderTriggerIcon(selectedOption);
+  const providerLabel = agentLabel || providerOptionLabel(composerProviderType);
 
-  if (onSelectAgent || onSelectWorkflow) {
+  if (onSelectAgent) {
     const grouped = groupAgentOptions(agentOptions ?? []);
     const hasAgents = grouped.agent.length > 0;
-    const workflows = workflowOptions ?? [];
     return (
       <DropdownMenu>
         <DropdownMenuTrigger
-          aria-label={
-            onSelectWorkflow
-              ? t("Change agent or workflow for this thread")
-              : t("Change agent for this thread")
-          }
+          aria-label={t("Change agent for this thread")}
           className="composer-provider-trigger"
           type="button"
         >
@@ -628,7 +554,7 @@ function renderComposerProviderControl({
         >
           {grouped.builtin.map((option) => (
             <FloatingActionMenuItem
-              data-active={!selectedWorkflow && option.id === selectedAgentId ? '' : undefined}
+              data-active={option.id === selectedAgentId ? '' : undefined}
               key={option.id}
               onSelect={() => onSelectAgent?.(option.id)}
             >
@@ -644,9 +570,7 @@ function renderComposerProviderControl({
               <FloatingActionMenuSubContent>
                 {grouped.agent.map((option) => (
                   <FloatingActionMenuItem
-                    data-active={
-                      !selectedWorkflow && option.id === selectedAgentId ? '' : undefined
-                    }
+                    data-active={option.id === selectedAgentId ? '' : undefined}
                     key={option.id}
                     onSelect={() => onSelectAgent?.(option.id)}
                   >
@@ -657,39 +581,6 @@ function renderComposerProviderControl({
                 ))}
               </FloatingActionMenuSubContent>
             </DropdownMenuSub>
-          ) : null}
-          {onSelectWorkflow ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuSub>
-                <FloatingActionMenuSubTrigger>{t("Workflow")}</FloatingActionMenuSubTrigger>
-                <FloatingActionMenuSubContent>
-                  {workflowOptionsLoading ? (
-                    <FloatingActionMenuItem disabled>
-                      <span className="composer-menu-label">{t("Loading workflows…")}</span>
-                    </FloatingActionMenuItem>
-                  ) : workflows.length ? (
-                    workflows.map((option) => (
-                      <FloatingActionMenuItem
-                        data-active={
-                          selectedWorkflow?.id === option.id ? '' : undefined
-                        }
-                        key={option.id}
-                        onSelect={() => onSelectWorkflow(option.id)}
-                      >
-                        <ComposerWorkflowOptionRow option={option} />
-                      </FloatingActionMenuItem>
-                    ))
-                  ) : (
-                    <FloatingActionMenuItem disabled>
-                      <span className="composer-menu-label">
-                        {t("No workflow definitions installed")}
-                      </span>
-                    </FloatingActionMenuItem>
-                  )}
-                </FloatingActionMenuSubContent>
-              </DropdownMenuSub>
-            </>
           ) : null}
         </FloatingActionMenuContent>
       </DropdownMenu>
@@ -816,10 +707,6 @@ export function ComposerForm({
   agentOptions,
   selectedAgentId,
   onSelectAgent,
-  workflowOptions,
-  selectedWorkflowId,
-  workflowOptionsLoading,
-  onSelectWorkflow,
   newThreadProviderModels,
   newThreadAgentConfiguredModel,
   newThreadSelectedModel,
@@ -858,7 +745,6 @@ export function ComposerForm({
   slashCommandsLoading,
 }: ComposerFormProps) {
   const { t } = useI18n();
-  const workflowSelected = Boolean(selectedWorkflowId);
   const { entries: pluginCatalog } = useChannelPluginCatalog();
   const iconDataUrlByChannel = useMemo(
     () =>
@@ -997,7 +883,7 @@ export function ComposerForm({
 
   function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files || []);
-    if (!files.length || workflowSelected) {
+    if (!files.length) {
       return;
     }
     onAppendComposerAttachments(files);
@@ -1005,7 +891,7 @@ export function ComposerForm({
 
   function handleDrop(event: DragEvent<HTMLFormElement>) {
     const files = Array.from(event.dataTransfer.files || []);
-    if (!files.length || workflowSelected) {
+    if (!files.length) {
       return;
     }
     event.preventDefault();
@@ -1014,7 +900,7 @@ export function ComposerForm({
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(event.clipboardData.files || []);
-    if (!files.length || workflowSelected) {
+    if (!files.length) {
       return;
     }
     event.preventDefault();
@@ -1365,7 +1251,7 @@ export function ComposerForm({
           >
             <FloatingActionMenuItem
               className="composer-menu-item"
-              disabled={composerEditingLocked || workflowSelected}
+              disabled={composerEditingLocked}
               onSelect={() => {
                 composerAttachmentInputRef.current?.click();
               }}
@@ -1411,10 +1297,6 @@ export function ComposerForm({
             agentOptions,
             selectedAgentId,
             onSelectAgent,
-            workflowOptions,
-            selectedWorkflowId,
-            workflowOptionsLoading,
-            onSelectWorkflow,
             t,
           })}
           {isActiveSendingThread ? (

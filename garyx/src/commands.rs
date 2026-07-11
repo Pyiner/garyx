@@ -45,8 +45,7 @@ use garyx_models::config_loader::{
     ConfigWriteOptions, write_config_value_atomic,
 };
 use garyx_models::local_paths::{
-    default_custom_agents_state_path, default_log_file_path, default_session_data_dir,
-    gary_home_dir,
+    default_custom_agents_state_path, default_log_file_path, gary_home_dir,
 };
 use garyx_models::provider::{
     AgentRunRequest, ProviderMessage, StreamEvent, default_claude_cli_mode,
@@ -90,7 +89,6 @@ mod task;
 mod test_support;
 mod thread;
 mod tool;
-mod workflow;
 
 pub(crate) use agent::*;
 pub(crate) use automation::*;
@@ -112,7 +110,6 @@ pub(crate) use shortcuts::*;
 pub(crate) use task::*;
 pub(crate) use thread::*;
 pub(crate) use tool::*;
-pub(crate) use workflow::*;
 
 #[derive(Debug, Clone)]
 pub(crate) struct OnboardCommandOptions {

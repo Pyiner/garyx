@@ -424,7 +424,7 @@ async fn create_thread_record_persists_metadata_object() {
         &store,
         ThreadEnsureOptions {
             metadata: HashMap::from([(
-                "workflow_child".to_owned(),
+                "custom_context".to_owned(),
                 json!({
                     "run_id": "run-camel",
                     "child_agent_id": "planner"
@@ -438,7 +438,7 @@ async fn create_thread_record_persists_metadata_object() {
 
     assert_eq!(
         thread_metadata_from_value(&created)
-            .get("workflow_child")
+            .get("custom_context")
             .cloned(),
         Some(json!({
             "run_id": "run-camel",
@@ -449,7 +449,7 @@ async fn create_thread_record_persists_metadata_object() {
     let stored = store.get(&thread_id).await.unwrap();
     assert_eq!(
         thread_metadata_from_value(&stored)
-            .get("workflow_child")
+            .get("custom_context")
             .cloned(),
         Some(json!({
             "run_id": "run-camel",
@@ -602,28 +602,4 @@ fn explicit_hidden_flag_marks_thread_hidden() {
     });
 
     assert!(is_hidden_thread_value(&value));
-}
-
-#[test]
-fn workflow_child_threads_are_hidden_from_default_thread_lists() {
-    let top_level = json!({
-        "thread_id": "thread::workflow-child",
-        "source": "workflow",
-        "workflow_child_run_id": "workflow-child::one",
-        "exclude_from_recent": true
-    });
-    assert!(!is_hidden_thread_value(&top_level));
-    assert!(is_default_thread_list_hidden(&top_level));
-
-    let child_marker_only = json!({
-        "thread_id": "thread::workflow-child",
-        "workflow_child_run_id": "workflow-child::one"
-    });
-    assert!(is_default_thread_list_hidden(&child_marker_only));
-
-    let regular = json!({
-        "thread_id": "thread::regular",
-        "source": "chat"
-    });
-    assert!(!is_default_thread_list_hidden(&regular));
 }

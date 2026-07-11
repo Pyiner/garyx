@@ -264,7 +264,7 @@ impl TaskService {
             .or_else(|| normalized_nonempty_string(input.agent_id.as_deref()))
             .or_else(|| match &input.executor {
                 Some(TaskExecutor::Agent { agent_id }) => Some(agent_id.clone()),
-                Some(TaskExecutor::Workflow { .. }) | None => None,
+                None => None,
             })
             .or_else(|| match &input.assignee {
                 Some(Principal::Agent { agent_id }) => Some(agent_id.clone()),

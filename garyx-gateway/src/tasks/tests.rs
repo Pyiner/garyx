@@ -1,14 +1,11 @@
 use super::*;
 use crate::custom_agents::CustomAgentStore;
 use crate::garyx_db::{
-    CURRENT_TASK_PROJECTION_VERSION, GaryxDbService, RecentThreadDraft, TASK_PROJECTION_NAME,
-    TaskProjectionDraft,
+    CURRENT_TASK_PROJECTION_VERSION, RecentThreadDraft, TASK_PROJECTION_NAME, TaskProjectionDraft,
 };
 use crate::server::AppStateBuilder;
 use garyx_models::ProviderType;
 use garyx_models::config::GaryxConfig;
-use std::fs;
-use tempfile::tempdir;
 
 fn route_task_source(thread_id: &str, task_id: &str) -> TaskSource {
     TaskSource {
@@ -780,96 +777,4 @@ async fn executor_rejects_assignee() {
             .unwrap()
             .contains("cannot also set an assignee")
     );
-}
-
-#[tokio::test]
-async fn workflow_backed_task_creation_dispatches_workflow_entrypoint() {
-    let data_dir = tempdir().expect("data dir");
-    let mut config = GaryxConfig::default();
-    config.tasks.enabled = true;
-    config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
-    let workflow_package = data_dir.path().join("workflows").join("unit");
-    fs::create_dir_all(&workflow_package).expect("workflow package");
-    fs::write(
-        workflow_package.join("garyx.workflow.json"),
-        r#"{
-          "workflowId": "unit",
-          "version": 4,
-          "name": "Unit Workflow",
-          "input": {"placeholder": "Unit request"},
-          "defaults": {}
-        }"#,
-    )
-    .expect("workflow manifest");
-    fs::write(workflow_package.join("workflow.ts"), "export {};\n").expect("workflow source");
-    let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
-    let state = AppStateBuilder::new(config)
-        .with_garyx_db(garyx_db)
-        .with_custom_agent_store(Arc::new(CustomAgentStore::new()))
-        .build();
-
-    let task_workspace_dir = "/Users/test/workflow-task";
-    let old_bun = std::env::var_os("GARYX_WORKFLOW_BUN_BIN");
-    unsafe {
-        std::env::set_var("GARYX_WORKFLOW_BUN_BIN", "/usr/bin/true");
-    }
-    let (status, Json(payload)) = create_task(
-        State(state.clone()),
-        HeaderMap::new(),
-        Json(CreateTaskBody {
-            title: Some("Run workflow".to_owned()),
-            body: None,
-            assignee: None,
-            notification_target: Some(TaskNotificationTargetBody::None),
-            source: None,
-            executor: Some(TaskExecutorBody::Workflow {
-                workflow_id: "unit".to_owned(),
-                input: Some(json!({"question": "test"})),
-            }),
-            start: false,
-            actor: None,
-            agent_id: Some("claude".to_owned()),
-            workspace_dir: Some(task_workspace_dir.to_owned()),
-            runtime: None,
-        }),
-    )
-    .await;
-    unsafe {
-        if let Some(value) = old_bun {
-            std::env::set_var("GARYX_WORKFLOW_BUN_BIN", value);
-        } else {
-            std::env::remove_var("GARYX_WORKFLOW_BUN_BIN");
-        }
-    }
-
-    assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(payload["dispatch"]["kind"], "workflow_entrypoint");
-    assert_eq!(payload["dispatch"]["workflowId"], "unit");
-    assert_eq!(payload["dispatch"]["workflowVersion"], 4);
-    assert_eq!(payload["task"]["status"], "in_progress");
-    assert_eq!(payload["task"]["executor"]["type"], "workflow");
-    assert_eq!(payload["task"]["executor"]["workflow_id"], "unit");
-    assert_eq!(payload["task"]["executor"]["workflow_version"], 4);
-    let task_thread_id = payload["thread_id"].as_str().expect("thread id");
-    let thread_record = state
-        .threads
-        .thread_store
-        .get(task_thread_id)
-        .await
-        .expect("task thread");
-    assert_eq!(thread_record["workspace_dir"], task_workspace_dir);
-}
-
-#[test]
-fn workflow_task_input_defaults_to_task_body() {
-    assert_eq!(
-        workflow_task_input_or_body(None, Some("  run this workflow  ")),
-        json!("run this workflow")
-    );
-    assert_eq!(
-        workflow_task_input_or_body(Some(json!({"explicit": true})), Some("ignored")),
-        json!({"explicit": true})
-    );
-    assert_eq!(workflow_task_input_or_body(None, Some("   ")), Value::Null);
-    assert_eq!(workflow_task_input_or_body(None, None), Value::Null);
 }

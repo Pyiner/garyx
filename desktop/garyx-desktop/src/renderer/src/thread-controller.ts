@@ -81,7 +81,7 @@ export async function selectWorkspaceForThread(input: {
   navigateRoute: (route: WorkspaceThreadRoute) => void;
   /**
    * Draft-entry command for threadId null (review #TASK-1621): keeps the
-   * user's current agent/workflow picks, matching the legacy behavior.
+   * user's current agent pick, matching the existing behavior.
    */
   enterDraft: (workspacePath: string) => void;
   setDesktopState: DesktopStateSetter;

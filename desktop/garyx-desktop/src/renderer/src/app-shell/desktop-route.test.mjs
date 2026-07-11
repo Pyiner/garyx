@@ -12,10 +12,8 @@ const baseRouteInput = {
   contentView: 'capsules',
   newThreadDraftActive: false,
   pendingAgentId: null,
-  pendingWorkflowId: null,
   pendingWorkspacePath: null,
   selectedAutomationId: null,
-  selectedWorkflowTaskId: null,
   selectedThreadId: null,
   settingsActiveTab: 'gateway',
   capsulePreviewId: null,
@@ -37,16 +35,6 @@ test('parses new thread hash route with workspace path', () => {
       kind: 'new-thread',
       workspacePath: '/Users/gary/repo',
       agentId: 'codex',
-      workflowId: null,
-    },
-  );
-  assert.deepEqual(
-    parseDesktopRoute('file:///Garyx.app/index.html#/new/%2FUsers%2Fgary%2Frepo?workflow=ship-flow'),
-    {
-      kind: 'new-thread',
-      workspacePath: '/Users/gary/repo',
-      agentId: null,
-      workflowId: 'ship-flow',
     },
   );
 });
@@ -57,25 +45,12 @@ test('builds stable hash routes', () => {
     '#/thread/thread%3A%3Aabc123',
   );
   assert.equal(
-    buildDesktopRouteHash({ kind: 'workflow-task', taskId: '#TASK-258' }),
-    '#/workflow/%23TASK-258',
-  );
-  assert.equal(
     buildDesktopRouteHash({
       kind: 'new-thread',
       workspacePath: '/Users/gary/repo',
       agentId: 'claude',
     }),
     '#/new?workspace=%2FUsers%2Fgary%2Frepo',
-  );
-  assert.equal(
-    buildDesktopRouteHash({
-      kind: 'new-thread',
-      workspacePath: '/Users/gary/repo',
-      agentId: 'codex',
-      workflowId: 'ship-flow',
-    }),
-    '#/new?workspace=%2FUsers%2Fgary%2Frepo&workflow=ship-flow',
   );
   assert.equal(
     buildDesktopRouteHash({ kind: 'settings', tabId: 'gateway' }),
@@ -97,16 +72,6 @@ test('parses utility views', () => {
     view: 'capsules',
   });
   assert.equal(buildDesktopRouteHash({ kind: 'view', view: 'capsules' }), '#/capsules');
-  assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/workflow/%23TASK-258'), {
-    kind: 'workflow-task',
-    taskId: '#TASK-258',
-  });
-  assert.equal(
-    contentViewForDesktopRoute(
-      parseDesktopRoute('file:///Garyx.app/index.html#/workflows?task=%23TASK-259'),
-    ),
-    'workflow',
-  );
   assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/settings/connection'), {
     kind: 'settings',
     tabId: 'gateway',
@@ -138,4 +103,3 @@ test('parses and builds capsule preview routes', () => {
     view: 'capsules',
   });
 });
-

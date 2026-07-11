@@ -256,20 +256,7 @@ pub fn is_hidden_thread_value(value: &Value) -> bool {
 }
 
 pub fn is_default_thread_list_hidden(value: &Value) -> bool {
-    if is_hidden_thread_value(value) {
-        return true;
-    }
-    if value
-        .get("source")
-        .and_then(Value::as_str)
-        .is_some_and(|source| source.trim() == "workflow")
-    {
-        return true;
-    }
-    value
-        .get("workflow_child_run_id")
-        .and_then(Value::as_str)
-        .is_some_and(|child_run_id| !child_run_id.trim().is_empty())
+    is_hidden_thread_value(value)
 }
 
 pub fn label_from_value(value: &Value) -> Option<String> {
@@ -389,11 +376,6 @@ pub fn upsert_thread_fields(value: &mut Value, thread_id: &str, options: &Thread
                         | "automation_id"
                         | "automation_thread_mode"
                         | "exclude_from_recent"
-                        | "workflow_id"
-                        | "workflow_child_run_id"
-                        | "workflow_parent_thread_id"
-                        | "workflow_phase_index"
-                        | "workflow_label"
                 ) {
                     mirrored_top_level_fields.push((trimmed_key.to_owned(), entry_value.clone()));
                 }

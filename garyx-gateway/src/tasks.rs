@@ -16,7 +16,7 @@ use garyx_models::{
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, TaskListFilter, TaskRuntimeInput, TaskService,
     TaskServiceError, UpdateTaskStatusInput, WorkspaceMode,
-    mark_thread_task_in_review_if_in_progress, workspace_dir_from_value,
+    workspace_dir_from_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -29,9 +29,6 @@ use crate::agent_identity::{
 use crate::garyx_db::{GaryxDbError, TaskForestScope};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
-use crate::workflows::{
-    WorkflowError, get_workflow_definition_package, spawn_workflow_task_entrypoint,
-};
 use crate::workspace_mode::worktree_base_dir_for_config;
 
 const ACTOR_HEADER: &str = "x-garyx-actor";
@@ -68,12 +65,6 @@ pub enum TaskExecutorBody {
     Agent {
         #[serde(alias = "agentId")]
         agent_id: String,
-    },
-    Workflow {
-        #[serde(alias = "workflowId")]
-        workflow_id: String,
-        #[serde(default)]
-        input: Option<Value>,
     },
 }
 
@@ -215,17 +206,10 @@ pub async fn create_task(
         ));
     }
     let workspace_dir = body.workspace_dir;
-    let normalized_workspace_dir = workspace_dir
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
     let mut runtime = task_runtime_input(body.runtime, body.agent_id, workspace_dir.clone());
-    let mut workflow_request = None;
-    let mut workflow_definition = None;
     let mut task_executor = None;
     let mut executor_agent_id = None;
-    let workflow_workspace_dir = match executor_body {
+    match executor_body {
         Some(TaskExecutorBody::Agent { agent_id }) => {
             let reference = match resolve_task_executor_agent(&state, &agent_id).await {
                 Ok(reference) => reference,
@@ -240,32 +224,9 @@ pub async fn create_task(
             task_executor = Some(TaskExecutor::Agent {
                 agent_id: bound_agent_id,
             });
-            None
         }
-        Some(TaskExecutorBody::Workflow { workflow_id, input }) => {
-            runtime = None;
-            let definition =
-                match get_workflow_definition_package(&state.config_snapshot(), &workflow_id) {
-                    Ok(definition) => definition,
-                    Err(error) => {
-                        return task_error_response(TaskServiceError::BadRequest(
-                            error.to_string(),
-                        ));
-                    }
-                };
-            task_executor = Some(TaskExecutor::Workflow {
-                workflow_id: definition.record.workflow_id.clone(),
-                workflow_version: Some(definition.record.version),
-            });
-            workflow_request = Some((
-                definition.record.workflow_id.clone(),
-                workflow_task_input_or_body(input, body.body.as_deref()),
-            ));
-            workflow_definition = Some(definition);
-            normalized_workspace_dir.clone()
-        }
-        None => None,
-    };
+        None => {}
+    }
     if let Err(error) = validate_runtime_agent(&state, &runtime).await {
         return task_error_response(error);
     }
@@ -300,10 +261,10 @@ pub async fn create_task(
             notification_target,
             source: body.source,
             executor: task_executor,
-            start: body.start || workflow_request.is_some() || executor_agent_id.is_some(),
+            start: body.start || executor_agent_id.is_some(),
             actor,
             agent_id: None,
-            workspace_dir: workflow_workspace_dir.clone(),
+            workspace_dir: None,
             runtime,
         })
         .await
@@ -324,43 +285,7 @@ pub async fn create_task(
                 "runtime_agent_id": runtime_agent_id,
                 "task": task,
             });
-            if let (Some(definition), Some((_, input))) = (workflow_definition, workflow_request) {
-                let task_id = garyx_router::tasks::canonical_task_id(&task);
-                if let Err(error) = mark_task_thread_as_workflow_run(
-                    &state,
-                    &thread_id,
-                    &definition.record.workflow_id,
-                    definition.record.version,
-                    workflow_workspace_dir.as_deref(),
-                )
-                .await
-                {
-                    return task_error_response(error);
-                }
-                match spawn_workflow_task_entrypoint(
-                    state.clone(),
-                    task_id,
-                    thread_id.clone(),
-                    definition.record.workflow_id,
-                    input,
-                    workflow_workspace_dir,
-                ) {
-                    Ok(dispatch) => payload["dispatch"] = dispatch,
-                    Err(error) => {
-                        let _ = mark_thread_task_in_review_if_in_progress(
-                            &state.threads.thread_store,
-                            &thread_id,
-                            Principal::Agent {
-                                agent_id: "workflow".to_owned(),
-                            },
-                            Some(format!("workflow entrypoint dispatch failed: {error}")),
-                            None,
-                        )
-                        .await;
-                        return workflow_error_as_task_response(error);
-                    }
-                }
-            } else if let Some(dispatch) = spawn_task_auto_dispatch(
+            if let Some(dispatch) = spawn_task_auto_dispatch(
                 state.clone(),
                 payload["thread_id"].as_str().unwrap_or_default().to_owned(),
                 payload["task"].clone(),
@@ -919,97 +844,6 @@ fn task_runtime_input(
     .then_some(input)
 }
 
-fn workflow_task_input_or_body(input: Option<Value>, task_body: Option<&str>) -> Value {
-    input.unwrap_or_else(|| {
-        task_body
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| Value::String(value.to_owned()))
-            .unwrap_or(Value::Null)
-    })
-}
-
-async fn mark_task_thread_as_workflow_run(
-    state: &Arc<AppState>,
-    thread_id: &str,
-    workflow_definition_id: &str,
-    workflow_definition_version: u64,
-    workspace_dir: Option<&str>,
-) -> Result<(), TaskServiceError> {
-    let mut record = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .ok_or_else(|| TaskServiceError::NotFound(thread_id.to_owned()))?;
-    {
-        let obj = record
-            .as_object_mut()
-            .ok_or_else(|| TaskServiceError::Store("thread record is not an object".to_owned()))?;
-        obj.insert(
-            "thread_kind".to_owned(),
-            Value::String("workflow_run".to_owned()),
-        );
-        obj.insert(
-            "workflow_run_id".to_owned(),
-            Value::String(thread_id.to_owned()),
-        );
-        obj.insert(
-            "workflow_definition_id".to_owned(),
-            Value::String(workflow_definition_id.to_owned()),
-        );
-        obj.insert(
-            "workflow_definition_version".to_owned(),
-            Value::Number(serde_json::Number::from(workflow_definition_version)),
-        );
-        obj.insert(
-            "workflow_status".to_owned(),
-            Value::String("queued".to_owned()),
-        );
-        if let Some(workspace_dir) = workspace_dir
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            obj.insert(
-                "workspace_dir".to_owned(),
-                Value::String(workspace_dir.to_owned()),
-            );
-        }
-        let metadata_value = obj
-            .entry("metadata".to_owned())
-            .or_insert_with(|| Value::Object(serde_json::Map::new()));
-        if !metadata_value.is_object() {
-            *metadata_value = Value::Object(serde_json::Map::new());
-        }
-        if let Some(metadata) = metadata_value.as_object_mut() {
-            metadata.insert("workflow_thread".to_owned(), Value::Bool(true));
-            metadata.insert(
-                "workflow_run_id".to_owned(),
-                Value::String(thread_id.to_owned()),
-            );
-            metadata.insert(
-                "workflow_definition_id".to_owned(),
-                Value::String(workflow_definition_id.to_owned()),
-            );
-            metadata.insert(
-                "workflow_definition_version".to_owned(),
-                Value::Number(serde_json::Number::from(workflow_definition_version)),
-            );
-            metadata.insert(
-                "workflow_status".to_owned(),
-                Value::String("queued".to_owned()),
-            );
-        }
-        obj.insert(
-            "updated_at".to_owned(),
-            Value::String(Utc::now().to_rfc3339()),
-        );
-    }
-    state.threads.thread_store.set(thread_id, record).await;
-    state.invalidate_gateway_sync_caches().await;
-    Ok(())
-}
-
 fn task_runtime_has_workspace(runtime: &Option<TaskRuntimeInput>) -> bool {
     runtime
         .as_ref()
@@ -1349,7 +1183,6 @@ pub(crate) fn spawn_task_auto_dispatch(
 fn task_dispatch_agent_id(task: &ThreadTask) -> Option<String> {
     match task.executor.as_ref() {
         Some(TaskExecutor::Agent { agent_id }) => Some(agent_id.clone()),
-        Some(TaskExecutor::Workflow { .. }) => None,
         None => match task.assignee.as_ref() {
             Some(Principal::Agent { agent_id }) => Some(agent_id.clone()),
             _ => None,
@@ -1510,28 +1343,6 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
             StatusCode::BAD_REQUEST
         }
         _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    (
-        status,
-        Json(json!({ "error": error.to_string(), "code": code })),
-    )
-}
-
-fn workflow_error_as_task_response(error: WorkflowError) -> (StatusCode, Json<Value>) {
-    let status = match &error {
-        WorkflowError::BadRequest(_) => StatusCode::BAD_REQUEST,
-        WorkflowError::NotFound(_) => StatusCode::NOT_FOUND,
-        WorkflowError::Conflict(_) => StatusCode::CONFLICT,
-        WorkflowError::Db(GaryxDbError::BadRequest(_)) => StatusCode::BAD_REQUEST,
-        WorkflowError::Db(_) | WorkflowError::Bridge(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    let code = match &error {
-        WorkflowError::BadRequest(_) | WorkflowError::Db(GaryxDbError::BadRequest(_)) => {
-            "BadRequest"
-        }
-        WorkflowError::NotFound(_) => "NotFound",
-        WorkflowError::Conflict(_) => "Conflict",
-        WorkflowError::Db(_) | WorkflowError::Bridge(_) => "Internal",
     };
     (
         status,

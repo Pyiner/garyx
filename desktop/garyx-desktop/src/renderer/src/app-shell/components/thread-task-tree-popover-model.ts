@@ -48,14 +48,12 @@ export function isCurrentTaskTreeNode(
 }
 
 export function shouldShowThreadTaskTreePopover(input: {
-  hasWorkflowRunContent: boolean;
   inspectorOpen: boolean;
   selectedThreadId: string | null;
   threadLogsOpen: boolean;
 }): boolean {
   return Boolean(
     input.selectedThreadId &&
-      !input.hasWorkflowRunContent &&
       !input.inspectorOpen &&
       !input.threadLogsOpen,
   );

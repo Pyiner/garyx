@@ -76,7 +76,6 @@ for arch in $ARCHS; do
 
   echo ""
   echo "==> building ${target}.${GLIBC}"
-  # Garyx no longer bundles a Bun runtime; workflows resolve `bun` from PATH.
   cargo zigbuild --release -p garyx --target "${target}.${GLIBC}"
 
   staging="dist/garyx-${VERSION}-${target}"

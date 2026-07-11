@@ -157,12 +157,6 @@ pub(crate) fn is_recent_thread_excluded(data: &Value) -> bool {
     if bool_field(data, "exclude_from_recent") {
         return true;
     }
-    if string_field(data, "source").is_some_and(|value| value == "workflow") {
-        return true;
-    }
-    if string_field(data, "workflow_child_run_id").is_some_and(|value| !value.is_empty()) {
-        return true;
-    }
     if string_field(data, "automation_thread_mode").is_some_and(|value| value == "generated_thread")
     {
         return true;
@@ -171,8 +165,6 @@ pub(crate) fn is_recent_thread_excluded(data: &Value) -> bool {
         return false;
     };
     bool_field(metadata, "exclude_from_recent")
-        || string_field(metadata, "source").is_some_and(|value| value == "workflow")
-        || string_field(metadata, "workflow_child_run_id").is_some_and(|value| !value.is_empty())
         || string_field(metadata, "automation_thread_mode")
             .is_some_and(|value| value == "generated_thread")
 }
@@ -250,19 +242,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn workflow_child_threads_are_not_projectable_recent_threads() {
-        let data = json!({
-            "label": "Workflow child",
-            "source": "workflow",
-            "workflow_child_run_id": "workflow-child::one",
-            "updated_at": "2026-01-01T00:00:01Z",
-        });
-
-        assert!(is_recent_thread_excluded(&data));
-        assert!(
-            recent_thread_draft_from_thread_data_with_active_run("thread::workflow", &data, None)
-                .is_none()
-        );
-    }
 }

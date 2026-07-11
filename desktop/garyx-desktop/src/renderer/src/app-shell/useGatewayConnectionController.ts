@@ -5,7 +5,6 @@ import type {
   DesktopCustomAgent,
   DesktopSettings,
   DesktopState,
-  DesktopWorkflowDefinition,
 } from "@shared/contracts";
 
 import type { GatewayMirror } from "../gateway-mirror/mirror";
@@ -63,9 +62,6 @@ type UseGatewayConnectionControllerArgs = {
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
   setDesktopAgents: React.Dispatch<React.SetStateAction<DesktopCustomAgent[]>>;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
-  setDesktopWorkflows: React.Dispatch<
-    React.SetStateAction<DesktopWorkflowDefinition[]>
-  >;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setGatewaySettingsStatus: React.Dispatch<
     React.SetStateAction<string | null>
@@ -93,7 +89,6 @@ export function useGatewayConnectionController({
   setConnection,
   setDesktopAgents,
   setDesktopState,
-  setDesktopWorkflows,
   setError,
   setGatewaySettingsStatus,
   setLocalSettingsStatus,
@@ -334,7 +329,6 @@ export function useGatewayConnectionController({
     startTransition(() => {
       setDesktopState(nextState);
       setDesktopAgents([...catalog.agents]);
-      setDesktopWorkflows([...catalog.workflows]);
     });
     return nextState;
   }

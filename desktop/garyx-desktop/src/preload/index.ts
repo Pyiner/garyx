@@ -102,16 +102,8 @@ const api: GaryxDesktopApi = {
   deleteCapsule: (input) => ipcRenderer.invoke("garyx:delete-capsule", input),
   getTask: (input) => ipcRenderer.invoke("garyx:get-task", input),
   createTask: (input) => ipcRenderer.invoke("garyx:create-task", input),
-  listWorkflowDefinitions: () =>
-    ipcRenderer.invoke("garyx:list-workflow-definitions"),
   listProviderRecentSessions: (input) =>
     ipcRenderer.invoke("garyx:list-provider-recent-sessions", input),
-  getWorkflowDefinitionSource: (input) =>
-    ipcRenderer.invoke("garyx:get-workflow-definition-source", input),
-  getWorkflowRun: (input) =>
-    ipcRenderer.invoke("garyx:get-workflow-run", input),
-  startWorkflowThread: (input) =>
-    ipcRenderer.invoke("garyx:start-workflow-thread", input),
   updateTaskStatus: (input) =>
     ipcRenderer.invoke("garyx:update-task-status", input),
   assignTask: (input) => ipcRenderer.invoke("garyx:assign-task", input),

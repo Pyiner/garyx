@@ -176,7 +176,7 @@ Full-height two-column panel:
 
 Add a scoped `capsules-*` block near the task styles:
 
-- `.conversation.capsules-view` and `.conversation.capsules-view .conversation-body` match the full-page zero-padding pattern used by tasks/workflow.
+- `.conversation.capsules-view` and `.conversation.capsules-view .conversation-body` match the full-page zero-padding pattern used by tasks.
 - `.capsules-page` mirrors the `tasks-page` full-height layout.
 - `.capsules-layout` two-column grid, responsive collapse below ~900px.
 - `.capsules-list`, `.capsules-list-row`, selected/hover states use monochrome/neutral tokens, not semantic green.

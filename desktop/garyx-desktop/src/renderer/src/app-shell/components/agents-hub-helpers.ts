@@ -1,12 +1,10 @@
 import type {
   DesktopCustomAgent,
   DesktopProviderModels,
-  DesktopWorkflowDefinition,
 } from '@shared/contracts';
 
 export type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex' | 'gemini_cli' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
 export type AgentDialogMode = 'create' | 'edit' | 'view' | null;
-export type WorkflowDialogMode = 'view' | null;
 export type AvatarStyleId = 'clean_glyph' | 'soft_3d' | 'glass_icon' | 'pixel_badge' | 'ink_line' | 'paper_cut' | 'blueprint' | 'enamel_sticker' | 'custom';
 
 export type AgentDraft = {
@@ -292,22 +290,6 @@ export function sortedAgents(value: DesktopCustomAgent[]): DesktopCustomAgent[] 
       }
       return left.displayName.localeCompare(right.displayName) || left.agentId.localeCompare(right.agentId);
     });
-}
-
-export function sortedWorkflows(value: DesktopWorkflowDefinition[]): DesktopWorkflowDefinition[] {
-  return [...value].sort((left, right) => {
-    return left.name.localeCompare(right.name) || left.workflowId.localeCompare(right.workflowId);
-  });
-}
-
-export function workflowDefaultWorkspace(workflow: DesktopWorkflowDefinition): string {
-  const value = workflow.defaults?.workspaceDir || workflow.defaults?.workspace_dir;
-  return typeof value === 'string' && value.trim() ? value.trim() : '';
-}
-
-export function workflowInputPlaceholder(workflow: DesktopWorkflowDefinition): string {
-  const value = workflow.input?.placeholder;
-  return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
 export function prettyJson(value: unknown): string {

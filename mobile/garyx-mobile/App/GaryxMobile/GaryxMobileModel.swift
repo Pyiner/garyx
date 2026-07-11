@@ -274,8 +274,6 @@ final class GaryxMobileModel: ObservableObject {
     var taskTreeSnapshotsByOrigin: [String: GaryxTaskForestPage] = [:]
     /// Insertion order of `taskTreeSnapshotsByOrigin` keys for FIFO eviction.
     var taskTreeSnapshotOriginOrder: [String] = []
-    @Published var workflowRunPanelState = GaryxWorkflowRunPanelState()
-    @Published var selectedWorkflowRunThread: GaryxThreadSummary?
     @Published var automations: [GaryxAutomationSummary] = [] {
         didSet { emitHomeProjectionSnapshot() }
     }
@@ -468,8 +466,6 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadDraftGeneration = UUID()
     var threadOpenState = GaryxMobileThreadOpenState()
     var threadRuntimeMutationIds: [String: UUID] = [:]
-    var workflowRunPollTask: Task<Void, Never>?
-    var workflowRunPollGeneration: UUID?
     var claudeCodeAuthPollTask: Task<Void, Never>?
     var claudeCodeAuthPollGeneration: UUID?
     #if DEBUG

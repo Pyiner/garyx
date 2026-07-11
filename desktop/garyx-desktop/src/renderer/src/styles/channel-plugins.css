@@ -532,7 +532,7 @@ button.new-thread-resume-link:hover {
   background: rgba(26, 28, 31, 0.08);
 }
 
-/* ── Tasks: Workflow executor + runs ── */
+/* ── Tasks: executor ── */
 .tasks-create-header {
   display: flex;
   align-items: center;
@@ -555,21 +555,6 @@ button.new-thread-resume-link:hover {
   min-width: 0;
 }
 
-.tasks-executor-tabs {
-  flex: none;
-}
-
-.tasks-executor-tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.tasks-executor-tabs button svg {
-  width: 14px;
-  height: 14px;
-}
-
 .tasks-executor-panel {
   display: grid;
   gap: 10px;
@@ -578,52 +563,4 @@ button.new-thread-resume-link:hover {
 
 .tasks-executor-panel [data-slot="select-trigger"] {
   width: 100%;
-}
-
-.tasks-workflow-state,
-.tasks-workflow-empty {
-  grid-column: 1 / -1;
-  padding: 12px;
-  border: 0.5px dashed var(--color-token-border);
-  border-radius: 8px;
-  background: var(--color-token-bg-secondary, #f7f7f5);
-  color: var(--color-token-text-secondary);
-  font-size: var(--text-xs-plus);
-}
-
-.tasks-workflow-state-error {
-  border-color: rgba(176, 58, 46, 0.3);
-  color: #b03a2e;
-}
-
-.tasks-workflow-empty {
-  display: grid;
-  gap: 4px;
-}
-
-.tasks-workflow-empty-title {
-  margin: 0;
-  color: var(--color-token-text-primary);
-  font-weight: var(--font-weight-medium);
-}
-
-.tasks-workflow-empty-hint {
-  margin: 0;
-}
-
-.tasks-workflow-empty-hint code {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-}
-
-.tasks-workflow-empty-hint code {
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(26, 28, 31, 0.06);
-  font-size: 11px;
-}
-
-.tasks-workflow-description {
-  margin: 4px 0 0;
-  color: var(--color-token-text-secondary);
-  font-size: var(--text-xs-plus);
 }

@@ -20,7 +20,6 @@ import type {
   DesktopChatStreamEvent,
   DesktopCustomAgent,
   DesktopState,
-  DesktopWorkflowDefinition,
   GetThreadHistoryInput,
   PendingThreadInput,
   RenderState,
@@ -82,7 +81,6 @@ function connectionEquals(
 export interface GatewayMirrorServices {
   getState(): Promise<DesktopState>;
   listCustomAgents(): Promise<DesktopCustomAgent[]>;
-  listWorkflowDefinitions(): Promise<DesktopWorkflowDefinition[]>;
   /** Paged history fetch (older pages and the forward incremental fetch). */
   getThreadHistory(input: GetThreadHistoryInput): Promise<ThreadTranscript>;
   /**
@@ -122,7 +120,6 @@ export interface GatewayRootSnapshot {
 export interface CatalogSnapshot {
   readonly version: number;
   readonly agents: readonly DesktopCustomAgent[];
-  readonly workflows: readonly DesktopWorkflowDefinition[];
 }
 
 export interface ThreadMirrorSnapshot {
@@ -207,9 +204,8 @@ export class GatewayMirror {
   private rootSnapshot: GatewayRootSnapshot | null = null;
   private rootListeners = new Set<() => void>();
 
-  // Catalog domain: agents / workflow definitions.
+  // Catalog domain: agents.
   private agents: readonly DesktopCustomAgent[] = [];
-  private workflows: readonly DesktopWorkflowDefinition[] = [];
   private catalogVersion = 0;
   private catalogSnapshot: CatalogSnapshot | null = null;
   private catalogListeners = new Set<() => void>();
@@ -280,7 +276,6 @@ export class GatewayMirror {
       this.catalogSnapshot = {
         version: this.catalogVersion,
         agents: this.agents,
-        workflows: this.workflows,
       };
     }
     return this.catalogSnapshot;
@@ -299,26 +294,21 @@ export class GatewayMirror {
   }
 
   /**
-   * Fetch the desktop root state plus the agent/workflow catalogs in
-   * one round (the legacy refreshDesktopState behavior: catalog fetches are
-   * individually best-effort). Updates root/catalog snapshots atomically
+   * Fetch the desktop root state plus the agent catalog in one round.
+   * The catalog fetch is best-effort. Updates root/catalog snapshots atomically
    * per domain and returns the fresh DesktopState for callers that need it.
    */
   async refreshDesktopState(): Promise<DesktopState> {
     if (!this.services) {
       throw new Error("GatewayMirror constructed without services");
     }
-    const [nextState, nextAgents, nextWorkflows] = await Promise.all([
+    const [nextState, nextAgents] = await Promise.all([
       this.services.getState(),
       this.services.listCustomAgents().catch(() => [] as DesktopCustomAgent[]),
-      this.services
-        .listWorkflowDefinitions()
-        .catch(() => [] as DesktopWorkflowDefinition[]),
     ]);
     this.desktopState = nextState;
     this.bumpRoot();
     this.agents = nextAgents;
-    this.workflows = nextWorkflows;
     this.bumpCatalog();
     return nextState;
   }

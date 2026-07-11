@@ -9,15 +9,13 @@ export type DesktopRoute =
       kind: 'new-thread';
       workspacePath?: string | null;
       agentId?: string | null;
-      workflowId?: string | null;
     }
-  | { kind: 'workflow-task'; taskId: string }
   | { kind: 'automation'; automationId?: string | null }
   | { kind: 'settings'; tabId?: SettingsTabId | null }
   | { kind: 'capsule'; capsuleId: string }
-  | { kind: 'view'; view: Exclude<ContentView, 'thread' | 'workflow' | 'automation' | 'settings'> };
+  | { kind: 'view'; view: Exclude<ContentView, 'thread' | 'automation' | 'settings'> };
 
-const SIMPLE_VIEW_SEGMENTS: Record<string, Exclude<ContentView, 'thread' | 'workflow' | 'automation' | 'settings'>> = {
+const SIMPLE_VIEW_SEGMENTS: Record<string, Exclude<ContentView, 'thread' | 'automation' | 'settings'>> = {
   browser: 'browser',
   bots: 'bots',
   capsules: 'capsules',
@@ -134,7 +132,6 @@ export function parseDesktopRoute(href?: string): DesktopRoute {
         second ||
         null,
       agentId: decodeLoose(routeUrl.searchParams.get('agent')) || null,
-      workflowId: decodeLoose(routeUrl.searchParams.get('workflow')) || null,
     };
   }
 
@@ -143,14 +140,6 @@ export function parseDesktopRoute(href?: string): DesktopRoute {
       kind: 'automation',
       automationId: second || decodeLoose(routeUrl.searchParams.get('id')),
     };
-  }
-
-  if (first === 'workflow' || first === 'workflows') {
-    const taskId =
-      second ||
-      decodeLoose(routeUrl.searchParams.get('task')) ||
-      decodeLoose(routeUrl.searchParams.get('taskId'));
-    return taskId ? { kind: 'workflow-task', taskId } : { kind: 'view', view: 'tasks' };
   }
 
   if (first === 'settings') {
@@ -184,8 +173,6 @@ export function contentViewForDesktopRoute(route: DesktopRoute): ContentView {
       return 'thread';
     case 'automation':
       return 'automation';
-    case 'workflow-task':
-      return 'workflow';
     case 'settings':
       return 'settings';
     case 'capsule':
@@ -204,17 +191,10 @@ export function buildDesktopRouteHash(route: DesktopRoute): string {
     case 'new-thread': {
       const params = new URLSearchParams();
       appendParam(params, 'workspace', route.workspacePath);
-      appendParam(
-        params,
-        'agent',
-        route.workflowId ? null : route.agentId && route.agentId !== 'claude' ? route.agentId : null,
-      );
-      appendParam(params, 'workflow', route.workflowId);
+      appendParam(params, 'agent', route.agentId && route.agentId !== 'claude' ? route.agentId : null);
       const query = params.toString();
       return query ? `#/new?${query}` : '#/new';
     }
-    case 'workflow-task':
-      return `#/workflow/${encodeSegment(route.taskId)}`;
     case 'automation':
       return route.automationId
         ? `#/automation/${encodeSegment(route.automationId)}`
@@ -235,8 +215,8 @@ export function buildDesktopRouteHash(route: DesktopRoute): string {
  * Normalize a route to its hash round-trip form (batch 4a):
  * `parseDesktopRoute(buildDesktopRouteHash(route))` without the string
  * detour. buildDesktopRouteHash drops empty/default params — notably the
- * `new-thread` agent param when it is the 'claude' default or a workflow
- * is set — so a state-derived route and its parsed echo only compare
+ * `new-thread` agent param when it is the 'claude' default — so a
+ * state-derived route and its parsed echo only compare
  * equal in canonical form. The route store commits canonical routes and
  * desktopRoutesEqual canonicalizes both sides.
  */
@@ -247,16 +227,10 @@ export function canonicalDesktopRoute(route: DesktopRoute): DesktopRoute {
       return { kind: 'thread', threadId: route.threadId.trim() };
     case 'new-thread': {
       const workspacePath = trimmed(route.workspacePath);
-      const workflowId = trimmed(route.workflowId);
       const rawAgentId = trimmed(route.agentId);
-      const agentId =
-        workflowId || !rawAgentId || rawAgentId === 'claude'
-          ? null
-          : rawAgentId;
-      return { kind: 'new-thread', workspacePath, agentId, workflowId };
+      const agentId = !rawAgentId || rawAgentId === 'claude' ? null : rawAgentId;
+      return { kind: 'new-thread', workspacePath, agentId };
     }
-    case 'workflow-task':
-      return { kind: 'workflow-task', taskId: route.taskId.trim() };
     case 'automation':
       return { kind: 'automation', automationId: trimmed(route.automationId) };
     case 'settings':
@@ -288,12 +262,9 @@ export function desktopRoutesEqual(a: DesktopRoute, b: DesktopRoute): boolean {
       const other = cb as typeof ca;
       return (
         ca.workspacePath === other.workspacePath &&
-        ca.agentId === other.agentId &&
-        ca.workflowId === other.workflowId
+        ca.agentId === other.agentId
       );
     }
-    case 'workflow-task':
-      return ca.taskId === (cb as typeof ca).taskId;
     case 'automation':
       return ca.automationId === (cb as typeof ca).automationId;
     case 'settings':

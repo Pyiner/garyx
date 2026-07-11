@@ -1,13 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 
 import {
   ThreadStreamGapError,
   createTask,
   updateCustomAgent,
   fetchThreadHistory,
-  getWorkflowRun,
   getTask,
   listTaskForest,
   listProviderModels,
@@ -172,7 +170,7 @@ test("listProviderModels maps provider default reasoning effort", async () => {
   }
 });
 
-test("getTask fetches task detail and preserves backing workflow thread id", async () => {
+test("getTask fetches task detail and preserves backing thread id", async () => {
   const originalFetch = globalThis.fetch;
   const urls = [];
   globalThis.fetch = async (url) => {
@@ -181,13 +179,12 @@ test("getTask fetches task detail and preserves backing workflow thread id", asy
       JSON.stringify({
         task_id: "#TASK-42",
         number: 42,
-        title: "Synthetic workflow task",
+        title: "Synthetic agent task",
         status: "in_progress",
-        thread_id: "thread::workflow-task-42",
+        thread_id: "thread::task-42",
         executor: {
-          type: "workflow",
-          workflow_id: "development-loop",
-          workflow_version: 1,
+          type: "agent",
+          agent_id: "claude",
         },
       }),
       { status: 200, statusText: "OK" },
@@ -206,11 +203,10 @@ test("getTask fetches task detail and preserves backing workflow thread id", asy
     assert.equal(urls.length, 1);
     assert.equal(urls[0], "http://127.0.0.1:31337/api/tasks/%23TASK-42");
     assert.equal(task.taskId, "#TASK-42");
-    assert.equal(task.threadId, "thread::workflow-task-42");
+    assert.equal(task.threadId, "thread::task-42");
     assert.deepEqual(task.executor, {
-      type: "workflow",
-      workflowId: "development-loop",
-      workflowVersion: 1,
+      type: "agent",
+      agentId: "claude",
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -375,63 +371,6 @@ test("createTask serializes child task source fields", async () => {
       agent_id: "claude",
     });
     assert.equal(requestBody.runtime.workspace_dir, "/Users/test/project");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("getWorkflowRun maps shared server presentation fixture", async () => {
-  const originalFetch = globalThis.fetch;
-  const urls = [];
-  const fixture = JSON.parse(
-    readFileSync(
-      new URL(
-        "../../../../test-fixtures/workflow-presentation/mobile-desktop-parity.json",
-        import.meta.url,
-      ),
-      "utf8",
-    ),
-  );
-  globalThis.fetch = async (url) => {
-    urls.push(String(url));
-    return new Response(JSON.stringify(fixture), {
-      status: 200,
-      statusText: "OK",
-    });
-  };
-
-  try {
-    const run = await getWorkflowRun(
-      {
-        gatewayUrl: "http://127.0.0.1:31337",
-        gatewayAuthToken: "",
-      },
-      { workflowRunId: "thread::workflow-1001" },
-    );
-
-    assert.equal(
-      urls[0],
-      "http://127.0.0.1:31337/api/workflows/thread%3A%3Aworkflow-1001",
-    );
-    assert.equal(run.presentation?.workflowRunId, "thread::workflow-1001");
-    assert.equal(run.presentation?.terminalComplete, false);
-    assert.equal(run.presentation?.stale, false);
-    assert.deepEqual(
-      run.presentation?.phases.map((phase) => phase.phaseId),
-      ["plan", "review", "finalize"],
-    );
-    assert.deepEqual(
-      run.presentation?.phases[1].children.map(
-        (child) => child.workflowChildRunId,
-      ),
-      ["child::risk", "child::lint"],
-    );
-    assert.deepEqual(
-      run.presentation?.childCards.map((child) => child.workflowChildRunId),
-      ["child::risk", "child::lint", "child::summary"],
-    );
-    assert.equal(run.presentation?.snapshotVersion, 1782028950000);
-    assert.equal(run.presentation?.latestEventSeq, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

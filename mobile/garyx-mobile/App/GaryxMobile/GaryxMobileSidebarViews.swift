@@ -82,11 +82,7 @@ private struct GaryxRootRouteContentView: View {
     var body: some View {
         switch route {
         case .conversation:
-            if model.showsWorkflowRunSurface {
-                GaryxWorkflowRunView()
-            } else {
-                GaryxConversationView()
-            }
+            GaryxConversationView()
         case .panel(let panel):
             panelContent(for: panel)
         }
@@ -96,11 +92,7 @@ private struct GaryxRootRouteContentView: View {
     private func panelContent(for panel: GaryxMobilePanel) -> some View {
         switch panel {
         case .chat:
-            if model.showsWorkflowRunSurface {
-                GaryxWorkflowRunView()
-            } else {
-                GaryxConversationView()
-            }
+            GaryxConversationView()
         case .workspaces:
             GaryxWorkspacesView()
         case .automations:

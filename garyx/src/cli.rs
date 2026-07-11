@@ -11,7 +11,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
     name = "garyx",
     version = VERSION,
     about = "Garyx – AI chat gateway",
-    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, provider, channels, commands, automation, workflow, db\n  Work with threads   task, thread, message, bot, usage, tool\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
+    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, provider, channels, commands, automation, db\n  Work with threads   task, thread, message, bot, usage, tool\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -150,12 +150,6 @@ pub(crate) enum Commands {
     Automation {
         #[command(subcommand)]
         action: AutomationAction,
-    },
-    /// Dynamic workflow runs
-    #[command(display_order = 26, name = "workflow", alias = "workflows")]
-    Workflow {
-        #[command(subcommand)]
-        action: WorkflowAction,
     },
     /// Agent-friendly application database
     #[command(display_order = 27, name = "db", visible_alias = "database")]
@@ -1420,84 +1414,6 @@ pub(crate) enum ThreadAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum WorkflowAction {
-    /// Manage reusable workflow definitions
-    Definition {
-        #[command(subcommand)]
-        action: WorkflowDefinitionAction,
-    },
-    /// List workflow runs
-    List {
-        /// Restrict to a parent thread
-        #[arg(long = "thread", alias = "parent-thread-id")]
-        parent_thread_id: Option<String>,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Get a workflow run
-    Get {
-        /// Workflow run id
-        workflow_run_id: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show workflow events
-    Events {
-        /// Workflow run id
-        workflow_run_id: String,
-        /// Event sequence cursor
-        #[arg(long, default_value_t = 0)]
-        after: u64,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Cancel a workflow run
-    Cancel {
-        /// Workflow run id
-        workflow_run_id: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum WorkflowDefinitionAction {
-    /// List workflow definitions
-    List {
-        /// Maximum number of definitions to return
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
-        /// Offset for pagination
-        #[arg(long, default_value_t = 0)]
-        offset: usize,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Get one workflow definition
-    Get {
-        /// Workflow definition id, e.g. development-loop
-        workflow_id: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Install or update a file-backed workflow package
-    Upsert {
-        /// Workflow package directory or garyx.workflow.json manifest path
-        #[arg(long)]
-        file: String,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
 pub(crate) enum TaskAction {
     /// List tasks (done tasks are included by default)
     List {
@@ -1546,14 +1462,8 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         worktree: bool,
         /// Agent that receives the delegated task
-        #[arg(long, conflicts_with = "workflow")]
+        #[arg(long)]
         agent: Option<String>,
-        /// Run this task with a reusable workflow definition instead of an agent
-        #[arg(long, conflicts_with = "agent")]
-        workflow: Option<String>,
-        /// Plain-text input passed to the workflow entrypoint (a workflow that needs structured data parses this text in its first step)
-        #[arg(long, requires = "workflow")]
-        input: Option<String>,
         /// Notification target when the task enters review. Defaults to the current thread (or `none` outside a thread). Override with `none`, `current-thread`, `thread <thread_id>`, or `bot <channel:account_id>`.
         #[arg(long, value_name = "TARGET", num_args = 1..=2)]
         notify: Vec<String>,

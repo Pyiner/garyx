@@ -55,8 +55,7 @@ code-level claims:
 - Confirmed, runtime side: repeated restart-wake resumes costing ~1.68M input
   tokens / ~94s (`15:38:48` dispatch → `15:40:22` completion), kernel-recorded
   `Physical footprint (peak): 5.5G`, 41.6M input tokens of run traffic in one
-  day, `workflow.ts is required` warning emitted 198,142 times (24.5% of all
-  log lines, one scan every 3-4s) until fixed, 230MB un-rotated `stderr.log`.
+  day, and a 230MB un-rotated `stderr.log`.
 - Confirmed, code side:
   - Both SQLite services wrap `rusqlite::Connection` in `std::sync::Mutex`
     (`garyx-gateway/src/garyx_db/mod.rs:490`, `garyx-gateway/src/app_db.rs:230`)
@@ -77,8 +76,6 @@ code-level claims:
     held, and there is no `busy_timeout`.
   - Thread-history inline images use synchronous `std::fs::read` + base64 on
     the request path (`garyx-gateway/src/api.rs:1386-1394`).
-  - Workflow definition listing does a synchronous directory scan + manifest
-    parse per call (`garyx-gateway/src/workflows/definitions.rs:92,132`).
   - CLI gateway JSON helper: 5s timeout, single attempt, a fresh
     `reqwest::Client` per call (`garyx/src/commands/gateway_client.rs:174-183`).
 - Corrected (investigation overclaimed):
@@ -192,9 +189,9 @@ Acceptance:
 Risk: medium. Many call sites; closures need owned arguments; do not introduce
 new lock scopes. Mechanical, reviewable per commit.
 
-### Batch 4 — Request-path hygiene (three small knives)
+### Batch 4 — Request-path hygiene (two small knives)
 
-Scope: `tasks.rs`, `workflows/definitions.rs`, `api.rs`.
+Scope: `tasks.rs`, `api.rs`.
 
 - Move `backfill_task_projection_if_incomplete` out of the tasks list route
   (`tasks.rs:570-587`) into startup reconciliation, per the repository
@@ -206,10 +203,6 @@ Scope: `tasks.rs`, `workflows/definitions.rs`, `api.rs`.
   mid-life projection loss, but after the startup warm-up the common flow —
   including `GET /api/tasks/{id}` right after a version-bump restart — must
   not rescan on the request path.
-- Cache workflow definition listing (`definitions.rs`): short-TTL (2-5s) or
-  root-mtime-keyed in-memory cache so 3-4s-interval polling stops re-scanning
-  the package directory and re-parsing manifests every call. File-backed
-  packages remain the source of truth (no DB rows).
 - Inline history images: replace `std::fs::metadata`/`std::fs::read`
   (`api.rs:1386-1394`) with `tokio::fs` equivalents.
 
@@ -218,8 +211,6 @@ Acceptance:
 - Tasks list returns correct data with both complete and incomplete
   projections; backfill runs at startup (log marker) and never on the read
   route.
-- Workflow list reflects a manifest edit within the TTL; no scan logs between
-  polls.
 - A thread history containing inline images renders identically (byte-equal
   response on a fixture thread).
 

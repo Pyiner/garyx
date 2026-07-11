@@ -5,7 +5,6 @@ pub(super) fn is_task_work_run_wake(run_id: &str, metadata: &HashMap<String, Val
         && !metadata_bool(metadata, "task_notification")
         && !metadata_bool(metadata, "internal_dispatch")
         && !metadata_bool(metadata, "system")
-        && !metadata_string_is_present(metadata, "workflow_child_run_id")
 }
 
 pub(super) async fn mark_task_in_progress_on_work_run_wake(

@@ -239,14 +239,6 @@ fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
     metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn metadata_string_is_present(metadata: &HashMap<String, Value>, key: &str) -> bool {
-    metadata
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-}
-
 fn non_empty_trimmed_owned(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {

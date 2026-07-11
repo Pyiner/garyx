@@ -7,7 +7,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use crate::server::AppState;
 use crate::{
     api, app_db, automation, capsules, chat, coding_usage, commands, dashboard, gateway_auth, mcp,
-    mcp_config, provider_auth, routes, tasks, tool_image, workflows, workspace_files, workspaces,
+    mcp_config, provider_auth, routes, tasks, tool_image, workspace_files, workspaces,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -95,54 +95,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/threads/{key}/stream",
             axum::routing::get(routes::thread_stream),
-        )
-        .route(
-            "/api/threads/{key}/workflows",
-            axum::routing::get(workflows::list_thread_workflows),
-        )
-        .route(
-            "/api/workflows",
-            axum::routing::get(workflows::list_workflows),
-        )
-        .route(
-            "/api/workflow-definitions",
-            axum::routing::get(workflows::list_workflow_definitions),
-        )
-        .route(
-            "/api/workflow-definitions/{workflow_id}",
-            axum::routing::get(workflows::get_workflow_definition),
-        )
-        .route(
-            "/api/workflow-definitions/{workflow_id}/source",
-            axum::routing::get(workflows::get_workflow_definition_source),
-        )
-        .route(
-            "/api/workflow-definitions/{workflow_id}/runs",
-            axum::routing::post(workflows::start_workflow_definition),
-        )
-        .route(
-            "/api/workflows/sdk",
-            axum::routing::post(workflows::start_sdk_workflow),
-        )
-        .route(
-            "/api/workflows/{workflow_id}",
-            axum::routing::get(workflows::get_workflow),
-        )
-        .route(
-            "/api/workflows/{workflow_id}/events",
-            axum::routing::get(workflows::workflow_events).post(workflows::append_workflow_event),
-        )
-        .route(
-            "/api/workflows/{workflow_id}/agents",
-            axum::routing::post(workflows::run_workflow_agent),
-        )
-        .route(
-            "/api/workflows/{workflow_id}/finish",
-            axum::routing::post(workflows::finish_sdk_workflow),
-        )
-        .route(
-            "/api/workflows/{workflow_id}/cancel",
-            axum::routing::post(workflows::cancel_workflow),
         )
         .route(
             "/api/tasks",
