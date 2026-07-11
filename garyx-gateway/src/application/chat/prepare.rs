@@ -15,9 +15,7 @@ use garyx_router::{
 };
 use serde_json::{Value, json};
 
-use crate::agent_identity::{
-    agent_runtime_metadata, resolve_agent_reference_from_stores,
-};
+use crate::agent_identity::{agent_runtime_metadata, resolve_agent_reference_from_stores};
 use crate::application::chat::contracts::ChatRequest;
 use crate::chat_shared::record_api_thread_log;
 use crate::managed_mcp_metadata::inject_managed_mcp_servers;
@@ -151,11 +149,8 @@ pub(crate) async fn prepare_chat_request(
         .map(ToOwned::to_owned)
     {
         Some(agent_id) => {
-            match resolve_agent_reference_from_stores(
-                state.ops.custom_agents.as_ref(),
-                &agent_id,
-            )
-            .await
+            match resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), &agent_id)
+                .await
             {
                 Ok(reference) => Some(reference),
                 Err(error) => {
