@@ -4063,8 +4063,8 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_telegram_reply_routing_after_endpoint_rebind_keeps_old_thread_without_switching_current(
-    ) {
+    async fn test_e2e_telegram_reply_routing_after_endpoint_rebind_keeps_old_thread_without_switching_current()
+     {
         let server = setup_tg_mock().await;
         let api_base = unique_api_base(&server);
         let provider = Arc::new(ConfigurableTestProvider::echo());
@@ -4420,7 +4420,13 @@ mod e2e_tests {
             store.delete(&old_thread).await.unwrap(),
             "old thread should be deleted"
         );
-        router.lock().await.rebuild_thread_indexes().await;
+        {
+            // Mirror the production detach route: the write-path purge
+            // clears this endpoint's router context incrementally
+            // (startup rebuild is retired, #TASK-2099).
+            let mut router_guard = router.lock().await;
+            router_guard.purge_endpoint_binding("telegram::bot1::42");
+        }
 
         let bot_reply_msg = TgMessage {
             message_id: 999,
@@ -5288,7 +5294,8 @@ mod e2e_tests {
                     "account_id": "main"
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         store
             .set(
                 "thread::hidden-task",
@@ -5298,7 +5305,8 @@ mod e2e_tests {
                     "thread_kind": "task"
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         let mut entries = (1..=10)
             .map(|index| {
                 recent_thread_entry(
@@ -6580,9 +6588,11 @@ mod e2e_tests {
         let calls = provider.calls.lock().unwrap();
         assert_eq!(calls[0].attachments.len(), 1);
         assert!(calls[0].attachments[0].name.ends_with("report.pdf"));
-        assert!(calls[0].attachments[0]
-            .path
-            .contains("garyx-telegram/inbound/"));
+        assert!(
+            calls[0].attachments[0]
+                .path
+                .contains("garyx-telegram/inbound/")
+        );
     }
 
     #[tokio::test]

@@ -20,8 +20,8 @@ use serde_json::Value;
 
 use crate::store::ThreadStore;
 use crate::threads::{
-    bindings_from_value, is_thread_key, label_from_value, value_updated_at,
-    workspace_dir_from_value, KnownChannelEndpoint,
+    KnownChannelEndpoint, bindings_from_value, is_thread_key, label_from_value, value_updated_at,
+    workspace_dir_from_value,
 };
 
 /// One persisted delivery context: the projection row behind
@@ -31,15 +31,6 @@ pub struct DeliveryContextRow {
     pub thread_id: String,
     pub context_json: String,
     pub updated_at: Option<String>,
-}
-
-/// One thread matching a channel binding, for `/threads`-style listings.
-#[derive(Debug, Clone)]
-pub struct BindingThreadRow {
-    pub thread_id: String,
-    pub thread_label: Option<String>,
-    pub updated_at: Option<String>,
-    pub created_at: Option<String>,
 }
 
 /// One outbound message-id route: the projection row behind
@@ -72,26 +63,14 @@ pub trait ChannelEndpointProjection: Send + Sync {
             .collect())
     }
 
-    /// Every bound endpoint with its holder-thread metadata — one entry
-    /// per (endpoint, holder) pair, so duplicate holders stay visible.
-    /// Callers wanting one row per endpoint pick their preferred holder
-    /// (see `list_known_channel_endpoints`).
+    /// Every bound endpoint with its holder-thread metadata. The
+    /// endpoint table holds one row per endpoint (single-owner model;
+    /// duplicates in legacy record bodies are settled by the one-shot
+    /// holder dedup migration).
     async fn endpoints(&self) -> Result<Vec<KnownChannelEndpoint>, String>;
 
     /// Every thread with a persisted delivery context.
     async fn delivery_contexts(&self) -> Result<Vec<DeliveryContextRow>, String>;
-
-    /// Threads matching a channel binding — through `channel_bindings`
-    /// or the retained legacy top-level record fields (binding key from
-    /// `thread_binding_key`/`from_id`, channel absent-or-equal, account
-    /// from `account_id`/`origin_account_id` or the `{account_id}::`
-    /// thread-id prefix for records without any account field).
-    async fn binding_threads(
-        &self,
-        channel: &str,
-        account_id: &str,
-        thread_binding_key: &str,
-    ) -> Result<Vec<BindingThreadRow>, String>;
 
     /// Every persisted outbound message-id route.
     async fn outbound_routes(&self) -> Result<Vec<OutboundRouteRow>, String>;
@@ -198,46 +177,6 @@ impl ChannelEndpointProjection for ScanChannelEndpointProjection {
         Ok(endpoints)
     }
 
-    async fn binding_threads(
-        &self,
-        channel: &str,
-        account_id: &str,
-        thread_binding_key: &str,
-    ) -> Result<Vec<BindingThreadRow>, String> {
-        let mut rows = Vec::new();
-        let keys = self
-            .store
-            .list_keys(None)
-            .await
-            .map_err(|error| error.to_string())?;
-        for key in keys {
-            let Some(value) = self
-                .store
-                .get(&key)
-                .await
-                .map_err(|error| error.to_string())?
-            else {
-                continue;
-            };
-            if !crate::threads::thread_matches_binding(
-                &key,
-                &value,
-                channel,
-                account_id,
-                thread_binding_key,
-            ) {
-                continue;
-            }
-            rows.push(BindingThreadRow {
-                thread_id: key,
-                thread_label: label_from_value(&value),
-                updated_at: string_field_of(&value, "updated_at"),
-                created_at: string_field_of(&value, "created_at"),
-            });
-        }
-        Ok(rows)
-    }
-
     async fn delivery_contexts(&self) -> Result<Vec<DeliveryContextRow>, String> {
         let mut rows = Vec::new();
         let keys = self
@@ -328,10 +267,6 @@ impl ChannelEndpointProjection for ScanChannelEndpointProjection {
         }
         Ok(rows)
     }
-}
-
-fn string_field_of(value: &Value, key: &str) -> Option<String> {
-    value.as_object().and_then(|obj| string_field(obj, key))
 }
 
 fn string_field(obj: &serde_json::Map<String, Value>, key: &str) -> Option<String> {

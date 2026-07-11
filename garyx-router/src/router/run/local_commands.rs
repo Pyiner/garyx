@@ -9,6 +9,7 @@ use crate::recent_threads::{
     parse_recent_bind_request, parse_recent_page_request, recent_thread_display_title,
     requested_recent_page, resolve_recent_page,
 };
+use crate::store::ThreadStoreExt;
 use crate::threads::{
     ThreadEnsureOptions, default_agent_for_channel_account, default_workspace_for_channel_account,
     default_workspace_mode_for_channel_account, label_from_value,
@@ -123,9 +124,11 @@ impl MessageRouter {
                     .current_canonical_thread_for_binding(channel, account_id, thread_binding_key)
                     .await;
                 let current_display = if let Some(thread_id) = current_thread.as_deref() {
+                    // Display decoration only: a store failure falls back to
+                    // the placeholder title instead of failing the listing.
                     let title = self
                         .threads
-                        .get(thread_id)
+                        .get_logged(thread_id)
                         .await
                         .and_then(|record| label_from_value(&record))
                         .unwrap_or_else(|| "New Thread".to_owned());
@@ -204,13 +207,21 @@ impl MessageRouter {
                         ));
                     }
                 }
-                let Some(target_data) = self.threads.get(&target_thread).await else {
-                    return Ok(self.reply_with_cached_thread(
-                        "That thread no longer exists. Run /threads again.",
-                        channel,
-                        account_id,
-                        thread_binding_key,
-                    ));
+                // A storage failure becomes a failed command, never a
+                // "thread no longer exists" claim (#TASK-2130 class).
+                let target_data = match self.threads.get(&target_thread).await {
+                    Ok(Some(target_data)) => target_data,
+                    Ok(None) => {
+                        return Ok(self.reply_with_cached_thread(
+                            "That thread no longer exists. Run /threads again.",
+                            channel,
+                            account_id,
+                            thread_binding_key,
+                        ));
+                    }
+                    Err(error) => {
+                        return Err(format!("thread storage is unavailable: {error}"));
+                    }
                 };
                 if let Err(error) = validate_thread_accepts_bot_binding(
                     &target_thread,

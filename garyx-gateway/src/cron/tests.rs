@@ -1336,7 +1336,8 @@ async fn test_bound_automation_dispatches_through_internal_inbound_front_door() 
                 "metadata": { "agent_id": "claude" }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let run = svc.run_now("automation-front-door").await.unwrap();
     assert_eq!(run.status, JobRunStatus::Success);

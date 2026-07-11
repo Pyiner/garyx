@@ -7,9 +7,9 @@ use serde_json::Value;
 
 use super::super::*;
 use crate::threads::{
-    ChannelBinding, ThreadEnsureOptions, ThreadIndexStats, default_agent_for_channel_account,
+    ChannelBinding, ThreadEnsureOptions, default_agent_for_channel_account,
     default_workspace_for_channel_account, default_workspace_mode_for_channel_account,
-    endpoint_key, list_known_channel_endpoints, new_thread_key, worktree_base_dir_for_config,
+    endpoint_key, new_thread_key, worktree_base_dir_for_config,
 };
 use crate::{EndpointBindingMutationError, EndpointDetachResult};
 
@@ -454,7 +454,10 @@ impl MessageRouter {
             }
         };
         let thread_id = owner.thread_id;
-        if !self.threads.exists(&thread_id).await {
+        // Existence gate: a stale owner row must not resurrect a deleted
+        // thread; a store failure degrades to unresolved (dispatch will
+        // surface the outage when it touches the store).
+        if !self.threads.exists_logged(&thread_id).await {
             return None;
         }
         self.thread_nav

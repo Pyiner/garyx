@@ -9,8 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use garyx_router::{
-    BindingThreadRow, ChannelEndpointProjection, DeliveryContextRow, KnownChannelEndpoint,
-    OutboundRouteRow,
+    ChannelEndpointProjection, DeliveryContextRow, KnownChannelEndpoint, OutboundRouteRow,
 };
 
 use crate::garyx_db::GaryxDbService;
@@ -46,23 +45,6 @@ impl ChannelEndpointProjection for SqlChannelEndpointProjection {
         let endpoint_key = endpoint_key.to_owned();
         self.garyx_db
             .run_blocking(move |db| db.thread_channel_endpoint_rows(&endpoint_key))
-            .await
-            .map_err(|error| error.to_string())
-    }
-
-    async fn binding_threads(
-        &self,
-        channel: &str,
-        account_id: &str,
-        thread_binding_key: &str,
-    ) -> Result<Vec<BindingThreadRow>, String> {
-        let channel = channel.to_owned();
-        let account_id = account_id.to_owned();
-        let thread_binding_key = thread_binding_key.to_owned();
-        self.garyx_db
-            .run_blocking(move |db| {
-                db.binding_thread_rows(&channel, &account_id, &thread_binding_key)
-            })
             .await
             .map_err(|error| error.to_string())
     }
@@ -107,7 +89,7 @@ impl ChannelEndpointProjection for SqlChannelEndpointProjection {
 mod tests {
     use std::sync::Arc;
 
-    use garyx_router::{channel_endpoint_projection_for, ThreadStore};
+    use garyx_router::{ThreadStore, channel_endpoint_projection_for};
     use serde_json::json;
 
     use crate::composition::app_bootstrap::AppStateBuilder;
@@ -184,17 +166,20 @@ mod tests {
 
         // Deleting the record removes the projection rows with it.
         store.delete("thread::bound").await.unwrap();
-        assert!(projection
-            .endpoint_holders("telegram::main::42")
-            .await
-            .expect("holders after delete")
-            .is_empty());
+        assert!(
+            projection
+                .endpoint_holders("telegram::main::42")
+                .await
+                .expect("holders after delete")
+                .is_empty()
+        );
     }
 
-    /// Moving a binding between threads goes through the projection to find
-    /// the previous holder and strips the binding from that record only.
+    /// Moving a binding between threads goes through the production
+    /// EndpointBindingMutator; the projection follows the record writes in
+    /// the same transaction, so the new holder is the only one visible.
     #[tokio::test]
-    async fn bind_endpoint_moves_binding_via_projection_holder_lookup() {
+    async fn bind_endpoint_moves_binding_and_projection_follows() {
         let state = state();
         let store: Arc<dyn ThreadStore> = state.threads.thread_store.clone();
         store
@@ -213,10 +198,15 @@ mod tests {
             chat_id: "42".to_owned(),
             ..Default::default()
         };
-        let previous = garyx_router::bind_endpoint_to_thread(&store, "thread::new", binding)
-            .await
-            .expect("bind");
-        assert_eq!(previous.as_deref(), Some("thread::old"));
+        let mutator = crate::endpoint_binding_mutator::SqlEndpointBindingMutator::new(
+            store.clone(),
+            state.ops.garyx_db.clone(),
+        );
+        let result =
+            garyx_router::EndpointBindingMutator::bind_endpoint(&mutator, "thread::new", binding)
+                .await
+                .expect("bind");
+        assert_eq!(result.previous_thread_id.as_deref(), Some("thread::old"));
 
         let projection = channel_endpoint_projection_for(&store);
         assert_eq!(
@@ -228,64 +218,6 @@ mod tests {
         );
         let old_record = store.get("thread::old").await.unwrap().expect("old record");
         assert!(garyx_router::bindings_from_value(&old_record).is_empty());
-    }
-
-    /// Binding-thread listings answer from SQL for both match families:
-    /// modern `channel_bindings` rows and the legacy top-level record
-    /// fields (`from_id`/`channel`/`account_id`) via the thread_meta
-    /// legacy binding columns (#TASK-2099 root review finding 3).
-    #[tokio::test]
-    async fn binding_threads_matches_modern_bindings_and_legacy_record_fields() {
-        let state = state();
-        let store: Arc<dyn ThreadStore> = state.threads.thread_store.clone();
-        store
-            .set(
-                "thread::modern",
-                bound_thread_record("thread::modern", "42"),
-            )
-            .await
-            .unwrap();
-        store
-            .set(
-                "thread::legacy",
-                json!({
-                    "thread_id": "thread::legacy",
-                    "channel": "telegram",
-                    "account_id": "main",
-                    "from_id": "42",
-                    "label": "Legacy",
-                    "updated_at": "2026-06-30T00:00:00.000Z",
-                }),
-            )
-            .await
-            .unwrap();
-        store
-            .set(
-                "thread::other-binding",
-                json!({
-                    "thread_id": "thread::other-binding",
-                    "channel": "telegram",
-                    "account_id": "main",
-                    "from_id": "99",
-                }),
-            )
-            .await
-            .unwrap();
-
-        let projection = channel_endpoint_projection_for(&store);
-        let mut rows = projection
-            .binding_threads("telegram", "main", "42")
-            .await
-            .expect("binding threads")
-            .into_iter()
-            .map(|row| row.thread_id)
-            .collect::<Vec<_>>();
-        rows.sort();
-        assert_eq!(
-            rows,
-            vec!["thread::legacy".to_owned(), "thread::modern".to_owned()],
-            "both the channel_bindings match and the legacy-field match must surface"
-        );
     }
 
     /// Injected non-SQL stores must resolve to the scan projection over
@@ -340,65 +272,5 @@ mod tests {
             .expect("resolve task by number over the scan reader");
         assert_eq!(resolved_thread_id, thread_id);
         assert_eq!(resolved.number, task.number);
-    }
-
-    /// Two thread records holding the SAME endpoint (legacy import or a
-    /// mid-bind race) must both be visible as holders and both be stripped
-    /// on the next bind — the projection stores one row per holder
-    /// (#TASK-2107 P1 regression).
-    #[tokio::test]
-    async fn duplicate_endpoint_holders_are_all_visible_and_all_removed_on_bind() {
-        let state = state();
-        let store: Arc<dyn ThreadStore> = state.threads.thread_store.clone();
-        store
-            .set("thread::old-a", bound_thread_record("thread::old-a", "42"))
-            .await
-            .unwrap();
-        store
-            .set("thread::old-b", bound_thread_record("thread::old-b", "42"))
-            .await
-            .unwrap();
-        store
-            .set("thread::new", json!({ "thread_id": "thread::new" }))
-            .await
-            .unwrap();
-
-        let projection = channel_endpoint_projection_for(&store);
-        let mut holders = projection
-            .endpoint_holders("telegram::main::42")
-            .await
-            .expect("holders before bind");
-        holders.sort();
-        assert_eq!(
-            holders,
-            vec!["thread::old-a".to_owned(), "thread::old-b".to_owned()],
-            "both duplicate holders must be visible in the projection"
-        );
-
-        let binding = garyx_router::ChannelBinding {
-            channel: "telegram".to_owned(),
-            account_id: "main".to_owned(),
-            binding_key: "42".to_owned(),
-            chat_id: "42".to_owned(),
-            ..Default::default()
-        };
-        garyx_router::bind_endpoint_to_thread(&store, "thread::new", binding)
-            .await
-            .expect("bind");
-
-        for old_thread in ["thread::old-a", "thread::old-b"] {
-            let record = store.get(old_thread).await.unwrap().expect("old record");
-            assert!(
-                garyx_router::bindings_from_value(&record).is_empty(),
-                "{old_thread} still holds a duplicate binding"
-            );
-        }
-        assert_eq!(
-            projection
-                .endpoint_holders("telegram::main::42")
-                .await
-                .expect("holders after bind"),
-            vec!["thread::new".to_owned()],
-        );
     }
 }

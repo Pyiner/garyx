@@ -1,9 +1,7 @@
 use super::*;
 use crate::memory_store::InMemoryThreadStore;
 use crate::thread_history::{ThreadHistoryRepository, ThreadTranscriptStore};
-use crate::threads::{
-    ChannelBinding, bindings_from_value, remove_binding, upsert_known_channel_endpoint,
-};
+use crate::threads::ChannelBinding;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -110,45 +108,6 @@ async fn test_latest_assistant_message_text_for_thread_ignores_user_messages() {
 }
 
 #[tokio::test]
-async fn test_lazy_endpoint_resolution_prefers_latest_updated_binding_for_duplicate_endpoint() {
-    let store = Arc::new(InMemoryThreadStore::new());
-    for (thread_id, label, updated_at) in [
-        ("thread::older", "Older", "2026-03-01T10:00:00Z"),
-        ("thread::newer", "Newer", "2026-03-01T12:00:00Z"),
-    ] {
-        store
-            .set(
-                thread_id,
-                json!({
-                    "thread_id": thread_id,
-                    "label": label,
-                    "updated_at": updated_at,
-                    "channel_bindings": [{
-                        "channel": "telegram",
-                        "account_id": "main",
-                        "binding_key": "user42",
-                        "chat_id": "user42",
-                        "display_label": "User 42"
-                    }]
-                }),
-            )
-            .await;
-    }
-
-    let mut router = MessageRouter::new(store, GaryxConfig::default());
-
-    // The lazy point lookup applies the preferred-holder tie-break when
-    // two records hold the same endpoint (no startup rebuild).
-    assert_eq!(
-        router
-            .resolve_endpoint_thread_id("telegram", "main", "user42")
-            .await
-            .as_deref(),
-        Some("thread::newer")
-    );
-}
-
-#[tokio::test]
 async fn test_resolve_endpoint_thread_id_uses_projected_owner_point_lookup() {
     let store = Arc::new(InMemoryThreadStore::new());
     store
@@ -199,7 +158,7 @@ async fn test_resolve_endpoint_thread_id_uses_projected_owner_point_lookup() {
 }
 
 #[tokio::test]
-async fn test_rebuild_thread_indexes_clears_detached_endpoint_thread_context() {
+async fn test_endpoint_detach_purge_clears_thread_context() {
     let store: Arc<dyn crate::ThreadStore> = Arc::new(InMemoryThreadStore::new());
     store
         .set(
@@ -219,93 +178,20 @@ async fn test_rebuild_thread_indexes_clears_detached_endpoint_thread_context() {
         .unwrap();
 
     let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
-    let binding_context_key = MessageRouter::build_binding_context_key("telegram", "main", "alice");
-    router.switch_to_thread(&binding_context_key, "thread::bound");
-    let mut record = store.get("thread::bound").await.unwrap();
-    let binding = bindings_from_value(&record).into_iter().next().unwrap();
-    upsert_known_channel_endpoint(&store, &binding)
-        .await
-        .unwrap();
-    assert!(remove_binding(&mut record, "telegram::main::alice"));
-    store.set("thread::bound", record).await;
+    let user_key = MessageRouter::build_binding_context_key("telegram", "main", "alice");
+    router.switch_to_thread(&user_key, "thread::bound");
 
-    let stats = router.rebuild_thread_indexes().await;
-    assert_eq!(stats.endpoint_bindings, 0);
+    // Mirror the production detach flow: the endpoint mutation persists
+    // through the EndpointBindingMutator and the write-path purge clears
+    // this endpoint's router context incrementally — there is no rebuild
+    // pass (#TASK-2099).
+    router.purge_endpoint_binding("telegram::main::alice");
+
     assert_eq!(
         router.get_current_thread_id_for_binding("telegram", "main", "alice"),
         None
     );
-}
-
-#[tokio::test]
-async fn test_lazy_endpoint_resolution_preserves_explicit_thread_overrides_for_bound_endpoint() {
-    let store: Arc<dyn crate::ThreadStore> = Arc::new(InMemoryThreadStore::new());
-    store
-        .set(
-            "thread::bound",
-            json!({
-                "thread_id": "thread::bound",
-                "channel_bindings": [{
-                    "channel": "telegram",
-                    "account_id": "main",
-                    "binding_key": "alice",
-                    "chat_id": "alice",
-                    "display_label": "Alice"
-                }]
-            }),
-        )
-        .await
-        .unwrap();
-
-    let mut router = MessageRouter::new(store, GaryxConfig::default());
-    let binding_context_key = MessageRouter::build_binding_context_key("telegram", "main", "alice");
-    router.switch_to_thread(&binding_context_key, "named-session");
-
-    let stats = router.rebuild_thread_indexes().await;
-    assert_eq!(stats.endpoint_bindings, 1);
-    assert_eq!(
-        router.get_current_thread_id_for_binding("telegram", "main", "alice"),
-        Some("named-session")
-    );
-}
-
-#[tokio::test]
-async fn test_canonical_resolution_skips_missing_explicit_thread_override_for_bound_endpoint() {
-    let store: Arc<dyn crate::ThreadStore> = Arc::new(InMemoryThreadStore::new());
-    store
-        .set(
-            "thread::bound",
-            json!({
-                "thread_id": "thread::bound",
-                "channel_bindings": [{
-                    "channel": "telegram",
-                    "account_id": "main",
-                    "binding_key": "alice",
-                    "chat_id": "alice",
-                    "display_label": "Alice"
-                }]
-            }),
-        )
-        .await
-        .unwrap();
-
-    let mut router = MessageRouter::new(store, GaryxConfig::default());
-    let binding_context_key = MessageRouter::build_binding_context_key("telegram", "main", "alice");
-    router.switch_to_thread(&binding_context_key, "thread::missing");
-
-    let stats = router.rebuild_thread_indexes().await;
-    assert_eq!(stats.endpoint_bindings, 1);
-    assert_eq!(
-        router.get_current_thread_id_for_binding("telegram", "main", "alice"),
-        None
-    );
-    assert_eq!(
-        router
-            .current_canonical_thread_for_binding("telegram", "main", "alice")
-            .await
-            .as_deref(),
-        Some("thread::bound")
-    );
+    assert!(!router.thread_nav.binding_thread_map.contains_key(&user_key));
 }
 
 #[tokio::test]

@@ -129,7 +129,15 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
                 target_thread_id.to_owned(),
             ));
         }
-        let Some(mut target) = self.thread_store.get(target_thread_id).await else {
+        let target = self
+            .thread_store
+            .get(target_thread_id)
+            .await
+            .map_err(|error| EndpointBindingMutationError::WriteFailed {
+                thread_id: target_thread_id.to_owned(),
+                message: error.to_string(),
+            })?;
+        let Some(mut target) = target else {
             return Err(EndpointBindingMutationError::TargetNotFound(
                 target_thread_id.to_owned(),
             ));
@@ -149,7 +157,7 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
             .map(ToOwned::to_owned);
         if let Some(previous_thread_id) = previous_thread_id.as_deref() {
             match self.thread_store.get(previous_thread_id).await {
-                Some(mut previous) => {
+                Ok(Some(mut previous)) => {
                     if remove_binding(&mut previous, &endpoint_key) {
                         self.write_binding_fields(previous_thread_id, &previous)
                             .await?;
@@ -159,10 +167,16 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
                         ));
                     }
                 }
-                None => {
+                Ok(None) => {
                     return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
                         previous_thread_id.to_owned(),
                     ));
+                }
+                Err(error) => {
+                    return Err(EndpointBindingMutationError::WriteFailed {
+                        thread_id: previous_thread_id.to_owned(),
+                        message: error.to_string(),
+                    });
                 }
             }
         }
@@ -208,7 +222,7 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
         let previous_thread_id = owner.thread_id.clone();
         if let Some(previous_thread_id) = previous_thread_id.as_deref() {
             match self.thread_store.get(previous_thread_id).await {
-                Some(mut previous) => {
+                Ok(Some(mut previous)) => {
                     if remove_binding(&mut previous, endpoint_key) {
                         self.write_binding_fields(previous_thread_id, &previous)
                             .await?;
@@ -218,10 +232,16 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
                         ));
                     }
                 }
-                None => {
+                Ok(None) => {
                     return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
                         previous_thread_id.to_owned(),
                     ));
+                }
+                Err(error) => {
+                    return Err(EndpointBindingMutationError::WriteFailed {
+                        thread_id: previous_thread_id.to_owned(),
+                        message: error.to_string(),
+                    });
                 }
             }
         } else {
@@ -292,27 +312,27 @@ mod tests {
 
     #[async_trait]
     impl ThreadStore for InstrumentedStore {
-        async fn get(&self, thread_id: &str) -> Option<Value> {
+        async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
             if self.hidden_reads.lock().unwrap().contains(thread_id) {
-                return None;
+                return Ok(None);
             }
             self.inner.get(thread_id).await
         }
 
-        async fn set(&self, thread_id: &str, data: Value) {
-            self.inner.set(thread_id, data).await;
+        async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
+            self.inner.set(thread_id, data).await
         }
 
-        async fn delete(&self, thread_id: &str) -> bool {
+        async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
             self.inner.delete(thread_id).await
         }
 
-        async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
+        async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
             self.list_calls.fetch_add(1, Ordering::SeqCst);
             self.inner.list_keys(prefix).await
         }
 
-        async fn exists(&self, thread_id: &str) -> bool {
+        async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
             self.inner.exists(thread_id).await
         }
 
@@ -366,7 +386,8 @@ mod tests {
                     "updated_at": "2026-07-11T08:00:00Z"
                 }),
             )
-            .await;
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -386,7 +407,7 @@ mod tests {
             .expect("move bind");
         assert_eq!(moved.previous_thread_id.as_deref(), Some("thread::old"));
         assert!(moved.changed);
-        assert!(bindings_from_value(&store.get("thread::old").await.unwrap()).is_empty());
+        assert!(bindings_from_value(&store.get("thread::old").await.unwrap().unwrap()).is_empty());
 
         let idempotent = mutator
             .bind_endpoint("thread::target", binding())
@@ -424,7 +445,9 @@ mod tests {
             .await
             .expect("runtime bind");
         assert_eq!(mutation.previous_thread_id.as_deref(), Some("thread::old"));
-        assert!(store.get("thread::target").await.unwrap()["delivery_context"].is_object());
+        assert!(
+            store.get("thread::target").await.unwrap().unwrap()["delivery_context"].is_object()
+        );
         assert_eq!(store.list_calls.load(Ordering::SeqCst), 0);
     }
 
@@ -448,7 +471,9 @@ mod tests {
             EndpointBindingMutationError::PreviousOwnerUnavailable(ref thread_id)
                 if thread_id == "thread::old"
         ));
-        assert!(bindings_from_value(&store.get("thread::target").await.unwrap()).is_empty());
+        assert!(
+            bindings_from_value(&store.get("thread::target").await.unwrap().unwrap()).is_empty()
+        );
 
         store.hidden_reads.lock().unwrap().clear();
         store
@@ -490,7 +515,8 @@ mod tests {
                     "account_id": "main"
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         let error = mutator
             .bind_endpoint("thread::other-channel", binding())
             .await
@@ -536,7 +562,9 @@ mod tests {
             detached.previous_thread_id.as_deref(),
             Some("thread::owner")
         );
-        assert!(bindings_from_value(&store.get("thread::owner").await.unwrap()).is_empty());
+        assert!(
+            bindings_from_value(&store.get("thread::owner").await.unwrap().unwrap()).is_empty()
+        );
         assert!(
             db.get_thread_channel_endpoint("telegram::main::1000000001")
                 .unwrap()
@@ -580,6 +608,7 @@ mod tests {
             if store
                 .get(thread_id)
                 .await
+                .unwrap()
                 .is_some_and(|record| !bindings_from_value(&record).is_empty())
             {
                 holders.push(thread_id);

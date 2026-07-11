@@ -450,7 +450,8 @@ async fn deliver_inbound_preserves_native_command_arguments_and_uses_plugin_outb
                 "label": "Current thread",
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let reader = Arc::new(RecordingRecentThreadPageReader {
         entries: (1..=11)
             .map(|index| RecentThreadListEntry {

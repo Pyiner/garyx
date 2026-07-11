@@ -129,6 +129,52 @@ fn parse_gateway_restart_no_wake() {
 }
 
 #[test]
+fn thread_send_destination_resolves_canonical_and_legacy_positional_forms() {
+    let destination = resolve_thread_send_destination(
+        Some("thread".to_owned()),
+        Some("thread::abc".to_owned()),
+        vec!["hello".to_owned()],
+    )
+    .expect("thread form");
+    assert_eq!(
+        destination.target,
+        ThreadSendTarget::Thread("thread::abc".to_owned())
+    );
+    assert_eq!(destination.message_parts, vec!["hello".to_owned()]);
+
+    let destination = resolve_thread_send_destination(
+        Some("bot".to_owned()),
+        Some("telegram:main".to_owned()),
+        vec!["continue".to_owned()],
+    )
+    .expect("bot form");
+    assert_eq!(
+        destination.target,
+        ThreadSendTarget::Bot("telegram:main".to_owned())
+    );
+
+    // Documented compatibility shorthand: a bare canonical thread id.
+    let destination = resolve_thread_send_destination(
+        Some("thread::abc".to_owned()),
+        Some("hello".to_owned()),
+        vec!["there".to_owned()],
+    )
+    .expect("legacy positional form");
+    assert_eq!(
+        destination.target,
+        ThreadSendTarget::Thread("thread::abc".to_owned())
+    );
+    assert_eq!(
+        destination.message_parts,
+        vec!["hello".to_owned(), "there".to_owned()]
+    );
+
+    let error = resolve_thread_send_destination(Some("bogus".to_owned()), None, Vec::new())
+        .expect_err("unknown kind");
+    assert!(error.to_string().contains("thread"));
+}
+
+#[test]
 fn parse_gateway_restart_wake_thread() {
     let cli = Cli::parse_from([
         "garyx",

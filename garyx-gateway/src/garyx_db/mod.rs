@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use chrono::{SecondsFormat, Utc};
-use garyx_router::{BindingThreadRow, KnownChannelEndpoint, is_thread_key};
+use garyx_router::{KnownChannelEndpoint, is_thread_key};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use serde_json::Value;
@@ -86,9 +86,7 @@ impl RecentThreadTaskFilter {
     fn count_sql(self) -> &'static str {
         match self {
             Self::Include => "SELECT COUNT(*) FROM recent_threads",
-            Self::Exclude => {
-                "SELECT COUNT(*) FROM recent_threads WHERE thread_type <> 'task'"
-            }
+            Self::Exclude => "SELECT COUNT(*) FROM recent_threads WHERE thread_type <> 'task'",
             Self::Only => "SELECT COUNT(*) FROM recent_threads WHERE thread_type = 'task'",
         }
     }
@@ -225,14 +223,6 @@ pub struct ThreadMetaDraft {
     pub last_delivery_context_json: Option<String>,
     pub last_delivery_updated_at: Option<String>,
     pub default_list_hidden: bool,
-    /// Legacy top-level binding fields from the record body
-    /// (`thread_binding_key`/`from_id`, `channel`,
-    /// `account_id`/`origin_account_id`): binding navigation matches these
-    /// in addition to `channel_bindings` (#TASK-2099).
-    pub legacy_thread_binding_key: Option<String>,
-    pub legacy_channel: Option<String>,
-    pub legacy_account_id: Option<String>,
-    pub legacy_has_account: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -767,10 +757,7 @@ impl GaryxDbService {
         self.list_recent_threads_page_inner(filter, limit, requested_offset, || Ok(()))
     }
 
-    pub(crate) fn contains_selectable_recent_thread(
-        &self,
-        thread_id: &str,
-    ) -> GaryxDbResult<bool> {
+    pub(crate) fn contains_selectable_recent_thread(&self, thread_id: &str) -> GaryxDbResult<bool> {
         let thread_id = normalize_thread_id(thread_id)?;
         let conn = self.read_conn()?;
         Ok(conn
@@ -1417,57 +1404,6 @@ impl GaryxDbService {
             .optional()?)
     }
 
-    /// Threads matching a channel binding, answered from the projections:
-    /// `channel_bindings` matches come from `thread_channel_endpoints`;
-    /// legacy top-level record fields come from the `thread_meta` legacy
-    /// binding columns with the retained matching semantics — channel
-    /// absent-or-equal, and either a matching account field or (for
-    /// records without any account field) a `{account_id}::` thread-id
-    /// prefix (#TASK-2099).
-    pub fn binding_thread_rows(
-        &self,
-        channel: &str,
-        account_id: &str,
-        thread_binding_key: &str,
-    ) -> GaryxDbResult<Vec<BindingThreadRow>> {
-        let conn = self.read_conn()?;
-        let prefix_pattern = format!("{}::%", escape_like_pattern(account_id));
-        let mut stmt = conn.prepare(
-            "SELECT m.thread_id, m.thread_label, m.updated_at, m.created_at
-             FROM thread_meta m
-             WHERE (
-                    m.legacy_thread_binding_key = ?3
-                    AND (m.legacy_channel IS NULL OR m.legacy_channel = ?1)
-                    AND (
-                        (m.legacy_has_account = 1 AND m.legacy_account_id = ?2)
-                        OR (m.legacy_has_account = 0 AND m.thread_id LIKE ?4 ESCAPE '\\')
-                    )
-                )
-                OR m.thread_id IN (
-                    SELECT e.thread_id
-                    FROM thread_channel_endpoints e
-                    WHERE e.channel = ?1 AND e.account_id = ?2 AND e.binding_key = ?3
-                )
-             ORDER BY m.thread_id ASC",
-        )?;
-        let rows = stmt.query_map(
-            params![channel, account_id, thread_binding_key, prefix_pattern],
-            |row| {
-                Ok(BindingThreadRow {
-                    thread_id: row.get(0)?,
-                    thread_label: row.get(1)?,
-                    updated_at: row.get(2)?,
-                    created_at: row.get(3)?,
-                })
-            },
-        )?;
-        let mut records = Vec::new();
-        for row in rows {
-            records.push(row?);
-        }
-        Ok(records)
-    }
-
     /// Point lookup: every holder row for one endpoint key.
     pub fn thread_channel_endpoint_rows(
         &self,
@@ -2027,9 +1963,6 @@ impl GaryxDbService {
 
 fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    if thread_channel_endpoints_needs_holder_pk(conn)? {
-        conn.execute("DROP TABLE thread_channel_endpoints", [])?;
-    }
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS thread_pins (
@@ -2184,10 +2117,6 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             selected_model_reasoning_effort TEXT,
             selected_model_service_tier TEXT,
             sdk_session_id TEXT,
-            legacy_thread_binding_key TEXT,
-            legacy_channel TEXT,
-            legacy_account_id TEXT,
-            legacy_has_account INTEGER NOT NULL DEFAULT 0,
             projection_version INTEGER NOT NULL DEFAULT 4,
             projected_at TEXT NOT NULL
         ) STRICT;
@@ -2202,11 +2131,8 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             ON thread_meta(last_delivery_updated_at DESC)
             WHERE last_delivery_context_json IS NOT NULL;
 
-        -- One row per (endpoint, holder thread): an endpoint bound by two
-        -- thread records (legacy import, mid-bind race) keeps every holder
-        -- visible so bind/detach can strip all of them (#TASK-2107 P1).
         CREATE TABLE IF NOT EXISTS thread_channel_endpoints (
-            endpoint_key TEXT NOT NULL,
+            endpoint_key TEXT PRIMARY KEY,
             channel TEXT NOT NULL,
             account_id TEXT NOT NULL,
             binding_key TEXT NOT NULL,
@@ -2214,14 +2140,13 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             delivery_target_type TEXT NOT NULL DEFAULT 'chat_id',
             delivery_target_id TEXT NOT NULL DEFAULT '',
             display_label TEXT NOT NULL DEFAULT '',
-            thread_id TEXT NOT NULL,
+            thread_id TEXT,
             thread_label TEXT,
             workspace_dir TEXT,
             thread_updated_at TEXT,
             last_inbound_at TEXT,
             last_delivery_at TEXT,
-            projected_at TEXT NOT NULL,
-            PRIMARY KEY (endpoint_key, thread_id)
+            projected_at TEXT NOT NULL
         ) STRICT;
 
         CREATE TABLE IF NOT EXISTS thread_message_routes (
@@ -2315,197 +2240,6 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         "#,
     )?;
     purge_retired_workflow_state(conn)?;
-    rederive_thread_channel_endpoint_rows_if_needed(conn)?;
-    rederive_thread_meta_binding_columns_if_needed(conn)?;
-    Ok(())
-}
-
-const THREAD_META_BINDING_COLUMNS_NAME: &str = "thread_meta_binding_columns";
-const THREAD_META_BINDING_COLUMNS_VERSION: i64 = 1;
-
-/// One-shot backfill of the `thread_meta` legacy binding columns
-/// (#TASK-2099): rows written before the columns existed re-derive them
-/// from the record bodies so binding navigation answers from SQL for
-/// legacy threads too. Marker-gated and committed atomically with the
-/// updates, mirroring the endpoint-holder re-derivation.
-fn rederive_thread_meta_binding_columns_if_needed(conn: &Connection) -> GaryxDbResult<()> {
-    let marker_present: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM projection_states
-             WHERE projection_name = ?1 AND projection_version = ?2",
-            params![
-                THREAD_META_BINDING_COLUMNS_NAME,
-                THREAD_META_BINDING_COLUMNS_VERSION
-            ],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if marker_present.is_some() {
-        return Ok(());
-    }
-
-    let tx = conn.unchecked_transaction()?;
-    let mut rederived = 0usize;
-    {
-        let mut stmt = tx.prepare(
-            "SELECT r.key, r.body
-             FROM thread_records r
-             JOIN thread_meta m ON m.thread_id = r.key",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        let mut update = tx.prepare(
-            "UPDATE thread_meta
-             SET legacy_thread_binding_key = ?2,
-                 legacy_channel = ?3,
-                 legacy_account_id = ?4,
-                 legacy_has_account = ?5
-             WHERE thread_id = ?1",
-        )?;
-        for row in rows {
-            let (key, body) = row?;
-            let Ok(data) = serde_json::from_str::<serde_json::Value>(&body) else {
-                tracing::warn!(
-                    key,
-                    "skipping unparseable record during binding-column re-derivation"
-                );
-                continue;
-            };
-            let (binding_key, channel, account_id, has_account) =
-                garyx_router::legacy_binding_fields_from_value(&data);
-            update.execute(params![
-                key,
-                binding_key,
-                channel,
-                account_id,
-                if has_account { 1 } else { 0 },
-            ])?;
-            rederived += 1;
-        }
-    }
-    tx.execute(
-        "INSERT INTO projection_states (
-            projection_name, projection_version, source_row_count, projected_at
-         )
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(projection_name) DO UPDATE SET
-            projection_version = excluded.projection_version,
-            source_row_count = excluded.source_row_count,
-            projected_at = excluded.projected_at",
-        params![
-            THREAD_META_BINDING_COLUMNS_NAME,
-            THREAD_META_BINDING_COLUMNS_VERSION,
-            i64::try_from(rederived).unwrap_or(i64::MAX),
-            now_string(),
-        ],
-    )?;
-    tx.commit()?;
-    tracing::info!(rederived, "backfilled thread_meta legacy binding columns");
-    Ok(())
-}
-
-const THREAD_CHANNEL_ENDPOINT_HOLDERS_NAME: &str = "thread_channel_endpoint_holders";
-const THREAD_CHANNEL_ENDPOINT_HOLDERS_VERSION: i64 = 1;
-
-/// True when `thread_channel_endpoints` still has the pre-#TASK-2107
-/// single-column `endpoint_key` primary key, which could represent only
-/// one holder per endpoint. Detecting it triggers a one-shot rebuild to
-/// the `(endpoint_key, thread_id)` holder schema.
-fn thread_channel_endpoints_needs_holder_pk(conn: &Connection) -> GaryxDbResult<bool> {
-    let table_exists: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'thread_channel_endpoints'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if table_exists.is_none() {
-        return Ok(false);
-    }
-    let pk_columns: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('thread_channel_endpoints') WHERE pk > 0",
-        [],
-        |row| row.get(0),
-    )?;
-    Ok(pk_columns == 1)
-}
-
-/// One-shot repopulation after the holder-PK rebuild: derive every
-/// endpoint row from the thread record bodies so holders that the old
-/// single-row schema could not represent become visible again.
-fn rederive_thread_channel_endpoint_rows_if_needed(conn: &Connection) -> GaryxDbResult<()> {
-    // Durable completion marker: the DROP, the CREATE, and the
-    // repopulation are separate steps on the open path, so only this
-    // projection_states row — committed in the same transaction as the
-    // rebuilt rows — proves the re-derivation finished. A crash at any
-    // earlier point leaves the marker absent and the next open re-runs
-    // the re-derivation instead of trusting an empty table.
-    let marker_present: Option<i64> = conn
-        .query_row(
-            "SELECT 1 FROM projection_states
-             WHERE projection_name = ?1 AND projection_version = ?2",
-            params![
-                THREAD_CHANNEL_ENDPOINT_HOLDERS_NAME,
-                THREAD_CHANNEL_ENDPOINT_HOLDERS_VERSION
-            ],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if marker_present.is_some() {
-        return Ok(());
-    }
-
-    let tx = conn.unchecked_transaction()?;
-    tx.execute("DELETE FROM thread_channel_endpoints", [])?;
-    let projected_at = now_string();
-    let mut rederived = 0usize;
-    {
-        let mut stmt = tx.prepare("SELECT key, body FROM thread_records")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (key, body) = row?;
-            if !garyx_router::is_thread_key(&key) {
-                continue;
-            }
-            let Ok(data) = serde_json::from_str::<serde_json::Value>(&body) else {
-                tracing::warn!(
-                    key,
-                    "skipping unparseable record during endpoint re-derivation"
-                );
-                continue;
-            };
-            for endpoint in
-                crate::thread_meta_projection::channel_endpoints_from_thread_data(&key, &data)
-            {
-                upsert_thread_channel_endpoint(&tx, &endpoint, &projected_at)?;
-                rederived += 1;
-            }
-        }
-    }
-    tx.execute(
-        "INSERT INTO projection_states (
-            projection_name, projection_version, source_row_count, projected_at
-         )
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(projection_name) DO UPDATE SET
-            projection_version = excluded.projection_version,
-            source_row_count = excluded.source_row_count,
-            projected_at = excluded.projected_at",
-        params![
-            THREAD_CHANNEL_ENDPOINT_HOLDERS_NAME,
-            THREAD_CHANNEL_ENDPOINT_HOLDERS_VERSION,
-            i64::try_from(rederived).unwrap_or(i64::MAX),
-            projected_at,
-        ],
-    )?;
-    tx.commit()?;
-    tracing::info!(
-        rederived,
-        "rebuilt thread_channel_endpoints with per-holder rows"
-    );
     Ok(())
 }
 
@@ -2935,10 +2669,6 @@ fn upsert_thread_meta(
     let selected_model_service_tier =
         normalize_optional(meta.selected_model_service_tier.as_deref());
     let sdk_session_id = normalize_optional(meta.sdk_session_id.as_deref());
-    let legacy_thread_binding_key = normalize_optional(meta.legacy_thread_binding_key.as_deref());
-    let legacy_channel = normalize_optional(meta.legacy_channel.as_deref());
-    let legacy_account_id = normalize_optional(meta.legacy_account_id.as_deref());
-    let legacy_has_account = if meta.legacy_has_account { 1 } else { 0 };
 
     tx.execute(
         "INSERT INTO thread_meta (
@@ -2948,10 +2678,9 @@ fn upsert_thread_meta(
             last_delivery_context_json, last_delivery_updated_at, default_list_hidden,
             provider_key, selected_model, selected_model_reasoning_effort,
             selected_model_service_tier, sdk_session_id,
-            legacy_thread_binding_key, legacy_channel, legacy_account_id, legacy_has_account,
             projection_version, projected_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
          ON CONFLICT(thread_id) DO UPDATE SET
             workspace_dir = excluded.workspace_dir,
             thread_type = excluded.thread_type,
@@ -2975,10 +2704,6 @@ fn upsert_thread_meta(
             last_delivery_context_json = excluded.last_delivery_context_json,
             last_delivery_updated_at = excluded.last_delivery_updated_at,
             default_list_hidden = excluded.default_list_hidden,
-            legacy_thread_binding_key = excluded.legacy_thread_binding_key,
-            legacy_channel = excluded.legacy_channel,
-            legacy_account_id = excluded.legacy_account_id,
-            legacy_has_account = excluded.legacy_has_account,
             projection_version = excluded.projection_version,
             projected_at = excluded.projected_at",
         params![
@@ -3005,10 +2730,6 @@ fn upsert_thread_meta(
             selected_model_reasoning_effort,
             selected_model_service_tier,
             sdk_session_id,
-            legacy_thread_binding_key,
-            legacy_channel,
-            legacy_account_id,
-            legacy_has_account,
             CURRENT_THREAD_META_PROJECTION_VERSION,
             recorded_at,
         ],
@@ -3045,7 +2766,7 @@ fn upsert_thread_channel_endpoint(
             last_inbound_at, last_delivery_at, projected_at
          )
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-         ON CONFLICT(endpoint_key, thread_id) DO UPDATE SET
+         ON CONFLICT(endpoint_key) DO UPDATE SET
             channel = excluded.channel,
             account_id = excluded.account_id,
             binding_key = excluded.binding_key,
@@ -3053,6 +2774,7 @@ fn upsert_thread_channel_endpoint(
             delivery_target_type = excluded.delivery_target_type,
             delivery_target_id = excluded.delivery_target_id,
             display_label = excluded.display_label,
+            thread_id = excluded.thread_id,
             thread_label = excluded.thread_label,
             workspace_dir = excluded.workspace_dir,
             thread_updated_at = excluded.thread_updated_at,
@@ -3221,9 +2943,6 @@ fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()>
         "selected_model_reasoning_effort",
         "selected_model_service_tier",
         "sdk_session_id",
-        "legacy_thread_binding_key",
-        "legacy_channel",
-        "legacy_account_id",
     ] {
         if !columns.contains(name) {
             conn.execute(
@@ -3231,13 +2950,6 @@ fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()>
                 [],
             )?;
         }
-    }
-    if !columns.contains("legacy_has_account") {
-        conn.execute(
-            "ALTER TABLE thread_meta
-             ADD COLUMN legacy_has_account INTEGER NOT NULL DEFAULT 0",
-            [],
-        )?;
     }
     if !columns.contains("message_count") {
         conn.execute(
@@ -3286,9 +2998,7 @@ fn ensure_thread_channel_endpoint_columns(conn: &Connection) -> GaryxDbResult<()
     Ok(())
 }
 
-fn recent_thread_record_from_row(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<RecentThreadRecord> {
+fn recent_thread_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecentThreadRecord> {
     Ok(RecentThreadRecord {
         thread_id: row.get(0)?,
         title: row.get(1)?,
@@ -4539,222 +4249,6 @@ mod tests {
     }
 
     #[test]
-    fn opening_legacy_endpoint_pk_db_rebuilds_per_holder_rows() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("garyx-db.sqlite3");
-        {
-            let conn = Connection::open(&path).expect("legacy db");
-            conn.execute_batch(
-                r#"
-                CREATE TABLE thread_channel_endpoints (
-                    endpoint_key TEXT PRIMARY KEY,
-                    channel TEXT NOT NULL,
-                    account_id TEXT NOT NULL,
-                    binding_key TEXT NOT NULL,
-                    chat_id TEXT NOT NULL DEFAULT '',
-                    delivery_target_type TEXT NOT NULL DEFAULT 'chat_id',
-                    delivery_target_id TEXT NOT NULL DEFAULT '',
-                    display_label TEXT NOT NULL DEFAULT '',
-                    thread_id TEXT,
-                    thread_label TEXT,
-                    workspace_dir TEXT,
-                    thread_updated_at TEXT,
-                    last_inbound_at TEXT,
-                    last_delivery_at TEXT,
-                    projected_at TEXT NOT NULL
-                ) STRICT;
-
-                INSERT INTO thread_channel_endpoints (
-                    endpoint_key, channel, account_id, binding_key, chat_id,
-                    delivery_target_type, delivery_target_id, display_label,
-                    thread_id, projected_at
-                ) VALUES (
-                    'telegram::main::1000000001', 'telegram', 'main', '1000000001',
-                    '1000000001', 'chat_id', '1000000001', 'Test User',
-                    'thread::holder-b', '2026-06-03T00:00:01.000Z'
-                );
-
-                CREATE TABLE thread_records (
-                    key         TEXT PRIMARY KEY,
-                    body        TEXT NOT NULL,
-                    updated_at  TEXT,
-                    recorded_at TEXT NOT NULL
-                ) STRICT;
-
-                INSERT INTO thread_records (key, body, updated_at, recorded_at) VALUES
-                (
-                    'thread::holder-a',
-                    '{"thread_id":"thread::holder-a","updated_at":"2026-06-03T00:00:01.000Z","channel_bindings":[{"channel":"telegram","account_id":"main","binding_key":"1000000001","chat_id":"1000000001"}]}',
-                    '2026-06-03T00:00:01.000Z',
-                    '2026-06-03T00:00:01.000Z'
-                ),
-                (
-                    'thread::holder-b',
-                    '{"thread_id":"thread::holder-b","updated_at":"2026-06-03T00:00:02.000Z","channel_bindings":[{"channel":"telegram","account_id":"main","binding_key":"1000000001","chat_id":"1000000001"}]}',
-                    '2026-06-03T00:00:02.000Z',
-                    '2026-06-03T00:00:02.000Z'
-                );
-                "#,
-            )
-            .expect("legacy thread_channel_endpoints");
-        }
-
-        // The pre-#TASK-2107 single-column PK could only represent one
-        // holder per endpoint. Opening the database rebuilds the table
-        // with the (endpoint_key, thread_id) holder schema and re-derives
-        // the rows from the record bodies, so BOTH holders are visible.
-        let db = GaryxDbService::open(&path).expect("open migrated db");
-        let mut holders = db
-            .thread_ids_for_channel_endpoint("telegram::main::1000000001")
-            .expect("holders");
-        holders.sort();
-        assert_eq!(
-            holders,
-            vec!["thread::holder-a".to_owned(), "thread::holder-b".to_owned()],
-            "the rebuild must surface every holder from the record bodies"
-        );
-
-        // A second open is a no-op (completion marker already recorded).
-        drop(db);
-        let db = GaryxDbService::open(&path).expect("reopen migrated db");
-        assert_eq!(
-            db.thread_ids_for_channel_endpoint("telegram::main::1000000001")
-                .expect("holders after reopen")
-                .len(),
-            2
-        );
-    }
-
-    /// Crash-interruption regression (#TASK-2099 root review finding 1):
-    /// a crash after the composite-PK table was created but before the
-    /// re-derivation committed leaves an EMPTY holder table on disk. The
-    /// completion marker is absent in that state, so the next open must
-    /// re-derive from the record bodies instead of trusting the empty
-    /// table.
-    #[test]
-    fn interrupted_holder_rebuild_rederives_on_next_open() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("garyx-db.sqlite3");
-        {
-            // Exact post-CREATE / pre-rederive disk state: v2 composite-PK
-            // endpoint table, zero rows, no completion marker, one bound
-            // record body.
-            let conn = Connection::open(&path).expect("interrupted db");
-            conn.execute_batch(
-                r#"
-                CREATE TABLE thread_channel_endpoints (
-                    endpoint_key TEXT NOT NULL,
-                    channel TEXT NOT NULL,
-                    account_id TEXT NOT NULL,
-                    binding_key TEXT NOT NULL,
-                    chat_id TEXT NOT NULL DEFAULT '',
-                    delivery_target_type TEXT NOT NULL DEFAULT 'chat_id',
-                    delivery_target_id TEXT NOT NULL DEFAULT '',
-                    display_label TEXT NOT NULL DEFAULT '',
-                    thread_id TEXT NOT NULL,
-                    thread_label TEXT,
-                    workspace_dir TEXT,
-                    thread_updated_at TEXT,
-                    last_inbound_at TEXT,
-                    last_delivery_at TEXT,
-                    projected_at TEXT NOT NULL,
-                    PRIMARY KEY (endpoint_key, thread_id)
-                ) STRICT;
-
-                CREATE TABLE thread_records (
-                    key         TEXT PRIMARY KEY,
-                    body        TEXT NOT NULL,
-                    updated_at  TEXT,
-                    recorded_at TEXT NOT NULL
-                ) STRICT;
-
-                INSERT INTO thread_records (key, body, updated_at, recorded_at) VALUES
-                (
-                    'thread::holder-a',
-                    '{"thread_id":"thread::holder-a","updated_at":"2026-06-03T00:00:01.000Z","channel_bindings":[{"channel":"telegram","account_id":"main","binding_key":"1000000001","chat_id":"1000000001"}]}',
-                    '2026-06-03T00:00:01.000Z',
-                    '2026-06-03T00:00:01.000Z'
-                );
-                "#,
-            )
-            .expect("interrupted rebuild state");
-        }
-
-        let db = GaryxDbService::open(&path).expect("open interrupted db");
-        assert_eq!(
-            db.thread_ids_for_channel_endpoint("telegram::main::1000000001")
-                .expect("holders"),
-            vec!["thread::holder-a".to_owned()],
-            "an interrupted rebuild must re-derive on the next open"
-        );
-    }
-
-    /// Rows written before the thread_meta legacy binding columns
-    /// existed carry NULLs there (#TASK-2099 root review finding 3).
-    /// Opening such a database must backfill the columns from the record
-    /// bodies exactly once, so legacy top-level-field threads stay
-    /// visible to SQL binding-thread listings.
-    #[test]
-    fn opening_db_backfills_thread_meta_legacy_binding_columns() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("garyx-db.sqlite3");
-        let body = serde_json::json!({
-            "thread_id": "thread::legacy",
-            "channel": "telegram",
-            "account_id": "main",
-            "from_id": "1000000001",
-            "updated_at": "2026-06-03T00:00:01.000Z",
-        });
-        {
-            let db = GaryxDbService::open(&path).expect("open fresh db");
-            let draft = crate::thread_meta_projection::
-                thread_meta_projection_from_thread_data_with_active_run(
-                    "thread::legacy",
-                    &body,
-                    None,
-                );
-            db.write_thread_record_with_projections(
-                "thread::legacy",
-                &body.to_string(),
-                None,
-                Some(ThreadRecordProjections {
-                    thread_meta: draft,
-                    task: None,
-                    recent: None,
-                }),
-            )
-            .expect("write legacy record");
-        }
-        {
-            // Simulate the pre-column database: NULL the derived values
-            // and drop the completion marker.
-            let conn = Connection::open(&path).expect("raw connection");
-            conn.execute_batch(
-                "UPDATE thread_meta SET
-                    legacy_thread_binding_key = NULL,
-                    legacy_channel = NULL,
-                    legacy_account_id = NULL,
-                    legacy_has_account = 0;
-                 DELETE FROM projection_states
-                 WHERE projection_name = 'thread_meta_binding_columns';",
-            )
-            .expect("simulate pre-column rows");
-        }
-
-        let db = GaryxDbService::open(&path).expect("reopen backfills");
-        let rows = db
-            .binding_thread_rows("telegram", "main", "1000000001")
-            .expect("binding rows");
-        assert_eq!(
-            rows.into_iter()
-                .map(|row| row.thread_id)
-                .collect::<Vec<_>>(),
-            vec!["thread::legacy".to_owned()],
-            "the one-shot backfill must restore legacy binding visibility"
-        );
-    }
-
-    #[test]
     fn thread_pins_round_trip_in_recency_order() {
         use std::time::Duration;
 
@@ -5251,24 +4745,19 @@ mod tests {
         .expect("seed initial row");
 
         let page = db
-            .list_recent_threads_page_inner(
-                RecentThreadTaskFilter::Include,
-                10,
-                0,
-                || {
-                    let writer = Connection::open(&path)?;
-                    writer.execute(
-                        "INSERT INTO recent_threads (
+            .list_recent_threads_page_inner(RecentThreadTaskFilter::Include, 10, 0, || {
+                let writer = Connection::open(&path)?;
+                writer.execute(
+                    "INSERT INTO recent_threads (
                             thread_id, title, thread_type, last_active_at, recorded_at
                          ) VALUES (
                             'thread::snapshot-after', 'After', 'chat',
                             '2026-05-23T11:00:00Z', '2026-05-23T11:00:00Z'
                          )",
-                        [],
-                    )?;
-                    Ok(())
-                },
-            )
+                    [],
+                )?;
+                Ok(())
+            })
             .expect("snapshot page");
 
         assert_eq!(page.total, 1);
@@ -5346,10 +4835,6 @@ mod tests {
                 last_delivery_context_json: Some(delivery_json.clone()),
                 last_delivery_updated_at: Some("2026-06-03T08:00:01.000Z".to_owned()),
                 default_list_hidden: false,
-                legacy_thread_binding_key: None,
-                legacy_channel: None,
-                legacy_account_id: None,
-                legacy_has_account: false,
             },
             channel_endpoints: vec![KnownChannelEndpoint {
                 endpoint_key: "telegram::main::42".to_owned(),

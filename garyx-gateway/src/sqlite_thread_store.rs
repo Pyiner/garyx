@@ -447,7 +447,8 @@ pub(crate) async fn import_thread_records_if_needed(
 mod contract_tests {
     use garyx_models::Principal;
     use garyx_router::{
-        CreateTaskInput, FileThreadStore, InMemoryTaskCounterStore, InMemoryThreadStore, TaskService,
+        CreateTaskInput, FileThreadStore, InMemoryTaskCounterStore, InMemoryThreadStore,
+        TaskService,
     };
     use serde_json::json;
 
@@ -761,18 +762,21 @@ mod contract_tests {
                 actor: Some(Principal::Agent {
                     agent_id: "test-agent".to_owned(),
                 }),
-                agent_id: None,
                 workspace_dir: None,
                 runtime: None,
             })
             .await
             .expect("create source task");
-        let mut legacy = source.get(&thread_id).await.expect("source record");
+        let mut legacy = source
+            .get(&thread_id)
+            .await
+            .expect("test store")
+            .expect("source record");
         legacy
             .as_object_mut()
             .expect("record object")
             .remove("thread_kind");
-        source.set(&thread_id, legacy).await;
+        source.set(&thread_id, legacy).await.expect("test store");
 
         let bridge = Arc::new(garyx_bridge::MultiProviderBridge::new());
         let store = assemble_sqlite_thread_store(
@@ -784,7 +788,11 @@ mod contract_tests {
         .await
         .expect("assemble store");
 
-        let imported = store.get(&thread_id).await.expect("imported task");
+        let imported = store
+            .get(&thread_id)
+            .await
+            .expect("store read")
+            .expect("imported task");
         assert_eq!(imported["thread_kind"], "task");
         let recent = garyx_db
             .list_recent_threads(10, 0)

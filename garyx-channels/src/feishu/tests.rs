@@ -2268,9 +2268,11 @@ mod e2e_tests {
         let calls = provider.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].attachments.len(), 1);
-        assert!(calls[0].attachments[0]
-            .path
-            .contains("garyx-feishu/inbound/"));
+        assert!(
+            calls[0].attachments[0]
+                .path
+                .contains("garyx-feishu/inbound/")
+        );
         assert!(calls[0].attachments[0].name.ends_with("brief.pdf"));
     }
 
@@ -3638,8 +3640,8 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_feishu_reply_routing_after_endpoint_rebind_keeps_old_thread_without_switching_current(
-    ) {
+    async fn test_e2e_feishu_reply_routing_after_endpoint_rebind_keeps_old_thread_without_switching_current()
+     {
         let (_server, client) = setup_feishu_mock().await;
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
@@ -3818,7 +3820,8 @@ mod e2e_tests {
                     "account_id": "main"
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         let mut entries = (1..=10)
             .map(|index| {
                 recent_thread_entry(

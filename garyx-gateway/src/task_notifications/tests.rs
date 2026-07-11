@@ -238,7 +238,8 @@ async fn thread_target_receives_complete_handoff_beyond_bot_cap() {
                 }),
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -249,7 +250,8 @@ async fn thread_target_receives_complete_handoff_beyond_bot_cap() {
                 "provider_key": "recording-provider",
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let handoff = format!(
         "{}\ncomplete-handoff-tail",

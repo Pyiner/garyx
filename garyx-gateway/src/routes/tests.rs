@@ -74,7 +74,7 @@ impl RouteStoreProbe {
 
 #[async_trait]
 impl ThreadStore for RouteStoreProbe {
-    async fn get(&self, thread_id: &str) -> Option<Value> {
+    async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
         self.get_calls
             .lock()
             .expect("route store probe lock")
@@ -82,20 +82,20 @@ impl ThreadStore for RouteStoreProbe {
         self.inner.get(thread_id).await
     }
 
-    async fn set(&self, thread_id: &str, data: Value) {
-        self.inner.set(thread_id, data).await;
+    async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
+        self.inner.set(thread_id, data).await
     }
 
-    async fn delete(&self, thread_id: &str) -> bool {
+    async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
         self.inner.delete(thread_id).await
     }
 
-    async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
+    async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
         self.list_calls.fetch_add(1, Ordering::SeqCst);
         self.inner.list_keys(prefix).await
     }
 
-    async fn exists(&self, thread_id: &str) -> bool {
+    async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
         self.inner.exists(thread_id).await
     }
 
@@ -3354,7 +3354,10 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
     );
     let included: Value = serde_json::from_slice(&omitted_body).unwrap();
     assert_eq!(included["total"], 4);
-    assert_eq!(included["threads"][0]["thread_id"], "thread::route-task-newest");
+    assert_eq!(
+        included["threads"][0]["thread_id"],
+        "thread::route-task-newest"
+    );
     assert_eq!(included["threads"][0]["thread_type"], "task");
     assert_eq!(included["threads"][0]["message_count"], 2);
     assert_eq!(included["threads"][0]["last_message_preview"], "preview");
@@ -3377,7 +3380,10 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
     assert_eq!(excluded["total"], 2);
     assert_eq!(excluded["count"], 1);
     assert_eq!(excluded["has_more"], true);
-    assert_eq!(excluded["threads"][0]["thread_id"], "thread::route-chat-newer");
+    assert_eq!(
+        excluded["threads"][0]["thread_id"],
+        "thread::route-chat-newer"
+    );
 
     let only_response = router
         .clone()
@@ -3449,16 +3455,8 @@ async fn recent_threads_tasks_exclude_never_scans_thread_store() {
         .with_thread_store(store.clone())
         .build();
     for (thread_id, thread_type, timestamp) in [
-        (
-            "thread::route-no-scan-task",
-            "task",
-            "2026-05-23T14:00:00Z",
-        ),
-        (
-            "thread::route-no-scan-chat",
-            "chat",
-            "2026-05-23T13:00:00Z",
-        ),
+        ("thread::route-no-scan-task", "task", "2026-05-23T14:00:00Z"),
+        ("thread::route-no-scan-chat", "chat", "2026-05-23T13:00:00Z"),
     ] {
         state
             .threads
@@ -3472,7 +3470,8 @@ async fn recent_threads_tasks_exclude_never_scans_thread_store() {
                     "updated_at": timestamp,
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         state
             .ops
             .garyx_db
@@ -3511,7 +3510,10 @@ async fn recent_threads_tasks_exclude_never_scans_thread_store() {
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["total"], 1);
-    assert_eq!(payload["threads"][0]["thread_id"], "thread::route-no-scan-chat");
+    assert_eq!(
+        payload["threads"][0]["thread_id"],
+        "thread::route-no-scan-chat"
+    );
     assert_eq!(
         store.list_calls.load(Ordering::SeqCst),
         0,

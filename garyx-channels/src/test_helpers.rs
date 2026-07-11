@@ -55,7 +55,7 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
         binding: ChannelBinding,
     ) -> Result<EndpointBindResult, EndpointBindingMutationError> {
         let mut owners = self.owners.lock().await;
-        let Some(mut target) = self.store.get(target_thread_id).await else {
+        let Ok(Some(mut target)) = self.store.get(target_thread_id).await else {
             return Err(EndpointBindingMutationError::TargetNotFound(
                 target_thread_id.to_owned(),
             ));
@@ -76,7 +76,7 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
             .filter(|owner| *owner != target_thread_id)
             .map(ToOwned::to_owned);
         if let Some(previous_thread_id) = previous_thread_id.as_deref() {
-            let Some(mut previous) = self.store.get(previous_thread_id).await else {
+            let Ok(Some(mut previous)) = self.store.get(previous_thread_id).await else {
                 return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
                     previous_thread_id.to_owned(),
                 ));
@@ -86,7 +86,10 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
                     previous_thread_id.to_owned(),
                 ));
             }
-            self.store.set(previous_thread_id, previous).await;
+            self.store
+                .set(previous_thread_id, previous)
+                .await
+                .expect("test store");
         }
 
         let target_changed = bindings_from_value(&target)
@@ -96,7 +99,10 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
             != Some(&binding);
         if target_changed || previous_thread_id.is_some() {
             upsert_binding(&mut target, binding.clone());
-            self.store.set(target_thread_id, target).await;
+            self.store
+                .set(target_thread_id, target)
+                .await
+                .expect("test store");
         }
         upsert_known_channel_endpoint(&self.store, &binding)
             .await
@@ -132,7 +138,7 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
                 changed: false,
             });
         };
-        let Some(mut previous) = self.store.get(&owner.thread_id).await else {
+        let Ok(Some(mut previous)) = self.store.get(&owner.thread_id).await else {
             return Err(EndpointBindingMutationError::PreviousOwnerUnavailable(
                 owner.thread_id,
             ));
@@ -142,7 +148,10 @@ impl EndpointBindingMutator for TestEndpointBindingMutator {
                 owner.thread_id,
             ));
         }
-        self.store.set(&owner.thread_id, previous).await;
+        self.store
+            .set(&owner.thread_id, previous)
+            .await
+            .expect("test store");
         upsert_known_channel_endpoint(&self.store, &owner.binding)
             .await
             .map_err(|message| EndpointBindingMutationError::WriteFailed {
