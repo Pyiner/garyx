@@ -5,6 +5,7 @@ import {
   DUAL_RAIL_COMPACT_WIDTH,
   SINGLE_RAIL_COMPACT_WIDTH,
   TASK_TREE_DOCK_MIN_WIDTH,
+  isDockedSidePanel,
   isDockedTaskTree,
   isCompactSidebarViewport,
   resolveSidebarCollapsed,
@@ -77,4 +78,35 @@ test("compact mode can be manually opened without changing the desktop preferenc
 test("task tree docks only after the full 736px reading column still fits", () => {
   assert.equal(isDockedTaskTree(TASK_TREE_DOCK_MIN_WIDTH - 1), false);
   assert.equal(isDockedTaskTree(TASK_TREE_DOCK_MIN_WIDTH), true);
+});
+
+test("right panels overlay before they can crush the primary thread", () => {
+  assert.equal(
+    isDockedSidePanel({
+      canvasWidth: 1069,
+      panelWidth: 520,
+    }),
+    false,
+  );
+  assert.equal(
+    isDockedSidePanel({
+      canvasWidth: 1070,
+      panelWidth: 520,
+    }),
+    true,
+  );
+  assert.equal(
+    isDockedSidePanel({
+      canvasWidth: 736,
+      panelWidth: 520,
+    }),
+    false,
+  );
+  assert.equal(
+    isDockedSidePanel({
+      canvasWidth: 1235,
+      panelWidth: 685,
+    }),
+    true,
+  );
 });

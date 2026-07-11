@@ -10,6 +10,7 @@ import {
   type DragEvent,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -70,6 +71,7 @@ import { useI18n, type Translate } from './i18n';
 type ComposerFormProps = {
   activeQueueLength: number;
   composer: string;
+  composerContext?: ReactNode;
   composerAttachmentInputRef: RefObject<HTMLInputElement | null>;
   composerBrowserAnnotations: BrowserAnnotationCommentRequest[];
   composerFiles: MessageFileAttachment[];
@@ -687,6 +689,7 @@ function renderComposerBotBindingSubmenu({
 export function ComposerForm({
   activeQueueLength,
   composer,
+  composerContext,
   composerAttachmentInputRef,
   composerBrowserAnnotations,
   composerFiles,
@@ -1236,42 +1239,45 @@ export function ComposerForm({
         placeholder={composerPlaceholder}
       />
       <div className="composer-actions composer-footer">
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            aria-label={t('Composer actions')}
-            className="ghost-button composer-plus-trigger"
-            disabled={composerLocked && botBindingDisabled}
-            type="button"
-          >
-            <Plus aria-hidden size={18} strokeWidth={1.8} />
-          </DropdownMenuTrigger>
-          <FloatingActionMenuContent
-            align="start"
-            side="top"
-          >
-            <FloatingActionMenuItem
-              className="composer-menu-item"
-              disabled={composerEditingLocked}
-              onSelect={() => {
-                composerAttachmentInputRef.current?.click();
-              }}
+        <div className="composer-leading-actions">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label={t('Composer actions')}
+              className="ghost-button composer-plus-trigger"
+              disabled={composerLocked && botBindingDisabled}
+              type="button"
             >
-              <Paperclip aria-hidden size={16} strokeWidth={1.75} />
-              <span className="composer-menu-label">
-                {t('Add photos and files')}
-              </span>
-            </FloatingActionMenuItem>
-            {onSelectBotBinding ? <DropdownMenuSeparator /> : null}
-            {renderComposerBotBindingSubmenu({
-              activeThreadBot,
-              activeThreadBotId,
-              botGroups,
-              iconDataUrlByChannel,
-              onSelectBotBinding,
-              t,
-            })}
-          </FloatingActionMenuContent>
-        </DropdownMenu>
+              <Plus aria-hidden size={18} strokeWidth={1.8} />
+            </DropdownMenuTrigger>
+            <FloatingActionMenuContent
+              align="start"
+              side="top"
+            >
+              <FloatingActionMenuItem
+                className="composer-menu-item"
+                disabled={composerEditingLocked}
+                onSelect={() => {
+                  composerAttachmentInputRef.current?.click();
+                }}
+              >
+                <Paperclip aria-hidden size={16} strokeWidth={1.75} />
+                <span className="composer-menu-label">
+                  {t('Add photos and files')}
+                </span>
+              </FloatingActionMenuItem>
+              {onSelectBotBinding ? <DropdownMenuSeparator /> : null}
+              {renderComposerBotBindingSubmenu({
+                activeThreadBot,
+                activeThreadBotId,
+                botGroups,
+                iconDataUrlByChannel,
+                onSelectBotBinding,
+                t,
+              })}
+            </FloatingActionMenuContent>
+          </DropdownMenu>
+          {composerContext}
+        </div>
         <div className="composer-buttons">
           {renderComposerModelControl({
             providerModels: threadProviderModels ?? newThreadProviderModels,

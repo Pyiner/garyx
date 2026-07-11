@@ -18,11 +18,11 @@ test('still parses legacy RFC3339 thread-log stamps without a timezone suffix', 
   assert.equal(line.text, 'WARN [run] legacy');
 });
 
-test('defaults side tools to the measured wide layout ratio when space allows', () => {
-  assert.equal(defaultSideToolsPanelWidth(1800), 1080);
+test('defaults side tools to a bounded rail instead of consuming most of the window', () => {
+  assert.equal(defaultSideToolsPanelWidth(1800), 720);
 });
 
 test('clamps side tools width to keep the main message column usable', () => {
-  assert.equal(defaultSideToolsPanelWidth(1235), 685);
+  assert.equal(defaultSideToolsPanelWidth(1235), 520);
   assert.equal(defaultSideToolsPanelWidth(900), 520);
 });

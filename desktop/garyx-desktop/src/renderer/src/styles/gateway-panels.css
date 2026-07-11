@@ -141,7 +141,7 @@
   right: var(--thread-subtask-edge-gap);
   z-index: 30;
   width: min(var(--thread-subtask-width), calc(100% - 24px));
-  max-height: min(58vh, 520px);
+  max-height: calc(100% - 24px);
   overflow-y: auto;
   scrollbar-width: none;
   border: 1px solid var(--border, rgba(26, 28, 31, 0.1));

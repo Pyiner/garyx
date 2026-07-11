@@ -1,6 +1,10 @@
 import type { ConnectionStatus } from '@shared/contracts';
 
 import type { GatewayIndicatorTone, ThreadLogLine } from './types';
+import {
+  SIDE_PANEL_MIN_MAIN_WIDTH,
+  SIDE_PANEL_RESIZER_WIDTH,
+} from './responsive-layout-model.ts';
 
 // Matches both the current gateway stamp (`2026-07-07 17:06:37.123`, local
 // wall clock, space-separated) and older RFC3339 lines (`...T...+08:00`/`Z`).
@@ -8,15 +12,12 @@ const THREAD_LOG_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}\S*
 export const MAX_GATEWAY_THREAD_LOG_LINES = 100;
 export const THREAD_LOG_PANEL_MIN_WIDTH = 280;
 export const THREAD_LOG_PANEL_MAX_WIDTH = 760;
-const THREAD_LOG_PANEL_MIN_MAIN_WIDTH = 540;
-const THREAD_LOG_PANEL_RESIZER_WIDTH = 10;
 const DEFAULT_THREAD_LOG_PANEL_WIDTH = 360;
 export const SIDE_TOOLS_PANEL_MIN_WIDTH = 520;
 export const SIDE_TOOLS_PANEL_MAX_WIDTH = 1180;
-export const SIDE_TOOLS_PANEL_DEFAULT_RATIO = 0.6;
-const SIDE_TOOLS_PANEL_MIN_MAIN_WIDTH = 540;
-const SIDE_TOOLS_PANEL_RESIZER_WIDTH = 10;
-const DEFAULT_SIDE_TOOLS_PANEL_WIDTH = 720;
+export const SIDE_TOOLS_PANEL_DEFAULT_RATIO = 0.42;
+const SIDE_TOOLS_PANEL_DEFAULT_MAX_WIDTH = 720;
+const DEFAULT_SIDE_TOOLS_PANEL_WIDTH = 520;
 const GATEWAY_OFFLINE_THRESHOLD = 3;
 
 export function keepRecentThreadLogLines(
@@ -77,7 +78,7 @@ export function clampThreadLogsPanelWidth(
   const layoutMax = layoutWidth && layoutWidth > 0
     ? Math.max(
         THREAD_LOG_PANEL_MIN_WIDTH,
-        layoutWidth - THREAD_LOG_PANEL_MIN_MAIN_WIDTH - THREAD_LOG_PANEL_RESIZER_WIDTH,
+        layoutWidth - SIDE_PANEL_MIN_MAIN_WIDTH - SIDE_PANEL_RESIZER_WIDTH,
       )
     : THREAD_LOG_PANEL_MAX_WIDTH;
   return Math.max(
@@ -97,8 +98,8 @@ export function clampSideToolsPanelWidth(
     ? Math.max(
         SIDE_TOOLS_PANEL_MIN_WIDTH,
         layoutWidth -
-          SIDE_TOOLS_PANEL_MIN_MAIN_WIDTH -
-          SIDE_TOOLS_PANEL_RESIZER_WIDTH,
+          SIDE_PANEL_MIN_MAIN_WIDTH -
+          SIDE_PANEL_RESIZER_WIDTH,
       )
     : SIDE_TOOLS_PANEL_MAX_WIDTH;
   return Math.max(
@@ -112,7 +113,13 @@ export function clampSideToolsPanelWidth(
 
 export function defaultSideToolsPanelWidth(layoutWidth?: number | null): number {
   const baseWidth = layoutWidth && layoutWidth > 0
-    ? layoutWidth * SIDE_TOOLS_PANEL_DEFAULT_RATIO
+    ? Math.min(
+        SIDE_TOOLS_PANEL_DEFAULT_MAX_WIDTH,
+        Math.max(
+          DEFAULT_SIDE_TOOLS_PANEL_WIDTH,
+          layoutWidth * SIDE_TOOLS_PANEL_DEFAULT_RATIO,
+        ),
+      )
     : DEFAULT_SIDE_TOOLS_PANEL_WIDTH;
   return clampSideToolsPanelWidth(baseWidth, layoutWidth);
 }

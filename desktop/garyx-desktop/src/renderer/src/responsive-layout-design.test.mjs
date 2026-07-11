@@ -20,10 +20,11 @@ test("transcript and composer share Codex's 736px reading edge", () => {
   const conversationCss = read("styles/conversation.css");
   const composerCss = read("styles/composer.css");
   const appShellSource = read("app-shell/AppShell.tsx");
+  const threadPageSource = read("app-shell/components/ThreadPage.tsx");
 
   assert.ok(
     conversationCss.includes(
-      ".conversation.thread-view .conversation-body {\n  padding-inline: 0;",
+      ".conversation.thread-view .conversation-body {\n  grid-template-rows: minmax(0, 1fr);\n  gap: 0;\n  padding: 0;",
     ),
   );
   assert.equal(
@@ -35,6 +36,11 @@ test("transcript and composer share Codex's 736px reading edge", () => {
       'contentView === "thread" ? "thread-view" : null',
     ),
   );
+  assert.ok(
+    composerCss.includes(".composer-shell-wrap {\n  position: absolute;\n  right: 0;\n  bottom: 16px;"),
+  );
+  assert.ok(threadPageSource.includes("composerContext={composerContext}"));
+  assert.ok(!threadPageSource.includes("<div\n                aria-label={t(\"Workspace mode\")}\n                className=\"thread-composer-status\""));
 });
 
 test("task tree only reserves a rail when the full reading column fits", () => {
@@ -51,4 +57,23 @@ test("task tree only reserves a rail when the full reading column fits", () => {
   assert.ok(source.includes('className={`thread-subtask-toggle'));
   assert.ok(source.includes("createPortal("));
   assert.ok(headerSource.includes("data-thread-task-tree-trigger-host"));
+  assert.ok(css.includes("max-height: calc(100% - 24px)"));
+});
+
+test("right panels use measured dock or overlay state instead of a viewport guess", () => {
+  const appShellSource = read("app-shell/AppShell.tsx");
+  const threadPageSource = read("app-shell/components/ThreadPage.tsx");
+  const controllerSource = read("app-shell/useLayoutResizeController.ts");
+  const workspaceRailsCss = read("styles/workspace-rails.css");
+  const conversationCss = read("styles/conversation.css");
+  const browserCss = read("styles/browser.css");
+
+  assert.ok(appShellSource.includes('sideToolsDocked ? "side-tools-docked" : "side-tools-overlay"'));
+  assert.ok(threadPageSource.includes('threadLogsDocked ? "log-panel-docked" : "log-panel-overlay"'));
+  assert.ok(controllerSource.includes("new ResizeObserver(syncMeasuredWidths)"));
+  assert.ok(workspaceRailsCss.includes(".conversation.with-side-tools.side-tools-overlay"));
+  assert.ok(conversationCss.includes(".thread-layout.with-log-panel.log-panel-overlay"));
+  assert.ok(!browserCss.includes(".conversation.with-side-tools {"));
+  assert.ok(!browserCss.includes(".thread-side-tools-panel {"));
+  assert.ok(!browserCss.includes(".thread-layout.with-log-panel {"));
 });

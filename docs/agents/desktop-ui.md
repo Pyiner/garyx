@@ -62,10 +62,23 @@
 - The transcript owns a 768px outer scroller with 16px internal gutters, which
   yields a 736px reading edge. The composer uses the same 736px edge directly;
   both become `available width - 32px` when constrained.
+- On an existing thread, the composer surface stays 16px above the window
+  bottom at every supported height. Workspace/branch context belongs inside
+  the composer footer; it must not create a second row that pushes the input
+  surface upward. The thread body starts directly below the 46px toolbar.
 - A task tree may reserve its 320px rail only when the thread canvas is at
   least 1088px wide, leaving the full reading column intact. Below that width,
   expose the tree through the 28px conversation-header control and show it as
   a dismissible overlay with Escape, outside-click, and focus-return behavior.
+- Right-side tools and logs choose docked versus overlay presentation from the
+  measured conversation canvas, the actual panel width, a 10px resizer, and a
+  540px minimum primary thread. Do not use a viewport-only media query: open
+  rails and user-resized sidebars change the available canvas. A constrained
+  panel floats below the toolbar with 12px edge insets; it never stacks under
+  the transcript or compresses the composer below the minimum primary width.
+- Floating task trees and right panels use the available height between their
+  top and bottom insets. Do not cap them to a percentage of viewport height on
+  tall windows or turn the app shell into document-height vertical stacking.
 - Validate responsive changes in the installed app around the actual seams:
   640, 720/721, 980/981, 1332/1333, and a wide desktop width. Restore the
   user's original window size after CDP measurement.
