@@ -67,25 +67,21 @@ pub trait ThreadStore: Send + Sync {
     /// on first bind); vanished thread records are never resurrected as
     /// skeletons.
     ///
-    /// Transactional backends override this with a single-transaction
-    /// implementation covering every record and its derived projections.
-    /// The default merges under whatever guarantees `update`/`set`
-    /// provide and exists only for simple in-memory stores; production
-    /// mutation paths run on the SQLite store.
+    /// Every backend that participates in multi-record mutations MUST
+    /// supply a genuinely atomic implementation (the SQLite store commits
+    /// every record and its derived projections in one transaction; the
+    /// in-memory store applies the batch under a single write guard). The
+    /// default REFUSES before touching storage: an API named atomic must
+    /// never partially commit, so there is no sequential fallback
+    /// (#TASK-2099 root final review).
     async fn update_many_atomic(
         &self,
         entries: Vec<AtomicRecordMerge>,
     ) -> Result<(), ThreadStoreError> {
-        for entry in entries {
-            match self.update(&entry.thread_id, entry.fields.clone()).await {
-                Ok(()) => {}
-                Err(ThreadStoreError::NotFound(_)) if entry.create_if_missing => {
-                    self.set(&entry.thread_id, entry.fields).await?;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(())
+        drop(entries);
+        Err(ThreadStoreError::Backend(
+            "this thread store backend does not support atomic multi-record mutations".to_owned(),
+        ))
     }
 
     /// Count keys, optionally filtered by prefix. Backends with SQL

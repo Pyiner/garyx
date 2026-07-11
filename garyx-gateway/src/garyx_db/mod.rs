@@ -1404,46 +1404,6 @@ impl GaryxDbService {
             .optional()?)
     }
 
-    /// Point lookup: every holder row for one endpoint key.
-    pub fn thread_channel_endpoint_rows(
-        &self,
-        endpoint_key: &str,
-    ) -> GaryxDbResult<Vec<KnownChannelEndpoint>> {
-        let conn = self.read_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT endpoint_key, channel, account_id, binding_key, chat_id,
-                    delivery_target_type, delivery_target_id, display_label,
-                    thread_id, thread_label, workspace_dir, thread_updated_at,
-                    last_inbound_at, last_delivery_at
-             FROM thread_channel_endpoints
-             WHERE endpoint_key = ?1
-             ORDER BY thread_id ASC",
-        )?;
-        let rows = stmt.query_map(params![endpoint_key], |row| {
-            Ok(KnownChannelEndpoint {
-                endpoint_key: row.get(0)?,
-                channel: row.get(1)?,
-                account_id: row.get(2)?,
-                binding_key: row.get(3)?,
-                chat_id: row.get(4)?,
-                delivery_target_type: row.get(5)?,
-                delivery_target_id: row.get(6)?,
-                display_label: row.get(7)?,
-                thread_id: row.get(8)?,
-                thread_label: row.get(9)?,
-                workspace_dir: row.get(10)?,
-                thread_updated_at: row.get(11)?,
-                last_inbound_at: row.get(12)?,
-                last_delivery_at: row.get(13)?,
-            })
-        })?;
-        let mut records = Vec::new();
-        for row in rows {
-            records.push(row?);
-        }
-        Ok(records)
-    }
-
     pub fn list_thread_message_routes(&self) -> GaryxDbResult<Vec<ThreadMessageRouteRecord>> {
         let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
@@ -1469,26 +1429,6 @@ impl GaryxDbService {
             records.push(row?);
         }
         Ok(records)
-    }
-
-    /// Thread ids currently holding a channel binding for one endpoint key.
-    pub fn thread_ids_for_channel_endpoint(
-        &self,
-        endpoint_key: &str,
-    ) -> GaryxDbResult<Vec<String>> {
-        let conn = self.read_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT thread_id
-             FROM thread_channel_endpoints
-             WHERE endpoint_key = ?1 AND thread_id IS NOT NULL
-             ORDER BY thread_id ASC",
-        )?;
-        let rows = stmt.query_map(params![endpoint_key], |row| row.get(0))?;
-        let mut thread_ids = Vec::new();
-        for row in rows {
-            thread_ids.push(row?);
-        }
-        Ok(thread_ids)
     }
 
     /// Per-thread persisted delivery contexts from the thread_meta projection.

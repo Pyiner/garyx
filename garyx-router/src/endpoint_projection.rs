@@ -49,20 +49,6 @@ pub struct OutboundRouteRow {
 
 #[async_trait]
 pub trait ChannelEndpointProjection: Send + Sync {
-    /// Thread ids currently holding a channel binding for `endpoint_key`.
-    async fn endpoint_holders(&self, endpoint_key: &str) -> Result<Vec<String>, String>;
-
-    /// Holder rows for one endpoint key (point lookup) — same shape as
-    /// [`Self::endpoints`], narrowed to a single key.
-    async fn endpoint(&self, endpoint_key: &str) -> Result<Vec<KnownChannelEndpoint>, String> {
-        Ok(self
-            .endpoints()
-            .await?
-            .into_iter()
-            .filter(|candidate| candidate.endpoint_key == endpoint_key)
-            .collect())
-    }
-
     /// Every bound endpoint with its holder-thread metadata. The
     /// endpoint table holds one row per endpoint (single-owner model;
     /// duplicates in legacy record bodies are settled by the one-shot
@@ -103,35 +89,6 @@ impl ScanChannelEndpointProjection {
 
 #[async_trait]
 impl ChannelEndpointProjection for ScanChannelEndpointProjection {
-    async fn endpoint_holders(&self, endpoint_key: &str) -> Result<Vec<String>, String> {
-        let mut holders = Vec::new();
-        let keys = self
-            .store
-            .list_keys(None)
-            .await
-            .map_err(|error| error.to_string())?;
-        for key in keys {
-            if !is_thread_key(&key) {
-                continue;
-            }
-            let Some(value) = self
-                .store
-                .get(&key)
-                .await
-                .map_err(|error| error.to_string())?
-            else {
-                continue;
-            };
-            if bindings_from_value(&value)
-                .iter()
-                .any(|binding| binding.endpoint_key() == endpoint_key)
-            {
-                holders.push(key);
-            }
-        }
-        Ok(holders)
-    }
-
     async fn endpoints(&self) -> Result<Vec<KnownChannelEndpoint>, String> {
         let mut endpoints = Vec::new();
         let keys = self

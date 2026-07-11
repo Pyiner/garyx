@@ -26,25 +26,9 @@ impl SqlChannelEndpointProjection {
 
 #[async_trait]
 impl ChannelEndpointProjection for SqlChannelEndpointProjection {
-    async fn endpoint_holders(&self, endpoint_key: &str) -> Result<Vec<String>, String> {
-        let endpoint_key = endpoint_key.to_owned();
-        self.garyx_db
-            .run_blocking(move |db| db.thread_ids_for_channel_endpoint(&endpoint_key))
-            .await
-            .map_err(|error| error.to_string())
-    }
-
     async fn endpoints(&self) -> Result<Vec<KnownChannelEndpoint>, String> {
         self.garyx_db
             .run_blocking(|db| db.list_thread_channel_endpoints())
-            .await
-            .map_err(|error| error.to_string())
-    }
-
-    async fn endpoint(&self, endpoint_key: &str) -> Result<Vec<KnownChannelEndpoint>, String> {
-        let endpoint_key = endpoint_key.to_owned();
-        self.garyx_db
-            .run_blocking(move |db| db.thread_channel_endpoint_rows(&endpoint_key))
             .await
             .map_err(|error| error.to_string())
     }
@@ -87,6 +71,23 @@ impl ChannelEndpointProjection for SqlChannelEndpointProjection {
 
 #[cfg(test)]
 mod tests {
+    /// Holder thread ids for one endpoint, derived from the public
+    /// listing (the dedicated point lookup was retired with its last
+    /// production consumer).
+    async fn holders_of(
+        projection: &std::sync::Arc<dyn garyx_router::ChannelEndpointProjection>,
+        endpoint_key: &str,
+    ) -> Vec<String> {
+        projection
+            .endpoints()
+            .await
+            .expect("endpoints listing")
+            .into_iter()
+            .filter(|endpoint| endpoint.endpoint_key == endpoint_key)
+            .filter_map(|endpoint| endpoint.thread_id)
+            .collect()
+    }
+
     use std::sync::Arc;
 
     use garyx_router::{ThreadStore, channel_endpoint_projection_for};
@@ -139,10 +140,7 @@ mod tests {
 
         let projection = channel_endpoint_projection_for(&store);
         assert_eq!(
-            projection
-                .endpoint_holders("telegram::main::42")
-                .await
-                .expect("holders"),
+            holders_of(&projection, "telegram::main::42").await,
             vec!["thread::bound".to_owned()],
         );
 
@@ -167,10 +165,8 @@ mod tests {
         // Deleting the record removes the projection rows with it.
         store.delete("thread::bound").await.unwrap();
         assert!(
-            projection
-                .endpoint_holders("telegram::main::42")
+            holders_of(&projection, "telegram::main::42")
                 .await
-                .expect("holders after delete")
                 .is_empty()
         );
     }
@@ -210,10 +206,7 @@ mod tests {
 
         let projection = channel_endpoint_projection_for(&store);
         assert_eq!(
-            projection
-                .endpoint_holders("telegram::main::42")
-                .await
-                .expect("holders"),
+            holders_of(&projection, "telegram::main::42").await,
             vec!["thread::new".to_owned()],
         );
         let old_record = store.get("thread::old").await.unwrap().expect("old record");
@@ -238,10 +231,7 @@ mod tests {
 
         let projection = channel_endpoint_projection_for(&store);
         assert_eq!(
-            projection
-                .endpoint_holders("telegram::main::42")
-                .await
-                .expect("holders on injected store"),
+            holders_of(&projection, "telegram::main::42").await,
             vec!["thread::bound".to_owned()],
             "the injected store must be answered by its own scan projection"
         );

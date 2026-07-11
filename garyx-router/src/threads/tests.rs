@@ -37,13 +37,15 @@ async fn sync_endpoint_delivery_timestamp_point_updates_registry_and_holder() {
             KNOWN_CHANNEL_ENDPOINTS_KEY,
             json!({"channel_bindings": [binding]}),
         )
-        .await;
+        .await
+        .unwrap();
     store
         .set(
             "thread::holder",
             json!({"thread_id": "thread::holder", "channel_bindings": [binding]}),
         )
-        .await;
+        .await
+        .unwrap();
     // A drifted stale copy on another thread: point sync intentionally does
     // not chase it — the steady-state invariant is one holder per endpoint,
     // and drift cleanup is not a delivery-path job.
@@ -52,7 +54,8 @@ async fn sync_endpoint_delivery_timestamp_point_updates_registry_and_holder() {
             "thread::stale",
             json!({"thread_id": "thread::stale", "channel_bindings": [binding]}),
         )
-        .await;
+        .await
+        .unwrap();
 
     sync_endpoint_delivery_timestamp(
         &store,
@@ -71,17 +74,21 @@ async fn sync_endpoint_delivery_timestamp_point_updates_registry_and_holder() {
             .next()
             .and_then(|binding| binding.last_delivery_at)
     };
-    let registry = store.get(KNOWN_CHANNEL_ENDPOINTS_KEY).await.unwrap();
+    let registry = store
+        .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         delivery_at(&registry).as_deref(),
         Some("2026-03-07T10:30:00Z")
     );
-    let holder = store.get("thread::holder").await.unwrap();
+    let holder = store.get("thread::holder").await.unwrap().unwrap();
     assert_eq!(
         delivery_at(&holder).as_deref(),
         Some("2026-03-07T10:30:00Z")
     );
-    let stale = store.get("thread::stale").await.unwrap();
+    let stale = store.get("thread::stale").await.unwrap().unwrap();
     assert_eq!(
         delivery_at(&stale).as_deref(),
         Some("2026-03-07T09:00:00Z"),

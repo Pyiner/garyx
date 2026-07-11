@@ -60,3 +60,80 @@ async fn test_clear() {
     store.clear().await;
     assert_eq!(store.size().await, 0);
 }
+
+/// The trait default for `update_many_atomic` must REFUSE before writing
+/// anything (#TASK-2099 root final review): an API named atomic must never
+/// partially commit, so a backend without a transactional implementation
+/// gets an explicit unsupported error and zero writes — never a sequential
+/// fallback that can stop halfway.
+#[tokio::test]
+async fn default_update_many_atomic_refuses_with_zero_writes() {
+    /// Delegates reads/writes to an in-memory store but deliberately does
+    /// NOT override `update_many_atomic`, exercising the trait default.
+    struct NonAtomicStore {
+        inner: InMemoryThreadStore,
+    }
+
+    #[async_trait::async_trait]
+    impl ThreadStore for NonAtomicStore {
+        async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
+            self.inner.get(thread_id).await
+        }
+        async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
+            self.inner.set(thread_id, data).await
+        }
+        async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+            self.inner.delete(thread_id).await
+        }
+        async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
+            self.inner.list_keys(prefix).await
+        }
+        async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+            self.inner.exists(thread_id).await
+        }
+        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
+            self.inner.update(thread_id, updates).await
+        }
+    }
+
+    let store = NonAtomicStore {
+        inner: InMemoryThreadStore::new(),
+    };
+    store
+        .set("thread::first", json!({"state": "before"}))
+        .await
+        .unwrap();
+    store
+        .set("thread::second", json!({"state": "before"}))
+        .await
+        .unwrap();
+
+    let error = store
+        .update_many_atomic(vec![
+            crate::AtomicRecordMerge {
+                thread_id: "thread::first".to_owned(),
+                fields: json!({"state": "after"}),
+                create_if_missing: false,
+            },
+            crate::AtomicRecordMerge {
+                thread_id: "thread::second".to_owned(),
+                fields: json!({"state": "after"}),
+                create_if_missing: false,
+            },
+        ])
+        .await
+        .expect_err("the non-transactional default must refuse");
+    assert!(
+        matches!(error, ThreadStoreError::Backend(ref message)
+            if message.contains("atomic multi-record")),
+        "unexpected error: {error}"
+    );
+
+    for thread_id in ["thread::first", "thread::second"] {
+        assert_eq!(
+            store.get(thread_id).await.unwrap().unwrap()["state"],
+            "before",
+            "the refused mutation must not have written {thread_id}"
+        );
+    }
+}

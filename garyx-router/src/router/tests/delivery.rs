@@ -466,7 +466,8 @@ async fn test_delivery_persistence_sync_never_lists_store_keys() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
     router
@@ -484,7 +485,11 @@ async fn test_delivery_persistence_sync_never_lists_store_keys() {
             },
         )
         .await;
-    let after_set = store.get("thread::delivery-no-scan").await.unwrap();
+    let after_set = store
+        .get("thread::delivery-no-scan")
+        .await
+        .unwrap()
+        .unwrap();
     assert!(
         after_set["channel_bindings"][0]["last_delivery_at"].is_string(),
         "point sync must stamp the holder binding"
@@ -499,6 +504,10 @@ async fn test_delivery_persistence_sync_never_lists_store_keys() {
         0,
         "delivery persistence must not scan the thread store"
     );
-    let stored = store.get("thread::delivery-no-scan").await.unwrap();
+    let stored = store
+        .get("thread::delivery-no-scan")
+        .await
+        .unwrap()
+        .unwrap();
     assert!(stored["channel_bindings"][0]["last_delivery_at"].is_null());
 }
