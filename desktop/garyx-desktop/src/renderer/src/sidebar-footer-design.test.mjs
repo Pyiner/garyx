@@ -60,13 +60,21 @@ test('sidebar footer pins the Codex frame and divider geometry', () => {
 test('gateway and settings controls pin the Codex footer alignment', () => {
   const ownerCss = read('styles/gateway-status.css');
   expectRule(ownerCss, '.gateway-identity-bar', [
+    'display: flex',
+    'align-items: center',
     'gap: 8px',
+    'width: 100%',
     'height: 46px',
+    'min-width: 0',
     'padding: 0 8px',
   ]);
   expectRule(ownerCss, '.gateway-identity-main', [
+    'display: flex',
+    'align-items: center',
     'gap: 8px',
+    'flex: 1',
     'height: 29px',
+    'min-width: 0',
     'padding: 0 8px',
     'border-radius: 10px',
     'font-family: -apple-system',
@@ -78,6 +86,10 @@ test('gateway and settings controls pin the Codex footer alignment', () => {
     'background: var(--color-token-row-hover)',
   ]);
 
+  expectRule(ownerCss, '.gateway-identity-copy', [
+    'flex: 1',
+    'min-width: 0',
+  ]);
   expectRule(ownerCss, '.gateway-identity-name', [
     'font-size: inherit',
     'font-weight: inherit',
