@@ -1114,8 +1114,6 @@ async fn test_thread_history_detail_preserves_task_thread_type() {
     assert_eq!(json["ok"], true);
     assert_eq!(json["thread"]["thread_type"], "task");
     assert_eq!(json["session"]["thread_type"], "task");
-    assert_eq!(json["thread"]["session_type"], "task");
-    assert_eq!(json["session"]["session_type"], "task");
 }
 
 #[tokio::test]
@@ -1150,8 +1148,6 @@ async fn test_thread_history_detail_defaults_missing_thread_kind_to_chat() {
     assert_eq!(json["ok"], true);
     assert_eq!(json["thread"]["thread_type"], "chat");
     assert_eq!(json["session"]["thread_type"], "chat");
-    assert_eq!(json["thread"]["session_type"], "chat");
-    assert_eq!(json["session"]["session_type"], "chat");
 }
 
 #[tokio::test]

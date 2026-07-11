@@ -58,7 +58,7 @@ struct ThreadSendDestination {
     message_parts: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum ThreadSendTarget {
     Thread(String),
     Task(String),
@@ -75,24 +75,7 @@ fn resolve_thread_send_destination(
     kind: Option<String>,
     target: Option<String>,
     message: Vec<String>,
-    bot_flag: Option<String>,
 ) -> Result<ThreadSendDestination, Box<dyn std::error::Error>> {
-    if let Some(bot) = trim_optional(bot_flag) {
-        let mut message_parts = Vec::new();
-        if let Some(kind) = kind {
-            message_parts.push(kind);
-        }
-        if let Some(target) = target {
-            message_parts.push(target);
-        }
-        message_parts.extend(message);
-        validate_bot_selector(&bot)?;
-        return Ok(ThreadSendDestination {
-            target: ThreadSendTarget::Bot(bot),
-            message_parts,
-        });
-    }
-
     let Some(kind) = trim_optional(kind) else {
         return Err(
             "destination is required: use `garyx thread send thread|task|bot <target> [message]...`"
@@ -171,14 +154,9 @@ fn resolve_gateway_restart_wake_destination(
     if wake.len() != 2 {
         return Err("wake target must be `all` or `thread|task|bot <target>`".into());
     }
-    resolve_thread_send_destination(
-        Some(wake[0].clone()),
-        Some(wake[1].clone()),
-        vec![message],
-        None,
-    )
-    .map(GatewayRestartWakeDecision::Single)
-    .map(Some)
+    resolve_thread_send_destination(Some(wake[0].clone()), Some(wake[1].clone()), vec![message])
+        .map(GatewayRestartWakeDecision::Single)
+        .map(Some)
 }
 
 fn trim_optional(value: Option<String>) -> Option<String> {
@@ -1073,12 +1051,11 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 kind,
                 target,
                 message,
-                bot,
                 workspace_dir,
                 timeout,
                 json,
             } => {
-                let destination = resolve_thread_send_destination(kind, target, message, bot)?;
+                let destination = resolve_thread_send_destination(kind, target, message)?;
                 let message_parts = destination.message_parts;
                 let text = if message_parts.is_empty() {
                     use std::io::Read;

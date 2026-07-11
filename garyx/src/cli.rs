@@ -1368,9 +1368,6 @@ pub(crate) enum ThreadAction {
         /// Message text (reads from stdin if omitted)
         #[arg(value_name = "MESSAGE", num_args = 0..)]
         message: Vec<String>,
-        /// Deprecated: use `garyx thread send bot <channel:account_id> ...`
-        #[arg(long, value_name = "CHANNEL:ACCOUNT_ID", hide = true)]
-        bot: Option<String>,
         /// Workspace directory for the agent
         #[arg(long)]
         workspace_dir: Option<String>,

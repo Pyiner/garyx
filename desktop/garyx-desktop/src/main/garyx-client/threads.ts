@@ -128,7 +128,6 @@ export interface ThreadSummaryPayload {
   thread_id?: string;
   thread_type?: string | null;
   threadType?: string | null;
-  session_type?: string | null;
   agent_id?: string | null;
   agentId?: string | null;
   label?: string | null;
@@ -527,10 +526,7 @@ export function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSumm
     id,
     title,
     threadType:
-      asString(value.thread_type) ||
-      asString(value.threadType) ||
-      asString(value.session_type) ||
-      null,
+      asString(value.thread_type) || asString(value.threadType) || null,
     createdAt,
     updatedAt,
     lastMessagePreview,

@@ -1042,7 +1042,6 @@ fn summarize_thread(thread_id: &str, data: &Value, messages: &[Value]) -> Value 
         "created_at": get_value("created_at", "_created_at"),
         "last_user_message": last_user_message,
         "last_assistant_message": last_assistant_message,
-        "session_type": thread_type.clone(),
         "thread_type": thread_type,
     })
 }
