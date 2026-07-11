@@ -54,3 +54,22 @@ cargo test -p garyx-gateway --lib
 cargo test -p garyx-router --all-targets
 cargo test -p garyx-channels --lib
 ```
+
+## Rust Worktree Cache
+
+Garyx disables Cargo incremental output and full debugger symbols for dev/test
+profiles, then uses `scripts/sccache-rustc-wrapper.sh` to share compiler output
+across concurrent Git worktrees. The wrapper normalizes the current checkout
+root before invoking `sccache`; if `sccache` is unavailable it invokes `rustc`
+directly, so CI and fresh machines keep working.
+
+Install the local cache on macOS and inspect its effectiveness with:
+
+```bash
+brew install sccache
+sccache --show-stats
+```
+
+The repository config caps the local cache at 20 GiB. Keep each active
+worktree's own `target` directory so Cargo builds do not serialize on one build
+directory, and remove the whole worktree after its task is approved.

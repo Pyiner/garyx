@@ -141,6 +141,11 @@ Detailed runtime and SDK rules:
 Use the narrowest reliable validation for the touched area. Common commands and
 fallbacks live in @docs/agents/validation.md.
 
+Keep a separate Cargo `target` directory in every concurrent Rust worktree.
+The checked-in `.cargo/config.toml` disables incremental/full dev-test debug
+artifacts and uses the worktree-aware sccache wrapper; do not replace it with a
+single shared `CARGO_TARGET_DIR`.
+
 For Rust changes, prefer the fast local loop before any full workspace run:
 `scripts/test/rust_tier1_fast.sh --changed`. For focused work, run the touched
 crate or exact test directly, for example `cargo test -p garyx-gateway --lib`,

@@ -1,0 +1,13 @@
+[build]
+rustc-wrapper = "scripts/sccache-rustc-wrapper.sh"
+incremental = false
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
+[env]
+SCCACHE_CACHE_SIZE = { value = "20G", force = false }
+SCCACHE_IGNORE_SERVER_IO_ERROR = { value = "1", force = false }
