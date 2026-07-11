@@ -706,9 +706,7 @@ impl StreamingRunSnapshot {
         // Attribution carried from the originating dispatch; built-in queue
         // markers above win on conflict.
         for (key, value) in &pending_input.metadata {
-            metadata
-                .entry(key.clone())
-                .or_insert_with(|| value.clone());
+            metadata.entry(key.clone()).or_insert_with(|| value.clone());
         }
         self.session_messages.push(ProviderMessage {
             role: ProviderMessageRole::User,

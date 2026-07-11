@@ -718,6 +718,49 @@ async fn test_save_thread_messages_strips_runtime_only_metadata() {
 }
 
 #[test]
+fn test_acknowledge_pending_input_merges_attribution_metadata() {
+    let mut snapshot = StreamingRunSnapshot::default();
+    let mut origin_metadata = HashMap::new();
+    origin_metadata.insert("source".to_owned(), json!("automation"));
+    origin_metadata.insert("automation_id".to_owned(), json!("automation-42"));
+    origin_metadata.insert("origin_run_id".to_owned(), json!("run-requested"));
+    // A conflicting carried value must not shadow the built-in queue marker.
+    origin_metadata.insert("queued_input_id".to_owned(), json!("spoofed"));
+
+    let pending_input = PendingUserInput {
+        id: "queued_input:test".to_owned(),
+        bridge_run_id: "run-active".to_owned(),
+        text: "scheduled prompt".to_owned(),
+        content: json!("scheduled prompt"),
+        queued_at: "2026-03-01T00:00:00Z".to_owned(),
+        origin_id: None,
+        metadata: origin_metadata,
+        status: PendingUserInputStatus::Queued,
+    };
+    assert!(snapshot.acknowledge_pending_input(&pending_input));
+
+    let user_turn = snapshot
+        .session_messages
+        .iter()
+        .find(|message| message.role == ProviderMessageRole::User)
+        .expect("acknowledged user turn");
+    assert_eq!(user_turn.metadata.get("source"), Some(&json!("automation")));
+    assert_eq!(
+        user_turn.metadata.get("automation_id"),
+        Some(&json!("automation-42"))
+    );
+    assert_eq!(
+        user_turn.metadata.get("origin_run_id"),
+        Some(&json!("run-requested"))
+    );
+    // Built-in queue markers win over carried metadata on conflict.
+    assert_eq!(
+        user_turn.metadata.get("queued_input_id"),
+        Some(&json!("queued_input:test"))
+    );
+}
+
+#[test]
 fn test_streaming_run_snapshot_splits_assistant_segments() {
     let mut snapshot = StreamingRunSnapshot::default();
     assert!(snapshot.apply_stream_event(&StreamEvent::Delta {
