@@ -435,3 +435,59 @@ async fn test_clear_last_delivery_with_persistence_clears_binding_timestamp() {
     assert!(stored.get("delivery_context").is_none());
     assert!(stored["channel_bindings"][0]["last_delivery_at"].is_null());
 }
+
+#[tokio::test]
+async fn test_delivery_persistence_sync_never_lists_store_keys() {
+    // The endpoint delivery-timestamp sync runs on every run delivery; it
+    // must stay point reads (registry + holder), never a store walk.
+    let store = Arc::new(super::NoScanThreadStore::new());
+    store
+        .set(
+            "thread::delivery-no-scan",
+            json!({
+                "thread_id": "thread::delivery-no-scan",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "bot1",
+                    "binding_key": "42",
+                    "chat_id": "42",
+                    "display_label": "u1"
+                }]
+            }),
+        )
+        .await;
+
+    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    router
+        .set_last_delivery_with_persistence(
+            "thread::delivery-no-scan",
+            garyx_models::routing::DeliveryContext {
+                channel: "telegram".to_owned(),
+                account_id: "bot1".to_owned(),
+                chat_id: "42".to_owned(),
+                user_id: "42".to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: "42".to_owned(),
+                thread_id: None,
+                metadata: Default::default(),
+            },
+        )
+        .await;
+    let after_set = store.get("thread::delivery-no-scan").await.unwrap();
+    assert!(
+        after_set["channel_bindings"][0]["last_delivery_at"].is_string(),
+        "point sync must stamp the holder binding"
+    );
+
+    router
+        .clear_last_delivery_with_persistence("thread::delivery-no-scan")
+        .await;
+
+    assert_eq!(
+        store.list_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "delivery persistence must not scan the thread store"
+    );
+    let stored = store.get("thread::delivery-no-scan").await.unwrap();
+    assert!(stored["channel_bindings"][0]["last_delivery_at"].is_null());
+}

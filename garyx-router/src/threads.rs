@@ -666,22 +666,26 @@ pub async fn delete_thread_record(
     Ok(())
 }
 
+/// Update `last_delivery_at` on one endpoint's binding with point reads: the
+/// known-endpoints registry plus the binding's holder thread. Steady state,
+/// an endpoint binding lives on exactly one thread and every caller operates
+/// on it, so there is nothing for a store scan to find — the previous
+/// `list_keys` walk ran on every run delivery.
 pub async fn sync_endpoint_delivery_timestamp(
     store: &Arc<dyn ThreadStore>,
     channel: &str,
     account_id: &str,
     binding_key: &str,
     last_delivery_at: Option<&str>,
+    holder_thread_id: &str,
 ) -> Result<(), String> {
     let target_key = endpoint_key(channel, account_id, binding_key);
-    let keys = store.list_keys(None).await;
 
-    for key in keys {
-        let is_registry = key == KNOWN_CHANNEL_ENDPOINTS_KEY;
-        if !is_registry && !is_thread_key(&key) {
+    for key in [KNOWN_CHANNEL_ENDPOINTS_KEY, holder_thread_id] {
+        if key != KNOWN_CHANNEL_ENDPOINTS_KEY && !is_thread_key(key) {
             continue;
         }
-        let Some(mut value) = store.get(&key).await else {
+        let Some(mut value) = store.get(key).await else {
             continue;
         };
         let Some(obj) = ensure_object(&mut value) else {
@@ -712,7 +716,7 @@ pub async fn sync_endpoint_delivery_timestamp(
                 "updated_at".to_owned(),
                 Value::String(Utc::now().to_rfc3339()),
             );
-            store.set(&key, value).await;
+            store.set(key, value).await;
         }
     }
 
