@@ -22,10 +22,7 @@ use garyx_router::{KnownChannelEndpoint, endpoint_key};
 
 use crate::auth_flow::AuthFlowExecutor;
 use crate::channel_trait::{Channel, ChannelError};
-use crate::dispatcher::{
-    ChannelDispatcher, ChannelDispatcherImpl,
-    SwappableDispatcher,
-};
+use crate::dispatcher::{ChannelDispatcher, ChannelDispatcherImpl, SwappableDispatcher};
 use crate::plugin_host::manifest::ManifestCapabilities;
 use crate::plugin_host::{
     AccountDescriptor, AccountRootBehavior, HostContext, InboundHandler, InitializeParams,

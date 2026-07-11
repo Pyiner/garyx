@@ -39,9 +39,9 @@ use crate::plugin::{
 use crate::plugin_host::auth_flow_bridge::SubprocessAuthFlowExecutor;
 use crate::plugin_host::manifest::{AccountRootBehavior, ManifestCapabilities};
 use crate::plugin_host::protocol::{
-    AccountDescriptor, CapabilitiesResponse,
-    PluginErrorCode, ReloadAccountsParams, ResolveAccountUiParams, ResolveAccountUiResult,
-    UiConversationNode, UiEndpointDescriptor, ValidateAccountParams, ValidateAccountResult,
+    AccountDescriptor, CapabilitiesResponse, PluginErrorCode, ReloadAccountsParams,
+    ResolveAccountUiParams, ResolveAccountUiResult, UiConversationNode, UiEndpointDescriptor,
+    ValidateAccountParams, ValidateAccountResult,
 };
 use crate::plugin_host::{PluginRpcClient, PluginSenderHandle, RpcError};
 

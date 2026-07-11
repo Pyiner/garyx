@@ -52,9 +52,9 @@ pub use dispatcher::{
 pub use feishu::FeishuChannel;
 pub use garyx_models::ChannelOutboundContent;
 pub use plugin::{
-    BuiltInPluginDiscoverer, ChannelPluginManager, PluginMetadata,
-    PluginState, PluginStatus, SubprocessPluginCatalogEntry, SubprocessPluginError,
-    builtin_plugin_metadata, builtin_plugin_metadata_list,
+    BuiltInPluginDiscoverer, ChannelPluginManager, PluginMetadata, PluginState, PluginStatus,
+    SubprocessPluginCatalogEntry, SubprocessPluginError, builtin_plugin_metadata,
+    builtin_plugin_metadata_list,
 };
 pub use telegram::TelegramChannel;
 pub use weixin::WeixinChannel;
