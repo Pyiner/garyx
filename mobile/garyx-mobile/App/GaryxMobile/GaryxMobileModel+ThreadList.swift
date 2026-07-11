@@ -134,6 +134,13 @@ extension GaryxMobileModel {
                 return
             }
             let pageThreads = pendingThreadArchives.visibleThreads(page.threads)
+            // Feed ids and their shared summaries are one projection commit.
+            // This is normally inactive while Chats is selected, but the user
+            // can switch to All while the auxiliary request is in flight.
+            let transactionId = homeProjectionGateway.beginTransaction(
+                label: "auxiliary-all-recent-threads-refresh"
+            )
+            defer { homeProjectionGateway.endTransaction(transactionId) }
             switch recentThreadFeeds.completeRefresh(
                 ticket,
                 pageIds: pageThreads.map(\.id),
