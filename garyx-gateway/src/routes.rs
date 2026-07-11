@@ -2601,16 +2601,17 @@ pub async fn create_thread(
                 }
                 Err(response) => return response,
             };
-            let Some(source_thread_data) = state
-                .threads
-                .thread_store
-                .get_logged(&source_thread_id)
-                .await
-            else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "fork source thread not found"})),
-                );
+            // NotFound stays a 400 claim; a backend failure must not
+            // masquerade as "fork source thread not found" (#TASK-2130).
+            let source_thread_data = match state.threads.thread_store.get(&source_thread_id).await {
+                Ok(Some(source_thread_data)) => source_thread_data,
+                Ok(None) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "fork source thread not found"})),
+                    );
+                }
+                Err(error) => return thread_store_error_response(&error),
             };
             let Some(provider_type) = provider_type_from_thread_value(&source_thread_data) else {
                 return (
