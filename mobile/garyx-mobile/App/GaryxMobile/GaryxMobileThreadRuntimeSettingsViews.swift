@@ -490,8 +490,10 @@ struct GaryxThreadRuntimeSettingsPanel: View {
                     .transition(.identity)
                 }
             }
+            // The header crossfades in place — no directional slide. The
+            // thread title must never move (the ±12pt micro-push on it read
+            // as a jitter); direction lives in the body content only.
             .opacity(pageContentVisible ? 1 : 0)
-            .offset(x: pageContentVisible ? 0 : pageHiddenOffset)
 
             Spacer(minLength: 0)
         }
