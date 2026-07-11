@@ -14,17 +14,21 @@ const css = readFileSync(path.join(rendererDir, 'styles/turn-summary.css'), 'utf
 function declarationsFor(selector) {
   const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
   const rulePattern = /([^{}]+)\{([^{}]*)\}/g;
+  const declarations = [];
   let match;
   while ((match = rulePattern.exec(stripped)) !== null) {
     const selectors = match[1].split(',').map((part) => part.trim());
     if (selectors.includes(selector)) {
-      return match[2]
-        .split(';')
-        .map((part) => part.trim())
-        .filter(Boolean);
+      declarations.push(
+        ...match[2]
+          .split(';')
+          .map((part) => part.trim())
+          .filter(Boolean),
+      );
     }
   }
-  assert.fail(`missing tool trace rule ${selector}`);
+  assert.ok(declarations.length > 0, `missing tool trace rule ${selector}`);
+  return declarations;
 }
 
 test('expanded tool activity grows naturally without nested vertical scrolling', () => {
@@ -39,7 +43,9 @@ test('expanded tool activity grows naturally without nested vertical scrolling',
       `${selector} must not cap expanded activity height`,
     );
     assert.ok(
-      declarations.every((declaration) => !declaration.startsWith('overflow-y:')),
+      declarations.every(
+        (declaration) => !declaration.startsWith('overflow') || declaration === 'overflow: visible',
+      ),
       `${selector} must not create a nested vertical scroller`,
     );
   }
