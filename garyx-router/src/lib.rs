@@ -61,6 +61,11 @@ pub mod threading {
     };
 }
 
+pub use endpoint_projection::{
+    ChannelEndpointProjection, DeliveryContextRow, OutboundRouteRow, ScanChannelEndpointProjection,
+    channel_endpoint_projection_for, register_channel_endpoint_projection,
+    remove_channel_endpoint_projection,
+};
 pub use file_store::FileThreadStore;
 pub use endpoint_binding::{
     EndpointBindResult, EndpointBindingMutationError, EndpointBindingMutator,
@@ -75,7 +80,7 @@ pub use router::{
     command_catalog_for_config, is_native_command_text, reserved_command_names,
 };
 pub use runtime_context::build_runtime_context_metadata;
-pub use store::{ThreadStore, ThreadStoreError};
+pub use store::{ThreadStore, ThreadStoreError, ThreadStoreExt};
 pub use task_counter::{InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore};
 pub use tasks::{
     CreateTaskInput, EnterReview, TaskHistoryPage, TaskId, TaskListFilter, TaskRuntimeInput,
@@ -88,11 +93,6 @@ pub use thread_history::{
     ThreadHistoryRepository, ThreadHistorySnapshot, ThreadTranscriptRecord, ThreadTranscriptStore,
     ThreadTranscriptWindow, TranscriptAppendRecordsResult, count_user_query_messages,
     extract_run_id, history_message_count, is_user_query_message, message_text,
-};
-pub use endpoint_projection::{
-    ChannelEndpointProjection, DeliveryContextRow, OutboundRouteRow,
-    ScanChannelEndpointProjection, channel_endpoint_projection_for,
-    register_channel_endpoint_projection, remove_channel_endpoint_projection,
 };
 pub use threads::{
     ChannelBinding, KNOWN_CHANNEL_ENDPOINTS_KEY, KnownChannelEndpoint, ThreadEnsureOptions,

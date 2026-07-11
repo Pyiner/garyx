@@ -2505,7 +2505,8 @@ async fn thread_summary_does_not_fetch_transcript_when_snapshot_cache_is_empty()
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .history
@@ -2525,6 +2526,7 @@ async fn thread_summary_does_not_fetch_transcript_when_snapshot_cache_is_empty()
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("thread data");
     let summary = thread_summary(thread_id, &data);
     assert!(summary["last_user_message"].is_null());
@@ -2674,6 +2676,7 @@ async fn create_thread_seeds_sdk_session_id() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("stored thread");
     assert_eq!(resolved.provider_type(), ProviderType::ClaudeCode);
     assert_eq!(data["sdk_session_id"], session_id);
@@ -2718,7 +2721,8 @@ async fn create_thread_forks_provider_session_without_importing_visible_history(
         .threads
         .thread_store
         .set(&parent_thread_id, parent_data)
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -2745,6 +2749,7 @@ async fn create_thread_forks_provider_session_without_importing_visible_history(
         .thread_store
         .get(child_thread_id)
         .await
+        .unwrap()
         .expect("child thread stored");
 
     assert_eq!(child_data["label"], "Side chat");
@@ -2915,6 +2920,7 @@ async fn create_thread_persists_model_and_reasoning_cells() {
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread");
     assert_eq!(stored["metadata"]["model"], "claude-opus-4-7");
     assert_eq!(stored["metadata"]["model_reasoning_effort"], "xhigh");
@@ -2943,7 +2949,8 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
                 "updated_at": "2026-01-01T00:00:00Z"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let router = build_router(state.clone());
 
     let request = authed_request()
@@ -3002,7 +3009,8 @@ async fn delete_thread_removes_garyx_db_pin() {
                 "updated_at": "2026-01-01T00:00:00Z"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .ops
         .garyx_db
@@ -3058,7 +3066,8 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     append_dangling_run_start(&state, "thread::recent-running", "run::active").await;
     state
         .threads
@@ -3081,7 +3090,8 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let running_state = state
         .threads
         .history
@@ -3113,7 +3123,8 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
                 "label": "No Timestamp"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let router = build_router(state.clone());
 
     let request = authed_request()
@@ -3195,7 +3206,8 @@ async fn recent_threads_route_reads_persistent_projection_without_router_resync(
                 "updated_at": "2026-05-23T09:00:00.000Z"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .ops
         .garyx_db
@@ -3528,7 +3540,8 @@ async fn recent_threads_route_removes_hidden_threads_from_projection() {
                 "updated_at": "2026-05-23T09:00:00.000Z"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let router = build_router(state.clone());
 
     let request = authed_request()
@@ -3558,7 +3571,8 @@ async fn recent_threads_route_removes_hidden_threads_from_projection() {
                 "hidden": true
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let request = authed_request()
         .uri("/api/recent-threads?limit=10")
         .body(Body::empty())
@@ -3591,7 +3605,8 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
                 "updated_at": "2026-05-23T09:00:00.000Z"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .ops
         .garyx_db
@@ -3649,7 +3664,15 @@ async fn delete_thread_without_record_is_plain_not_found() {
     // the route answers 404 without any cleanup pass.
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::never-existed";
-    assert!(state.threads.thread_store.get(thread_id).await.is_none());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -3701,7 +3724,8 @@ async fn threads_route_reads_full_thread_meta_projection_not_recent_subset() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     // Projections derive in the same transaction as the write above
     // (#TASK-1864): the full-meta row is present without any read-time
     // repair, which is retired.
@@ -3768,7 +3792,8 @@ async fn threads_route_filters_default_hidden_threads_from_meta_projection() {
                 "updated_at": "2026-05-23T09:00:00.000Z"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -3781,7 +3806,8 @@ async fn threads_route_filters_default_hidden_threads_from_meta_projection() {
                 "updated_at": "2026-05-23T10:00:00.000Z"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let router = build_router(state);
 
     let request = authed_request()
@@ -3825,7 +3851,8 @@ async fn update_thread_persists_and_clears_model_cells() {
                 "metadata": {},
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -3848,6 +3875,7 @@ async fn update_thread_persists_and_clears_model_cells() {
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread after update");
     assert_eq!(stored["metadata"]["model"], "claude-opus-4-7");
     assert_eq!(stored["metadata"]["model_reasoning_effort"], "max");
@@ -3878,6 +3906,7 @@ async fn update_thread_persists_and_clears_model_cells() {
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread after clear");
     assert!(stored["metadata"].get("model").is_none());
     assert!(stored["metadata"].get("model_reasoning_effort").is_none());
@@ -3910,7 +3939,8 @@ async fn update_thread_writes_model_cell_not_override() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -3934,6 +3964,7 @@ async fn update_thread_writes_model_cell_not_override() {
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread after update");
     assert_eq!(
         stored["metadata"]["model"], "claude-fable-5",
@@ -3987,7 +4018,8 @@ async fn update_thread_migrates_legacy_override_into_model_cell() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -4004,6 +4036,7 @@ async fn update_thread_migrates_legacy_override_into_model_cell() {
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread after migrate");
     assert_eq!(
         stored["metadata"]["model"], "claude-fable-5",
@@ -4036,7 +4069,8 @@ async fn update_thread_empty_model_clears_cell_and_legacy_override() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -4053,6 +4087,7 @@ async fn update_thread_empty_model_clears_cell_and_legacy_override() {
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread after clear");
     assert!(
         stored["metadata"].get("model").is_none(),
@@ -4099,6 +4134,7 @@ async fn create_thread_writes_model_cell_not_override() {
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread");
     assert_eq!(
         stored["metadata"]["model"], "claude-fable-5",
@@ -4140,7 +4176,8 @@ async fn thread_history_runtime_reports_effective_model_overrides() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state);
     let request = authed_request()
@@ -4188,7 +4225,8 @@ async fn thread_summary_routes_include_runtime_summary() {
         .threads
         .thread_store
         .set(thread_id, thread_value.clone())
-        .await;
+        .await
+        .unwrap();
     // Seed the projection through the production draft builder so this
     // test guards the real write-path contract: `/api/threads` resolves
     // its runtime summary from the projection columns alone.
@@ -4286,7 +4324,8 @@ async fn thread_history_runtime_reports_provider_default_alias() {
                 "metadata": {},
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state);
     let request = authed_request()
@@ -4351,7 +4390,8 @@ async fn thread_history_runtime_prefers_thread_snapshot_over_current_agent_profi
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state);
     let request = authed_request()
@@ -4389,7 +4429,8 @@ async fn thread_history_runtime_leaves_cli_provider_defaults_empty() {
                     "metadata": {},
                 }),
             )
-            .await;
+            .await
+            .unwrap();
     }
 
     let router = build_router(state);
@@ -4433,7 +4474,8 @@ async fn thread_history_runtime_reports_native_builtin_provider_default() {
                 "metadata": {},
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state);
     let request = authed_request()
@@ -4535,6 +4577,7 @@ async fn seed_imported_thread_history_persists_transcript_and_thread_state() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("stored thread");
     assert_eq!(stored["history"]["message_count"], 2);
     assert_eq!(stored["message_count"], 2);
@@ -4623,6 +4666,7 @@ async fn create_thread_without_workspace_uses_private_thread_workspace() {
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread");
     assert_eq!(
         workspace_dir_from_value(&stored).as_deref(),
@@ -4970,6 +5014,7 @@ async fn create_thread_with_worktree_creates_managed_git_worktree() {
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread");
     assert_eq!(stored["workspace_dir"], workspace_dir);
     assert_eq!(stored["worktree"]["mode"], "worktree");
@@ -5095,6 +5140,7 @@ async fn create_thread_worktree_rejects_git_repo_without_head_as_bad_request() {
             .thread_store
             .list_keys(Some("thread::"))
             .await
+            .unwrap()
             .is_empty()
     );
 }
@@ -5113,7 +5159,8 @@ async fn update_thread_accepts_encoded_thread_path_segment() {
                 "label": "Before",
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state);
     let request = authed_request()
@@ -5214,7 +5261,8 @@ async fn delete_thread_rejects_enabled_channel_binding() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -5232,7 +5280,15 @@ async fn delete_thread_rejects_enabled_channel_binding() {
         payload["error"],
         "cannot delete thread with active channel bindings"
     );
-    assert!(state.threads.thread_store.get(thread_id).await.is_some());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]
@@ -5293,7 +5349,8 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .ops
         .garyx_db
@@ -5341,7 +5398,15 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
         json!(["api::main::loop", "telegram::main::1000000001"])
     );
 
-    assert!(state.threads.thread_store.get(thread_id).await.is_none());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(
         state
             .ops
@@ -5374,7 +5439,15 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
             .await
     };
     assert_ne!(reconnected_thread_id, thread_id);
-    assert!(state.threads.thread_store.get(thread_id).await.is_none());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(
         state
             .ops
@@ -5403,7 +5476,8 @@ async fn archive_thread_rejects_active_run_without_deleting() {
                 "messages": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
     append_dangling_run_start(&state, thread_id, "run::archive-active").await;
 
     let router = build_router(state.clone());
@@ -5416,7 +5490,15 @@ async fn archive_thread_rejects_active_run_without_deleting() {
     let response = router.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert!(state.threads.thread_store.get(thread_id).await.is_some());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert!(
         !state
             .ops
@@ -5467,7 +5549,8 @@ async fn archive_thread_rejects_automation_thread_id_without_deleting() {
                 "messages": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -5479,7 +5562,15 @@ async fn archive_thread_rejects_automation_thread_id_without_deleting() {
     let response = router.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert!(state.threads.thread_store.get(thread_id).await.is_some());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert!(
         !state
             .ops
@@ -5530,7 +5621,8 @@ async fn archive_thread_rejects_automation_target_reference_without_deleting() {
                 "messages": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -5542,7 +5634,15 @@ async fn archive_thread_rejects_automation_target_reference_without_deleting() {
     let response = router.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert!(state.threads.thread_store.get(thread_id).await.is_some());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert!(
         !state
             .ops
@@ -5562,7 +5662,7 @@ async fn archived_thread_tombstone_blocks_projection_rewrite() {
         .mark_thread_archived(thread_id)
         .expect("mark thread archived");
 
-    state
+    let rejected = state
         .threads
         .thread_store
         .set(
@@ -5576,8 +5676,20 @@ async fn archived_thread_tombstone_blocks_projection_rewrite() {
             }),
         )
         .await;
+    assert!(matches!(
+        rejected,
+        Err(garyx_router::ThreadStoreError::Archived(_))
+    ));
 
-    assert!(state.threads.thread_store.get(thread_id).await.is_none());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(
         state
             .ops
@@ -5658,7 +5770,8 @@ async fn delete_thread_allows_disabled_channel_binding() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -5668,7 +5781,15 @@ async fn delete_thread_allows_disabled_channel_binding() {
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(state.threads.thread_store.get(thread_id).await.is_none());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -5694,7 +5815,8 @@ async fn delete_thread_allows_orphan_channel_binding() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -5704,7 +5826,15 @@ async fn delete_thread_allows_orphan_channel_binding() {
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(state.threads.thread_store.get(thread_id).await.is_none());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -5786,7 +5916,15 @@ async fn delete_thread_aborts_active_run_and_prevents_recreation() {
 
     tokio::time::sleep(std::time::Duration::from_millis(350)).await;
     assert!(!bridge.is_run_active("run-delete-session").await);
-    assert!(state.threads.thread_store.get(&thread_id).await.is_none());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(&thread_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(provider.cleared_sessions(), vec![thread_id]);
 }
 
@@ -5865,7 +6003,15 @@ async fn delete_thread_drops_local_state_even_when_provider_clear_fails() {
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    assert!(state.threads.thread_store.get(&thread_id).await.is_none());
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(&thread_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(failing_provider.cleared_sessions(), vec![thread_id.clone()]);
     assert_eq!(
         bridge
@@ -5902,7 +6048,8 @@ async fn delete_thread_clears_in_memory_reply_routing() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     {
         let mut router = state.threads.router.lock().await;
         router
@@ -5952,7 +6099,8 @@ async fn delete_thread_clears_in_memory_last_delivery() {
                 "label": "Delivery Delete"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     {
         let mut router = state.threads.router.lock().await;
         router.set_last_delivery(
@@ -6004,7 +6152,8 @@ async fn delete_thread_clears_switched_thread_references() {
                 "label": "Switch Delete"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     {
         let mut router = state.threads.router.lock().await;
         let user_key = MessageRouter::build_account_user_key("telegram", "main", "u1", false, None);
@@ -6161,7 +6310,8 @@ async fn cached_channel_endpoints_reuses_snapshot_until_invalidated() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let initial = state.cached_channel_endpoints().await;
     assert_eq!(initial.len(), 1);
@@ -6186,7 +6336,8 @@ async fn cached_channel_endpoints_reuses_snapshot_until_invalidated() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let cached = state.cached_channel_endpoints().await;
     assert_eq!(cached[0].display_label, "Initial Chat");
@@ -6418,7 +6569,8 @@ async fn configured_bots_route_resolves_legacy_telegram_private_endpoint_without
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state);
     let request = authed_request()
@@ -6494,7 +6646,8 @@ async fn bot_consoles_route_aggregates_configured_bots_and_endpoints() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state);
     let request = authed_request()
@@ -6584,7 +6737,8 @@ async fn bot_consoles_route_preserves_plugin_main_endpoint_resolution() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state);
     let request = authed_request()
@@ -6667,7 +6821,8 @@ async fn bot_consoles_route_uses_configured_bot_order_not_activity_order() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -6687,7 +6842,8 @@ async fn bot_consoles_route_uses_configured_bot_order_not_activity_order() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -6707,7 +6863,8 @@ async fn bot_consoles_route_uses_configured_bot_order_not_activity_order() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state);
     let request = authed_request()
@@ -6770,7 +6927,8 @@ async fn bot_consoles_route_ignores_unconfigured_endpoint_accounts() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = build_router(state);
     let request = authed_request()
@@ -6802,13 +6960,15 @@ async fn thread_metadata_preserves_task_thread_type() {
                 "thread_kind": "task",
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let data = state
         .threads
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("thread data");
     let response = thread_metadata_response(&state, thread_id, &data).await;
     assert_eq!(response["thread_type"], "task");
@@ -6828,13 +6988,15 @@ async fn thread_metadata_defaults_missing_thread_kind_to_chat() {
                 "label": "Legacy cron-shaped metadata",
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let data = state
         .threads
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("thread data");
     let response = thread_metadata_response(&state, thread_id, &data).await;
     assert_eq!(response["thread_type"], "chat");
@@ -6933,6 +7095,7 @@ async fn task_title_routes_update_backing_thread_label_and_projection() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("task backing thread");
     assert_eq!(stored["label"], created_title);
     assert_eq!(stored["thread_title_source"], "task");
@@ -6985,6 +7148,7 @@ async fn task_title_routes_update_backing_thread_label_and_projection() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("task backing thread");
     assert_eq!(stored["label"], updated_title);
     let recent = state
@@ -7046,6 +7210,7 @@ async fn task_title_routes_update_backing_thread_label_and_projection() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("task backing thread");
     assert_eq!(stored["label"], "Manual thread title");
     assert_eq!(stored["thread_title_source"], "explicit");
@@ -7113,6 +7278,7 @@ async fn task_create_with_worktree_runtime_creates_thread_in_managed_worktree() 
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread");
     let workspace_dir = stored["workspace_dir"].as_str().expect("workspace dir");
     assert_ne!(workspace_dir, repo.path().to_string_lossy().as_ref());
@@ -7429,6 +7595,7 @@ async fn task_delete_aborts_run_and_removes_task_overlay_but_retains_thread() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("backing thread should remain");
     assert!(retained.get("task").is_none());
     assert_eq!(retained["thread_kind"], "task");
@@ -7667,6 +7834,7 @@ async fn task_assign_rejects_assignee_that_differs_from_bound_thread_agent() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("thread before assign");
     assert_eq!(before["agent_id"], "claude");
     assert_eq!(before["provider_type"], "claude_code");
@@ -7706,6 +7874,7 @@ async fn task_assign_rejects_assignee_that_differs_from_bound_thread_agent() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("thread after assign");
     assert_eq!(after["agent_id"], "claude");
     assert_eq!(after["provider_type"], "claude_code");
@@ -7793,6 +7962,7 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("thread before assign");
     assert!(before.get("agent_id").is_none());
     assert!(before.get("provider_type").is_none());
@@ -7826,6 +7996,7 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("thread after assign");
     assert_eq!(after["agent_id"], "late-antigravity");
     assert_eq!(after["provider_type"], json!(ProviderType::AntigravityCli));

@@ -1,3 +1,4 @@
+use garyx_router::ThreadStoreExt;
 use std::collections::{HashMap, HashSet};
 
 use crate::provider_trait::{BridgeError, ProviderModelDefaults};
@@ -475,7 +476,7 @@ impl MultiProviderBridge {
 
         let thread_store = self.inner.thread_store.read().await.clone();
         let mut thread_record = match thread_store.as_ref() {
-            Some(store) => store.get(thread_id).await,
+            Some(store) => store.get_logged(thread_id).await,
             None => None,
         };
         if let Some(record) = thread_record.as_ref() {
@@ -548,7 +549,9 @@ impl MultiProviderBridge {
                         Value::String(chrono::Utc::now().to_rfc3339()),
                     );
                 }
-                store.set(thread_id, record.clone()).await;
+                if !store.set_logged(thread_id, record.clone()).await {
+                    tracing::warn!(thread_id, "agent runtime snapshot write did not persist");
+                }
             }
         }
     }

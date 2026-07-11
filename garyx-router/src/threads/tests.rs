@@ -111,7 +111,8 @@ async fn list_known_channel_endpoints_includes_thread_metadata() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let endpoints = list_known_channel_endpoints(&store).await;
     assert_eq!(endpoints.len(), 1);
@@ -149,7 +150,8 @@ async fn list_known_channel_endpoints_backfills_delivery_target_from_binding_key
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let endpoints = list_known_channel_endpoints(&store).await;
     assert_eq!(endpoints.len(), 1);
@@ -184,7 +186,8 @@ async fn list_known_channel_endpoints_orders_by_endpoint_key_not_activity() {
                     }]
                 }),
             )
-            .await;
+            .await
+            .unwrap();
     }
 
     let endpoints = list_known_channel_endpoints(&store).await;
@@ -218,7 +221,8 @@ async fn list_known_channel_endpoints_prefers_latest_thread_binding_when_duplica
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     store
         .set(
             "thread::new",
@@ -235,7 +239,8 @@ async fn list_known_channel_endpoints_prefers_latest_thread_binding_when_duplica
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let endpoints = list_known_channel_endpoints(&store).await;
     assert_eq!(endpoints.len(), 1);
@@ -261,7 +266,8 @@ async fn update_thread_record_preserves_workspace_when_not_provided() {
                 "workspace_dir": "/tmp/workspace-a"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let updated = update_thread_record(&store, "thread::keep", Some("After".to_owned()), None)
         .await
@@ -288,7 +294,8 @@ async fn update_thread_record_explicit_label_clears_provider_title() {
                 "provider_thread_title": "Provider Title"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let updated = update_thread_record(
         &store,
@@ -315,14 +322,15 @@ async fn update_thread_record_rejects_clearing_workspace() {
                 "workspace_dir": "/tmp/workspace-b"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let error = update_thread_record(&store, "thread::clear", None, Some("   ".to_owned()))
         .await
         .unwrap_err();
 
     assert!(error.contains("workspace_dir is immutable"));
-    let stored = store.get("thread::clear").await.unwrap();
+    let stored = store.get("thread::clear").await.unwrap().unwrap();
     assert_eq!(
         workspace_dir_from_value(&stored).as_deref(),
         Some("/tmp/workspace-b")
@@ -340,7 +348,8 @@ async fn update_thread_record_rejects_workspace_change() {
                 "workspace_dir": "/tmp/workspace-a"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let error = update_thread_record(
         &store,
@@ -352,7 +361,7 @@ async fn update_thread_record_rejects_workspace_change() {
     .unwrap_err();
 
     assert!(error.contains("workspace_dir is immutable"));
-    let stored = store.get("thread::move").await.unwrap();
+    let stored = store.get("thread::move").await.unwrap().unwrap();
     assert_eq!(
         workspace_dir_from_value(&stored).as_deref(),
         Some("/tmp/workspace-a")
@@ -369,7 +378,8 @@ async fn update_thread_record_allows_initial_workspace_set() {
                 "thread_id": "thread::initial"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let updated = update_thread_record(
         &store,
@@ -397,7 +407,8 @@ async fn update_thread_record_allows_same_workspace_value() {
                 "workspace_dir": "/tmp/workspace-d"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let updated = update_thread_record(
         &store,
@@ -464,7 +475,7 @@ async fn create_thread_record_persists_metadata_object() {
         }))
     );
 
-    let stored = store.get(&thread_id).await.unwrap();
+    let stored = store.get(&thread_id).await.unwrap().unwrap();
     assert_eq!(
         thread_metadata_from_value(&stored)
             .get("custom_context")

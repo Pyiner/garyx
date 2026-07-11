@@ -296,9 +296,7 @@ pub(super) async fn fetch_gateway_json(
     path_and_query: &str,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path_and_query);
-    let builder = shared_http_client()
-        .get(&url)
-        .timeout(GATEWAY_GET_TIMEOUT);
+    let builder = shared_http_client().get(&url).timeout(GATEWAY_GET_TIMEOUT);
     execute_gateway_json(builder, gateway, GatewayRetryPolicy::Idempotent).await
 }
 
@@ -653,7 +651,9 @@ mod tests {
             .expect("gateway cli error");
         assert_eq!(cli_error.kind, GatewayErrorKind::Unreachable);
         assert!(
-            cli_error.message.contains("verify whether the write landed"),
+            cli_error
+                .message
+                .contains("verify whether the write landed"),
             "mutation timeout should warn before manual retry: {}",
             cli_error.message
         );

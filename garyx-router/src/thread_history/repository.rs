@@ -38,6 +38,7 @@ impl ThreadHistoryRepository {
             .thread_store
             .get(thread_id)
             .await
+            .map_err(|error| ThreadHistoryError::Storage(error.to_string()))?
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
         let bounded_limit = limit.max(1);
 
@@ -85,6 +86,7 @@ impl ThreadHistoryRepository {
             .thread_store
             .get(thread_id)
             .await
+            .map_err(|error| ThreadHistoryError::Storage(error.to_string()))?
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
         let bounded_limit = limit.max(1);
         let (committed_messages, total_committed_messages, committed_start_index) = self
@@ -115,6 +117,7 @@ impl ThreadHistoryRepository {
             .thread_store
             .get(thread_id)
             .await
+            .map_err(|error| ThreadHistoryError::Storage(error.to_string()))?
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
         let bounded_fallback_limit = fallback_message_limit.max(1);
         let bounded_user_query_limit = user_query_limit.max(1);
@@ -187,6 +190,7 @@ impl ThreadHistoryRepository {
         self.thread_store
             .get(thread_id)
             .await
+            .map_err(|error| ThreadHistoryError::Storage(error.to_string()))?
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
 
         if self.transcript_store.exists(thread_id).await {
@@ -224,6 +228,7 @@ impl ThreadHistoryRepository {
             .thread_store
             .get(thread_id)
             .await
+            .map_err(|error| ThreadHistoryError::Storage(error.to_string()))?
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
 
         if self.transcript_store.exists(thread_id).await {

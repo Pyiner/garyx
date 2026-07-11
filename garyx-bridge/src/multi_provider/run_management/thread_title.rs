@@ -1,4 +1,5 @@
 use super::*;
+use garyx_router::ThreadStoreExt;
 
 pub(super) fn summarize_text(value: &str, limit: usize) -> String {
     let sanitized = value.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -57,7 +58,7 @@ pub(super) async fn persist_provider_thread_title_if_missing(
     title: Option<&str>,
 ) -> Option<String> {
     let title = title.and_then(normalize_provider_thread_title)?;
-    let mut value = store.get(thread_id).await?;
+    let mut value = store.get_logged(thread_id).await?;
     if !should_apply_provider_thread_title(&value) {
         return None;
     }
@@ -75,7 +76,9 @@ pub(super) async fn persist_provider_thread_title_if_missing(
         "updated_at".to_owned(),
         Value::String(chrono::Utc::now().to_rfc3339()),
     );
-    store.set(thread_id, value).await;
+    if !store.set_logged(thread_id, value).await {
+        return None;
+    }
     Some(title)
 }
 

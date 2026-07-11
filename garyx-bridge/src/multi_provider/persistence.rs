@@ -1,3 +1,4 @@
+use garyx_router::ThreadStoreExt;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
@@ -1220,10 +1221,16 @@ pub(super) async fn save_streaming_partial(
         }
     }
 
-    let mut session_data = store
-        .get(run.thread_id)
-        .await
-        .unwrap_or_else(|| serde_json::json!({}));
+    // A failed record read must not fall back to an empty record: writing
+    // that skeleton back would clobber thread metadata. Skip this
+    // persistence tick instead; the next tick retries.
+    let mut session_data = match store.get(run.thread_id).await {
+        Ok(existing) => existing.unwrap_or_else(|| serde_json::json!({})),
+        Err(error) => {
+            warn!(thread_id = %run.thread_id, error = %error, "failed to read thread record; skipping streaming persistence tick");
+            return (appended, committed_pairs);
+        }
+    };
     let committed_total = match committed_total {
         Some(total) => total,
         None => history
@@ -1276,7 +1283,9 @@ pub(super) async fn save_streaming_partial(
             Value::String(Utc::now().to_rfc3339()),
         );
     }
-    store.set(run.thread_id, session_data).await;
+    if !store.set_logged(run.thread_id, session_data).await {
+        warn!(thread_id = %run.thread_id, "thread record write did not persist");
+    }
     (appended, committed_pairs)
 }
 
@@ -1378,10 +1387,15 @@ async fn save_thread_messages_with_session_update(
     transcript_controls: &[RunControlRecord],
     terminal_control: Option<TerminalRunControl>,
 ) -> Vec<(u64, Value)> {
-    let mut session_data = store
-        .get(run.thread_id)
-        .await
-        .unwrap_or_else(|| serde_json::json!({}));
+    // Same clobber guard as the streaming path: a read failure must not
+    // degrade into writing a skeleton record over live metadata.
+    let mut session_data = match store.get(run.thread_id).await {
+        Ok(existing) => existing.unwrap_or_else(|| serde_json::json!({})),
+        Err(error) => {
+            warn!(thread_id = %run.thread_id, error = %error, "failed to read thread record; skipping final run persistence");
+            return Vec::new();
+        }
+    };
     let run_messages = build_run_messages(&run);
     let current_run_id = primary_run_identifier(run.metadata);
     let existing_recent_run_ids = recent_committed_run_ids_from_value(&session_data);
@@ -1577,7 +1591,9 @@ async fn save_thread_messages_with_session_update(
         );
     }
 
-    store.set(run.thread_id, session_data).await;
+    if !store.set_logged(run.thread_id, session_data).await {
+        warn!(thread_id = %run.thread_id, "thread record write did not persist");
+    }
     committed_pairs
 }
 

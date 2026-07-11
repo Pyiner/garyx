@@ -1,3 +1,4 @@
+use crate::store::ThreadStoreExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -113,7 +114,7 @@ impl MessageRouter {
             );
         }
 
-        let thread_record = self.threads.get(&thread_id).await;
+        let thread_record = self.threads.get_logged(&thread_id).await;
         let thread_workspace_dir = thread_record
             .as_ref()
             .and_then(crate::workspace_dir_from_value);

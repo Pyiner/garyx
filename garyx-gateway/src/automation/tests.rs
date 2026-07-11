@@ -390,7 +390,8 @@ async fn update_automation_switches_target_thread_without_workspace_snapshot() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let body: UpdateAutomationBody =
         serde_json::from_value(serde_json::json!({ "targetThreadId": "thread::target-two" }))
             .unwrap();
@@ -455,7 +456,8 @@ async fn automation_threads_endpoint_returns_generated_run_associations() {
                 "messages": [{"role": "user", "content": "Summarize."}]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .ops
         .garyx_db
@@ -592,6 +594,7 @@ async fn data_trigger_with_agent_id_creates_and_dispatches_agent_task() {
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("task thread exists");
     assert_eq!(record["agent_id"], "codex");
     assert_eq!(record["provider_type"], "codex_app_server");

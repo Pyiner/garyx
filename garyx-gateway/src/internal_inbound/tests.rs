@@ -156,7 +156,8 @@ async fn test_dispatch_internal_message_to_thread_uses_explicit_thread() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -172,7 +173,8 @@ async fn test_dispatch_internal_message_to_thread_uses_explicit_thread() {
                 "channel_bindings": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     {
         let mut router = state.threads.router.lock().await;
@@ -229,6 +231,7 @@ async fn test_dispatch_internal_message_to_thread_uses_explicit_thread() {
         .thread_store
         .get("thread::old-thread")
         .await
+        .unwrap()
         .expect("thread should remain persisted");
     assert!(saved["delivery_context"]["thread_id"].is_null());
 
@@ -327,7 +330,8 @@ async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_me
                 "channel_bindings": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     dispatch_internal_message_to_thread(
         &state,
@@ -397,7 +401,8 @@ async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_me
                 "channel_bindings": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
     dispatch_internal_message_to_thread(
         &state,
         "thread::agent-task-override",
@@ -483,7 +488,8 @@ async fn test_dispatch_internal_message_to_thread_restores_missing_dm_binding() 
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     dispatch_internal_message_to_thread(
         &state,
@@ -500,6 +506,7 @@ async fn test_dispatch_internal_message_to_thread_restores_missing_dm_binding() 
         .thread_store
         .get("thread::restore-binding")
         .await
+        .unwrap()
         .expect("thread should remain persisted");
     let bindings = saved["channel_bindings"]
         .as_array()

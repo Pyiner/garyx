@@ -22,6 +22,7 @@ use garyx_models::provider::{
     SDK_SESSION_FORK_METADATA_KEY,
 };
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
+use garyx_router::ThreadStoreExt;
 use garyx_router::{
     ChannelBinding, KnownChannelEndpoint, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadEnsureOptions,
     ThreadTranscriptRecord, WorkspaceMode, bindings_from_value, history_message_count,
@@ -877,7 +878,8 @@ async fn seed_imported_thread_history(
         .threads
         .thread_store
         .set(thread_id, thread_data.clone())
-        .await;
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -1099,7 +1101,7 @@ async fn ensure_existing_thread_id(state: &Arc<AppState>, key: &str) -> Option<S
     if trimmed.is_empty() || !is_thread_key(trimmed) {
         return None;
     }
-    if state.threads.thread_store.exists(trimmed).await {
+    if state.threads.thread_store.exists_logged(trimmed).await {
         Some(trimmed.to_owned())
     } else {
         None
@@ -1133,11 +1135,20 @@ async fn hard_delete_thread_record(
     if abort_active_runs {
         let _ = state.integration.bridge.abort_thread_runs(thread_id).await;
     }
-    if !state.threads.thread_store.delete(thread_id).await {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({"deleted": false, "error": format!("thread not found: {thread_id}") })),
-        ));
+    match state.threads.thread_store.delete(thread_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"deleted": false, "error": format!("thread not found: {thread_id}") })),
+            ));
+        }
+        Err(error) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"deleted": false, "error": error.to_string() })),
+            ));
+        }
     }
 
     // Projection rows and the pin were removed in the same transaction as
@@ -1473,7 +1484,7 @@ async fn attach_thread_runtime_summary_with_catalog(
     summary: &mut Value,
     catalog: &AgentCatalogSnapshot,
 ) {
-    let thread_value = state.threads.thread_store.get(thread_id).await;
+    let thread_value = state.threads.thread_store.get_logged(thread_id).await;
     if let Some(obj) = summary.as_object_mut() {
         obj.insert(
             "thread_runtime".to_owned(),
@@ -1582,7 +1593,7 @@ pub async fn get_thread(
             Json(json!({"error": "thread not found"})),
         );
     };
-    match state.threads.thread_store.get(&thread_id).await {
+    match state.threads.thread_store.get_logged(&thread_id).await {
         Some(data) => (
             StatusCode::OK,
             Json(thread_metadata_response(&state, &thread_id, &data).await),
@@ -2534,7 +2545,11 @@ pub async fn create_thread(
                     Json(json!({"error": "fork source thread not found"})),
                 );
             };
-            let Some(source_thread_data) = state.threads.thread_store.get(&source_thread_id).await
+            let Some(source_thread_data) = state
+                .threads
+                .thread_store
+                .get_logged(&source_thread_id)
+                .await
             else {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -2700,7 +2715,7 @@ pub async fn create_thread(
                             .await;
                     }
                     Err(error) => {
-                        state.threads.thread_store.delete(&thread_id).await;
+                        state.threads.thread_store.delete_logged(&thread_id).await;
                         return (
                             StatusCode::INTERNAL_SERVER_ERROR,
                             Json(json!({ "error": error })),
@@ -2713,7 +2728,7 @@ pub async fn create_thread(
                     seed_imported_thread_history(&state, &thread_id, &mut data, &recovered.messages)
                         .await
             {
-                state.threads.thread_store.delete(&thread_id).await;
+                state.threads.thread_store.delete_logged(&thread_id).await;
                 let _ = state
                     .threads
                     .history
@@ -2779,11 +2794,17 @@ pub async fn update_thread(
                         Value::String(Utc::now().to_rfc3339()),
                     );
                 }
-                state
+                if let Err(error) = state
                     .threads
                     .thread_store
                     .set(&thread_id, data.clone())
-                    .await;
+                    .await
+                {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": error.to_string() })),
+                    );
+                }
             }
             state
                 .integration
@@ -2946,7 +2967,7 @@ pub async fn archive_thread(
             Json(json!({"archived": false, "error": "thread not found"})),
         );
     }
-    let Some(thread_data) = state.threads.thread_store.get(trimmed).await else {
+    let Some(thread_data) = state.threads.thread_store.get_logged(trimmed).await else {
         // No record: projections were removed with it in the same delete
         // transaction, so only the tombstone and runtime state remain.
         let archive_id = trimmed.to_owned();
@@ -3009,7 +3030,7 @@ pub async fn archive_thread(
     let delete_data = state
         .threads
         .thread_store
-        .get(trimmed)
+        .get_logged(trimmed)
         .await
         .unwrap_or(thread_data);
     if let Err(response) = hard_delete_thread_record(&state, trimmed, &delete_data, false).await {
@@ -3040,7 +3061,7 @@ pub async fn delete_thread(
             Json(json!({"deleted": false, "error": "thread not found"})),
         );
     };
-    let Some(thread_data) = state.threads.thread_store.get(&thread_id).await else {
+    let Some(thread_data) = state.threads.thread_store.get_logged(&thread_id).await else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"deleted": false, "error": "thread not found"})),
@@ -3490,7 +3511,12 @@ pub async fn detach_channel_endpoint(
 /// GET /api/status - detailed system status
 pub async fn system_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let uptime = state.runtime.start_time.elapsed().as_secs();
-    let thread_count = state.threads.thread_store.list_keys(None).await.len();
+    let thread_count = state
+        .threads
+        .thread_store
+        .list_keys_logged(None)
+        .await
+        .len();
     let stream_drops = state.ops.events.dropped_count();
     let stream_history_size = state.ops.events.history_len().await;
 

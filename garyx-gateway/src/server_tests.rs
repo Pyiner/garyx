@@ -322,7 +322,8 @@ async fn test_sessions_filtering_with_prefix() {
             "thread::agent1-u1",
             serde_json::json!({"thread_id": "thread::agent1-u1"}),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -330,7 +331,8 @@ async fn test_sessions_filtering_with_prefix() {
             "thread::agent1-u2",
             serde_json::json!({"thread_id": "thread::agent1-u2"}),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -338,7 +340,8 @@ async fn test_sessions_filtering_with_prefix() {
             "thread::agent2-u3",
             serde_json::json!({"thread_id": "thread::agent2-u3"}),
         )
-        .await;
+        .await
+        .unwrap();
 
     let gw = Gateway::new(state);
     let req = authed_request()
@@ -375,7 +378,8 @@ async fn test_sessions_pagination_limit_offset() {
                     "thread_id": format!("thread::{:02}", i)
                 }),
             )
-            .await;
+            .await
+            .unwrap();
     }
 
     let gw = Gateway::new(state);
@@ -446,7 +450,8 @@ async fn test_channel_endpoints_returns_thread_metadata() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let gw = Gateway::new(state);
     let req = authed_request()
@@ -490,7 +495,8 @@ async fn test_bind_channel_endpoint_moves_binding_to_target_thread() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -503,7 +509,8 @@ async fn test_bind_channel_endpoint_moves_binding_to_target_thread() {
                 "channel_bindings": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let gw = Gateway::new(state.clone());
     let req = authed_request()
@@ -530,12 +537,14 @@ async fn test_bind_channel_endpoint_moves_binding_to_target_thread() {
         .thread_store
         .get("thread::source")
         .await
+        .unwrap()
         .unwrap();
     let target = state
         .threads
         .thread_store
         .get("thread::target")
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(
         source["channel_bindings"]
@@ -571,7 +580,8 @@ async fn test_bind_channel_endpoint_noops_when_already_bound_to_target_thread() 
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let gw = Gateway::new(state.clone());
     let req = authed_request()
@@ -598,6 +608,7 @@ async fn test_bind_channel_endpoint_noops_when_already_bound_to_target_thread() 
         .thread_store
         .get("thread::target")
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(
         target["channel_bindings"]
@@ -628,7 +639,8 @@ async fn test_bind_channel_endpoint_moves_delivery_target_to_bound_thread() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -641,7 +653,8 @@ async fn test_bind_channel_endpoint_moves_delivery_target_to_bound_thread() {
                 "channel_bindings": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
     {
         let mut router = state.threads.router.lock().await;
         router
@@ -690,6 +703,7 @@ async fn test_bind_channel_endpoint_moves_delivery_target_to_bound_thread() {
         .thread_store
         .get("thread::source")
         .await
+        .unwrap()
         .unwrap();
     assert!(source.get("delivery_context").is_none());
     let target = state
@@ -697,6 +711,7 @@ async fn test_bind_channel_endpoint_moves_delivery_target_to_bound_thread() {
         .thread_store
         .get("thread::target")
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(target["delivery_context"]["channel"], "telegram");
     assert_eq!(target["delivery_context"]["chat_id"], "alice");
@@ -723,7 +738,8 @@ async fn test_detach_channel_endpoint_removes_binding() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let gw = Gateway::new(state.clone());
     let req = authed_request()
@@ -748,6 +764,7 @@ async fn test_detach_channel_endpoint_removes_binding() {
         .thread_store
         .get("thread::bound")
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(
         stored["channel_bindings"]
@@ -801,7 +818,8 @@ async fn test_detach_channel_endpoint_clears_endpoint_runtime_routing() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     {
         let mut router = state.threads.router.lock().await;
@@ -865,6 +883,7 @@ async fn test_detach_channel_endpoint_clears_endpoint_runtime_routing() {
         .thread_store
         .get("thread::bound")
         .await
+        .unwrap()
         .unwrap();
     assert!(stored.get("delivery_context").is_none());
 }
@@ -914,7 +933,8 @@ async fn test_detach_channel_endpoint_preserves_other_topic_routing_in_same_chat
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     {
         let mut router = state.threads.router.lock().await;
@@ -996,6 +1016,7 @@ async fn test_detach_channel_endpoint_preserves_other_topic_routing_in_same_chat
         .thread_store
         .get("thread::bound")
         .await
+        .unwrap()
         .unwrap();
     let outbound = stored["outbound_message_ids"].as_array().unwrap();
     assert_eq!(outbound.len(), 1);
@@ -1057,7 +1078,8 @@ async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     {
         let mut router = state.threads.router.lock().await;
@@ -1133,6 +1155,7 @@ async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat
         .thread_store
         .get("thread::bound")
         .await
+        .unwrap()
         .unwrap();
     let outbound = stored["outbound_message_ids"].as_array().unwrap();
     assert_eq!(outbound.len(), 1);

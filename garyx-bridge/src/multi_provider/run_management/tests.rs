@@ -32,7 +32,8 @@ async fn provider_thread_title_replaces_prompt_fallback_label() {
                 "thread_title_source": "garyx_prompt"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let applied = persist_provider_thread_title_if_missing(
         &store,
@@ -42,7 +43,11 @@ async fn provider_thread_title_replaces_prompt_fallback_label() {
     .await;
 
     assert_eq!(applied.as_deref(), Some("Provider Generated Title"));
-    let updated = store.get("thread::title").await.expect("thread exists");
+    let updated = store
+        .get("thread::title")
+        .await
+        .unwrap()
+        .expect("thread exists");
     assert_eq!(updated["label"], "Provider Generated Title");
     assert_eq!(updated["thread_title_source"], "provider");
     assert_eq!(updated["provider_thread_title"], "Provider Generated Title");
@@ -59,7 +64,8 @@ async fn provider_thread_title_does_not_replace_explicit_label() {
                 "label": "Human Label"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let applied = persist_provider_thread_title_if_missing(
         &store,
@@ -69,7 +75,11 @@ async fn provider_thread_title_does_not_replace_explicit_label() {
     .await;
 
     assert!(applied.is_none());
-    let updated = store.get("thread::explicit").await.expect("thread exists");
+    let updated = store
+        .get("thread::explicit")
+        .await
+        .unwrap()
+        .expect("thread exists");
     assert_eq!(updated["label"], "Human Label");
     assert!(updated.get("provider_thread_title").is_none());
 }
@@ -88,7 +98,8 @@ async fn provider_thread_title_does_not_replace_task_label() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let applied = persist_provider_thread_title_if_missing(
         &store,
@@ -98,7 +109,11 @@ async fn provider_thread_title_does_not_replace_task_label() {
     .await;
 
     assert!(applied.is_none());
-    let updated = store.get("thread::task").await.expect("thread exists");
+    let updated = store
+        .get("thread::task")
+        .await
+        .unwrap()
+        .expect("thread exists");
     assert_eq!(
         updated["label"],
         "Polish roguelike copy in English after FOV"
@@ -118,7 +133,8 @@ async fn provider_thread_title_does_not_replace_task_managed_label() {
                 "thread_title_source": "task"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let applied = persist_provider_thread_title_if_missing(
         &store,
@@ -131,6 +147,7 @@ async fn provider_thread_title_does_not_replace_task_managed_label() {
     let updated = store
         .get("thread::task-managed")
         .await
+        .unwrap()
         .expect("thread exists");
     assert_eq!(updated["label"], "#TASK-33 Ship thread title");
     assert_eq!(updated["thread_title_source"], "task");

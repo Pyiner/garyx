@@ -21,13 +21,18 @@ struct ScanProjectionReader {
 }
 
 impl ScanProjectionReader {
-    async fn tasks(&self) -> Vec<(String, Value, ThreadTask)> {
+    async fn tasks(&self) -> Result<Vec<(String, Value, ThreadTask)>, String> {
         let mut tasks = Vec::new();
-        for key in self.store.list_keys(None).await {
+        for key in self
+            .store
+            .list_keys(None)
+            .await
+            .map_err(|e| e.to_string())?
+        {
             if !is_thread_key(&key) {
                 continue;
             }
-            let Some(record) = self.store.get(&key).await else {
+            let Some(record) = self.store.get(&key).await.map_err(|e| e.to_string())? else {
                 continue;
             };
             let Ok(Some(task)) = task_from_record(&record) else {
@@ -35,7 +40,7 @@ impl ScanProjectionReader {
             };
             tasks.push((key, record, task));
         }
-        tasks
+        Ok(tasks)
     }
 }
 
@@ -90,14 +95,14 @@ impl TaskProjectionReader for ScanProjectionReader {
     async fn thread_id_for_number(&self, number: u64) -> Result<Option<String>, String> {
         Ok(self
             .tasks()
-            .await
+            .await?
             .into_iter()
             .find(|(_, _, task)| task.number == number)
             .map(|(thread_id, _, _)| thread_id))
     }
 
     async fn has_running_subtask_targeting(&self, thread_id: &str) -> Result<bool, String> {
-        Ok(self.tasks().await.into_iter().any(|(key, _, task)| {
+        Ok(self.tasks().await?.into_iter().any(|(key, _, task)| {
             key != thread_id
                 && task.status == TaskStatus::InProgress
                 && matches!(
@@ -114,7 +119,7 @@ impl TaskProjectionReader for ScanProjectionReader {
         let limit = filter.limit.unwrap_or(50);
         let offset = filter.offset.unwrap_or(0);
         let mut summaries = Vec::new();
-        for (key, record, task) in self.tasks().await {
+        for (key, record, task) in self.tasks().await? {
             if !filter.include_done && task.status == TaskStatus::Done {
                 continue;
             }
@@ -388,7 +393,7 @@ async fn task_create_stores_task_overlay_without_task_messages() {
         .await
         .unwrap();
     assert!(task.number > 0);
-    let record = service.thread_store.get(&thread_id).await.unwrap();
+    let record = service.thread_store.get(&thread_id).await.unwrap().unwrap();
     assert!(record.get("task").is_some());
     assert_eq!(record["thread_kind"], "task");
     // The body is no longer seeded into a record messages copy
@@ -417,7 +422,7 @@ async fn task_create_stores_prefixed_thread_title() {
         .await
         .unwrap();
 
-    let record = service.thread_store.get(&thread_id).await.unwrap();
+    let record = service.thread_store.get(&thread_id).await.unwrap().unwrap();
     assert_eq!(task.title, "Audit daemons");
     assert_eq!(
         record["label"],
@@ -451,7 +456,7 @@ async fn set_title_updates_managed_thread_title() {
         .await
         .unwrap();
 
-    let record = service.thread_store.get(&thread_id).await.unwrap();
+    let record = service.thread_store.get(&thread_id).await.unwrap().unwrap();
     assert_eq!(updated.title, "Updated title");
     assert_eq!(
         record["label"],
@@ -493,7 +498,7 @@ async fn set_title_does_not_overwrite_manually_renamed_thread() {
         .await
         .unwrap();
 
-    let record = service.thread_store.get(&thread_id).await.unwrap();
+    let record = service.thread_store.get(&thread_id).await.unwrap().unwrap();
     assert_eq!(updated.title, "New task title");
     assert_eq!(record["label"], "Manual thread title");
     assert_eq!(record["thread_title_source"], "explicit");
@@ -518,21 +523,21 @@ async fn set_title_leaves_legacy_unmanaged_thread_title_unchanged() {
         .await
         .unwrap();
     let task_id = canonical_task_id(&task);
-    let mut record = service.thread_store.get(&thread_id).await.unwrap();
+    let mut record = service.thread_store.get(&thread_id).await.unwrap().unwrap();
     let obj = record.as_object_mut().unwrap();
     obj.insert(
         "label".to_owned(),
         Value::String("Legacy thread title".to_owned()),
     );
     obj.remove("thread_title_source");
-    service.thread_store.set(&thread_id, record).await;
+    service.thread_store.set(&thread_id, record).await.unwrap();
 
     let updated = service
         .set_title(&task_id, "Retitled legacy task".to_owned(), None)
         .await
         .unwrap();
 
-    let record = service.thread_store.get(&thread_id).await.unwrap();
+    let record = service.thread_store.get(&thread_id).await.unwrap().unwrap();
     assert_eq!(updated.title, "Retitled legacy task");
     assert_eq!(record["label"], "Legacy thread title");
     assert!(record.get("thread_title_source").is_none());
@@ -627,7 +632,7 @@ async fn task_create_binds_agent_executor_to_thread() {
         })
         .await
         .unwrap();
-    let record = service.thread_store.get(&thread_id).await.unwrap();
+    let record = service.thread_store.get(&thread_id).await.unwrap().unwrap();
     assert_eq!(record["agent_id"], "agent::reviewer");
     assert_eq!(
         task.executor,
@@ -1291,6 +1296,7 @@ async fn delete_task_removes_overlay_from_list_but_keeps_thread_record() {
         .thread_store
         .get(&thread_id)
         .await
+        .unwrap()
         .expect("backing thread remains");
     assert!(record.get("task").is_none());
     assert_eq!(record["thread_kind"], "task");
@@ -1433,7 +1439,7 @@ async fn task_create_persists_runtime_fields() {
         })
         .await
         .unwrap();
-    let record = service.thread_store.get(&thread_id).await.unwrap();
+    let record = service.thread_store.get(&thread_id).await.unwrap().unwrap();
     assert_eq!(record["agent_id"], Value::String("codex".to_owned()));
     assert_eq!(
         record["workspace_dir"],

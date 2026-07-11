@@ -1,3 +1,4 @@
+use garyx_router::ThreadStoreExt;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -108,7 +109,12 @@ pub(crate) async fn deliver_task_review_handoff(
     else {
         return Ok(());
     };
-    let Some(record) = state.threads.thread_store.get(&event.thread_id).await else {
+    let Some(record) = state
+        .threads
+        .thread_store
+        .get_logged(&event.thread_id)
+        .await
+    else {
         return Err(TaskNotificationError::new(&event, "task thread not found"));
     };
     let task = task_from_record(&record)
@@ -208,7 +214,7 @@ async fn deliver_notification_to_thread(
     if state
         .threads
         .thread_store
-        .get(target_thread_id)
+        .get_logged(target_thread_id)
         .await
         .is_none()
     {

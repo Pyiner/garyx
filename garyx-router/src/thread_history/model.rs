@@ -4,6 +4,8 @@ use super::*;
 pub enum ThreadHistoryError {
     #[error("thread not found: {0}")]
     ThreadNotFound(String),
+    #[error("thread store failed: {0}")]
+    Storage(String),
     #[error("missing transcript for thread: {0}")]
     MissingTranscript(String),
     #[error("transcript io error for thread {thread_id}: {message}")]

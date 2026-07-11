@@ -174,7 +174,8 @@ async fn test_rebuild_from_store() {
                 ]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut idx = MessageRoutingIndex::new();
     let count = idx.rebuild_from_store(&store, "telegram").await;
@@ -202,7 +203,8 @@ async fn test_rebuild_from_store_restores_chat_scoped_routing() {
                 ]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     store
         .set(
             "s2",
@@ -212,7 +214,8 @@ async fn test_rebuild_from_store_restores_chat_scoped_routing() {
                 ]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut idx = MessageRoutingIndex::new();
     let count = idx.rebuild_from_store(&store, "telegram").await;

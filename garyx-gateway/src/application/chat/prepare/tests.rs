@@ -128,7 +128,8 @@ async fn persist_thread_label_marks_prompt_fallback_source() {
             "thread::prompt-title",
             json!({ "thread_id": "thread::prompt-title" }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let title_update = persist_thread_label_if_missing(
         &state,
@@ -147,6 +148,7 @@ async fn persist_thread_label_marks_prompt_fallback_source() {
         .thread_store
         .get("thread::prompt-title")
         .await
+        .unwrap()
         .expect("thread exists");
     assert_eq!(updated["label"], "Please investigate provider title events");
     assert_eq!(updated["thread_title_source"], "garyx_prompt");
@@ -213,7 +215,8 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let prepared = prepare_chat_request(
         &state,
@@ -333,7 +336,8 @@ async fn prepare_chat_request_prefers_thread_snapshot_before_agent_runtime_metad
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let prepared = prepare_chat_request(
         &state,
@@ -412,7 +416,8 @@ async fn prepare_chat_request_strips_reserved_provider_env_from_request_metadata
                 "messages": [],
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut metadata = HashMap::new();
     metadata.insert(
@@ -472,7 +477,8 @@ async fn prepare_chat_request_binds_explicit_api_thread_to_from_id() {
                 "channel_bindings": [],
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let prepared = prepare_chat_request(
         &state,
@@ -501,6 +507,7 @@ async fn prepare_chat_request_binds_explicit_api_thread_to_from_id() {
         .thread_store
         .get("thread::api-explicit")
         .await
+        .unwrap()
         .expect("thread exists");
     let binding = garyx_router::bindings_from_value(&updated)
         .into_iter()

@@ -1295,8 +1295,7 @@ fn parse_task_create_agent_executor_options() {
     ]);
     match cli.command {
         Some(Commands::Task {
-            action:
-                TaskAction::Create { agent, .. },
+            action: TaskAction::Create { agent, .. },
         }) => {
             assert_eq!(agent.as_deref(), Some("claude"));
         }
@@ -2710,7 +2709,8 @@ async fn startup_runtime_assembles_without_rebuilding_thread_indexes_from_canoni
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut config = GaryxConfig::default();
     config.sessions.data_dir = Some(session_dir.display().to_string());
@@ -2737,7 +2737,13 @@ async fn startup_runtime_assembles_without_rebuilding_thread_indexes_from_canoni
         .await
         .unwrap();
 
-    let keys = assembly.state.threads.thread_store.list_keys(None).await;
+    let keys = assembly
+        .state
+        .threads
+        .thread_store
+        .list_keys(None)
+        .await
+        .unwrap();
     assert!(keys.iter().any(|key| key == "thread::startup-alice"));
 
     let thread = assembly
@@ -2746,6 +2752,7 @@ async fn startup_runtime_assembles_without_rebuilding_thread_indexes_from_canoni
         .thread_store
         .get("thread::startup-alice")
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(thread["sdk_session_id"], "sdk-123");
     assert_eq!(thread["workspace_dir"], "/tmp/runtime-assembler-ws");

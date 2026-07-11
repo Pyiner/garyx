@@ -1,3 +1,4 @@
+use garyx_router::ThreadStoreExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,8 +31,8 @@ use crate::run_graph::{RunGraphState, execute_agent_run};
 
 use super::MultiProviderBridge;
 use super::persistence::{
-    MAX_SESSION_MESSAGES, PendingUserInput, PendingUserInputStatus, PersistedRun,
-    RunControlRecord, StreamingRunSnapshot, TerminalRunControl, ThreadPersistenceCommand,
+    MAX_SESSION_MESSAGES, PendingUserInput, PendingUserInputStatus, PersistedRun, RunControlRecord,
+    StreamingRunSnapshot, TerminalRunControl, ThreadPersistenceCommand,
     capsule_attached_control_record, save_failed_thread_messages_with_terminal_control,
     save_streaming_partial, save_thread_messages_with_terminal_control,
 };
@@ -319,7 +320,7 @@ async fn restore_thread_affinity_from_store(
     }
 
     let store = bridge.inner.thread_store.read().await.clone()?;
-    let session_data = store.get(thread_id).await?;
+    let session_data = store.get_logged(thread_id).await?;
     if let Some(provider_key) = session_data
         .get("provider_key")
         .and_then(Value::as_str)
@@ -657,7 +658,7 @@ impl MultiProviderBridge {
         // This avoids leaking a different provider's session/thread id across
         // provider switches on the same Garyx thread.
         if let Some(store) = &*self.inner.thread_store.read().await
-            && let Some(session_data) = store.get(&thread_id).await
+            && let Some(session_data) = store.get_logged(&thread_id).await
         {
             let resolved_provider_type = provider.provider_type();
             let history = self.inner.thread_history.read().await.clone();
@@ -1272,7 +1273,7 @@ impl MultiProviderBridge {
 
         scrub_inline_run_runtime_metadata(&mut metadata);
         if let Some(store) = self.inner.thread_store.read().await.clone()
-            && let Some(thread_data) = store.get(thread_id).await
+            && let Some(thread_data) = store.get_logged(thread_id).await
         {
             for (key, value) in thread_metadata_from_value(&thread_data) {
                 metadata.entry(key).or_insert(value);
@@ -1283,13 +1284,7 @@ impl MultiProviderBridge {
         let effective_workspace_dir =
             resolve_effective_workspace_dir(&self.inner, thread_id, workspace_dir).await?;
         let (provider_key, provider, _) = self
-            .resolve_thread_execution_target(
-                thread_id,
-                "api",
-                "inline",
-                &mut metadata,
-                None,
-            )
+            .resolve_thread_execution_target(thread_id, "api", "inline", &mut metadata, None)
             .await?;
         record_thread_log(
             thread_logs.clone(),
@@ -1347,7 +1342,7 @@ impl MultiProviderBridge {
         }
 
         if let Some(store) = &*self.inner.thread_store.read().await
-            && let Some(session_data) = store.get(thread_id).await
+            && let Some(session_data) = store.get_logged(thread_id).await
         {
             let resolved_provider_type = provider.provider_type();
             let history = self.inner.thread_history.read().await.clone();

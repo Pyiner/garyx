@@ -1368,7 +1368,8 @@ async fn test_thread_bound_claude_code_agent_snapshots_env_on_shared_provider() 
                 "metadata": {}
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     bridge.set_thread_history(history);
 
@@ -1431,7 +1432,7 @@ async fn test_thread_bound_claude_code_agent_snapshots_env_on_shared_provider() 
         Some("claude_code")
     );
 
-    let stored = store.get(thread_id).await.expect("stored thread");
+    let stored = store.get(thread_id).await.unwrap().expect("stored thread");
     assert_eq!(
         stored
             .get("metadata")
@@ -1729,7 +1730,8 @@ async fn run_inline_streaming_rederives_target_metadata_and_persists_history() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let metadata = HashMap::from([
         ("agent_id".to_owned(), json!("caller")),
@@ -1784,6 +1786,7 @@ async fn run_inline_streaming_rederives_target_metadata_and_persists_history() {
     let thread_data = store
         .get("thread::child-coder")
         .await
+        .unwrap()
         .expect("thread data should exist");
     assert_eq!(
         thread_data.get("provider_key").and_then(|v| v.as_str()),
@@ -1845,7 +1848,8 @@ async fn run_inline_streaming_uses_global_run_limiter() {
                     }
                 }),
             )
-            .await;
+            .await
+            .unwrap();
     }
 
     let first_bridge = bridge.clone();
@@ -1927,7 +1931,8 @@ async fn provider_title_update_is_forwarded_after_persistence_without_delaying_d
                 "thread_title_source": "garyx_prompt"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let events = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
     let done = Arc::new(Notify::new());
@@ -1969,6 +1974,7 @@ async fn provider_title_update_is_forwarded_after_persistence_without_delaying_d
     let updated = store
         .get("thread::title-event")
         .await
+        .unwrap()
         .expect("thread exists");
     assert_eq!(updated["label"], "Provider Generated Title");
     assert_eq!(updated["thread_title_source"], "provider");
@@ -2015,7 +2021,8 @@ async fn provider_title_update_is_not_forwarded_when_explicit_label_wins() {
                 "thread_title_source": "explicit"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let events = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
     let done = Arc::new(Notify::new());
@@ -2049,6 +2056,7 @@ async fn provider_title_update_is_not_forwarded_when_explicit_label_wins() {
     let updated = store
         .get("thread::explicit-title-event")
         .await
+        .unwrap()
         .expect("thread exists");
     assert_eq!(updated["label"], "Human Title");
     assert!(updated.get("provider_thread_title").is_none());
@@ -2371,6 +2379,7 @@ async fn test_thread_persistence_after_run() {
     let data = store
         .get("sess::tg::persist")
         .await
+        .unwrap()
         .expect("thread record should exist");
     assert_eq!(data["provider_key"], "p1");
     assert!(
@@ -2559,7 +2568,7 @@ async fn test_thread_persistence_checkpoints_streaming_metadata_before_run_compl
 
     let checkpointed = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            let Some(data) = store.get("sess::tg::checkpoint").await else {
+            let Some(data) = store.get("sess::tg::checkpoint").await.unwrap() else {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 continue;
             };
@@ -2599,6 +2608,7 @@ async fn test_thread_persistence_checkpoints_streaming_metadata_before_run_compl
     let final_data = store
         .get("sess::tg::checkpoint")
         .await
+        .unwrap()
         .expect("final thread data should exist");
     let final_messages = combined_thread_messages(&history, "sess::tg::checkpoint").await;
     assert_eq!(final_messages.len(), 2);
@@ -2653,7 +2663,8 @@ async fn test_failed_run_commits_terminal_control_and_preserves_partial_messages
                 "task": task
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     let history = make_history(store.clone());
     bridge.set_thread_history(history.clone());
@@ -2687,13 +2698,13 @@ async fn test_failed_run_commits_terminal_control_and_preserves_partial_messages
     let final_data = store
         .get("sess::tg::failed-checkpoint")
         .await
+        .unwrap()
         .expect("failed thread data should exist");
     assert_eq!(final_data["sdk_session_id"], "sdk-existing");
     assert_eq!(final_data["provider_sdk_session_ids"]["p1"], "sdk-existing");
     assert_eq!(final_data["task"]["status"], "in_progress");
 
-    let final_messages =
-        combined_thread_messages(&history, "sess::tg::failed-checkpoint").await;
+    let final_messages = combined_thread_messages(&history, "sess::tg::failed-checkpoint").await;
     assert_eq!(final_messages[0]["role"], "user");
     assert_eq!(final_messages[0]["content"], "keep this failure");
     assert!(
@@ -2750,7 +2761,8 @@ async fn test_empty_successful_task_run_does_not_move_to_review() {
                 "task": task
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     bridge.set_thread_history(make_history(store.clone()));
 
@@ -2779,6 +2791,7 @@ async fn test_empty_successful_task_run_does_not_move_to_review() {
     let final_data = store
         .get("sess::tg::empty-task")
         .await
+        .unwrap()
         .expect("thread data should exist");
     assert_eq!(final_data["task"]["status"], "in_progress");
 }
@@ -2822,7 +2835,8 @@ async fn test_unsuccessful_task_run_with_partial_response_does_not_move_to_revie
                 "task": task
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     let history = make_history(store.clone());
     bridge.set_thread_history(history.clone());
@@ -2852,10 +2866,10 @@ async fn test_unsuccessful_task_run_with_partial_response_does_not_move_to_revie
     let final_data = store
         .get("sess::tg::failed-result-task")
         .await
+        .unwrap()
         .expect("thread data should exist");
     assert_eq!(final_data["task"]["status"], "in_progress");
-    let final_messages =
-        combined_thread_messages(&history, "sess::tg::failed-result-task").await;
+    let final_messages = combined_thread_messages(&history, "sess::tg::failed-result-task").await;
     assert!(
         final_messages
             .iter()
@@ -2905,7 +2919,8 @@ async fn test_segmented_successful_task_run_hands_off_only_final_answer_segment(
                 "task": task
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     bridge.set_thread_history(make_history(store.clone()));
     let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(128);
@@ -3004,7 +3019,8 @@ async fn test_work_run_wake_revives_in_review_task_before_completion() {
                 "task": task
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     bridge.set_thread_history(make_history(store.clone()));
     let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(128);
@@ -3031,6 +3047,7 @@ async fn test_work_run_wake_revives_in_review_task_before_completion() {
     let status_during_run = store
         .get(thread_id)
         .await
+        .unwrap()
         .and_then(|data| data["task"]["status"].as_str().map(ToOwned::to_owned));
 
     provider.release_run();
@@ -3046,6 +3063,7 @@ async fn test_work_run_wake_revives_in_review_task_before_completion() {
     let final_data = store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("thread data should exist");
     assert_eq!(final_data["task"]["status"], "in_review");
 
@@ -3134,7 +3152,8 @@ async fn test_work_run_wake_revives_done_task_before_completion() {
                 "task": task
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     bridge.set_thread_history(make_history(store.clone()));
     let (tx, mut rx) = tokio::sync::broadcast::channel::<String>(128);
@@ -3161,6 +3180,7 @@ async fn test_work_run_wake_revives_done_task_before_completion() {
     let status_during_run = store
         .get(thread_id)
         .await
+        .unwrap()
         .and_then(|data| data["task"]["status"].as_str().map(ToOwned::to_owned));
 
     provider.release_run();
@@ -3176,6 +3196,7 @@ async fn test_work_run_wake_revives_done_task_before_completion() {
     let final_data = store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("thread data should exist");
     assert_eq!(final_data["task"]["status"], "in_review");
 
@@ -3243,7 +3264,8 @@ async fn assert_non_work_run_does_not_revive_task(
                 "task": task
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     bridge.set_thread_history(make_history(store.clone()));
 
@@ -3269,6 +3291,7 @@ async fn assert_non_work_run_does_not_revive_task(
     let status_during_run = store
         .get(thread_id)
         .await
+        .unwrap()
         .and_then(|data| data["task"]["status"].as_str().map(ToOwned::to_owned));
     assert_eq!(status_during_run.as_deref(), Some(expected_status));
 
@@ -3284,6 +3307,7 @@ async fn assert_non_work_run_does_not_revive_task(
     let final_data = store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("thread data should exist");
     assert_eq!(final_data["task"]["status"], expected_status);
 }
@@ -3372,7 +3396,7 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
 
     let pending_checkpoint = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            let Some(data) = store.get("sess::tg::queued-input").await else {
+            let Some(data) = store.get("sess::tg::queued-input").await.unwrap() else {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 continue;
             };
@@ -3405,7 +3429,7 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
 
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            let Some(data) = store.get("sess::tg::queued-input").await else {
+            let Some(data) = store.get("sess::tg::queued-input").await.unwrap() else {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 continue;
             };
@@ -3460,6 +3484,7 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
     let final_data = store
         .get("sess::tg::queued-input")
         .await
+        .unwrap()
         .expect("final thread data should exist");
     assert_eq!(
         final_data["pending_user_inputs"]
@@ -3622,7 +3647,8 @@ async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
                 "task": task,
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     let history = make_history(store.clone());
     bridge.set_thread_history(history.clone());
@@ -3664,7 +3690,7 @@ async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
 
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
-            if store.get("sess::tg::queued-task").await.is_none() {
+            if store.get("sess::tg::queued-task").await.unwrap().is_none() {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 continue;
             };
@@ -3705,6 +3731,7 @@ async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
     let final_data = store
         .get("sess::tg::queued-task")
         .await
+        .unwrap()
         .expect("final task thread data should exist");
     assert_eq!(final_data["task"]["status"], "in_review");
 }
@@ -3977,7 +4004,8 @@ async fn test_start_run_restores_provider_scoped_sdk_session_id_from_thread_stor
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
@@ -4022,7 +4050,8 @@ async fn test_start_run_restores_thread_bound_sdk_session_id_by_provider_type() 
                 "sdk_session_id": "thread-bound-session"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
@@ -4071,7 +4100,8 @@ async fn test_start_run_uses_fork_parent_sdk_session_before_child_session_exists
                 )
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
@@ -4127,7 +4157,8 @@ async fn test_start_run_resumes_child_sdk_session_after_fork_child_is_bound() {
                 )
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
@@ -4178,7 +4209,8 @@ async fn test_start_run_restores_claude_sdk_session_id_from_legacy_tty_record() 
                 "sdk_session_id": "claude-native-session"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let bridge = MultiProviderBridge::new();
     let claude_sdk = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
@@ -4226,7 +4258,8 @@ async fn test_start_run_restores_claude_sdk_session_id_when_legacy_tty_was_defau
                 "sdk_session_id": "claude-native-session"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let bridge = MultiProviderBridge::new();
     let claude_sdk = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
@@ -4273,7 +4306,8 @@ async fn test_start_run_ignores_legacy_sdk_session_id_from_other_provider() {
                 "sdk_session_id": "codex-thread",
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
@@ -4422,7 +4456,8 @@ async fn test_start_agent_run_persists_runtime_snapshot_on_first_non_override_ru
                 "metadata": {},
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     bridge.set_thread_history(history);
     let provider = Arc::new(MockProvider::with_runtime_selection(
@@ -4455,7 +4490,7 @@ async fn test_start_agent_run_persists_runtime_snapshot_on_first_non_override_ru
     .await
     .expect("run should finish");
 
-    let data = store.get(thread_id).await.expect("thread data");
+    let data = store.get(thread_id).await.unwrap().expect("thread data");
     assert_eq!(data["metadata"]["model"], "provider-default-v1");
     assert_eq!(data["metadata"]["model_reasoning_effort"], "high");
     assert_eq!(data["metadata"]["model_service_tier"], "flex");
@@ -4478,7 +4513,8 @@ async fn test_start_agent_run_skips_snapshot_fields_controlled_by_override() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     bridge.set_thread_history(history);
     let provider = Arc::new(MockProvider::with_runtime_selection(
@@ -4511,7 +4547,7 @@ async fn test_start_agent_run_skips_snapshot_fields_controlled_by_override() {
     .await
     .expect("run should finish");
 
-    let data = store.get(thread_id).await.expect("thread data");
+    let data = store.get(thread_id).await.unwrap().expect("thread data");
     assert_eq!(data["metadata"]["model_override"], "override-model");
     assert!(data["metadata"]["model"].is_null());
     assert_eq!(data["metadata"]["model_reasoning_effort"], "high");
@@ -4536,7 +4572,8 @@ async fn test_start_agent_run_does_not_overwrite_existing_runtime_snapshot() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store.clone()).await;
     bridge.set_thread_history(history);
     let provider = Arc::new(MockProvider::with_runtime_selection(
@@ -4569,7 +4606,7 @@ async fn test_start_agent_run_does_not_overwrite_existing_runtime_snapshot() {
     .await
     .expect("run should finish");
 
-    let data = store.get(thread_id).await.expect("thread data");
+    let data = store.get(thread_id).await.unwrap().expect("thread data");
     assert_eq!(data["metadata"]["model"], "provider-default-v1");
     assert_eq!(data["metadata"]["model_reasoning_effort"], "high");
     assert_eq!(data["metadata"]["model_service_tier"], "flex");
@@ -4594,7 +4631,8 @@ async fn test_start_agent_run_uses_thread_snapshot_before_agent_profile_metadata
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
     bridge.set_thread_store(store).await;
     bridge.set_thread_history(history);
     bridge
@@ -4769,7 +4807,8 @@ async fn test_backfill_runtime_metadata_injects_thread_model_cell() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut metadata: HashMap<String, Value> = HashMap::new();
     bridge
@@ -4823,7 +4862,8 @@ async fn test_backfill_runtime_metadata_prefers_model_cell_over_agent_model() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut metadata: HashMap<String, Value> = HashMap::new();
     bridge
@@ -4859,7 +4899,8 @@ async fn test_backfill_runtime_metadata_legacy_override_wins_over_cell() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut metadata: HashMap<String, Value> = HashMap::new();
     bridge
@@ -4899,7 +4940,8 @@ async fn test_backfill_runtime_metadata_injects_thread_provider_env_snapshot() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut metadata: HashMap<String, Value> = HashMap::new();
     bridge
@@ -4911,7 +4953,9 @@ async fn test_backfill_runtime_metadata_injects_thread_provider_env_snapshot() {
         .and_then(Value::as_object)
         .expect("thread snapshot provider_env must reach run metadata");
     assert_eq!(
-        provider_env.get("ANTHROPIC_BASE_URL").and_then(Value::as_str),
+        provider_env
+            .get("ANTHROPIC_BASE_URL")
+            .and_then(Value::as_str),
         Some("http://127.0.0.1:15721"),
         "proxy base URL from the thread snapshot must drive the run"
     );
@@ -4944,7 +4988,8 @@ async fn test_backfill_runtime_metadata_keeps_explicit_provider_env() {
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut metadata: HashMap<String, Value> = HashMap::new();
     metadata.insert(

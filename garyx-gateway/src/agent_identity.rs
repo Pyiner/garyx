@@ -120,7 +120,9 @@ pub(crate) async fn create_thread_for_agent_reference(
         )],
     );
 
-    thread_store.set(&thread_id, data.clone()).await;
+    if let Err(error) = thread_store.set(&thread_id, data.clone()).await {
+        tracing::warn!(thread_id = %thread_id, error = %error, "failed to persist agent runtime snapshot");
+    }
     if let Some(workspace_dir) = workspace_dir_from_value(&data) {
         bridge
             .set_thread_workspace_binding(&thread_id, Some(workspace_dir))

@@ -21,7 +21,8 @@ async fn test_rebuild_last_delivery_cache() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     let rebuilt = router.rebuild_last_delivery_cache().await;
@@ -47,7 +48,8 @@ async fn test_rebuild_last_delivery_cache_prefers_latest_timestamp() {
                 "lastUpdatedAt": "2026-03-01T10:00:00Z",
             }),
         )
-        .await;
+        .await
+        .unwrap();
     store
         .set(
             "bot2::main::u2",
@@ -58,7 +60,8 @@ async fn test_rebuild_last_delivery_cache_prefers_latest_timestamp() {
                 "lastUpdatedAt": "2026-03-01T11:00:00Z",
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     let rebuilt = router.rebuild_last_delivery_cache().await;
@@ -83,7 +86,8 @@ async fn test_resolve_delivery_target_with_rebuild() {
                 "lastUpdatedAt": "2026-03-01T12:00:00Z",
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     assert!(
@@ -119,7 +123,8 @@ async fn test_resolve_delivery_target_with_rebuild_sanitizes_legacy_telegram_dm_
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     let resolved = router
@@ -147,7 +152,8 @@ async fn test_resolve_delivery_target_with_rebuild_drops_non_numeric_telegram_th
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     let resolved = router
@@ -171,7 +177,8 @@ async fn test_resolve_delivery_target_with_rebuild_last_target() {
                 "lastUpdatedAt": "2026-03-01T10:00:00Z",
             }),
         )
-        .await;
+        .await
+        .unwrap();
     store
         .set(
             "bot2::main::u2",
@@ -182,7 +189,8 @@ async fn test_resolve_delivery_target_with_rebuild_last_target() {
                 "lastUpdatedAt": "2026-03-01T11:00:00Z",
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     let resolved = router
@@ -236,8 +244,9 @@ async fn test_set_last_delivery_with_persistence_does_not_recreate_deleted_sessi
                 "messages": []
             }),
         )
-        .await;
-    assert!(store.delete("bot1::main::u1").await);
+        .await
+        .unwrap();
+    assert!(store.delete("bot1::main::u1").await.unwrap());
 
     router
         .set_last_delivery_with_persistence(
@@ -255,7 +264,7 @@ async fn test_set_last_delivery_with_persistence_does_not_recreate_deleted_sessi
         )
         .await;
 
-    assert!(store.get("bot1::main::u1").await.is_none());
+    assert!(store.get("bot1::main::u1").await.unwrap().is_none());
     assert!(router.get_last_delivery("bot1::main::u1").is_some());
 }
 
@@ -369,7 +378,8 @@ async fn test_set_last_delivery_with_persistence_updates_binding_timestamp() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
     router
@@ -388,7 +398,7 @@ async fn test_set_last_delivery_with_persistence_updates_binding_timestamp() {
         )
         .await;
 
-    let stored = store.get("thread::delivery").await.unwrap();
+    let stored = store.get("thread::delivery").await.unwrap().unwrap();
     assert!(
         stored["channel_bindings"][0]["last_delivery_at"]
             .as_str()
@@ -423,7 +433,8 @@ async fn test_clear_last_delivery_with_persistence_clears_binding_timestamp() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
     router.rebuild_last_delivery_cache().await;
@@ -431,7 +442,7 @@ async fn test_clear_last_delivery_with_persistence_clears_binding_timestamp() {
         .clear_last_delivery_with_persistence("thread::delivery")
         .await;
 
-    let stored = store.get("thread::delivery").await.unwrap();
+    let stored = store.get("thread::delivery").await.unwrap().unwrap();
     assert!(stored.get("delivery_context").is_none());
     assert!(stored["channel_bindings"][0]["last_delivery_at"].is_null());
 }

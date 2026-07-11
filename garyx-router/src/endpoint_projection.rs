@@ -127,11 +127,21 @@ impl ScanChannelEndpointProjection {
 impl ChannelEndpointProjection for ScanChannelEndpointProjection {
     async fn endpoint_holders(&self, endpoint_key: &str) -> Result<Vec<String>, String> {
         let mut holders = Vec::new();
-        for key in self.store.list_keys(None).await {
+        let keys = self
+            .store
+            .list_keys(None)
+            .await
+            .map_err(|error| error.to_string())?;
+        for key in keys {
             if !is_thread_key(&key) {
                 continue;
             }
-            let Some(value) = self.store.get(&key).await else {
+            let Some(value) = self
+                .store
+                .get(&key)
+                .await
+                .map_err(|error| error.to_string())?
+            else {
                 continue;
             };
             if bindings_from_value(&value)
@@ -146,11 +156,21 @@ impl ChannelEndpointProjection for ScanChannelEndpointProjection {
 
     async fn endpoints(&self) -> Result<Vec<KnownChannelEndpoint>, String> {
         let mut endpoints: HashMap<String, KnownChannelEndpoint> = HashMap::new();
-        for key in self.store.list_keys(None).await {
+        let keys = self
+            .store
+            .list_keys(None)
+            .await
+            .map_err(|error| error.to_string())?;
+        for key in keys {
             if !is_thread_key(&key) {
                 continue;
             }
-            let Some(value) = self.store.get(&key).await else {
+            let Some(value) = self
+                .store
+                .get(&key)
+                .await
+                .map_err(|error| error.to_string())?
+            else {
                 continue;
             };
             let updated_at = value_updated_at(&value);
@@ -192,8 +212,18 @@ impl ChannelEndpointProjection for ScanChannelEndpointProjection {
 
     async fn delivery_contexts(&self) -> Result<Vec<DeliveryContextRow>, String> {
         let mut rows = Vec::new();
-        for key in self.store.list_keys(None).await {
-            let Some(value) = self.store.get(&key).await else {
+        let keys = self
+            .store
+            .list_keys(None)
+            .await
+            .map_err(|error| error.to_string())?;
+        for key in keys {
+            let Some(value) = self
+                .store
+                .get(&key)
+                .await
+                .map_err(|error| error.to_string())?
+            else {
                 continue;
             };
             let Some(obj) = value.as_object() else {
@@ -219,8 +249,18 @@ impl ChannelEndpointProjection for ScanChannelEndpointProjection {
 
     async fn outbound_routes(&self) -> Result<Vec<OutboundRouteRow>, String> {
         let mut rows = Vec::new();
-        for key in self.store.list_keys(None).await {
-            let Some(value) = self.store.get(&key).await else {
+        let keys = self
+            .store
+            .list_keys(None)
+            .await
+            .map_err(|error| error.to_string())?;
+        for key in keys {
+            let Some(value) = self
+                .store
+                .get(&key)
+                .await
+                .map_err(|error| error.to_string())?
+            else {
                 continue;
             };
             let Some(records) = value.get("outbound_message_ids").and_then(Value::as_array) else {

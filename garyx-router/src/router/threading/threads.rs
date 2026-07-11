@@ -1,3 +1,4 @@
+use crate::store::ThreadStoreExt;
 use std::collections::HashMap;
 
 use chrono::Utc;
@@ -28,7 +29,7 @@ fn delivery_thread_scope_from_binding(binding: &ChannelBinding) -> Option<String
 
 impl MessageRouter {
     pub async fn check_auto_recovery(&self, thread_id: &str) -> Option<String> {
-        let data = self.threads.get(thread_id).await?;
+        let data = self.threads.get_logged(thread_id).await?;
         data.get("auto_recover_next_thread")
             .or_else(|| data.get("auto_recover_next_session"))
             .and_then(|v| v.as_str())
@@ -115,7 +116,7 @@ impl MessageRouter {
         let existing = self
             .get_current_thread_id_for_binding(channel, account_id, thread_binding_key)
             .map(str::to_owned)?;
-        if !self.threads.exists(&existing).await {
+        if !self.threads.exists_logged(&existing).await {
             return None;
         }
         Some(existing)
@@ -129,7 +130,9 @@ impl MessageRouter {
             .cloned()
             .collect::<std::collections::HashSet<_>>();
         for thread_id in stale_threads {
-            if crate::threads::is_thread_key(&thread_id) && !self.threads.exists(&thread_id).await {
+            if crate::threads::is_thread_key(&thread_id)
+                && !self.threads.exists_logged(&thread_id).await
+            {
                 self.clear_thread_references(&thread_id);
             }
         }
@@ -156,7 +159,7 @@ impl MessageRouter {
         if trimmed.is_empty() {
             return None;
         }
-        if self.threads.exists(trimmed).await {
+        if self.threads.exists_logged(trimmed).await {
             return Some(trimmed.to_owned());
         }
         None
@@ -428,7 +431,7 @@ impl MessageRouter {
         }
 
         if let Some(redirect_key) = self.check_auto_recovery(&thread_id).await {
-            if self.threads.exists(&redirect_key).await {
+            if self.threads.exists_logged(&redirect_key).await {
                 tracing::info!(
                     original = %thread_id,
                     redirect = %redirect_key,
@@ -468,7 +471,7 @@ impl MessageRouter {
     ) -> Option<String> {
         let key = endpoint_key(channel, account_id, thread_binding_key);
         if let Some(thread_id) = self.thread_nav.endpoint_thread_map.get(&key).cloned() {
-            if self.threads.exists(&thread_id).await {
+            if self.threads.exists_logged(&thread_id).await {
                 return Some(thread_id);
             }
             self.thread_nav.endpoint_thread_map.remove(&key);

@@ -151,7 +151,8 @@ async fn test_rebuild_routing_index() {
                 ]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     let count = router.rebuild_routing_index("telegram").await;
@@ -173,7 +174,8 @@ async fn test_record_outbound_message_with_persistence_rebuilds() {
                 "messages": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     router
         .record_outbound_message_with_persistence(
@@ -189,6 +191,7 @@ async fn test_record_outbound_message_with_persistence_rebuilds() {
     let saved = store
         .get("s_outbound")
         .await
+        .unwrap()
         .expect("existing thread should persist outbound routing");
     let records = saved["outbound_message_ids"].as_array().unwrap();
     assert_eq!(records.len(), 1);
@@ -225,8 +228,9 @@ async fn test_record_outbound_message_with_persistence_does_not_recreate_deleted
                 "messages": []
             }),
         )
-        .await;
-    assert!(store.delete("s_deleted").await);
+        .await
+        .unwrap();
+    assert!(store.delete("s_deleted").await.unwrap());
 
     router
         .record_outbound_message_with_persistence(
@@ -239,7 +243,7 @@ async fn test_record_outbound_message_with_persistence_does_not_recreate_deleted
         )
         .await;
 
-    assert!(store.get("s_deleted").await.is_none());
+    assert!(store.get("s_deleted").await.unwrap().is_none());
     assert_eq!(
         router.resolve_reply_thread_for_chat("telegram", "bot1", Some("42"), None, "m-001"),
         Some("s_deleted")

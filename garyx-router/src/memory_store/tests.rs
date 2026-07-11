@@ -7,39 +7,39 @@ async fn test_basic_crud() {
 
     // Initially empty.
     assert_eq!(store.size().await, 0);
-    assert!(!store.exists("k1").await);
-    assert_eq!(store.get("k1").await, None);
+    assert!(!store.exists("k1").await.unwrap());
+    assert_eq!(store.get("k1").await.unwrap(), None);
 
     // Set and get.
-    store.set("k1", json!({"hello": "world"})).await;
-    assert!(store.exists("k1").await);
+    store.set("k1", json!({"hello": "world"})).await.unwrap();
+    assert!(store.exists("k1").await.unwrap());
     assert_eq!(store.size().await, 1);
-    let v = store.get("k1").await.unwrap();
+    let v = store.get("k1").await.unwrap().unwrap();
     assert_eq!(v["hello"], "world");
 
     // Update.
     store.update("k1", json!({"foo": "bar"})).await.unwrap();
-    let v = store.get("k1").await.unwrap();
+    let v = store.get("k1").await.unwrap().unwrap();
     assert_eq!(v["hello"], "world");
     assert_eq!(v["foo"], "bar");
 
     // Delete.
-    assert!(store.delete("k1").await);
-    assert!(!store.delete("k1").await);
+    assert!(store.delete("k1").await.unwrap());
+    assert!(!store.delete("k1").await.unwrap());
     assert_eq!(store.size().await, 0);
 }
 
 #[tokio::test]
 async fn test_list_keys_with_prefix() {
     let store = InMemoryThreadStore::new();
-    store.set("agent1::main::u1", json!({})).await;
-    store.set("agent1::main::u2", json!({})).await;
-    store.set("agent2::main::u1", json!({})).await;
+    store.set("agent1::main::u1", json!({})).await.unwrap();
+    store.set("agent1::main::u2", json!({})).await.unwrap();
+    store.set("agent2::main::u1", json!({})).await.unwrap();
 
-    let all = store.list_keys(None).await;
+    let all = store.list_keys(None).await.unwrap();
     assert_eq!(all.len(), 3);
 
-    let mut filtered = store.list_keys(Some("agent1::")).await;
+    let mut filtered = store.list_keys(Some("agent1::")).await.unwrap();
     filtered.sort();
     assert_eq!(filtered, vec!["agent1::main::u1", "agent1::main::u2"]);
 }
@@ -54,8 +54,8 @@ async fn test_update_missing_key() {
 #[tokio::test]
 async fn test_clear() {
     let store = InMemoryThreadStore::new();
-    store.set("a", json!(1)).await;
-    store.set("b", json!(2)).await;
+    store.set("a", json!(1)).await.unwrap();
+    store.set("b", json!(2)).await.unwrap();
     assert_eq!(store.size().await, 2);
     store.clear().await;
     assert_eq!(store.size().await, 0);

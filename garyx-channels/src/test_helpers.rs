@@ -282,7 +282,7 @@ pub async fn wait_for_provider_calls(provider: &ConfigurableTestProvider, expect
 pub async fn wait_for_thread_delivery_persistence(store: &Arc<dyn ThreadStore>, thread_id: &str) {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let persisted = store.get(thread_id).await.is_some_and(|value| {
+            let persisted = store.get(thread_id).await.unwrap().is_some_and(|value| {
                 let has_outbound = value
                     .get("outbound_message_ids")
                     .and_then(Value::as_array)

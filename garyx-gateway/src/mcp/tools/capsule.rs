@@ -192,6 +192,7 @@ async fn capsule_thread_snapshot(
         .thread_store
         .get(thread_id)
         .await
+        .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("thread not found for capsule context: {thread_id}"))?;
     Ok(CapsuleThreadSnapshot {
         agent_id: garyx_router::agent_id_from_value(&thread),

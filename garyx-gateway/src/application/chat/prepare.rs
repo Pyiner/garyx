@@ -1,3 +1,4 @@
+use garyx_router::ThreadStoreExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -28,7 +29,25 @@ const PROMPT_THREAD_TITLE_SOURCE: &str = "garyx_prompt";
 #[derive(Debug)]
 pub(crate) enum ChatPreparationError {
     InvalidRequest(StatusCode, Json<Value>),
-    ThreadUpdateConflict { thread_id: String, error: String },
+    ThreadUpdateConflict {
+        thread_id: String,
+        error: String,
+    },
+    /// Thread store read/write failed (backend/serialization/archived).
+    Storage {
+        thread_id: String,
+        error: String,
+    },
+}
+
+fn storage_error(
+    thread_id: &str,
+) -> impl Fn(garyx_router::ThreadStoreError) -> ChatPreparationError {
+    let thread_id = thread_id.to_owned();
+    move |error| ChatPreparationError::Storage {
+        thread_id: thread_id.clone(),
+        error: error.to_string(),
+    }
 }
 
 #[derive(Debug)]
@@ -74,7 +93,7 @@ async fn persist_thread_provider_type_if_missing(
     thread_id: &str,
     provider_type: &ProviderType,
 ) -> bool {
-    let Some(mut thread_data) = state.threads.thread_store.get(thread_id).await else {
+    let Some(mut thread_data) = state.threads.thread_store.get_logged(thread_id).await else {
         return false;
     };
     if thread_bound_provider_type(&thread_data).is_some() {
@@ -91,8 +110,11 @@ async fn persist_thread_provider_type_if_missing(
         "updated_at".to_owned(),
         Value::String(chrono::Utc::now().to_rfc3339()),
     );
-    state.threads.thread_store.set(thread_id, thread_data).await;
-    true
+    state
+        .threads
+        .thread_store
+        .set_logged(thread_id, thread_data)
+        .await
 }
 
 /// Request-metadata keys reserved for server-side runtime resolution. Chat
@@ -138,7 +160,12 @@ pub(crate) async fn prepare_chat_request(
             Value::String(client_intent_id.to_owned()),
         );
     }
-    let thread_data = state.threads.thread_store.get(&thread_id).await;
+    let thread_data = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .map_err(storage_error(&thread_id))?;
     if let Some(thread_data) = thread_data.as_ref() {
         merge_thread_model_cells(thread_data, &mut req.metadata);
     }
@@ -217,7 +244,12 @@ pub(crate) async fn prepare_chat_request(
     if thread_cache_maybe_stale {
         state.invalidate_gateway_sync_caches().await;
     }
-    let runtime_thread_data = state.threads.thread_store.get(&thread_id).await;
+    let runtime_thread_data = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .map_err(storage_error(&thread_id))?;
     let runtime_context = build_runtime_context_metadata(
         &thread_id,
         runtime_thread_data.as_ref(),
@@ -305,7 +337,12 @@ async fn resolve_runtime_workspace_dir(
     requested_workspace_path: Option<&str>,
 ) -> Result<RuntimeWorkspaceResolution, ChatPreparationError> {
     let requested_workspace_dir = normalize_workspace_dir(requested_workspace_path);
-    let existing_thread = state.threads.thread_store.get(thread_id).await;
+    let existing_thread = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .map_err(storage_error(thread_id))?;
     let existing_workspace_dir = existing_thread.as_ref().and_then(workspace_dir_from_value);
 
     if let (Some(existing), Some(requested)) = (
@@ -393,7 +430,13 @@ async fn persist_thread_label_if_missing(
     let Some(next_label) = prompt_derived_thread_label(effective_message) else {
         return Ok(None);
     };
-    let Some(existing) = state.threads.thread_store.get(thread_id).await else {
+    let Some(existing) = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .map_err(storage_error(thread_id))?
+    else {
         return Ok(None);
     };
     if !should_autoname_thread(&existing) {
@@ -418,7 +461,12 @@ async fn persist_thread_label_if_missing(
             Value::String(chrono::Utc::now().to_rfc3339()),
         );
     }
-    state.threads.thread_store.set(thread_id, next).await;
+    state
+        .threads
+        .thread_store
+        .set(thread_id, next)
+        .await
+        .map_err(storage_error(thread_id))?;
     Ok(Some(next_label))
 }
 
@@ -593,7 +641,14 @@ async fn persist_explicit_api_thread_binding(
     if account_id.is_empty() || from_id.is_empty() {
         return Ok(false);
     }
-    if state.threads.thread_store.get(thread_id).await.is_none() {
+    if state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .map_err(storage_error(thread_id))?
+        .is_none()
+    {
         return Ok(false);
     }
 

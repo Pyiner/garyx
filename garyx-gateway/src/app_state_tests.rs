@@ -283,7 +283,8 @@ async fn test_app_state_builder_shares_thread_store() {
                 "msg": "hello"
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let bridge = Arc::new(garyx_bridge::MultiProviderBridge::new());
     let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
@@ -319,6 +320,7 @@ async fn test_app_state_builder_shares_thread_store() {
             .thread_store
             .get("thread::test-key")
             .await
+            .unwrap()
             .unwrap()["msg"],
         "hello"
     );
@@ -430,7 +432,8 @@ async fn startup_warmup_clears_dangling_orphan_run() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state.spawn_gateway_sync_cache_warmup();
 
     // Startup settles orphaned running rows with one SQL pass: the bridge

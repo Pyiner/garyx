@@ -326,7 +326,10 @@ impl TaskService {
         }
         set_task_thread_title(&mut record, &task)?;
         set_task_on_record(&mut record, &task)?;
-        self.thread_store.set(&thread_id, record).await;
+        self.thread_store
+            .set(&thread_id, record)
+            .await
+            .map_err(store_error)?;
         Ok((thread_id, task))
     }
 
@@ -533,11 +536,15 @@ impl TaskService {
             .thread_store
             .get(&thread_id)
             .await
+            .map_err(store_error)?
             .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
         let task = task_from_record(&record)?
             .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
         remove_task_from_record(&mut record)?;
-        self.thread_store.set(&thread_id, record).await;
+        self.thread_store
+            .set(&thread_id, record)
+            .await
+            .map_err(store_error)?;
         Ok((thread_id, task))
     }
 
@@ -558,6 +565,7 @@ impl TaskService {
             .thread_store
             .get(&thread_id)
             .await
+            .map_err(store_error)?
             .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
         let mut task = task_from_record(&record)?
             .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
@@ -580,7 +588,10 @@ impl TaskService {
             set_task_thread_title(&mut record, &task)?;
         }
         set_task_on_record(&mut record, &task)?;
-        self.thread_store.set(&thread_id, record).await;
+        self.thread_store
+            .set(&thread_id, record)
+            .await
+            .map_err(store_error)?;
         Ok(task)
     }
 
@@ -595,12 +606,16 @@ impl TaskService {
             .thread_store
             .get(&thread_id)
             .await
+            .map_err(store_error)?
             .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
         let mut task = task_from_record(&record)?
             .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
         f(&mut task)?;
         set_task_on_record(&mut record, &task)?;
-        self.thread_store.set(&thread_id, record).await;
+        self.thread_store
+            .set(&thread_id, record)
+            .await
+            .map_err(store_error)?;
         Ok(task)
     }
 
@@ -652,6 +667,7 @@ impl TaskService {
                     .thread_store
                     .get(&thread_id)
                     .await
+                    .map_err(store_error)?
                     .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
                 Ok((thread_id, record))
             }
@@ -669,7 +685,11 @@ impl TaskService {
         // Projections derive in the same write transaction as the record,
         // so a projection row without a matching record body indicates a
         // bug, not staleness — surface it as NotFound without repair.
-        if let Some(record) = self.thread_store.get(&thread_id).await
+        if let Some(record) = self
+            .thread_store
+            .get(&thread_id)
+            .await
+            .map_err(store_error)?
             && let Some(task) = task_from_record(&record)?
             && task.number == number
         {
@@ -694,7 +714,7 @@ pub async fn mark_thread_task_in_review_if_in_progress(
     validate_principal(&actor)?;
     let lock = task_thread_lock(thread_id);
     let _guard = lock.lock().await;
-    let Some(mut record) = thread_store.get(thread_id).await else {
+    let Some(mut record) = thread_store.get(thread_id).await.map_err(store_error)? else {
         return Ok(None);
     };
     let Some(mut task) = task_from_record(&record)? else {
@@ -730,7 +750,10 @@ pub async fn mark_thread_task_in_review_if_in_progress(
         None,
     );
     set_task_on_record(&mut record, &task)?;
-    thread_store.set(thread_id, record).await;
+    thread_store
+        .set(thread_id, record)
+        .await
+        .map_err(store_error)?;
     Ok(Some(EnterReview { task, handoff }))
 }
 
@@ -742,7 +765,7 @@ pub async fn mark_thread_task_in_progress_on_wake(
     validate_principal(&actor)?;
     let lock = task_thread_lock(thread_id);
     let _guard = lock.lock().await;
-    let Some(mut record) = thread_store.get(thread_id).await else {
+    let Some(mut record) = thread_store.get(thread_id).await.map_err(store_error)? else {
         return Ok(None);
     };
     let Some(mut task) = task_from_record(&record)? else {
@@ -764,7 +787,10 @@ pub async fn mark_thread_task_in_progress_on_wake(
         None,
     );
     set_task_on_record(&mut record, &task)?;
-    thread_store.set(thread_id, record).await;
+    thread_store
+        .set(thread_id, record)
+        .await
+        .map_err(store_error)?;
     Ok(Some(task))
 }
 
@@ -1055,6 +1081,10 @@ fn validate_notification_target(
             Ok(())
         }
     }
+}
+
+fn store_error(error: crate::ThreadStoreError) -> TaskServiceError {
+    TaskServiceError::Store(error.to_string())
 }
 
 fn default_actor() -> Principal {

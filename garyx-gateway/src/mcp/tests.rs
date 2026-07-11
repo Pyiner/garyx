@@ -158,12 +158,14 @@ async fn test_status_counts_threads() {
         .threads
         .thread_store
         .set("s1::dm::u1", json!({}))
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
         .set("s2::dm::u2", json!({}))
-        .await;
+        .await
+        .unwrap();
     let server = GaryMcpServer::new(state);
     let v = server.status_payload(RunContext::default()).await.unwrap();
     assert_eq!(v["threads"]["count"], 2);
@@ -296,7 +298,8 @@ async fn test_status_reports_current_and_other_bots() {
                 ]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let server = GaryMcpServer::new(state);
 
     let v = server
@@ -332,7 +335,8 @@ async fn test_status_current_context_includes_workspace_for_thread() {
                 "workspace_dir": "/tmp/status-workspace"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let server = GaryMcpServer::new(state);
     let v = server
         .status_payload(RunContext {
@@ -475,7 +479,8 @@ async fn test_capsule_create_uses_thread_context_and_derives_agent_from_thread()
                 "provider_type": "codex"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let temp = tempfile::tempdir().expect("temp dir");
     let _guard = crate::capsules::tests_support::set_test_capsules_dir_for_test(
         temp.path().join("capsules"),
@@ -540,7 +545,8 @@ async fn test_capsule_create_rejects_conflicting_missing_and_bad_html() {
         .threads
         .thread_store
         .set(thread_id, json!({ "thread_id": thread_id }))
-        .await;
+        .await
+        .unwrap();
     let run_ctx = RunContext {
         thread_id: Some(thread_id.to_owned()),
         ..Default::default()
@@ -611,7 +617,8 @@ async fn test_capsule_create_reads_absolute_html_path() {
         .threads
         .thread_store
         .set(thread_id, json!({ "thread_id": thread_id }))
-        .await;
+        .await
+        .unwrap();
     let temp = tempfile::tempdir().expect("temp dir");
     let _guard = crate::capsules::tests_support::set_test_capsules_dir_for_test(
         temp.path().join("capsules"),
@@ -654,7 +661,8 @@ async fn test_capsule_update_rewrites_file_and_list_filters_thread() {
             .threads
             .thread_store
             .set(thread_id, json!({ "thread_id": thread_id }))
-            .await;
+            .await
+            .unwrap();
     }
 
     let first = tools::capsule::create_inner(
@@ -929,7 +937,8 @@ async fn test_execute_message_recovers_thread_target_from_persisted_delivery() {
                 "lastUpdatedAt": "2026-03-01T12:00:00Z",
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let result = server
         .execute_message(
@@ -1324,7 +1333,8 @@ async fn test_execute_message_uses_thread_binding_for_requested_bot() {
                 ]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     {
         let mut router = server.app_state.threads.router.lock().await;
@@ -1454,7 +1464,8 @@ async fn test_execute_message_records_outbound_ids_for_thread_target() {
         .threads
         .thread_store
         .set("thread::bound", json!({}))
-        .await;
+        .await
+        .unwrap();
 
     {
         let mut router = server.app_state.threads.router.lock().await;
@@ -1502,6 +1513,7 @@ async fn test_execute_message_records_outbound_ids_for_thread_target() {
         .thread_store
         .get("thread::bound")
         .await
+        .unwrap()
         .expect("thread should exist");
     let outbound = stored["outbound_message_ids"]
         .as_array()
@@ -1816,7 +1828,8 @@ async fn test_send_image_message_via_api_base_returns_message_id_and_records_thr
         .threads
         .thread_store
         .set("thread::photo", json!({}))
-        .await;
+        .await
+        .unwrap();
 
     let image_path = std::env::temp_dir().join(format!("garyx-mcp-photo-{}.png", Uuid::new_v4()));
     tokio::fs::write(&image_path, b"fake-image-bytes")
@@ -1867,6 +1880,7 @@ async fn test_send_image_message_via_api_base_returns_message_id_and_records_thr
         .thread_store
         .get("thread::photo")
         .await
+        .unwrap()
         .expect("thread should exist");
     let outbound = stored["outbound_message_ids"]
         .as_array()

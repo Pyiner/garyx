@@ -98,7 +98,10 @@ pub(crate) async fn cmd_task_get(
         Some(fetch) => fetch.await,
         None => None,
     };
-    print!("{}", format_task_progress(&payload, history_payload.as_ref()));
+    print!(
+        "{}",
+        format_task_progress(&payload, history_payload.as_ref())
+    );
     Ok(())
 }
 
@@ -175,10 +178,7 @@ fn task_executor_payload(agent: Option<String>) -> Result<Value, Box<dyn std::er
             "agentId": agent_id,
         }));
     }
-    Err(
-        "Task creation is a delegation feature, so you must specify an Agent with --agent."
-            .into(),
-    )
+    Err("Task creation is a delegation feature, so you must specify an Agent with --agent.".into())
 }
 
 fn task_source_payload_from_env() -> Option<Value> {

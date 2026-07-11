@@ -334,6 +334,7 @@ async fn test_save_thread_messages_preserves_provider_message_order() {
     let stored = store
         .get("thread::ordered")
         .await
+        .unwrap()
         .expect("stored session should exist");
     assert_eq!(stored["provider_key"], "provider::ordered");
     assert_eq!(
@@ -382,7 +383,11 @@ async fn test_save_thread_messages_maintains_write_time_preview_fields() {
     )
     .await;
 
-    let stored = store.get("thread::previews").await.expect("stored");
+    let stored = store
+        .get("thread::previews")
+        .await
+        .unwrap()
+        .expect("stored");
     assert_eq!(stored["last_user_preview"], "first question");
     assert_eq!(stored["last_assistant_preview"], "first answer");
 
@@ -407,7 +412,11 @@ async fn test_save_thread_messages_maintains_write_time_preview_fields() {
     )
     .await;
 
-    let stored = store.get("thread::previews").await.expect("stored");
+    let stored = store
+        .get("thread::previews")
+        .await
+        .unwrap()
+        .expect("stored");
     assert_eq!(stored["last_user_preview"], "second question");
     assert_eq!(stored["last_assistant_preview"], "first answer");
 }
@@ -459,7 +468,11 @@ async fn test_preview_fields_follow_same_run_replay_retraction() {
         },
     )
     .await;
-    let stored = store.get("thread::replay-previews").await.expect("stored");
+    let stored = store
+        .get("thread::replay-previews")
+        .await
+        .unwrap()
+        .expect("stored");
     assert_eq!(stored["last_assistant_preview"], "first replay answer");
 
     // The same run id replays with no assistant output: its previous rows
@@ -483,7 +496,11 @@ async fn test_preview_fields_follow_same_run_replay_retraction() {
     )
     .await;
 
-    let stored = store.get("thread::replay-previews").await.expect("stored");
+    let stored = store
+        .get("thread::replay-previews")
+        .await
+        .unwrap()
+        .expect("stored");
     assert_eq!(stored["last_assistant_preview"], "older answer");
     assert_eq!(stored["last_user_preview"], "replayed question");
 }
@@ -512,7 +529,11 @@ async fn test_preview_fields_are_removed_when_no_row_survives_the_cap() {
         },
     )
     .await;
-    let stored = store.get("thread::cap-previews").await.expect("stored");
+    let stored = store
+        .get("thread::cap-previews")
+        .await
+        .unwrap()
+        .expect("stored");
     assert_eq!(stored["last_assistant_preview"], "only assistant answer");
 
     // One run with >100 user rows evicts every assistant row.
@@ -537,7 +558,11 @@ async fn test_preview_fields_are_removed_when_no_row_survives_the_cap() {
     )
     .await;
 
-    let stored = store.get("thread::cap-previews").await.expect("stored");
+    let stored = store
+        .get("thread::cap-previews")
+        .await
+        .unwrap()
+        .expect("stored");
     assert!(
         stored.get("last_assistant_preview").is_none(),
         "assistant preview must be removed once the cap evicts every assistant row"
@@ -578,6 +603,7 @@ async fn test_save_thread_messages_copies_client_intent_to_user_origin_id() {
     store
         .get("thread::origin")
         .await
+        .unwrap()
         .expect("stored session should exist");
     let messages = committed_content(&history, "thread::origin").await;
     assert_eq!(
@@ -617,6 +643,7 @@ async fn test_save_thread_messages_persists_user_images_as_blocks() {
     let stored = store
         .get("thread::image")
         .await
+        .unwrap()
         .expect("stored session should exist");
     assert_eq!(stored["provider_key"], "provider::image");
     let messages = committed_content(&history, "thread::image").await;
@@ -662,6 +689,7 @@ async fn test_save_thread_messages_overrides_stale_metadata_sdk_session_id() {
     let stored = store
         .get("thread::sdk-session-message")
         .await
+        .unwrap()
         .expect("stored session should exist");
     let messages = committed_content(&history, "thread::sdk-session-message").await;
     assert_eq!(messages[0]["metadata"]["sdk_session_id"], "new-session");
@@ -831,7 +859,8 @@ async fn test_save_streaming_partial_commits_user_row_without_inflight_content_t
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut metadata = HashMap::new();
     metadata.insert("client_run_id".to_owned(), json!("run-partial"));
@@ -908,6 +937,7 @@ async fn test_save_streaming_partial_commits_user_row_without_inflight_content_t
     let stored = store
         .get("thread::partial")
         .await
+        .unwrap()
         .expect("stored session should exist");
     assert_eq!(stored["sdk_session_id"], "sdk-existing");
     assert_eq!(
@@ -935,7 +965,10 @@ async fn test_save_streaming_partial_commits_user_row_without_inflight_content_t
 async fn test_result_time_boundary_commits_answer_before_done_and_late_text_is_new_row() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let history = make_history(store.clone());
-    store.set("thread::result-finalize", json!({})).await;
+    store
+        .set("thread::result-finalize", json!({}))
+        .await
+        .unwrap();
 
     let mut metadata = HashMap::new();
     metadata.insert("bridge_run_id".to_owned(), json!("bridge-result"));
@@ -1106,7 +1139,8 @@ async fn test_save_streaming_partial_clears_abandoned_pending_inputs_for_new_use
                 ]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let metadata = HashMap::from([
         ("client_run_id".to_owned(), json!("run-new")),
@@ -1138,6 +1172,7 @@ async fn test_save_streaming_partial_clears_abandoned_pending_inputs_for_new_use
     let stored = store
         .get("thread::partial-clear-orphaned")
         .await
+        .unwrap()
         .expect("stored session should exist");
     let pending_inputs = stored["pending_user_inputs"]
         .as_array()
@@ -1166,7 +1201,8 @@ async fn test_save_streaming_partial_keeps_abandoned_pending_inputs_for_internal
                 ]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let metadata = HashMap::from([
         ("client_run_id".to_owned(), json!("run-loop")),
@@ -1203,6 +1239,7 @@ async fn test_save_streaming_partial_keeps_abandoned_pending_inputs_for_internal
     let stored = store
         .get("thread::partial-keep-orphaned")
         .await
+        .unwrap()
         .expect("stored session should exist");
     let pending_inputs = stored["pending_user_inputs"]
         .as_array()
@@ -1296,7 +1333,7 @@ async fn test_streaming_then_terminal_commit_does_not_duplicate_messages() {
 
     // During the run, the transcript already contains every finalized row and
     // the trailing in-flight assistant is intentionally not mirrored elsewhere.
-    let mid = store.get(thread_id).await.expect("session exists");
+    let mid = store.get(thread_id).await.unwrap().expect("session exists");
     assert_eq!(mid["history"]["message_count"], 4);
 
     // Terminal commit: reconcile the tail to the full authoritative set.
@@ -1348,7 +1385,7 @@ async fn test_streaming_then_terminal_commit_does_not_duplicate_messages() {
     assert_eq!(committed[1].message["content"], "Working");
     assert_eq!(committed[4].message["content"], "Done");
 
-    let stored = store.get(thread_id).await.expect("session exists");
+    let stored = store.get(thread_id).await.unwrap().expect("session exists");
     assert_eq!(stored["history"]["message_count"], 5);
 }
 
@@ -1471,7 +1508,8 @@ async fn test_save_thread_messages_clears_only_current_provider_sdk_session_id()
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     save_thread_messages(
         &store,
@@ -1494,6 +1532,7 @@ async fn test_save_thread_messages_clears_only_current_provider_sdk_session_id()
     let stored = store
         .get("thread::provider-sessions")
         .await
+        .unwrap()
         .expect("stored session should exist");
     assert_eq!(
         stored["provider_sdk_session_ids"]["provider::other"],
@@ -1623,6 +1662,7 @@ async fn test_save_thread_messages_synthesizes_message_tool_delivery_as_assistan
     let stored = store
         .get("thread::delivery-mirror")
         .await
+        .unwrap()
         .expect("stored session should exist");
     assert_eq!(stored["provider_key"], "provider::delivery");
     let messages = committed_content(&history, "thread::delivery-mirror").await;
@@ -1688,6 +1728,7 @@ async fn test_save_thread_messages_does_not_synthesize_delivery_when_assistant_e
     let stored = store
         .get("thread::explicit-assistant")
         .await
+        .unwrap()
         .expect("stored session should exist");
     assert_eq!(stored["provider_key"], "provider::explicit-assistant");
     let messages = committed_content(&history, "thread::explicit-assistant").await;
@@ -1738,6 +1779,7 @@ async fn test_save_thread_messages_marks_loop_continuation_as_internal() {
     store
         .get("thread::loop-internal")
         .await
+        .unwrap()
         .expect("stored thread should exist");
     let messages = committed_content(&history, "thread::loop-internal").await;
     assert_eq!(messages.len(), 2);

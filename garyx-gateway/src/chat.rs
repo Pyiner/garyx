@@ -312,6 +312,15 @@ async fn start_chat_run(
                 })),
             ));
         }
+        Err(ChatPreparationError::Storage { thread_id, error }) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "threadId": thread_id,
+                    "error": error
+                })),
+            ));
+        }
     };
 
     let config = state.config_snapshot();

@@ -415,7 +415,13 @@ async fn test_chat_start_http_returns_503_while_provider_runtime_starts() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"], "gateway_provider_runtime_starting");
     assert!(
-        state.threads.thread_store.get(thread_id).await.is_none(),
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_none(),
         "startup rejection should not create or mutate a thread"
     );
 }
@@ -515,7 +521,8 @@ async fn test_chat_start_http_forwards_bound_reply_using_run_start_binding_snaps
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = test_router(state.clone());
     let req = Request::builder()
@@ -559,7 +566,8 @@ async fn test_chat_start_http_forwards_bound_reply_using_run_start_binding_snaps
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
     release.notify_one();
 
     let calls = tokio::time::timeout(std::time::Duration::from_secs(2), async {
@@ -625,7 +633,8 @@ async fn test_chat_start_assigns_private_workspace_to_thread_without_workspace()
                 "workspace_dir": Value::Null
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let router = test_router(state.clone());
 
     let req = Request::builder()
@@ -660,6 +669,7 @@ async fn test_chat_start_assigns_private_workspace_to_thread_without_workspace()
         .thread_store
         .get("thread::legacy-empty-workspace")
         .await
+        .unwrap()
         .expect("stored thread");
     let workspace_dir = stored["workspace_dir"]
         .as_str()

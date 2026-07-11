@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::store::ThreadStoreExt;
 use chrono::Utc;
 use garyx_models::messages::MessageMetadata;
 use garyx_models::thread_logs::{ThreadLogEvent, is_canonical_thread_id};
@@ -228,7 +229,7 @@ impl MessageRouter {
             return;
         }
 
-        let Some(mut thread_data) = self.threads.get(thread_id).await else {
+        let Some(mut thread_data) = self.threads.get_logged(thread_id).await else {
             debug!(
                 thread_id,
                 channel, account_id, "Thread missing; skipping outbound message persistence"
@@ -269,7 +270,7 @@ impl MessageRouter {
             "updated_at".to_owned(),
             Value::String(Utc::now().to_rfc3339()),
         );
-        self.threads.set(thread_id, thread_data).await;
+        self.threads.set_logged(thread_id, thread_data).await;
     }
 
     /// Rebuild the message routing index from the thread store.
@@ -323,7 +324,7 @@ impl MessageRouter {
             thread_binding_key,
         );
 
-        let Some(mut thread_data) = self.threads.get(thread_id).await else {
+        let Some(mut thread_data) = self.threads.get_logged(thread_id).await else {
             return;
         };
         let Some(obj) = thread_data.as_object_mut() else {
@@ -388,7 +389,7 @@ impl MessageRouter {
             "updated_at".to_owned(),
             Value::String(Utc::now().to_rfc3339()),
         );
-        self.threads.set(thread_id, thread_data).await;
+        self.threads.set_logged(thread_id, thread_data).await;
     }
 
     /// Clone the underlying thread store handle.

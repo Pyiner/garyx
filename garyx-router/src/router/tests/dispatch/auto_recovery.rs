@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn test_auto_recovery_no_redirect() {
     let store = Arc::new(InMemoryThreadStore::new());
-    store.set("s1", json!({"messages": []})).await;
+    store.set("s1", json!({"messages": []})).await.unwrap();
 
     let router = MessageRouter::new(store, GaryxConfig::default());
     assert!(router.check_auto_recovery("s1").await.is_none());
@@ -19,8 +19,9 @@ async fn test_auto_recovery_with_redirect() {
                 "auto_recover_next_thread": "s_new"
             }),
         )
-        .await;
-    store.set("s_new", json!({"messages": []})).await;
+        .await
+        .unwrap();
+    store.set("s_new", json!({"messages": []})).await.unwrap();
 
     let router = MessageRouter::new(store, GaryxConfig::default());
     assert_eq!(
@@ -39,7 +40,8 @@ async fn test_auto_recovery_empty_redirect() {
                 "auto_recover_next_thread": ""
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = MessageRouter::new(store, GaryxConfig::default());
     assert!(router.check_auto_recovery("s1").await.is_none());
@@ -61,8 +63,9 @@ async fn test_auto_recovery_reads_legacy_session_key() {
                 "auto_recover_next_session": "s_new"
             }),
         )
-        .await;
-    store.set("s_new", json!({"messages": []})).await;
+        .await
+        .unwrap();
+    store.set("s_new", json!({"messages": []})).await.unwrap();
 
     let router = MessageRouter::new(store, GaryxConfig::default());
     assert_eq!(

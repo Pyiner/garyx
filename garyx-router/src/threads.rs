@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use crate::store::ThreadStoreExt;
 use crate::{DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, ThreadStore};
 use crate::{WorkspaceMode, prepare_thread_worktree};
 
@@ -273,10 +274,13 @@ pub async fn upsert_known_channel_endpoint(
     let mut value = store
         .get(KNOWN_CHANNEL_ENDPOINTS_KEY)
         .await
+        .map_err(|error| error.to_string())?
         .unwrap_or_else(|| Value::Object(Map::new()));
     upsert_binding(&mut value, binding.clone());
-    store.set(KNOWN_CHANNEL_ENDPOINTS_KEY, value).await;
-    Ok(())
+    store
+        .set(KNOWN_CHANNEL_ENDPOINTS_KEY, value)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub fn workspace_dir_from_value(value: &Value) -> Option<String> {
@@ -590,7 +594,10 @@ pub async fn create_thread_record(
     {
         obj.insert("worktree".to_owned(), worktree);
     }
-    store.set(&thread_id, value.clone()).await;
+    store
+        .set(&thread_id, value.clone())
+        .await
+        .map_err(|error| error.to_string())?;
     Ok((thread_id, value))
 }
 
@@ -600,7 +607,11 @@ pub async fn update_thread_record(
     label: Option<String>,
     workspace_dir: Option<String>,
 ) -> Result<Value, String> {
-    let Some(mut value) = store.get(thread_id).await else {
+    let Some(mut value) = store
+        .get(thread_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
         return Err(format!("thread not found: {thread_id}"));
     };
     let existing_workspace_dir = workspace_dir_from_value(&value);
@@ -646,7 +657,10 @@ pub async fn update_thread_record(
         "updated_at".to_owned(),
         Value::String(Utc::now().to_rfc3339()),
     );
-    store.set(thread_id, value.clone()).await;
+    store
+        .set(thread_id, value.clone())
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(value)
 }
 
@@ -654,13 +668,21 @@ pub async fn delete_thread_record(
     store: &Arc<dyn ThreadStore>,
     thread_id: &str,
 ) -> Result<(), String> {
-    let Some(value) = store.get(thread_id).await else {
+    let Some(value) = store
+        .get(thread_id)
+        .await
+        .map_err(|error| error.to_string())?
+    else {
         return Err(format!("thread not found: {thread_id}"));
     };
     if !bindings_from_value(&value).is_empty() {
         return Err("cannot delete thread with active channel bindings".to_owned());
     }
-    if !store.delete(thread_id).await {
+    if !store
+        .delete(thread_id)
+        .await
+        .map_err(|error| error.to_string())?
+    {
         return Err(format!("thread not found: {thread_id}"));
     }
     Ok(())
@@ -685,7 +707,7 @@ pub async fn sync_endpoint_delivery_timestamp(
         if key != KNOWN_CHANNEL_ENDPOINTS_KEY && !is_thread_key(key) {
             continue;
         }
-        let Some(mut value) = store.get(key).await else {
+        let Some(mut value) = store.get(key).await.map_err(|error| error.to_string())? else {
             continue;
         };
         let Some(obj) = ensure_object(&mut value) else {
@@ -716,7 +738,10 @@ pub async fn sync_endpoint_delivery_timestamp(
                 "updated_at".to_owned(),
                 Value::String(Utc::now().to_rfc3339()),
             );
-            store.set(key, value).await;
+            store
+                .set(key, value)
+                .await
+                .map_err(|error| error.to_string())?;
         }
     }
 
@@ -728,7 +753,7 @@ pub async fn sync_endpoint_delivery_timestamp(
 pub async fn list_registry_channel_endpoints(
     store: &Arc<dyn ThreadStore>,
 ) -> Vec<KnownChannelEndpoint> {
-    let Some(registry) = store.get(KNOWN_CHANNEL_ENDPOINTS_KEY).await else {
+    let Some(registry) = store.get_logged(KNOWN_CHANNEL_ENDPOINTS_KEY).await else {
         return Vec::new();
     };
     bindings_from_value(&registry)

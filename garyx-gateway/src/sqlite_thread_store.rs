@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
-use garyx_router::{ThreadStore, ThreadStoreError, ThreadTranscriptStore, is_thread_key};
+use garyx_router::{
+    ThreadStore, ThreadStoreError, ThreadStoreExt, ThreadTranscriptStore, is_thread_key,
+};
 use serde_json::Value;
 use tracing::warn;
 
@@ -72,41 +74,39 @@ impl SqliteThreadStore {
 
     /// Archived threads reject writes and clear their projections — same
     /// semantics as the former wrapper. One blocking hop covers the
-    /// tombstone check and the projection cleanup.
-    async fn reject_archived_thread_write(&self, thread_id: &str) -> bool {
+    /// tombstone check and the projection cleanup. A failed tombstone
+    /// check is an error (never fail-open into a write that may be
+    /// silently dropped downstream).
+    async fn reject_archived_thread_write(
+        &self,
+        thread_id: &str,
+    ) -> Result<bool, ThreadStoreError> {
         if !is_thread_key(thread_id) {
-            return false;
+            return Ok(false);
         }
         let owned_thread_id = thread_id.to_owned();
-        let rejected = self
-            .garyx_db
+        self.garyx_db
             .run_blocking(move |db| {
                 let thread_id = owned_thread_id.as_str();
-                match db.is_thread_archived(thread_id) {
-                    Ok(true) => {
-                        if let Err(error) = db.unpin_thread(thread_id) {
-                            warn!(thread_id, error = %error, "failed to unpin archived thread");
-                        }
-                        if let Err(error) = db.remove_recent_thread(thread_id) {
-                            warn!(thread_id, error = %error, "failed to remove archived thread from recent projection");
-                        }
-                        if let Err(error) = db.remove_thread_meta_projection(thread_id) {
-                            warn!(thread_id, error = %error, "failed to remove archived thread meta projection");
-                        }
-                        if let Err(error) = db.remove_task_projection(thread_id) {
-                            warn!(thread_id, error = %error, "failed to remove archived task projection");
-                        }
-                        Ok(true)
-                    }
-                    Ok(false) => Ok(false),
-                    Err(error) => {
-                        warn!(thread_id, error = %error, "failed to check archived thread tombstone before write");
-                        Ok(false)
-                    }
+                if !db.is_thread_archived(thread_id)? {
+                    return Ok(false);
                 }
+                if let Err(error) = db.unpin_thread(thread_id) {
+                    warn!(thread_id, error = %error, "failed to unpin archived thread");
+                }
+                if let Err(error) = db.remove_recent_thread(thread_id) {
+                    warn!(thread_id, error = %error, "failed to remove archived thread from recent projection");
+                }
+                if let Err(error) = db.remove_thread_meta_projection(thread_id) {
+                    warn!(thread_id, error = %error, "failed to remove archived thread meta projection");
+                }
+                if let Err(error) = db.remove_task_projection(thread_id) {
+                    warn!(thread_id, error = %error, "failed to remove archived task projection");
+                }
+                Ok(true)
             })
-            .await;
-        rejected.unwrap_or(false)
+            .await
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
 
     /// Derive the projection set for one thread record. Non-thread keys get
@@ -136,19 +136,17 @@ impl SqliteThreadStore {
         })
     }
 
-    async fn write_record(&self, key: &str, mut data: Value) {
+    async fn write_record(&self, key: &str, mut data: Value) -> Result<(), ThreadStoreError> {
         // Structural invariant of the truth table: bodies never carry the
         // retired `messages` snapshot (#TASK-1864). Batch 1 removed every
         // producer; this strip guards legacy values arriving through the
         // boot-import path.
         strip_retired_record_fields(&mut data);
-        let body = match serde_json::to_string(&data) {
-            Ok(body) => body,
-            Err(error) => {
-                warn!(key, error = %error, "failed to serialize thread record body; dropping write");
-                return;
-            }
-        };
+        let body =
+            serde_json::to_string(&data).map_err(|error| ThreadStoreError::Serialization {
+                thread_id: key.to_owned(),
+                message: error.to_string(),
+            })?;
         let updated_at = data
             .get("updated_at")
             .and_then(Value::as_str)
@@ -156,7 +154,7 @@ impl SqliteThreadStore {
         let projections = self.derive_projections(key, &data).await;
         let garyx_db = Arc::clone(&self.garyx_db);
         let key_owned = key.to_owned();
-        let result = garyx_db
+        garyx_db
             .run_blocking(move |db| {
                 db.write_thread_record_with_projections(
                     &key_owned,
@@ -165,115 +163,91 @@ impl SqliteThreadStore {
                     projections,
                 )
             })
-            .await;
-        if let Err(error) = result {
-            warn!(key, error = %error, "failed to write thread record");
-        }
+            .await
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
 }
 
 #[async_trait]
 impl ThreadStore for SqliteThreadStore {
-    async fn get(&self, thread_id: &str) -> Option<Value> {
+    async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
         let garyx_db = Arc::clone(&self.garyx_db);
         let key = thread_id.to_owned();
-        let body = match garyx_db
+        let Some(body) = garyx_db
             .run_blocking(move |db| db.get_thread_record_body(&key))
             .await
-        {
-            Ok(body) => body?,
-            Err(error) => {
-                warn!(thread_id, error = %error, "failed to read thread record");
-                return None;
-            }
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))?
+        else {
+            return Ok(None);
         };
-        match serde_json::from_str(&body) {
-            Ok(value) => Some(value),
-            Err(error) => {
-                warn!(thread_id, error = %error, "failed to parse thread record body");
-                None
-            }
-        }
+        serde_json::from_str(&body)
+            .map(Some)
+            .map_err(|error| ThreadStoreError::Serialization {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            })
     }
 
-    async fn set(&self, thread_id: &str, data: Value) {
+    async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
         let lock = self.key_lock(thread_id);
         let _guard = lock.lock().await;
-        // Archived threads silently drop writes (review #TASK-1901).
-        if self.reject_archived_thread_write(thread_id).await {
-            return;
+        // Archived threads reject writes with a typed error so callers
+        // cannot mistake a dropped write for a persisted one (#TASK-2099;
+        // rejection semantics from review #TASK-1901).
+        if self.reject_archived_thread_write(thread_id).await? {
+            return Err(ThreadStoreError::Archived(thread_id.to_owned()));
         }
-        self.write_record(thread_id, data).await;
+        self.write_record(thread_id, data).await
     }
 
-    async fn delete(&self, thread_id: &str) -> bool {
+    async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
         let lock = self.key_lock(thread_id);
         let _guard = lock.lock().await;
         let garyx_db = Arc::clone(&self.garyx_db);
         let key = thread_id.to_owned();
-        match garyx_db
+        garyx_db
             .run_blocking(move |db| db.delete_thread_record_with_projections(&key))
             .await
-        {
-            Ok(removed) => removed,
-            Err(error) => {
-                warn!(thread_id, error = %error, "failed to delete thread record");
-                false
-            }
-        }
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
 
-    async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
+    async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
         let garyx_db = Arc::clone(&self.garyx_db);
         let prefix = prefix.map(ToOwned::to_owned);
-        match garyx_db
+        garyx_db
             .run_blocking(move |db| db.list_thread_record_keys(prefix.as_deref()))
             .await
-        {
-            Ok(keys) => keys,
-            Err(error) => {
-                warn!(error = %error, "failed to list thread record keys");
-                Vec::new()
-            }
-        }
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
 
-    async fn exists(&self, thread_id: &str) -> bool {
+    async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
         let garyx_db = Arc::clone(&self.garyx_db);
         let key = thread_id.to_owned();
-        match garyx_db
+        garyx_db
             .run_blocking(move |db| db.thread_record_exists(&key))
             .await
-        {
-            Ok(exists) => exists,
-            Err(error) => {
-                warn!(thread_id, error = %error, "failed to check thread record existence");
-                false
-            }
-        }
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
         let lock = self.key_lock(thread_id);
         let _guard = lock.lock().await;
-        // Archived threads silently drop writes (review #TASK-1901).
-        if self.reject_archived_thread_write(thread_id).await {
-            return Ok(());
+        if self.reject_archived_thread_write(thread_id).await? {
+            return Err(ThreadStoreError::Archived(thread_id.to_owned()));
         }
         // Read-merge-write under the per-key lock: equivalent to an atomic
         // top-level merge because no other writer for this key can
         // interleave, and the write itself is a single transaction.
         let mut data = self
             .get(thread_id)
-            .await
+            .await?
             .ok_or_else(|| ThreadStoreError::NotFound(thread_id.to_owned()))?;
         if let (Some(target), Some(updates)) = (data.as_object_mut(), updates.as_object()) {
             for (key, value) in updates {
                 target.insert(key.clone(), value.clone());
             }
         }
-        self.write_record(thread_id, data).await;
-        Ok(())
+        self.write_record(thread_id, data).await
     }
 }
 
@@ -327,7 +301,7 @@ pub(crate) async fn import_thread_records_if_needed(
     sqlite_store: &SqliteThreadStore,
     transcript_store: &Arc<ThreadTranscriptStore>,
 ) -> ThreadRecordImportSummary {
-    let source_keys = source.list_keys(None).await;
+    let source_keys = source.list_keys_logged(None).await;
     // Gate on state-row existence, not the key count: in steady state new
     // threads change the count, and a count-sensitive gate would re-import
     // on every boot, flowing the stale file archive back over the SQL
@@ -369,7 +343,7 @@ pub(crate) async fn import_thread_records_if_needed(
         ..Default::default()
     };
     for key in &source_keys {
-        let Some(mut data) = source.get(key).await else {
+        let Some(mut data) = source.get_logged(key).await else {
             summary.skipped += 1;
             continue;
         };
@@ -446,8 +420,13 @@ pub(crate) async fn import_thread_records_if_needed(
 
         // write_record strips the snapshot and derives projections in one
         // transaction.
-        sqlite_store.write_record(key, data).await;
-        summary.imported += 1;
+        match sqlite_store.write_record(key, data).await {
+            Ok(()) => summary.imported += 1,
+            Err(error) => {
+                warn!(key, error = %error, "failed to import thread record");
+                summary.skipped += 1;
+            }
+        }
     }
 
     if let Err(error) = garyx_db.record_projection_state(
@@ -490,10 +469,10 @@ mod contract_tests {
     }
 
     async fn run_contract(store: &dyn ThreadStore) {
-        // Missing key.
-        assert_eq!(store.get("thread::missing").await, None);
-        assert!(!store.exists("thread::missing").await);
-        assert!(!store.delete("thread::missing").await);
+        // Missing key: absent, not an error.
+        assert_eq!(store.get("thread::missing").await.expect("get"), None);
+        assert!(!store.exists("thread::missing").await.expect("exists"));
+        assert!(!store.delete("thread::missing").await.expect("delete"));
         assert!(
             store
                 .update("thread::missing", json!({"label": "x"}))
@@ -508,10 +487,15 @@ mod contract_tests {
                 "thread::alpha",
                 json!({"thread_id": "thread::alpha", "label": "first"}),
             )
-            .await;
-        let read = store.get("thread::alpha").await.expect("read back");
+            .await
+            .expect("set");
+        let read = store
+            .get("thread::alpha")
+            .await
+            .expect("get")
+            .expect("read back");
         assert_eq!(read["label"], "first");
-        assert!(store.exists("thread::alpha").await);
+        assert!(store.exists("thread::alpha").await.expect("exists"));
 
         // Overwrite replaces the whole value.
         store
@@ -519,8 +503,13 @@ mod contract_tests {
                 "thread::alpha",
                 json!({"thread_id": "thread::alpha", "generation": 2}),
             )
-            .await;
-        let read = store.get("thread::alpha").await.expect("read v2");
+            .await
+            .expect("set v2");
+        let read = store
+            .get("thread::alpha")
+            .await
+            .expect("get")
+            .expect("read v2");
         assert_eq!(read["generation"], 2);
         assert!(read.get("label").is_none(), "set is a full replace");
 
@@ -529,7 +518,11 @@ mod contract_tests {
             .update("thread::alpha", json!({"label": "merged", "extra": true}))
             .await
             .expect("update");
-        let read = store.get("thread::alpha").await.expect("read merged");
+        let read = store
+            .get("thread::alpha")
+            .await
+            .expect("get")
+            .expect("read merged");
         assert_eq!(read["generation"], 2);
         assert_eq!(read["label"], "merged");
         assert_eq!(read["extra"], true);
@@ -537,11 +530,15 @@ mod contract_tests {
         // Non-thread keys are ordinary records.
         store
             .set("meta::known_channel_endpoints", json!({"endpoints": []}))
-            .await;
-        store.set("cron::job-1", json!({"schedule": "daily"})).await;
+            .await
+            .expect("set registry");
+        store
+            .set("cron::job-1", json!({"schedule": "daily"}))
+            .await
+            .expect("set cron");
 
         // list_keys: all + prefix.
-        let mut all = store.list_keys(None).await;
+        let mut all = store.list_keys(None).await.expect("list");
         all.sort();
         assert_eq!(
             all,
@@ -551,15 +548,18 @@ mod contract_tests {
                 "thread::alpha".to_owned(),
             ]
         );
-        let mut threads = store.list_keys(Some("thread::")).await;
+        let mut threads = store
+            .list_keys(Some("thread::"))
+            .await
+            .expect("list prefix");
         threads.sort();
         assert_eq!(threads, vec!["thread::alpha".to_owned()]);
 
         // Delete.
-        assert!(store.delete("thread::alpha").await);
-        assert!(!store.delete("thread::alpha").await);
-        assert_eq!(store.get("thread::alpha").await, None);
-        assert!(!store.exists("thread::alpha").await);
+        assert!(store.delete("thread::alpha").await.expect("delete"));
+        assert!(!store.delete("thread::alpha").await.expect("re-delete"));
+        assert_eq!(store.get("thread::alpha").await.expect("get"), None);
+        assert!(!store.exists("thread::alpha").await.expect("exists"));
     }
 
     #[tokio::test]
@@ -607,7 +607,8 @@ mod contract_tests {
                 "thread::rollback",
                 json!({"thread_id": "thread::rollback", "label": "v1"}),
             )
-            .await;
+            .await
+            .unwrap();
 
         let summary =
             import_thread_records_if_needed(&garyx_db, &source, &sqlite, &transcript_store).await;
@@ -619,7 +620,8 @@ mod contract_tests {
                 "thread::rollback",
                 json!({"thread_id": "thread::rollback", "label": "v2"}),
             )
-            .await;
+            .await
+            .unwrap();
         // …and clearing the import-state row (the manual recovery step)
         // forces the re-import (#TASK-1901: same key count must not skip it).
         assert!(
@@ -632,7 +634,11 @@ mod contract_tests {
             import_thread_records_if_needed(&garyx_db, &source, &sqlite, &transcript_store).await;
         assert_eq!(summary.imported, 1, "cleared state must force a re-import");
         assert_eq!(
-            sqlite.get("thread::rollback").await.expect("record")["label"],
+            sqlite
+                .get("thread::rollback")
+                .await
+                .unwrap()
+                .expect("record")["label"],
             "v2",
             "the re-import must pick up the rollback write"
         );
@@ -664,7 +670,8 @@ mod contract_tests {
                     "task": {"number": 42, "status": "done", "title": "Legacy task"},
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         // A thread that already has a transcript: no backfill.
         source
             .set(
@@ -674,7 +681,8 @@ mod contract_tests {
                     "messages": [{"role": "user", "content": "already transcribed"}],
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         transcript_store
             .append_committed_messages(
                 "thread::modern",
@@ -686,7 +694,8 @@ mod contract_tests {
         // Non-thread keys import as plain records.
         source
             .set("meta::known_channel_endpoints", json!({"endpoints": []}))
-            .await;
+            .await
+            .unwrap();
 
         let summary =
             import_thread_records_if_needed(&garyx_db, &source, &sqlite, &transcript_store).await;
@@ -699,7 +708,11 @@ mod contract_tests {
 
         // The legacy thread: snapshot stripped, transcript rebuilt, preview
         // and task body seeded, projections derived.
-        let record = sqlite.get("thread::legacy").await.expect("imported record");
+        let record = sqlite
+            .get("thread::legacy")
+            .await
+            .unwrap()
+            .expect("imported record");
         assert!(record.get("messages").is_none());
         assert_eq!(record["last_user_preview"], "legacy question");
         assert_eq!(record["last_assistant_preview"], "legacy answer");
@@ -718,7 +731,13 @@ mod contract_tests {
                 .any(|row| row.thread_id == "thread::legacy"),
             "projections must be derived during import"
         );
-        assert!(sqlite.get("meta::known_channel_endpoints").await.is_some());
+        assert!(
+            sqlite
+                .get("meta::known_channel_endpoints")
+                .await
+                .unwrap()
+                .is_some()
+        );
 
         // Second run is a no-op: the migration state row gates it.
         let summary =
@@ -819,7 +838,8 @@ mod contract_tests {
                     "messages": [{"role": "user", "content": "retired task"}],
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         source
             .set(
                 "thread::legacy-workflow-child",
@@ -830,7 +850,8 @@ mod contract_tests {
                     "messages": [{"role": "assistant", "content": "retired child"}],
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         source
             .set(
                 "thread::ordinary",
@@ -839,7 +860,8 @@ mod contract_tests {
                     "label": "Discuss the ordinary deployment workflow",
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         transcript_store
             .append_committed_messages(
                 "thread::legacy-workflow-task",
@@ -854,9 +876,21 @@ mod contract_tests {
         assert_eq!(summary.source_keys, 3);
         assert_eq!(summary.imported, 1);
         assert_eq!(summary.skipped, 2);
-        assert!(sqlite.get("thread::legacy-workflow-task").await.is_none());
-        assert!(sqlite.get("thread::legacy-workflow-child").await.is_none());
-        assert!(sqlite.get("thread::ordinary").await.is_some());
+        assert!(
+            sqlite
+                .get("thread::legacy-workflow-task")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            sqlite
+                .get("thread::legacy-workflow-child")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(sqlite.get("thread::ordinary").await.unwrap().is_some());
         assert!(
             !transcript_store
                 .exists("thread::legacy-workflow-task")
@@ -884,9 +918,10 @@ mod contract_tests {
                     "messages": [{"role": "user", "content": "legacy"}],
                 }),
             )
-            .await;
+            .await
+            .unwrap();
 
-        let read = store.get(thread_id).await.expect("read back");
+        let read = store.get(thread_id).await.unwrap().expect("read back");
         assert!(
             read.get("messages").is_none(),
             "record bodies never carry the retired messages snapshot"
@@ -911,7 +946,8 @@ mod contract_tests {
                     "hidden": true,
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         assert!(
             !garyx_db
                 .list_recent_threads(10, 0)
@@ -919,17 +955,26 @@ mod contract_tests {
                 .iter()
                 .any(|row| row.thread_id == thread_id)
         );
-        assert!(store.exists(thread_id).await);
+        assert!(store.exists(thread_id).await.unwrap());
 
-        // Archived threads reject writes entirely.
+        // Archived threads reject writes with a typed error (#TASK-2099):
+        // a dropped write must never look persisted to the caller.
         garyx_db.mark_thread_archived(thread_id).expect("archive");
-        store
+        let rejected = store
             .set(
                 thread_id,
                 json!({"thread_id": thread_id, "label": "after-archive"}),
             )
             .await;
-        let read = store.get(thread_id).await.expect("record still readable");
+        assert!(
+            matches!(rejected, Err(ThreadStoreError::Archived(_))),
+            "archived write must surface as ThreadStoreError::Archived, got {rejected:?}"
+        );
+        let read = store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .expect("record still readable");
         assert_eq!(
             read["label"], "Projected",
             "archived threads must reject writes"

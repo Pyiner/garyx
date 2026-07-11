@@ -1,3 +1,4 @@
+use garyx_router::ThreadStoreExt;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -1727,7 +1728,7 @@ impl CronService {
         if app_state
             .threads
             .thread_store
-            .get(&thread_id)
+            .get_logged(&thread_id)
             .await
             .is_none()
         {
@@ -1944,6 +1945,7 @@ impl CronService {
                 .thread_store
                 .get(thread_id)
                 .await
+                .map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("cron target thread not found: {thread_id}"))?;
             (thread_id.to_owned(), None, Some(thread_record))
         } else if let Some(target) = configured_target {
@@ -1965,14 +1967,19 @@ impl CronService {
                     .thread_store
                     .get(&key)
                     .await
+                    .map_err(|error| format!("cron target thread read failed: {error}"))?
                     .ok_or_else(|| format!("cron target thread not found: {key}"))?;
                 (key, delivery, Some(thread_record))
             } else {
                 let resolved = resolve_delivery_target_with_recovery(&runtime.router, target)
                     .await
                     .ok_or_else(|| format!("unable to resolve cron delivery target: {target}"))?;
-                let thread_record =
-                    runtime.thread_store.get(&resolved.0).await.ok_or_else(|| {
+                let thread_record = runtime
+                    .thread_store
+                    .get(&resolved.0)
+                    .await
+                    .map_err(|error| format!("cron delivery target read failed: {error}"))?
+                    .ok_or_else(|| {
                         format!(
                             "cron delivery target {target} resolved to missing thread {}",
                             resolved.0

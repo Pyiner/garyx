@@ -1,4 +1,5 @@
 use super::*;
+use garyx_router::ThreadStoreExt;
 
 pub(super) fn insert_snapshot_field(
     metadata: &mut Map<String, Value>,
@@ -36,7 +37,7 @@ pub(super) async fn persist_thread_runtime_snapshot(
     let Some(store) = store else {
         return;
     };
-    let Some(mut thread_data) = store.get(thread_id).await else {
+    let Some(mut thread_data) = store.get_logged(thread_id).await else {
         return;
     };
     let existing_top_level_overrides = [
@@ -96,7 +97,9 @@ pub(super) async fn persist_thread_runtime_snapshot(
         "updated_at".to_owned(),
         Value::String(Utc::now().to_rfc3339()),
     );
-    store.set(thread_id, thread_data).await;
+    if !store.set_logged(thread_id, thread_data).await {
+        tracing::warn!(thread_id, "pending-input persistence write did not persist");
+    }
 }
 
 pub(super) fn build_pending_input_content(

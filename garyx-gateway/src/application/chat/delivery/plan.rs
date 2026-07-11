@@ -1,3 +1,4 @@
+use garyx_router::ThreadStoreExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -72,7 +73,7 @@ pub(super) async fn snapshot_bound_thread_delivery_targets(
     state
         .threads
         .thread_store
-        .get(thread_id)
+        .get_logged(thread_id)
         .await
         .map(|session_data| bound_thread_delivery_targets(&session_data))
         .unwrap_or_default()

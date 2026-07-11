@@ -1,3 +1,4 @@
+use crate::store::ThreadStoreExt;
 use std::collections::HashMap;
 
 use chrono::Utc;
@@ -27,7 +28,7 @@ impl MessageRouter {
         from_id: &str,
         is_group: bool,
     ) {
-        let Some(mut data) = self.threads.get(thread_id).await else {
+        let Some(mut data) = self.threads.get_logged(thread_id).await else {
             return;
         };
         let Some(obj) = data.as_object_mut() else {
@@ -60,7 +61,7 @@ impl MessageRouter {
                 "updated_at".to_owned(),
                 Value::String(Utc::now().to_rfc3339()),
             );
-            self.threads.set(thread_id, data).await;
+            self.threads.set_logged(thread_id, data).await;
         }
     }
 

@@ -133,7 +133,8 @@ mod tests {
         let store: Arc<dyn ThreadStore> = state.threads.thread_store.clone();
         store
             .set("thread::bound", bound_thread_record("thread::bound", "42"))
-            .await;
+            .await
+            .unwrap();
 
         let projection = channel_endpoint_projection_for(&store);
         assert_eq!(
@@ -163,7 +164,7 @@ mod tests {
         assert_eq!(routes[0].channel.as_deref(), Some("telegram"));
 
         // Deleting the record removes the projection rows with it.
-        store.delete("thread::bound").await;
+        store.delete("thread::bound").await.unwrap();
         assert!(
             projection
                 .endpoint_holders("telegram::main::42")
@@ -181,10 +182,12 @@ mod tests {
         let store: Arc<dyn ThreadStore> = state.threads.thread_store.clone();
         store
             .set("thread::old", bound_thread_record("thread::old", "42"))
-            .await;
+            .await
+            .unwrap();
         store
             .set("thread::new", json!({ "thread_id": "thread::new" }))
-            .await;
+            .await
+            .unwrap();
 
         let binding = garyx_router::ChannelBinding {
             channel: "telegram".to_owned(),
@@ -206,7 +209,7 @@ mod tests {
                 .expect("holders"),
             vec!["thread::new".to_owned()],
         );
-        let old_record = store.get("thread::old").await.expect("old record");
+        let old_record = store.get("thread::old").await.unwrap().expect("old record");
         assert!(garyx_router::bindings_from_value(&old_record).is_empty());
     }
 }

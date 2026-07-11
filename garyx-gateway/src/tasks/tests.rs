@@ -706,6 +706,7 @@ async fn agent_executor_creates_in_progress_task_and_dispatches_without_assignee
         .thread_store
         .get(thread_id)
         .await
+        .unwrap()
         .expect("stored thread");
     assert_eq!(stored["thread_kind"], "task");
     assert_eq!(stored["agent_id"], "reviewer");

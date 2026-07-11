@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::store::ThreadStoreExt;
 use chrono::Utc;
 use serde_json::Value;
 
@@ -161,7 +162,7 @@ impl MessageRouter {
         let now = Utc::now().to_rfc3339();
         let mut thread_data = self
             .threads
-            .get(thread_id)
+            .get_logged(thread_id)
             .await
             .unwrap_or_else(|| serde_json::json!({}));
         let Some(obj) = thread_data.as_object_mut() else {
@@ -210,6 +211,6 @@ impl MessageRouter {
         }
 
         obj.insert("updated_at".to_owned(), Value::String(now));
-        self.threads.set(thread_id, thread_data).await;
+        self.threads.set_logged(thread_id, thread_data).await;
     }
 }

@@ -132,6 +132,7 @@ pub(crate) async fn dispatch_internal_message_to_thread(
         .thread_store
         .get(target_thread_id)
         .await
+        .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("thread not found: {target_thread_id}"))?;
     let delivery_context = MessageRouter::resolve_delivery_target_from_store(
         state.threads.thread_store.clone(),

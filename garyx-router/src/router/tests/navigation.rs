@@ -92,7 +92,8 @@ async fn test_latest_assistant_message_text_for_thread_ignores_user_messages() {
             "thread::wx-assistant-final",
             json!({"history": {"message_count": 3}}),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
     router.set_thread_history_repository(Arc::new(ThreadHistoryRepository::new(
@@ -165,7 +166,8 @@ async fn test_resolve_endpoint_thread_id_uses_projected_owner_point_lookup() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let binding = ChannelBinding {
         channel: "telegram".to_owned(),
@@ -213,7 +215,8 @@ async fn test_rebuild_thread_indexes_clears_detached_endpoint_thread_context() {
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
     let binding_context_key = MessageRouter::build_binding_context_key("telegram", "main", "alice");
@@ -251,7 +254,8 @@ async fn test_rebuild_thread_indexes_preserves_explicit_thread_overrides_for_bou
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     let binding_context_key = MessageRouter::build_binding_context_key("telegram", "main", "alice");
@@ -282,7 +286,8 @@ async fn test_rebuild_thread_indexes_clears_missing_explicit_thread_override_for
                 }]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     let binding_context_key = MessageRouter::build_binding_context_key("telegram", "main", "alice");
@@ -318,7 +323,11 @@ async fn test_ensure_thread_entry_creates_with_label() {
         )
         .await;
 
-    let saved = store.get("bot1::main::u1:session-1").await.unwrap();
+    let saved = store
+        .get("bot1::main::u1:session-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(saved["thread_id"], "bot1::main::u1:session-1");
     assert_eq!(saved["channel"], "telegram");
     assert_eq!(saved["account_id"], "bot1");

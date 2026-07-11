@@ -2802,7 +2802,11 @@ mod e2e_tests {
                 .await
         };
         assert_eq!(current.as_deref(), Some(session_key.as_str()));
-        let persisted = store.get(&session_key).await.expect("thread should exist");
+        let persisted = store
+            .get(&session_key)
+            .await
+            .unwrap()
+            .expect("thread should exist");
         let bindings = bindings_from_value(&persisted);
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].endpoint_key(), "telegram::bot1::42");
@@ -4413,7 +4417,7 @@ mod e2e_tests {
             .await
             .expect("bind should succeed");
         assert!(
-            store.delete(&old_thread).await,
+            store.delete(&old_thread).await.unwrap(),
             "old thread should be deleted"
         );
         router.lock().await.rebuild_thread_indexes().await;
@@ -4903,7 +4907,7 @@ mod e2e_tests {
             let calls = provider.calls.lock().unwrap();
             calls[0].thread_id.clone()
         };
-        let data = store.get(&thread_id).await;
+        let data = store.get(&thread_id).await.unwrap();
         assert!(data.is_some(), "thread data should be persisted");
         let data = data.unwrap();
         assert!(data.get("messages").is_none());
@@ -4980,6 +4984,7 @@ mod e2e_tests {
         let thread_data = store
             .get(switched.as_deref().expect("thread id should exist"))
             .await
+            .unwrap()
             .expect("created thread should persist");
         assert!(
             thread_data["label"]
@@ -5181,6 +5186,7 @@ mod e2e_tests {
         let thread_keys: Vec<String> = store
             .list_keys(None)
             .await
+            .unwrap()
             .into_iter()
             .filter(|key| is_thread_key(key))
             .collect();

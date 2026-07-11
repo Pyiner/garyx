@@ -39,28 +39,29 @@ impl Default for InMemoryThreadStore {
 
 #[async_trait]
 impl ThreadStore for InMemoryThreadStore {
-    async fn get(&self, thread_id: &str) -> Option<Value> {
-        self.store.read().await.get(thread_id).cloned()
+    async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
+        Ok(self.store.read().await.get(thread_id).cloned())
     }
 
-    async fn set(&self, thread_id: &str, data: Value) {
+    async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
         self.store.write().await.insert(thread_id.to_owned(), data);
+        Ok(())
     }
 
-    async fn delete(&self, thread_id: &str) -> bool {
-        self.store.write().await.remove(thread_id).is_some()
+    async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+        Ok(self.store.write().await.remove(thread_id).is_some())
     }
 
-    async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
+    async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
         let guard = self.store.read().await;
-        match prefix {
+        Ok(match prefix {
             Some(p) => guard.keys().filter(|k| k.starts_with(p)).cloned().collect(),
             None => guard.keys().cloned().collect(),
-        }
+        })
     }
 
-    async fn exists(&self, thread_id: &str) -> bool {
-        self.store.read().await.contains_key(thread_id)
+    async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+        Ok(self.store.read().await.contains_key(thread_id))
     }
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {

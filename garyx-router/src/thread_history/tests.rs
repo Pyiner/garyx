@@ -46,7 +46,8 @@ async fn repository_reads_only_committed_transcript() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let repo = ThreadHistoryRepository::new(thread_store, transcript_store);
 
     let snapshot = repo
@@ -99,7 +100,8 @@ async fn transcript_run_state_reports_dangling_run_as_busy() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let repo = ThreadHistoryRepository::new(thread_store, transcript_store.clone());
 
     let snapshot = repo.thread_snapshot("thread::live-only", 10).await.unwrap();
@@ -533,7 +535,8 @@ async fn repository_rejects_stale_history_count_without_transcript() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let repo =
         ThreadHistoryRepository::new(thread_store, Arc::new(ThreadTranscriptStore::memory()));
 
@@ -609,7 +612,8 @@ async fn thread_snapshot_after_index_returns_committed_tail_only() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let repo = ThreadHistoryRepository::new(thread_store, transcript_store);
 
     // after index 0 -> committed tail [b] only.
@@ -648,7 +652,8 @@ async fn thread_snapshot_after_index_respects_limit_without_overlay() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let repo = ThreadHistoryRepository::new(thread_store, transcript_store);
 
     // after 0, limit 1 -> committed tail [b] only.

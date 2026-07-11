@@ -819,7 +819,8 @@ mod tests {
                     "messages": []
                 }),
             )
-            .await;
+            .await
+            .unwrap();
     }
 
     async fn wait_for_calls(provider: &RecordingProvider, expected: usize) -> Vec<ProviderCall> {
@@ -1063,7 +1064,8 @@ mod tests {
                     }
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         thread_id
     }
 

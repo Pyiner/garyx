@@ -1,3 +1,4 @@
+use garyx_router::ThreadStoreExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -892,7 +893,13 @@ async fn validate_thread_runtime_allows_assignee(
     let Principal::Agent { agent_id } = assignee else {
         return Ok(());
     };
-    let Some(thread) = state.threads.thread_store.get(thread_id).await else {
+    let Some(thread) = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .map_err(|error| TaskServiceError::Store(error.to_string()))?
+    else {
         return Ok(());
     };
     let reference = resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
@@ -939,7 +946,13 @@ async fn ensure_thread_workspace_from_assignee_default(
     let Some(Principal::Agent { agent_id }) = assignee else {
         return Ok(());
     };
-    let Some(mut updated) = state.threads.thread_store.get(thread_id).await else {
+    let Some(mut updated) = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .map_err(|error| TaskServiceError::Store(error.to_string()))?
+    else {
         return Ok(());
     };
     let reference = resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
@@ -983,7 +996,8 @@ async fn ensure_thread_workspace_from_assignee_default(
         .threads
         .thread_store
         .set(thread_id, updated.clone())
-        .await;
+        .await
+        .map_err(|error| TaskServiceError::Store(error.to_string()))?;
     state
         .integration
         .bridge
@@ -996,7 +1010,13 @@ pub(crate) async fn ensure_created_task_thread_provider_from_bound_agent(
     state: &Arc<AppState>,
     thread_id: &str,
 ) -> Result<(), TaskServiceError> {
-    let Some(mut updated) = state.threads.thread_store.get(thread_id).await else {
+    let Some(mut updated) = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .map_err(|error| TaskServiceError::Store(error.to_string()))?
+    else {
         return Ok(());
     };
     if updated.get("provider_type").is_some() {
@@ -1035,7 +1055,12 @@ pub(crate) async fn ensure_created_task_thread_provider_from_bound_agent(
             Value::String(Utc::now().to_rfc3339()),
         );
     }
-    state.threads.thread_store.set(thread_id, updated).await;
+    state
+        .threads
+        .thread_store
+        .set(thread_id, updated)
+        .await
+        .map_err(|error| TaskServiceError::Store(error.to_string()))?;
     Ok(())
 }
 
@@ -1132,7 +1157,7 @@ async fn task_auto_dispatch_still_current(
     task_id: &str,
     agent_id: &str,
 ) -> bool {
-    let Some(record) = state.threads.thread_store.get(thread_id).await else {
+    let Some(record) = state.threads.thread_store.get_logged(thread_id).await else {
         return false;
     };
     let Ok(Some(task)) = garyx_router::tasks::task_from_record(&record) else {
@@ -1229,7 +1254,7 @@ async fn runtime_agent_id_for_thread(state: &Arc<AppState>, thread_id: &str) -> 
     state
         .threads
         .thread_store
-        .get(thread_id)
+        .get_logged(thread_id)
         .await
         .and_then(|record| garyx_router::agent_id_from_value(&record))
         .unwrap_or_default()

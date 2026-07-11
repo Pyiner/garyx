@@ -39,7 +39,12 @@ async fn seed_transcript_backed_thread(state: &Arc<AppState>, thread_id: &str, m
             }),
         );
     }
-    state.threads.thread_store.set(thread_id, data).await;
+    state
+        .threads
+        .thread_store
+        .set(thread_id, data)
+        .await
+        .unwrap();
     if !messages.is_empty() {
         state
             .threads
@@ -167,12 +172,14 @@ async fn test_thread_history_with_data() {
         .threads
         .thread_store
         .set("thread::agent1-user1", json!({"msg": "hello"}))
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
         .set("thread::agent1-user2", json!({"msg": "world"}))
-        .await;
+        .await
+        .unwrap();
 
     let router = api_router(state);
 
@@ -244,7 +251,8 @@ async fn test_thread_diagnostics_returns_ledger_records() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = api_router(state);
     let req = Request::builder()
@@ -309,7 +317,8 @@ async fn test_bot_status_returns_current_bound_thread_only() {
                 "channel_bindings": [],
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -334,7 +343,8 @@ async fn test_bot_status_returns_current_bound_thread_only() {
                 }],
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .message_ledger
@@ -427,7 +437,8 @@ async fn test_bot_bind_rebinds_main_endpoint_to_existing_thread() {
                 }],
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
@@ -441,7 +452,8 @@ async fn test_bot_bind_rebinds_main_endpoint_to_existing_thread() {
                 "channel_bindings": [],
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = api_router(state.clone());
     let req = Request::builder()
@@ -473,12 +485,14 @@ async fn test_bot_bind_rebinds_main_endpoint_to_existing_thread() {
         .thread_store
         .get("thread::source")
         .await
+        .unwrap()
         .unwrap();
     let target = state
         .threads
         .thread_store
         .get("thread::target")
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(source["channel_bindings"].as_array().unwrap().len(), 0);
     assert_eq!(target["channel_bindings"].as_array().unwrap().len(), 1);
@@ -526,7 +540,8 @@ async fn test_bot_bind_rejects_cross_channel_thread() {
                 "channel_bindings": [],
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = api_router(state);
     let req = Request::builder()
@@ -603,7 +618,8 @@ async fn test_bot_unbind_clears_main_endpoint_binding() {
                 }],
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let router = api_router(state.clone());
     let req = Request::builder()
@@ -635,6 +651,7 @@ async fn test_bot_unbind_clears_main_endpoint_binding() {
         .thread_store
         .get("thread::current")
         .await
+        .unwrap()
         .unwrap();
     assert_eq!(thread["channel_bindings"].as_array().unwrap().len(), 0);
 }
@@ -985,12 +1002,14 @@ async fn test_thread_history_with_prefix() {
         .threads
         .thread_store
         .set("thread::agent1-user1", json!({"msg": "a"}))
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .thread_store
         .set("thread::agent2-user2", json!({"msg": "b"}))
-        .await;
+        .await
+        .unwrap();
 
     let router = api_router(state);
 
@@ -1467,6 +1486,7 @@ async fn test_thread_history_detail_repairs_orphaned_pending_user_inputs() {
         .thread_store
         .get("thread::pending-u3")
         .await
+        .unwrap()
         .expect("thread should still exist");
     assert_eq!(
         repaired["pending_user_inputs"]

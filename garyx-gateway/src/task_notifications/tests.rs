@@ -316,7 +316,8 @@ async fn deliver_without_handoff_does_not_fallback_to_committed_thread_final_mes
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
     state
         .threads
         .history
@@ -378,7 +379,8 @@ async fn dispatch_does_not_replay_ready_notification_without_handoff() {
                 }),
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     deliver_task_review_handoff(
         &state,
@@ -452,7 +454,8 @@ async fn dispatches_ready_notification_to_bot_target() {
                 }),
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let handoff = format!(
         "The implementation is complete.\n{}\nbot-handoff-tail",
@@ -523,7 +526,13 @@ async fn dispatches_ready_notification_to_bot_target() {
     );
 
     let mut persisted_notification = false;
-    for thread_id in state.threads.thread_store.list_keys(Some("thread::")).await {
+    for thread_id in state
+        .threads
+        .thread_store
+        .list_keys(Some("thread::"))
+        .await
+        .unwrap()
+    {
         let snapshot = state
             .threads
             .history

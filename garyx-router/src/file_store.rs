@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::{Mutex, Semaphore};
-use tracing::{debug, error};
+use tracing::debug;
 
 use crate::store::{ThreadStore, ThreadStoreError};
 
@@ -331,7 +331,7 @@ impl FileThreadStore {
 
 #[async_trait]
 impl ThreadStore for FileThreadStore {
-    async fn get(&self, thread_id: &str) -> Option<Value> {
+    async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
         // Check cache first.
         {
             let mut cache = self.cache.lock().await;
@@ -346,7 +346,7 @@ impl ThreadStore for FileThreadStore {
                     if let Some(disk_mtime) = Self::file_mtime(&path).await
                         && disk_mtime == mtime
                     {
-                        return Some(data);
+                        return Ok(Some(data));
                     }
                     // Invalidate stale cache entry.
                     let mut cache = self.cache.lock().await;
@@ -360,25 +360,40 @@ impl ThreadStore for FileThreadStore {
 
         let path = self.resolve_thread_file(thread_id);
         if !path.exists() {
-            return None;
+            return Ok(None);
         }
 
-        let _permit = self.semaphore.acquire().await.ok()?;
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|error| ThreadStoreError::Backend(format!("semaphore closed: {error}")))?;
 
         // Lock-free read: every writer lands through `atomic_write`
         // (temp file + rename), so a plain read always observes one
         // complete record. Readers must not queue on the write lock —
         // concurrent history polling otherwise starves other readers
         // and thread-create paths into lock timeouts.
-        let bytes = tokio::fs::read(&path).await.ok()?;
-        let data: Value = serde_json::from_slice(&bytes).ok()?;
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|error| ThreadStoreError::Backend(format!("read failed: {error}")))?;
+        let data: Value =
+            serde_json::from_slice(&bytes).map_err(|error| ThreadStoreError::Serialization {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            })?;
 
         // Prefer the canonical path for cache keying, while still accepting a
         // record read from an older storage location.
         let cache_path = self.thread_file(thread_id);
-        let mtime = Self::file_mtime(&cache_path)
+        let Some(mtime) = Self::file_mtime(&cache_path)
             .await
-            .or(Self::file_mtime(&path).await)?;
+            .or(Self::file_mtime(&path).await)
+        else {
+            // Deleted between read and stat: treat as a consistent read
+            // without caching.
+            return Ok(Some(data));
+        };
 
         let mut cache = self.cache.lock().await;
         Self::evict_if_needed(&mut cache, self.cache_max_size);
@@ -391,10 +406,10 @@ impl ThreadStore for FileThreadStore {
             },
         );
 
-        Some(data)
+        Ok(Some(data))
     }
 
-    async fn set(&self, thread_id: &str, data: Value) {
+    async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
         let path = self.thread_file(thread_id);
         let legacy_path = self.legacy_thread_file(thread_id);
         let legacy_compat_path = self.legacy_compat_thread_file(thread_id);
@@ -402,22 +417,26 @@ impl ThreadStore for FileThreadStore {
 
         self.check_stale_lock(&lock_thread_path).await;
 
-        let _permit = match self.semaphore.acquire().await {
-            Ok(permit) => permit,
-            Err(e) => {
-                error!(thread_id, error = %e, "semaphore closed on set");
-                return;
-            }
-        };
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|error| ThreadStoreError::Backend(format!("semaphore closed: {error}")))?;
 
-        if let Err(e) = self.acquire_lock(&lock_thread_path).await {
-            error!(thread_id, error = %e, "lock timeout on set");
-            return;
-        }
+        self.acquire_lock(&lock_thread_path)
+            .await
+            .map_err(|error| ThreadStoreError::Backend(format!("lock timeout: {error}")))?;
 
         let result = async {
-            let bytes = serde_json::to_vec_pretty(&data)?;
-            Self::atomic_write(&path, &bytes).await?;
+            let bytes = serde_json::to_vec_pretty(&data).map_err(|error| {
+                ThreadStoreError::Serialization {
+                    thread_id: thread_id.to_owned(),
+                    message: error.to_string(),
+                }
+            })?;
+            Self::atomic_write(&path, &bytes)
+                .await
+                .map_err(|error| ThreadStoreError::Backend(format!("write failed: {error}")))?;
             if legacy_path != path && legacy_path.exists() {
                 let _ = tokio::fs::remove_file(&legacy_path).await;
                 let _ = tokio::fs::remove_file(Self::lock_file_for_path(&legacy_path)).await;
@@ -443,92 +462,110 @@ impl ThreadStore for FileThreadStore {
             );
 
             debug!(thread_id, "saved thread");
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            Ok(())
         }
         .await;
 
         self.release_lock(&lock_thread_path).await;
-
-        if let Err(e) = result {
-            error!(thread_id, error = %e, "failed to set thread");
-        }
+        result
     }
 
-    async fn delete(&self, thread_id: &str) -> bool {
+    async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
         // Remove from cache first.
         self.cache.lock().await.remove(thread_id);
 
         let path = self.resolve_thread_file(thread_id);
         if !path.exists() {
-            return false;
+            return Ok(false);
         }
 
         self.check_stale_lock(&path).await;
 
-        let permit = self.semaphore.acquire().await;
-        if permit.is_err() {
-            return false;
-        }
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|error| ThreadStoreError::Backend(format!("semaphore closed: {error}")))?;
 
-        if let Err(e) = self.acquire_lock(&path).await {
-            error!(thread_id, error = %e, "lock timeout on delete");
-            return false;
-        }
+        self.acquire_lock(&path)
+            .await
+            .map_err(|error| ThreadStoreError::Backend(format!("lock timeout: {error}")))?;
 
-        let ok = tokio::fs::remove_file(&path).await.is_ok();
+        let result = tokio::fs::remove_file(&path).await;
 
         // Release lock and clean up the lock file.
         self.release_lock(&path).await;
 
-        if ok {
-            debug!(thread_id, "deleted thread");
+        match result {
+            Ok(()) => {
+                debug!(thread_id, "deleted thread");
+                Ok(true)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(ThreadStoreError::Backend(format!("delete failed: {error}"))),
         }
-        ok
     }
 
-    async fn list_keys(&self, prefix: Option<&str>) -> Vec<String> {
+    async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
         let mut keys = Vec::new();
         let mut seen = HashSet::new();
         for root in self.storage_roots() {
             let mut entries = match tokio::fs::read_dir(root).await {
-                Ok(e) => e,
-                Err(_) => continue,
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(ThreadStoreError::Backend(format!(
+                        "list failed for {}: {error}",
+                        root.display()
+                    )));
+                }
             };
 
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let path = entry.path();
-                if path.extension().is_none_or(|ext| ext != "json") {
-                    continue;
-                }
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    let Some(key) = Self::stem_to_key(stem) else {
-                        continue;
-                    };
-                    if let Some(p) = prefix
-                        && !key.starts_with(p)
-                    {
-                        continue;
+            loop {
+                match entries.next_entry().await {
+                    Ok(Some(entry)) => {
+                        let path = entry.path();
+                        if path.extension().is_none_or(|ext| ext != "json") {
+                            continue;
+                        }
+                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                            let Some(key) = Self::stem_to_key(stem) else {
+                                continue;
+                            };
+                            if let Some(p) = prefix
+                                && !key.starts_with(p)
+                            {
+                                continue;
+                            }
+                            if seen.insert(key.clone()) {
+                                keys.push(key);
+                            }
+                        }
                     }
-                    if seen.insert(key.clone()) {
-                        keys.push(key);
+                    Ok(None) => break,
+                    Err(error) => {
+                        return Err(ThreadStoreError::Backend(format!(
+                            "list failed for {}: {error}",
+                            root.display()
+                        )));
                     }
                 }
             }
         }
-        keys
+        Ok(keys)
     }
 
-    async fn exists(&self, thread_id: &str) -> bool {
+    async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
         // Fast path: check cache.
         {
             let cache = self.cache.lock().await;
             if cache.contains_key(thread_id) {
-                return true;
+                return Ok(true);
             }
         }
-        self.thread_file(thread_id).exists()
+        Ok(self.thread_file(thread_id).exists()
             || self.legacy_thread_file(thread_id).exists()
-            || self.legacy_compat_thread_file(thread_id).exists()
+            || self.legacy_compat_thread_file(thread_id).exists())
     }
 
     async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
@@ -536,15 +573,15 @@ impl ThreadStore for FileThreadStore {
 
         self.check_stale_lock(&path).await;
 
-        let _permit =
-            self.semaphore.acquire().await.map_err(|_| {
-                ThreadStoreError::NotFound(format!("semaphore error for {thread_id}"))
-            })?;
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|error| ThreadStoreError::Backend(format!("semaphore closed: {error}")))?;
 
-        self.acquire_lock(&path).await.map_err(|e| {
-            error!(thread_id, error = %e, "lock timeout on update");
-            ThreadStoreError::NotFound(format!("lock timeout for {thread_id}"))
-        })?;
+        self.acquire_lock(&path)
+            .await
+            .map_err(|error| ThreadStoreError::Backend(format!("lock timeout: {error}")))?;
 
         let result = async {
             if !path.exists() {
@@ -553,10 +590,14 @@ impl ThreadStore for FileThreadStore {
 
             let bytes = tokio::fs::read(&path)
                 .await
-                .map_err(|_| ThreadStoreError::NotFound(thread_id.to_owned()))?;
+                .map_err(|error| ThreadStoreError::Backend(format!("read failed: {error}")))?;
 
-            let mut data: Value = serde_json::from_slice(&bytes)
-                .map_err(|_| ThreadStoreError::NotFound(thread_id.to_owned()))?;
+            let mut data: Value = serde_json::from_slice(&bytes).map_err(|error| {
+                ThreadStoreError::Serialization {
+                    thread_id: thread_id.to_owned(),
+                    message: error.to_string(),
+                }
+            })?;
 
             // Merge top-level keys.
             if let (Some(existing), Some(new_fields)) = (data.as_object_mut(), updates.as_object())
@@ -566,11 +607,15 @@ impl ThreadStore for FileThreadStore {
                 }
             }
 
-            let out_bytes = serde_json::to_vec_pretty(&data)
-                .map_err(|_| ThreadStoreError::NotFound(thread_id.to_owned()))?;
+            let out_bytes = serde_json::to_vec_pretty(&data).map_err(|error| {
+                ThreadStoreError::Serialization {
+                    thread_id: thread_id.to_owned(),
+                    message: error.to_string(),
+                }
+            })?;
             Self::atomic_write(&path, &out_bytes)
                 .await
-                .map_err(|_| ThreadStoreError::NotFound(thread_id.to_owned()))?;
+                .map_err(|error| ThreadStoreError::Backend(format!("write failed: {error}")))?;
 
             let mtime = Self::file_mtime(&path)
                 .await

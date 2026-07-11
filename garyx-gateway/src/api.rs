@@ -4,6 +4,7 @@
 //! thread history, cron data, settings mutation, and restart
 //! controls.
 
+use garyx_router::ThreadStoreExt;
 use std::collections::{HashMap, HashSet};
 use std::path::Path as FsPath;
 use std::sync::Arc;
@@ -235,7 +236,7 @@ pub async fn thread_history(
     let keys = state
         .threads
         .thread_store
-        .list_keys(params.prefix.as_deref())
+        .list_keys_logged(params.prefix.as_deref())
         .await;
     let keys: Vec<String> = keys.into_iter().filter(|key| is_thread_key(key)).collect();
 
@@ -244,7 +245,7 @@ pub async fn thread_history(
 
     for key in &limited_keys {
         if params.include_messages {
-            if let Some(data) = state.threads.thread_store.get(key).await {
+            if let Some(data) = state.threads.thread_store.get_logged(key).await {
                 threads.push(json!({
                     "key": key,
                     "data": data,
@@ -257,7 +258,7 @@ pub async fn thread_history(
             }
         } else {
             // Summary only: key + existence
-            let exists = state.threads.thread_store.exists(key).await;
+            let exists = state.threads.thread_store.exists_logged(key).await;
             threads.push(json!({
                 "key": key,
                 "active": exists,
@@ -286,7 +287,7 @@ pub async fn thread_diagnostics(
     }
 
     let limit = params.limit.clamp(1, MAX_THREAD_HISTORY_LIMIT);
-    let thread_value = state.threads.thread_store.get(thread_id).await;
+    let thread_value = state.threads.thread_store.get_logged(thread_id).await;
     let bindings = thread_value
         .as_ref()
         .map(bindings_from_value)
@@ -394,7 +395,7 @@ pub async fn bot_bind(
             })),
         );
     }
-    let Some(thread_data) = state.threads.thread_store.get(thread_id).await else {
+    let Some(thread_data) = state.threads.thread_store.get_logged(thread_id).await else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -620,7 +621,7 @@ async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value 
 
     let current_thread_id = endpoint.thread_id.clone();
     let current_thread = match current_thread_id.as_deref() {
-        Some(thread_id) => state.threads.thread_store.get(thread_id).await,
+        Some(thread_id) => state.threads.thread_store.get_logged(thread_id).await,
         None => None,
     };
     let current_thread_status = if current_thread_id.is_some() {
@@ -972,7 +973,11 @@ pub(crate) async fn thread_history_for_key(
             "pending_user_inputs".to_owned(),
             Value::Array(persisted_pending_user_inputs),
         );
-        state.threads.thread_store.set(key, data_raw.clone()).await;
+        state
+            .threads
+            .thread_store
+            .set_logged(key, data_raw.clone())
+            .await;
     }
     let thread = summarize_thread(key, &data_raw, &messages);
     json!({

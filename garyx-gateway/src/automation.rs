@@ -1,3 +1,4 @@
+use garyx_router::ThreadStoreExt;
 use std::sync::Arc;
 
 use axum::{
@@ -690,7 +691,7 @@ async fn resolve_automation_target_thread(
     if !is_thread_key(thread_id) {
         return Err("targetThreadId must be an existing thread id".to_owned());
     }
-    let Some(thread_data) = state.threads.thread_store.get(thread_id).await else {
+    let Some(thread_data) = state.threads.thread_store.get_logged(thread_id).await else {
         return Err(format!("target thread not found: {thread_id}"));
     };
     Ok(Some(AutomationTargetThread {
@@ -1146,7 +1147,11 @@ async fn automation_thread_entry(
     automation_label: Option<&str>,
     automation_deleted: bool,
 ) -> Value {
-    let thread = state.threads.thread_store.get(&record.thread_id).await;
+    let thread = state
+        .threads
+        .thread_store
+        .get_logged(&record.thread_id)
+        .await;
     let thread = match thread {
         Some(data) => {
             let transcript_store = state.threads.history.transcript_store();

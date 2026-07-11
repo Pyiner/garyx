@@ -5,6 +5,7 @@ use garyx_channels::{
 };
 use garyx_models::config::GaryxConfig;
 use garyx_models::thread_logs::ThreadLogSink;
+use garyx_router::ThreadStoreExt;
 use garyx_router::{
     KnownChannelEndpoint, MessageLedgerStore, MessageRouter, ThreadHistoryRepository, ThreadStore,
     is_thread_key,
@@ -174,7 +175,7 @@ impl AppState {
     pub async fn thread_record_count(&self) -> usize {
         self.threads
             .thread_store
-            .list_keys(None)
+            .list_keys_logged(None)
             .await
             .iter()
             .filter(|key| is_thread_key(key))

@@ -48,7 +48,10 @@ impl ThreadCreator for CapturingThreadCreator {
             "workspace_dir": options.workspace_dir,
             "agent_id": options.agent_id,
         });
-        thread_store.set(thread_id, value.clone()).await;
+        thread_store
+            .set(thread_id, value.clone())
+            .await
+            .map_err(|e| e.to_string())?;
         Ok((thread_id.to_owned(), value))
     }
 }
@@ -78,7 +81,7 @@ async fn seed_bound_dm_thread(
             base_obj.insert(key.clone(), value.clone());
         }
     }
-    store.set(thread_id, base).await;
+    store.set(thread_id, base).await.unwrap();
 }
 
 fn native_thread_request(command: &str, run_id: &str) -> InboundRequest {
@@ -142,6 +145,7 @@ async fn test_route_and_dispatch_basic() {
         .threads
         .get(&result.thread_id)
         .await
+        .unwrap()
         .expect("thread should persist delivery context");
     assert_eq!(saved["delivery_context"]["chat_id"], "user42");
     assert!(saved["delivery_context"]["thread_id"].is_null());
@@ -241,6 +245,7 @@ async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent(
     let saved = store
         .get(&result.thread_id)
         .await
+        .unwrap()
         .expect("fallback thread should be persisted");
     assert_eq!(saved["agent_id"], "claude");
     assert_eq!(saved["channel"], "examplebot");
@@ -342,6 +347,7 @@ async fn test_route_and_dispatch_uses_explicit_delivery_thread_id() {
         .threads
         .get(&result.thread_id)
         .await
+        .unwrap()
         .expect("thread should persist delivery context");
     assert_eq!(saved["delivery_context"]["chat_id"], "-100123");
     assert_eq!(saved["delivery_context"]["thread_id"], "555");
@@ -1334,7 +1340,8 @@ async fn test_route_and_dispatch_with_reply_routing() {
     router
         .threads
         .set("thread::special", json!({"messages": []}))
-        .await;
+        .await
+        .unwrap();
 
     // Record an outbound message first
     router.record_outbound_message("thread::special", "telegram", "bot1", "msg42");
@@ -1376,7 +1383,8 @@ async fn test_route_and_dispatch_reply_routing_switches_scheduled_thread() {
     router
         .threads
         .set("cron::daily::user42", json!({"messages": []}))
-        .await;
+        .await
+        .unwrap();
     router.record_outbound_message("cron::daily::user42", "telegram", "bot1", "msg42");
 
     let request = InboundRequest {
@@ -1411,11 +1419,13 @@ async fn test_route_and_dispatch_reply_routing_is_scoped_by_chat_id() {
     router
         .threads
         .set("session_chat_1", json!({"messages": []}))
-        .await;
+        .await
+        .unwrap();
     router
         .threads
         .set("session_chat_2", json!({"messages": []}))
-        .await;
+        .await
+        .unwrap();
 
     router.record_outbound_message_for_chat(
         "session_chat_1",
@@ -1468,7 +1478,8 @@ async fn test_route_and_dispatch_reply_routing_backfills_missing_thread_context(
                 "messages": [{"role": "assistant", "content": "hello"}]
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
     let dispatcher = MockDispatcher::new();
@@ -1494,7 +1505,7 @@ async fn test_route_and_dispatch_reply_routing_backfills_missing_thread_context(
         .unwrap();
     assert_eq!(result.thread_id, "thread::special");
 
-    let thread_state = store.get("thread::special").await.unwrap();
+    let thread_state = store.get("thread::special").await.unwrap().unwrap();
     assert_eq!(thread_state["channel"], "telegram");
     assert_eq!(thread_state["account_id"], "bot1");
     assert_eq!(thread_state["from_id"], "user42");
@@ -1556,7 +1567,8 @@ async fn test_route_and_dispatch_backfill_does_not_override_existing_context() {
                 "is_group": true
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
     let dispatcher = MockDispatcher::new();
@@ -1582,7 +1594,7 @@ async fn test_route_and_dispatch_backfill_does_not_override_existing_context() {
         .unwrap();
     assert_eq!(result.thread_id, "thread::special");
 
-    let thread_state = store.get("thread::special").await.unwrap();
+    let thread_state = store.get("thread::special").await.unwrap().unwrap();
     assert_eq!(thread_state["channel"], "feishu");
     assert_eq!(thread_state["account_id"], "app1");
     assert_eq!(thread_state["from_id"], "ou_existing");
@@ -1772,7 +1784,8 @@ async fn test_route_and_dispatch_persists_last_delivery_context() {
                 "messages": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let request = InboundRequest {
         channel: "telegram".to_owned(),
@@ -1796,6 +1809,7 @@ async fn test_route_and_dispatch_persists_last_delivery_context() {
     let saved = store
         .get(&result.thread_id)
         .await
+        .unwrap()
         .expect("group thread should persist delivery context");
     assert_eq!(saved["last_channel"], "telegram");
     assert_eq!(saved["last_to"], "user42");
@@ -1861,7 +1875,8 @@ async fn test_route_and_dispatch_auto_recovery() {
                 "messages": []
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     router.rebuild_thread_indexes().await;
@@ -2052,7 +2067,7 @@ async fn test_route_and_dispatch_reply_routing_falls_back_to_rebound_thread_when
         None,
         "reply-1",
     );
-    assert!(store.delete("thread::old").await);
+    assert!(store.delete("thread::old").await.unwrap());
     router.rebuild_thread_indexes().await;
 
     let request = InboundRequest {
@@ -2148,7 +2163,7 @@ async fn test_route_and_dispatch_reply_routing_falls_back_after_real_initial_dis
         .await
         .expect("bind should succeed");
 
-    assert!(store.delete(&initial_result.thread_id).await);
+    assert!(store.delete(&initial_result.thread_id).await.unwrap());
     router.rebuild_thread_indexes().await;
 
     let request = InboundRequest {
@@ -2185,10 +2200,12 @@ async fn test_route_and_dispatch_scheduled_thread_skips_auto_recovery() {
                 "auto_recover_next_thread": "bot1::main::recovered"
             }),
         )
-        .await;
+        .await
+        .unwrap();
     store
         .set("bot1::main::recovered", json!({"messages": []}))
-        .await;
+        .await
+        .unwrap();
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     let dispatcher = MockDispatcher::new();

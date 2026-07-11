@@ -126,6 +126,7 @@ impl MessageRouter {
             .threads
             .get(thread_id)
             .await
+            .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("thread not found: {thread_id}"))?;
         let delivery_context = self
             .resolve_delivery_target(thread_id)

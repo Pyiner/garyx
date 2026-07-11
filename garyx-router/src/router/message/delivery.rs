@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::store::ThreadStoreExt;
 use chrono::{DateTime, Utc};
 use garyx_models::routing::{infer_delivery_target_id, infer_delivery_target_type};
 use garyx_models::thread_logs::{ThreadLogEvent, is_canonical_thread_id};
@@ -108,7 +109,7 @@ impl MessageRouter {
         ctx: &DeliveryContext,
         sync_endpoint_timestamp: bool,
     ) {
-        let Some(mut thread_data) = self.threads.get(thread_id).await else {
+        let Some(mut thread_data) = self.threads.get_logged(thread_id).await else {
             debug!(
                 thread_id,
                 "Thread missing; skipping delivery-context persistence"
@@ -174,7 +175,7 @@ impl MessageRouter {
             Value::String(Utc::now().to_rfc3339()),
         );
 
-        self.threads.set(thread_id, thread_data).await;
+        self.threads.set_logged(thread_id, thread_data).await;
         if sync_endpoint_timestamp {
             let binding_key = Self::delivery_binding_key(ctx);
             let _ = sync_endpoint_delivery_timestamp(
@@ -245,13 +246,15 @@ impl MessageRouter {
     ) {
         let existing_ctx = self.get_last_delivery(thread_id).cloned().or(self
             .threads
-            .get(thread_id)
+            .get_logged(thread_id)
             .await
             .and_then(|value| Self::extract_delivery_context_from_thread(&value)));
         self.clear_last_delivery(thread_id);
 
-        let Some(mut thread_data) = self.threads.get(thread_id).await else {
-            if sync_endpoint_timestamp && let Some(ctx) = existing_ctx {
+        let Some(mut thread_data) = self.threads.get_logged(thread_id).await else {
+            if sync_endpoint_timestamp
+                && let Some(ctx) = existing_ctx
+            {
                 let binding_key = Self::delivery_binding_key(&ctx);
                 let _ = sync_endpoint_delivery_timestamp(
                     &self.threads,
@@ -287,8 +290,10 @@ impl MessageRouter {
             "updated_at".to_owned(),
             Value::String(Utc::now().to_rfc3339()),
         );
-        self.threads.set(thread_id, thread_data).await;
-        if sync_endpoint_timestamp && let Some(ctx) = existing_ctx {
+        self.threads.set_logged(thread_id, thread_data).await;
+        if sync_endpoint_timestamp
+            && let Some(ctx) = existing_ctx
+        {
             let binding_key = Self::delivery_binding_key(&ctx);
             let _ = sync_endpoint_delivery_timestamp(
                 &self.threads,
@@ -355,7 +360,7 @@ impl MessageRouter {
             .unwrap_or(chat_id);
         let persisted_ctx = self
             .threads
-            .get(thread_id)
+            .get_logged(thread_id)
             .await
             .and_then(|value| Self::extract_delivery_context_from_thread(&value));
         let should_clear = self
@@ -411,7 +416,7 @@ impl MessageRouter {
         let trimmed = target.trim();
         if !trimmed.is_empty() && trimmed != "last" {
             let thread_id = Self::normalize_thread_target(trimmed);
-            if let Some(thread_data) = thread_store.get(thread_id).await
+            if let Some(thread_data) = thread_store.get_logged(thread_id).await
                 && let Some(ctx) = Self::extract_delivery_context_from_thread(&thread_data)
             {
                 return Some((thread_id.to_owned(), ctx));
@@ -489,7 +494,7 @@ impl MessageRouter {
         let trimmed = target.trim();
         if !trimmed.is_empty() && trimmed != "last" {
             let thread_id = Self::normalize_thread_target(trimmed);
-            if let Some(thread_data) = self.threads.get(thread_id).await
+            if let Some(thread_data) = self.threads.get_logged(thread_id).await
                 && let Some(obj) = thread_data.as_object()
                 && let Some(ctx) = Self::extract_delivery_context(obj)
             {

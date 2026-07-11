@@ -29,8 +29,8 @@ use cli::{
 };
 use commands::{
     ProviderSetOptions, cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list,
-    cmd_agent_update, cmd_agent_upsert, cmd_automation_activity,
-    cmd_automation_create, cmd_automation_data_trigger_create, cmd_automation_data_trigger_delete,
+    cmd_agent_update, cmd_agent_upsert, cmd_automation_activity, cmd_automation_create,
+    cmd_automation_data_trigger_create, cmd_automation_data_trigger_delete,
     cmd_automation_data_trigger_list, cmd_automation_data_trigger_set_enabled,
     cmd_automation_delete, cmd_automation_get, cmd_automation_list, cmd_automation_pause,
     cmd_automation_resume, cmd_automation_run, cmd_automation_update, cmd_bot_status,

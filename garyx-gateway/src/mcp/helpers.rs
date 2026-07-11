@@ -1,4 +1,5 @@
 use super::*;
+use garyx_router::ThreadStoreExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BotSelection {
@@ -416,14 +417,14 @@ impl GaryMcpServer {
             state
                 .threads
                 .thread_store
-                .get(thread_id)
+                .get_logged(thread_id)
                 .await
                 .and_then(|value| garyx_router::workspace_dir_from_value(&value))
         } else {
             None
         };
 
-        let thread_keys = state.threads.thread_store.list_keys(None).await;
+        let thread_keys = state.threads.thread_store.list_keys_logged(None).await;
         let thread_count = thread_keys.len();
 
         let bridge = &state.integration.bridge;
@@ -619,7 +620,13 @@ impl GaryMcpServer {
     }
 
     async fn load_thread_bot_bindings(&self, thread_id: &str) -> Vec<ThreadBotBinding> {
-        let Some(thread_data) = self.app_state.threads.thread_store.get(thread_id).await else {
+        let Some(thread_data) = self
+            .app_state
+            .threads
+            .thread_store
+            .get_logged(thread_id)
+            .await
+        else {
             return Vec::new();
         };
         let mut bindings = Vec::new();
@@ -691,7 +698,12 @@ impl GaryMcpServer {
             }
 
             if current_bot.is_none()
-                && let Some(thread_data) = self.app_state.threads.thread_store.get(thread_id).await
+                && let Some(thread_data) = self
+                    .app_state
+                    .threads
+                    .thread_store
+                    .get_logged(thread_id)
+                    .await
             {
                 if let (Some(channel), Some(account_id)) = (
                     thread_data
@@ -1223,7 +1235,12 @@ impl GaryMcpServer {
         target: &ResolvedMessageTarget,
     ) -> Option<String> {
         let thread_id = target.thread_id.as_deref()?;
-        let thread_data = self.app_state.threads.thread_store.get(thread_id).await?;
+        let thread_data = self
+            .app_state
+            .threads
+            .thread_store
+            .get_logged(thread_id)
+            .await?;
         let token = Self::extract_weixin_context_token_from_thread_data(&thread_data)?;
         let trimmed = token.trim();
         if trimmed.is_empty() {

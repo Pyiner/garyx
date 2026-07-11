@@ -976,7 +976,8 @@ async fn test_build_scheduled_response_callback_records_reply_routing() {
                 "thread_id": "cron::daily",
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let router = Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
         store.clone(),
         garyx_models::config::GaryxConfig::default(),
@@ -1016,7 +1017,7 @@ async fn test_build_scheduled_response_callback_records_reply_routing() {
         );
     }
 
-    let thread_state = store.get("cron::daily").await.unwrap();
+    let thread_state = store.get("cron::daily").await.unwrap().unwrap();
     assert_eq!(
         thread_state["outbound_message_ids"][0]["thread_binding_key"],
         serde_json::json!("42_t100")
@@ -1130,7 +1131,8 @@ async fn test_dispatch_agent_turn_recovers_thread_target_delivery_from_store() {
                 "lastUpdatedAt": "2026-03-01T12:00:00Z",
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let runtime = Arc::new(RwLock::new(Some(CronDispatchRuntime {
         thread_store: store.clone(),
         router: Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
@@ -1272,7 +1274,8 @@ async fn test_bound_automation_run_reuses_existing_thread() {
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     let run = svc.run_now("automation-bound").await.unwrap();
     assert_eq!(run.status, JobRunStatus::Success);
@@ -1286,7 +1289,7 @@ async fn test_bound_automation_run_reuses_existing_thread() {
         .expect("reloaded automation job");
 
     assert_eq!(reloaded_job.thread_id.as_deref(), Some(target_thread_id));
-    assert!(store.get(target_thread_id).await.is_some());
+    assert!(store.get(target_thread_id).await.unwrap().is_some());
 }
 
 #[tokio::test]
@@ -1426,7 +1429,7 @@ async fn test_bound_automation_missing_target_thread_fails_without_cleanup() {
         .await
         .expect("automation job after failed run");
     assert_eq!(job.thread_id.as_deref(), Some(missing_thread_id));
-    assert!(store.get(missing_thread_id).await.is_none());
+    assert!(store.get(missing_thread_id).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -1479,7 +1482,7 @@ async fn test_failed_automation_run_now_cleans_up_failed_thread() {
         .await
         .expect("automation job after failed run");
     assert!(job.thread_id.is_none());
-    assert!(store.get(&failed_thread_id).await.is_none());
+    assert!(store.get(&failed_thread_id).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -2385,7 +2388,8 @@ async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn()
                 }
             }),
         )
-        .await;
+        .await
+        .unwrap();
 
     // Schedule an internal-dispatch job that should fire in ~500ms.
     // Bypass the MCP tool's 60s minimum on purpose — this test runs in CI

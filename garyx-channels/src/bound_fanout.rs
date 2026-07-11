@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use garyx_models::provider::{AgentRunRequest, StreamEvent};
-use garyx_router::{AgentDispatcher, MessageRouter, ThreadStore, bindings_from_value};
+use garyx_router::{
+    AgentDispatcher, MessageRouter, ThreadStore, ThreadStoreExt, bindings_from_value,
+};
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -28,7 +30,7 @@ async fn snapshot_bound_targets(
     thread_id: &str,
     run_id: &str,
 ) -> Vec<StreamingDispatchTarget> {
-    let Some(thread_data) = thread_store.get(thread_id).await else {
+    let Some(thread_data) = thread_store.get_logged(thread_id).await else {
         return Vec::new();
     };
 
@@ -343,7 +345,8 @@ mod tests {
                         ]
                     }),
                 )
-                .await;
+                .await
+                .unwrap();
             if let Some(callback) = response_callback {
                 callback(StreamEvent::Delta {
                     text: "after attach".to_owned(),
@@ -380,7 +383,8 @@ mod tests {
                     ]
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         let router = Arc::new(Mutex::new(MessageRouter::new(
             store,
             GaryxConfig::default(),
@@ -446,7 +450,8 @@ mod tests {
                     ]
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         let router = Arc::new(Mutex::new(MessageRouter::new(
             store.clone(),
             GaryxConfig::default(),
