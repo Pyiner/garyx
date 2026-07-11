@@ -103,8 +103,7 @@ async fn state_with_agent_default_workspace() -> Arc<AppState> {
 }
 
 async fn state_with_task_agents() -> Arc<AppState> {
-    let mut config = GaryxConfig::default();
-    config.tasks.enabled = true;
+    let config = GaryxConfig::default();
     let custom_agents = Arc::new(CustomAgentStore::new());
     for agent_id in ["reviewer", "planner", "coder"] {
         custom_agents
@@ -688,7 +687,6 @@ async fn agent_executor_creates_in_progress_task_and_dispatches_without_assignee
             }),
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         }),
@@ -752,7 +750,6 @@ async fn executor_rejects_assignee() {
             }),
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         }),

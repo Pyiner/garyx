@@ -1,4 +1,3 @@
-
 use garyx_models::routing::{
     DeliveryContext, infer_delivery_target_id, infer_delivery_target_type,
 };
@@ -17,8 +16,6 @@ use crate::garyx_db::{
 };
 use crate::thread_runtime::selected_model_cells_from_thread_value;
 use crate::thread_type::thread_summary_type_from_record;
-
-
 
 /// Channel endpoints for gateway sync: the projection rows (bound
 /// endpoints, derived in the same transaction as every record write)

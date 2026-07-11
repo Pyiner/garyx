@@ -439,15 +439,6 @@ export async function createTask(
     input.executor?.type === "agent" && input.executor.agentId.trim()
       ? { type: "agent", agent_id: input.executor.agentId.trim() }
       : null;
-  const assignee = input.assignee?.trim()
-    ? principalPayload(input.assignee)
-    : null;
-  const runtimeAgentId =
-    executorPayload?.type === "agent"
-      ? executorPayload.agent_id
-      : assignee?.kind === "agent"
-        ? assignee.agent_id
-        : "";
   const workspaceDir = input.workspaceDir?.trim() || "";
   const source = taskSourcePayload(input.source);
   const payload = await requestJson<TaskSummaryPayload>(settings, "/api/tasks", {
@@ -458,11 +449,11 @@ export async function createTask(
       body: input.body?.trim() || null,
       ...(source ? { source } : {}),
       executor: executorPayload,
-      assignee: executorPayload ? null : assignee,
-      start: input.start === true || executorPayload !== null || assignee !== null,
+      assignee: null,
+      start: input.start === true || executorPayload !== null,
       workspace_dir: null,
       runtime: {
-        agent_id: runtimeAgentId || null,
+        agent_id: executorPayload?.agent_id || null,
         workspace_dir: workspaceDir || null,
         workspace_mode: input.workspaceMode || "local",
       },

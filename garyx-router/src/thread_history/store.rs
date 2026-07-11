@@ -217,8 +217,7 @@ impl ThreadCache {
     fn trailing_run_block(&self, trimmed_run_id: &str) -> Option<&[CachedTranscriptRecord]> {
         let mut start = self.tail.len();
         while start > 0
-            && self.tail[start - 1].record.run_id.as_deref().map(str::trim)
-                == Some(trimmed_run_id)
+            && self.tail[start - 1].record.run_id.as_deref().map(str::trim) == Some(trimmed_run_id)
         {
             start -= 1;
         }
@@ -239,7 +238,11 @@ impl ThreadCache {
     /// Serve `render_snapshot_in_window` when the cached tail covers the
     /// requested window. Returns `None` (caller falls back to the full read)
     /// when the floor or based_on bound reaches below the cached tail.
-    fn render_snapshot_in_window(&self, floor_seq: u64, based_on_seq: u64) -> Option<RenderSnapshot> {
+    fn render_snapshot_in_window(
+        &self,
+        floor_seq: u64,
+        based_on_seq: u64,
+    ) -> Option<RenderSnapshot> {
         if floor_seq == 0 {
             return None;
         }
@@ -310,10 +313,8 @@ impl ThreadCache {
     /// came up short of `limit` while older uncached records might still
     /// hold more content rows.
     fn provider_session_tail_messages(&self, limit: usize) -> Option<Vec<Value>> {
-        let filtered = provider_session_tail_from_messages(
-            self.tail.iter().map(|c| &c.record.message),
-            limit,
-        );
+        let filtered =
+            provider_session_tail_from_messages(self.tail.iter().map(|c| &c.record.message), limit);
         if filtered.len() >= limit || self.covers_whole_file() {
             return Some(filtered);
         }
@@ -377,8 +378,12 @@ impl ThreadCache {
 enum MessagesReconcilePlan {
     NoOp,
     /// Append `authoritative[skip..]`.
-    AppendSuffix { skip: usize },
-    Rewrite { rebuilt: Vec<ThreadTranscriptRecord> },
+    AppendSuffix {
+        skip: usize,
+    },
+    Rewrite {
+        rebuilt: Vec<ThreadTranscriptRecord>,
+    },
 }
 
 fn plan_reconcile_run_tail(
@@ -441,7 +446,9 @@ fn plan_reconcile_run_tail(
 enum RecordsReconcilePlan {
     NoOp,
     /// Append `authoritative[skip..]`.
-    AppendSuffix { skip: usize },
+    AppendSuffix {
+        skip: usize,
+    },
     Rewrite {
         rebuilt: Vec<ThreadTranscriptRecord>,
         changed: Vec<ThreadTranscriptRecord>,
@@ -513,20 +520,21 @@ fn plan_reconcile_run_records_tail(
     if authoritative_identity.len() > existing_identity.len()
         && authoritative_identity[..existing_identity.len()] == existing_identity[..]
     {
-        let prefix_changed = authoritative
-            .iter()
-            .zip(existing_tail.iter())
-            .any(|(draft, existing)| {
-                let replacement = record_from_draft_replacing(
-                    thread_id,
-                    Some(trimmed_run_id),
-                    existing.seq,
-                    draft,
-                    existing,
-                );
-                replacement.timestamp != existing.timestamp
-                    || replacement.message != existing.message
-            });
+        let prefix_changed =
+            authoritative
+                .iter()
+                .zip(existing_tail.iter())
+                .any(|(draft, existing)| {
+                    let replacement = record_from_draft_replacing(
+                        thread_id,
+                        Some(trimmed_run_id),
+                        existing.seq,
+                        draft,
+                        existing,
+                    );
+                    replacement.timestamp != existing.timestamp
+                        || replacement.message != existing.message
+                });
         if !prefix_changed {
             return RecordsReconcilePlan::AppendSuffix {
                 skip: existing_tail.len(),
@@ -853,9 +861,7 @@ impl ThreadTranscriptStore {
 
     fn store_now_ms(&self) -> u64 {
         match &self.mode {
-            TranscriptStoreMode::File { created_at, .. } => {
-                created_at.elapsed().as_millis() as u64
-            }
+            TranscriptStoreMode::File { created_at, .. } => created_at.elapsed().as_millis() as u64,
             TranscriptStoreMode::Memory { .. } => 0,
         }
     }
@@ -867,7 +873,8 @@ impl ThreadTranscriptStore {
             cache.as_ref().map(|entry| entry.tail_bytes).unwrap_or(0),
             Ordering::Relaxed,
         );
-        slot.last_used_ms.store(self.store_now_ms(), Ordering::Relaxed);
+        slot.last_used_ms
+            .store(self.store_now_ms(), Ordering::Relaxed);
     }
 
     /// Drop least-recently-used cache entries until the store-wide budget
@@ -1124,12 +1131,12 @@ impl ThreadTranscriptStore {
         run_id: Option<&str>,
         messages: &[Value],
     ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
-        let path = self
-            .transcript_path(thread_id)
-            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
-                thread_id: thread_id.to_owned(),
-                message: "missing transcript path".to_owned(),
-            })?;
+        let path =
+            self.transcript_path(thread_id)
+                .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: "missing transcript path".to_owned(),
+                })?;
         self.ensure_cache(cache, thread_id, &path).await?;
         let entry = cache.as_ref().expect("cache ensured above");
         let next_seq = entry.last_seq + 1;
@@ -1231,12 +1238,12 @@ impl ThreadTranscriptStore {
         run_id: Option<&str>,
         records: &[RunTranscriptRecordDraft],
     ) -> Result<TranscriptAppendRecordsResult, ThreadHistoryError> {
-        let path = self
-            .transcript_path(thread_id)
-            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
-                thread_id: thread_id.to_owned(),
-                message: "missing transcript path".to_owned(),
-            })?;
+        let path =
+            self.transcript_path(thread_id)
+                .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: "missing transcript path".to_owned(),
+                })?;
         self.ensure_cache(cache, thread_id, &path).await?;
         let entry = cache.as_ref().expect("cache ensured above");
         let next_seq = entry.last_seq + 1;
@@ -1275,7 +1282,12 @@ impl ThreadTranscriptStore {
             .await
             .map(|meta| meta.len())
             .unwrap_or(0);
-        entry.push_appended(&appended_records, &line_sizes, file_len, &self.cache_budget());
+        entry.push_appended(
+            &appended_records,
+            &line_sizes,
+            file_len,
+            &self.cache_budget(),
+        );
         Ok(TranscriptAppendRecordsResult {
             total_messages: entry.total_records,
             last_message_at: entry.last_message_at(),
@@ -1325,34 +1337,35 @@ impl ThreadTranscriptStore {
                     message: error.to_string(),
                 }
             })?;
-            file.write_all(b"\n").await.map_err(|error| {
-                ThreadHistoryError::TranscriptIo {
+            file.write_all(b"\n")
+                .await
+                .map_err(|error| ThreadHistoryError::TranscriptIo {
                     thread_id: thread_id.to_owned(),
                     message: error.to_string(),
-                }
-            })?;
+                })?;
         }
 
         let mut line_sizes = Vec::with_capacity(appended.len());
         for record in appended {
-            let line = serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(
-                |error| ThreadHistoryError::InvalidTranscript {
-                    thread_id: thread_id.to_owned(),
-                    message: error.to_string(),
-                },
-            )?;
+            let line =
+                serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(|error| {
+                    ThreadHistoryError::InvalidTranscript {
+                        thread_id: thread_id.to_owned(),
+                        message: error.to_string(),
+                    }
+                })?;
             file.write_all(line.as_bytes()).await.map_err(|error| {
                 ThreadHistoryError::TranscriptIo {
                     thread_id: thread_id.to_owned(),
                     message: error.to_string(),
                 }
             })?;
-            file.write_all(b"\n").await.map_err(|error| {
-                ThreadHistoryError::TranscriptIo {
+            file.write_all(b"\n")
+                .await
+                .map_err(|error| ThreadHistoryError::TranscriptIo {
                     thread_id: thread_id.to_owned(),
                     message: error.to_string(),
-                }
-            })?;
+                })?;
             line_sizes.push(line.len());
         }
         file.flush()
@@ -1407,12 +1420,12 @@ impl ThreadTranscriptStore {
         thread_id: &str,
         messages: &[Value],
     ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
-        let path = self
-            .transcript_path(thread_id)
-            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
-                thread_id: thread_id.to_owned(),
-                message: "missing transcript path".to_owned(),
-            })?;
+        let path =
+            self.transcript_path(thread_id)
+                .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: "missing transcript path".to_owned(),
+                })?;
         let existing = self.read_records_from_path(thread_id, &path).await?;
         let records = reconcile_rewrite_records(thread_id, &existing, messages);
         if records == existing {
@@ -1480,12 +1493,12 @@ impl ThreadTranscriptStore {
         thread_id: &str,
         records: &[ThreadTranscriptRecord],
     ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
-        let path = self
-            .transcript_path(thread_id)
-            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
-                thread_id: thread_id.to_owned(),
-                message: "missing transcript path".to_owned(),
-            })?;
+        let path =
+            self.transcript_path(thread_id)
+                .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: "missing transcript path".to_owned(),
+                })?;
         let mut lines = Vec::with_capacity(records.len() + 1);
         lines.push(
             serde_json::to_string(&TranscriptLine::Session {
@@ -1518,12 +1531,12 @@ impl ThreadTranscriptStore {
                 message: error.to_string(),
             }
         })?;
-        tokio::fs::rename(&tmp, &path).await.map_err(|error| {
-            ThreadHistoryError::TranscriptIo {
+        tokio::fs::rename(&tmp, &path)
+            .await
+            .map_err(|error| ThreadHistoryError::TranscriptIo {
                 thread_id: thread_id.to_owned(),
                 message: error.to_string(),
-            }
-        })?;
+            })?;
         let file_len = tokio::fs::metadata(&path)
             .await
             .map(|meta| meta.len())
@@ -1641,12 +1654,12 @@ impl ThreadTranscriptStore {
         trimmed_run_id: &str,
         authoritative: &[Value],
     ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
-        let path = self
-            .transcript_path(thread_id)
-            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
-                thread_id: thread_id.to_owned(),
-                message: "missing transcript path".to_owned(),
-            })?;
+        let path =
+            self.transcript_path(thread_id)
+                .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: "missing transcript path".to_owned(),
+                })?;
         self.verify_cache(cache, &path).await;
 
         // Fast path off the cached tail: the steady-state terminal reconcile
@@ -1803,12 +1816,12 @@ impl ThreadTranscriptStore {
         trimmed_run_id: &str,
         authoritative: &[RunTranscriptRecordDraft],
     ) -> Result<TranscriptAppendRecordsResult, ThreadHistoryError> {
-        let path = self
-            .transcript_path(thread_id)
-            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
-                thread_id: thread_id.to_owned(),
-                message: "missing transcript path".to_owned(),
-            })?;
+        let path =
+            self.transcript_path(thread_id)
+                .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: "missing transcript path".to_owned(),
+                })?;
         self.verify_cache(cache, &path).await;
 
         // Fast path off the cached tail: no-op and pure-suffix-append are
@@ -2927,9 +2940,7 @@ mod streaming_build_tests {
     fn filtered_session_oracle(all: &[Value], limit: usize) -> Vec<Value> {
         let filtered: Vec<Value> = all
             .iter()
-            .filter(|message| {
-                message.get("kind").and_then(Value::as_str) != Some("control")
-            })
+            .filter(|message| message.get("kind").and_then(Value::as_str) != Some("control"))
             .cloned()
             .collect();
         filtered[filtered.len().saturating_sub(limit)..].to_vec()

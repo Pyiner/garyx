@@ -41,7 +41,6 @@ fn test_provider_type_serde() {
     assert_eq!(back, ProviderType::GeminiLlm);
     let alias: ProviderType = serde_json::from_str("\"gemini_llm\"").unwrap();
     assert_eq!(alias, ProviderType::GeminiLlm);
-
 }
 
 #[test]

@@ -240,14 +240,15 @@ impl AppState {
             // Crash recovery: settle orphaned running rows left by the
             // previous process in one SQL pass (the bridge run index is
             // empty at boot, so every projected active run is stale).
-            let cleared_orphan_runs = state
-                .ops
-                .garyx_db
-                .clear_stale_active_runs()
-                .unwrap_or_else(|error| {
-                    warn!(error = %error, "failed to clear stale active runs at startup");
-                    0
-                });
+            let cleared_orphan_runs =
+                state
+                    .ops
+                    .garyx_db
+                    .clear_stale_active_runs()
+                    .unwrap_or_else(|error| {
+                        warn!(error = %error, "failed to clear stale active runs at startup");
+                        0
+                    });
             let threads = state.thread_record_count().await;
             let endpoints = state.cached_channel_endpoints().await.len();
             debug!(

@@ -22,8 +22,8 @@ use crate::garyx_db::{
     GaryxDbResult, GaryxDbService, ThreadRecordProjections, is_retired_workflow_thread_record,
 };
 use crate::recent_thread_projection::{
-    ActiveRunProbe, is_recent_thread_excluded, recent_thread_draft_from_thread_data_with_active_run,
-    resolve_active_run_id,
+    ActiveRunProbe, is_recent_thread_excluded,
+    recent_thread_draft_from_thread_data_with_active_run, resolve_active_run_id,
 };
 use crate::task_projection::task_projection_draft_from_thread_data;
 use crate::thread_meta_projection::thread_meta_projection_from_thread_data_with_active_run;
@@ -111,11 +111,7 @@ impl SqliteThreadStore {
 
     /// Derive the projection set for one thread record. Non-thread keys get
     /// `None` (record-only write).
-    async fn derive_projections(
-        &self,
-        key: &str,
-        data: &Value,
-    ) -> Option<ThreadRecordProjections> {
+    async fn derive_projections(&self, key: &str, data: &Value) -> Option<ThreadRecordProjections> {
         if !is_thread_key(key) {
             return None;
         }
@@ -297,11 +293,8 @@ pub async fn assemble_sqlite_thread_store(
     let probe: Arc<dyn ActiveRunProbe> = Arc::new(
         crate::recent_thread_projection::BridgeActiveRunProbe::new(Arc::downgrade(bridge)),
     );
-    let sqlite_store = SqliteThreadStore::new(
-        Arc::clone(&garyx_db),
-        Arc::clone(&transcript_store),
-        probe,
-    );
+    let sqlite_store =
+        SqliteThreadStore::new(Arc::clone(&garyx_db), Arc::clone(&transcript_store), probe);
     import_thread_records_if_needed(&garyx_db, &import_source, &sqlite_store, &transcript_store)
         .await;
     garyx_db
@@ -413,8 +406,7 @@ pub(crate) async fn import_thread_records_if_needed(
             if let Some(object) = data.as_object_mut() {
                 // Seed the write-time preview fields the projections read.
                 for role in ["user", "assistant"] {
-                    if let Some(field) =
-                        garyx_models::message_preview::preview_field_for_role(role)
+                    if let Some(field) = garyx_models::message_preview::preview_field_for_role(role)
                         && !object.contains_key(field)
                         && let Some(preview) =
                             garyx_models::message_preview::last_message_preview_for_role(
@@ -546,9 +538,7 @@ mod contract_tests {
         store
             .set("meta::known_channel_endpoints", json!({"endpoints": []}))
             .await;
-        store
-            .set("cron::job-1", json!({"schedule": "daily"}))
-            .await;
+        store.set("cron::job-1", json!({"schedule": "daily"})).await;
 
         // list_keys: all + prefix.
         let mut all = store.list_keys(None).await;
@@ -596,9 +586,8 @@ mod contract_tests {
     async fn sqlite_store_satisfies_the_contract_on_a_file_database() {
         // File databases exercise the dedicated reader connection.
         let dir = tempfile::tempdir().expect("temp dir");
-        let garyx_db = Arc::new(
-            GaryxDbService::open(dir.path().join("garyx-db.sqlite3")).expect("db opens"),
-        );
+        let garyx_db =
+            Arc::new(GaryxDbService::open(dir.path().join("garyx-db.sqlite3")).expect("db opens"));
         let store = sqlite_store(garyx_db);
         run_contract(&store).await;
     }
@@ -614,7 +603,10 @@ mod contract_tests {
         );
         let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
         source
-            .set("thread::rollback", json!({"thread_id": "thread::rollback", "label": "v1"}))
+            .set(
+                "thread::rollback",
+                json!({"thread_id": "thread::rollback", "label": "v1"}),
+            )
             .await;
 
         let summary =
@@ -623,7 +615,10 @@ mod contract_tests {
 
         // A manual recovery rewrites the archive under the same key count…
         source
-            .set("thread::rollback", json!({"thread_id": "thread::rollback", "label": "v2"}))
+            .set(
+                "thread::rollback",
+                json!({"thread_id": "thread::rollback", "label": "v2"}),
+            )
             .await;
         // …and clearing the import-state row (the manual recovery step)
         // forces the re-import (#TASK-1901: same key count must not skip it).
@@ -697,7 +692,10 @@ mod contract_tests {
             import_thread_records_if_needed(&garyx_db, &source, &sqlite, &transcript_store).await;
         assert_eq!(summary.source_keys, 3);
         assert_eq!(summary.imported, 3);
-        assert_eq!(summary.transcripts_backfilled, 1, "only the pre-transcript thread");
+        assert_eq!(
+            summary.transcripts_backfilled, 1,
+            "only the pre-transcript thread"
+        );
 
         // The legacy thread: snapshot stripped, transcript rebuilt, preview
         // and task body seeded, projections derived.
@@ -926,7 +924,10 @@ mod contract_tests {
         // Archived threads reject writes entirely.
         garyx_db.mark_thread_archived(thread_id).expect("archive");
         store
-            .set(thread_id, json!({"thread_id": thread_id, "label": "after-archive"}))
+            .set(
+                thread_id,
+                json!({"thread_id": thread_id, "label": "after-archive"}),
+            )
             .await;
         let read = store.get(thread_id).await.expect("record still readable");
         assert_eq!(

@@ -1923,8 +1923,8 @@ async fn test_settings_update_merge_true_rejects_unknown_patch_field() {
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
-                "tasks": {
-                    "enbaled": true
+                "gateway": {
+                    "public_urk": "https://garyx.example"
                 }
             }))
             .unwrap(),
@@ -1944,7 +1944,7 @@ async fn test_settings_update_merge_true_rejects_unknown_patch_field() {
         error
             .as_str()
             .unwrap_or_default()
-            .contains("$.tasks.enbaled")
+            .contains("$.gateway.public_urk")
     }));
 }
 
@@ -2283,8 +2283,8 @@ async fn test_settings_update_merge_true_ignores_untouched_legacy_account_config
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
-                "tasks": {
-                    "enabled": false
+                "gateway": {
+                    "public_url": "https://garyx.example"
                 }
             }))
             .unwrap(),
@@ -2294,11 +2294,11 @@ async fn test_settings_update_merge_true_ignores_untouched_legacy_account_config
     assert_eq!(resp.status(), 200);
 
     let live = state_with_path.config_snapshot();
-    assert!(!live.tasks.enabled);
+    assert_eq!(live.gateway.public_url, "https://garyx.example");
 
     let persisted: Value =
         serde_json::from_str(&tokio::fs::read_to_string(&config_path).await.unwrap()).unwrap();
-    assert_eq!(persisted["tasks"]["enabled"], false);
+    assert_eq!(persisted["gateway"]["public_url"], "https://garyx.example");
     assert_eq!(
         persisted["channels"]["weixin"]["accounts"]["test-weixin"]["config"]["uin"],
         ""
@@ -2361,8 +2361,8 @@ async fn test_settings_update_merge_true_rejects_touched_legacy_account_config_e
                         }
                     }
                 },
-                "tasks": {
-                    "enabled": false
+                "gateway": {
+                    "public_url": "https://garyx.example"
                 }
             }))
             .unwrap(),
@@ -2381,7 +2381,14 @@ async fn test_settings_update_merge_true_rejects_touched_legacy_account_config_e
             .unwrap_or_default()
             .contains("$.channels.weixin.accounts.test-weixin.config.uin must not be blank")
     }));
-    assert!(state_with_path.config_snapshot().tasks.enabled);
+    assert!(
+        state_with_path
+            .config_snapshot()
+            .gateway
+            .public_url
+            .is_empty(),
+        "rejected patch must not touch the live config"
+    );
 }
 
 #[tokio::test]

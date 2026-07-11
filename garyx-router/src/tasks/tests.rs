@@ -296,7 +296,6 @@ async fn projected_task_mutations_increment_events_len() {
             executor: None,
             start: false,
             actor: Some(actor()),
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -383,7 +382,6 @@ async fn task_create_stores_task_overlay_without_task_messages() {
             actor: Some(Principal::Agent {
                 agent_id: "cindy".to_owned(),
             }),
-            agent_id: Some("cindy".to_owned()),
             workspace_dir: None,
             runtime: None,
         })
@@ -413,7 +411,6 @@ async fn task_create_stores_prefixed_thread_title() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -442,7 +439,6 @@ async fn set_title_updates_managed_thread_title() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -477,7 +473,6 @@ async fn set_title_does_not_overwrite_manually_renamed_thread() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -517,7 +512,6 @@ async fn set_title_leaves_legacy_unmanaged_thread_title_unchanged() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -564,7 +558,6 @@ async fn task_create_stores_source_and_list_filters_it() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -629,7 +622,6 @@ async fn task_create_binds_agent_executor_to_thread() {
             }),
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -659,7 +651,6 @@ async fn status_machine_rejects_illegal_transition() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -691,7 +682,6 @@ async fn status_update_does_not_assign_todo_task() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -728,7 +718,6 @@ async fn run_completion_marks_in_progress_task_in_review() {
             executor: None,
             start: true,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -786,7 +775,6 @@ async fn run_completion_defers_review_while_subtasks_run() {
             executor: None,
             start: true,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -806,7 +794,6 @@ async fn run_completion_defers_review_while_subtasks_run() {
             executor: None,
             start: true,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -882,7 +869,6 @@ async fn run_completion_leaves_non_progress_task_status_unchanged() {
             executor: None,
             start: true,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -931,7 +917,6 @@ async fn run_wake_revives_in_review_task_to_in_progress() {
             executor: None,
             start: true,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -985,7 +970,6 @@ async fn run_wake_revives_done_task_to_in_progress() {
             executor: None,
             start: true,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -1050,7 +1034,6 @@ async fn status_machine_allows_done_to_in_progress() {
             executor: None,
             start: true,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -1112,7 +1095,6 @@ async fn assignee_can_mark_done_after_explicit_review_confirmation() {
             actor: Some(Principal::Human {
                 user_id: "owner".to_owned(),
             }),
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -1163,7 +1145,6 @@ async fn reviewer_can_mark_reviewed_task_done() {
             actor: Some(Principal::Human {
                 user_id: "owner".to_owned(),
             }),
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -1211,7 +1192,6 @@ async fn assign_starts_todo_task() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -1249,7 +1229,6 @@ async fn stop_running_task_moves_to_todo_and_releases_assignee() {
             executor: None,
             start: true,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -1297,7 +1276,6 @@ async fn delete_task_removes_overlay_from_list_but_keeps_thread_record() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -1345,7 +1323,6 @@ async fn concurrent_mutations_preserve_both_events() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -1401,7 +1378,6 @@ async fn task_history_supports_before_cursor() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: None,
         })
@@ -1447,7 +1423,6 @@ async fn task_create_persists_runtime_fields() {
             executor: None,
             start: false,
             actor: None,
-            agent_id: None,
             workspace_dir: None,
             runtime: Some(TaskRuntimeInput {
                 agent_id: Some("codex".to_owned()),

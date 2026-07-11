@@ -615,8 +615,8 @@ pub fn parse_codex_cli_version(output: &str) -> Option<String> {
 /// catalog entries the native GPT provider fully supports.
 pub fn effective_codex_models_client_version(detected: Option<&str>) -> String {
     let floor = CODEX_MODELS_CLIENT_VERSION_FLOOR;
-    let Some((detected, detected_triple)) = detected
-        .and_then(|version| Some((version, semver_triple(version)?)))
+    let Some((detected, detected_triple)) =
+        detected.and_then(|version| Some((version, semver_triple(version)?)))
     else {
         return floor.to_owned();
     };

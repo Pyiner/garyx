@@ -482,10 +482,7 @@ fn hot_reload_keeps_last_good_on_invalid_update() {
         metrics
     );
     assert_eq!(hosts.iter().filter(|h| *h == "0.0.0.0").count(), 1);
-    assert!(
-        metrics.failures >= 1,
-        "hosts={hosts:?} metrics={metrics:?}"
-    );
+    assert!(metrics.failures >= 1, "hosts={hosts:?} metrics={metrics:?}");
 }
 
 // -----------------------------------------------------------------------

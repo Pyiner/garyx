@@ -1360,13 +1360,7 @@ async fn create_data_trigger_task(
     trigger: &AutomationDataTrigger,
     event: &AppDbEvent,
 ) -> Option<Value> {
-    let Some(task_service) = crate::tasks::task_service(state) else {
-        return Some(json!({
-            "triggerId": trigger.id,
-            "status": "skipped",
-            "reason": "tasks disabled"
-        }));
-    };
+    let task_service = crate::tasks::task_service(state);
     let title = render_data_trigger_template(&trigger.title_template, event);
     let body = render_data_trigger_template(&trigger.body_template, event);
     let runtime = TaskRuntimeInput {
@@ -1390,7 +1384,6 @@ async fn create_data_trigger_task(
             actor: Some(Principal::Agent {
                 agent_id: "garyx-automation".to_owned(),
             }),
-            agent_id: None,
             workspace_dir: None,
             runtime: Some(runtime),
         })

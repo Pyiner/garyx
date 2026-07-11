@@ -561,7 +561,6 @@ async fn data_trigger_with_agent_id_creates_and_dispatches_agent_task() {
         })
         .expect("trigger created");
     let mut config = GaryxConfig::default();
-    config.tasks.enabled = true;
     config.sessions.data_dir = Some(temp.path().join("data").to_string_lossy().to_string());
     let state = AppStateBuilder::new(config).with_app_db(app_db).build();
     let event = AppDbEvent {

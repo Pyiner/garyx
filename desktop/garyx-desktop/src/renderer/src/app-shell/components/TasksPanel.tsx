@@ -166,10 +166,6 @@ function taskStatusMenuIcon(status: DesktopTaskStatus): LucideIcon {
   }
 }
 
-function isTasksDisabled(error: string | null): boolean {
-  return Boolean(error && /tasks are disabled|TasksDisabled/i.test(error));
-}
-
 function taskCountLabel(count: number, t: Translate): string {
   return t('{count} tasks', { count });
 }
@@ -596,7 +592,6 @@ export function TasksPanel({
     setDraftWorkspaceMode('local');
   }
 
-  const disabled = isTasksDisabled(error);
   const visibleCount = tasks.length;
   const headerCount = loading
       ? t('Loading tasks…')
@@ -1026,11 +1021,7 @@ export function TasksPanel({
       ) : null}
 
       {error ? (
-        <div className={`tasks-state ${disabled ? 'tasks-state-warning' : 'tasks-state-error'}`}>
-          {disabled
-            ? t('Tasks are disabled in the gateway config.')
-            : error}
-        </div>
+        <div className="tasks-state tasks-state-error">{error}</div>
       ) : null}
 
       {viewMode === 'board' ? (

@@ -409,7 +409,6 @@ const zhCN: Record<string, string> = {
   'Stop task': '停止任务',
   'Delete task': '删除任务',
   'Delete task {taskId}? The task will leave task lists, but the backing thread and transcript stay available.': '删除任务 {taskId}？该任务会从任务列表中移除，但对应线程和转录仍会保留。',
-  'Tasks are disabled in the gateway config.': '网关配置中尚未启用任务功能。',
   'No tasks yet.': '还没有任务。',
   'No active tasks right now.': '当前没有活跃任务。',
   'Pin conversations to add them to the operation room.': '置顶对话以加入作战室。',

@@ -119,8 +119,6 @@ export interface CreateTaskInput {
   body?: string | null;
   source?: DesktopTaskSource | null;
   executor?: CreateTaskExecutorInput | null;
-  /** @deprecated New task creation should use `executor`. */
-  assignee?: string | null;
   start?: boolean;
   workspaceDir?: string | null;
   workspaceMode?: DesktopWorkspaceMode;

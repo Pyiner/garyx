@@ -49,8 +49,6 @@ pub struct CreateTaskBody {
     #[serde(default)]
     pub actor: Option<Principal>,
     #[serde(default)]
-    pub agent_id: Option<String>,
-    #[serde(default)]
     pub workspace_dir: Option<String>,
     #[serde(default)]
     pub runtime: Option<TaskRuntimeBody>,
@@ -74,8 +72,6 @@ pub struct BatchCreateTaskBody {
     pub notification_target: Option<TaskNotificationTargetBody>,
     #[serde(default)]
     pub source: Option<TaskSource>,
-    #[serde(default)]
-    pub agent_id: Option<String>,
     #[serde(default)]
     pub workspace_dir: Option<String>,
     #[serde(default)]
@@ -189,9 +185,7 @@ pub async fn create_task(
     headers: HeaderMap,
     Json(body): Json<CreateTaskBody>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     let actor = match actor_from_request(body.actor, &headers) {
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
@@ -203,7 +197,7 @@ pub async fn create_task(
         ));
     }
     let workspace_dir = body.workspace_dir;
-    let mut runtime = task_runtime_input(body.runtime, body.agent_id, workspace_dir.clone());
+    let mut runtime = task_runtime_input(body.runtime, workspace_dir.clone());
     let mut task_executor = None;
     let mut executor_agent_id = None;
     match executor_body {
@@ -260,7 +254,6 @@ pub async fn create_task(
             executor: task_executor,
             start: body.start || executor_agent_id.is_some(),
             actor,
-            agent_id: None,
             workspace_dir: None,
             runtime,
         })
@@ -303,9 +296,7 @@ pub async fn create_tasks_batch(
     headers: HeaderMap,
     Json(body): Json<BatchCreateTaskBody>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     if body.tasks.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -316,7 +307,7 @@ pub async fn create_tasks_batch(
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
     };
-    let top_runtime = task_runtime_input(body.runtime, body.agent_id, body.workspace_dir);
+    let top_runtime = task_runtime_input(body.runtime, body.workspace_dir);
     let top_notification_target = body.notification_target.map(TaskNotificationTarget::from);
     let top_source = body.source;
     if let Err(error) = validate_runtime_agent(&state, &top_runtime).await {
@@ -375,7 +366,6 @@ pub async fn create_tasks_batch(
                 executor: None,
                 start: item.start,
                 actor: actor.clone(),
-                agent_id: None,
                 workspace_dir: None,
                 runtime,
             })
@@ -414,9 +404,7 @@ pub async fn get_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     match service.get_task(&task_id).await {
         Ok((thread_id, thread, task)) => (
             StatusCode::OK,
@@ -435,9 +423,7 @@ pub async fn list_tasks(
     State(state): State<Arc<AppState>>,
     Query(query): Query<TaskListQuery>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     let filter = match task_list_filter(query) {
         Ok(filter) => filter,
         Err(error) => return task_error_response(error),
@@ -459,9 +445,6 @@ pub async fn list_task_forest(
     State(state): State<Arc<AppState>>,
     Query(query): Query<TaskListQuery>,
 ) -> (StatusCode, Json<Value>) {
-    if task_service(&state).is_none() {
-        return tasks_disabled();
-    }
     let scope = query.scope;
     let anchor_thread_id = query.anchor_thread_id.clone();
     let filter = match task_list_filter(query) {
@@ -500,9 +483,7 @@ pub async fn task_history(
     Path(task_id): Path<String>,
     Query(query): Query<TaskHistoryQuery>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     match service
         .task_history(&task_id, query.limit, query.before.as_deref())
         .await
@@ -521,9 +502,7 @@ pub async fn assign_task(
     headers: HeaderMap,
     Json(body): Json<AssignTaskBody>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     let actor = match actor_from_request(body.actor, &headers) {
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
@@ -582,9 +561,7 @@ pub async fn unassign_task(
     Path(task_id): Path<String>,
     headers: HeaderMap,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     let actor = match actor_from_request(None, &headers) {
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
@@ -601,9 +578,7 @@ pub async fn update_task_status(
     headers: HeaderMap,
     Json(body): Json<UpdateTaskStatusBody>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     let actor = match actor_from_request(body.actor, &headers) {
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
@@ -628,9 +603,7 @@ pub async fn stop_task(
     Path(task_id): Path<String>,
     headers: HeaderMap,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     let actor = match actor_from_request(None, &headers) {
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
@@ -659,9 +632,7 @@ pub async fn delete_task(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     let (thread_id, _, task) = match service.get_task(&task_id).await {
         Ok(task) => task,
         Err(error) => return task_error_response(error),
@@ -692,9 +663,7 @@ pub async fn set_task_title(
     headers: HeaderMap,
     Json(body): Json<SetTaskTitleBody>,
 ) -> (StatusCode, Json<Value>) {
-    let Some(service) = task_service(&state) else {
-        return tasks_disabled();
-    };
+    let service = task_service(&state);
     let actor = match actor_from_request(body.actor, &headers) {
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
@@ -708,17 +677,13 @@ pub async fn set_task_title(
     }
 }
 
-pub(crate) fn task_service(state: &Arc<AppState>) -> Option<TaskService> {
-    let config = state.config_snapshot();
-    if !config.tasks.enabled {
-        return None;
-    }
-    Some(TaskService::new(
+pub(crate) fn task_service(state: &Arc<AppState>) -> TaskService {
+    TaskService::new(
         state.threads.thread_store.clone(),
         Arc::new(crate::task_projection::SqliteTaskCounterStore::new(
             state.ops.garyx_db.clone(),
         )),
-    ))
+    )
 }
 
 fn task_list_filter(query: TaskListQuery) -> Result<TaskListFilter, TaskServiceError> {
@@ -810,7 +775,6 @@ fn required_notification_target(
 
 fn task_runtime_input(
     runtime: Option<TaskRuntimeBody>,
-    legacy_agent_id: Option<String>,
     legacy_workspace_dir: Option<String>,
 ) -> Option<TaskRuntimeInput> {
     let mut input = runtime
@@ -821,9 +785,6 @@ fn task_runtime_input(
             workspace_mode: WorkspaceMode::Local,
             worktree_base_dir: None,
         });
-    if input.agent_id.is_none() {
-        input.agent_id = normalized_nonempty(legacy_agent_id);
-    }
     if input.workspace_dir.is_none() {
         input.workspace_dir = normalized_nonempty(legacy_workspace_dir);
     }
@@ -1272,16 +1233,6 @@ async fn runtime_agent_id_for_thread(state: &Arc<AppState>, thread_id: &str) -> 
         .await
         .and_then(|record| garyx_router::agent_id_from_value(&record))
         .unwrap_or_default()
-}
-
-fn tasks_disabled() -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({
-            "error": "tasks are disabled",
-            "code": "TasksDisabled",
-        })),
-    )
 }
 
 fn task_projection_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {

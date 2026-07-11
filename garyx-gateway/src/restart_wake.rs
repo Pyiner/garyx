@@ -618,18 +618,11 @@ async fn resolve_wake_thread_id(
     }
 }
 
-async fn resolve_task_thread_id(
-    state: &Arc<AppState>,
-    task_id: &str,
-) -> Result<String, String> {
+async fn resolve_task_thread_id(state: &Arc<AppState>, task_id: &str) -> Result<String, String> {
     // Resolve through the task projection (indexed by task number) instead
     // of enumerating every thread record: the old full scan read multi-MB
     // thread files for the whole store right on the restart path.
-    let Some(service) = crate::tasks::task_service(state) else {
-        return Err(format!(
-            "restart wake task target requires tasks to be enabled: {task_id}"
-        ));
-    };
+    let service = crate::tasks::task_service(state);
     match service.get_task(task_id).await {
         Ok((thread_id, _record, _task)) => Ok(thread_id),
         Err(garyx_router::tasks::TaskServiceError::NotFound(_)) => {
@@ -1110,5 +1103,4 @@ mod tests {
             .expect_err("a missing projection row resolves to not-found");
         assert!(error.contains("not found"), "unexpected error: {error}");
     }
-
 }

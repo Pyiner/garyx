@@ -35,7 +35,7 @@ pub use command_catalog::{
     CommandCatalog, CommandCatalogEntry, CommandCatalogOptions, CommandDispatch, CommandKind,
     CommandSource, CommandSurface, CommandVisibility, CommandWarning,
 };
-pub use config::{GaryxConfig, TasksConfig};
+pub use config::GaryxConfig;
 pub use config_loader::{
     ConfigDiagnostic, ConfigDiagnostics, ConfigHotReloadOptions, ConfigHotReloader,
     ConfigLoadFailure, ConfigLoadOptions, ConfigReloadMetricsSnapshot, ConfigRuntimeOverrides,

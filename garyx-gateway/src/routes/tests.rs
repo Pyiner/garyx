@@ -6844,7 +6844,6 @@ async fn thread_metadata_defaults_missing_thread_kind_to_chat() {
 async fn task_routes_resolve_percent_encoded_ids() {
     let dir = tempdir().unwrap();
     let mut config = test_config();
-    config.tasks.enabled = true;
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     let state = AppStateBuilder::new(config).build();
     let router = build_router(state);
@@ -6889,7 +6888,6 @@ async fn task_routes_resolve_percent_encoded_ids() {
 async fn task_title_routes_update_backing_thread_label_and_projection() {
     let dir = tempdir().unwrap();
     let mut config = test_config();
-    config.tasks.enabled = true;
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     let state = AppStateBuilder::new(config).build();
     let router = build_router(state.clone());
@@ -7082,7 +7080,6 @@ async fn task_create_with_worktree_runtime_creates_thread_in_managed_worktree() 
     init_test_git_repo(repo.path());
     let data_dir = tempdir().unwrap();
     let mut config = test_config();
-    config.tasks.enabled = true;
     config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
     let state = AppStateBuilder::new(config).build();
     let router = build_router(state.clone());
@@ -7144,7 +7141,6 @@ async fn task_create_with_worktree_runtime_creates_thread_in_managed_worktree() 
 async fn task_create_with_agent_assignee_queues_agent_dispatch() {
     let dir = tempdir().unwrap();
     let mut config = test_config();
-    config.tasks.enabled = true;
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
     custom_agents
@@ -7245,7 +7241,6 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
 async fn task_stop_aborts_active_backing_thread_run_and_releases_task() {
     let dir = tempdir().unwrap();
     let mut config = test_config();
-    config.tasks.enabled = true;
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     config.channels.api.accounts.insert(
         "main".to_owned(),
@@ -7337,7 +7332,6 @@ async fn task_stop_aborts_active_backing_thread_run_and_releases_task() {
 async fn task_delete_aborts_run_and_removes_task_overlay_but_retains_thread() {
     let dir = tempdir().unwrap();
     let mut config = test_config();
-    config.tasks.enabled = true;
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     config.channels.api.accounts.insert(
         "main".to_owned(),
@@ -7484,7 +7478,6 @@ async fn task_delete_aborts_run_and_removes_task_overlay_but_retains_thread() {
 async fn task_assign_queues_dispatch_with_original_body() {
     let dir = tempdir().unwrap();
     let mut config = test_config();
-    config.tasks.enabled = true;
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
     custom_agents
@@ -7607,7 +7600,6 @@ async fn task_assign_queues_dispatch_with_original_body() {
 async fn task_assign_rejects_assignee_that_differs_from_bound_thread_agent() {
     let dir = tempdir().unwrap();
     let mut config = test_config();
-    config.tasks.enabled = true;
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
 
@@ -7723,7 +7715,6 @@ async fn task_assign_rejects_assignee_that_differs_from_bound_thread_agent() {
 async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
     let dir = tempdir().unwrap();
     let mut config = test_config();
-    config.tasks.enabled = true;
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
     let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
     custom_agents

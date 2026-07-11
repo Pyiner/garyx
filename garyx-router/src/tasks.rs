@@ -65,8 +65,6 @@ pub struct CreateTaskInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<Principal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<TaskRuntimeInput>,
@@ -245,7 +243,6 @@ impl TaskService {
         let thread_agent_id = runtime
             .as_ref()
             .and_then(|runtime| normalized_nonempty_string(runtime.agent_id.as_deref()))
-            .or_else(|| normalized_nonempty_string(input.agent_id.as_deref()))
             .or_else(|| match &input.executor {
                 Some(TaskExecutor::Agent { agent_id }) => Some(agent_id.clone()),
                 None => None,

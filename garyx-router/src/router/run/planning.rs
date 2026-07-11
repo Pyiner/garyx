@@ -441,7 +441,6 @@ impl MessageRouter {
         self.build_dispatch_plan_for_thread(context, thread_id, reply_routed)
             .await
     }
-
 }
 
 fn native_message_id(extra_metadata: &HashMap<String, Value>) -> Option<String> {

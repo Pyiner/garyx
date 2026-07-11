@@ -1790,7 +1790,9 @@ async fn transcript_cache_hot_paths_do_not_reread_file() {
             .unwrap()
             .into_iter()
             .filter(|record| record.run_id.as_deref() == Some(run_id))
-            .map(|record| RunTranscriptRecordDraft::with_timestamp(record.message, record.timestamp))
+            .map(|record| {
+                RunTranscriptRecordDraft::with_timestamp(record.message, record.timestamp)
+            })
             .collect();
         store
             .reconcile_run_records_tail(thread_id, run_id, &authoritative)
@@ -2024,8 +2026,10 @@ async fn file_paging_matches_full_read_oracle_without_full_reads() {
     }
 
     for (after, limit) in [(0usize, 7usize), (12, 100), (29, 5), (99, 5)] {
-        let (messages, reported_total, start) =
-            store.page_after_index(thread_id, after, limit).await.unwrap();
+        let (messages, reported_total, start) = store
+            .page_after_index(thread_id, after, limit)
+            .await
+            .unwrap();
         let expected_start = after.saturating_add(1).min(total);
         let expected_end = expected_start.saturating_add(limit).min(total);
         assert_eq!(reported_total, total);
@@ -2060,7 +2064,10 @@ async fn file_paging_matches_full_read_oracle_without_full_reads() {
             expected_start = end.saturating_sub(fallback.max(1));
         }
         assert_eq!(reported_total, total);
-        assert_eq!(start, expected_start, "start for before={before:?} q={queries}");
+        assert_eq!(
+            start, expected_start,
+            "start for before={before:?} q={queries}"
+        );
         assert_eq!(
             messages,
             oracle_slice(expected_start, end),
@@ -2213,7 +2220,6 @@ async fn transcript_cache_concurrent_threads_do_not_block_or_corrupt() {
         let seqs: Vec<u64> = records.iter().map(|record| record.seq).collect();
         let expected: Vec<u64> = (1..=25u64).collect();
         assert_eq!(seqs, expected, "thread {thread} seq chain broken");
-        assert_reads_match_oracle(&store, &thread_id, &format!("concurrent thread {thread}"))
-            .await;
+        assert_reads_match_oracle(&store, &thread_id, &format!("concurrent thread {thread}")).await;
     }
 }

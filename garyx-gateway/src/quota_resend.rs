@@ -65,7 +65,12 @@ pub(crate) fn spawn_reactor(state: Arc<AppState>) {
                     // record may have been dropped. Replay recent history so the
                     // resend is still scheduled; per-thread job ids make
                     // re-processing idempotent.
-                    for raw_event in state.ops.events.history_snapshot(EVENT_HISTORY_REPLAY).await {
+                    for raw_event in state
+                        .ops
+                        .events
+                        .history_snapshot(EVENT_HISTORY_REPLAY)
+                        .await
+                    {
                         if let Some(plan) = parse_resend_plan(&raw_event) {
                             schedule_resend(&state, plan).await;
                         }
@@ -192,7 +197,10 @@ async fn schedule_resend(state: &Arc<AppState>, plan: ResendPlan) {
             "{} usage-limit auto-resend after {} quota window reset",
             plan.provider, window
         ),
-        None => format!("{} usage-limit auto-resend after quota reset", plan.provider),
+        None => format!(
+            "{} usage-limit auto-resend after quota reset",
+            plan.provider
+        ),
     };
 
     let cfg = CronJobConfig {

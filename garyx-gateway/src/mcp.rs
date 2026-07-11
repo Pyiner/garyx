@@ -284,7 +284,6 @@ impl GaryMcpServer {
             tool_router,
         }
     }
-
 }
 
 #[tool_router]

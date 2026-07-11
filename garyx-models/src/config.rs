@@ -1065,23 +1065,10 @@ pub struct SessionConfig {
     /// Defaults to `~/.gary/data` if not set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<String>,
-
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct DesktopConfig {}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TasksConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-impl Default for TasksConfig {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
-}
 
 /// Top-level configuration for the host-side plugin auto-updater.
 ///
@@ -1135,8 +1122,6 @@ pub struct GaryxConfig {
     pub sessions: SessionConfig,
     #[serde(default)]
     pub desktop: DesktopConfig,
-    #[serde(default)]
-    pub tasks: TasksConfig,
     #[serde(default)]
     pub cron: CronConfig,
     #[serde(default)]

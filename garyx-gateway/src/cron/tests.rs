@@ -1713,7 +1713,10 @@ async fn test_cron_dst_fall_back_fires_at_first_occurrence_instead_of_skipping_t
     // Re-arming right after that firing lands on the next day: the 01:30
     // wall-clock event already fired once on the fall-back day.
     let rearmed = CronJob::compute_next_run(&schedule, next);
-    assert_eq!(rearmed, Utc.with_ymd_and_hms(2026, 11, 2, 6, 30, 0).unwrap());
+    assert_eq!(
+        rearmed,
+        Utc.with_ymd_and_hms(2026, 11, 2, 6, 30, 0).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -1738,7 +1741,10 @@ async fn test_cron_dst_fall_back_never_returns_a_past_instant() {
     // Once both occurrences have passed, the next firing is the next day.
     let late = Utc.with_ymd_and_hms(2026, 11, 1, 6, 40, 0).unwrap(); // 01:40 EST
     let next_day = CronJob::compute_next_run(&schedule, late);
-    assert_eq!(next_day, Utc.with_ymd_and_hms(2026, 11, 2, 6, 30, 0).unwrap());
+    assert_eq!(
+        next_day,
+        Utc.with_ymd_and_hms(2026, 11, 2, 6, 30, 0).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -1808,7 +1814,10 @@ async fn test_bare_cron_dst_fall_back_fires_first_occurrence_under_tz_env() {
     assert_eq!(next, Utc.with_ymd_and_hms(2026, 11, 1, 5, 30, 0).unwrap());
 
     let rearmed = CronJob::compute_next_run(&schedule, next);
-    assert_eq!(rearmed, Utc.with_ymd_and_hms(2026, 11, 2, 6, 30, 0).unwrap());
+    assert_eq!(
+        rearmed,
+        Utc.with_ymd_and_hms(2026, 11, 2, 6, 30, 0).unwrap()
+    );
 }
 
 #[tokio::test]

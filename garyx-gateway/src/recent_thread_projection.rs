@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use garyx_bridge::MultiProviderBridge;
 use garyx_router::{
-    ThreadTranscriptStore, history_message_count,
-    is_hidden_thread_value, is_thread_key, workspace_dir_from_value,
+    ThreadTranscriptStore, history_message_count, is_hidden_thread_value, is_thread_key,
+    workspace_dir_from_value,
 };
 use serde_json::Value;
 use std::sync::{Arc, Weak};
@@ -241,5 +241,4 @@ mod tests {
                 .is_none()
         );
     }
-
 }

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::provider::ProviderType;
 use crate::CustomAgentProfile;
+use crate::provider::ProviderType;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentReference {

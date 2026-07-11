@@ -310,7 +310,10 @@ impl std::fmt::Display for RenderDeltaError {
                 "render delta from_rows_hash {delta_from_rows_hash} does not match held rows hash {prev_rows_hash}"
             ),
             Self::DuplicateUpsertRow { row_id } => {
-                write!(f, "render delta upsert row id {row_id} appears more than once")
+                write!(
+                    f,
+                    "render delta upsert row id {row_id} appears more than once"
+                )
             }
             Self::UnexpectedUpsertRow { row_id } => {
                 write!(

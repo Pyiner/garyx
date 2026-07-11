@@ -172,10 +172,6 @@ function formatTaskTimestamp(value?: string | null): string {
   ).format(date);
 }
 
-function isTasksDisabled(error: string | null): boolean {
-  return Boolean(error && /tasks are disabled|TasksDisabled/i.test(error));
-}
-
 function taskDisplayId(task: DesktopTaskSummary): string {
   return task.taskId || `#TASK-${task.number}`;
 }
@@ -249,7 +245,6 @@ function SideThreadTasksTool({
   }, [loadTasks]);
 
   const visibleCount = tasks.length;
-  const disabled = isTasksDisabled(error);
   const countLabel = loading
     ? t("Loading tasks…")
     : t("{count} tasks", { count: total || visibleCount });
@@ -279,13 +274,7 @@ function SideThreadTasksTool({
       </header>
 
       {error ? (
-        <div
-          className={`side-tool-tasks-state ${
-            disabled ? "is-warning" : "is-error"
-          }`}
-        >
-          {disabled ? t("Tasks are disabled in the gateway config.") : error}
-        </div>
+        <div className="side-tool-tasks-state is-error">{error}</div>
       ) : null}
 
       {!sourceThreadId ? (

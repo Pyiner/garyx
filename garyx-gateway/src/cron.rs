@@ -482,7 +482,9 @@ pub(crate) fn build_followup_body(
     ));
     lines.push(format!(
         "scheduled_for: {}",
-        scheduled_for.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S")
+        scheduled_for
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S")
     ));
     lines.push(format!(
         "delay_seconds_requested: {}",

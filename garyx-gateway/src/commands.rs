@@ -191,35 +191,34 @@ pub async fn update_shortcut(
 
     let current_name = normalize_shortcut_command_name(&current_name);
 
-    let result = mutate_config(&state, move |config| {
-        let Some(index) = config
-            .commands
-            .iter()
-            .position(|existing| normalize_shortcut_command_name(&existing.name) == current_name)
-        else {
-            return Err((
-                StatusCode::NOT_FOUND,
-                format!("command '/{current_name}' not found"),
-            ));
-        };
+    let result =
+        mutate_config(&state, move |config| {
+            let Some(index) = config.commands.iter().position(|existing| {
+                normalize_shortcut_command_name(&existing.name) == current_name
+            }) else {
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    format!("command '/{current_name}' not found"),
+                ));
+            };
 
-        if command.name != current_name
-            && config
-                .commands
-                .iter()
-                .any(|existing| normalize_shortcut_command_name(&existing.name) == command.name)
-        {
-            return Err((
-                StatusCode::CONFLICT,
-                format!("command '/{}' already exists", command.name),
-            ));
-        }
+            if command.name != current_name
+                && config
+                    .commands
+                    .iter()
+                    .any(|existing| normalize_shortcut_command_name(&existing.name) == command.name)
+            {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!("command '/{}' already exists", command.name),
+                ));
+            }
 
-        let value = shortcut_value(&command);
-        config.commands[index] = command;
-        Ok(value)
-    })
-    .await;
+            let value = shortcut_value(&command);
+            config.commands[index] = command;
+            Ok(value)
+        })
+        .await;
 
     match result {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),

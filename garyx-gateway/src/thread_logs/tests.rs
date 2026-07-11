@@ -118,7 +118,10 @@ async fn record_event_stamps_missing_timestamp_in_local_timezone() {
     // be the machine's local wall clock (a UTC stamp in the same shape would
     // drift by the UTC offset).
     let drift = (parsed - Local::now().naive_local()).num_seconds().abs();
-    assert!(drift < 300, "thread-log stamp must be local wall-clock, drift {drift}s");
+    assert!(
+        drift < 300,
+        "thread-log stamp must be local wall-clock, drift {drift}s"
+    );
 }
 
 #[tokio::test]
