@@ -1544,6 +1544,7 @@ impl CronService {
                             &message,
                             active_agent_runs,
                             dispatch_runtime,
+                            app_state_weak,
                         )
                         .await
                         {
@@ -1779,12 +1780,121 @@ impl CronService {
         })
     }
 
+    /// Dispatch a scheduled prompt into an existing thread through the
+    /// internal-inbound front door: the message is injected exactly like a
+    /// user message (router inbound semantics, transcript user turn, busy
+    /// queueing, channel echo), sharing the pipeline with `schedule_followup`
+    /// and the quota auto-resend instead of starting a bridge run directly.
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_agent_turn_via_thread(
+        job: &CronJob,
+        run_id: &str,
+        message: &str,
+        active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
+        runtime: &CronDispatchRuntime,
+        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+        thread_key: &str,
+    ) -> Result<(), String> {
+        let automation_job = is_automation_prompt_job(job);
+        let source = if automation_job { "automation" } else { "cron" };
+
+        runtime
+            .thread_logs
+            .record_event(
+                ThreadLogEvent::info(thread_key, "automation", "scheduled dispatch started")
+                    .with_run_id(run_id.to_owned())
+                    .with_field("job_id", serde_json::json!(job.id))
+                    .with_field("job_kind", serde_json::json!(format!("{:?}", job.kind)))
+                    .with_field("source", serde_json::json!(source))
+                    .with_field("dispatch", serde_json::json!("internal_inbound"))
+                    .with_field("thread_id", serde_json::json!(thread_key)),
+            )
+            .await;
+
+        if let Err(error) = sync_default_external_user_skills() {
+            tracing::warn!(
+                error = %error,
+                thread_id = %thread_key,
+                "failed to sync external user skills before scheduled dispatch"
+            );
+        }
+
+        let app_state = app_state_weak
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| "cron app_state back-reference is not installed".to_owned())?;
+
+        let mut extra_metadata = HashMap::new();
+        extra_metadata.insert("source".to_owned(), serde_json::json!(source));
+        if automation_job {
+            extra_metadata.insert("automation_id".to_owned(), serde_json::json!(job.id));
+        } else {
+            extra_metadata.insert("cron_job_id".to_owned(), serde_json::json!(job.id));
+        }
+        extra_metadata.insert(
+            "cron_action".to_owned(),
+            serde_json::json!(format!("{:?}", job.action)),
+        );
+
+        let result = dispatch_internal_message_to_thread(
+            &app_state,
+            thread_key,
+            run_id,
+            message,
+            InternalDispatchOptions {
+                extra_metadata,
+                ..Default::default()
+            },
+        )
+        .await;
+
+        match result {
+            Ok(()) => {
+                active_agent_runs
+                    .write()
+                    .await
+                    .insert(job.id.clone(), run_id.to_owned());
+                runtime
+                    .thread_logs
+                    .record_event(
+                        ThreadLogEvent::info(
+                            thread_key,
+                            "automation",
+                            "scheduled dispatch accepted",
+                        )
+                        .with_run_id(run_id.to_owned())
+                        .with_field("job_id", serde_json::json!(job.id))
+                        .with_field("thread_id", serde_json::json!(thread_key)),
+                    )
+                    .await;
+                Ok(())
+            }
+            Err(error) => {
+                runtime
+                    .thread_logs
+                    .record_event(
+                        ThreadLogEvent::error(
+                            thread_key,
+                            "automation",
+                            "scheduled dispatch failed",
+                        )
+                        .with_run_id(run_id.to_owned())
+                        .with_field("job_id", serde_json::json!(job.id))
+                        .with_field("error", serde_json::json!(error)),
+                    )
+                    .await;
+                Err(format!("cron dispatch failed: {error}"))
+            }
+        }
+    }
+
     async fn dispatch_agent_turn(
         job: &CronJob,
         run_id: &str,
         message: &str,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
+        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
     ) -> Result<(), String> {
         let runtime = dispatch_runtime
             .read()
@@ -1837,6 +1947,27 @@ impl CronService {
                 .map(|(_, ctx)| ctx);
             (format!("cron::{}", job.id), delivery, None)
         };
+
+        // Front door: any scheduled turn that resolved to a real, existing
+        // thread dispatches through the same internal-inbound pipeline as
+        // `schedule_followup` and the quota auto-resend — the prompt behaves
+        // exactly like a user message (router inbound semantics, transcript
+        // user turn, busy queueing, channel echo). The direct
+        // `start_agent_run` path below survives only for the thread-less
+        // `cron::<job id>` pseudo-target, which has no thread record to
+        // dispatch into.
+        if thread_record.is_some() {
+            return Self::dispatch_agent_turn_via_thread(
+                job,
+                run_id,
+                message,
+                active_agent_runs,
+                &runtime,
+                app_state_weak,
+                &thread_key,
+            )
+            .await;
+        }
 
         let automation_job = is_automation_prompt_job(job);
         let thread_bound_automation =

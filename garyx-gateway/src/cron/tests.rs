@@ -66,6 +66,96 @@ struct CountingAutomationProvider {
     delay_ms: u64,
 }
 
+/// Records every `run_streaming` invocation's thread, message, and metadata
+/// so tests can assert what actually reached the provider through the
+/// internal-inbound front door.
+#[derive(Default)]
+struct MetadataRecordingProvider {
+    calls: std::sync::Mutex<Vec<(String, String, HashMap<String, serde_json::Value>)>>,
+}
+
+#[async_trait]
+impl AgentLoopProvider for MetadataRecordingProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: garyx_bridge::provider_trait::StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        self.calls.lock().unwrap().push((
+            options.thread_id.clone(),
+            options.message.clone(),
+            options.metadata.clone(),
+        ));
+        on_chunk(StreamEvent::Done);
+        Ok(ProviderRunResult {
+            run_id: "metadata-recording-run".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: "ok".to_owned(),
+            session_messages: vec![],
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: None,
+            success: true,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost: 0.0,
+            duration_ms: 0,
+        })
+    }
+
+    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+        Ok(session_key.to_owned())
+    }
+}
+
+/// Wire a cron service and a pre-registered bridge into a production-shaped
+/// `AppState` so AgentTurn jobs that resolve to a real thread can dispatch
+/// through the internal-inbound front door. Returns the state; the cron
+/// dispatch runtime shares the state's thread store and router.
+async fn wire_front_door_state(
+    svc: &Arc<CronService>,
+    bridge: Arc<MultiProviderBridge>,
+) -> Arc<crate::server::AppState> {
+    let state = crate::composition::app_bootstrap::AppStateBuilder::new(
+        garyx_models::config::GaryxConfig::default(),
+    )
+    .with_bridge(bridge.clone())
+    .with_cron_service(svc.clone())
+    .build();
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    svc.set_dispatch_runtime(
+        state.threads.thread_store.clone(),
+        state.threads.router.clone(),
+        bridge,
+        Arc::new(ChannelDispatcherImpl::new()),
+        Arc::new(NoopThreadLogSink),
+        HashMap::new(),
+        Arc::new(crate::custom_agents::CustomAgentStore::new()),
+    )
+    .await;
+    state
+}
+
 #[async_trait]
 impl AgentLoopProvider for SuccessfulAutomationProvider {
     fn provider_type(&self) -> ProviderType {
@@ -1076,17 +1166,27 @@ async fn test_dispatch_agent_turn_recovers_thread_target_delivery_from_store() {
     };
 
     let active_agent_runs = Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
-    let err = CronService::dispatch_agent_turn(&job, "run-1", "ping", &active_agent_runs, &runtime)
-        .await
-        .expect_err("bridge has no providers in this test");
-    assert!(err.contains("cron dispatch failed"));
-    assert!(err.contains("channel=telegram"));
+    // A thread-like target whose record exists routes through the
+    // internal-inbound front door; this fixture installs no AppState
+    // back-reference, so the front-door branch is the one that must fail.
+    let app_state_weak: Arc<OnceLock<Weak<AppState>>> = Arc::new(OnceLock::new());
+    let err = CronService::dispatch_agent_turn(
+        &job,
+        "run-1",
+        "ping",
+        &active_agent_runs,
+        &runtime,
+        &app_state_weak,
+    )
+    .await
+    .expect_err("front door requires an installed app_state back-reference");
+    assert!(err.contains("app_state back-reference"));
 }
 
 #[tokio::test]
 async fn test_successful_automation_run_persists_thread_id() {
     let tmp = TempDir::new().unwrap();
-    let svc = CronService::new(tmp.path().to_path_buf());
+    let svc = Arc::new(CronService::new(tmp.path().to_path_buf()));
     let _ = ensure_dirs(tmp.path()).await;
 
     svc.add(CronJobConfig {
@@ -1108,24 +1208,12 @@ async fn test_successful_automation_run_persists_thread_id() {
     .await
     .unwrap();
 
-    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
     let bridge = Arc::new(MultiProviderBridge::new());
     bridge
         .register_provider("automation-success", Arc::new(SuccessfulAutomationProvider))
         .await;
-    svc.set_dispatch_runtime(
-        store.clone(),
-        Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-            store,
-            garyx_models::config::GaryxConfig::default(),
-        ))),
-        bridge,
-        Arc::new(ChannelDispatcherImpl::new()),
-        Arc::new(NoopThreadLogSink),
-        HashMap::new(),
-        Arc::new(crate::custom_agents::CustomAgentStore::new()),
-    )
-    .await;
+    bridge.set_default_provider_key("automation-success").await;
+    let _state = wire_front_door_state(&svc, bridge).await;
 
     let run = svc.run_now("automation-persist").await.unwrap();
     assert_eq!(run.status, JobRunStatus::Success);
@@ -1144,7 +1232,7 @@ async fn test_successful_automation_run_persists_thread_id() {
 #[tokio::test]
 async fn test_bound_automation_run_reuses_existing_thread() {
     let tmp = TempDir::new().unwrap();
-    let svc = CronService::new(tmp.path().to_path_buf());
+    let svc = Arc::new(CronService::new(tmp.path().to_path_buf()));
     let _ = ensure_dirs(tmp.path()).await;
 
     let target_thread_id = "thread::bound-automation";
@@ -1167,7 +1255,13 @@ async fn test_bound_automation_run_reuses_existing_thread() {
     .await
     .unwrap();
 
-    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("automation-success", Arc::new(SuccessfulAutomationProvider))
+        .await;
+    bridge.set_default_provider_key("automation-success").await;
+    let state = wire_front_door_state(&svc, bridge).await;
+    let store = state.threads.thread_store.clone();
     store
         .set(
             target_thread_id,
@@ -1179,23 +1273,6 @@ async fn test_bound_automation_run_reuses_existing_thread() {
             }),
         )
         .await;
-    let bridge = Arc::new(MultiProviderBridge::new());
-    bridge
-        .register_provider("automation-success", Arc::new(SuccessfulAutomationProvider))
-        .await;
-    svc.set_dispatch_runtime(
-        store.clone(),
-        Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-            store.clone(),
-            garyx_models::config::GaryxConfig::default(),
-        ))),
-        bridge,
-        Arc::new(ChannelDispatcherImpl::new()),
-        Arc::new(NoopThreadLogSink),
-        HashMap::new(),
-        Arc::new(crate::custom_agents::CustomAgentStore::new()),
-    )
-    .await;
 
     let run = svc.run_now("automation-bound").await.unwrap();
     assert_eq!(run.status, JobRunStatus::Success);
@@ -1210,6 +1287,87 @@ async fn test_bound_automation_run_reuses_existing_thread() {
 
     assert_eq!(reloaded_job.thread_id.as_deref(), Some(target_thread_id));
     assert!(store.get(target_thread_id).await.is_some());
+}
+
+#[tokio::test]
+async fn test_bound_automation_dispatches_through_internal_inbound_front_door() {
+    let tmp = TempDir::new().unwrap();
+    let svc = Arc::new(CronService::new(tmp.path().to_path_buf()));
+    let _ = ensure_dirs(tmp.path()).await;
+
+    let target_thread_id = "thread::front-door-automation";
+    svc.add(CronJobConfig {
+        id: "automation-front-door".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Automation Front Door".to_owned()),
+        schedule: CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("scheduled prompt".to_owned()),
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: Some(target_thread_id.to_owned()),
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .unwrap();
+
+    let bridge = Arc::new(MultiProviderBridge::new());
+    let provider = Arc::new(MetadataRecordingProvider::default());
+    bridge
+        .register_provider("front-door-recorder", provider.clone())
+        .await;
+    bridge.set_default_provider_key("front-door-recorder").await;
+    let state = wire_front_door_state(&svc, bridge).await;
+    state
+        .threads
+        .thread_store
+        .set(
+            target_thread_id,
+            serde_json::json!({
+                "thread_id": target_thread_id,
+                "workspace_dir": "/tmp/front-door-automation",
+                "metadata": { "agent_id": "claude" }
+            }),
+        )
+        .await;
+
+    let run = svc.run_now("automation-front-door").await.unwrap();
+    assert_eq!(run.status, JobRunStatus::Success);
+
+    // The scheduled prompt reached the provider as an ordinary inbound
+    // message carrying the internal-dispatch and automation markers.
+    let calls = provider.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    let (thread_id, message, metadata) = &calls[0];
+    assert_eq!(thread_id, target_thread_id);
+    assert_eq!(message, "scheduled prompt");
+    assert_eq!(
+        metadata.get("internal_dispatch"),
+        Some(&serde_json::Value::Bool(true))
+    );
+    assert_eq!(
+        metadata.get("source"),
+        Some(&serde_json::json!("automation"))
+    );
+    assert_eq!(
+        metadata.get("automation_id"),
+        Some(&serde_json::json!("automation-front-door"))
+    );
+
+    // And it was committed to the thread transcript as a user turn — the
+    // front door behaves like a person sending a message, not a bare run.
+    let latest_user = state
+        .threads
+        .history
+        .latest_message_text_for_role(target_thread_id, "user")
+        .await
+        .expect("history readable")
+        .expect("user turn recorded");
+    assert_eq!(latest_user, "scheduled prompt");
 }
 
 #[tokio::test]
@@ -1834,25 +1992,13 @@ async fn test_tick_and_run_now_do_not_execute_same_job_twice() {
     .await
     .unwrap();
 
-    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
     let bridge = Arc::new(MultiProviderBridge::new());
     let provider = Arc::new(CountingAutomationProvider::new(150));
     bridge
         .register_provider("counting-automation", provider.clone())
         .await;
-    svc.set_dispatch_runtime(
-        store.clone(),
-        Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-            store,
-            garyx_models::config::GaryxConfig::default(),
-        ))),
-        bridge,
-        Arc::new(ChannelDispatcherImpl::new()),
-        Arc::new(NoopThreadLogSink),
-        HashMap::new(),
-        Arc::new(crate::custom_agents::CustomAgentStore::new()),
-    )
-    .await;
+    bridge.set_default_provider_key("counting-automation").await;
+    let _state = wire_front_door_state(&svc, bridge).await;
 
     let run_now_task = {
         let svc = svc.clone();

@@ -9,6 +9,7 @@ use garyx_router::{ChannelBinding, MessageRouter, ThreadMessageRequest, bindings
 use serde_json::Value;
 
 use crate::chat_delivery::build_bound_response_callback;
+use crate::managed_mcp_metadata::inject_managed_mcp_servers;
 use crate::server::AppState;
 
 const INTERNAL_DISPATCH_PROVIDER_READY_TIMEOUT: Duration = Duration::from_secs(30);
@@ -165,6 +166,20 @@ pub(crate) async fn dispatch_internal_message_to_thread(
         .unwrap_or_else(|| "loop".to_owned());
 
     extra_metadata.insert("internal_dispatch".to_owned(), Value::Bool(true));
+    // Internal dispatch is a front door for synthetic user turns (followups,
+    // quota auto-resends, scheduled automation prompts); give the resulting
+    // run the same managed-MCP context a chat-API message gets so native
+    // in-process providers keep their gateway-managed servers.
+    {
+        let config = state.config_snapshot();
+        let gateway_auth_token = config.gateway.auth_token.trim();
+        if !gateway_auth_token.is_empty() {
+            extra_metadata
+                .entry("garyx_mcp_auth_token".to_owned())
+                .or_insert_with(|| Value::String(gateway_auth_token.to_owned()));
+        }
+        inject_managed_mcp_servers(&config.mcp_servers, &mut extra_metadata);
+    }
     if let Some(requested_provider) = requested_provider.as_ref() {
         extra_metadata.insert(
             "requested_provider_type".to_owned(),
