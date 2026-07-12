@@ -42,7 +42,7 @@ and
 
 The normalized fixture is
 [`legacy-horizontal-layout-oracle.json`](../../../desktop/garyx-desktop/src/renderer/src/app-shell/fixtures/legacy-horizontal-layout-oracle.json).
-It records seven 1480×940 packaged scenarios:
+It records eight 1480×940 packaged scenarios:
 
 1. baseline;
 2. sidebar collapsed;
@@ -50,12 +50,23 @@ It records seven 1480×940 packaged scenarios:
 4. thread logs;
 5. Recent L2 rail;
 6. Recent L2 plus side tools;
-7. Recent L2 plus thread logs.
+7. Recent L2 plus thread logs at the canonical 360 DIP preference (docked);
+8. Recent L2 plus thread logs at an explicit 480 DIP sample (overlay).
 
 For each scenario it records rectangles, computed grid tracks, semantic class
 tokens, state-bearing ARIA attributes, the four-panel desired occupancy, and
 the drag/no-drag carveout. Dynamic text, element IDs, workspace paths, thread
-IDs, and task-tree content height are deliberately excluded.
+IDs, task activity status, and task-tree content height are deliberately
+excluded. The closed compact task tree is scaled around its center, so its
+content-height-derived `rect.y` is normalized along with its height; stable
+`x`/width geometry remains pinned.
+
+Capture requires an active thread with a task forest. The script fails with an
+explicit prerequisite error if the docked tree or its Recent-rail compact
+toggle is absent. It temporarily drives the real logs resizer to the canonical
+360 DIP default and the deliberate 480 DIP overlay sample, then restores the
+user's original persisted logs width and reloads the renderer back to the
+baseline panel state.
 
 Reproduce it against a freshly installed packaged app:
 
@@ -69,3 +80,5 @@ npm run layout:oracle -- --compare
 Use `GARYX_LAYOUT_CDP_ENDPOINT` when the packaged app is not using the project
 default endpoint. `--write` is only for intentionally recording a new Phase 0
 baseline; Phases 0b–3 use `--compare` and must match exactly.
+Exact comparison is a same-host packaged regression gate; computed font row
+metrics may differ across operating systems or font installations.

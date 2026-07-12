@@ -20,6 +20,7 @@ const expectedOccupancy = new Map([
   ['recent-rail', [true, true, false, false]],
   ['recent-rail-side-tools', [true, true, true, false]],
   ['recent-rail-thread-logs', [true, true, false, true]],
+  ['recent-rail-thread-logs-overlay', [true, true, false, true]],
 ]);
 
 function pixelTracks(value) {
@@ -99,6 +100,32 @@ test('oracle pins classes, semantic attributes, computed tracks, and drag carveo
       `${scenario.name}: legacy right panels remain mutually exclusive`,
     );
   }
+});
+
+test('oracle normalizes dynamic task state and deliberately samples logs dock and overlay', () => {
+  const scenario = (name) =>
+    oracle.scenarios.find((candidate) => candidate.name === name);
+  const baseline = scenario('baseline');
+  const recentRail = scenario('recent-rail');
+  const defaultLogs = scenario('recent-rail-thread-logs');
+  const overlayLogs = scenario('recent-rail-thread-logs-overlay');
+
+  assert.equal(baseline.elements.taskTree.rect.y, 58);
+  assert.equal(baseline.elements.taskTree.rect.height, 'dynamic');
+  assert.equal(recentRail.elements.taskTree.rect.y, 'dynamic');
+  assert.equal(recentRail.elements.taskTree.rect.height, 'dynamic');
+  assert.doesNotMatch(rawFixture, /has-active/);
+
+  assert.equal(defaultLogs.presentation.threadLogs, 'docked');
+  assert.equal(
+    defaultLogs.elements.threadLogResizer.attributes['aria-valuenow'],
+    '360',
+  );
+  assert.equal(overlayLogs.presentation.threadLogs, 'overlay');
+  assert.equal(
+    overlayLogs.elements.threadLogResizer.attributes['aria-valuenow'],
+    '480',
+  );
 });
 
 test('oracle fixture contains no user data or dynamic thread identity', () => {

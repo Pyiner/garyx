@@ -16,6 +16,8 @@ const fixturePath = path.join(
 const defaultCdpEndpoint = 'http://127.0.0.1:39222';
 const expectedViewport = { width: 1480, height: 940 };
 const settleDelayMs = 240;
+const defaultThreadLogsPanelWidth = 360;
+const overlayThreadLogsPanelWidth = 480;
 const sideToolsToggleSelector =
   '.conversation-header-actions > button.conversation-header-action-icon';
 
@@ -80,7 +82,7 @@ const semanticClassTokens = {
   threadLogResizer: ['thread-log-resizer'],
   threadLogPanel: ['thread-log-panel'],
   taskTree: ['thread-subtask-pop', 'is-compact-open'],
-  taskTreeToggle: ['thread-subtask-toggle', 'is-open', 'has-active'],
+  taskTreeToggle: ['thread-subtask-toggle', 'is-open'],
   sidebarCarveout: [
     'sidebar-collapse-toggle',
     'sidebar-collapse-toggle-carveout',
@@ -236,6 +238,91 @@ async function resetPanels(page) {
   await ensureSidebarOpen(page, true);
 }
 
+async function requireTaskTree(page, presentation) {
+  const taskTree = page.locator(elementSelectors.taskTree).first();
+  if ((await taskTree.count()) === 0) {
+    throw new Error(
+      'The packaged oracle requires an active thread with a task forest so task-tree layout is captured.',
+    );
+  }
+  if (
+    presentation === 'overlay' &&
+    (await page.locator(elementSelectors.taskTreeToggle).count()) === 0
+  ) {
+    throw new Error(
+      'The Recent-rail oracle scenario requires the task tree to use its compact overlay presentation.',
+    );
+  }
+}
+
+async function persistedThreadLogsPanelWidth(page) {
+  return page.evaluate(async () => {
+    const state = await window.garyxDesktop.getState();
+    return state.settings.threadLogsPanelWidth;
+  });
+}
+
+async function setThreadLogsPanelWidth(page, targetWidth) {
+  const resizer = page.locator(elementSelectors.threadLogResizer).first();
+  if ((await resizer.count()) === 0) {
+    throw new Error('Open thread logs before setting the canonical oracle width.');
+  }
+
+  const currentWidth = Number(await resizer.getAttribute('aria-valuenow'));
+  const minWidth = Number(await resizer.getAttribute('aria-valuemin'));
+  const maxWidth = Number(await resizer.getAttribute('aria-valuemax'));
+  assert.ok(Number.isFinite(currentWidth), 'thread-log width must be numeric');
+  assert.ok(
+    targetWidth >= minWidth && targetWidth <= maxWidth,
+    `thread-log width ${targetWidth} must fit ${minWidth}-${maxWidth}`,
+  );
+  if (currentWidth === targetWidth) {
+    return;
+  }
+
+  const box = await resizer.boundingBox();
+  assert.ok(box, 'thread-log resizer must be measurable');
+  const startX = box.x + box.width / 2;
+  const startY = box.y + Math.min(box.height / 2, 120);
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.waitForFunction(() => document.body.style.cursor === 'col-resize');
+  await page.mouse.move(startX + currentWidth - targetWidth, startY, {
+    steps: 8,
+  });
+  await page.mouse.up();
+  await page.waitForFunction(
+    ({ selector, expected }) =>
+      document.querySelector(selector)?.getAttribute('aria-valuenow') ===
+      String(expected),
+    { selector: elementSelectors.threadLogResizer, expected: targetWidth },
+  );
+  await page.waitForFunction(
+    async (expected) =>
+      (await window.garyxDesktop.getState()).settings.threadLogsPanelWidth ===
+      expected,
+    targetWidth,
+  );
+  await settle(page);
+}
+
+async function restorePackagedState(page, originalThreadLogsPanelWidth) {
+  await page.evaluate(async (width) => {
+    const state = await window.garyxDesktop.getState();
+    if (state.settings.threadLogsPanelWidth !== width) {
+      await window.garyxDesktop.saveSettings({
+        ...state.settings,
+        threadLogsPanelWidth: width,
+      });
+    }
+  }, originalThreadLogsPanelWidth);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.app-shell');
+  await page.waitForSelector('.thread-layout');
+  await settle(page);
+  await resetPanels(page);
+}
+
 async function captureScenario(page, name) {
   return page.evaluate(
     ({
@@ -263,6 +350,13 @@ async function captureScenario(page, name) {
         }
         const rect = node.getBoundingClientRect();
         const computed = getComputedStyle(node);
+        const transformScaleY =
+          computed.transform === 'none'
+            ? 1
+            : new DOMMatrixReadOnly(computed.transform).m22;
+        const transformMovesYWithDynamicHeight =
+          key === 'taskTree' &&
+          Math.abs(transformScaleY - 1) > Number.EPSILON;
         const allowed = new Set(classTokenAllowlist[key] || []);
         const classTokens = String(node.className)
           .split(/\s+/)
@@ -270,7 +364,7 @@ async function captureScenario(page, name) {
         return {
           rect: {
             x: round(rect.x),
-            y: round(rect.y),
+            y: transformMovesYWithDynamicHeight ? 'dynamic' : round(rect.y),
             width: round(rect.width),
             height: dynamicHeightKeys.includes(key) ? 'dynamic' : round(rect.height),
           },
@@ -389,40 +483,65 @@ async function captureOracle(page) {
     expectedViewport,
     'restart the packaged app before capture so the native 1480x940 legacy baseline is authoritative',
   );
+  const originalThreadLogsPanelWidth =
+    await persistedThreadLogsPanelWidth(page);
+  assert.ok(
+    Number.isFinite(originalThreadLogsPanelWidth),
+    'persisted thread-log width must be numeric',
+  );
 
-  const scenarios = [];
-  await resetPanels(page);
-  scenarios.push(await captureScenario(page, 'baseline'));
+  try {
+    const scenarios = [];
+    await resetPanels(page);
+    await ensureThreadLogsOpen(page, true);
+    await setThreadLogsPanelWidth(page, defaultThreadLogsPanelWidth);
+    await ensureThreadLogsOpen(page, false);
+    await requireTaskTree(page, 'docked');
+    scenarios.push(await captureScenario(page, 'baseline'));
 
-  await ensureSidebarOpen(page, false);
-  scenarios.push(await captureScenario(page, 'sidebar-collapsed'));
-  await ensureSidebarOpen(page, true);
+    await ensureSidebarOpen(page, false);
+    scenarios.push(await captureScenario(page, 'sidebar-collapsed'));
+    await ensureSidebarOpen(page, true);
 
-  await ensureSideToolsOpen(page, true);
-  scenarios.push(await captureScenario(page, 'side-tools'));
-  await ensureSideToolsOpen(page, false);
+    await ensureSideToolsOpen(page, true);
+    scenarios.push(await captureScenario(page, 'side-tools'));
+    await ensureSideToolsOpen(page, false);
 
-  await ensureThreadLogsOpen(page, true);
-  scenarios.push(await captureScenario(page, 'thread-logs'));
-  await ensureThreadLogsOpen(page, false);
+    await ensureThreadLogsOpen(page, true);
+    scenarios.push(await captureScenario(page, 'thread-logs'));
+    await ensureThreadLogsOpen(page, false);
 
-  await ensureConversationRailOpen(page, true);
-  scenarios.push(await captureScenario(page, 'recent-rail'));
+    await ensureConversationRailOpen(page, true);
+    await requireTaskTree(page, 'overlay');
+    scenarios.push(await captureScenario(page, 'recent-rail'));
 
-  await ensureSideToolsOpen(page, true);
-  scenarios.push(await captureScenario(page, 'recent-rail-side-tools'));
-  await ensureSideToolsOpen(page, false);
+    await ensureSideToolsOpen(page, true);
+    scenarios.push(await captureScenario(page, 'recent-rail-side-tools'));
+    await ensureSideToolsOpen(page, false);
 
-  await ensureThreadLogsOpen(page, true);
-  scenarios.push(await captureScenario(page, 'recent-rail-thread-logs'));
+    await ensureThreadLogsOpen(page, true);
+    scenarios.push(await captureScenario(page, 'recent-rail-thread-logs'));
 
-  await resetPanels(page);
-  return {
-    schemaVersion: 1,
-    policy: 'legacy',
-    capture: 'packaged-cdp-normalized-structure',
-    scenarios,
-  };
+    await ensureThreadLogsOpen(page, false);
+    await ensureConversationRailOpen(page, false);
+    await ensureThreadLogsOpen(page, true);
+    await setThreadLogsPanelWidth(page, overlayThreadLogsPanelWidth);
+    await ensureThreadLogsOpen(page, false);
+    await ensureConversationRailOpen(page, true);
+    await ensureThreadLogsOpen(page, true);
+    scenarios.push(
+      await captureScenario(page, 'recent-rail-thread-logs-overlay'),
+    );
+
+    return {
+      schemaVersion: 1,
+      policy: 'legacy',
+      capture: 'packaged-cdp-normalized-structure',
+      scenarios,
+    };
+  } finally {
+    await restorePackagedState(page, originalThreadLogsPanelWidth);
+  }
 }
 
 async function main() {
