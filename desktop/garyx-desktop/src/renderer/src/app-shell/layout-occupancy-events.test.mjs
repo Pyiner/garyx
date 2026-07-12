@@ -184,4 +184,25 @@ test("rejects invalid source state instead of manufacturing occupancy", () => {
     () => createLayoutOccupancyEventLog({ ...closed, conversationRailKey: "" }),
     /null or non-empty/,
   );
+  assert.throws(
+    () =>
+      createLayoutOccupancyEventLog({
+        ...closed,
+        openCapsuleCount: 1,
+        threadLogs: true,
+      }),
+    /mutually exclusive/,
+  );
+
+  const log = createLayoutOccupancyEventLog({ ...closed, threadLogs: true });
+  assert.throws(
+    () =>
+      appendLayoutOccupancyIntent(
+        log,
+        { ...log.currentSources, openCapsuleCount: 1 },
+        "user-route",
+      ),
+    /mutually exclusive/,
+  );
+  assert.deepEqual(log.currentSources, { ...closed, threadLogs: true });
 });

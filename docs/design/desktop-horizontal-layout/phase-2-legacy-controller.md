@@ -23,6 +23,14 @@ store folds the ordered desired-occupancy checkpoint locally and then compacts
 the settled transaction, because no native Phase 2 result can refer back to
 it. There is no renderer call to a native bounds executor in Phase 2.
 
+Every side-tools opening writer (workspace request/effect, inspector toggle,
+and transcript capsule open) uses one `replaceThreadLogsWithSideTools`
+constructor. The occupancy log independently rejects a source vector that
+would request side tools and thread logs together, before advancing its source
+cursor. The regression test drives logs → capsule replace → sidebar toggle
+through the real log/store modules and proves the later intent still changes
+the frame, preventing a rejected writer from silently freezing the session.
+
 ## Atomic DOM publication
 
 `applyFrame(root, frame)` synchronously writes every `--gx-*` pixel variable,

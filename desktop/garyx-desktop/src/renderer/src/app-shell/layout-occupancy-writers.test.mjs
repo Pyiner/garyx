@@ -150,12 +150,40 @@ test("route, capsule, logs replace, and cleanup writers enter the same bridge", 
   );
 });
 
-test("desired logging may lead legacy commits without changing their UI sequence", () => {
+test("every side-tools opening writer replaces thread logs in one vector", () => {
   assert.match(
     appShell,
-    /handleWorkspacePreviewRequested[\s\S]*?commitLegacyLayoutIntent\(\s*"user-route",[\s\S]*?inspectorOpen: true,[\s\S]*?threadLogsOpen: false,[\s\S]*?\(current\) => \(\{ \.\.\.current, inspectorOpen: true \}\)/,
-    "workspace preview logs its final replace vector but preserves the first legacy write",
+    /function replaceThreadLogsWithSideTools[\s\S]*?\.\.\.patch,[\s\S]*?threadLogsOpen: false/,
+    "the shared opening constructor makes right-panel exclusion structural",
   );
+  assert.equal(
+    (appShell.match(/\breplaceThreadLogsWithSideTools\(/g) || []).length,
+    5,
+    "one constructor definition plus all four side-tools opening writers",
+  );
+  assert.match(
+    appShell,
+    /handleWorkspacePreviewRequested[\s\S]*?replaceThreadLogsWithSideTools\(current, \{ inspectorOpen: true \}\)/,
+    "workspace preview applies one mutually-exclusive vector",
+  );
+  assert.match(
+    appShell,
+    /workspacePreviewModalOpen[\s\S]*?replaceThreadLogsWithSideTools\(current, \{ inspectorOpen: true \}\)/,
+    "workspace preview effect uses the same constructor",
+  );
+  assert.match(
+    appShell,
+    /onOpenCapsule=\{[\s\S]*?replaceThreadLogsWithSideTools\(current, \{[\s\S]*?openCapsuleTabs:/,
+    "transcript capsule open replaces logs before opening the side-tools union",
+  );
+  assert.match(
+    appShell,
+    /onToggleInspector=\{[\s\S]*?replaceThreadLogsWithSideTools\(current, \{[\s\S]*?inspectorOpen: nextInspectorOpen/,
+    "inspector toggle keeps the right panels mutually exclusive",
+  );
+});
+
+test("desired cleanup may lead legacy commits without changing their UI sequence", () => {
   assert.match(
     appShell,
     /normalizeNewThreadIntent[\s\S]*?openCapsuleTabs: \[\],[\s\S]*?openCapsuleTabs: current\.openCapsuleTabs/,
@@ -164,6 +192,11 @@ test("desired logging may lead legacy commits without changing their UI sequence
   assert.match(
     appShell,
     /layoutOccupancyEventLogRef\.current = appendResult\.log/,
+  );
+  assert.match(
+    appShell,
+    /conversationRail: secondaryConversationRailRequested[\s\S]*?: \{ kind: "closed" \}/,
+    "the event log and live store share the same route-gated initial rail seed",
   );
 });
 

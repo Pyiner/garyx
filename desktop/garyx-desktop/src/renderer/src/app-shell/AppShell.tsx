@@ -288,6 +288,19 @@ type LegacyLayoutIntentUpdate = (
   current: LegacyLayoutIntentState,
 ) => LegacyLayoutIntentState;
 
+function replaceThreadLogsWithSideTools(
+  current: LegacyLayoutIntentState,
+  patch: Partial<
+    Pick<LegacyLayoutIntentState, "inspectorOpen" | "openCapsuleTabs">
+  >,
+): LegacyLayoutIntentState {
+  return {
+    ...current,
+    ...patch,
+    threadLogsOpen: false,
+  };
+}
+
 function conversationRailIntentFromLegacyState(input: {
   botConversationGroupId: string | null;
   recentThreadsRailOpen: boolean;
@@ -1209,11 +1222,13 @@ export function AppShell() {
   });
   const initialLegacyLayoutIntent: LegacyLayoutIntentState = {
     globalSidebarOpen: sidebarDesiredOpen,
-    conversationRail: conversationRailIntentFromLegacyState({
-      botConversationGroupId,
-      recentThreadsRailOpen,
-      workspaceConversationPath,
-    }),
+    conversationRail: secondaryConversationRailRequested
+      ? conversationRailIntentFromLegacyState({
+          botConversationGroupId,
+          recentThreadsRailOpen,
+          workspaceConversationPath,
+        })
+      : { kind: "closed" },
     inspectorOpen,
     openCapsuleTabs,
     threadLogsOpen,
@@ -1652,14 +1667,8 @@ export function AppShell() {
       ? activeWorkspace.path
       : "";
   const handleWorkspacePreviewRequested = useCallback(() => {
-    commitLegacyLayoutIntent(
-      "user-route",
-      (current) => ({
-        ...current,
-        inspectorOpen: true,
-        threadLogsOpen: false,
-      }),
-      (current) => ({ ...current, inspectorOpen: true }),
+    commitLegacyLayoutIntent("user-route", (current) =>
+      replaceThreadLogsWithSideTools(current, { inspectorOpen: true }),
     );
   }, [commitLegacyLayoutIntent]);
   const {
@@ -2945,11 +2954,9 @@ export function AppShell() {
     if (!workspacePreviewModalOpen || contentView !== "thread") {
       return;
     }
-    commitLegacyLayoutIntent("user-route", (current) => ({
-      ...current,
-      inspectorOpen: true,
-      threadLogsOpen: false,
-    }));
+    commitLegacyLayoutIntent("user-route", (current) =>
+      replaceThreadLogsWithSideTools(current, { inspectorOpen: true }),
+    );
   }, [commitLegacyLayoutIntent, contentView, workspacePreviewModalOpen]);
 
   useEffect(() => {
@@ -4150,29 +4157,31 @@ export function AppShell() {
             return;
           }
           // Open/activate this capsule as a tab in the right dock (#TASK-1470).
-          // Dedup by id; refresh title/revision if it is already open. Does not
-          // touch inspectorOpen — the capsule path drives the dock on its own.
+          // Dedup by id; refresh title/revision if it is already open. The
+          // capsule path drives the dock without inspector state and replaces
+          // thread logs so the two right-panel presentations stay exclusive.
           const capsuleId = card.capsule_id;
           const title = card.title?.trim() || "";
-          commitLegacyLayoutIntent("user-route", (current) => ({
-            ...current,
-            openCapsuleTabs: current.openCapsuleTabs.some(
-              (tab) => tab.capsuleId === capsuleId,
-            )
-              ? current.openCapsuleTabs.map((tab) =>
-                  tab.capsuleId === capsuleId
-                    ? {
-                        ...tab,
-                        revision: card.revision,
-                        title: title || tab.title,
-                      }
-                    : tab,
-                )
-              : [
-                  ...current.openCapsuleTabs,
-                  { capsuleId, revision: card.revision, title },
-                ],
-          }));
+          commitLegacyLayoutIntent("user-route", (current) =>
+            replaceThreadLogsWithSideTools(current, {
+              openCapsuleTabs: current.openCapsuleTabs.some(
+                (tab) => tab.capsuleId === capsuleId,
+              )
+                ? current.openCapsuleTabs.map((tab) =>
+                    tab.capsuleId === capsuleId
+                      ? {
+                          ...tab,
+                          revision: card.revision,
+                          title: title || tab.title,
+                        }
+                      : tab,
+                  )
+                : [
+                    ...current.openCapsuleTabs,
+                    { capsuleId, revision: card.revision, title },
+                  ],
+            }),
+          );
           setPendingActiveCapsuleId(capsuleId);
         }}
         onSelectWorkspace={(workspacePath) => {
@@ -4759,11 +4768,11 @@ export function AppShell() {
                 onToggleInspector={() => {
                   const nextInspectorOpen =
                     !appliedLayoutIntentRef.current.inspectorOpen;
-                  commitLegacyLayoutIntent("user-panel", (current) => ({
-                    ...current,
-                    inspectorOpen: nextInspectorOpen,
-                    threadLogsOpen: false,
-                  }));
+                  commitLegacyLayoutIntent("user-panel", (current) =>
+                    replaceThreadLogsWithSideTools(current, {
+                      inspectorOpen: nextInspectorOpen,
+                    }),
+                  );
                 }}
                 onToggleThreadLogs={() => {
                   // Logs and the side-tools dock are mutually exclusive right

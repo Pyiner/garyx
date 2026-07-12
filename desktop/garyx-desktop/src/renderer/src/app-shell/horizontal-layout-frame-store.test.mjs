@@ -7,6 +7,11 @@ import {
   clearFrame,
   createLegacyHorizontalLayoutFrameStore,
 } from "./horizontal-layout-frame-store.ts";
+import {
+  appendLayoutOccupancyIntent,
+  createLayoutOccupancyEventLog,
+  projectLayoutOccupancy,
+} from "./layout-occupancy-events.ts";
 
 function snapshot(width = 1480, revision = 1) {
   const bounds = { x: 0, y: 0, width, height: 940 };
@@ -170,6 +175,59 @@ test("legacy store reduces normalized occupancy and width events without wiring 
   assert.equal(target.variables.get("--spacing-token-rail"), "333px");
   assert.equal(notifications, 2);
   unsubscribe();
+});
+
+test("logs to transcript capsule is one valid replace and later intents stay live", () => {
+  const store = baselineStore();
+  const target = mockRoot();
+  store.attachRoot(target.root);
+  let log = createLayoutOccupancyEventLog({
+    globalSidebar: true,
+    conversationRailKey: null,
+    inspectorOpen: false,
+    openCapsuleCount: 0,
+    threadLogs: false,
+  });
+  const commit = (nextSources, cause) => {
+    const result = appendLayoutOccupancyIntent(log, nextSources, cause);
+    log = result.log;
+    if (result.event) {
+      store.dispatch(result.event);
+    }
+    assert.deepEqual(
+      store.getState().desiredOccupancy,
+      projectLayoutOccupancy(log.currentSources),
+    );
+    return result.event;
+  };
+
+  commit({ ...log.currentSources, threadLogs: true }, "user-panel");
+  assert.equal(store.getSnapshot().presentation.threadLogs, "docked");
+
+  const capsuleReplace = commit(
+    {
+      ...log.currentSources,
+      openCapsuleCount: 1,
+      threadLogs: false,
+    },
+    "user-route",
+  );
+  assert.deepEqual(capsuleReplace?.nextOccupancy, {
+    globalSidebar: true,
+    conversationRail: false,
+    sideTools: true,
+    threadLogs: false,
+  });
+  assert.equal(store.getSnapshot().presentation.sideTools, "docked");
+  assert.equal(store.getSnapshot().presentation.threadLogs, "closed");
+  assert.deepEqual(store.getState().diagnostics, []);
+
+  commit(
+    { ...log.currentSources, globalSidebar: false },
+    "user-panel",
+  );
+  assert.equal(store.getSnapshot().presentation.globalSidebar, "collapsed");
+  assert.equal(target.attributes.get("data-sidebar-state"), "collapsed");
 });
 
 test("detaching or clearing a frame removes only the owned variables and attributes", () => {
