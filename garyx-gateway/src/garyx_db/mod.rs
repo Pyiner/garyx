@@ -2145,6 +2145,7 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     )?;
     ensure_thread_meta_projection_columns(conn)?;
     ensure_thread_channel_endpoint_columns(conn)?;
+    ensure_thread_channel_endpoint_single_holder_schema(conn)?;
     conn.execute_batch(
         r#"
         CREATE INDEX IF NOT EXISTS idx_thread_channel_endpoints_thread
@@ -2989,6 +2990,66 @@ fn ensure_thread_channel_endpoint_columns(conn: &Connection) -> GaryxDbResult<()
             )?;
         }
     }
+    Ok(())
+}
+
+/// Restore the single-owner endpoint schema after versions that stored one
+/// row per `(endpoint_key, thread_id)`. `CREATE TABLE IF NOT EXISTS` cannot
+/// change that composite primary key, so current `ON CONFLICT(endpoint_key)`
+/// writes otherwise fail at prepare time. The endpoint table is derived state:
+/// rebuild it atomically and clear the holder-dedup marker so the existing
+/// post-import startup migration repopulates it from canonical thread records.
+fn ensure_thread_channel_endpoint_single_holder_schema(conn: &Connection) -> GaryxDbResult<()> {
+    let primary_key_columns = {
+        let mut stmt = conn.prepare(
+            "SELECT name
+               FROM pragma_table_info('thread_channel_endpoints')
+              WHERE pk > 0
+              ORDER BY pk",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut columns = Vec::new();
+        for row in rows {
+            columns.push(row?);
+        }
+        columns
+    };
+    if primary_key_columns == ["endpoint_key"] {
+        return Ok(());
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DROP TABLE thread_channel_endpoints", [])?;
+    tx.execute_batch(
+        r#"
+        CREATE TABLE thread_channel_endpoints (
+            endpoint_key TEXT PRIMARY KEY,
+            channel TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            binding_key TEXT NOT NULL,
+            chat_id TEXT NOT NULL DEFAULT '',
+            delivery_target_type TEXT NOT NULL DEFAULT 'chat_id',
+            delivery_target_id TEXT NOT NULL DEFAULT '',
+            display_label TEXT NOT NULL DEFAULT '',
+            thread_id TEXT,
+            thread_label TEXT,
+            workspace_dir TEXT,
+            thread_updated_at TEXT,
+            last_inbound_at TEXT,
+            last_delivery_at TEXT,
+            projected_at TEXT NOT NULL
+        ) STRICT;
+        "#,
+    )?;
+    tx.execute(
+        "DELETE FROM projection_states WHERE projection_name = ?1",
+        params![ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME],
+    )?;
+    tx.commit()?;
+    tracing::info!(
+        ?primary_key_columns,
+        "rebuilt legacy thread endpoint projection for single-holder ownership"
+    );
     Ok(())
 }
 
@@ -4240,6 +4301,118 @@ mod tests {
         assert_eq!(rows[0].message_count, 0);
         assert_eq!(rows[0].last_message_preview, None);
         assert_eq!(rows[0].projection_version, 2);
+    }
+
+    #[test]
+    fn opening_composite_endpoint_pk_db_restores_single_holder_upserts() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            let conn = Connection::open(&path).expect("legacy db");
+            conn.execute_batch(
+                r#"
+                CREATE TABLE thread_records (
+                    key TEXT PRIMARY KEY,
+                    body TEXT NOT NULL,
+                    updated_at TEXT,
+                    recorded_at TEXT NOT NULL
+                ) STRICT;
+
+                CREATE TABLE projection_states (
+                    projection_name TEXT PRIMARY KEY,
+                    projection_version INTEGER NOT NULL,
+                    source_row_count INTEGER NOT NULL,
+                    projected_at TEXT NOT NULL
+                ) STRICT;
+
+                CREATE TABLE thread_channel_endpoints (
+                    endpoint_key TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    binding_key TEXT NOT NULL,
+                    chat_id TEXT NOT NULL DEFAULT '',
+                    delivery_target_type TEXT NOT NULL DEFAULT 'chat_id',
+                    delivery_target_id TEXT NOT NULL DEFAULT '',
+                    display_label TEXT NOT NULL DEFAULT '',
+                    thread_id TEXT NOT NULL,
+                    thread_label TEXT,
+                    workspace_dir TEXT,
+                    thread_updated_at TEXT,
+                    last_inbound_at TEXT,
+                    last_delivery_at TEXT,
+                    projected_at TEXT NOT NULL,
+                    PRIMARY KEY (endpoint_key, thread_id)
+                ) STRICT;
+
+                INSERT INTO thread_records (key, body, updated_at, recorded_at)
+                VALUES (
+                    'thread::legacy-holder',
+                    '{"thread_id":"thread::legacy-holder","updated_at":"2026-07-01T00:00:00Z","channel_bindings":[{"channel":"api","account_id":"main","binding_key":"client-1","chat_id":"client-1"}]}',
+                    '2026-07-01T00:00:00Z',
+                    '2026-07-01T00:00:00Z'
+                );
+
+                INSERT INTO projection_states (
+                    projection_name, projection_version, source_row_count, projected_at
+                ) VALUES (
+                    'endpoint_holder_dedup_v1', 1, 1, '2026-07-01T00:00:00Z'
+                );
+
+                INSERT INTO thread_channel_endpoints (
+                    endpoint_key, channel, account_id, binding_key, chat_id,
+                    thread_id, projected_at
+                ) VALUES (
+                    'api::main::client-1', 'api', 'main', 'client-1', 'client-1',
+                    'thread::legacy-holder', '2026-07-01T00:00:00Z'
+                );
+                "#,
+            )
+            .expect("legacy composite endpoint schema");
+        }
+
+        let db = GaryxDbService::open(&path).expect("open migrated db");
+        db.run_thread_data_startup_migrations()
+            .expect("run startup migrations");
+        let rederived = db
+            .list_thread_channel_endpoints()
+            .expect("list rederived endpoints");
+        assert_eq!(rederived.len(), 1);
+        assert_eq!(
+            rederived[0].thread_id.as_deref(),
+            Some("thread::legacy-holder")
+        );
+
+        db.replace_thread_meta_projection(ThreadMetaProjectionDraft {
+            thread_id: "thread::current-holder".to_owned(),
+            thread_meta: ThreadMetaDraft {
+                thread_id: "thread::current-holder".to_owned(),
+                thread_type: "chat".to_owned(),
+                ..Default::default()
+            },
+            channel_endpoints: vec![KnownChannelEndpoint {
+                endpoint_key: "api::main::client-1".to_owned(),
+                channel: "api".to_owned(),
+                account_id: "main".to_owned(),
+                binding_key: "client-1".to_owned(),
+                chat_id: "client-1".to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: "client-1".to_owned(),
+                display_label: "Test Client".to_owned(),
+                thread_id: Some("thread::current-holder".to_owned()),
+                ..Default::default()
+            }],
+            message_routes: Vec::new(),
+        })
+        .expect("single-holder endpoint upsert");
+
+        let endpoints = db
+            .list_thread_channel_endpoints()
+            .expect("list migrated endpoints");
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(
+            endpoints[0].thread_id.as_deref(),
+            Some("thread::current-holder")
+        );
     }
 
     #[test]
