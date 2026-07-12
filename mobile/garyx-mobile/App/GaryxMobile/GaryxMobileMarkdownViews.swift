@@ -842,10 +842,6 @@ private final class GaryxMarkdownRenderCache {
     private let maxCacheableAttributedBytes = 8 * 1024
     private let blockCache: NSCache<NSString, GaryxMarkdownBlockCacheEntry>
     private let attributedCache: NSCache<NSString, GaryxMarkdownAttributedCacheEntry>
-    private let attributedOptions = AttributedString.MarkdownParsingOptions(
-        interpretedSyntax: .full,
-        failurePolicy: .returnPartiallyParsedIfPossible
-    )
 
     private init() {
         let blockCache = NSCache<NSString, GaryxMarkdownBlockCacheEntry>()
@@ -888,28 +884,10 @@ private final class GaryxMarkdownRenderCache {
     }
 
     private func renderAttributedString(from markdown: String, linkifyFilePaths: Bool) -> AttributedString {
-        let value = (try? AttributedString(markdown: markdown, options: attributedOptions)) ?? AttributedString(markdown)
-        guard linkifyFilePaths else { return value }
-        return Self.linkifyingBareFilePaths(value)
-    }
-
-    /// Turns bare file-system paths in already-parsed markdown into tappable
-    /// `garyx-path:` links so transcript surfaces route them through the
-    /// shared file-preview path. Existing links are left untouched.
-    private static func linkifyingBareFilePaths(_ attributed: AttributedString) -> AttributedString {
-        let plain = String(attributed.characters)
-        let detected = GaryxFilePathLinkDetector.detect(in: plain)
-        guard !detected.isEmpty else { return attributed }
-        var result = attributed
-        for link in detected {
-            guard let url = GaryxFilePathLinkDetector.linkURL(forTarget: link.target) else { continue }
-            let lower = result.index(result.startIndex, offsetByCharacters: link.characterOffset)
-            let upper = result.index(lower, offsetByCharacters: link.characterCount)
-            let range = lower..<upper
-            guard result[range].runs.allSatisfy({ $0.link == nil }) else { continue }
-            result[range].link = url
-        }
-        return result
+        GaryxMarkdownAttributedStringRenderer.attributedString(
+            from: markdown,
+            linkifyFilePaths: linkifyFilePaths
+        )
     }
 }
 
