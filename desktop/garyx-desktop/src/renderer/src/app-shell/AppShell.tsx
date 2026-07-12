@@ -187,6 +187,12 @@ import {
 } from "./route-effect-bridge";
 import { useGatewayConnectionController } from "./useGatewayConnectionController";
 import { useLayoutResizeController } from "./useLayoutResizeController";
+import {
+  appendLayoutOccupancyIntent,
+  createLayoutOccupancyEventLog,
+  type LayoutIntentCause,
+  type LayoutOccupancySources,
+} from "./layout-occupancy-events";
 import { resolveMemoryDialogTargetFromPath } from "./useMemoryDialogController";
 import {
   MemoryDialogRoot,
@@ -264,6 +270,66 @@ type ThreadEntrySelectionSource =
   | "bot-conversation"
   | "workspace-conversation"
   | "tasks";
+
+type ConversationRailIntent =
+  | { kind: "closed" }
+  | { kind: "recent" }
+  | { kind: "bot"; groupId: string }
+  | { kind: "workspace"; workspacePath: string };
+
+type LegacyLayoutIntentState = {
+  globalSidebarOpen: boolean;
+  conversationRail: ConversationRailIntent;
+  inspectorOpen: boolean;
+  openCapsuleTabs: SideCapsuleTab[];
+  threadLogsOpen: boolean;
+};
+
+type LegacyLayoutIntentUpdate = (
+  current: LegacyLayoutIntentState,
+) => LegacyLayoutIntentState;
+
+function conversationRailIntentFromLegacyState(input: {
+  botConversationGroupId: string | null;
+  recentThreadsRailOpen: boolean;
+  workspaceConversationPath: string | null;
+}): ConversationRailIntent {
+  if (input.botConversationGroupId) {
+    return { kind: "bot", groupId: input.botConversationGroupId };
+  }
+  if (input.workspaceConversationPath) {
+    return {
+      kind: "workspace",
+      workspacePath: input.workspaceConversationPath,
+    };
+  }
+  return input.recentThreadsRailOpen ? { kind: "recent" } : { kind: "closed" };
+}
+
+function conversationRailKey(intent: ConversationRailIntent): string | null {
+  switch (intent.kind) {
+    case "recent":
+      return "recent";
+    case "bot":
+      return `bot:${intent.groupId}`;
+    case "workspace":
+      return `workspace:${intent.workspacePath.trim().toLowerCase()}`;
+    case "closed":
+      return null;
+  }
+}
+
+function layoutOccupancySources(
+  state: LegacyLayoutIntentState,
+): LayoutOccupancySources {
+  return {
+    globalSidebar: state.globalSidebarOpen,
+    conversationRailKey: conversationRailKey(state.conversationRail),
+    inspectorOpen: state.inspectorOpen,
+    openCapsuleCount: state.openCapsuleTabs.length,
+    threadLogs: state.threadLogsOpen,
+  };
+}
 
 const GatewaySettingsPanel = lazy(() =>
   import("../GatewaySettingsPanel").then((module) => ({
@@ -579,7 +645,9 @@ export function AppShell() {
   // owns the list so the dock can show without a workspace; the panel renders
   // these and owns active-tab selection. `pendingActiveCapsuleId` is a one-shot
   // request to activate a capsule's tab (consumed by the panel).
-  const [openCapsuleTabs, setOpenCapsuleTabs] = useState<SideCapsuleTab[]>([]);
+  const [openCapsuleTabs, setOpenCapsuleTabsLegacy] = useState<
+    SideCapsuleTab[]
+  >([]);
   const [pendingActiveCapsuleId, setPendingActiveCapsuleId] = useState<
     string | null
   >(null);
@@ -653,15 +721,18 @@ export function AppShell() {
   const conversationTitleRef = useRef<ConversationTitleHandle | null>(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [bindingMutation, setBindingMutation] = useState<string | null>(null);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [threadLogsOpen, setThreadLogsOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpenLegacy] = useState(false);
+  const [threadLogsOpen, setThreadLogsOpenLegacy] = useState(false);
   // Batch 5b: log content/polling live in ThreadLogDock; the shell keeps
   // only the open flag and the unread mirror for the header badge.
   const [threadLogsHasUnread, setThreadLogsHasUnread] = useState(false);
-  const [botConversationGroupId, setBotConversationGroupId] = useState<string | null>(null);
-  const [workspaceConversationPath, setWorkspaceConversationPath] =
+  const [botConversationGroupId, setBotConversationGroupIdLegacy] = useState<
+    string | null
+  >(null);
+  const [workspaceConversationPath, setWorkspaceConversationPathLegacy] =
     useState<string | null>(null);
-  const [recentThreadsRailOpen, setRecentThreadsRailOpen] = useState(false);
+  const [recentThreadsRailOpen, setRecentThreadsRailOpenLegacy] =
+    useState(false);
   // Batch 6c-2b: contentView is a SELECTOR over the committed route — the
   // route store is the only view state (AppShell subscribes on its local
   // store instance, not through context: AppShell renders the Provider).
@@ -1158,6 +1229,7 @@ export function AppShell() {
         recentThreadsRailOpen,
     );
   const {
+    compactSidebarViewport,
     conversationRef,
     currentConversationWidth,
     currentThreadLayoutWidth,
@@ -1169,6 +1241,7 @@ export function AppShell() {
     setSideToolsPanelWidth,
     setSideToolsResizing,
     sidebarCollapsed,
+    sidebarDesiredOpen,
     sidebarResizing,
     sidebarWidth,
     sideToolsPanelWidth,
@@ -1180,7 +1253,7 @@ export function AppShell() {
     threadLogsDocked,
     threadLogsPanelWidth,
     threadLogsResizing,
-    toggleSidebarCollapsed,
+    toggleSidebarCollapsed: toggleSidebarCollapsedLegacy,
   } = useLayoutResizeController({
     contentView,
     desktopState,
@@ -1191,6 +1264,78 @@ export function AppShell() {
     setSettingsDraft,
     threadLogsOpen,
   });
+  const initialLegacyLayoutIntent: LegacyLayoutIntentState = {
+    globalSidebarOpen: sidebarDesiredOpen,
+    conversationRail: conversationRailIntentFromLegacyState({
+      botConversationGroupId,
+      recentThreadsRailOpen,
+      workspaceConversationPath,
+    }),
+    inspectorOpen,
+    openCapsuleTabs,
+    threadLogsOpen,
+  };
+  const desiredLayoutIntentRef = useRef(initialLegacyLayoutIntent);
+  const appliedLayoutIntentRef = useRef(initialLegacyLayoutIntent);
+  const layoutOccupancyEventLogRef = useRef(
+    createLayoutOccupancyEventLog(
+      layoutOccupancySources(initialLegacyLayoutIntent),
+    ),
+  );
+
+  // Phase 0b shadow bridge: every horizontal panel writer enters here. The
+  // desired update is logged synchronously as one full vector; updateApplied
+  // may preserve a legacy multi-commit UI sequence until a later writer lands
+  // the same desired vector. No model/effect channel consumes the log yet.
+  const commitLegacyLayoutIntent = useCallback(
+    (
+      cause: LayoutIntentCause,
+      updateDesired: LegacyLayoutIntentUpdate,
+      updateApplied: LegacyLayoutIntentUpdate = updateDesired,
+    ) => {
+      const nextDesired = updateDesired(desiredLayoutIntentRef.current);
+      desiredLayoutIntentRef.current = nextDesired;
+      const appendResult = appendLayoutOccupancyIntent(
+        layoutOccupancyEventLogRef.current,
+        layoutOccupancySources(nextDesired),
+        cause,
+      );
+      layoutOccupancyEventLogRef.current = appendResult.log;
+
+      const nextApplied = updateApplied(appliedLayoutIntentRef.current);
+      appliedLayoutIntentRef.current = nextApplied;
+      setOpenCapsuleTabsLegacy(nextApplied.openCapsuleTabs);
+      setInspectorOpenLegacy(nextApplied.inspectorOpen);
+      setThreadLogsOpenLegacy(nextApplied.threadLogsOpen);
+      setRecentThreadsRailOpenLegacy(
+        nextApplied.conversationRail.kind === "recent",
+      );
+      setBotConversationGroupIdLegacy(
+        nextApplied.conversationRail.kind === "bot"
+          ? nextApplied.conversationRail.groupId
+          : null,
+      );
+      setWorkspaceConversationPathLegacy(
+        nextApplied.conversationRail.kind === "workspace"
+          ? nextApplied.conversationRail.workspacePath
+          : null,
+      );
+    },
+    [],
+  );
+  const toggleSidebarCollapsed = useCallback(() => {
+    if (!compactSidebarViewport) {
+      commitLegacyLayoutIntent("user-panel", (current) => ({
+        ...current,
+        globalSidebarOpen: !current.globalSidebarOpen,
+      }));
+    }
+    toggleSidebarCollapsedLegacy();
+  }, [
+    commitLegacyLayoutIntent,
+    compactSidebarViewport,
+    toggleSidebarCollapsedLegacy,
+  ]);
   // Batch 5b scroll colocation: the DOM-bound effects/scheduler live in
   // ThreadPage's useThreadTranscriptScroll; the shell keeps the scroll
   // INTENT bundle (it must survive viewport unmounts — automations pre-arm
@@ -1561,8 +1706,16 @@ export function AppShell() {
       ? activeWorkspace.path
       : "";
   const handleWorkspacePreviewRequested = useCallback(() => {
-    setInspectorOpen(true);
-  }, []);
+    commitLegacyLayoutIntent(
+      "user-route",
+      (current) => ({
+        ...current,
+        inspectorOpen: true,
+        threadLogsOpen: false,
+      }),
+      (current) => ({ ...current, inspectorOpen: true }),
+    );
+  }, [commitLegacyLayoutIntent]);
   const {
     activeWorkspaceDirectoryState,
     expandedWorkspaceDirectories,
@@ -1810,10 +1963,11 @@ export function AppShell() {
     if (shouldShowConversationRail) {
       return;
     }
-    setBotConversationGroupId((current) => (current ? null : current));
-    setWorkspaceConversationPath((current) => (current ? null : current));
-    setRecentThreadsRailOpen((current) => (current ? false : current));
-  }, [shouldShowConversationRail]);
+    commitLegacyLayoutIntent("system-cleanup", (current) => ({
+      ...current,
+      conversationRail: { kind: "closed" },
+    }));
+  }, [commitLegacyLayoutIntent, shouldShowConversationRail]);
   useEffect(() => {
     if (!botConversationGroupId) {
       return;
@@ -1824,9 +1978,12 @@ export function AppShell() {
         (group.conversationNodes || []).length > 0,
     );
     if (!groupExists) {
-      setBotConversationGroupId(null);
+      commitLegacyLayoutIntent("system-cleanup", (current) => ({
+        ...current,
+        conversationRail: { kind: "closed" },
+      }));
     }
-  }, [botConversationGroupId, visibleBotGroups]);
+  }, [botConversationGroupId, commitLegacyLayoutIntent, visibleBotGroups]);
   const activeBotConversationGroup = useMemo(() => {
     if (!shouldShowConversationRail || !botConversationGroupId) {
       return null;
@@ -1851,9 +2008,16 @@ export function AppShell() {
       );
     });
     if (!workspaceExists) {
-      setWorkspaceConversationPath(null);
+      commitLegacyLayoutIntent("system-cleanup", (current) => ({
+        ...current,
+        conversationRail: { kind: "closed" },
+      }));
     }
-  }, [workspaceConversationPath, workspaceThreadGroups]);
+  }, [
+    commitLegacyLayoutIntent,
+    workspaceConversationPath,
+    workspaceThreadGroups,
+  ]);
   const activeWorkspaceThreadGroup = useMemo(() => {
     if (
       !shouldShowConversationRail ||
@@ -2772,9 +2936,12 @@ export function AppShell() {
     // Capsule tabs are scoped to the current thread; drop them when the thread
     // or content view changes so a different thread's capsules never linger in
     // the dock (#TASK-1470).
-    setOpenCapsuleTabs([]);
+    commitLegacyLayoutIntent("system-cleanup", (current) => ({
+      ...current,
+      openCapsuleTabs: [],
+    }));
     setPendingActiveCapsuleId(null);
-  }, [contentView, selectedThreadId]);
+  }, [commitLegacyLayoutIntent, contentView, selectedThreadId]);
 
   useEffect(() => {
     if (!inspectorOpen && !threadLogsOpen) {
@@ -2784,10 +2951,16 @@ export function AppShell() {
     function handleKeydown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         if (threadLogsOpen) {
-          setThreadLogsOpen(false);
+          commitLegacyLayoutIntent("system-cleanup", (current) => ({
+            ...current,
+            threadLogsOpen: false,
+          }));
           return;
         }
-        setInspectorOpen(false);
+        commitLegacyLayoutIntent("system-cleanup", (current) => ({
+          ...current,
+          inspectorOpen: false,
+        }));
       }
     }
 
@@ -2795,18 +2968,24 @@ export function AppShell() {
     return () => {
       window.removeEventListener("keydown", handleKeydown);
     };
-  }, [inspectorOpen, threadLogsOpen]);
+  }, [commitLegacyLayoutIntent, inspectorOpen, threadLogsOpen]);
 
   useEffect(() => {
     if (contentView !== "thread") {
-      setInspectorOpen(false);
-      setThreadLogsOpen(false);
+      commitLegacyLayoutIntent("system-cleanup", (current) => ({
+        ...current,
+        inspectorOpen: false,
+        threadLogsOpen: false,
+      }));
     }
-  }, [contentView]);
+  }, [commitLegacyLayoutIntent, contentView]);
 
   useEffect(() => {
     if (!activeWorkspacePath) {
-      setInspectorOpen(false);
+      commitLegacyLayoutIntent("system-cleanup", (current) => ({
+        ...current,
+        inspectorOpen: false,
+      }));
       return;
     }
 
@@ -2814,15 +2993,18 @@ export function AppShell() {
       ...current,
       [workspaceDirectoryKey(activeWorkspacePath, "")]: true,
     }));
-  }, [activeWorkspacePath]);
+  }, [activeWorkspacePath, commitLegacyLayoutIntent]);
 
   useEffect(() => {
     if (!workspacePreviewModalOpen || contentView !== "thread") {
       return;
     }
-    setThreadLogsOpen(false);
-    setInspectorOpen(true);
-  }, [contentView, workspacePreviewModalOpen]);
+    commitLegacyLayoutIntent("user-route", (current) => ({
+      ...current,
+      inspectorOpen: true,
+      threadLogsOpen: false,
+    }));
+  }, [commitLegacyLayoutIntent, contentView, workspacePreviewModalOpen]);
 
   useEffect(() => {
     if (!inspectorOpen || contentView !== "thread" || !activeWorkspacePath) {
@@ -2845,9 +3027,12 @@ export function AppShell() {
 
   useEffect(() => {
     if (threadLogsOpen && !selectedThreadId) {
-      setThreadLogsOpen(false);
+      commitLegacyLayoutIntent("system-cleanup", (current) => ({
+        ...current,
+        threadLogsOpen: false,
+      }));
     }
-  }, [selectedThreadId, threadLogsOpen]);
+  }, [commitLegacyLayoutIntent, selectedThreadId, threadLogsOpen]);
 
   function setPendingAutomationRun(
     threadId: string,
@@ -3118,10 +3303,24 @@ export function AppShell() {
   }
 
   async function handleNewThread() {
-    setBotConversationGroupId(null);
-    setWorkspaceConversationPath(null);
-    setThreadLogsOpen(false);
-    setInspectorOpen(false);
+    const normalizeNewThreadIntent: LegacyLayoutIntentUpdate = (current) => ({
+      ...current,
+      conversationRail:
+        current.conversationRail.kind === "recent"
+          ? current.conversationRail
+          : { kind: "closed" },
+      inspectorOpen: false,
+      openCapsuleTabs: [],
+      threadLogsOpen: false,
+    });
+    commitLegacyLayoutIntent(
+      "user-route",
+      normalizeNewThreadIntent,
+      (current) => ({
+        ...normalizeNewThreadIntent(current),
+        openCapsuleTabs: current.openCapsuleTabs,
+      }),
+    );
     startNewThreadDraft({
       selectableNewThreadWorkspaces,
       pendingNewThreadWorkspaceEntry,
@@ -3782,9 +3981,12 @@ export function AppShell() {
       pendingActiveCapsuleId={pendingActiveCapsuleId}
       onActivatePendingCapsuleHandled={() => setPendingActiveCapsuleId(null)}
       onCloseCapsuleTab={(capsuleId) => {
-        setOpenCapsuleTabs((tabs) =>
-          tabs.filter((tab) => tab.capsuleId !== capsuleId),
-        );
+        commitLegacyLayoutIntent("user-route", (current) => ({
+          ...current,
+          openCapsuleTabs: current.openCapsuleTabs.filter(
+            (tab) => tab.capsuleId !== capsuleId,
+          ),
+        }));
       }}
       onCloseWorkspacePreview={closeWorkspacePreview}
       onLocalFileLinkClick={handleLocalFileLinkClick}
@@ -3795,8 +3997,11 @@ export function AppShell() {
         // dock visible independently of inspectorOpen, clear them too so the
         // button works in a capsule-only dock and in Files+capsule docks
         // (#TASK-1470).
-        setInspectorOpen(false);
-        setOpenCapsuleTabs([]);
+        commitLegacyLayoutIntent("user-panel", (current) => ({
+          ...current,
+          inspectorOpen: false,
+          openCapsuleTabs: [],
+        }));
         setPendingActiveCapsuleId(null);
       }}
       onOpenTaskThread={(task) =>
@@ -4009,18 +4214,25 @@ export function AppShell() {
           // touch inspectorOpen — the capsule path drives the dock on its own.
           const capsuleId = card.capsule_id;
           const title = card.title?.trim() || "";
-          setOpenCapsuleTabs((tabs) =>
-            tabs.some((tab) => tab.capsuleId === capsuleId)
-              ? tabs.map((tab) =>
+          commitLegacyLayoutIntent("user-route", (current) => ({
+            ...current,
+            openCapsuleTabs: current.openCapsuleTabs.some(
+              (tab) => tab.capsuleId === capsuleId,
+            )
+              ? current.openCapsuleTabs.map((tab) =>
                   tab.capsuleId === capsuleId
-                    ? { ...tab, revision: card.revision, title: title || tab.title }
+                    ? {
+                        ...tab,
+                        revision: card.revision,
+                        title: title || tab.title,
+                      }
                     : tab,
                 )
               : [
-                  ...tabs,
+                  ...current.openCapsuleTabs,
                   { capsuleId, revision: card.revision, title },
                 ],
-          );
+          }));
           setPendingActiveCapsuleId(capsuleId);
         }}
         onSelectWorkspace={(workspacePath) => {
@@ -4316,30 +4528,37 @@ export function AppShell() {
           void handleNewThread();
         }}
         onOpenRecent={() => {
-          setBotConversationGroupId(null);
-          setWorkspaceConversationPath(null);
+          commitLegacyLayoutIntent("user-route", (current) => ({
+            ...current,
+            conversationRail:
+              shouldShowConversationRail &&
+              current.conversationRail.kind === "recent"
+                ? { kind: "closed" }
+                : { kind: "recent" },
+          }));
           if (!shouldShowConversationRail) {
             desktopRouteStore.navigate({ kind: "thread-home" }, { replace: true });
-            setRecentThreadsRailOpen(true);
-            return;
           }
-          setRecentThreadsRailOpen((current) => !current);
         }}
         onOpenBot={(group) => {
           void (async () => {
-            setRecentThreadsRailOpen(false);
-            setBotConversationGroupId((current) =>
-              current === group.id ? current : null,
-            );
-            setWorkspaceConversationPath(null);
+            commitLegacyLayoutIntent("user-route", (current) => ({
+              ...current,
+              conversationRail:
+                current.conversationRail.kind === "bot" &&
+                current.conversationRail.groupId === group.id
+                  ? current.conversationRail
+                  : { kind: "closed" },
+            }));
             await handleBotClick(group);
           })();
         }}
         onOpenPinnedThread={(threadId) => {
           void (async () => {
-            setRecentThreadsRailOpen(false);
-            setBotConversationGroupId(null);
-            setWorkspaceConversationPath(null);
+            commitLegacyLayoutIntent("user-route", (current) => ({
+              ...current,
+              conversationRail: { kind: "closed" },
+            }));
             await openExistingThread(threadId, "pinned");
           })();
         }}
@@ -4350,19 +4569,31 @@ export function AppShell() {
           void handleDeleteThread(threadId);
         }}
         onToggleBotConversationGroup={(group) => {
-          setRecentThreadsRailOpen(false);
-          setWorkspaceConversationPath(null);
-          setBotConversationGroupId((current) =>
-            current === group.id ? null : group.id,
-          );
+          commitLegacyLayoutIntent("user-route", (current) => ({
+            ...current,
+            conversationRail:
+              current.conversationRail.kind === "bot" &&
+              current.conversationRail.groupId === group.id
+                ? { kind: "closed" }
+                : { kind: "bot", groupId: group.id },
+          }));
         }}
         onToggleWorkspaceThreadGroup={(workspacePath) => {
-          setRecentThreadsRailOpen(false);
-          setBotConversationGroupId(null);
-          setWorkspaceConversationPath((current) => {
-            const currentKey = current?.trim().toLowerCase() || "";
+          commitLegacyLayoutIntent("user-route", (current) => {
+            const currentKey =
+              current.conversationRail.kind === "workspace"
+                ? current.conversationRail.workspacePath
+                    .trim()
+                    .toLowerCase()
+                : "";
             const nextKey = workspacePath.trim().toLowerCase();
-            return currentKey === nextKey ? null : workspacePath;
+            return {
+              ...current,
+              conversationRail:
+                currentKey === nextKey
+                  ? { kind: "closed" }
+                  : { kind: "workspace", workspacePath },
+            };
           });
         }}
         onAddBot={() => {
@@ -4426,7 +4657,10 @@ export function AppShell() {
             void handleArchiveBotConversationEndpoint(endpoint);
           }}
           onClose={() => {
-            setBotConversationGroupId(null);
+            commitLegacyLayoutIntent("user-route", (current) => ({
+              ...current,
+              conversationRail: { kind: "closed" },
+            }));
           }}
           onOpenEndpoint={(endpoint) => {
             void handleOpenThreadFromEndpoint(endpoint, "bot-conversation");
@@ -4447,7 +4681,10 @@ export function AppShell() {
             );
           }}
           onClose={() => {
-            setWorkspaceConversationPath(null);
+            commitLegacyLayoutIntent("user-route", (current) => ({
+              ...current,
+              conversationRail: { kind: "closed" },
+            }));
           }}
           onArchiveThread={(threadId) => {
             void handleDeleteThread(threadId);
@@ -4471,7 +4708,10 @@ export function AppShell() {
             </span>
           }
           onClose={() => {
-            setRecentThreadsRailOpen(false);
+            commitLegacyLayoutIntent("user-route", (current) => ({
+              ...current,
+              conversationRail: { kind: "closed" },
+            }));
           }}
           onLoadMore={recentThreadFeeds.loadMore}
           onRailResizeStart={handleRailResizeStart}
@@ -4589,16 +4829,26 @@ export function AppShell() {
                   desktopRouteStore.navigate({ kind: "thread-home" }, { replace: true });
                 }}
                 onToggleInspector={() => {
-                  setThreadLogsOpen(false);
-                  setInspectorOpen((current) => !current);
+                  const nextInspectorOpen =
+                    !appliedLayoutIntentRef.current.inspectorOpen;
+                  commitLegacyLayoutIntent("user-panel", (current) => ({
+                    ...current,
+                    inspectorOpen: nextInspectorOpen,
+                    threadLogsOpen: false,
+                  }));
                 }}
                 onToggleThreadLogs={() => {
                   // Logs and the side-tools dock are mutually exclusive right
                   // panels; opening logs closes the dock, capsule tabs included.
-                  setOpenCapsuleTabs([]);
+                  const nextThreadLogsOpen =
+                    !appliedLayoutIntentRef.current.threadLogsOpen;
+                  commitLegacyLayoutIntent("user-panel", (current) => ({
+                    ...current,
+                    inspectorOpen: false,
+                    openCapsuleTabs: [],
+                    threadLogsOpen: nextThreadLogsOpen,
+                  }));
                   setPendingActiveCapsuleId(null);
-                  setInspectorOpen(false);
-                  setThreadLogsOpen((current) => !current);
                 }}
               />
             </header>

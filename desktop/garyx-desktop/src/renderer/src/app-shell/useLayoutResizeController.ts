@@ -537,6 +537,7 @@ export function useLayoutResizeController({
   });
 
   return {
+    compactSidebarViewport,
     conversationRef,
     currentConversationWidth,
     currentThreadLayoutWidth,
@@ -548,6 +549,7 @@ export function useLayoutResizeController({
     setSideToolsPanelWidth,
     setSideToolsResizing,
     sidebarCollapsed,
+    sidebarDesiredOpen: !sidebarCollapsedByUser,
     sidebarResizing,
     sidebarWidth,
     sideToolsPanelWidth,
