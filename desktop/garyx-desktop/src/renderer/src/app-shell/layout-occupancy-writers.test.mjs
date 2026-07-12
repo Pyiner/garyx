@@ -7,6 +7,14 @@ const resizeController = readFileSync(
   new URL("./useLayoutResizeController.ts", import.meta.url),
   "utf8",
 );
+const frameStore = readFileSync(
+  new URL("./horizontal-layout-frame-store.ts", import.meta.url),
+  "utf8",
+);
+const mainWindow = readFileSync(
+  new URL("../../../main/index.ts", import.meta.url),
+  "utf8",
+);
 
 function rendererSourceFiles(directory) {
   const files = [];
@@ -24,9 +32,19 @@ function rendererSourceFiles(directory) {
   return files;
 }
 
-const rendererSources = rendererSourceFiles(
+const rendererSourceUrls = rendererSourceFiles(
   new URL("../", import.meta.url),
-).map((url) => readFileSync(url, "utf8"));
+);
+const rendererSources = rendererSourceUrls.map((url) =>
+  readFileSync(url, "utf8"),
+);
+const liveNativeEffectSources = rendererSourceUrls
+  .filter(
+    (url) =>
+      !url.pathname.endsWith("/responsive-layout-model.ts") &&
+      !url.pathname.endsWith("/window-layout-protocol.ts"),
+  )
+  .map((url) => readFileSync(url, "utf8"));
 
 const legacySetterNames = [
   "setOpenCapsuleTabsLegacy",
@@ -70,8 +88,14 @@ test("all legacy occupancy setters have exactly one centralized call site", () =
 });
 
 test("sidebar normal intent is logged while compact presentation stays legacy-only", () => {
-  assert.match(resizeController, /compactSidebarViewport,/);
-  assert.match(resizeController, /sidebarDesiredOpen: !sidebarCollapsedByUser/);
+  assert.match(
+    resizeController,
+    /compactSidebarViewport: frame\.presentation\.compactViewport/,
+  );
+  assert.match(
+    resizeController,
+    /sidebarDesiredOpen: store\.getState\(\)\.desiredOccupancy\.globalSidebar/,
+  );
   assert.equal(
     appShell.match(/\btoggleSidebarCollapsedLegacy\b/g)?.length,
     3,
@@ -143,11 +167,28 @@ test("desired logging may lead legacy commits without changing their UI sequence
   );
 });
 
-test("Phase 1 machine effects remain headless and are not live-wired", () => {
-  for (const source of [appShell, resizeController]) {
-    assert.doesNotMatch(source, /\breduceHorizontalLayout\b/);
-    assert.doesNotMatch(source, /\bprojectHorizontalLayout\b/);
+test("Phase 2 consumes legacy frames while native window effects remain disconnected", () => {
+  assert.match(frameStore, /\breduceHorizontalLayout\b/);
+  assert.match(frameStore, /\bprojectHorizontalLayout\b/);
+  assert.match(resizeController, /createLegacyHorizontalLayoutFrameStore/);
+  assert.match(resizeController, /useSyncExternalStore/);
+  assert.match(appShell, /dispatchLayoutOccupancyEvent\(appendResult\.event\)/);
+  for (const source of liveNativeEffectSources) {
     assert.doesNotMatch(source, /\bAPPLY_WINDOW_BOUNDS\b/);
     assert.doesNotMatch(source, /\bCLAIM_INITIAL_LAYOUT\b/);
   }
+  assert.doesNotMatch(resizeController, /adjustWindow|setBounds/);
+  assert.match(mainWindow, /minWidth: 1180/);
+  assert.doesNotMatch(mainWindow, /minWidth: 480/);
+  assert.doesNotMatch(
+    appShell,
+    /--spacing-token-sidebar|--side-tools-panel-width|--thread-log-panel-width/,
+  );
+  assert.match(frameStore, /function applyFrame/);
+  assert.match(frameStore, /data-layout-revision/);
+  assert.match(resizeController, /window\.requestAnimationFrame\(flush\)/);
+  assert.ok(
+    (resizeController.match(/"pointercancel"/g) || []).length >= 8,
+    "all four resize paths keep pointercancel-as-commit listeners and cleanup",
+  );
 });

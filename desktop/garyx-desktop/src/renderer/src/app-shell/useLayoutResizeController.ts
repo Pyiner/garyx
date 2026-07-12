@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import {
   DEFAULT_DESKTOP_SETTINGS,
@@ -8,22 +15,26 @@ import {
 
 import type { SideCapsuleTab } from "./components/SideToolsPanel";
 import {
+  SIDE_TOOLS_PANEL_MAX_WIDTH,
+  SIDE_TOOLS_PANEL_MIN_WIDTH,
   THREAD_LOG_PANEL_MAX_WIDTH,
   THREAD_LOG_PANEL_MIN_WIDTH,
   clampSideToolsPanelWidth,
   clampThreadLogsPanelWidth,
   defaultSideToolsPanelWidth,
 } from "./diagnostics-helpers";
-import type { ContentView } from "./types";
+import {
+  createLegacyHorizontalLayoutFrameStore,
+  type LegacyHorizontalLayoutFrameStore,
+} from "./horizontal-layout-frame-store";
+import type { LayoutOccupancyEvent } from "./layout-occupancy-events";
 import {
   CONVERSATION_RAIL_DEFAULT_WIDTH,
   SIDEBAR_DEFAULT_WIDTH,
-  clampConversationRailWidth,
-  clampSidebarWidth,
-  isCompactSidebarViewport,
-  isDockedSidePanel,
-  resolveSidebarCollapsed,
+  type LayoutPanelId,
+  type WindowLayoutSnapshot,
 } from "./responsive-layout-model";
+import type { ContentView } from "./types";
 
 type UseLayoutResizeControllerArgs = {
   contentView: ContentView;
@@ -36,6 +47,39 @@ type UseLayoutResizeControllerArgs = {
   threadLogsOpen: boolean;
 };
 
+function readSidebarDesiredOpen(): boolean {
+  try {
+    return window.localStorage.getItem("garyx.sidebarCollapsed") !== "1";
+  } catch {
+    return true;
+  }
+}
+
+function rendererWindowSnapshot(
+  revision: number,
+  origin: WindowLayoutSnapshot["origin"],
+): WindowLayoutSnapshot {
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  const bounds = { x: 0, y: 0, width, height };
+  return {
+    windowRevision: revision,
+    bounds,
+    contentBounds: { ...bounds },
+    normalBounds: { ...bounds },
+    workArea: {
+      x: 0,
+      y: 0,
+      width: Math.max(width, window.screen.availWidth || width),
+      height: Math.max(height, window.screen.availHeight || height),
+    },
+    mode: "normal",
+    displayId: "renderer-local",
+    scaleFactor: window.devicePixelRatio,
+    origin,
+  };
+}
+
 export function useLayoutResizeController({
   contentView,
   desktopState,
@@ -46,54 +90,86 @@ export function useLayoutResizeController({
   setSettingsDraft,
   threadLogsOpen,
 }: UseLayoutResizeControllerArgs) {
-  const [threadLogsPanelWidth, setThreadLogsPanelWidth] = useState(
-    DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
-  );
-  const [threadLogsResizing, setThreadLogsResizing] = useState(false);
-  const [sideToolsPanelWidth, setSideToolsPanelWidth] = useState(() =>
-    defaultSideToolsPanelWidth(null),
-  );
-  const [sideToolsResizing, setSideToolsResizing] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
-  const [sidebarCollapsedByUser, setSidebarCollapsedByUser] = useState(() => {
-    try {
-      return window.localStorage.getItem("garyx.sidebarCollapsed") === "1";
-    } catch {
-      return false;
-    }
-  });
-  const initialCompactSidebarViewport = isCompactSidebarViewport({
-    secondaryRailOpen,
-    viewportWidth: window.innerWidth,
-  });
-  const [compactSidebarViewport, setCompactSidebarViewport] = useState(
-    initialCompactSidebarViewport,
-  );
-  const compactSidebarViewportRef = useRef(initialCompactSidebarViewport);
-  const [compactSidebarOpen, setCompactSidebarOpen] = useState(false);
-  const sidebarCollapsed = resolveSidebarCollapsed({
-    compactOpen: compactSidebarOpen,
-    compactViewport: compactSidebarViewport,
-    userCollapsed: sidebarCollapsedByUser,
-  });
-  const toggleSidebarCollapsed = useCallback(() => {
-    if (compactSidebarViewport) {
-      setCompactSidebarOpen((current) => !current);
-      return;
-    }
-    setSidebarCollapsedByUser((current) => {
-      const next = !current;
-      try {
-        window.localStorage.setItem("garyx.sidebarCollapsed", next ? "1" : "0");
-      } catch {
-        // Ignore storage failures; collapse state just won't persist.
-      }
-      return next;
+  const initialSidebarDesiredOpenRef = useRef<boolean | null>(null);
+  if (initialSidebarDesiredOpenRef.current === null) {
+    initialSidebarDesiredOpenRef.current = readSidebarDesiredOpen();
+  }
+  const storeRef = useRef<LegacyHorizontalLayoutFrameStore | null>(null);
+  if (!storeRef.current) {
+    storeRef.current = createLegacyHorizontalLayoutFrameStore({
+      rendererEpoch: "legacy-live-renderer",
+      snapshot: rendererWindowSnapshot(1, "hydrate"),
+      desiredOccupancy: {
+        globalSidebar: initialSidebarDesiredOpenRef.current,
+        conversationRail: secondaryRailOpen,
+        sideTools: inspectorOpen || openCapsuleTabs.length > 0,
+        threadLogs: threadLogsOpen,
+      },
+      widths: {
+        globalSidebar: SIDEBAR_DEFAULT_WIDTH,
+        conversationRail: CONVERSATION_RAIL_DEFAULT_WIDTH,
+        sideTools: defaultSideToolsPanelWidth(null),
+        threadLogs: DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
+      },
     });
-  }, [compactSidebarViewport]);
+  }
+  const store = storeRef.current;
+  const frame = useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getSnapshot,
+  );
+  const layoutRootRef = useCallback(
+    (root: HTMLDivElement | null) => {
+      store.attachRoot(root);
+    },
+    [store],
+  );
+  useEffect(
+    () => () => {
+      store.attachRoot(null);
+    },
+    [store],
+  );
+
+  const dispatchLayoutOccupancyEvent = useCallback(
+    (event: LayoutOccupancyEvent) => {
+      // Phase 2 deliberately consumes only the pure legacy frame. The
+      // checkpoint/native effect channel remains disconnected until the
+      // expand-v1 activation phase.
+      const previousFrame = store.getSnapshot();
+      store.dispatch(event);
+      const nextFrame = store.getSnapshot();
+      if (
+        nextFrame.presentation.compactViewport &&
+        !previousFrame.presentation.compactViewport &&
+        store.getState().compactSidebarOpen
+      ) {
+        store.dispatch({ type: "COMPACT_SIDEBAR_TOGGLED" });
+      }
+    },
+    [store],
+  );
+  const dispatchPanelWidth = useCallback(
+    (panel: LayoutPanelId, width: number, commit = false) => {
+      store.dispatch({ type: "PANEL_WIDTH_CHANGED", panel, width, commit });
+    },
+    [store],
+  );
+
+  const currentConversationWidth = useCallback(() => {
+    const columns = store.getSnapshot().nestedColumns.conversation;
+    return columns.threadLayout + columns.sideToolsResizer + columns.sideTools;
+  }, [store]);
+  const currentThreadLayoutWidth = useCallback(
+    () => store.getSnapshot().nestedColumns.conversation.threadLayout,
+    [store],
+  );
+
   const [sidebarResizing, setSidebarResizing] = useState(false);
-  const [railWidth, setRailWidth] = useState(CONVERSATION_RAIL_DEFAULT_WIDTH);
   const [railResizing, setRailResizing] = useState(false);
+  const [threadLogsResizing, setThreadLogsResizing] = useState(false);
+  const [sideToolsResizing, setSideToolsResizing] = useState(false);
   const sidebarResizeStateRef = useRef<{
     startX: number;
     startWidth: number;
@@ -102,129 +178,180 @@ export function useLayoutResizeController({
     startX: number;
     startWidth: number;
   } | null>(null);
-
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty("--app-sidebar-width", `${sidebarWidth}px`);
-    return () => {
-      root.style.removeProperty("--app-sidebar-width");
-    };
-  }, [sidebarWidth]);
-
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    root.style.setProperty("--spacing-token-rail", `${railWidth}px`);
-    return () => {
-      root.style.removeProperty("--spacing-token-rail");
-    };
-  }, [railWidth]);
-
-  useEffect(() => {
-    const syncCompactSidebar = () => {
-      const nextCompact = isCompactSidebarViewport({
-        secondaryRailOpen,
-        viewportWidth: window.innerWidth,
-      });
-      if (nextCompact && !compactSidebarViewportRef.current) {
-        setCompactSidebarOpen(false);
-      }
-      compactSidebarViewportRef.current = nextCompact;
-      setCompactSidebarViewport(nextCompact);
-    };
-
-    syncCompactSidebar();
-    window.addEventListener("resize", syncCompactSidebar);
-    return () => {
-      window.removeEventListener("resize", syncCompactSidebar);
-    };
-  }, [secondaryRailOpen]);
-  const threadLayoutRef = useRef<HTMLDivElement | null>(null);
-  const conversationRef = useRef<HTMLElement | null>(null);
-  const [threadLayoutWidth, setThreadLayoutWidth] = useState(0);
-  const threadLogsPanelWidthRef = useRef(
-    DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
-  );
   const threadLogsResizeStateRef = useRef<{
     startX: number;
     startWidth: number;
   } | null>(null);
-  const sideToolsPanelWidthRef = useRef(defaultSideToolsPanelWidth(null));
   const sideToolsResizeStateRef = useRef<{
     startX: number;
     startWidth: number;
   } | null>(null);
-  const sideToolsPanelWidthCustomizedRef = useRef(false);
+  const threadLayoutRef = useRef<HTMLDivElement | null>(null);
 
-  const desktopStateReady = desktopState !== null;
-  useLayoutEffect(() => {
-    const threadLayout = threadLayoutRef.current;
-    const syncMeasuredWidths = () => {
-      const nextThreadLayoutWidth = threadLayout?.clientWidth || 0;
-      setThreadLayoutWidth((current) =>
-        current === nextThreadLayoutWidth ? current : nextThreadLayoutWidth,
+  const persistThreadLogsPanelWidth = useCallback(
+    async (nextWidth: number) => {
+      const clampedWidth = clampThreadLogsPanelWidth(
+        nextWidth,
+        currentThreadLayoutWidth(),
       );
-    };
+      dispatchPanelWidth("threadLogs", clampedWidth, true);
+      setSettingsDraft((current) => ({
+        ...current,
+        threadLogsPanelWidth: clampedWidth,
+      }));
 
-    syncMeasuredWidths();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", syncMeasuredWidths);
-      return () => {
-        window.removeEventListener("resize", syncMeasuredWidths);
-      };
-    }
+      const persistedWidth = desktopState?.settings.threadLogsPanelWidth;
+      if (persistedWidth === clampedWidth) {
+        return;
+      }
 
-    const observer = new ResizeObserver(syncMeasuredWidths);
-    if (threadLayout) {
-      observer.observe(threadLayout);
-    }
-    return () => observer.disconnect();
-  }, [
-    contentView,
-    desktopStateReady,
-    inspectorOpen,
-    openCapsuleTabs.length,
-    threadLogsOpen,
-  ]);
+      try {
+        const nextState = await window.garyxDesktop.saveSettings({
+          ...(desktopState?.settings || DEFAULT_DESKTOP_SETTINGS),
+          threadLogsPanelWidth: clampedWidth,
+        });
+        setDesktopState(nextState);
+      } catch {
+        // Keep the local width even if persistence fails; this preference is
+        // deliberately non-blocking.
+      }
+    },
+    [
+      currentThreadLayoutWidth,
+      desktopState?.settings,
+      dispatchPanelWidth,
+      setDesktopState,
+      setSettingsDraft,
+    ],
+  );
 
-  function currentThreadLayoutWidth(): number | null {
-    return threadLayoutRef.current?.clientWidth || null;
-  }
-
-  function currentConversationWidth(): number | null {
-    return conversationRef.current?.clientWidth || null;
-  }
-
-  async function persistThreadLogsPanelWidth(nextWidth: number) {
-    const clampedWidth = clampThreadLogsPanelWidth(
-      nextWidth,
+  useEffect(() => {
+    const nextWidth = clampThreadLogsPanelWidth(
+      desktopState?.settings.threadLogsPanelWidth ??
+        DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
       currentThreadLayoutWidth(),
     );
-    setThreadLogsPanelWidth(clampedWidth);
-    setSettingsDraft((current) => ({
-      ...current,
-      threadLogsPanelWidth: clampedWidth,
-    }));
+    dispatchPanelWidth("threadLogs", nextWidth);
+    setSettingsDraft((current) =>
+      current.threadLogsPanelWidth === nextWidth
+        ? current
+        : { ...current, threadLogsPanelWidth: nextWidth },
+    );
+  }, [
+    currentThreadLayoutWidth,
+    desktopState?.settings.threadLogsPanelWidth,
+    dispatchPanelWidth,
+    setSettingsDraft,
+  ]);
 
-    const persistedWidth = desktopState?.settings.threadLogsPanelWidth;
-    if (persistedWidth === clampedWidth) {
+  useLayoutEffect(() => {
+    const syncViewport = () => {
+      const previousFrame = store.getSnapshot();
+      const state = store.getState();
+      store.dispatch({
+        type: "WINDOW_SNAPSHOT_CHANGED",
+        snapshot: rendererWindowSnapshot(
+          state.snapshot.windowRevision + 1,
+          "user",
+        ),
+      });
+      const nextFrame = store.getSnapshot();
+      if (
+        nextFrame.presentation.compactViewport &&
+        !previousFrame.presentation.compactViewport &&
+        store.getState().compactSidebarOpen
+      ) {
+        store.dispatch({ type: "COMPACT_SIDEBAR_TOGGLED" });
+      }
+
+      const widths = store.getState().widths;
+      const nextLogsWidth = clampThreadLogsPanelWidth(
+        widths.threadLogs,
+        currentThreadLayoutWidth(),
+      );
+      if (nextLogsWidth !== widths.threadLogs) {
+        dispatchPanelWidth("threadLogs", nextLogsWidth);
+        setSettingsDraft((current) => ({
+          ...current,
+          threadLogsPanelWidth: nextLogsWidth,
+        }));
+      }
+      const nextSideToolsWidth = widths.sideToolsCustomized
+        ? clampSideToolsPanelWidth(
+            widths.sideTools,
+            currentConversationWidth(),
+          )
+        : defaultSideToolsPanelWidth(currentConversationWidth());
+      if (nextSideToolsWidth !== store.getState().widths.sideTools) {
+        dispatchPanelWidth("sideTools", nextSideToolsWidth);
+      }
+    };
+
+    syncViewport();
+    window.addEventListener("resize", syncViewport);
+    return () => {
+      window.removeEventListener("resize", syncViewport);
+    };
+  }, [
+    currentConversationWidth,
+    currentThreadLayoutWidth,
+    dispatchPanelWidth,
+    setSettingsDraft,
+    store,
+  ]);
+
+  useLayoutEffect(() => {
+    if (
+      contentView !== "thread" ||
+      !(inspectorOpen || openCapsuleTabs.length > 0)
+    ) {
       return;
     }
+    const animationFrame = window.requestAnimationFrame(() => {
+      const widths = store.getState().widths;
+      const nextWidth = widths.sideToolsCustomized
+        ? clampSideToolsPanelWidth(
+            widths.sideTools,
+            currentConversationWidth(),
+          )
+        : defaultSideToolsPanelWidth(currentConversationWidth());
+      if (nextWidth !== widths.sideTools) {
+        dispatchPanelWidth("sideTools", nextWidth);
+      }
+    });
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+    };
+  }, [
+    contentView,
+    currentConversationWidth,
+    dispatchPanelWidth,
+    inspectorOpen,
+    openCapsuleTabs.length,
+    store,
+  ]);
 
-    try {
-      const nextState = await window.garyxDesktop.saveSettings({
-        ...(desktopState?.settings || DEFAULT_DESKTOP_SETTINGS),
-        threadLogsPanelWidth: clampedWidth,
-      });
-      setDesktopState(nextState);
-    } catch {
-      // Keep the local width even if persistence fails; this is a non-blocking UI preference.
+  const toggleSidebarCollapsed = useCallback(() => {
+    if (store.getSnapshot().presentation.compactViewport) {
+      store.dispatch({ type: "COMPACT_SIDEBAR_TOGGLED" });
+      return;
     }
-  }
+    try {
+      window.localStorage.setItem(
+        "garyx.sidebarCollapsed",
+        store.getState().desiredOccupancy.globalSidebar ? "0" : "1",
+      );
+    } catch {
+      // Ignore storage failures; collapse state just will not persist.
+    }
+  }, [store]);
 
-  function handleSidebarResizeStart(event: React.PointerEvent<HTMLDivElement>) {
+  function handleSidebarResizeStart(
+    event: React.PointerEvent<HTMLDivElement>,
+  ) {
     sidebarResizeStateRef.current = {
       startX: event.clientX,
-      startWidth: sidebarWidth,
+      startWidth: store.getState().widths.globalSidebar,
     };
     setSidebarResizing(true);
     document.body.style.cursor = "col-resize";
@@ -235,7 +362,7 @@ export function useLayoutResizeController({
   function handleRailResizeStart(event: React.PointerEvent<HTMLDivElement>) {
     railResizeStateRef.current = {
       startX: event.clientX,
-      startWidth: railWidth,
+      startWidth: store.getState().widths.conversationRail,
     };
     setRailResizing(true);
     document.body.style.cursor = "col-resize";
@@ -251,7 +378,7 @@ export function useLayoutResizeController({
     }
     threadLogsResizeStateRef.current = {
       startX: event.clientX,
-      startWidth: threadLogsPanelWidthRef.current,
+      startWidth: store.getState().widths.threadLogs,
     };
     setThreadLogsResizing(true);
     document.body.style.cursor = "col-resize";
@@ -268,8 +395,8 @@ export function useLayoutResizeController({
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
       return;
     }
-
     event.preventDefault();
+    const currentWidth = store.getState().widths.threadLogs;
     const step = event.shiftKey ? 48 : 24;
     const nextWidth =
       event.key === "Home"
@@ -281,110 +408,73 @@ export function useLayoutResizeController({
             )
           : event.key === "ArrowLeft"
             ? clampThreadLogsPanelWidth(
-                threadLogsPanelWidthRef.current + step,
+                currentWidth + step,
                 currentThreadLayoutWidth(),
               )
             : clampThreadLogsPanelWidth(
-                threadLogsPanelWidthRef.current - step,
+                currentWidth - step,
                 currentThreadLayoutWidth(),
               );
     void persistThreadLogsPanelWidth(nextWidth);
   }
 
-  useEffect(() => {
-    threadLogsPanelWidthRef.current = threadLogsPanelWidth;
-  }, [threadLogsPanelWidth]);
+  function handleSideToolsResizeStart(
+    event: React.PointerEvent<HTMLDivElement>,
+  ) {
+    const currentWidth = store.getState().widths.sideTools;
+    dispatchPanelWidth("sideTools", currentWidth);
+    sideToolsResizeStateRef.current = {
+      startX: event.clientX,
+      startWidth: currentWidth,
+    };
+    setSideToolsResizing(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    event.preventDefault();
+  }
 
-  useEffect(() => {
-    sideToolsPanelWidthRef.current = sideToolsPanelWidth;
-  }, [sideToolsPanelWidth]);
-
-  useEffect(() => {
-    const nextWidth = clampThreadLogsPanelWidth(
-      desktopState?.settings.threadLogsPanelWidth ??
-        DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
-      currentThreadLayoutWidth(),
-    );
-    setThreadLogsPanelWidth(nextWidth);
-    setSettingsDraft((current) => {
-      if (current.threadLogsPanelWidth === nextWidth) {
-        return current;
-      }
-      return {
-        ...current,
-        threadLogsPanelWidth: nextWidth,
-      };
-    });
-  }, [desktopState?.settings.threadLogsPanelWidth]);
-
-  useLayoutEffect(() => {
-    // Initialize/clamp the dock width whenever the dock is shown — including the
-    // no-workspace capsule-only dock (#TASK-1470); width is workspace-agnostic.
-    if (
-      contentView !== "thread" ||
-      !(inspectorOpen || openCapsuleTabs.length > 0)
-    ) {
+  function handleSideToolsResizeKeyDown(
+    event: React.KeyboardEvent<HTMLDivElement>,
+  ) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
       return;
     }
-
-    const frame = window.requestAnimationFrame(() => {
-      const layoutWidth = currentConversationWidth();
-      const nextWidth = sideToolsPanelWidthCustomizedRef.current
-        ? clampSideToolsPanelWidth(sideToolsPanelWidthRef.current, layoutWidth)
-        : defaultSideToolsPanelWidth(layoutWidth);
-      if (nextWidth !== sideToolsPanelWidthRef.current) {
-        setSideToolsPanelWidth(nextWidth);
-      }
-    });
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [contentView, inspectorOpen, openCapsuleTabs.length]);
-
-  useEffect(() => {
-    const handleResize = () => {
-      const measuredThreadLayoutWidth = currentThreadLayoutWidth() || 0;
-      const measuredConversationWidth = currentConversationWidth() || 0;
-      setThreadLayoutWidth(measuredThreadLayoutWidth);
-      const nextWidth = clampThreadLogsPanelWidth(
-        threadLogsPanelWidthRef.current,
-        measuredThreadLayoutWidth,
-      );
-      if (nextWidth !== threadLogsPanelWidthRef.current) {
-        setThreadLogsPanelWidth(nextWidth);
-        setSettingsDraft((current) => ({
-          ...current,
-          threadLogsPanelWidth: nextWidth,
-        }));
-      }
-      const nextSideToolsWidth = sideToolsPanelWidthCustomizedRef.current
-        ? clampSideToolsPanelWidth(
-            sideToolsPanelWidthRef.current,
-            measuredConversationWidth,
-          )
-        : defaultSideToolsPanelWidth(measuredConversationWidth);
-      if (nextSideToolsWidth !== sideToolsPanelWidthRef.current) {
-        setSideToolsPanelWidth(nextSideToolsWidth);
-      }
-    };
-    window.addEventListener("resize", handleResize);
-    return () => {
-      window.removeEventListener("resize", handleResize);
-    };
-  }, []);
+    event.preventDefault();
+    const currentWidth = store.getState().widths.sideTools;
+    const step = event.shiftKey ? 56 : 28;
+    const nextWidth =
+      event.key === "Home"
+        ? SIDE_TOOLS_PANEL_MIN_WIDTH
+        : event.key === "End"
+          ? clampSideToolsPanelWidth(
+              SIDE_TOOLS_PANEL_MAX_WIDTH,
+              currentConversationWidth(),
+            )
+          : event.key === "ArrowLeft"
+            ? clampSideToolsPanelWidth(
+                currentWidth + step,
+                currentConversationWidth(),
+              )
+            : clampSideToolsPanelWidth(
+                currentWidth - step,
+                currentConversationWidth(),
+              );
+    dispatchPanelWidth("sideTools", nextWidth, true);
+  }
 
   useEffect(() => {
     if (!sidebarResizing) {
       return;
     }
     const handlePointerMove = (event: PointerEvent) => {
-      const state = sidebarResizeStateRef.current;
-      if (!state) return;
-      const next = clampSidebarWidth(
-        state.startWidth + (event.clientX - state.startX),
+      const resizeState = sidebarResizeStateRef.current;
+      if (!resizeState) {
+        return;
+      }
+      dispatchPanelWidth(
+        "globalSidebar",
+        resizeState.startWidth + (event.clientX - resizeState.startX),
       );
-      setSidebarWidth(next);
     };
     const finishResize = () => {
       sidebarResizeStateRef.current = null;
@@ -402,39 +492,39 @@ export function useLayoutResizeController({
       window.removeEventListener("pointerup", finishResize);
       window.removeEventListener("pointercancel", finishResize);
     };
-  }, [sidebarResizing]);
+  }, [dispatchPanelWidth, sidebarResizing]);
 
   useEffect(() => {
     if (!railResizing) {
       return;
     }
-    let lastNext = railResizeStateRef.current?.startWidth ?? railWidth;
-    let rafId: number | null = null;
+    let lastNext =
+      railResizeStateRef.current?.startWidth ??
+      store.getState().widths.conversationRail;
+    let animationFrame: number | null = null;
     const flush = () => {
-      rafId = null;
-      document.documentElement.style.setProperty(
-        "--spacing-token-rail",
-        `${lastNext}px`,
-      );
+      animationFrame = null;
+      dispatchPanelWidth("conversationRail", lastNext);
     };
     const handlePointerMove = (event: PointerEvent) => {
-      const state = railResizeStateRef.current;
-      if (!state) return;
-      lastNext = clampConversationRailWidth(
-        state.startWidth + (event.clientX - state.startX),
-      );
-      if (rafId === null) {
-        rafId = requestAnimationFrame(flush);
+      const resizeState = railResizeStateRef.current;
+      if (!resizeState) {
+        return;
+      }
+      lastNext =
+        resizeState.startWidth + (event.clientX - resizeState.startX);
+      if (animationFrame === null) {
+        animationFrame = window.requestAnimationFrame(flush);
       }
     };
     const finishResize = () => {
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
+        animationFrame = null;
       }
+      dispatchPanelWidth("conversationRail", lastNext, true);
       railResizeStateRef.current = null;
       setRailResizing(false);
-      setRailWidth(lastNext);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
@@ -442,8 +532,8 @@ export function useLayoutResizeController({
     window.addEventListener("pointerup", finishResize);
     window.addEventListener("pointercancel", finishResize);
     return () => {
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
+      if (animationFrame !== null) {
+        window.cancelAnimationFrame(animationFrame);
       }
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
@@ -451,13 +541,12 @@ export function useLayoutResizeController({
       window.removeEventListener("pointerup", finishResize);
       window.removeEventListener("pointercancel", finishResize);
     };
-  }, [railResizing]);
+  }, [dispatchPanelWidth, railResizing, store]);
 
   useEffect(() => {
     if (!threadLogsResizing) {
       return;
     }
-
     const handlePointerMove = (event: PointerEvent) => {
       const resizeState = threadLogsResizeStateRef.current;
       if (!resizeState) {
@@ -467,22 +556,20 @@ export function useLayoutResizeController({
         resizeState.startWidth + (resizeState.startX - event.clientX),
         currentThreadLayoutWidth(),
       );
-      setThreadLogsPanelWidth(nextWidth);
+      dispatchPanelWidth("threadLogs", nextWidth);
       setSettingsDraft((current) => ({
         ...current,
         threadLogsPanelWidth: nextWidth,
       }));
     };
-
     const finishResize = () => {
-      const nextWidth = threadLogsPanelWidthRef.current;
+      const nextWidth = store.getState().widths.threadLogs;
       threadLogsResizeStateRef.current = null;
       setThreadLogsResizing(false);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       void persistThreadLogsPanelWidth(nextWidth);
     };
-
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", finishResize);
     window.addEventListener("pointercancel", finishResize);
@@ -493,32 +580,38 @@ export function useLayoutResizeController({
       window.removeEventListener("pointerup", finishResize);
       window.removeEventListener("pointercancel", finishResize);
     };
-  }, [threadLogsResizing, desktopState?.settings.threadLogsPanelWidth]);
+  }, [
+    currentThreadLayoutWidth,
+    dispatchPanelWidth,
+    persistThreadLogsPanelWidth,
+    setSettingsDraft,
+    store,
+    threadLogsResizing,
+  ]);
 
   useEffect(() => {
     if (!sideToolsResizing) {
       return;
     }
-
     const handlePointerMove = (event: PointerEvent) => {
       const resizeState = sideToolsResizeStateRef.current;
       if (!resizeState) {
         return;
       }
-      const nextWidth = clampSideToolsPanelWidth(
-        resizeState.startWidth + (resizeState.startX - event.clientX),
-        currentConversationWidth(),
+      dispatchPanelWidth(
+        "sideTools",
+        clampSideToolsPanelWidth(
+          resizeState.startWidth + (resizeState.startX - event.clientX),
+          currentConversationWidth(),
+        ),
       );
-      setSideToolsPanelWidth(nextWidth);
     };
-
     const finishResize = () => {
       sideToolsResizeStateRef.current = null;
       setSideToolsResizing(false);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", finishResize);
     window.addEventListener("pointercancel", finishResize);
@@ -529,37 +622,34 @@ export function useLayoutResizeController({
       window.removeEventListener("pointerup", finishResize);
       window.removeEventListener("pointercancel", finishResize);
     };
-  }, [sideToolsResizing]);
-
-  const threadLogsDocked = isDockedSidePanel({
-    canvasWidth: threadLayoutWidth,
-    panelWidth: threadLogsPanelWidth,
-  });
+  }, [
+    currentConversationWidth,
+    dispatchPanelWidth,
+    sideToolsResizing,
+  ]);
 
   return {
-    compactSidebarViewport,
-    conversationRef,
+    compactSidebarViewport: frame.presentation.compactViewport,
     currentConversationWidth,
     currentThreadLayoutWidth,
+    dispatchLayoutOccupancyEvent,
     handleRailResizeStart,
     handleSidebarResizeStart,
+    handleSideToolsResizeKeyDown,
+    handleSideToolsResizeStart,
     handleThreadLogsResizeKeyDown,
     handleThreadLogsResizeStart,
+    layoutRootRef,
     railResizing,
-    setSideToolsPanelWidth,
-    setSideToolsResizing,
-    sidebarCollapsed,
-    sidebarDesiredOpen: !sidebarCollapsedByUser,
+    sidebarCollapsed: frame.presentation.globalSidebar === "collapsed",
+    sidebarDesiredOpen: store.getState().desiredOccupancy.globalSidebar,
     sidebarResizing,
-    sidebarWidth,
-    sideToolsPanelWidth,
-    sideToolsPanelWidthCustomizedRef,
-    sideToolsPanelWidthRef,
-    sideToolsResizeStateRef,
+    sidebarWidth: store.getState().widths.globalSidebar,
+    sideToolsPanelWidth: store.getState().widths.sideTools,
     sideToolsResizing,
     threadLayoutRef,
-    threadLogsDocked,
-    threadLogsPanelWidth,
+    threadLogsDocked: frame.presentation.threadLogs === "docked",
+    threadLogsPanelWidth: store.getState().widths.threadLogs,
     threadLogsResizing,
     toggleSidebarCollapsed,
   };

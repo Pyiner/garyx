@@ -7,7 +7,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import { startTransition } from "react";
@@ -984,59 +983,6 @@ export function AppShell() {
     gatewayMirror.dispatchMachineAction(action);
   }
 
-  function handleSideToolsResizeStart(
-    event: React.PointerEvent<HTMLDivElement>,
-  ) {
-    // Resize works whenever the dock is shown, including the no-workspace
-    // capsule-only dock (#TASK-1470); it no longer gates on a workspace.
-    if (!showConversationSideTools) {
-      return;
-    }
-    sideToolsPanelWidthCustomizedRef.current = true;
-    sideToolsResizeStateRef.current = {
-      startX: event.clientX,
-      startWidth: sideToolsPanelWidthRef.current,
-    };
-    setSideToolsResizing(true);
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    event.preventDefault();
-  }
-
-  function handleSideToolsResizeKeyDown(
-    event: React.KeyboardEvent<HTMLDivElement>,
-  ) {
-    if (!showConversationSideTools) {
-      return;
-    }
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-      return;
-    }
-
-    event.preventDefault();
-    sideToolsPanelWidthCustomizedRef.current = true;
-    const step = event.shiftKey ? 56 : 28;
-    const layoutWidth = currentConversationWidth();
-    const nextWidth =
-      event.key === "Home"
-        ? SIDE_TOOLS_PANEL_MIN_WIDTH
-        : event.key === "End"
-          ? clampSideToolsPanelWidth(
-              SIDE_TOOLS_PANEL_MAX_WIDTH,
-              layoutWidth,
-            )
-          : event.key === "ArrowLeft"
-            ? clampSideToolsPanelWidth(
-                sideToolsPanelWidthRef.current + step,
-                layoutWidth,
-              )
-            : clampSideToolsPanelWidth(
-                sideToolsPanelWidthRef.current - step,
-                layoutWidth,
-              );
-    setSideToolsPanelWidth(nextWidth);
-  }
-
   const activeThread = selectedThread(desktopState, selectedThreadId);
 
   const threadSummaryById = useMemo(() => {
@@ -1230,24 +1176,21 @@ export function AppShell() {
     );
   const {
     compactSidebarViewport,
-    conversationRef,
     currentConversationWidth,
     currentThreadLayoutWidth,
+    dispatchLayoutOccupancyEvent,
     handleRailResizeStart,
     handleSidebarResizeStart,
+    handleSideToolsResizeKeyDown,
+    handleSideToolsResizeStart,
     handleThreadLogsResizeKeyDown,
     handleThreadLogsResizeStart,
+    layoutRootRef,
     railResizing,
-    setSideToolsPanelWidth,
-    setSideToolsResizing,
     sidebarCollapsed,
     sidebarDesiredOpen,
     sidebarResizing,
-    sidebarWidth,
     sideToolsPanelWidth,
-    sideToolsPanelWidthCustomizedRef,
-    sideToolsPanelWidthRef,
-    sideToolsResizeStateRef,
     sideToolsResizing,
     threadLayoutRef,
     threadLogsDocked,
@@ -1283,10 +1226,10 @@ export function AppShell() {
     ),
   );
 
-  // Phase 0b shadow bridge: every horizontal panel writer enters here. The
-  // desired update is logged synchronously as one full vector; updateApplied
-  // may preserve a legacy multi-commit UI sequence until a later writer lands
-  // the same desired vector. No model/effect channel consumes the log yet.
+  // Every horizontal panel writer enters here. The desired update is logged
+  // synchronously as one full vector and Phase 2 feeds that exact event into
+  // the legacy-policy frame store. updateApplied still preserves the old
+  // component-state sequence while expand/native effects remain disconnected.
   const commitLegacyLayoutIntent = useCallback(
     (
       cause: LayoutIntentCause,
@@ -1301,6 +1244,9 @@ export function AppShell() {
         cause,
       );
       layoutOccupancyEventLogRef.current = appendResult.log;
+      if (appendResult.event) {
+        dispatchLayoutOccupancyEvent(appendResult.event);
+      }
 
       const nextApplied = updateApplied(appliedLayoutIntentRef.current);
       appliedLayoutIntentRef.current = nextApplied;
@@ -1321,7 +1267,7 @@ export function AppShell() {
           : null,
       );
     },
-    [],
+    [dispatchLayoutOccupancyEvent],
   );
   const toggleSidebarCollapsed = useCallback(() => {
     if (!compactSidebarViewport) {
@@ -4036,12 +3982,6 @@ export function AppShell() {
   ]
     .filter(Boolean)
     .join(" ");
-  const conversationStyle = showConversationSideTools
-    ? ({
-        "--side-tools-panel-width": `${sideToolsPanelWidth}px`,
-      } as CSSProperties)
-    : undefined;
-
   function renderPrimaryThreadPage(
     options: {
       embedded?: boolean;
@@ -4254,13 +4194,7 @@ export function AppShell() {
         rateLimit={activeRateLimit}
         onRateLimitContinue={() => handleSendPromptText("continue")}
         threadLayoutRef={threadLayoutRef}
-        threadLayoutStyle={
-          !embedded && threadLogsOpen
-            ? ({
-                "--thread-log-panel-width": `${threadLogsPanelWidth}px`,
-              } as CSSProperties)
-            : undefined
-        }
+        threadLayoutStyle={undefined}
         threadLogsMaxWidth={
           embedded
             ? 0
@@ -4462,11 +4396,7 @@ export function AppShell() {
   return appShellChrome(
     <div
       className={appShellClassName}
-      style={
-        {
-          "--spacing-token-sidebar": sidebarCollapsed ? "0px" : `${sidebarWidth}px`,
-        } as React.CSSProperties
-      }
+      ref={layoutRootRef}
     >
       <ToastViewportHost />
       <button
@@ -4774,8 +4704,6 @@ export function AppShell() {
       ) : (
         <main
           className={conversationClassName}
-          ref={conversationRef}
-          style={conversationStyle}
         >
           {isCapsulesView || isTasksView ? null : showStaticWindowToolbar ? (
             <div aria-hidden="true" className="settings-window-toolbar" />

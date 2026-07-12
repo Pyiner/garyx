@@ -347,6 +347,10 @@ export type HorizontalLayoutNestedColumns = Readonly<{
 }>;
 
 export type HorizontalLayoutCssVariables = Readonly<{
+  "--gx-sidebar-preferred-width": string;
+  "--gx-conversation-rail-preferred-width": string;
+  "--gx-side-tools-preferred-width": string;
+  "--gx-thread-logs-preferred-width": string;
   "--gx-sidebar-width": string;
   "--gx-conversation-rail-width": string;
   "--gx-shell-main-width": string;
@@ -848,6 +852,12 @@ function solveStableHorizontalLayout(
     threadLogs: threadLogsPresentation !== "closed",
   };
   const cssVariables: HorizontalLayoutCssVariables = {
+    "--gx-sidebar-preferred-width": asPixels(widths.globalSidebar),
+    "--gx-conversation-rail-preferred-width": asPixels(
+      widths.conversationRail,
+    ),
+    "--gx-side-tools-preferred-width": asPixels(widths.sideTools),
+    "--gx-thread-logs-preferred-width": asPixels(widths.threadLogs),
     "--gx-sidebar-width": asPixels(sidebar),
     "--gx-conversation-rail-width": asPixels(rail),
     "--gx-shell-main-width": asPixels(shellMain),

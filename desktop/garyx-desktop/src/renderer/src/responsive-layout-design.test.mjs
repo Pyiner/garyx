@@ -79,11 +79,15 @@ test("side tools use one right-docked presentation at every width", () => {
 test("thread logs use measured dock or overlay state instead of a viewport guess", () => {
   const threadPageSource = read("app-shell/components/ThreadPage.tsx");
   const controllerSource = read("app-shell/useLayoutResizeController.ts");
+  const frameStoreSource = read("app-shell/horizontal-layout-frame-store.ts");
   const conversationCss = read("styles/conversation.css");
   const browserCss = read("styles/browser.css");
 
   assert.ok(threadPageSource.includes('threadLogsDocked ? "log-panel-docked" : "log-panel-overlay"'));
-  assert.ok(controllerSource.includes("new ResizeObserver(syncMeasuredWidths)"));
+  assert.ok(controllerSource.includes("frame.presentation.threadLogs === \"docked\""));
+  assert.ok(controllerSource.includes("currentThreadLayoutWidth"));
+  assert.ok(frameStoreSource.includes("projectHorizontalLayout"));
+  assert.ok(!controllerSource.includes("new ResizeObserver"));
   assert.ok(conversationCss.includes(".thread-layout.with-log-panel.log-panel-overlay"));
   assert.ok(!browserCss.includes(".thread-layout.with-log-panel {"));
 });
