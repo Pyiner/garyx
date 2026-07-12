@@ -73,6 +73,31 @@ final class HomeChromeInteractionTests: XCTestCase {
         )
     }
 
+    func testThreadActionsUseLongPressMenuInsteadOfSwipeActions() throws {
+        let app = launchHome(useScrollFixture: true)
+        let row = app.staticTexts["Synthetic thread 7"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "archiveable unpinned thread row")
+
+        row.press(forDuration: 0.8)
+
+        let pinAction = app.buttons["Pin thread"]
+        XCTAssertTrue(
+            pinAction.waitForExistence(timeout: 5),
+            "long-pressing a thread must present the pin action"
+        )
+        XCTAssertTrue(
+            app.buttons["Archive thread"].waitForExistence(timeout: 5),
+            "long-pressing a thread must present the destructive archive action"
+        )
+        XCTAssertEqual(
+            pinAction.frame.width / app.frame.width,
+            0.565,
+            accuracy: 0.025,
+            "the compact menu must preserve the reference image's screen-width proportion"
+        )
+        XCTAssertEqual(pinAction.frame.height, 44, accuracy: 2)
+    }
+
     private func launchHome(useScrollFixture: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"

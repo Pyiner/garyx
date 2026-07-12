@@ -249,6 +249,10 @@ extension GaryxMobileModel {
         let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedThreadId.isEmpty else { return }
         guard pendingThreadArchives.startArchive(threadId: normalizedThreadId) else { return }
+        guard homeThreadListStore.beginArchiveTransition(threadId: normalizedThreadId) else {
+            pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
+            return
+        }
 
         let endpointKeys = GaryxThreadArchiveRequestBuilder.endpointKeys(
             threadId: normalizedThreadId,
@@ -278,6 +282,7 @@ extension GaryxMobileModel {
                 let transactionId = homeProjectionGateway.beginTransaction(label: "archive-commit")
                 defer { homeProjectionGateway.endTransaction(transactionId) }
                 pendingThreadArchives.commitArchive(threadId: normalizedThreadId)
+                homeThreadListStore.commitArchiveTransition(threadId: normalizedThreadId)
                 removeArchivedThreadLocally(normalizedThreadId)
                 channelEndpoints.removeAll { endpoint in
                     let endpointThreadId = endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -295,6 +300,7 @@ extension GaryxMobileModel {
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
+            homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
             lastError = displayMessage(for: error)
         }
     }

@@ -49,34 +49,110 @@ extension GaryxMobileModel {
     func togglePinnedThread(_ threadId: String) {
         let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedId.isEmpty else { return }
-        let pinned = !isThreadPinned(normalizedId)
-        Task { await setThreadPinned(normalizedId, pinned: pinned) }
+        let currentlyPinned = homeThreadListStore.effectivePinnedState(threadId: normalizedId)
+            ?? isThreadPinned(normalizedId)
+        beginThreadPinRequest(normalizedId, pinned: !currentlyPinned)
     }
 
     func unpinThread(_ threadId: String) {
         let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedId.isEmpty else { return }
-        Task { await setThreadPinned(normalizedId, pinned: false) }
+        beginThreadPinRequest(normalizedId, pinned: false)
     }
 
-    func setThreadPinned(_ threadId: String, pinned: Bool) async {
+    private func beginThreadPinRequest(_ threadId: String, pinned: Bool) {
         let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedId.isEmpty else { return }
         let previousIds = pinnedThreadIds
-        pinnedThreadIds = Self.pinnedThreadIdsWith(
-            pinnedThreadIds,
+        let originallyPinned = previousIds.contains(normalizedId)
+        let recentIndex = pinTransitionRecentIndex(
             threadId: normalizedId,
-            pinned: pinned
+            pinned: pinned,
+            previousPinnedIds: previousIds
         )
+        guard homeThreadListStore.beginPinTransition(
+            threadId: normalizedId,
+            pinned: pinned,
+            originalPinned: originallyPinned,
+            recentIndex: recentIndex
+        ) else {
+            return
+        }
+
+        let transactionId = homeProjectionGateway.beginTransaction(label: "pin-optimistic")
+        pinnedThreadIds = Self.pinnedThreadIdsWith(previousIds, threadId: normalizedId, pinned: pinned)
         recentThreadFeeds.noteLocalMutation()
+        homeProjectionGateway.endTransaction(transactionId)
+
+        let runtimeGeneration = gatewayRuntimeGeneration
+        Task { [weak self] in
+            await self?.finishThreadPinRequest(
+                normalizedId,
+                pinned: pinned,
+                runtimeGeneration: runtimeGeneration
+            )
+        }
+    }
+
+    /// Returns the row's visible Recent position, excluding threads that will
+    /// remain pinned. The raw feed retains pinned ids, so using its array index
+    /// directly would make an unpinned row jump too far down the Recent group.
+    private func pinTransitionRecentIndex(
+        threadId: String,
+        pinned: Bool,
+        previousPinnedIds: [String]
+    ) -> Int? {
+        let presentedRecent = homeThreadListStore.presentationSnapshot.sections.recent
+        if let currentIndex = presentedRecent.firstIndex(where: { $0.id == threadId }) {
+            return currentIndex
+        }
+        guard !pinned,
+              let feedIndex = visibleRecentThreadIds.firstIndex(of: threadId) else {
+            return nil
+        }
+        let pinnedAfterRequest = Set(
+            Self.pinnedThreadIdsWith(
+                previousPinnedIds,
+                threadId: threadId,
+                pinned: false
+            )
+        )
+        return visibleRecentThreadIds[..<feedIndex].reduce(into: 0) { count, candidateId in
+            if !pinnedAfterRequest.contains(candidateId) {
+                count += 1
+            }
+        }
+    }
+
+    private func finishThreadPinRequest(
+        _ normalizedId: String,
+        pinned: Bool,
+        runtimeGeneration: UUID
+    ) async {
         do {
             let page = try await client().setThreadPinned(threadId: normalizedId, pinned: pinned)
-            applyPinnedThreadIds(page.threadIds)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            let confirmedIds = Self.normalizedPinnedThreadIds(page.threadIds)
+            homeThreadListStore.resolvePinTransition(
+                threadId: normalizedId,
+                pinned: confirmedIds.contains(normalizedId)
+            )
+            let presentedIds = homeThreadListStore.presentedPinnedThreadIds(from: confirmedIds)
+            let transactionId = homeProjectionGateway.beginTransaction(label: "pin-confirm")
+            applyPinnedThreadIds(presentedIds)
             recentThreadFeeds.noteLocalMutation()
+            homeProjectionGateway.endTransaction(transactionId)
             persistRecentThreadsWidgetSnapshot()
         } catch {
-            pinnedThreadIds = previousIds
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            let rollbackIds = homeThreadListStore.rollbackPinTransition(
+                threadId: normalizedId,
+                basePinnedIds: pinnedThreadIds
+            ) ?? pinnedThreadIds
+            let transactionId = homeProjectionGateway.beginTransaction(label: "pin-rollback")
+            applyPinnedThreadIds(rollbackIds)
             recentThreadFeeds.noteLocalMutation()
+            homeProjectionGateway.endTransaction(transactionId)
             persistRecentThreadsWidgetSnapshot()
             lastError = displayMessage(for: error)
         }

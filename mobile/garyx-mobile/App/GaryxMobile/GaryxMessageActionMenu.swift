@@ -195,6 +195,310 @@ private struct GaryxMessageMenuPanel: View {
     }
 }
 
+// MARK: - In-place thread action menu
+
+/// Compact Home-row menu matched to the in-list long-press treatment: the
+/// source row stays in place and receives a focused card treatment while the
+/// rest of the surface recedes behind a light scrim.
+enum GaryxThreadActionMenuRole {
+    case standard
+    case destructive
+}
+
+struct GaryxThreadActionMenuItem: Identifiable {
+    let id: String
+    let title: String
+    let systemImage: String
+    let role: GaryxThreadActionMenuRole
+    let isEnabled: Bool
+    let handler: () -> Void
+
+    init(
+        title: String,
+        systemImage: String,
+        role: GaryxThreadActionMenuRole = .standard,
+        isEnabled: Bool = true,
+        handler: @escaping () -> Void
+    ) {
+        self.id = title
+        self.title = title
+        self.systemImage = systemImage
+        self.role = role
+        self.isEnabled = isEnabled
+        self.handler = handler
+    }
+}
+
+private enum GaryxThreadActionMenuMetrics {
+    static let menuWidthFraction: CGFloat = 0.565
+    static let minimumMenuWidth: CGFloat = 212
+    static let maximumMenuWidth: CGFloat = 244
+    static let rowHeight: CGFloat = 44
+    static let verticalPadding: CGFloat = 6
+    static let cornerRadius: CGFloat = 22
+    static let surfaceMargin: CGFloat = 18
+    static let sourceHorizontalInset: CGFloat = 18
+    static let sourceVerticalInset: CGFloat = 2
+    static let sourceCornerRadius: CGFloat = 14
+    static let panelGap: CGFloat = 16
+}
+
+private struct GaryxThreadActionMenuRequest: Equatable {
+    let token: UUID
+    let anchor: Anchor<CGRect>
+    let items: [GaryxThreadActionMenuItem]
+    let dismiss: () -> Void
+
+    static func == (lhs: GaryxThreadActionMenuRequest, rhs: GaryxThreadActionMenuRequest) -> Bool {
+        lhs.token == rhs.token
+    }
+}
+
+private struct GaryxThreadActionMenuPreferenceKey: PreferenceKey {
+    static let defaultValue: GaryxThreadActionMenuRequest? = nil
+
+    static func reduce(
+        value: inout GaryxThreadActionMenuRequest?,
+        nextValue: () -> GaryxThreadActionMenuRequest?
+    ) {
+        value = value ?? nextValue()
+    }
+}
+
+extension View {
+    func garyxThreadActionMenu(
+        items: @escaping () -> [GaryxThreadActionMenuItem]
+    ) -> some View {
+        modifier(GaryxThreadActionMenuModifier(itemsProvider: items))
+    }
+
+    func garyxThreadActionMenuHost(bottomInset: CGFloat = 0) -> some View {
+        modifier(GaryxThreadActionMenuHostModifier(bottomInset: bottomInset))
+    }
+}
+
+private struct GaryxThreadActionMenuModifier: ViewModifier {
+    let itemsProvider: () -> [GaryxThreadActionMenuItem]
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var presented: PresentedMenu?
+
+    private struct PresentedMenu {
+        let token: UUID
+        let items: [GaryxThreadActionMenuItem]
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if presented != nil {
+                    focusedSourceBackground
+                        .transition(.opacity.combined(with: .scale(scale: 0.985)))
+                }
+            }
+            .animation(focusAnimation, value: presented?.token)
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.36, maximumDistance: 16)
+                    .onEnded { _ in
+                        let items = itemsProvider()
+                        guard items.contains(where: \.isEnabled) else { return }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        presented = PresentedMenu(token: UUID(), items: items)
+                    }
+            )
+            .anchorPreference(key: GaryxThreadActionMenuPreferenceKey.self, value: .bounds) { anchor in
+                guard let presented else { return nil }
+                return GaryxThreadActionMenuRequest(
+                    token: presented.token,
+                    anchor: anchor,
+                    items: presented.items,
+                    dismiss: { self.presented = nil }
+                )
+            }
+            .accessibilityActions {
+                ForEach(itemsProvider().filter(\.isEnabled)) { item in
+                    Button(item.title, action: item.handler)
+                }
+            }
+    }
+
+    private var focusedSourceBackground: some View {
+        // Keep the selected row flat: brightness and a hairline are enough to
+        // express focus here; a card shadow makes the in-list row look detached.
+        RoundedRectangle(
+            cornerRadius: GaryxThreadActionMenuMetrics.sourceCornerRadius,
+            style: .continuous
+        )
+        .fill(Color(.systemBackground))
+        .overlay {
+            RoundedRectangle(
+                cornerRadius: GaryxThreadActionMenuMetrics.sourceCornerRadius,
+                style: .continuous
+            )
+            .stroke(Color.primary.opacity(0.055), lineWidth: 0.7)
+        }
+        .padding(.horizontal, GaryxThreadActionMenuMetrics.sourceHorizontalInset)
+        .padding(.vertical, GaryxThreadActionMenuMetrics.sourceVerticalInset)
+    }
+
+    private var focusAnimation: Animation? {
+        reduceMotion ? nil : .timingCurve(0.22, 1, 0.36, 1, duration: 0.16)
+    }
+}
+
+private struct GaryxThreadActionMenuHostModifier: ViewModifier {
+    let bottomInset: CGFloat
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.overlayPreferenceValue(GaryxThreadActionMenuPreferenceKey.self) { request in
+            GeometryReader { proxy in
+                let panelWidth = resolvedPanelWidth(in: proxy)
+                ZStack(alignment: .topLeading) {
+                    if let request {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture { request.dismiss() }
+
+                        focusScrim(request: request, proxy: proxy)
+                            .allowsHitTesting(false)
+
+                        GaryxThreadActionMenuPanel(request: request)
+                            .frame(width: panelWidth)
+                            .offset(panelOffset(for: request, panelWidth: panelWidth, in: proxy))
+                            .transition(
+                                .opacity.combined(
+                                    with: .scale(scale: 0.965, anchor: .bottomLeading)
+                                )
+                            )
+                    }
+                }
+                .animation(menuAnimation, value: request?.token)
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    private func focusScrim(
+        request: GaryxThreadActionMenuRequest,
+        proxy: GeometryProxy
+    ) -> some View {
+        let sourceRect = focusedSourceRect(for: request, in: proxy)
+        return Path { path in
+            path.addRect(CGRect(origin: .zero, size: proxy.size))
+            path.addRoundedRect(
+                in: sourceRect,
+                cornerSize: CGSize(
+                    width: GaryxThreadActionMenuMetrics.sourceCornerRadius,
+                    height: GaryxThreadActionMenuMetrics.sourceCornerRadius
+                )
+            )
+        }
+        .fill(Color.black.opacity(0.14), style: FillStyle(eoFill: true))
+    }
+
+    private func focusedSourceRect(
+        for request: GaryxThreadActionMenuRequest,
+        in proxy: GeometryProxy
+    ) -> CGRect {
+        proxy[request.anchor].insetBy(
+            dx: GaryxThreadActionMenuMetrics.sourceHorizontalInset,
+            dy: GaryxThreadActionMenuMetrics.sourceVerticalInset
+        )
+    }
+
+    private func panelOffset(
+        for request: GaryxThreadActionMenuRequest,
+        panelWidth: CGFloat,
+        in proxy: GeometryProxy
+    ) -> CGSize {
+        let sourceRect = focusedSourceRect(for: request, in: proxy)
+        let panelHeight = CGFloat(request.items.count) * GaryxThreadActionMenuMetrics.rowHeight
+            + GaryxThreadActionMenuMetrics.verticalPadding * 2
+        let margin = GaryxThreadActionMenuMetrics.surfaceMargin
+        let x = min(
+            max(sourceRect.minX, margin),
+            max(margin, proxy.size.width - panelWidth - margin)
+        )
+        let aboveY = sourceRect.minY - panelHeight - GaryxThreadActionMenuMetrics.panelGap
+        let belowY = sourceRect.maxY + GaryxThreadActionMenuMetrics.panelGap
+        let availableBottom = proxy.size.height - bottomInset - margin
+        let y: CGFloat
+        if aboveY >= margin {
+            y = aboveY
+        } else {
+            y = min(belowY, max(margin, availableBottom - panelHeight))
+        }
+        return CGSize(width: x, height: y)
+    }
+
+    private func resolvedPanelWidth(in proxy: GeometryProxy) -> CGFloat {
+        min(
+            max(
+                proxy.size.width * GaryxThreadActionMenuMetrics.menuWidthFraction,
+                GaryxThreadActionMenuMetrics.minimumMenuWidth
+            ),
+            GaryxThreadActionMenuMetrics.maximumMenuWidth
+        )
+    }
+
+    private var menuAnimation: Animation? {
+        reduceMotion ? nil : .timingCurve(0.22, 1, 0.36, 1, duration: 0.17)
+    }
+}
+
+private struct GaryxThreadActionMenuPanel: View {
+    let request: GaryxThreadActionMenuRequest
+
+    var body: some View {
+        GaryxGlassPanel(
+            cornerRadius: GaryxThreadActionMenuMetrics.cornerRadius,
+            fallbackMaterial: .regularMaterial,
+            tint: Color(.systemBackground).opacity(0.90),
+            shadowOpacity: 0.15
+        ) {
+            VStack(spacing: 0) {
+                ForEach(request.items) { item in
+                    Button {
+                        request.dismiss()
+                        item.handler()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: item.systemImage)
+                                .font(GaryxFont.system(size: 18, weight: .regular))
+                                .frame(width: 28)
+
+                            Text(item.title)
+                                .font(GaryxFont.body())
+                                .lineLimit(1)
+
+                            Spacer(minLength: 0)
+                        }
+                        .foregroundStyle(
+                            item.role == .destructive ? GaryxTheme.danger : Color.primary
+                        )
+                        .padding(.horizontal, 18)
+                        .frame(height: GaryxThreadActionMenuMetrics.rowHeight)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(GaryxThreadActionMenuButtonStyle())
+                    .disabled(!item.isEnabled)
+                    .opacity(item.isEnabled ? 1 : 0.42)
+                }
+            }
+            .padding(.vertical, GaryxThreadActionMenuMetrics.verticalPadding)
+        }
+    }
+}
+
+private struct GaryxThreadActionMenuButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color.primary.opacity(configuration.isPressed ? 0.055 : 0))
+    }
+}
+
 /// Plain share-sheet host for menu actions that need `UIActivityViewController`
 /// (the in-place menu cannot embed `ShareLink`).
 struct GaryxActivityShareSheet: UIViewControllerRepresentable {

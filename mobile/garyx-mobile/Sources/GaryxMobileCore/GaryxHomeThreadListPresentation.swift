@@ -152,6 +152,17 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
         )
     }
 
+    func withPinnedState(_ isPinned: Bool) -> GaryxSidebarThreadRowPresentation {
+        GaryxSidebarThreadRowPresentation(
+            title: title,
+            subtitle: subtitle,
+            trailingTimestamp: trailingTimestamp,
+            isSelected: isSelected,
+            isPinned: isPinned,
+            isRunning: isRunning
+        )
+    }
+
     private static func subtitle(for thread: GaryxThreadSummary) -> String? {
         let context: String? = {
             if let workspacePath = thread.workspacePath, !workspacePath.isEmpty {
@@ -293,6 +304,56 @@ enum GaryxHomeRecentPlaceholder: Equatable, Sendable {
     case unavailable
 }
 
+enum GaryxHomeThreadListRegion: Equatable, Sendable {
+    case pinned
+    case recent
+}
+
+/// One stable identity space for the native List. A thread keeps the same item
+/// id while moving between Pinned and Recent, allowing UIKit to animate a move
+/// instead of rendering an unrelated deletion and insertion.
+enum GaryxHomeThreadListItem: Identifiable, Equatable, Sendable {
+    case pinnedHeader
+    case thread(GaryxHomeThreadRow, region: GaryxHomeThreadListRegion)
+    case pinnedSpacer
+    case recentHeader
+    case recentPlaceholder(GaryxHomeRecentPlaceholder)
+
+    var id: String {
+        switch self {
+        case .pinnedHeader:
+            "header:pinned"
+        case let .thread(row, _):
+            "thread:\(row.id)"
+        case .pinnedSpacer:
+            "spacer:pinned"
+        case .recentHeader:
+            "header:recent"
+        case .recentPlaceholder:
+            "placeholder:recent"
+        }
+    }
+}
+
+enum GaryxHomeThreadListLayout {
+    static func primaryItems(for snapshot: GaryxHomeThreadListSnapshot) -> [GaryxHomeThreadListItem] {
+        var items: [GaryxHomeThreadListItem] = []
+        if !snapshot.sections.pinned.isEmpty {
+            items.append(.pinnedHeader)
+            items += snapshot.sections.pinned.map { .thread($0, region: .pinned) }
+            items.append(.pinnedSpacer)
+        }
+        items.append(.recentHeader)
+        switch snapshot.recentPlaceholder {
+        case .none:
+            items += snapshot.sections.recent.map { .thread($0, region: .recent) }
+        case let placeholder:
+            items.append(.recentPlaceholder(placeholder))
+        }
+        return items
+    }
+}
+
 struct GaryxHomeThreadRow: Identifiable, Equatable, Sendable {
     let id: String
     let thread: GaryxThreadSummary
@@ -301,6 +362,243 @@ struct GaryxHomeThreadRow: Identifiable, Equatable, Sendable {
     let timestampValue: String?
     let canArchive: Bool
     let showsDivider: Bool
+}
+
+enum GaryxHomeThreadRowMotion: Equatable, Sendable {
+    case stable
+    case archiving
+    case pinning
+    case leavingFilteredList
+}
+
+/// Ephemeral presentation state layered over the canonical Home snapshot.
+/// It keeps archive rows physically present until the remote commit, while pin
+/// overrides prevent stale refreshes from bouncing a row between groups.
+struct GaryxHomeThreadTransitionState: Equatable, Sendable {
+    private enum ArchivePhase: Equatable, Sendable {
+        case requesting
+        case committed
+    }
+
+    private struct PinTransition: Equatable, Sendable {
+        var targetPinned: Bool
+        let originalPinned: Bool
+        let recentIndex: Int?
+        let originalPinnedIndex: Int
+        let sourceRow: GaryxHomeThreadRow?
+        let sequence: UInt64
+        var remoteResolved: Bool
+
+        var restoresOriginalPlacement: Bool {
+            remoteResolved && targetPinned == originalPinned
+        }
+    }
+
+    private var archivePhases: [String: ArchivePhase] = [:]
+    private var pinTransitions: [String: PinTransition] = [:]
+    private var nextSequence: UInt64 = 0
+
+    var isEmpty: Bool {
+        archivePhases.isEmpty && pinTransitions.isEmpty
+    }
+
+    mutating func beginArchive(threadId: String) -> Bool {
+        guard let threadId = Self.normalizedThreadId(threadId),
+              archivePhases[threadId] == nil,
+              pinTransitions[threadId] == nil else {
+            return false
+        }
+        archivePhases[threadId] = .requesting
+        return true
+    }
+
+    mutating func commitArchive(threadId: String) {
+        guard let threadId = Self.normalizedThreadId(threadId),
+              archivePhases[threadId] != nil else {
+            return
+        }
+        archivePhases[threadId] = .committed
+    }
+
+    mutating func cancelArchive(threadId: String) {
+        guard let threadId = Self.normalizedThreadId(threadId) else { return }
+        archivePhases[threadId] = nil
+    }
+
+    mutating func beginPin(
+        threadId: String,
+        pinned: Bool,
+        originalPinned: Bool,
+        recentIndex: Int?,
+        originalPinnedIndex: Int? = nil,
+        sourceRow: GaryxHomeThreadRow? = nil
+    ) -> Bool {
+        guard let threadId = Self.normalizedThreadId(threadId),
+              pinned != originalPinned,
+              archivePhases[threadId] == nil,
+              pinTransitions[threadId] == nil else {
+            return false
+        }
+        nextSequence &+= 1
+        pinTransitions[threadId] = PinTransition(
+            targetPinned: pinned,
+            originalPinned: originalPinned,
+            recentIndex: recentIndex.map { max(0, $0) },
+            originalPinnedIndex: max(0, originalPinnedIndex ?? 0),
+            sourceRow: sourceRow,
+            sequence: nextSequence,
+            remoteResolved: false
+        )
+        return true
+    }
+
+    mutating func resolvePin(threadId: String, pinned: Bool) {
+        guard let threadId = Self.normalizedThreadId(threadId),
+              var transition = pinTransitions[threadId] else {
+            return
+        }
+        transition.targetPinned = pinned
+        transition.remoteResolved = true
+        pinTransitions[threadId] = transition
+    }
+
+    mutating func rollbackPin(threadId: String) {
+        guard let threadId = Self.normalizedThreadId(threadId),
+              var transition = pinTransitions[threadId] else {
+            return
+        }
+        transition.targetPinned = transition.originalPinned
+        transition.remoteResolved = true
+        pinTransitions[threadId] = transition
+    }
+
+    mutating func reset() {
+        archivePhases = [:]
+        pinTransitions = [:]
+    }
+
+    mutating func reconcile(with baseSections: GaryxHomeThreadSections) {
+        let baseRows = Dictionary(uniqueKeysWithValues: baseSections.allRows.map { ($0.id, $0) })
+        archivePhases = archivePhases.filter { threadId, phase in
+            phase != .committed || baseRows[threadId] != nil
+        }
+        pinTransitions = pinTransitions.filter { threadId, transition in
+            guard transition.remoteResolved else {
+                return true
+            }
+            if transition.targetPinned {
+                return baseRows[threadId]?.presentation.isPinned != true
+            }
+            if transition.recentIndex == nil {
+                return baseRows[threadId] != nil
+            }
+            return baseRows[threadId]?.presentation.isPinned != false
+        }
+    }
+
+    func motion(for threadId: String) -> GaryxHomeThreadRowMotion {
+        guard let threadId = Self.normalizedThreadId(threadId) else { return .stable }
+        if archivePhases[threadId] != nil {
+            return .archiving
+        }
+        if let transition = pinTransitions[threadId] {
+            if !transition.targetPinned, transition.recentIndex == nil {
+                return .leavingFilteredList
+            }
+            return .pinning
+        }
+        return .stable
+    }
+
+    func effectivePinnedState(
+        for threadId: String,
+        baseSections: GaryxHomeThreadSections
+    ) -> Bool? {
+        guard let threadId = Self.normalizedThreadId(threadId) else { return nil }
+        if let transition = pinTransitions[threadId] {
+            return transition.targetPinned
+        }
+        return baseSections.allRows.first(where: { $0.id == threadId })?.presentation.isPinned
+    }
+
+    /// Applies every in-flight pin intent to an authoritative id list. This
+    /// preserves unrelated optimistic requests when one concurrent request
+    /// resolves or rolls back with an older full-list response.
+    func presentedPinnedThreadIds(from baseIds: [String]) -> [String] {
+        var seen = Set<String>()
+        var ids = baseIds.compactMap { rawId -> String? in
+            guard let threadId = Self.normalizedThreadId(rawId),
+                  seen.insert(threadId).inserted else {
+                return nil
+            }
+            return threadId
+        }
+        for (threadId, transition) in pinTransitions.sorted(by: { $0.value.sequence < $1.value.sequence }) {
+            ids.removeAll { $0 == threadId }
+            if transition.targetPinned {
+                let targetIndex = transition.restoresOriginalPlacement
+                    ? min(transition.originalPinnedIndex, ids.count)
+                    : 0
+                ids.insert(threadId, at: targetIndex)
+            }
+        }
+        return ids
+    }
+
+    func presentedSections(from baseSections: GaryxHomeThreadSections) -> GaryxHomeThreadSections {
+        guard !pinTransitions.isEmpty else { return baseSections }
+        var rowsById = Dictionary(uniqueKeysWithValues: baseSections.allRows.map { ($0.id, $0) })
+        for (threadId, transition) in pinTransitions where rowsById[threadId] == nil {
+            rowsById[threadId] = transition.sourceRow
+        }
+        var pinnedIds = baseSections.pinned.map(\.id)
+        var recentIds = baseSections.recent.map(\.id)
+
+        for (threadId, transition) in pinTransitions.sorted(by: { $0.value.sequence < $1.value.sequence }) {
+            guard rowsById[threadId] != nil else { continue }
+            pinnedIds.removeAll { $0 == threadId }
+            recentIds.removeAll { $0 == threadId }
+            if transition.targetPinned {
+                let targetIndex = transition.restoresOriginalPlacement
+                    ? min(transition.originalPinnedIndex, pinnedIds.count)
+                    : 0
+                pinnedIds.insert(threadId, at: targetIndex)
+            } else if let recentIndex = transition.recentIndex {
+                recentIds.insert(threadId, at: min(recentIndex, recentIds.count))
+            } else {
+                pinnedIds.insert(threadId, at: min(transition.originalPinnedIndex, pinnedIds.count))
+            }
+        }
+
+        return GaryxHomeThreadSections(
+            pinned: Self.placedRows(ids: pinnedIds, rowsById: rowsById, pinned: true),
+            recent: Self.placedRows(ids: recentIds, rowsById: rowsById, pinned: false)
+        )
+    }
+
+    private static func placedRows(
+        ids: [String],
+        rowsById: [String: GaryxHomeThreadRow],
+        pinned: Bool
+    ) -> [GaryxHomeThreadRow] {
+        ids.enumerated().compactMap { index, threadId in
+            guard let row = rowsById[threadId] else { return nil }
+            return GaryxHomeThreadRow(
+                id: row.id,
+                thread: row.thread,
+                presentation: row.presentation.withPinnedState(pinned),
+                avatar: row.avatar,
+                timestampValue: row.timestampValue,
+                canArchive: row.canArchive,
+                showsDivider: index > 0
+            )
+        }
+    }
+
+    private static func normalizedThreadId(_ rawId: String) -> String? {
+        let threadId = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return threadId.isEmpty ? nil : threadId
+    }
 }
 
 enum GaryxHomeThreadSectionsBuilder {
@@ -461,6 +759,7 @@ final class GaryxHomeThreadListStore: ObservableObject {
     @Published private(set) var snapshot: GaryxHomeThreadListSnapshot
     private var previousInput: GaryxHomeThreadListInput?
     private let sectionsCache = GaryxHomeThreadSectionsCache()
+    private var transitionState = GaryxHomeThreadTransitionState()
     private(set) var latestActorAppliedSeq = 0
     private(set) var acceptedInputCount = 0
     private(set) var acceptedActorSnapshotCount = 0
@@ -468,6 +767,109 @@ final class GaryxHomeThreadListStore: ObservableObject {
 
     init(snapshot: GaryxHomeThreadListSnapshot = .empty) {
         self.snapshot = snapshot
+    }
+
+    var presentationSnapshot: GaryxHomeThreadListSnapshot {
+        GaryxHomeThreadListSnapshot(
+            sections: transitionState.presentedSections(from: snapshot.sections),
+            isLoadingThreads: snapshot.isLoadingThreads,
+            isHomeVisible: snapshot.isHomeVisible,
+            selectedRecentFilter: snapshot.selectedRecentFilter,
+            recentFeedPresentation: snapshot.recentFeedPresentation
+        )
+    }
+
+    func rowMotion(threadId: String) -> GaryxHomeThreadRowMotion {
+        transitionState.motion(for: threadId)
+    }
+
+    func effectivePinnedState(threadId: String) -> Bool? {
+        transitionState.effectivePinnedState(for: threadId, baseSections: snapshot.sections)
+    }
+
+    func presentedPinnedThreadIds(from baseIds: [String]) -> [String] {
+        transitionState.presentedPinnedThreadIds(from: baseIds)
+    }
+
+    @discardableResult
+    func beginArchiveTransition(threadId: String) -> Bool {
+        return updateTransitionState { state in
+            state.beginArchive(threadId: threadId)
+        }
+    }
+
+    func commitArchiveTransition(threadId: String) {
+        updateTransitionState { state in
+            let before = state
+            state.commitArchive(threadId: threadId)
+            return state != before
+        }
+    }
+
+    func cancelArchiveTransition(threadId: String) {
+        updateTransitionState { state in
+            let before = state
+            state.cancelArchive(threadId: threadId)
+            return state != before
+        }
+    }
+
+    @discardableResult
+    func beginPinTransition(
+        threadId: String,
+        pinned: Bool,
+        originalPinned: Bool,
+        recentIndex: Int?
+    ) -> Bool {
+        let presentedSections = transitionState.presentedSections(from: snapshot.sections)
+        let sourceRow = presentedSections.allRows.first { $0.id == threadId }
+        let originalPinnedIndex = presentedSections.pinned.firstIndex { $0.id == threadId }
+        return updateTransitionState { state in
+            state.beginPin(
+                threadId: threadId,
+                pinned: pinned,
+                originalPinned: originalPinned,
+                recentIndex: recentIndex,
+                originalPinnedIndex: originalPinnedIndex,
+                sourceRow: sourceRow
+            )
+        }
+    }
+
+    func resolvePinTransition(threadId: String, pinned: Bool) {
+        updateTransitionState { state in
+            let before = state
+            state.resolvePin(threadId: threadId, pinned: pinned)
+            state.reconcile(with: snapshot.sections)
+            return state != before
+        }
+    }
+
+    @discardableResult
+    func rollbackPinTransition(
+        threadId: String,
+        basePinnedIds: [String]? = nil
+    ) -> [String]? {
+        let before = transitionState
+        var next = before
+        next.rollbackPin(threadId: threadId)
+        // Derive the canonical rollback before reconciliation can retire a
+        // fast-failing transition against an actor snapshot that never saw it.
+        let presentedIds = basePinnedIds.map { next.presentedPinnedThreadIds(from: $0) }
+        next.reconcile(with: snapshot.sections)
+        if next != before {
+            objectWillChange.send()
+            transitionState = next
+        }
+        return presentedIds
+    }
+
+    func resetTransitions() {
+        updateTransitionState { state in
+            guard !state.isEmpty else { return false }
+            state.reset()
+            return true
+        }
     }
 
     var sectionDerivationCount: Int {
@@ -490,10 +892,13 @@ final class GaryxHomeThreadListStore: ObservableObject {
             selectedRecentFilter: input.selectedRecentFilter,
             recentFeedPresentation: input.recentFeedPresentation
         )
-        guard snapshot != next else {
+        var reconciledTransitions = transitionState
+        reconciledTransitions.reconcile(with: next.sections)
+        let transitionsChanged = reconciledTransitions != transitionState
+        guard snapshot != next || transitionsChanged else {
             return false
         }
-        snapshot = next
+        apply(next, reconciledTransitions: reconciledTransitions)
         publishCount += 1
         return true
     }
@@ -513,11 +918,39 @@ final class GaryxHomeThreadListStore: ObservableObject {
             selectedRecentFilter: actorSnapshot.selectedRecentFilter,
             recentFeedPresentation: actorSnapshot.recentFeedPresentation
         )
-        guard snapshot != next else {
+        var reconciledTransitions = transitionState
+        reconciledTransitions.reconcile(with: next.sections)
+        let transitionsChanged = reconciledTransitions != transitionState
+        guard snapshot != next || transitionsChanged else {
             return false
         }
-        snapshot = next
+        apply(next, reconciledTransitions: reconciledTransitions)
         publishCount += 1
+        return true
+    }
+
+    private func apply(
+        _ nextSnapshot: GaryxHomeThreadListSnapshot,
+        reconciledTransitions: GaryxHomeThreadTransitionState
+    ) {
+        let snapshotChanged = snapshot != nextSnapshot
+        if !snapshotChanged {
+            objectWillChange.send()
+        }
+        transitionState = reconciledTransitions
+        if snapshotChanged {
+            snapshot = nextSnapshot
+        }
+    }
+
+    @discardableResult
+    private func updateTransitionState(
+        _ update: (inout GaryxHomeThreadTransitionState) -> Bool
+    ) -> Bool {
+        var next = transitionState
+        guard update(&next), next != transitionState else { return false }
+        objectWillChange.send()
+        transitionState = next
         return true
     }
 

@@ -276,32 +276,247 @@ final class HomeProjectionReducerTests: XCTestCase {
         )
     }
 
-    func testOptimisticRollbackRestoresExplicitLaterPlacement() {
-        let input = GaryxHomeListFixture.makeInputs(threadCount: 10, pinnedCount: 2, runningCount: 0)
-        var state = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state
+    func testPinSectionChangeReportsOneAssociatedMoveInsteadOfDeleteAndInsert() throws {
+        let input = GaryxHomeListFixture.makeInputs(threadCount: 8, pinnedCount: 0, runningCount: 0)
+        let initial = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state
 
-        state = reduce(
-            state,
-            .optimisticArchive(
-                threadId: "thread-0",
-                pinnedThreadIds: ["thread-1"],
-                recentThreadIds: Array(input.recentThreadIds.dropFirst())
+        let result = reduce(initial, .pinsChanged(pinnedThreadIds: ["thread-4"]))
+        let difference = try XCTUnwrap(result.difference)
+
+        var removalAssociation: Int?
+        var insertionAssociation: Int?
+        for change in difference {
+            switch change {
+            case let .remove(_, element, associatedWith):
+                if element == "thread-4" {
+                    removalAssociation = associatedWith
+                }
+            case let .insert(_, element, associatedWith):
+                if element == "thread-4" {
+                    insertionAssociation = associatedWith
+                }
+            }
+        }
+
+        XCTAssertNotNil(
+            removalAssociation,
+            "A pin transition must describe the row relocation as a move, not a disappearance."
+        )
+        XCTAssertNotNil(
+            insertionAssociation,
+            "A pin transition must describe the row relocation as a move, not a second insertion."
+        )
+    }
+
+    func testPendingPinMovesOneStableListItemAndShieldsAgainstStaleBase() throws {
+        let input = GaryxHomeListFixture.makeInputs(threadCount: 8, pinnedCount: 0, runningCount: 0)
+        let base = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state.snapshot.sections
+        var transitions = GaryxHomeThreadTransitionState()
+
+        XCTAssertTrue(transitions.beginPin(
+            threadId: "thread-4",
+            pinned: true,
+            originalPinned: false,
+            recentIndex: 4
+        ))
+        XCTAssertFalse(transitions.beginPin(
+            threadId: "thread-4",
+            pinned: false,
+            originalPinned: true,
+            recentIndex: 4
+        ))
+        let presented = transitions.presentedSections(from: base)
+
+        XCTAssertEqual(presented.pinned.map(\.id), ["thread-4"])
+        XCTAssertEqual(transitions.motion(for: "thread-4"), .pinning)
+
+        let baseItemId = try XCTUnwrap(
+            GaryxHomeThreadListLayout.primaryItems(for: snapshot(sections: base))
+                .first(where: { item in
+                    if case let .thread(row, _) = item { return row.id == "thread-4" }
+                    return false
+                })
+        ).id
+        let movedItemId = try XCTUnwrap(
+            GaryxHomeThreadListLayout.primaryItems(for: snapshot(sections: presented))
+                .first(where: { item in
+                    if case let .thread(row, _) = item { return row.id == "thread-4" }
+                    return false
+                })
+        ).id
+        XCTAssertEqual(baseItemId, movedItemId)
+
+        transitions.resolvePin(threadId: "thread-4", pinned: true)
+        transitions.reconcile(with: base)
+        XCTAssertEqual(
+            transitions.presentedSections(from: base).pinned.map(\.id),
+            ["thread-4"],
+            "An old pins refresh must not bounce the row back to Recent."
+        )
+
+        let confirmed = reduce(
+            reduce(HomeProjectionState(), ingest(input, epoch: 1)).state,
+            .pinsChanged(pinnedThreadIds: ["thread-4"])
+        ).state.snapshot.sections
+        transitions.reconcile(with: confirmed)
+        XCTAssertEqual(transitions.motion(for: "thread-4"), .stable)
+        XCTAssertEqual(transitions.presentedSections(from: confirmed), confirmed)
+    }
+
+    func testArchiveTransitionKeepsPhysicalRowUntilCommitAndRestoresOnFailure() {
+        let input = GaryxHomeListFixture.makeInputs(threadCount: 6, pinnedCount: 1, runningCount: 0)
+        let base = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state.snapshot.sections
+        var transitions = GaryxHomeThreadTransitionState()
+
+        XCTAssertTrue(transitions.beginArchive(threadId: "thread-0"))
+        XCTAssertEqual(transitions.motion(for: "thread-0"), .archiving)
+        XCTAssertEqual(
+            transitions.presentedSections(from: base).allRows.map(\.id),
+            base.allRows.map(\.id),
+            "Optimistic archive feedback must not change UICollectionView item counts."
+        )
+
+        transitions.cancelArchive(threadId: "thread-0")
+        XCTAssertEqual(transitions.motion(for: "thread-0"), .stable)
+
+        XCTAssertTrue(transitions.beginArchive(threadId: "thread-0"))
+        transitions.commitArchive(threadId: "thread-0")
+        transitions.reconcile(with: base)
+        XCTAssertEqual(transitions.motion(for: "thread-0"), .archiving)
+
+        let committed = GaryxHomeThreadSections(
+            pinned: base.pinned.filter { $0.id != "thread-0" },
+            recent: base.recent.filter { $0.id != "thread-0" }
+        )
+        transitions.reconcile(with: committed)
+        XCTAssertEqual(transitions.motion(for: "thread-0"), .stable)
+    }
+
+    func testPinFailureMovesBackImmediatelyWithoutWaitingForCanonicalRollback() {
+        let input = GaryxHomeListFixture.makeInputs(threadCount: 8, pinnedCount: 0, runningCount: 0)
+        let baseState = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state
+        let original = baseState.snapshot.sections
+        let optimisticBase = reduce(
+            baseState,
+            .pinsChanged(pinnedThreadIds: ["thread-4"])
+        ).state.snapshot.sections
+        var transitions = GaryxHomeThreadTransitionState()
+
+        XCTAssertTrue(transitions.beginPin(
+            threadId: "thread-4",
+            pinned: true,
+            originalPinned: false,
+            recentIndex: 4
+        ))
+        transitions.rollbackPin(threadId: "thread-4")
+        transitions.reconcile(with: optimisticBase)
+
+        XCTAssertFalse(transitions.presentedSections(from: optimisticBase).pinned.contains { $0.id == "thread-4" })
+        XCTAssertEqual(
+            transitions.presentedSections(from: optimisticBase).recent.map(\.id),
+            original.recent.map(\.id)
+        )
+
+        transitions.reconcile(with: original)
+        XCTAssertEqual(transitions.motion(for: "thread-4"), .stable)
+    }
+
+    func testConcurrentPinIntentMergePreservesIndependentRequestsAndRollbacks() {
+        var transitions = GaryxHomeThreadTransitionState()
+        XCTAssertTrue(transitions.beginPin(
+            threadId: "thread-a",
+            pinned: true,
+            originalPinned: false,
+            recentIndex: 0
+        ))
+        XCTAssertTrue(transitions.beginPin(
+            threadId: "thread-b",
+            pinned: true,
+            originalPinned: false,
+            recentIndex: 1
+        ))
+        XCTAssertEqual(
+            transitions.presentedPinnedThreadIds(from: []),
+            ["thread-b", "thread-a"]
+        )
+
+        transitions.rollbackPin(threadId: "thread-a")
+        XCTAssertEqual(
+            transitions.presentedPinnedThreadIds(from: ["thread-a"]),
+            ["thread-b"],
+            "rolling back A must retain B while removing A from an older full-list base"
+        )
+
+        transitions.rollbackPin(threadId: "thread-b")
+        XCTAssertEqual(
+            transitions.presentedPinnedThreadIds(from: ["thread-b"]),
+            [],
+            "rolling back B must not resurrect the already failed A request"
+        )
+    }
+
+    func testFastPinFailureDerivesRollbackBeforeTransitionReconciliation() throws {
+        let input = GaryxHomeListFixture.makeInputs(threadCount: 4, pinnedCount: 0, runningCount: 0)
+        let sections = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state.snapshot.sections
+        let store = GaryxHomeThreadListStore(snapshot: snapshot(sections: sections))
+        XCTAssertTrue(store.beginPinTransition(
+            threadId: "thread-1",
+            pinned: true,
+            originalPinned: false,
+            recentIndex: 1
+        ))
+
+        let rollbackIds = try XCTUnwrap(
+            store.rollbackPinTransition(
+                threadId: "thread-1",
+                basePinnedIds: ["thread-1"]
             )
-        ).state
-        XCTAssertNil(state.snapshot.sections.allRows.first { $0.id == "thread-0" })
+        )
 
-        state = reduce(state, .pinsChanged(pinnedThreadIds: ["thread-2"])).state
-        state = reduce(
-            state,
-            .optimisticRollback(
-                threadId: "thread-0",
-                restoredPinnedThreadIds: ["thread-2", "thread-0"],
-                restoredRecentThreadIds: input.recentThreadIds
-            )
-        ).state
+        XCTAssertEqual(rollbackIds, [])
+        XCTAssertEqual(store.rowMotion(threadId: "thread-1"), .stable)
+    }
 
-        XCTAssertEqual(state.pinnedThreadIds, ["thread-2", "thread-0"])
-        XCTAssertEqual(state.snapshot.sections.pinned.map(\.id), ["thread-2", "thread-0"])
+    func testUnpinOutsideCurrentFilterCollapsesInPlaceAndCanRestoreFromSavedRow() throws {
+        let input = GaryxHomeListFixture.makeInputs(threadCount: 8, pinnedCount: 3, runningCount: 0)
+        let ingested = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state
+        let base = reduce(
+            ingested,
+            .pinsChanged(pinnedThreadIds: input.pinnedThreadIds)
+        ).state.snapshot.sections
+        let pinnedRow = try XCTUnwrap(base.pinned.first { $0.id == "thread-1" })
+        let originalPinnedIndex = try XCTUnwrap(base.pinned.firstIndex { $0.id == pinnedRow.id })
+        var transitions = GaryxHomeThreadTransitionState()
+
+        XCTAssertTrue(transitions.beginPin(
+            threadId: pinnedRow.id,
+            pinned: false,
+            originalPinned: true,
+            recentIndex: nil,
+            originalPinnedIndex: originalPinnedIndex,
+            sourceRow: pinnedRow
+        ))
+        XCTAssertEqual(transitions.motion(for: pinnedRow.id), .leavingFilteredList)
+        XCTAssertEqual(
+            transitions.presentedSections(from: base).pinned.map(\.id),
+            base.pinned.map(\.id),
+            "The physical List item stays in its source slot while it visually collapses."
+        )
+
+        let optimisticBase = GaryxHomeThreadSections(
+            pinned: base.pinned.filter { $0.id != pinnedRow.id },
+            recent: base.recent
+        )
+        transitions.rollbackPin(threadId: pinnedRow.id)
+        transitions.reconcile(with: optimisticBase)
+        XCTAssertEqual(
+            transitions.presentedSections(from: optimisticBase).pinned.map(\.id),
+            base.pinned.map(\.id),
+            "A failed request restores the saved source row before canonical rollback catches up."
+        )
+
+        transitions.reconcile(with: base)
+        XCTAssertEqual(transitions.motion(for: pinnedRow.id), .stable)
     }
 
     func testReducerCanRunOffMainActor() async throws {
@@ -365,6 +580,16 @@ final class HomeProjectionReducerTests: XCTestCase {
 
     private func row(in state: HomeProjectionState, id: String) throws -> GaryxHomeThreadRow {
         try XCTUnwrap(state.snapshot.sections.allRows.first { $0.id == id })
+    }
+
+    private func snapshot(sections: GaryxHomeThreadSections) -> GaryxHomeThreadListSnapshot {
+        GaryxHomeThreadListSnapshot(
+            sections: sections,
+            isLoadingThreads: false,
+            isHomeVisible: true,
+            selectedRecentFilter: .all,
+            recentFeedPresentation: .init(isPrimed: true)
+        )
     }
 
 }
