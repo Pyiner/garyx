@@ -2,6 +2,10 @@
 
 状态:#TASK-2161 综合定稿,实现基准。
 
+修订(2026-07-12,上线后用户决定):移除筛选按钮右上角的 active dot,
+非默认筛选的可见提示只保留「Recent · Chats」标题尾注;本文其余关于
+dot 的段落仅作历史设计记录,不再是实现要求。
+
 基线:`origin/main` @ `26821a59e`(2026-07-12,含 #TASK-2153 / #TASK-2158
 已落地的 Recent filter tabs 实现)。实现前已 fetch 并确认当前 worktree HEAD 与
 `origin/main` 一致,Recent 同域没有更新的主线演进。
