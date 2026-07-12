@@ -16,6 +16,10 @@ import {
 } from "./diagnostics-helpers";
 import type { ContentView } from "./types";
 import {
+  CONVERSATION_RAIL_DEFAULT_WIDTH,
+  SIDEBAR_DEFAULT_WIDTH,
+  clampConversationRailWidth,
+  clampSidebarWidth,
   isCompactSidebarViewport,
   isDockedSidePanel,
   resolveSidebarCollapsed,
@@ -50,7 +54,7 @@ export function useLayoutResizeController({
     defaultSideToolsPanelWidth(null),
   );
   const [sideToolsResizing, setSideToolsResizing] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(245);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [sidebarCollapsedByUser, setSidebarCollapsedByUser] = useState(() => {
     try {
       return window.localStorage.getItem("garyx.sidebarCollapsed") === "1";
@@ -88,7 +92,7 @@ export function useLayoutResizeController({
     });
   }, [compactSidebarViewport]);
   const [sidebarResizing, setSidebarResizing] = useState(false);
-  const [railWidth, setRailWidth] = useState(258);
+  const [railWidth, setRailWidth] = useState(CONVERSATION_RAIL_DEFAULT_WIDTH);
   const [railResizing, setRailResizing] = useState(false);
   const sidebarResizeStateRef = useRef<{
     startX: number;
@@ -377,9 +381,8 @@ export function useLayoutResizeController({
     const handlePointerMove = (event: PointerEvent) => {
       const state = sidebarResizeStateRef.current;
       if (!state) return;
-      const next = Math.max(
-        245,
-        Math.min(520, state.startWidth + (event.clientX - state.startX)),
+      const next = clampSidebarWidth(
+        state.startWidth + (event.clientX - state.startX),
       );
       setSidebarWidth(next);
     };
@@ -417,9 +420,8 @@ export function useLayoutResizeController({
     const handlePointerMove = (event: PointerEvent) => {
       const state = railResizeStateRef.current;
       if (!state) return;
-      lastNext = Math.max(
-        220,
-        Math.min(420, state.startWidth + (event.clientX - state.startX)),
+      lastNext = clampConversationRailWidth(
+        state.startWidth + (event.clientX - state.startX),
       );
       if (rafId === null) {
         rafId = requestAnimationFrame(flush);

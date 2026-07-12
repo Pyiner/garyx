@@ -3,6 +3,23 @@ export const DUAL_RAIL_COMPACT_WIDTH = 980;
 export const TASK_TREE_DOCK_MIN_WIDTH = 1088;
 export const SIDE_PANEL_MIN_MAIN_WIDTH = 540;
 export const SIDE_PANEL_RESIZER_WIDTH = 10;
+export const SIDEBAR_DEFAULT_WIDTH = 245;
+export const SIDEBAR_MIN_WIDTH = 245;
+export const SIDEBAR_MAX_WIDTH = 520;
+export const CONVERSATION_RAIL_DEFAULT_WIDTH = 258;
+export const CONVERSATION_RAIL_MIN_WIDTH = 220;
+export const CONVERSATION_RAIL_MAX_WIDTH = 420;
+
+export function clampSidebarWidth(width: number): number {
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width));
+}
+
+export function clampConversationRailWidth(width: number): number {
+  return Math.max(
+    CONVERSATION_RAIL_MIN_WIDTH,
+    Math.min(CONVERSATION_RAIL_MAX_WIDTH, width),
+  );
+}
 
 export function responsiveSidebarBreakpoint(
   secondaryRailOpen: boolean,

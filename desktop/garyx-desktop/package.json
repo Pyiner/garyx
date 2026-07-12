@@ -19,6 +19,7 @@
     "build:packaged": "npm run build:ui",
     "preview": "electron-vite preview",
     "install:app": "node ./scripts/install-mac-app.mjs",
+    "layout:oracle": "node ./scripts/capture-horizontal-layout-oracle.mjs",
     "dist:mac": "npm run build:packaged && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.identity=null --publish never && npm run install:app",
     "dist:dir": "npm run build:packaged && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir --config.mac.identity=null --publish never && npm run install:app",
     "dist:mac:release": "node ./scripts/build-mac-release.mjs",
