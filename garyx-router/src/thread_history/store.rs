@@ -97,6 +97,7 @@ fn provider_session_tail_from_messages<'a>(
 #[derive(Debug)]
 struct ThreadCache {
     checkpoint: TranscriptRunState,
+    render_prefix_checkpoint: TranscriptRenderPrefixState,
     base_seq: u64,
     tail: Vec<CachedTranscriptRecord>,
     tail_bytes: usize,
@@ -113,6 +114,7 @@ impl ThreadCache {
         let total_records = records.len();
         Self {
             checkpoint: TranscriptRunState::default(),
+            render_prefix_checkpoint: TranscriptRenderPrefixState::default(),
             base_seq: min_seq.saturating_sub(1),
             tail: records,
             tail_bytes: 0,
@@ -133,6 +135,11 @@ impl ThreadCache {
         self.base_seq + 1
     }
 
+    fn cache_bytes(&self) -> usize {
+        self.tail_bytes
+            .saturating_add(self.render_prefix_checkpoint.estimated_heap_bytes())
+    }
+
     fn covers_whole_file(&self) -> bool {
         self.total_records == self.tail.len()
     }
@@ -147,6 +154,17 @@ impl ThreadCache {
         }
     }
 
+    fn fold_checkpoint_record(
+        run_state: &mut TranscriptRunState,
+        render_prefix_state: &mut TranscriptRenderPrefixState,
+        record: &ThreadTranscriptRecord,
+    ) {
+        if let Ok(value) = serde_json::to_value(record) {
+            apply_transcript_record(run_state, &value);
+            apply_transcript_render_prefix_record(render_prefix_state, &value);
+        }
+    }
+
     /// Fold the oldest tail records into the checkpoint until the tail fits
     /// the per-thread budget again. Always keeps at least one record so the
     /// tail stays anchored at the file's end.
@@ -157,7 +175,11 @@ impl ThreadCache {
                 || self.tail_bytes > budget.tail_max_bytes)
         {
             let cached = &self.tail[drained];
-            Self::fold_record(&mut self.checkpoint, &cached.record);
+            Self::fold_checkpoint_record(
+                &mut self.checkpoint,
+                &mut self.render_prefix_checkpoint,
+                &cached.record,
+            );
             self.base_seq = cached.record.seq;
             self.tail_bytes -= cached.bytes;
             drained += 1;
@@ -235,6 +257,24 @@ impl ThreadCache {
         state
     }
 
+    fn render_prefix_state_before(
+        &self,
+        floor_seq: u64,
+        based_on_seq: u64,
+    ) -> TranscriptRenderPrefixState {
+        let mut state = self.render_prefix_checkpoint.clone();
+        let prefix_end = floor_seq.saturating_sub(1).min(based_on_seq);
+        for cached in &self.tail {
+            if cached.record.seq > prefix_end {
+                break;
+            }
+            if let Ok(value) = serde_json::to_value(&cached.record) {
+                apply_transcript_render_prefix_record(&mut state, &value);
+            }
+        }
+        state
+    }
+
     /// Serve `render_snapshot_in_window` when the cached tail covers the
     /// requested window. Returns `None` (caller falls back to the full read)
     /// when the floor or based_on bound reaches below the cached tail.
@@ -252,14 +292,18 @@ impl ThreadCache {
             return None;
         }
         let run_state = self.run_state_at(based_on_seq);
+        let render_prefix_state = self.render_prefix_state_before(floor_seq, based_on_seq);
         let window_values: Vec<Value> = self
             .tail
             .iter()
             .filter(|c| c.record.seq >= floor_seq && c.record.seq <= based_on_seq)
             .filter_map(|c| serde_json::to_value(&c.record).ok())
             .collect();
-        let mut snapshot =
-            reduce_transcript_render_state_with_run_state(window_values.iter(), &run_state);
+        let mut snapshot = reduce_transcript_render_state_with_prefix_state(
+            window_values.iter(),
+            &run_state,
+            &render_prefix_state,
+        );
         if snapshot.based_on_seq == 0 {
             snapshot.based_on_seq = based_on_seq.min(self.last_seq);
         }
@@ -859,6 +903,22 @@ impl ThreadTranscriptStore {
         }
     }
 
+    #[cfg(test)]
+    pub(super) async fn render_cache_checkpoint_debug(
+        &self,
+        thread_id: &str,
+    ) -> Option<(u64, u64, usize)> {
+        let slot = self.file_slot(thread_id)?;
+        let cache = slot.state.lock().await;
+        cache.as_ref().map(|entry| {
+            (
+                entry.base_seq,
+                entry.tail_start_seq(),
+                entry.render_prefix_checkpoint.estimated_heap_bytes(),
+            )
+        })
+    }
+
     fn store_now_ms(&self) -> u64 {
         match &self.mode {
             TranscriptStoreMode::File { created_at, .. } => created_at.elapsed().as_millis() as u64,
@@ -870,7 +930,7 @@ impl ThreadTranscriptStore {
     /// eviction pass without taking the slot lock).
     fn sync_slot_accounting(&self, slot: &ThreadSlot, cache: &Option<ThreadCache>) {
         slot.cached_bytes.store(
-            cache.as_ref().map(|entry| entry.tail_bytes).unwrap_or(0),
+            cache.as_ref().map(ThreadCache::cache_bytes).unwrap_or(0),
             Ordering::Relaxed,
         );
         slot.last_used_ms
@@ -913,7 +973,7 @@ impl ThreadTranscriptStore {
             if let Ok(mut state) = slot.state.try_lock()
                 && let Some(entry) = state.take()
             {
-                total = total.saturating_sub(entry.tail_bytes);
+                total = total.saturating_sub(entry.cache_bytes());
                 slot.cached_bytes.store(0, Ordering::Relaxed);
             }
         }
@@ -2340,13 +2400,22 @@ impl ThreadTranscriptStore {
             .filter_map(|record| serde_json::to_value(record).ok())
             .collect::<Vec<_>>();
         let run_state = reduce_transcript_run_state(&full_values);
+        let render_prefix_values = prefix
+            .iter()
+            .filter(|record| record.seq < floor_seq)
+            .filter_map(|record| serde_json::to_value(record).ok())
+            .collect::<Vec<_>>();
+        let render_prefix_state = reduce_transcript_render_prefix_state(&render_prefix_values);
         let window_values = prefix
             .iter()
             .filter(|record| record.seq >= floor_seq)
             .filter_map(|record| serde_json::to_value(record).ok())
             .collect::<Vec<_>>();
-        let mut snapshot =
-            reduce_transcript_render_state_with_run_state(&window_values, &run_state);
+        let mut snapshot = reduce_transcript_render_state_with_prefix_state(
+            &window_values,
+            &run_state,
+            &render_prefix_state,
+        );
         if snapshot.based_on_seq == 0 {
             snapshot.based_on_seq = actual_based_on_seq;
         }
@@ -3057,6 +3126,10 @@ mod streaming_build_tests {
         let streamed = store.build_cache_streaming(thread_id, &path).await.unwrap();
 
         assert_eq!(streamed.checkpoint, oracle.checkpoint, "checkpoint fold");
+        assert_eq!(
+            streamed.render_prefix_checkpoint, oracle.render_prefix_checkpoint,
+            "render-prefix checkpoint fold"
+        );
         assert_eq!(streamed.base_seq, oracle.base_seq, "base_seq");
         assert_eq!(streamed.min_seq, oracle.min_seq, "min_seq");
         assert_eq!(streamed.last_seq, oracle.last_seq, "last_seq");

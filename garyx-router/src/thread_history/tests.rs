@@ -385,6 +385,163 @@ async fn render_snapshot_in_window_uses_full_prefix_run_state() {
     );
 }
 
+/// Regression reproduction for the captured mobile transcript shape: the
+/// cold-open floor landed on a task notification between a pending tool use
+/// and its late result. Re-reducing only records at/after the floor must not
+/// move that result from the pre-floor turn into the notification turn. A
+/// row changing ownership when the render floor changes gives SwiftUI a
+/// structurally different row under the same id and can leave the old card
+/// visually detached while later rows continue to update.
+#[tokio::test]
+async fn render_window_does_not_reparent_cross_floor_tool_result_to_task_notification() {
+    let store = ThreadTranscriptStore::memory();
+    store
+        .append_run_records(
+            "thread::render-window-task-notification",
+            Some("run-render-window-task-notification"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "Earlier request"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "tool_use",
+                        "kind": "tool_trace",
+                        "tool_use_id": "tool-window-boundary",
+                        "content": {
+                            "tool": "Bash",
+                            "input": {"command": "true"}
+                        }
+                    }),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "user",
+                        "content": "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-42\" status=\"in_review\">\nTask #TASK-42 is ready for review: Test Review\n\nReview complete.\n</garyx_task_notification>"
+                    }),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "tool_result",
+                        "kind": "tool_trace",
+                        "tool_use_id": "tool-window-boundary",
+                        "content": {"result": {"stdout": "done"}}
+                    }),
+                    "2026-06-18T12:00:03Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "Notification handled"}),
+                    "2026-06-18T12:00:04Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let full = store
+        .render_snapshot_at_seq("thread::render-window-task-notification", 5)
+        .await
+        .unwrap();
+    assert_eq!(
+        row_ref_ids(&full),
+        vec!["seq:1", "seq:2", "seq:4", "seq:3", "seq:5"],
+        "the full reducer repairs the late result into its original pre-floor tool group"
+    );
+
+    let window = store
+        .render_snapshot_in_window("thread::render-window-task-notification", 3, 5)
+        .await
+        .unwrap();
+    assert_eq!(
+        row_ref_ids(&window),
+        vec!["seq:3", "seq:5"],
+        "narrowing at the notification must not reparent seq:4 into that turn"
+    );
+}
+
+#[tokio::test]
+async fn rolled_render_prefix_checkpoint_preserves_hidden_tool_owner() {
+    let dir = tempdir().unwrap();
+    let store = ThreadTranscriptStore::file_for_tests(dir.path(), 1 << 20, 3, 1 << 20)
+        .await
+        .unwrap();
+    let thread_id = "thread::rolled-render-prefix";
+    store
+        .append_run_records(
+            thread_id,
+            Some("run-rolled-render-prefix"),
+            &[
+                RunTranscriptRecordDraft::from_message(
+                    json!({"role": "user", "content": "Earlier request"}),
+                ),
+                RunTranscriptRecordDraft::from_message(json!({
+                    "role": "tool_use",
+                    "kind": "tool_trace",
+                    "tool_use_id": "tool-rolled-boundary",
+                    "content": {"tool": "Bash", "input": {"command": "true"}}
+                })),
+                RunTranscriptRecordDraft::from_message(
+                    json!({"role": "assistant", "content": "Waiting for the result"}),
+                ),
+                RunTranscriptRecordDraft::from_message(
+                    json!({"role": "assistant", "content": "Still working"}),
+                ),
+                RunTranscriptRecordDraft::from_message(
+                    json!({"role": "assistant", "content": "One more update"}),
+                ),
+                RunTranscriptRecordDraft::from_message(
+                    json!({"role": "user", "content": "Task notification"}),
+                ),
+                RunTranscriptRecordDraft::from_message(json!({
+                    "role": "tool_result",
+                    "kind": "tool_trace",
+                    "tool_use_id": "tool-rolled-boundary",
+                    "content": {"result": {"stdout": "done"}}
+                })),
+                RunTranscriptRecordDraft::from_message(
+                    json!({"role": "assistant", "content": "Notification handled"}),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let full = store.render_snapshot_at_seq(thread_id, 8).await.unwrap();
+    assert_eq!(
+        row_ref_ids(&full),
+        vec![
+            "seq:1", "seq:2", "seq:7", "seq:3", "seq:4", "seq:5", "seq:6", "seq:8"
+        ],
+        "full reduction is the ownership ground truth"
+    );
+
+    let (base_seq, tail_start_seq, render_prefix_bytes) = store
+        .render_cache_checkpoint_debug(thread_id)
+        .await
+        .expect("append path keeps a cache entry");
+    assert!(base_seq > 0, "test must exercise a rolled checkpoint");
+    assert_eq!(tail_start_seq, 6, "floor must start at cached tail");
+    assert!(
+        render_prefix_bytes > 0,
+        "the rolled checkpoint must retain the hidden pending owner"
+    );
+
+    let baseline = store.full_file_reads.load(CacheTestOrdering::Relaxed);
+    let window = store
+        .render_snapshot_in_window(thread_id, 6, 8)
+        .await
+        .unwrap();
+    assert_eq!(row_ref_ids(&window), vec!["seq:6", "seq:8"]);
+    assert_eq!(
+        store.full_file_reads.load(CacheTestOrdering::Relaxed),
+        baseline,
+        "cache-eligible render must use the rolled checkpoint, not a full-file fallback"
+    );
+}
+
 #[tokio::test]
 async fn cold_open_user_turn_window_selects_newest_user_turn() {
     let store = ThreadTranscriptStore::memory();
@@ -1484,13 +1641,23 @@ fn oracle_render_in_window(
         .filter_map(|record| serde_json::to_value(record).ok())
         .collect::<Vec<_>>();
     let run_state = garyx_models::reduce_transcript_run_state(&full_values);
+    let render_prefix_values = prefix
+        .iter()
+        .filter(|record| record.seq < floor_seq)
+        .filter_map(|record| serde_json::to_value(record).ok())
+        .collect::<Vec<_>>();
+    let render_prefix_state =
+        garyx_models::reduce_transcript_render_prefix_state(&render_prefix_values);
     let window_values = prefix
         .iter()
         .filter(|record| record.seq >= floor_seq)
         .filter_map(|record| serde_json::to_value(record).ok())
         .collect::<Vec<_>>();
-    let mut snapshot =
-        garyx_models::reduce_transcript_render_state_with_run_state(&window_values, &run_state);
+    let mut snapshot = garyx_models::reduce_transcript_render_state_with_prefix_state(
+        &window_values,
+        &run_state,
+        &render_prefix_state,
+    );
     if snapshot.based_on_seq == 0 {
         snapshot.based_on_seq = actual_based_on_seq;
     }

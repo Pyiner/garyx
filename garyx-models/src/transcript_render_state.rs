@@ -534,9 +534,74 @@ pub fn final_assistant_text_from_render_records<'a>(
     assistant_visible_text(message)
 }
 
+/// Compact reducer context for records that precede a client-declared render
+/// floor. It retains only grouping state that can affect later records; no
+/// transcript bodies or selected tool output are copied into the checkpoint.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TranscriptRenderPrefixState {
+    current_tool_group: ToolGroupBuilder,
+    latest_run_start_seq: u64,
+}
+
+impl TranscriptRenderPrefixState {
+    /// Approximate heap storage retained by this state, for transcript-cache
+    /// accounting. The fixed struct itself is already part of `ThreadCache`.
+    pub fn estimated_heap_bytes(&self) -> usize {
+        self.current_tool_group.estimated_heap_bytes()
+    }
+}
+
+/// Advance the compact render-prefix checkpoint by one committed record.
+/// This shares the exact per-record transition used by full/window rendering,
+/// but discards blocks that are wholly below the future render floor.
+pub fn apply_transcript_render_prefix_record(
+    state: &mut TranscriptRenderPrefixState,
+    record: &Value,
+) {
+    let mut discarded_blocks = Vec::new();
+    let mut discarded_capsule_marks = Vec::new();
+    let mut discarded_placeholders = Vec::new();
+    apply_render_record(
+        record,
+        false,
+        &mut state.current_tool_group,
+        &mut discarded_blocks,
+        &mut discarded_capsule_marks,
+        &mut discarded_placeholders,
+        &mut state.latest_run_start_seq,
+    );
+    debug_assert!(discarded_blocks.is_empty());
+    debug_assert!(discarded_capsule_marks.is_empty());
+    debug_assert!(discarded_placeholders.is_empty());
+}
+
+pub fn reduce_transcript_render_prefix_state<'a>(
+    records: impl IntoIterator<Item = &'a Value>,
+) -> TranscriptRenderPrefixState {
+    let mut state = TranscriptRenderPrefixState::default();
+    for record in records {
+        apply_transcript_render_prefix_record(&mut state, record);
+    }
+    state
+}
+
 pub fn reduce_transcript_render_state_with_run_state<'a>(
     records: impl IntoIterator<Item = &'a Value>,
     run_state: &TranscriptRunState,
+) -> RenderSnapshot {
+    reduce_transcript_render_state_with_prefix_state(
+        records,
+        run_state,
+        &TranscriptRenderPrefixState::default(),
+    )
+}
+
+/// Reduce the visible portion of a transcript using exact reducer context
+/// folded from committed records below its render floor.
+pub fn reduce_transcript_render_state_with_prefix_state<'a>(
+    records: impl IntoIterator<Item = &'a Value>,
+    run_state: &TranscriptRunState,
+    prefix_state: &TranscriptRenderPrefixState,
 ) -> RenderSnapshot {
     let records = records.into_iter().collect::<Vec<_>>();
     let based_on_seq = records
@@ -548,69 +613,26 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
     let mut filtered_placeholders = Vec::new();
     let mut blocks = Vec::new();
     let mut capsule_marks = Vec::new();
-    let mut current_tool_group = ToolGroupBuilder::default();
-    let mut latest_run_start_seq = 0u64;
+    let mut current_tool_group = prefix_state.current_tool_group.clone();
+    let mut latest_run_start_seq = prefix_state.latest_run_start_seq;
 
     for record in records {
-        let Some(seq) = record_seq(record) else {
-            continue;
-        };
-        let Some(message) = record_message(record) else {
-            continue;
-        };
-        let role = normalized_role(message);
-        let reference = message_ref(seq, &role, message);
-        if is_control_message(message) {
-            if control_kind(message) == Some("run_start") {
-                latest_run_start_seq = seq;
-            }
-            if let Some(mark) = capsule_mark_from_message(seq, message) {
-                current_tool_group.flush_boundary_into(&mut blocks);
-                capsule_marks.push(mark);
-            }
-            continue;
-        }
-        let tool_related = is_tool_related_message(&role, message);
-        let kind = resolve_message_kind_for_object(&role, message, tool_related);
-        match kind {
-            "user_input" | "assistant_reply" => {
-                current_tool_group.flush_boundary_into(&mut blocks);
-                if kind == "assistant_reply" && is_empty_streaming_assistant(message) {
-                    filtered_placeholders.push(RenderFilteredPlaceholder {
-                        message: reference,
-                        reason: RenderPlaceholderFilterReason::EmptyStreamingAssistant,
-                    });
-                    continue;
-                }
-                blocks.push(RenderBlock::Message(RenderMessageBlock {
-                    reference,
-                    role,
-                    timestamp: message_timestamp(record, message),
-                    streaming: message_streaming(message),
-                }));
-            }
-            "tool_trace" => {
-                let is_result = is_tool_result_trace(&role, message);
-                current_tool_group.push_tool_message(
-                    ToolMessage {
-                        reference,
-                        timestamp: message_timestamp(record, message),
-                        tool_use_id: tool_call_id(message),
-                        is_result,
-                        is_error: message_bool(message, "is_error")
-                            || message_bool(message, "isError"),
-                        projection: RenderToolFieldProjection::from_message(message, is_result),
-                    },
-                    &mut blocks,
-                );
-            }
-            _ => {
-                current_tool_group.flush_boundary_into(&mut blocks);
-            }
-        }
+        apply_render_record(
+            record,
+            true,
+            &mut current_tool_group,
+            &mut blocks,
+            &mut capsule_marks,
+            &mut filtered_placeholders,
+            &mut latest_run_start_seq,
+        );
     }
     current_tool_group.flush_into(&mut blocks);
-    apply_tool_group_statuses(&mut blocks, run_state);
+    apply_tool_group_statuses(
+        &mut blocks,
+        run_state,
+        &current_tool_group.hidden_pending_by_visible_block,
+    );
 
     let rows = build_rows(&blocks, &capsule_marks, &latest_capsules, run_state);
     let (tail_activity, active_tool_group_id, progress_locus) =
@@ -633,6 +655,82 @@ pub fn reduce_transcript_render_state_with_run_state<'a>(
         rate_limit,
         window: None,
         rows_hash: None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_render_record(
+    record: &Value,
+    visible: bool,
+    current_tool_group: &mut ToolGroupBuilder,
+    blocks: &mut Vec<RenderBlock>,
+    capsule_marks: &mut Vec<CapsuleMark>,
+    filtered_placeholders: &mut Vec<RenderFilteredPlaceholder>,
+    latest_run_start_seq: &mut u64,
+) {
+    let Some(seq) = record_seq(record) else {
+        return;
+    };
+    let Some(message) = record_message(record) else {
+        return;
+    };
+    let role = normalized_role(message);
+    let reference = message_ref(seq, &role, message);
+    if is_control_message(message) {
+        if control_kind(message) == Some("run_start") {
+            *latest_run_start_seq = seq;
+        }
+        if let Some(mark) = capsule_mark_from_message(seq, message) {
+            current_tool_group.flush_boundary_into(blocks);
+            if visible {
+                capsule_marks.push(mark);
+            }
+        }
+        return;
+    }
+    let tool_related = is_tool_related_message(&role, message);
+    let kind = resolve_message_kind_for_object(&role, message, tool_related);
+    match kind {
+        "user_input" | "assistant_reply" => {
+            // Boundary flush deliberately precedes empty-streaming filtering.
+            current_tool_group.flush_boundary_into(blocks);
+            if !visible {
+                return;
+            }
+            if kind == "assistant_reply" && is_empty_streaming_assistant(message) {
+                filtered_placeholders.push(RenderFilteredPlaceholder {
+                    message: reference,
+                    reason: RenderPlaceholderFilterReason::EmptyStreamingAssistant,
+                });
+                return;
+            }
+            blocks.push(RenderBlock::Message(RenderMessageBlock {
+                reference,
+                role,
+                timestamp: message_timestamp(record, message),
+                streaming: message_streaming(message),
+            }));
+        }
+        "tool_trace" => {
+            let is_result = is_tool_result_trace(&role, message);
+            current_tool_group.push_tool_message(
+                ToolMessage {
+                    reference,
+                    timestamp: message_timestamp(record, message),
+                    tool_use_id: tool_call_id(message),
+                    is_result,
+                    is_error: message_bool(message, "is_error") || message_bool(message, "isError"),
+                    projection: visible
+                        .then(|| RenderToolFieldProjection::from_message(message, is_result))
+                        .flatten(),
+                    visible,
+                },
+                blocks,
+            );
+        }
+        _ => {
+            current_tool_group.flush_boundary_into(blocks);
+        }
     }
 }
 
@@ -683,7 +781,7 @@ struct RenderMessageBlock {
     streaming: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolMessage {
     reference: RenderMessageRef,
     timestamp: Option<String>,
@@ -691,9 +789,10 @@ struct ToolMessage {
     is_result: bool,
     is_error: bool,
     projection: Option<RenderToolFieldProjection>,
+    visible: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolEntryDraft {
     id: String,
     tool_use_id: Option<String>,
@@ -704,6 +803,9 @@ struct ToolEntryDraft {
     last_timestamp: Option<String>,
     is_error: bool,
     projection: Option<RenderToolFieldProjection>,
+    visible: bool,
+    has_tool_use: bool,
+    has_tool_result: bool,
 }
 
 impl ToolEntryDraft {
@@ -713,13 +815,16 @@ impl ToolEntryDraft {
         Self {
             id,
             tool_use_id: message.tool_use_id,
-            tool_use: Some(message.reference),
+            tool_use: message.visible.then_some(message.reference),
             tool_result: None,
             first_seq: seq,
             first_timestamp: message.timestamp.clone(),
             last_timestamp: message.timestamp,
             is_error: false,
             projection: message.projection,
+            visible: message.visible,
+            has_tool_use: true,
+            has_tool_result: false,
         }
     }
 
@@ -730,12 +835,15 @@ impl ToolEntryDraft {
             id,
             tool_use_id: message.tool_use_id,
             tool_use: None,
-            tool_result: Some(message.reference),
+            tool_result: message.visible.then_some(message.reference),
             first_seq: seq,
             first_timestamp: message.timestamp.clone(),
             last_timestamp: message.timestamp,
             is_error: message.is_error,
             projection: message.projection,
+            visible: message.visible,
+            has_tool_use: false,
+            has_tool_result: true,
         }
     }
 
@@ -744,33 +852,90 @@ impl ToolEntryDraft {
             self.tool_use_id = message.tool_use_id;
             self.id = tool_entry_id(self.tool_use_id.as_deref(), self.first_seq);
         }
-        self.tool_result = Some(message.reference);
+        self.has_tool_result = true;
+        if self.visible {
+            self.tool_result = Some(message.reference);
+        }
         self.last_timestamp = message.timestamp.or_else(|| self.last_timestamp.clone());
         self.is_error = message.is_error;
-        self.projection = merge_tool_result_projection(self.projection.take(), message.projection);
+        if self.visible {
+            self.projection =
+                merge_tool_result_projection(self.projection.take(), message.projection);
+        }
     }
 
     fn is_pending(&self) -> bool {
-        self.tool_use.is_some() && self.tool_result.is_none()
+        self.has_tool_use && !self.has_tool_result
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlushedPendingOwner {
+    Visible { block_idx: usize, entry_idx: usize },
+    Hidden,
+    HiddenInVisibleGroup { block_idx: usize },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ToolGroupBuilder {
     entries: Vec<ToolEntryDraft>,
     pending_by_id: BTreeMap<String, usize>,
     anonymous_pending: VecDeque<usize>,
-    /// Pending calls that were already flushed at a narrative boundary,
-    /// addressed as (block index, entry index) into the emitted blocks. A
-    /// late tool_result repairs the flushed entry in place instead of
-    /// opening a second group (#TASK-1603) — and the boundary flush itself
-    /// stays unconditional, so an orphan call can never hold the group
-    /// open and pool every later tool at the end of the thread.
-    flushed_pending_by_id: BTreeMap<String, (usize, usize)>,
+    /// Pending calls that were already flushed at a narrative boundary. A
+    /// visible owner addresses its emitted block/entry; a hidden owner was
+    /// emitted above the render floor and consumes its late result without
+    /// reparenting it. The boundary flush stays unconditional, so an orphan
+    /// call can never hold the group open and pool every later tool at the
+    /// end of the thread (#TASK-1603).
+    flushed_pending_by_id: BTreeMap<String, FlushedPendingOwner>,
+    /// Invisible pre-floor calls can seed a group that also contains visible
+    /// continuation entries. Keep their pending count by emitted block so
+    /// group status remains consistent with the full snapshot.
+    hidden_pending_by_visible_block: BTreeMap<usize, usize>,
 }
 
 impl ToolGroupBuilder {
-    fn push_tool_message(&mut self, message: ToolMessage, blocks: &mut Vec<RenderBlock>) {
+    fn estimated_heap_bytes(&self) -> usize {
+        let entry_storage = self.entries.capacity() * std::mem::size_of::<ToolEntryDraft>();
+        let entry_strings = self
+            .entries
+            .iter()
+            .map(|entry| {
+                entry.id.capacity()
+                    + entry
+                        .tool_use_id
+                        .as_ref()
+                        .map(|value| value.capacity())
+                        .unwrap_or(0)
+                    + entry
+                        .first_timestamp
+                        .as_ref()
+                        .map(|value| value.capacity())
+                        .unwrap_or(0)
+                    + entry
+                        .last_timestamp
+                        .as_ref()
+                        .map(|value| value.capacity())
+                        .unwrap_or(0)
+            })
+            .sum::<usize>();
+        let identified = self
+            .pending_by_id
+            .keys()
+            .map(|key| key.capacity() + std::mem::size_of::<(String, usize)>())
+            .sum::<usize>();
+        let anonymous = self.anonymous_pending.capacity() * std::mem::size_of::<usize>();
+        let flushed = self
+            .flushed_pending_by_id
+            .keys()
+            .map(|key| key.capacity() + std::mem::size_of::<(String, FlushedPendingOwner)>())
+            .sum::<usize>();
+        let hidden_pending =
+            self.hidden_pending_by_visible_block.len() * std::mem::size_of::<(usize, usize)>();
+        entry_storage + entry_strings + identified + anonymous + flushed + hidden_pending
+    }
+
+    fn push_tool_message(&mut self, message: ToolMessage, blocks: &mut [RenderBlock]) {
         if message.is_result {
             self.push_tool_result(message, blocks);
         } else {
@@ -780,6 +945,13 @@ impl ToolGroupBuilder {
 
     fn push_tool_use(&mut self, message: ToolMessage) {
         let tool_use_id = message.tool_use_id.clone();
+        if message.visible
+            && let Some(tool_use_id) = tool_use_id.as_deref()
+        {
+            // A visible reuse shadows stale hidden prefix ownership. Visible
+            // pending maps still keep the full reducer's existing precedence.
+            self.remove_hidden_owner(tool_use_id);
+        }
         let entry = ToolEntryDraft::from_use(message);
         let idx = self.entries.len();
         self.entries.push(entry);
@@ -790,7 +962,7 @@ impl ToolGroupBuilder {
         }
     }
 
-    fn push_tool_result(&mut self, message: ToolMessage, blocks: &mut Vec<RenderBlock>) {
+    fn push_tool_result(&mut self, message: ToolMessage, blocks: &mut [RenderBlock]) {
         if let Some(tool_use_id) = message.tool_use_id.as_deref()
             && let Some(idx) = self.pending_by_id.remove(tool_use_id)
             && let Some(entry) = self.entries.get_mut(idx)
@@ -800,22 +972,38 @@ impl ToolGroupBuilder {
         }
 
         if let Some(tool_use_id) = message.tool_use_id.as_deref()
-            && let Some((block_idx, entry_idx)) = self.flushed_pending_by_id.remove(tool_use_id)
-            && let Some(RenderBlock::ToolGroup(group)) = blocks.get_mut(block_idx)
-            && let Some(entry) = group.entries.get_mut(entry_idx)
+            && let Some(owner) = self.flushed_pending_by_id.remove(tool_use_id)
         {
-            entry.tool_result = Some(message.reference);
-            entry.status = if message.is_error {
-                RenderToolEntryStatus::Failed
-            } else {
-                RenderToolEntryStatus::Completed
-            };
-            entry.projection =
-                merge_tool_result_projection(entry.projection.take(), message.projection);
-            if message.timestamp.is_some() {
-                group.finished_at = message.timestamp;
+            match owner {
+                FlushedPendingOwner::Hidden => return,
+                FlushedPendingOwner::HiddenInVisibleGroup { block_idx } => {
+                    self.decrement_hidden_pending(block_idx);
+                    return;
+                }
+                FlushedPendingOwner::Visible {
+                    block_idx,
+                    entry_idx,
+                } => {
+                    if let Some(RenderBlock::ToolGroup(group)) = blocks.get_mut(block_idx)
+                        && let Some(entry) = group.entries.get_mut(entry_idx)
+                    {
+                        entry.tool_result = message.visible.then_some(message.reference);
+                        entry.status = if message.is_error {
+                            RenderToolEntryStatus::Failed
+                        } else {
+                            RenderToolEntryStatus::Completed
+                        };
+                        entry.projection = merge_tool_result_projection(
+                            entry.projection.take(),
+                            message.projection,
+                        );
+                        if message.timestamp.is_some() {
+                            group.finished_at = message.timestamp;
+                        }
+                        return;
+                    }
+                }
             }
-            return;
         }
 
         while let Some(idx) = self.anonymous_pending.pop_front() {
@@ -879,18 +1067,14 @@ impl ToolGroupBuilder {
             .iter()
             .rev()
             .find_map(|entry| entry.last_timestamp.clone());
-        let mut pending_ids = Vec::new();
-        let entries: Vec<RenderToolEntry> = self
-            .entries
-            .drain(..)
-            .enumerate()
-            .map(|(entry_idx, entry)| {
-                if entry.is_pending()
-                    && let Some(tool_use_id) = entry.tool_use_id.clone()
-                {
-                    pending_ids.push((tool_use_id, entry_idx));
-                }
-                RenderToolEntry {
+        let pending_by_id = std::mem::take(&mut self.pending_by_id);
+        let mut visible_index_by_draft = Vec::with_capacity(self.entries.len());
+        let mut visible_entries = Vec::new();
+        for entry in self.entries.drain(..) {
+            if entry.visible {
+                let visible_idx = visible_entries.len();
+                visible_index_by_draft.push(Some(visible_idx));
+                visible_entries.push(RenderToolEntry {
                     id: entry.id,
                     tool_use_id: entry.tool_use_id,
                     status: if entry.is_error {
@@ -901,23 +1085,71 @@ impl ToolGroupBuilder {
                     tool_use: entry.tool_use,
                     tool_result: entry.tool_result,
                     projection: entry.projection,
-                }
-            })
-            .collect();
-        let block_idx = blocks.len();
-        blocks.push(RenderBlock::ToolGroup(RenderToolGroup {
-            id: tool_group_id(first_tool_use_id.as_deref(), first_seq),
-            status: RenderToolGroupStatus::Completed,
-            entries,
-            started_at,
-            finished_at,
-        }));
-        for (tool_use_id, entry_idx) in pending_ids {
-            self.flushed_pending_by_id
-                .insert(tool_use_id, (block_idx, entry_idx));
+                });
+            } else {
+                visible_index_by_draft.push(None);
+            }
         }
-        self.pending_by_id.clear();
+        let visible_block_idx = if visible_entries.is_empty() {
+            None
+        } else {
+            let block_idx = blocks.len();
+            blocks.push(RenderBlock::ToolGroup(RenderToolGroup {
+                id: tool_group_id(first_tool_use_id.as_deref(), first_seq),
+                status: RenderToolGroupStatus::Completed,
+                entries: visible_entries,
+                started_at,
+                finished_at,
+            }));
+            Some(block_idx)
+        };
+        for (tool_use_id, draft_idx) in pending_by_id {
+            let owner = match (
+                visible_block_idx,
+                visible_index_by_draft.get(draft_idx).copied().flatten(),
+            ) {
+                (Some(block_idx), Some(entry_idx)) => FlushedPendingOwner::Visible {
+                    block_idx,
+                    entry_idx,
+                },
+                (Some(block_idx), None) => {
+                    *self
+                        .hidden_pending_by_visible_block
+                        .entry(block_idx)
+                        .or_insert(0) += 1;
+                    FlushedPendingOwner::HiddenInVisibleGroup { block_idx }
+                }
+                (None, _) => FlushedPendingOwner::Hidden,
+            };
+            self.flushed_pending_by_id.insert(tool_use_id, owner);
+        }
         self.anonymous_pending.clear();
+    }
+
+    fn remove_hidden_owner(&mut self, tool_use_id: &str) {
+        let Some(owner) = self.flushed_pending_by_id.get(tool_use_id).copied() else {
+            return;
+        };
+        match owner {
+            FlushedPendingOwner::Hidden => {
+                self.flushed_pending_by_id.remove(tool_use_id);
+            }
+            FlushedPendingOwner::HiddenInVisibleGroup { block_idx } => {
+                self.flushed_pending_by_id.remove(tool_use_id);
+                self.decrement_hidden_pending(block_idx);
+            }
+            FlushedPendingOwner::Visible { .. } => {}
+        }
+    }
+
+    fn decrement_hidden_pending(&mut self, block_idx: usize) {
+        let Some(count) = self.hidden_pending_by_visible_block.get_mut(&block_idx) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            self.hidden_pending_by_visible_block.remove(&block_idx);
+        }
     }
 }
 
@@ -1315,7 +1547,11 @@ fn tool_group_first_seq(group: &RenderToolGroup) -> Option<u64> {
         .min()
 }
 
-fn apply_tool_group_statuses(blocks: &mut [RenderBlock], run_state: &TranscriptRunState) {
+fn apply_tool_group_statuses(
+    blocks: &mut [RenderBlock],
+    run_state: &TranscriptRunState,
+    hidden_pending_by_visible_block: &BTreeMap<usize, usize>,
+) {
     let tail_index = blocks.len().checked_sub(1);
     for (index, block) in blocks.iter_mut().enumerate() {
         let RenderBlock::ToolGroup(group) = block else {
@@ -1324,10 +1560,13 @@ fn apply_tool_group_statuses(blocks: &mut [RenderBlock], run_state: &TranscriptR
         let active = run_state.busy
             && run_state.activity == TranscriptRunActivity::UsingTool
             && Some(index) == tail_index
-            && group
+            && (group
                 .entries
                 .iter()
-                .any(|entry| entry.tool_use.is_some() && entry.tool_result.is_none());
+                .any(|entry| entry.tool_use.is_some() && entry.tool_result.is_none())
+                || hidden_pending_by_visible_block
+                    .get(&index)
+                    .is_some_and(|count| *count > 0));
         group.status = if active {
             RenderToolGroupStatus::Active
         } else {
@@ -1619,7 +1858,7 @@ mod tests {
     use super::*;
     use serde::Deserialize;
     use serde_json::json;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::PathBuf;
 
@@ -1911,6 +2150,335 @@ mod tests {
             groups[0].entries[0].status,
             RenderToolEntryStatus::Completed
         );
+    }
+
+    #[test]
+    fn window_prefix_consumes_late_result_owned_above_floor() {
+        let records = vec![
+            user_record(1, "Earlier request", "00000000-0000-0000-0000-000000000021"),
+            tool_use_record(2, "call_before_floor", "Bash"),
+            user_record(
+                3,
+                "Task notification",
+                "00000000-0000-0000-0000-000000000022",
+            ),
+            tool_result_record(4, "call_before_floor", false),
+            assistant_record(5, "Notification handled"),
+        ];
+
+        let full = reduce_transcript_render_state(&records);
+        assert_eq!(
+            row_ref_ids(&full),
+            vec![
+                "origin:00000000-0000-0000-0000-000000000021",
+                "seq:2",
+                "seq:4",
+                "origin:00000000-0000-0000-0000-000000000022",
+                "seq:5"
+            ]
+        );
+
+        let window = render_window(&records, 3);
+        assert_eq!(
+            row_ref_ids(&window),
+            vec!["origin:00000000-0000-0000-0000-000000000022", "seq:5"],
+            "the late result belongs to the hidden pre-floor group"
+        );
+    }
+
+    #[test]
+    fn window_prefix_preserves_cross_floor_group_identity_and_timestamps() {
+        let records = vec![
+            user_record(1, "Run tools", "00000000-0000-0000-0000-000000000023"),
+            message_record(
+                2,
+                json!({
+                    "role": "tool_use",
+                    "tool_use_id": "call_hidden_seed",
+                    "tool_name": "Bash",
+                    "timestamp": "2026-01-01T00:00:02Z"
+                }),
+            ),
+            message_record(
+                3,
+                json!({
+                    "role": "tool_result",
+                    "tool_use_id": "call_hidden_seed",
+                    "timestamp": "2026-01-01T00:00:03Z"
+                }),
+            ),
+            message_record(
+                4,
+                json!({
+                    "role": "tool_use",
+                    "tool_use_id": "call_visible_continuation",
+                    "tool_name": "Read",
+                    "timestamp": "2026-01-01T00:00:04Z"
+                }),
+            ),
+            message_record(
+                5,
+                json!({
+                    "role": "tool_result",
+                    "tool_use_id": "call_visible_continuation",
+                    "timestamp": "2026-01-01T00:00:05Z"
+                }),
+            ),
+            assistant_record(6, "Done"),
+        ];
+
+        let full = reduce_transcript_render_state(&records);
+        let window = render_window(&records, 4);
+        let (_, full_group, _) = tool_entry_location(&full, "tool_entry:call_visible_continuation");
+        let (_, window_group, window_entry) =
+            tool_entry_location(&window, "tool_entry:call_visible_continuation");
+
+        assert_eq!(window_group.id, full_group.id);
+        assert_eq!(window_group.id, "tool_group:call_hidden_seed");
+        assert_eq!(window_group.started_at, full_group.started_at);
+        assert_eq!(
+            window_group.started_at.as_deref(),
+            Some("2026-01-01T00:00:02Z")
+        );
+        assert_eq!(
+            window_group.finished_at.as_deref(),
+            Some("2026-01-01T00:00:05Z")
+        );
+        assert_eq!(window_group.entries.len(), 1);
+        assert_eq!(window_entry.tool_use.as_ref().map(|item| item.seq), Some(4));
+        assert_eq!(
+            window_entry.tool_result.as_ref().map(|item| item.seq),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn window_group_stays_active_for_hidden_pending_call() {
+        let records = vec![
+            control_record(1, "run_start"),
+            user_record(
+                2,
+                "Run parallel tools",
+                "00000000-0000-0000-0000-000000000028",
+            ),
+            tool_use_record(3, "call_hidden_pending", "Bash"),
+            tool_use_record(4, "call_visible_complete", "Read"),
+            tool_result_record(5, "call_visible_complete", false),
+        ];
+
+        let full = reduce_transcript_render_state(&records);
+        let window = render_window(&records, 4);
+        let (_, full_group, _) = tool_entry_location(&full, "tool_entry:call_visible_complete");
+        let (_, window_group, window_entry) =
+            tool_entry_location(&window, "tool_entry:call_visible_complete");
+
+        assert_eq!(full_group.status, RenderToolGroupStatus::Active);
+        assert_eq!(window_group.status, full_group.status);
+        assert_eq!(window_entry.status, RenderToolEntryStatus::Completed);
+        assert_eq!(window.tail_activity, RenderTailActivity::ToolActive);
+        assert_eq!(
+            window.active_tool_group_id.as_deref(),
+            Some(window_group.id.as_str())
+        );
+    }
+
+    #[test]
+    fn window_prefix_preserves_anonymous_fifo_across_floor() {
+        let anonymous_use = |seq| {
+            message_record(
+                seq,
+                json!({
+                    "role": "tool_use",
+                    "tool_name": "Bash",
+                    "timestamp": format!("2026-01-01T00:00:{seq:02}Z")
+                }),
+            )
+        };
+        let anonymous_result = |seq| {
+            message_record(
+                seq,
+                json!({
+                    "role": "tool_result",
+                    "timestamp": format!("2026-01-01T00:00:{seq:02}Z")
+                }),
+            )
+        };
+        let records = vec![
+            anonymous_use(1),
+            anonymous_use(2),
+            anonymous_result(3),
+            anonymous_result(4),
+            assistant_record(5, "Done"),
+        ];
+
+        let window = render_window(&records, 2);
+        assert_eq!(row_ref_ids(&window), vec!["seq:2", "seq:4", "seq:5"]);
+        let (_, group, entry) = tool_entry_location(&window, "tool_entry:seq:2");
+        assert_eq!(group.id, "tool_group:seq:1");
+        assert_eq!(entry.tool_result.as_ref().map(|item| item.seq), Some(4));
+        assert!(
+            !row_ref_ids(&window).contains(&"seq:3".to_owned()),
+            "the first visible result must satisfy the older hidden anonymous call"
+        );
+    }
+
+    #[test]
+    fn hidden_filtering_boundaries_flush_before_window_seed() {
+        let boundary_cases = [
+            (
+                "empty streaming assistant",
+                message_record(
+                    2,
+                    json!({
+                        "role": "assistant",
+                        "content": "",
+                        "streaming": true,
+                        "timestamp": "2026-01-01T00:00:02Z"
+                    }),
+                ),
+            ),
+            (
+                "capsule attached",
+                capsule_attached_record(2, "capsule-test", "Test Capsule", 1, "created"),
+            ),
+        ];
+
+        for (name, boundary) in boundary_cases {
+            let records = vec![
+                tool_use_record(1, "call_hidden_boundary", "Bash"),
+                boundary,
+                tool_use_record(3, "call_visible_after_boundary", "Read"),
+                tool_result_record(4, "call_hidden_boundary", false),
+                tool_result_record(5, "call_visible_after_boundary", false),
+                assistant_record(6, "Done"),
+            ];
+            let window = render_window(&records, 3);
+            assert_eq!(
+                row_ref_ids(&window),
+                vec!["seq:3", "seq:5", "seq:6"],
+                "{name} must flush before filtering"
+            );
+            let (_, group, entry) =
+                tool_entry_location(&window, "tool_entry:call_visible_after_boundary");
+            assert_eq!(
+                group.id, "tool_group:call_visible_after_boundary",
+                "{name} must not leak the hidden group seed across its boundary"
+            );
+            assert_eq!(entry.tool_result.as_ref().map(|item| item.seq), Some(5));
+        }
+    }
+
+    #[test]
+    fn visible_duplicate_id_shadows_hidden_owner_open_and_flushed() {
+        for flush_visible_before_result in [false, true] {
+            let mut records = vec![
+                tool_use_record(1, "call_reused", "Bash"),
+                assistant_record(2, "Hidden boundary"),
+                tool_use_record(3, "call_reused", "Read"),
+            ];
+            if flush_visible_before_result {
+                records.push(assistant_record(4, "Visible boundary"));
+                records.push(tool_result_record(5, "call_reused", false));
+                records.push(assistant_record(6, "Done"));
+            } else {
+                records.push(tool_result_record(4, "call_reused", false));
+                records.push(assistant_record(5, "Done"));
+            }
+
+            let result_seq = if flush_visible_before_result { 5 } else { 4 };
+            let window = render_window(&records, 3);
+            let (_, group, entry) = tool_entry_location(&window, "tool_entry:call_reused");
+            assert_eq!(group.id, "tool_group:call_reused");
+            assert_eq!(entry.tool_use.as_ref().map(|item| item.seq), Some(3));
+            assert_eq!(
+                entry.tool_result.as_ref().map(|item| item.seq),
+                Some(result_seq),
+                "visible duplicate must win when flushed={flush_visible_before_result}"
+            );
+        }
+    }
+
+    #[test]
+    fn genuine_orphan_result_at_or_above_floor_remains_visible() {
+        let records = vec![
+            user_record(1, "Question", "00000000-0000-0000-0000-000000000024"),
+            tool_result_record(2, "call_without_use", false),
+            assistant_record(3, "Done"),
+        ];
+        let window = render_window(&records, 2);
+        assert_eq!(row_ref_ids(&window), vec!["seq:2", "seq:3"]);
+        let (_, _, entry) = tool_entry_location(&window, "tool_entry:call_without_use");
+        assert!(entry.tool_use.is_none());
+        assert_eq!(entry.tool_result.as_ref().map(|item| item.seq), Some(2));
+    }
+
+    #[test]
+    fn render_floor_sweep_preserves_visible_full_snapshot_ownership() {
+        let records = vec![
+            user_record(1, "First", "00000000-0000-0000-0000-000000000025"),
+            tool_use_record(2, "call_group_seed", "Bash"),
+            tool_result_record(3, "call_group_seed", false),
+            tool_use_record(4, "call_group_continuation", "Read"),
+            tool_result_record(5, "call_group_continuation", false),
+            assistant_record(6, "First done"),
+            user_record(
+                7,
+                "Task notification",
+                "00000000-0000-0000-0000-000000000026",
+            ),
+            tool_use_record(8, "call_late_boundary", "Bash"),
+            message_record(
+                9,
+                json!({"role": "assistant", "content": "", "streaming": true}),
+            ),
+            tool_result_record(10, "call_late_boundary", false),
+            capsule_attached_record(11, "capsule-floor", "Floor Capsule", 1, "created"),
+            tool_use_record(12, "call_after_capsule", "Read"),
+            tool_result_record(13, "call_after_capsule", false),
+            assistant_record(14, "Second done"),
+            user_record(15, "Third", "00000000-0000-0000-0000-000000000027"),
+            tool_result_record(16, "call_orphan_visible", false),
+            assistant_record(17, "Third done"),
+        ];
+        let full = reduce_transcript_render_state(&records);
+        let full_locations = tool_entry_locations(&full);
+
+        for floor in 1..=17 {
+            let window = render_window(&records, floor);
+            let window_locations = tool_entry_locations(&window);
+            for (entry_id, full_location) in &full_locations {
+                if full_location.anchor_seq < floor {
+                    continue;
+                }
+                let window_location = window_locations
+                    .get(entry_id)
+                    .unwrap_or_else(|| panic!("floor {floor} dropped visible entry {entry_id}"));
+                assert_eq!(
+                    window_location.group_id, full_location.group_id,
+                    "floor {floor} changed group identity for {entry_id}"
+                );
+                if full_location.turn_anchor_seq >= floor {
+                    assert_eq!(
+                        window_location.turn_id, full_location.turn_id,
+                        "floor {floor} reparented visible entry {entry_id}"
+                    );
+                }
+            }
+            for row in &full.rows {
+                let turn = expect_user_turn(row);
+                let Some(user) = turn.user.as_ref().filter(|user| user.seq >= floor) else {
+                    continue;
+                };
+                assert!(
+                    window
+                        .rows
+                        .iter()
+                        .any(|row| expect_user_turn(row).id == turn.id),
+                    "floor {floor} dropped/reidentified visible user {}",
+                    user.id
+                );
+            }
+        }
     }
 
     #[test]
@@ -3068,6 +3636,131 @@ mod tests {
             RenderActivityRow::Step(row) => row,
             other => panic!("expected step, got {other:?}"),
         }
+    }
+
+    fn render_window(records: &[Value], floor_seq: u64) -> RenderSnapshot {
+        let run_state = reduce_transcript_run_state(records);
+        let prefix_state = reduce_transcript_render_prefix_state(
+            records
+                .iter()
+                .filter(|record| record_seq(record).is_some_and(|seq| seq < floor_seq)),
+        );
+        reduce_transcript_render_state_with_prefix_state(
+            records
+                .iter()
+                .filter(|record| record_seq(record).is_some_and(|seq| seq >= floor_seq)),
+            &run_state,
+            &prefix_state,
+        )
+    }
+
+    fn tool_entry_location<'a>(
+        snapshot: &'a RenderSnapshot,
+        entry_id: &str,
+    ) -> (
+        &'a RenderUserTurnRow,
+        &'a RenderToolGroup,
+        &'a RenderToolEntry,
+    ) {
+        for row in &snapshot.rows {
+            let turn = expect_user_turn(row);
+            for activity in &turn.activity {
+                let RenderActivityRow::Step(step) = activity else {
+                    continue;
+                };
+                for item in &step.steps {
+                    let RenderStepItem::ToolGroup(group) = item else {
+                        continue;
+                    };
+                    if let Some(entry) = group.entries.iter().find(|entry| entry.id == entry_id) {
+                        return (turn, group, entry);
+                    }
+                }
+            }
+        }
+        panic!("missing tool entry {entry_id}");
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ToolEntryLocation {
+        anchor_seq: u64,
+        group_id: String,
+        turn_id: String,
+        turn_anchor_seq: u64,
+    }
+
+    fn tool_entry_locations(snapshot: &RenderSnapshot) -> BTreeMap<String, ToolEntryLocation> {
+        let mut locations = BTreeMap::new();
+        for row in &snapshot.rows {
+            let turn = expect_user_turn(row);
+            let turn_anchor_seq = turn_anchor_seq(turn);
+            for activity in &turn.activity {
+                let RenderActivityRow::Step(step) = activity else {
+                    continue;
+                };
+                for item in &step.steps {
+                    let RenderStepItem::ToolGroup(group) = item else {
+                        continue;
+                    };
+                    for entry in &group.entries {
+                        let anchor_seq = [entry.tool_use.as_ref(), entry.tool_result.as_ref()]
+                            .into_iter()
+                            .flatten()
+                            .map(|reference| reference.seq)
+                            .min()
+                            .expect("visible tool entry has a message ref");
+                        let previous = locations.insert(
+                            entry.id.clone(),
+                            ToolEntryLocation {
+                                anchor_seq,
+                                group_id: group.id.clone(),
+                                turn_id: turn.id.clone(),
+                                turn_anchor_seq,
+                            },
+                        );
+                        assert!(previous.is_none(), "fixture tool-entry ids must be unique");
+                    }
+                }
+            }
+        }
+        locations
+    }
+
+    fn turn_anchor_seq(turn: &RenderUserTurnRow) -> u64 {
+        if let Some(user) = &turn.user {
+            return user.seq;
+        }
+        turn.activity
+            .iter()
+            .flat_map(|activity| match activity {
+                RenderActivityRow::AssistantReply(reply) => vec![reply.message.seq],
+                RenderActivityRow::Step(step) => {
+                    let mut seqs = Vec::new();
+                    for item in &step.steps {
+                        match item {
+                            RenderStepItem::AssistantMessage(message) => {
+                                seqs.push(message.message.seq);
+                            }
+                            RenderStepItem::ToolGroup(group) => {
+                                for entry in &group.entries {
+                                    seqs.extend(
+                                        [entry.tool_use.as_ref(), entry.tool_result.as_ref()]
+                                            .into_iter()
+                                            .flatten()
+                                            .map(|reference| reference.seq),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    if let Some(final_message) = &step.final_message {
+                        seqs.push(final_message.seq);
+                    }
+                    seqs
+                }
+            })
+            .min()
+            .unwrap_or(0)
     }
 
     /// Every message-ref id the snapshot's row tree references — the

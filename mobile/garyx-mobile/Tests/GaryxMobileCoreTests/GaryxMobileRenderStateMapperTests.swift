@@ -92,6 +92,108 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(frame.renderState?.tailActivity, GaryxRenderTailActivity.none)
     }
 
+    func testCrossFloorTaskNotificationStaysAnOrdinaryServerOrderedRow() throws {
+        let payload = #"""
+        {
+          "type": "thread_render_frame",
+          "thread_id": "thread::render-floor-task-owner",
+          "events": [
+            {
+              "type": "committed_message",
+              "thread_id": "thread::render-floor-task-owner",
+              "seq": 3,
+              "message": {
+                "index": 2,
+                "role": "user",
+                "text": "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-42\" status=\"in_review\">Test review</garyx_task_notification>"
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::render-floor-task-owner",
+              "seq": 4,
+              "message": {
+                "index": 3,
+                "role": "tool_result",
+                "tool_use_id": "tool-frame-boundary",
+                "content": { "result": { "stdout": "done" } }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::render-floor-task-owner",
+              "seq": 5,
+              "message": {
+                "index": 4,
+                "role": "assistant",
+                "text": "Notification handled"
+              }
+            }
+          ],
+          "render_state": {
+            "based_on_seq": 5,
+            "rows": [
+              {
+                "kind": "user_turn",
+                "id": "user_turn:seq:3",
+                "user": { "id": "seq:3", "seq": 3, "role": "user" },
+                "activity": [
+                  {
+                    "kind": "assistant_reply",
+                    "id": "assistant_reply:seq:5",
+                    "message": { "id": "seq:5", "seq": 5, "role": "assistant" },
+                    "streaming": false
+                  }
+                ],
+                "started_at": null,
+                "finished_at": null
+              }
+            ],
+            "tailActivity": "none",
+            "activeToolGroupId": null,
+            "progress_locus": "none",
+            "filtered_placeholders": [],
+            "window": { "floor_seq": 3, "has_more_above": true }
+          }
+        }
+        """#
+
+        var processor = GatewayStreamFrameProcessor()
+        processor.resetConnection(afterSeq: 2, replayScope: .resume)
+        let result = processor.processPayload(payload, threadId: "thread::render-floor-task-owner")
+        XCTAssertNil(result.reconnect)
+        XCTAssertEqual(result.actions.count, 2)
+        guard case let .applyCommittedMessages(committed) = try XCTUnwrap(result.actions.first),
+              case let .applyRenderSnapshot(snapshot) = try XCTUnwrap(result.actions.last) else {
+            return XCTFail("frame must apply bodies before the server snapshot")
+        }
+        XCTAssertEqual(committed.map(\.index), [2, 3, 4])
+        XCTAssertEqual(snapshot.window, GaryxRenderWindow(floorSeq: 3, hasMoreAbove: true))
+
+        let messages = GaryxMobileTranscriptMapper.mobileMessages(from: committed)
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: messages,
+            transcriptMessages: committed
+        )
+
+        let row = try XCTUnwrap(rows.only)
+        XCTAssertEqual(row.id, "user_turn:seq:3")
+        XCTAssertTrue(row.userBlock?.message.text.contains("Test review") == true)
+        guard case let .flat(reply) = try XCTUnwrap(row.activityRows.only) else {
+            return XCTFail("the task notification should have one ordinary assistant reply")
+        }
+        XCTAssertEqual(reply.message.text, "Notification handled")
+        XCTAssertEqual(
+            rows.flatMap(\.activityRows).compactMap { activity -> GaryxMobileToolTraceGroup? in
+                guard case let .turn(turn) = activity else { return nil }
+                return turn.steps.compactMap(\.message.toolTraceGroup).first
+            },
+            [],
+            "the cached late result body must not create local tool ownership"
+        )
+    }
+
     func testUserTurnDecodesMissingCapsuleCardsAsEmpty() throws {
         let row = try decodeRenderUserTurnRow(#"""
         {
