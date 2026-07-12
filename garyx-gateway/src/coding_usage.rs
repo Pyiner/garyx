@@ -354,15 +354,20 @@ fn parse_codex_usage(value: &Value) -> Result<ProviderUsage, String> {
     let rate_limit = value
         .get("rate_limit")
         .ok_or_else(|| "Codex usage response missing rate_limit".to_string())?;
-    // Only treat `secondary_window` as the weekly allowance when its declared
-    // window length is actually ~7 days; otherwise we would mislabel a daily or
-    // other rolling limit as weekly quota.
-    let weekly = rate_limit
-        .get("secondary_window")
+    // Window position is not semantic: Codex historically returned the
+    // 5-hour allowance as primary and the weekly allowance as secondary, but
+    // now also returns the weekly allowance alone as primary. Identify the
+    // weekly window by its declared duration in either slot.
+    let weekly = ["primary_window", "secondary_window"]
+        .into_iter()
+        .filter_map(|key| rate_limit.get(key))
         .filter(|window| codex_window_is_weekly(window))
-        .and_then(parse_codex_window);
+        .find_map(parse_codex_window);
+    // Keep the legacy primary-window fallback for the session allowance, but
+    // never expose a confirmed weekly primary window as a 5-hour limit.
     let session = rate_limit
         .get("primary_window")
+        .filter(|window| !codex_window_is_weekly(window))
         .and_then(parse_codex_window);
     if weekly.is_none() && session.is_none() {
         return Err("Codex usage response had no usable rate-limit windows".to_string());
@@ -966,6 +971,30 @@ mod tests {
         assert!(weekly.resets_at.is_some());
         let session = usage.session.expect("session window");
         assert_eq!(session.remaining_percent, 98.0);
+    }
+
+    #[test]
+    fn parses_codex_weekly_primary_without_session() {
+        let payload = json!({
+            "plan_type": "pro",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 36,
+                    "limit_window_seconds": 604800,
+                    "reset_after_seconds": 479565,
+                    "reset_at": 1784361431
+                }
+            }
+        });
+
+        let usage = parse_codex_usage(&payload).unwrap();
+        let weekly = usage.weekly.expect("weekly window");
+        assert_eq!(weekly.remaining_percent, 64.0);
+        assert_eq!(weekly.reset_after_seconds, Some(479565));
+        assert!(
+            usage.session.is_none(),
+            "weekly window is not a session limit"
+        );
     }
 
     #[test]
