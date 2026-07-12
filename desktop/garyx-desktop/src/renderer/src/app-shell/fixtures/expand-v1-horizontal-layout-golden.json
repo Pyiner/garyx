@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "policy": "expand-v1",
+  "scenarios": [
+    {
+      "name": "side-tools-auto-hidden-at-960",
+      "width": 960,
+      "desiredOccupancy": {
+        "globalSidebar": true,
+        "conversationRail": false,
+        "sideTools": true,
+        "threadLogs": false
+      },
+      "presentation": {
+        "globalSidebar": "expanded",
+        "conversationRail": "closed",
+        "sideTools": "hidden",
+        "threadLogs": "closed",
+        "taskTree": "overlay-closed",
+        "taskTreeDocked": false,
+        "compactViewport": false,
+        "headerDensity": "regular"
+      },
+      "columns": [245, 0, 0, 715, 0, 0, 0, 0]
+    },
+    {
+      "name": "side-tools-docked-at-961",
+      "width": 961,
+      "desiredOccupancy": {
+        "globalSidebar": true,
+        "conversationRail": false,
+        "sideTools": true,
+        "threadLogs": false
+      },
+      "presentation": {
+        "globalSidebar": "expanded",
+        "conversationRail": "closed",
+        "sideTools": "docked",
+        "threadLogs": "closed",
+        "taskTree": "absent",
+        "taskTreeDocked": false,
+        "compactViewport": false,
+        "headerDensity": "regular"
+      },
+      "columns": [245, 0, 0, 386, 10, 320, 0, 0]
+    },
+    {
+      "name": "dual-rail-sidebar-compact-at-980",
+      "width": 980,
+      "desiredOccupancy": {
+        "globalSidebar": true,
+        "conversationRail": true,
+        "sideTools": false,
+        "threadLogs": false
+      },
+      "presentation": {
+        "globalSidebar": "collapsed",
+        "conversationRail": "open",
+        "sideTools": "closed",
+        "threadLogs": "closed",
+        "taskTree": "overlay-closed",
+        "taskTreeDocked": false,
+        "compactViewport": true,
+        "headerDensity": "compact"
+      },
+      "columns": [0, 258, 1, 721, 0, 0, 0, 0]
+    },
+    {
+      "name": "dual-rail-sidebar-restored-at-981",
+      "width": 981,
+      "desiredOccupancy": {
+        "globalSidebar": true,
+        "conversationRail": true,
+        "sideTools": false,
+        "threadLogs": false
+      },
+      "presentation": {
+        "globalSidebar": "expanded",
+        "conversationRail": "open",
+        "sideTools": "closed",
+        "threadLogs": "closed",
+        "taskTree": "overlay-closed",
+        "taskTreeDocked": false,
+        "compactViewport": false,
+        "headerDensity": "regular"
+      },
+      "columns": [245, 258, 1, 477, 0, 0, 0, 0]
+    },
+    {
+      "name": "minimum-width-capacity-chain",
+      "width": 480,
+      "desiredOccupancy": {
+        "globalSidebar": true,
+        "conversationRail": true,
+        "sideTools": true,
+        "threadLogs": false
+      },
+      "presentation": {
+        "globalSidebar": "collapsed",
+        "conversationRail": "hidden",
+        "sideTools": "hidden",
+        "threadLogs": "closed",
+        "taskTree": "overlay-closed",
+        "taskTreeDocked": false,
+        "compactViewport": true,
+        "headerDensity": "compact"
+      },
+      "columns": [0, 0, 0, 480, 0, 0, 0, 0]
+    },
+    {
+      "name": "thread-logs-overlay-at-800",
+      "width": 800,
+      "desiredOccupancy": {
+        "globalSidebar": true,
+        "conversationRail": false,
+        "sideTools": false,
+        "threadLogs": true
+      },
+      "presentation": {
+        "globalSidebar": "expanded",
+        "conversationRail": "closed",
+        "sideTools": "closed",
+        "threadLogs": "overlay",
+        "taskTree": "absent",
+        "taskTreeDocked": false,
+        "compactViewport": false,
+        "headerDensity": "regular"
+      },
+      "columns": [245, 0, 0, 555, 0, 0, 0, 0]
+    }
+  ]
+}

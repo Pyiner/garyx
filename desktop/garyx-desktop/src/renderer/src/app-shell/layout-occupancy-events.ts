@@ -1,15 +1,13 @@
-export type LayoutIntentCause =
-  | "user-panel"
-  | "user-route"
-  | "system-cleanup"
-  | "hydrate";
+import type {
+  HorizontalLayoutEvent,
+  LayoutIntentCause,
+  LayoutPanelOccupancy,
+} from "./responsive-layout-model";
 
-export type LayoutPanelOccupancy = Readonly<{
-  globalSidebar: boolean;
-  conversationRail: boolean;
-  sideTools: boolean;
-  threadLogs: boolean;
-}>;
+export type {
+  LayoutIntentCause,
+  LayoutPanelOccupancy,
+} from "./responsive-layout-model";
 
 export type LayoutOccupancySources = Readonly<{
   globalSidebar: boolean;
@@ -19,13 +17,10 @@ export type LayoutOccupancySources = Readonly<{
   threadLogs: boolean;
 }>;
 
-export type LayoutOccupancyEvent = Readonly<{
-  type: "LAYOUT_INTENT_CHANGED";
-  previousOccupancy: LayoutPanelOccupancy;
-  nextOccupancy: LayoutPanelOccupancy;
-  cause: LayoutIntentCause;
-  transactionId: string;
-}>;
+export type LayoutOccupancyEvent = Extract<
+  HorizontalLayoutEvent,
+  { type: "LAYOUT_INTENT_CHANGED" }
+>;
 
 export type LayoutOccupancyEventLog = Readonly<{
   currentSources: LayoutOccupancySources;

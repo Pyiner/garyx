@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const appShell = readFileSync(new URL("./AppShell.tsx", import.meta.url), "utf8");
@@ -7,6 +7,26 @@ const resizeController = readFileSync(
   new URL("./useLayoutResizeController.ts", import.meta.url),
   "utf8",
 );
+
+function rendererSourceFiles(directory) {
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const url = new URL(
+      `${entry.name}${entry.isDirectory() ? "/" : ""}`,
+      directory,
+    );
+    if (entry.isDirectory()) {
+      files.push(...rendererSourceFiles(url));
+    } else if (/\.tsx?$/.test(entry.name)) {
+      files.push(url);
+    }
+  }
+  return files;
+}
+
+const rendererSources = rendererSourceFiles(
+  new URL("../", import.meta.url),
+).map((url) => readFileSync(url, "utf8"));
 
 const legacySetterNames = [
   "setOpenCapsuleTabsLegacy",
@@ -19,9 +39,12 @@ const legacySetterNames = [
 
 test("all legacy occupancy setters have exactly one centralized call site", () => {
   for (const setterName of legacySetterNames) {
-    const references =
-      appShell.match(new RegExp(`\\b${setterName}\\b`, "g")) || [];
-    const calls = appShell.match(new RegExp(`\\b${setterName}\\(`, "g")) || [];
+    const references = rendererSources.flatMap((source) =>
+      source.match(new RegExp(`\\b${setterName}\\b`, "g")) || [],
+    );
+    const calls = rendererSources.flatMap((source) =>
+      source.match(new RegExp(`\\b${setterName}\\(`, "g")) || [],
+    );
     assert.equal(
       references.length,
       2,
@@ -95,9 +118,10 @@ test("route, capsule, logs replace, and cleanup writers enter the same bridge", 
     /onToggleThreadLogs=\{[\s\S]*?inspectorOpen: false,[\s\S]*?openCapsuleTabs: \[\],[\s\S]*?threadLogsOpen: nextThreadLogsOpen/,
     "logs replacement supplies one complete target vector",
   );
-  assert.ok(
+  assert.equal(
     (appShell.match(/commitLegacyLayoutIntent\("system-cleanup"/g) || [])
-      .length >= 8,
+      .length,
+    9,
     "route, data, Escape, no-thread, and capsule cleanup paths are normalized",
   );
 });
@@ -117,4 +141,13 @@ test("desired logging may lead legacy commits without changing their UI sequence
     appShell,
     /layoutOccupancyEventLogRef\.current = appendResult\.log/,
   );
+});
+
+test("Phase 1 machine effects remain headless and are not live-wired", () => {
+  for (const source of [appShell, resizeController]) {
+    assert.doesNotMatch(source, /\breduceHorizontalLayout\b/);
+    assert.doesNotMatch(source, /\bprojectHorizontalLayout\b/);
+    assert.doesNotMatch(source, /\bAPPLY_WINDOW_BOUNDS\b/);
+    assert.doesNotMatch(source, /\bCLAIM_INITIAL_LAYOUT\b/);
+  }
 });
