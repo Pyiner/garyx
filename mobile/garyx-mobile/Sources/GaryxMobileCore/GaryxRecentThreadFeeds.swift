@@ -68,22 +68,6 @@ public struct GaryxRecentThreadLoadMoreTicket: Equatable, Sendable {
     public var limit: Int { pagerTicket.limit }
 }
 
-public struct GaryxRecentThreadRemovalRollback: Equatable, Sendable {
-    public let threadId: String
-    public let allPosition: Int?
-    public let nonTaskPosition: Int?
-
-    public init(
-        threadId: String,
-        allPosition: Int?,
-        nonTaskPosition: Int?
-    ) {
-        self.threadId = threadId
-        self.allPosition = allPosition
-        self.nonTaskPosition = nonTaskPosition
-    }
-}
-
 public struct GaryxRecentThreadFeedState: Equatable, Sendable {
     public private(set) var orderedThreadIds: [String]
     public private(set) var isPrimed: Bool
@@ -187,18 +171,8 @@ public struct GaryxRecentThreadFeedState: Equatable, Sendable {
         pager.noteLocalMutation()
     }
 
-    fileprivate mutating func remove(_ threadId: String) -> Int? {
-        let position = orderedThreadIds.firstIndex(of: threadId)
+    fileprivate mutating func remove(_ threadId: String) {
         orderedThreadIds.removeAll { $0 == threadId }
-        noteLocalMutation()
-        return position
-    }
-
-    fileprivate mutating func restore(_ threadId: String, position: Int?) {
-        orderedThreadIds.removeAll { $0 == threadId }
-        if let position {
-            orderedThreadIds.insert(threadId, at: min(position, orderedThreadIds.count))
-        }
         noteLocalMutation()
     }
 
@@ -378,19 +352,11 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
         nonTaskFeed.noteLocalMutation()
     }
 
-    public mutating func removeThread(_ rawThreadId: String) -> GaryxRecentThreadRemovalRollback {
+    public mutating func removeThread(_ rawThreadId: String) {
         let threadId = rawThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
-        return GaryxRecentThreadRemovalRollback(
-            threadId: threadId,
-            allPosition: allFeed.remove(threadId),
-            nonTaskPosition: nonTaskFeed.remove(threadId)
-        )
-    }
-
-    public mutating func rollbackRemoval(_ rollback: GaryxRecentThreadRemovalRollback) {
-        guard !rollback.threadId.isEmpty else { return }
-        allFeed.restore(rollback.threadId, position: rollback.allPosition)
-        nonTaskFeed.restore(rollback.threadId, position: rollback.nonTaskPosition)
+        guard !threadId.isEmpty else { return }
+        allFeed.remove(threadId)
+        nonTaskFeed.remove(threadId)
     }
 
     public mutating func upsertChat(threadId rawThreadId: String) {

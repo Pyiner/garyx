@@ -248,7 +248,7 @@ extension GaryxMobileModel {
     func archiveThreadRecord(threadId: String, additionalEndpointKey: String? = nil) async {
         let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedThreadId.isEmpty else { return }
-        guard !pendingThreadArchives.contains(threadId: normalizedThreadId) else { return }
+        guard pendingThreadArchives.startArchive(threadId: normalizedThreadId) else { return }
 
         let endpointKeys = GaryxThreadArchiveRequestBuilder.endpointKeys(
             threadId: normalizedThreadId,
@@ -257,11 +257,9 @@ extension GaryxMobileModel {
         )
 
         let runtimeGeneration = gatewayRuntimeGeneration
-        let previousPinnedThreadIds = pinnedThreadIds
-        let previousThreads = threads
-        let previousLastOpenedThreadId = persistedLastOpenedThreadId
-        pendingThreadArchives.startArchive(threadId: normalizedThreadId)
-        let recentRollback = removeArchivedThreadLocally(normalizedThreadId)
+        // Preserve the conversation-surface contract: leaving the archived
+        // thread is immediate. Only the Home List row set waits for the
+        // remote commit, which is the collection-view crash boundary.
         if selectedThread?.id == normalizedThreadId {
             openNewThreadDraft()
         }
@@ -271,37 +269,32 @@ extension GaryxMobileModel {
                 endpointKeys: endpointKeys
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            pendingThreadArchives.resolveArchive(threadId: normalizedThreadId)
-            removeArchivedThreadLocally(normalizedThreadId)
-            channelEndpoints.removeAll { endpoint in
-                let endpointThreadId = endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return endpointKeys.contains(endpoint.endpointKey)
-                    || endpointThreadId == normalizedThreadId
+
+            // A native SwiftUI List cannot safely delete a swipe-action row
+            // and reinsert it in the same update cycle when the request
+            // fails. Commit every visible row-set mutation exactly once,
+            // after the gateway has accepted the destructive operation.
+            do {
+                let transactionId = homeProjectionGateway.beginTransaction(label: "archive-commit")
+                defer { homeProjectionGateway.endTransaction(transactionId) }
+                pendingThreadArchives.commitArchive(threadId: normalizedThreadId)
+                removeArchivedThreadLocally(normalizedThreadId)
+                channelEndpoints.removeAll { endpoint in
+                    let endpointThreadId = endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    return endpointKeys.contains(endpoint.endpointKey)
+                        || endpointThreadId == normalizedThreadId
+                }
+                persistCatalogCacheSnapshot()
+                messagesByThread[normalizedThreadId] = nil
+                messageSignaturesByThread[normalizedThreadId] = nil
+                activeAssistantMessageIdsByThread[normalizedThreadId] = nil
             }
-            persistCatalogCacheSnapshot()
-            if selectedThread?.id == normalizedThreadId {
-                selectedThread = nil
-                draftThreadTitle = ""
-                discardComposerDraft(forThread: normalizedThreadId)
-                messages = []
-                cancelSelectedThreadReconcileLoop()
-                resetSelectedThreadHistoryPagination()
-            }
-            messagesByThread[normalizedThreadId] = nil
-            messageSignaturesByThread[normalizedThreadId] = nil
-            activeAssistantMessageIdsByThread[normalizedThreadId] = nil
+
             await refreshRemoteState()
             await refreshThreads(source: .userAction)
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            pendingThreadArchives.resolveArchive(threadId: normalizedThreadId)
-            let transactionId = homeProjectionGateway.beginTransaction(label: "archive-rollback")
-            defer { homeProjectionGateway.endTransaction(transactionId) }
-            pinnedThreadIds = previousPinnedThreadIds
-            recentThreadFeeds.rollbackRemoval(recentRollback)
-            threads = previousThreads
-            restorePersistedLastOpenedThreadId(previousLastOpenedThreadId)
-            persistRecentThreadsWidgetSnapshot()
+            pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
             lastError = displayMessage(for: error)
         }
     }

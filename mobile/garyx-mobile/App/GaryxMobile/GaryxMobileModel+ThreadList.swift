@@ -79,11 +79,9 @@ extension GaryxMobileModel {
             case .abandonedLocalMutation:
                 // Archive/delete/pin surgery raced this refresh
                 // (review #TASK-1804 round 3): every pre-await snapshot is
-                // stale — the surgery's tombstone may already be resolved,
-                // so commit-point re-filtering cannot save them. Drop the
-                // page and follow up with a fresh refresh, which also
-                // replaces the surgery-triggered refresh this one coalesced
-                // away.
+                // stale. Drop the page and follow up with a fresh refresh,
+                // which also replaces the surgery-triggered refresh this one
+                // coalesced away.
                 Task { [weak self] in
                     await self?.refreshThreads(source: source)
                 }
@@ -185,8 +183,8 @@ extension GaryxMobileModel {
     /// Synchronous commit of a completed head-refresh transaction. Runs
     /// entirely on the MainActor after the refresh's last await, so all
     /// inputs captured before the backfill are re-filtered here against the
-    /// commit-point `pendingThreadArchives`: a thread archived while the
-    /// backfill was suspended must not be resurrected by pre-await
+    /// committed tombstones in `pendingThreadArchives`: a thread archived
+    /// while the backfill was suspended must not be resurrected by pre-await
     /// snapshots (review #TASK-1804 round 2).
     func commitRefreshedRecentThreadsPage(
         pinsPageThreadIds: [String],

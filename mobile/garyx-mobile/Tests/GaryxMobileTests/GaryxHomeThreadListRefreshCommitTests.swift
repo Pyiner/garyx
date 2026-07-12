@@ -24,10 +24,10 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         // pins arrived while `thread-pinned` was still live.
         let page = try makeRecentThreadsPage(threads: [pinned, recent, incoming])
 
-        // Backfill await window: the user archives the pinned thread. The
-        // archive flow marks it pending and removes it locally before its
-        // gateway call completes.
+        // Backfill await window: the gateway accepts the archive and the app
+        // commits its one local removal while this older page is suspended.
         model.pendingThreadArchives.startArchive(threadId: pinned.id)
+        model.pendingThreadArchives.commitArchive(threadId: pinned.id)
         model.removeArchivedThreadLocally(pinned.id)
 
         // The refresh resumes, but the filter-owned pager rejects every
@@ -457,7 +457,94 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         )
     }
 
-    func testArchiveSuccessInvalidatesRefreshIssuedAfterOptimisticRemoval() async throws {
+    func testArchiveFailureKeepsListSnapshotStableUntilRemoteCommit() async throws {
+        let archiveStarted = expectation(description: "archive request started")
+        let archiveGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "POST", components.path.hasSuffix("/archive") {
+                archiveStarted.fulfill()
+                guard archiveGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    statusCode: 500,
+                    data: Data(#"{"error":"archive failed"}"#.utf8)
+                )
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            archiveGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let archived = makeThread(id: "thread-archived", title: "Archived thread")
+        let survivor = makeThread(id: "thread-survivor", title: "Surviving thread")
+        model.threads = [archived, survivor]
+        model.pinnedThreadIds = [archived.id]
+        primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .all)
+        primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .nonTask)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        let initialSnapshot = model.homeThreadListStore.snapshot
+
+        let archiveTask = Task { @MainActor in
+            await model.archiveThreadRecord(threadId: archived.id)
+        }
+        await fulfillment(of: [archiveStarted], timeout: 2)
+
+        // A refresh may finish while the remote operation is still pending.
+        // It must keep the existing row visible until the archive commits.
+        let concurrentRefresh = try XCTUnwrap(
+            model.recentThreadFeeds.requestRefresh(filter: .all)
+        )
+        XCTAssertEqual(
+            model.recentThreadFeeds.completeRefresh(
+                concurrentRefresh,
+                pageIds: [archived.id, survivor.id],
+                pageOffset: 0,
+                pageCount: 2,
+                hasMore: false
+            ),
+            .apply(.replaceHead)
+        )
+        model.commitRefreshedRecentThreadsPage(
+            pinsPageThreadIds: [archived.id],
+            fetchedThreads: [archived, survivor],
+            previousThreadSummaries: [archived, survivor],
+            previouslyRemoteBusyThreadIds: [],
+            selectionIdForThisRefresh: nil,
+            runtimeGeneration: model.gatewayRuntimeGeneration
+        )
+        await model.homeProjectionGateway.waitForIdleForTesting()
+
+        XCTAssertTrue(model.pendingThreadArchives.isRequestInFlight(threadId: archived.id))
+        XCTAssertEqual(model.pinnedThreadIds, [archived.id])
+        XCTAssertEqual(model.allRecentThreadIds, [archived.id, survivor.id])
+        XCTAssertEqual(model.threads, [archived, survivor])
+        XCTAssertEqual(
+            model.homeThreadListStore.snapshot,
+            initialSnapshot,
+            "a remote archive that has not committed must not delete List rows"
+        )
+
+        archiveGate.signal()
+        await archiveTask.value
+        await model.homeProjectionGateway.waitForIdleForTesting()
+
+        XCTAssertFalse(model.pendingThreadArchives.contains(threadId: archived.id))
+        XCTAssertEqual(model.pinnedThreadIds, [archived.id])
+        XCTAssertEqual(model.allRecentThreadIds, [archived.id, survivor.id])
+        XCTAssertEqual(model.threads, [archived, survivor])
+        XCTAssertEqual(model.homeThreadListStore.snapshot, initialSnapshot)
+    }
+
+    func testArchiveSuccessMakesOneListCommitAndInvalidatesEarlierRefresh() async throws {
         let archiveStarted = expectation(description: "archive request started")
         let archiveGate = DispatchSemaphore(value: 0)
         let session = makeStubSession { request in
@@ -492,25 +579,34 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         model.threads = [archived, survivor]
         primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .all)
         primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .nonTask)
+        let allMutationSequence = model.recentThreadFeeds.allFeed.pager.localMutationSequence
+        let chatsMutationSequence = model.recentThreadFeeds.nonTaskFeed.pager.localMutationSequence
 
         let archiveTask = Task { @MainActor in
             await model.archiveThreadRecord(threadId: archived.id)
         }
         await fulfillment(of: [archiveStarted], timeout: 2)
-        XCTAssertTrue(model.pendingThreadArchives.contains(threadId: archived.id))
-        XCTAssertEqual(model.allRecentThreadIds, [survivor.id])
+        XCTAssertTrue(model.pendingThreadArchives.isRequestInFlight(threadId: archived.id))
+        XCTAssertEqual(model.allRecentThreadIds, [archived.id, survivor.id])
 
-        // This ticket is newer than the optimistic removal, so only the
-        // successful archive's second local removal can invalidate its stale
-        // server page after the pending tombstone has been resolved.
+        // The request is pending but has not changed the List. Its single
+        // success commit must invalidate this pre-commit server page.
         let staleTicket = try XCTUnwrap(model.recentThreadFeeds.requestRefresh(filter: .all))
         archiveGate.signal()
-        let archiveResolved = await waitUntil {
-            !model.pendingThreadArchives.contains(threadId: archived.id)
+        let archiveCommitted = await waitUntil {
+            model.pendingThreadArchives.isCommitted(threadId: archived.id)
         }
         XCTAssertTrue(
-            archiveResolved,
-            "the real archive success path must resolve its pending tombstone"
+            archiveCommitted,
+            "the real archive success path must commit its stale-response tombstone"
+        )
+        XCTAssertEqual(
+            model.recentThreadFeeds.allFeed.pager.localMutationSequence,
+            allMutationSequence + 1
+        )
+        XCTAssertEqual(
+            model.recentThreadFeeds.nonTaskFeed.pager.localMutationSequence,
+            chatsMutationSequence + 1
         )
 
         let completion = model.recentThreadFeeds.completeRefresh(

@@ -199,13 +199,13 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
         XCTAssertFalse(feeds.selectedPresentation.headFailure)
     }
 
-    func testLocalRemovalBlocksStalePageAndRollbackRestoresBothOrders() throws {
+    func testLocalRemovalBlocksStalePageInBothFeeds() throws {
         var feeds = makeFeeds()
         adoptHead(&feeds, filter: .all, ids: ["task", "chat", "tail"])
         adoptHead(&feeds, filter: .nonTask, ids: ["chat", "tail"])
         let stale = try XCTUnwrap(feeds.requestRefresh(filter: .all))
 
-        let rollback = feeds.removeThread("chat")
+        feeds.removeThread("chat")
         XCTAssertEqual(feeds.allRecentThreadIds, ["task", "tail"])
         XCTAssertEqual(feeds.nonTaskFeed.orderedThreadIds, ["tail"])
         XCTAssertEqual(
@@ -218,10 +218,6 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
             ),
             .abandonedLocalMutation
         )
-
-        feeds.rollbackRemoval(rollback)
-        XCTAssertEqual(feeds.allRecentThreadIds, ["task", "chat", "tail"])
-        XCTAssertEqual(feeds.nonTaskFeed.orderedThreadIds, ["chat", "tail"])
     }
 
     func testChatUpsertTouchesBothFeedsWhileTaskMembershipComesFromServerPages() {

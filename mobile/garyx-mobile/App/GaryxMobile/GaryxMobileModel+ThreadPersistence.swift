@@ -97,27 +97,19 @@ extension GaryxMobileModel {
         recentThreadFeeds.noteLocalMutation()
     }
 
-    @discardableResult
-    func removeArchivedThreadLocally(_ threadId: String) -> GaryxRecentThreadRemovalRollback {
+    func removeArchivedThreadLocally(_ threadId: String) {
         let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedId.isEmpty else {
-            return GaryxRecentThreadRemovalRollback(
-                threadId: "",
-                allPosition: nil,
-                nonTaskPosition: nil
-            )
-        }
+        guard !normalizedId.isEmpty else { return }
         let transactionId = homeProjectionGateway.beginTransaction(label: "archive-local-remove")
         defer { homeProjectionGateway.endTransaction(transactionId) }
         pinnedThreadIds.removeAll { $0 == normalizedId }
-        let rollback = recentThreadFeeds.removeThread(normalizedId)
+        recentThreadFeeds.removeThread(normalizedId)
         threads.removeAll { $0.id == normalizedId }
         // Any in-flight refresh captured this thread before the removal;
         // invalidate its commit so stale snapshots cannot resurrect the row
-        // even after the archive tombstone resolves (review #TASK-1804).
+        // alongside the committed archive tombstone (review #TASK-1804).
         clearPersistedLastOpenedThreadId(ifMatches: normalizedId)
         persistRecentThreadsWidgetSnapshot()
-        return rollback
     }
 
     // MARK: - Last opened thread restore
