@@ -833,6 +833,77 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertTrue(model.homeThreadListStore.presentationSnapshot.sections.pinned.isEmpty)
     }
 
+    func testConcurrentPinAndUnpinFailuresRestoreOriginalPinnedOrder() async throws {
+        let pinStarted = expectation(description: "pin request started")
+        let unpinStarted = expectation(description: "unpin request started")
+        let pinGate = DispatchSemaphore(value: 0)
+        let unpinGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "PUT", components.path.hasSuffix("/api/thread-pins/thread-new") {
+                pinStarted.fulfill()
+                guard pinGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, statusCode: 500, data: Data())
+            }
+            if request.httpMethod == "DELETE", components.path.hasSuffix("/api/thread-pins/thread-one") {
+                unpinStarted.fulfill()
+                guard unpinGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, statusCode: 500, data: Data())
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            pinGate.signal()
+            unpinGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let zero = makeThread(id: "thread-zero", title: "Pinned zero")
+        let one = makeThread(id: "thread-one", title: "Pinned one")
+        let two = makeThread(id: "thread-two", title: "Pinned two")
+        let new = makeThread(id: "thread-new", title: "New pin")
+        model.threads = [zero, one, two, new]
+        model.pinnedThreadIds = [zero.id, one.id, two.id]
+        primeRecentFeed(model, ids: [zero.id, one.id, two.id, new.id], filter: .all)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+
+        model.togglePinnedThread(new.id)
+        model.unpinThread(one.id)
+
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id),
+            [new.id, zero.id, two.id]
+        )
+        await fulfillment(of: [pinStarted, unpinStarted], timeout: 2)
+
+        pinGate.signal()
+        let pinRolledBack = await waitUntil {
+            model.pinnedThreadIds == [zero.id, two.id]
+                && model.homeThreadListStore.rowMotion(threadId: one.id) == .pinning
+        }
+        XCTAssertTrue(pinRolledBack)
+
+        unpinGate.signal()
+        let unpinRolledBack = await waitUntil {
+            model.pinnedThreadIds == [zero.id, one.id, two.id]
+                && model.homeThreadListStore.rowMotion(threadId: one.id) == .stable
+        }
+        XCTAssertTrue(unpinRolledBack)
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id),
+            [zero.id, one.id, two.id],
+            "The failed unpin must restore between its stable neighbors after the earlier pin fails."
+        )
+    }
+
     func testUnpinOutsideSelectedFilterCollapsesThenRestoresInPlaceOnFailure() async throws {
         let unpinStarted = expectation(description: "unpin request started")
         let unpinGate = DispatchSemaphore(value: 0)

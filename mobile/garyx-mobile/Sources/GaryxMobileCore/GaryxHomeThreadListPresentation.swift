@@ -385,6 +385,8 @@ struct GaryxHomeThreadTransitionState: Equatable, Sendable {
         let originalPinned: Bool
         let recentIndex: Int?
         let originalPinnedIndex: Int
+        let originalPinnedOrder: [String]
+        let originalRecentOrder: [String]
         let sourceRow: GaryxHomeThreadRow?
         let sequence: UInt64
         var remoteResolved: Bool
@@ -431,6 +433,8 @@ struct GaryxHomeThreadTransitionState: Equatable, Sendable {
         originalPinned: Bool,
         recentIndex: Int?,
         originalPinnedIndex: Int? = nil,
+        originalPinnedOrder: [String] = [],
+        originalRecentOrder: [String] = [],
         sourceRow: GaryxHomeThreadRow? = nil
     ) -> Bool {
         guard let threadId = Self.normalizedThreadId(threadId),
@@ -445,6 +449,8 @@ struct GaryxHomeThreadTransitionState: Equatable, Sendable {
             originalPinned: originalPinned,
             recentIndex: recentIndex.map { max(0, $0) },
             originalPinnedIndex: max(0, originalPinnedIndex ?? 0),
+            originalPinnedOrder: Self.normalizedThreadIds(originalPinnedOrder),
+            originalRecentOrder: Self.normalizedThreadIds(originalRecentOrder),
             sourceRow: sourceRow,
             sequence: nextSequence,
             remoteResolved: false
@@ -537,7 +543,12 @@ struct GaryxHomeThreadTransitionState: Equatable, Sendable {
             ids.removeAll { $0 == threadId }
             if transition.targetPinned {
                 let targetIndex = transition.restoresOriginalPlacement
-                    ? min(transition.originalPinnedIndex, ids.count)
+                    ? Self.restorationIndex(
+                        threadId: threadId,
+                        originalOrder: transition.originalPinnedOrder,
+                        currentIds: ids,
+                        fallbackIndex: transition.originalPinnedIndex
+                    )
                     : 0
                 ids.insert(threadId, at: targetIndex)
             }
@@ -560,13 +571,32 @@ struct GaryxHomeThreadTransitionState: Equatable, Sendable {
             recentIds.removeAll { $0 == threadId }
             if transition.targetPinned {
                 let targetIndex = transition.restoresOriginalPlacement
-                    ? min(transition.originalPinnedIndex, pinnedIds.count)
+                    ? Self.restorationIndex(
+                        threadId: threadId,
+                        originalOrder: transition.originalPinnedOrder,
+                        currentIds: pinnedIds,
+                        fallbackIndex: transition.originalPinnedIndex
+                    )
                     : 0
                 pinnedIds.insert(threadId, at: targetIndex)
             } else if let recentIndex = transition.recentIndex {
-                recentIds.insert(threadId, at: min(recentIndex, recentIds.count))
+                let targetIndex = transition.restoresOriginalPlacement
+                    ? Self.restorationIndex(
+                        threadId: threadId,
+                        originalOrder: transition.originalRecentOrder,
+                        currentIds: recentIds,
+                        fallbackIndex: recentIndex
+                    )
+                    : min(recentIndex, recentIds.count)
+                recentIds.insert(threadId, at: targetIndex)
             } else {
-                pinnedIds.insert(threadId, at: min(transition.originalPinnedIndex, pinnedIds.count))
+                let targetIndex = Self.restorationIndex(
+                    threadId: threadId,
+                    originalOrder: transition.originalPinnedOrder,
+                    currentIds: pinnedIds,
+                    fallbackIndex: transition.originalPinnedIndex
+                )
+                pinnedIds.insert(threadId, at: targetIndex)
             }
         }
 
@@ -598,6 +628,42 @@ struct GaryxHomeThreadTransitionState: Equatable, Sendable {
     private static func normalizedThreadId(_ rawId: String) -> String? {
         let threadId = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
         return threadId.isEmpty ? nil : threadId
+    }
+
+    private static func normalizedThreadIds(_ rawIds: [String]) -> [String] {
+        var seen = Set<String>()
+        return rawIds.compactMap { rawId in
+            guard let threadId = normalizedThreadId(rawId),
+                  seen.insert(threadId).inserted else {
+                return nil
+            }
+            return threadId
+        }
+    }
+
+    /// Restores relative to the nearest surviving stable neighbor instead of
+    /// trusting an index that another optimistic transition may have shifted.
+    private static func restorationIndex(
+        threadId: String,
+        originalOrder: [String],
+        currentIds: [String],
+        fallbackIndex: Int
+    ) -> Int {
+        guard let originalIndex = originalOrder.firstIndex(of: threadId) else {
+            return min(max(0, fallbackIndex), currentIds.count)
+        }
+
+        for candidateId in originalOrder[..<originalIndex].reversed() {
+            if let candidateIndex = currentIds.firstIndex(of: candidateId) {
+                return candidateIndex + 1
+            }
+        }
+        for candidateId in originalOrder.dropFirst(originalIndex + 1) {
+            if let candidateIndex = currentIds.firstIndex(of: candidateId) {
+                return candidateIndex
+            }
+        }
+        return min(max(0, fallbackIndex), currentIds.count)
     }
 }
 
@@ -824,6 +890,8 @@ final class GaryxHomeThreadListStore: ObservableObject {
         let presentedSections = transitionState.presentedSections(from: snapshot.sections)
         let sourceRow = presentedSections.allRows.first { $0.id == threadId }
         let originalPinnedIndex = presentedSections.pinned.firstIndex { $0.id == threadId }
+        let originalPinnedOrder = presentedSections.pinned.map(\.id)
+        let originalRecentOrder = presentedSections.recent.map(\.id)
         return updateTransitionState { state in
             state.beginPin(
                 threadId: threadId,
@@ -831,6 +899,8 @@ final class GaryxHomeThreadListStore: ObservableObject {
                 originalPinned: originalPinned,
                 recentIndex: recentIndex,
                 originalPinnedIndex: originalPinnedIndex,
+                originalPinnedOrder: originalPinnedOrder,
+                originalRecentOrder: originalRecentOrder,
                 sourceRow: sourceRow
             )
         }

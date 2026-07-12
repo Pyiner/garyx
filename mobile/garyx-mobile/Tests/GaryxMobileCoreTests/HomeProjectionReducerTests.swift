@@ -455,6 +455,49 @@ final class HomeProjectionReducerTests: XCTestCase {
         )
     }
 
+    func testConcurrentPinThenUnpinFailuresRestoreStableNeighborOrder() throws {
+        let input = GaryxHomeListFixture.makeInputs(threadCount: 8, pinnedCount: 3, runningCount: 0)
+        let ingested = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state
+        let sections = reduce(
+            ingested,
+            .pinsChanged(pinnedThreadIds: input.pinnedThreadIds)
+        ).state.snapshot.sections
+        let store = GaryxHomeThreadListStore(snapshot: snapshot(sections: sections))
+
+        XCTAssertTrue(store.beginPinTransition(
+            threadId: "thread-3",
+            pinned: true,
+            originalPinned: false,
+            recentIndex: 0
+        ))
+        XCTAssertEqual(
+            store.presentationSnapshot.sections.pinned.map(\.id),
+            ["thread-3", "thread-0", "thread-1", "thread-2"]
+        )
+        XCTAssertTrue(store.beginPinTransition(
+            threadId: "thread-1",
+            pinned: false,
+            originalPinned: true,
+            recentIndex: 0
+        ))
+
+        let afterFirstFailure = try XCTUnwrap(store.rollbackPinTransition(
+            threadId: "thread-3",
+            basePinnedIds: ["thread-3", "thread-0", "thread-2"]
+        ))
+        XCTAssertEqual(afterFirstFailure, ["thread-0", "thread-2"])
+
+        let afterSecondFailure = try XCTUnwrap(store.rollbackPinTransition(
+            threadId: "thread-1",
+            basePinnedIds: afterFirstFailure
+        ))
+        XCTAssertEqual(
+            afterSecondFailure,
+            ["thread-0", "thread-1", "thread-2"],
+            "A rollback must use surviving stable neighbors, not a stale optimistic array index."
+        )
+    }
+
     func testFastPinFailureDerivesRollbackBeforeTransitionReconciliation() throws {
         let input = GaryxHomeListFixture.makeInputs(threadCount: 4, pinnedCount: 0, runningCount: 0)
         let sections = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state.snapshot.sections
@@ -494,6 +537,8 @@ final class HomeProjectionReducerTests: XCTestCase {
             originalPinned: true,
             recentIndex: nil,
             originalPinnedIndex: originalPinnedIndex,
+            originalPinnedOrder: base.pinned.map(\.id),
+            originalRecentOrder: base.recent.map(\.id),
             sourceRow: pinnedRow
         ))
         XCTAssertEqual(transitions.motion(for: pinnedRow.id), .leavingFilteredList)
