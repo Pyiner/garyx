@@ -7,6 +7,9 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
         XCTAssertEqual(GaryxRecentThreadFilter.nonTask.tasksQueryValue, "exclude")
         XCTAssertEqual(GaryxRecentThreadFilter.all.displayName, "All")
         XCTAssertEqual(GaryxRecentThreadFilter.nonTask.displayName, "Chats")
+        XCTAssertEqual(GaryxRecentThreadFilter.homeMenuOptions, [.all, .nonTask])
+        XCTAssertNil(GaryxRecentThreadFilter.all.activeStatusLabel)
+        XCTAssertEqual(GaryxRecentThreadFilter.nonTask.activeStatusLabel, "Chats")
     }
 
     func testDefaultsToAllAndKeepsAllStableWhenVisibleFilterChanges() {
@@ -51,11 +54,11 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
         XCTAssertEqual(feeds.allFeed.orderedThreadIds, ["task", "chat-a"])
     }
 
-    func testResetAbandonsOldEpochAndResetsSelection() throws {
+    func testResetFeedDataAbandonsOldEpochAndPreservesSelection() throws {
         var feeds = makeFeeds()
         feeds.select(.nonTask)
         let ticket = try XCTUnwrap(feeds.requestRefresh())
-        feeds.reset()
+        feeds.resetFeedData()
 
         XCTAssertEqual(
             feeds.completeRefresh(
@@ -67,9 +70,21 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
             ),
             .abandonedStaleEpoch
         )
-        XCTAssertEqual(feeds.selectedFilter, .all)
+        XCTAssertEqual(feeds.selectedFilter, .nonTask)
         XCTAssertTrue(feeds.allRecentThreadIds.isEmpty)
         XCTAssertTrue(feeds.visibleRecentThreadIds.isEmpty)
+    }
+
+    func testRestoredSelectionOwnsFirstVisibleRefreshTicket() throws {
+        var feeds = GaryxRecentThreadFeeds(
+            pageLimit: 30,
+            overlap: 5,
+            selectedFilter: .nonTask
+        )
+
+        XCTAssertEqual(feeds.selectedFilter, .nonTask)
+        XCTAssertEqual(try XCTUnwrap(feeds.requestRefresh()).filter, .nonTask)
+        XCTAssertTrue(feeds.allRecentThreadIds.isEmpty)
     }
 
     func testSuccessfulEmptyPageIsPrimedAndFirstFailureIsUnavailable() throws {

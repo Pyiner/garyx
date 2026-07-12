@@ -139,10 +139,7 @@ final class GaryxMobileModel: ObservableObject {
     /// Filter-keyed Recent feeds. Each filter owns a pager/cursor/failure
     /// gate; All remains the canonical Widget/Automation feed while the
     /// selected feed alone drives Home presentation.
-    var recentThreadFeeds = GaryxRecentThreadFeeds(
-        pageLimit: GaryxMobileModel.threadListPageLimit,
-        overlap: GaryxMobileModel.threadListPageOverlap
-    ) {
+    var recentThreadFeeds: GaryxRecentThreadFeeds {
         didSet {
             if oldValue != recentThreadFeeds {
                 refreshHomeObservationPaginationSnapshot()
@@ -479,9 +476,18 @@ final class GaryxMobileModel: ObservableObject {
         keychain: GaryxMobileKeychain = .shared,
         gatewayClientFactory: ((GaryxGatewayConfiguration) -> GaryxGatewayClient)? = nil
     ) {
+        let restoredRecentThreadFilter = GaryxRecentThreadFilterStorage.load(
+            defaults: defaults,
+            key: GaryxMobileSettingsKeys.recentThreadFilter
+        )
         self.defaults = defaults
         self.keychain = keychain
         self.gatewayClientFactory = gatewayClientFactory
+        self.recentThreadFeeds = GaryxRecentThreadFeeds(
+            pageLimit: Self.threadListPageLimit,
+            overlap: Self.threadListPageOverlap,
+            selectedFilter: restoredRecentThreadFilter
+        )
         let avatarStore = GaryxAvatarDiskStore()
         self.avatarStore = avatarStore
         self.avatarImageProvider = GaryxAvatarImageProvider(
@@ -513,7 +519,7 @@ final class GaryxMobileModel: ObservableObject {
         #if DEBUG
         let debugEnvironment = ProcessInfo.processInfo.environment
         if debugEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] == "1" {
-            loadDebugSnapshot()
+            loadDebugSnapshot(recentFilter: .all)
             applyDebugDestination(
                 panelName: debugEnvironment["GARYX_MOBILE_DEBUG_PANEL"],
                 tabName: debugEnvironment["GARYX_MOBILE_DEBUG_SETTINGS_TAB"],

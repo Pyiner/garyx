@@ -4,6 +4,11 @@ public enum GaryxRecentThreadFilter: String, CaseIterable, Equatable, Hashable, 
     case all
     case nonTask
 
+    /// The product surface exposed by the Home filter menu. Keep this
+    /// explicit so future internal filter cases do not appear on Home merely
+    /// because the enum remains `CaseIterable`.
+    public static let homeMenuOptions: [Self] = [.all, .nonTask]
+
     public var tasksQueryValue: String {
         switch self {
         case .all: return "include"
@@ -14,6 +19,14 @@ public enum GaryxRecentThreadFilter: String, CaseIterable, Equatable, Hashable, 
     public var displayName: String {
         switch self {
         case .all: return "All"
+        case .nonTask: return "Chats"
+        }
+    }
+
+    /// A shared non-default status label for Home chrome and section copy.
+    public var activeStatusLabel: String? {
+        switch self {
+        case .all: return nil
         case .nonTask: return "Chats"
         }
     }
@@ -217,8 +230,12 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
     public private(set) var allFeed: GaryxRecentThreadFeedState
     public private(set) var nonTaskFeed: GaryxRecentThreadFeedState
 
-    public init(pageLimit: Int, overlap: Int) {
-        selectedFilter = .all
+    public init(
+        pageLimit: Int,
+        overlap: Int,
+        selectedFilter: GaryxRecentThreadFilter = .all
+    ) {
+        self.selectedFilter = selectedFilter
         allFeed = GaryxRecentThreadFeedState(pageLimit: pageLimit, overlap: overlap)
         nonTaskFeed = GaryxRecentThreadFeedState(pageLimit: pageLimit, overlap: overlap)
     }
@@ -383,9 +400,11 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
         nonTaskFeed.upsertAtHead(threadId)
     }
 
-    public mutating func reset() {
+    /// Clears Gateway-owned page data while retaining the app-global viewing
+    /// preference. Resetting each pager still advances its epoch, so results
+    /// issued against the previous Gateway cannot commit.
+    public mutating func resetFeedData() {
         allFeed.reset()
         nonTaskFeed.reset()
-        selectedFilter = .all
     }
 }

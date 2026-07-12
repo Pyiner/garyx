@@ -7,6 +7,11 @@ extension GaryxMobileModel {
     func selectRecentThreadFilter(_ filter: GaryxRecentThreadFilter) {
         guard recentThreadFeeds.selectedFilter != filter else { return }
         recentThreadFeeds.select(filter)
+        GaryxRecentThreadFilterStorage.save(
+            filter,
+            defaults: defaults,
+            key: GaryxMobileSettingsKeys.recentThreadFilter
+        )
         Task { [weak self] in
             await self?.refreshThreads(source: .userAction)
         }

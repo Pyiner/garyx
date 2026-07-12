@@ -141,7 +141,6 @@ private enum GaryxSidebarMetrics {
     static let rowCornerRadius: CGFloat = 12
     static let selectedThreadCornerRadius: CGFloat = 12
     static let iconFrame: CGFloat = 28
-    static let bottomBarClearance: CGFloat = 28
 }
 
 struct GaryxHomeThreadListView: View, Equatable {
@@ -172,10 +171,17 @@ struct GaryxHomeThreadListView: View, Equatable {
         threadListWithBottomBar
             .frame(maxHeight: .infinity)
             .garyxPageBackground()
+            .garyxFloatingBottomChrome {
+                GaryxHomeNewThreadFab(action: onStartNewChat)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 8)
+            }
             .garyxAdaptiveTopBar {
                 GaryxHomeHeaderView(
+                    selectedRecentFilter: homeListStore.snapshot.selectedRecentFilter,
                     onOpenDrawer: onOpenDrawer,
-                    onNewChat: { onStartNewChat() }
+                    onSelectRecentFilter: onSelectRecentFilter
                 )
             }
             .task(id: homeListStore.snapshot.isHomeVisible) {
@@ -210,7 +216,6 @@ struct GaryxHomeThreadListView: View, Equatable {
         Group {
             spacerRow(height: 4)
             sidebarThreadSections
-            spacerRow(height: GaryxSidebarMetrics.bottomBarClearance)
         }
         // Rows carry their own padding/background; strip List chrome so the page
         // background shows through and custom dividers are the only separators.
@@ -251,14 +256,13 @@ struct GaryxHomeThreadListView: View, Equatable {
             spacerRow(height: 10)
         }
 
-        GaryxSidebarSectionHeader(title: "Recent", systemImage: "clock.fill")
+        GaryxSidebarSectionHeader(
+            title: "Recent",
+            systemImage: "clock.fill",
+            statusLabel: snapshot.selectedRecentFilter.activeStatusLabel
+        )
             .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
             .padding(.bottom, 4)
-
-        GaryxRecentThreadFilterPicker(
-            selection: snapshot.selectedRecentFilter,
-            onSelect: onSelectRecentFilter
-        )
 
         switch snapshot.recentPlaceholder {
         case .loadingSkeleton(let rowCount):
@@ -403,8 +407,9 @@ private struct GaryxHomeThreadButton: View, Equatable {
 }
 
 struct GaryxHomeHeaderView: View {
+    let selectedRecentFilter: GaryxRecentThreadFilter
     let onOpenDrawer: () -> Void
-    let onNewChat: () -> Void
+    let onSelectRecentFilter: (GaryxRecentThreadFilter) -> Void
 
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: 10) {
@@ -419,17 +424,10 @@ struct GaryxHomeHeaderView: View {
 
                 Spacer(minLength: 0)
 
-                Button(action: onNewChat) {
-                    // Mirrors the menu button's glass circle treatment.
-                    Image(systemName: "plus.bubble")
-                        .font(GaryxFont.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .ultraThinMaterial, in: Circle())
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("New chat")
+                GaryxRecentThreadFilterMenu(
+                    selection: selectedRecentFilter,
+                    onSelect: onSelectRecentFilter
+                )
             }
         }
         .padding(.horizontal, 16)
@@ -1335,14 +1333,27 @@ private struct GaryxWorkspaceThreadDetailSection: View {
 private struct GaryxSidebarSectionHeader: View {
     let title: String
     let systemImage: String
+    var statusLabel: String? = nil
 
     var body: some View {
         HStack(spacing: 0) {
             Text(title)
                 .font(GaryxFont.caption(weight: .medium))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
+            if let statusLabel {
+                Text(" · ")
+                    .font(GaryxFont.caption(weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text(statusLabel)
+                    .font(GaryxFont.caption(weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+            }
         }
-        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
     }
 }
 

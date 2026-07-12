@@ -332,16 +332,129 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let oldGeneration = model.gatewayRuntimeGeneration
         model.resetGatewayRuntimeState()
         XCTAssertNotEqual(model.gatewayRuntimeGeneration, oldGeneration)
-        XCTAssertEqual(model.recentThreadFeeds.selectedFilter, .all)
+        XCTAssertEqual(model.recentThreadFeeds.selectedFilter, .nonTask)
 
         auxiliaryGate.signal()
         await auxiliaryTask.value
 
         XCTAssertNil(
             model.lastError,
-            "an old gateway failure must be dropped even though reset selected All, the ticket's filter"
+            "an old gateway failure must be dropped while reset preserves the selected filter"
         )
         XCTAssertEqual(model.recentThreadFeeds.selectedPresentation, GaryxRecentThreadFeedPresentation())
+    }
+
+    func testRestoredChatsFilterOwnsInitialSnapshotAndFirstVisibleRefresh() async throws {
+        let suiteName = "GaryxHomeThreadListRefreshCommitTests.restore.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set("http://gateway.example.test", forKey: GaryxMobileSettingsKeys.gatewayUrl)
+        defaults.set("nonTask", forKey: GaryxMobileSettingsKeys.recentThreadFilter)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let selectedRequestStarted = expectation(description: "restored Chats request started")
+        let chatsPage = try makeRecentThreadsPageData(rows: [
+            (id: "thread-restored-chat", title: "Restored chat"),
+        ])
+        let allPage = try makeRecentThreadsPageData(rows: [
+            (id: "thread-restored-task", title: "Restored task"),
+            (id: "thread-restored-chat", title: "Restored chat"),
+        ])
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if components.path == "/api/thread-pins" {
+                return try garyxStubResponse(request, data: Data(#"{"thread_ids":[]}"#.utf8))
+            }
+            guard components.path == "/api/recent-threads" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            let tasks = components.queryItems?.first(where: { $0.name == "tasks" })?.value
+            if tasks == GaryxRecentThreadFilter.nonTask.tasksQueryValue {
+                selectedRequestStarted.fulfill()
+                return try garyxStubResponse(request, data: chatsPage)
+            }
+            XCTAssertEqual(tasks, GaryxRecentThreadFilter.all.tasksQueryValue)
+            return try garyxStubResponse(request, data: allPage)
+        }
+        defer {
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(defaults: defaults, session: session)
+        XCTAssertEqual(model.recentThreadFeeds.selectedFilter, .nonTask)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        XCTAssertEqual(model.homeThreadListStore.snapshot.selectedRecentFilter, .nonTask)
+        XCTAssertEqual(
+            model.homeProjectionGateway.snapshotEmitCount,
+            1,
+            "model init must not publish an intermediate All snapshot"
+        )
+
+        let refresh = Task { @MainActor in
+            await model.refreshThreads(source: .userPullToRefresh)
+        }
+        await fulfillment(of: [selectedRequestStarted], timeout: 2)
+        await refresh.value
+        if let auxiliaryTask = model.auxiliaryAllRecentThreadsRefreshTask {
+            await auxiliaryTask.value
+        }
+
+        XCTAssertEqual(model.visibleRecentThreadIds, ["thread-restored-chat"])
+        XCTAssertEqual(
+            model.allRecentThreadIds,
+            ["thread-restored-task", "thread-restored-chat"]
+        )
+    }
+
+    func testGlobalSelectionPersistsAcrossModelAndGatewayReset() throws {
+        let suiteName = "GaryxHomeThreadListRefreshCommitTests.persistence.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set("http://gateway-a.example.test", forKey: GaryxMobileSettingsKeys.gatewayUrl)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let model = makeModel(defaults: defaults)
+        model.gatewayURL = ""
+        model.selectRecentThreadFilter(.nonTask)
+        XCTAssertEqual(
+            defaults.string(forKey: GaryxMobileSettingsKeys.recentThreadFilter),
+            "nonTask"
+        )
+        XCTAssertNil(
+            defaults.string(
+                forKey: model.scopedSettingsKey(GaryxMobileSettingsKeys.recentThreadFilter)
+            )
+        )
+
+        primeRecentFeed(model, ids: ["thread-task", "thread-chat"], filter: .all)
+        primeRecentFeed(model, ids: ["thread-chat"], filter: .nonTask)
+        let staleTicket = try XCTUnwrap(model.recentThreadFeeds.requestRefresh(filter: .nonTask))
+        model.resetGatewayRuntimeState()
+
+        XCTAssertEqual(model.recentThreadFeeds.selectedFilter, .nonTask)
+        XCTAssertTrue(model.recentThreadFeeds.allFeed.orderedThreadIds.isEmpty)
+        XCTAssertTrue(model.recentThreadFeeds.nonTaskFeed.orderedThreadIds.isEmpty)
+        XCTAssertEqual(
+            model.recentThreadFeeds.completeRefresh(
+                staleTicket,
+                pageIds: ["stale-thread"],
+                pageOffset: 0,
+                pageCount: 1,
+                hasMore: false
+            ),
+            .abandonedStaleEpoch
+        )
+
+        defaults.set("http://gateway-b.example.test", forKey: GaryxMobileSettingsKeys.gatewayUrl)
+        let relaunchedModel = makeModel(defaults: defaults)
+        XCTAssertEqual(relaunchedModel.recentThreadFeeds.selectedFilter, .nonTask)
+        XCTAssertEqual(
+            try XCTUnwrap(relaunchedModel.recentThreadFeeds.requestRefresh()).filter,
+            .nonTask
+        )
     }
 
     func testArchiveSuccessInvalidatesRefreshIssuedAfterOptimisticRemoval() async throws {
@@ -414,11 +527,24 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         await archiveTask.value
     }
 
-    private func makeModel(session: URLSession? = nil) -> GaryxMobileModel {
-        let suiteName = "GaryxHomeThreadListRefreshCommitTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        defaults.set("http://gateway.example.test", forKey: GaryxMobileSettingsKeys.gatewayUrl)
+    private func makeModel(
+        defaults: UserDefaults? = nil,
+        session: URLSession? = nil
+    ) -> GaryxMobileModel {
+        let resolvedDefaults: UserDefaults
+        if let defaults {
+            resolvedDefaults = defaults
+        } else {
+            let suiteName = "GaryxHomeThreadListRefreshCommitTests.\(UUID().uuidString)"
+            resolvedDefaults = UserDefaults(suiteName: suiteName)!
+            resolvedDefaults.removePersistentDomain(forName: suiteName)
+        }
+        if resolvedDefaults.string(forKey: GaryxMobileSettingsKeys.gatewayUrl) == nil {
+            resolvedDefaults.set(
+                "http://gateway.example.test",
+                forKey: GaryxMobileSettingsKeys.gatewayUrl
+            )
+        }
         let clientFactory = session.map { session in
             { (configuration: GaryxGatewayConfiguration) in
                 GaryxGatewayClient(
@@ -428,7 +554,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
                 )
             }
         }
-        return GaryxMobileModel(defaults: defaults, gatewayClientFactory: clientFactory)
+        return GaryxMobileModel(defaults: resolvedDefaults, gatewayClientFactory: clientFactory)
     }
 
     private func makeThread(id: String, title: String) -> GaryxThreadSummary {

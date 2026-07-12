@@ -420,7 +420,7 @@ extension GaryxMobileModel {
         if usesLiveGateway {
             debugSnapshotActive = false
         } else {
-            loadDebugSnapshot()
+            loadDebugSnapshot(recentFilter: .all)
         }
 
         applyDebugDestination(
@@ -481,7 +481,7 @@ extension GaryxMobileModel {
         setSidebarVisible(false, animated: false)
     }
 
-    func loadDebugSnapshot() {
+    func loadDebugSnapshot(recentFilter: GaryxRecentThreadFilter) {
         debugSnapshotActive = true
         cancelBackgroundCommittedRunReconcileLoop()
         clearActiveRunState()
@@ -512,6 +512,7 @@ extension GaryxMobileModel {
         connectionState = .ready(version: "debug")
         debugShowsWorkspaceModeSheet = false
         debugShowsGatewaySwitcher = false
+        recentThreadFeeds.select(recentFilter)
         resetThreadListPagination()
         remoteStateLoadPhase = .loaded
         agentTargetsLoadPhase = .loaded
