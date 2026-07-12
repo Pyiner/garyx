@@ -1,46 +1,5 @@
 /* Left rail, titlebar drag zone, sidebar sections, pinned thread rows. */
 
-.left-rail {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-height: 0;
-  padding: var(--inset-toolbar) 8px 10px;
-  background: transparent;
-  border-right: none;
-  box-shadow: none;
-}
-
-/* Draggable titlebar zone covering the top padding of the sidebar */
-.left-rail::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--inset-toolbar);
-  -webkit-app-region: drag;
-  z-index: 100;
-  pointer-events: auto;
-}
-
-.left-rail::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  /* No decorative gleam — the requirement is "match the original
-     `#f6f6f6` color, just add the vibrancy breath". Any white gradient
-     would lift the top brighter than `#f6f6f6` and break that promise. */
-  background: transparent;
-  pointer-events: none;
-}
-
-.left-rail > *:not(.sidebar-resizer) {
-  position: relative;
-  z-index: 1;
-}
-
 .brand-card {
   padding: 0 10px 8px;
 }
@@ -696,55 +655,4 @@
 
 .workspace-row:hover .sidebar-section-chevron {
   opacity: 1;
-}
-
-/* Sidebar collapse: the toggle lives beside the traffic lights (same spot in
-   both states). Its own no-drag loses to the titlebar drag overlays that
-   follow it in document order (Electron composes window drag regions in that
-   order; z-index plays no part), so `.sidebar-collapse-toggle-carveout` — a
-   twin rendered as the last app-shell child — re-punches the hole and takes
-   the pointer clicks, while this early sibling keeps keyboard focus order. */
-.sidebar-collapse-toggle {
-  position: absolute;
-  top: 12px;
-  left: 84px;
-  z-index: 120;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-token-description-foreground);
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-  transition:
-    color var(--duration-fast) var(--ease-standard),
-    background var(--duration-fast) var(--ease-standard);
-}
-
-/* The carve-out twin overlays the keyboard button one-to-one via the shared
-   base class and needs no extra rules. It is a non-focusable presentation div
-   (a button twin would steal focus on click and get force-exposed in the AX
-   tree). Keep it visually identical — both render, stacked, and must read as
-   one control. */
-
-.sidebar-collapse-toggle:hover {
-  background: color-mix(in oklab, var(--color-token-text-primary) 10%, transparent);
-  color: var(--color-token-text-primary);
-}
-
-/* Collapsed: the rail must stay in the grid flow (items are placed by
-   order — display:none would shift .conversation into the 0px column), so
-   hide it visually inside the zero-width track instead. */
-.app-shell.sidebar-collapsed .left-rail {
-  visibility: hidden;
-  pointer-events: none;
-  overflow: hidden;
-  min-width: 0;
-  padding-left: 0;
-  padding-right: 0;
 }

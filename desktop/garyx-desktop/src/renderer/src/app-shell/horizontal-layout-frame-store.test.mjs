@@ -86,9 +86,7 @@ test("applyFrame publishes every px variable and presentation attribute under on
     [...HORIZONTAL_LAYOUT_FRAME_ATTRIBUTES].sort(),
   );
   assert.equal(target.variables.get("--gx-sidebar-width"), "245px");
-  assert.equal(target.variables.get("--app-sidebar-width"), "245px");
-  assert.equal(target.variables.get("--spacing-token-sidebar"), "245px");
-  assert.equal(target.variables.get("--spacing-token-rail"), "0px");
+  assert.equal(target.variables.get("--gx-conversation-rail-width"), "0px");
   assert.equal(target.attributes.get("data-layout-policy"), "legacy");
   assert.equal(target.attributes.get("data-layout-revision"), "0");
   assert.deepEqual(target.operations.at(-1), [
@@ -151,7 +149,7 @@ test("legacy store reduces normalized occupancy and width events without wiring 
     store.getState().acknowledgedSession.desiredOccupancy.conversationRail,
     true,
   );
-  assert.equal(target.variables.get("--spacing-token-rail"), "258px");
+  assert.equal(target.variables.get("--gx-conversation-rail-width"), "258px");
   assert.equal(
     target.attributes.get("data-conversation-rail-state"),
     "open",
@@ -172,7 +170,7 @@ test("legacy store reduces normalized occupancy and width events without wiring 
     width: 333,
     commit: true,
   });
-  assert.equal(target.variables.get("--spacing-token-rail"), "333px");
+  assert.equal(target.variables.get("--gx-conversation-rail-width"), "333px");
   assert.equal(notifications, 2);
   unsubscribe();
 });

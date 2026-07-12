@@ -34,8 +34,7 @@
   --text-display-xl: 24px;
   --text-display-2xl: 30px;
   --container-2xl: 42rem;
-  --spacing-token-sidebar: 245px;
-  --app-sidebar-width: var(--spacing-token-sidebar);
+  --gx-sidebar-preferred-width: 245px;
   --app-modal-gutter: 24px;
   --app-modal-backdrop-bg: rgba(13, 13, 13, 0.16);
   --z-app-sidebar-resizer: 20;

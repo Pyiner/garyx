@@ -47,7 +47,6 @@
   contain: layout paint style;
   transform: translateX(0);
   will-change: transform, opacity;
-  -webkit-app-region: no-drag;
 }
 
 .side-tools-tabs {
@@ -61,13 +60,6 @@
   padding: 0 8px;
   border-bottom: 0.5px solid color-mix(in srgb, var(--color-token-border) 72%, transparent);
   background: var(--color-token-bg-primary);
-  -webkit-app-region: no-drag;
-}
-
-.side-tools-tabs button,
-.side-tools-tabs [role="menu"],
-.side-tools-tabs [role="menuitem"] {
-  -webkit-app-region: no-drag;
 }
 
 .side-tools-tab-cluster {
@@ -769,6 +761,7 @@
 }
 
 .side-tool-chat-thread .thread-layout {
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
 }
 

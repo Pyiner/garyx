@@ -1,50 +1,5 @@
-/* Thread log panel and resizer, channel settings surface. */
-
-.thread-log-resizer {
-  position: relative;
-  width: var(--thread-log-resizer-width, 10px);
-  min-width: var(--thread-log-resizer-width, 10px);
-  cursor: col-resize;
-  touch-action: none;
-}
-
-.side-tools-resizer {
-  position: relative;
-  cursor: col-resize;
-  touch-action: none;
-  -webkit-app-region: no-drag;
-}
-
-.side-tools-resizer {
-  width: var(--side-tools-resizer-width, 10px);
-  min-width: var(--side-tools-resizer-width, 10px);
-}
-
-.thread-log-resizer::before,
-.side-tools-resizer::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 2px;
-  border-radius: 999px;
-  background: transparent;
-  transform: translateX(-50%);
-}
-
-.thread-log-resizer:hover::before,
-.thread-log-resizer:focus-visible::before,
-.thread-layout.log-panel-resizing .thread-log-resizer::before,
-.side-tools-resizer:hover::before,
-.side-tools-resizer:focus-visible::before,
-.conversation.side-tools-resizing .side-tools-resizer::before {
-  background: color-mix(
-    in srgb,
-    var(--color-token-foreground) 22%,
-    transparent
-  );
-}
+/* Thread log panel and channel settings surface. Shell resizer geometry lives
+   in the always-loaded app-shell.css owner. */
 
 .thread-log-panel {
   display: grid;

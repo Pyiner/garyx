@@ -152,7 +152,7 @@
 .gateway-switcher-popover {
   /* Match Codex's bottom-left profile menu: span the complete footer row,
      preserve an 8px viewport gutter, and use the shared 4px surface inset. */
-  width: calc(var(--app-sidebar-width) - 16px);
+  width: calc(var(--gx-sidebar-preferred-width) - 16px);
   max-width: calc(100vw - 16px);
   min-width: 208px;
   padding: var(--menu-surface-padding);

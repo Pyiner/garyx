@@ -16,16 +16,6 @@ export type HorizontalLayoutFrameRoot = Pick<
   "style" | "setAttribute" | "removeAttribute"
 >;
 
-const LEGACY_VARIABLE_ALIASES = {
-  "--app-sidebar-width": "--gx-sidebar-preferred-width",
-  "--spacing-token-sidebar": "--gx-sidebar-width",
-  "--spacing-token-rail": "--gx-conversation-rail-width",
-  "--side-tools-panel-width": "--gx-side-tools-preferred-width",
-  "--side-tools-resizer-width": "--gx-right-resizer-width",
-  "--thread-log-panel-width": "--gx-thread-logs-preferred-width",
-  "--thread-log-resizer-width": "--gx-thread-log-resizer-width",
-} as const;
-
 export const HORIZONTAL_LAYOUT_FRAME_VARIABLES = [
   "--gx-sidebar-preferred-width",
   "--gx-conversation-rail-preferred-width",
@@ -40,7 +30,6 @@ export const HORIZONTAL_LAYOUT_FRAME_VARIABLES = [
   "--gx-thread-main-width",
   "--gx-thread-log-resizer-width",
   "--gx-thread-log-panel-width",
-  ...Object.keys(LEGACY_VARIABLE_ALIASES),
 ] as const;
 
 export const HORIZONTAL_LAYOUT_FRAME_ATTRIBUTES = [
@@ -79,9 +68,6 @@ export function applyFrame(
   const frame = requiredStableFrame(projection);
   for (const [name, value] of Object.entries(frame.cssVariables)) {
     root.style.setProperty(name, value);
-  }
-  for (const [alias, source] of Object.entries(LEGACY_VARIABLE_ALIASES)) {
-    root.style.setProperty(alias, frame.cssVariables[source]);
   }
   for (const [name, value] of Object.entries(frame.dataAttributes)) {
     if (name !== "data-layout-revision") {

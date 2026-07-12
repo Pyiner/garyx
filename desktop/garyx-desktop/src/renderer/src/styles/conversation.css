@@ -14,30 +14,12 @@
   -webkit-backdrop-filter: blur(8px);
   background: rgba(255, 255, 255, 0.72);
   border-bottom: none;
-  -webkit-app-region: drag;
-}
-
-/* Buttons/inputs inside the drag region must opt out */
-.conversation-header button,
-.conversation-header select,
-.conversation-header input,
-.conversation-header label,
-.conversation-header a,
-.conversation-header-actions {
-  -webkit-app-region: no-drag;
 }
 
 .thread-task-tree-header-slot {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-}
-
-/* Collapsed sidebar (no conversation rail): the header hugs the window's left
-   edge, so the title must clear the traffic lights (x 18-70) and the sidebar
-   toggle (x 84-110) that float above it. */
-.app-shell.sidebar-collapsed:not(.with-bot-conversation-rail) .conversation-header {
-  padding-left: 122px;
 }
 
 .conversation-header-copy {
@@ -922,65 +904,6 @@
   grid-template-rows: minmax(0, 1fr);
   gap: 0;
   padding: 0;
-}
-
-.thread-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 18px;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.thread-layout.with-inspector-panel {
-  grid-template-columns: minmax(0, 1fr);
-  column-gap: 0;
-  row-gap: 0;
-  align-items: stretch;
-}
-
-.thread-layout.with-log-panel {
-  position: relative;
-  align-items: stretch;
-  gap: 0;
-}
-
-.thread-layout.with-log-panel.log-panel-docked {
-  grid-template-columns:
-    minmax(0, 1fr)
-    var(--thread-log-resizer-width, 10px)
-    minmax(
-      var(--thread-log-panel-min-width, 280px),
-      var(--thread-log-panel-width, 360px)
-    );
-}
-
-.thread-layout.with-log-panel.log-panel-overlay {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.thread-layout.with-log-panel.log-panel-overlay .thread-log-resizer {
-  display: none;
-}
-
-.thread-layout.with-log-panel.log-panel-overlay .thread-log-panel {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  bottom: 12px;
-  z-index: 45;
-  width: min(var(--thread-log-panel-width, 360px), calc(100% - 24px));
-  max-height: none;
-  padding: 10px 12px 12px;
-  border: 0.5px solid var(--color-token-border);
-  border-radius: 16px;
-  background: var(--color-token-bg-primary);
-  box-shadow: var(--shadow-lg);
-}
-
-.thread-layout.log-panel-resizing {
-  cursor: col-resize;
 }
 
 .thread-main {

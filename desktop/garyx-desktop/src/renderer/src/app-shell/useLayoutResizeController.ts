@@ -647,6 +647,7 @@ export function useLayoutResizeController({
     sidebarWidth: store.getState().widths.globalSidebar,
     sideToolsPanelWidth: store.getState().widths.sideTools,
     sideToolsResizing,
+    taskTreeDocked: frame.presentation.taskTreeDocked,
     threadLayoutRef,
     threadLogsDocked: frame.presentation.threadLogs === "docked",
     threadLogsPanelWidth: store.getState().widths.threadLogs,

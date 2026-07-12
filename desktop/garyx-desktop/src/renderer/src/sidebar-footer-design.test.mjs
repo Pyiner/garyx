@@ -109,7 +109,7 @@ test('gateway and settings controls pin the Codex footer alignment', () => {
     'background: var(--color-token-row-hover)',
   ]);
   expectRule(ownerCss, '.gateway-switcher-popover', [
-    'width: calc(var(--app-sidebar-width) - 16px)',
+    'width: calc(var(--gx-sidebar-preferred-width) - 16px)',
     'max-width: calc(100vw - 16px)',
     'padding: var(--menu-surface-padding)',
   ]);

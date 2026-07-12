@@ -281,6 +281,7 @@ type ThreadPageProps = {
   showTailThinking: boolean;
   rateLimit?: RenderRateLimit | null;
   onRateLimitContinue?: () => void | Promise<unknown>;
+  taskTreeDocked: boolean;
   threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
   threadLogsMaxWidth: number;
@@ -456,6 +457,7 @@ export function ThreadPage({
   showTailThinking,
   rateLimit,
   onRateLimitContinue,
+  taskTreeDocked,
   threadLayoutRef,
   threadLayoutStyle,
   threadLogsMaxWidth,
@@ -609,6 +611,7 @@ export function ThreadPage({
           threadLogsOpen,
         }) && selectedThreadId ? (
           <ThreadTaskTreePopover
+            taskTreeDocked={taskTreeDocked}
             threadId={selectedThreadId}
             threadAvatarCatalog={threadAvatarCatalog}
             onOpenThread={onOpenThreadById}

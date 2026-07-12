@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -24,7 +23,6 @@ import {
   type ThreadAvatarCatalog,
 } from "../../thread-avatar";
 import { AgentOptionAvatar } from "./AgentOptionAvatar";
-import { isDockedTaskTree } from "../responsive-layout-model";
 import {
   buildTaskRows,
   isCurrentTaskTreeNode,
@@ -40,6 +38,7 @@ function displayTaskId(task: DesktopTaskForestTaskNode): string {
 }
 
 type ThreadTaskTreePopoverProps = {
+  taskTreeDocked: boolean;
   threadId: string | null;
   threadAvatarCatalog: ThreadAvatarCatalog;
   onOpenThread: (threadId: string) => void;
@@ -92,6 +91,7 @@ function storeTreeSnapshot(anchorThreadId: string, snapshot: ForestSnapshot) {
 }
 
 export function ThreadTaskTreePopover({
+  taskTreeDocked,
   threadId,
   threadAvatarCatalog,
   onOpenThread,
@@ -99,7 +99,6 @@ export function ThreadTaskTreePopover({
   const { t } = useI18n();
   const [snapshot, setSnapshot] = useState<ForestSnapshot>(EMPTY_SNAPSHOT);
   const [compactOpen, setCompactOpen] = useState(false);
-  const [docked, setDocked] = useState(false);
   const [triggerHost, setTriggerHost] = useState<HTMLElement | null>(null);
   const compactTriggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
@@ -118,6 +117,12 @@ export function ThreadTaskTreePopover({
     currentThreadRef.current = threadId;
     setCompactOpen(false);
   }, [threadId]);
+
+  useEffect(() => {
+    if (taskTreeDocked) {
+      setCompactOpen(false);
+    }
+  }, [taskTreeDocked]);
 
   useEffect(() => {
     setTriggerHost(
@@ -206,31 +211,6 @@ export function ThreadTaskTreePopover({
       }),
     [snapshot],
   );
-
-  useLayoutEffect(() => {
-    const threadMain = popoverRef.current?.parentElement;
-    if (!threadMain) {
-      return;
-    }
-
-    const syncDockedState = () => {
-      const nextDocked = isDockedTaskTree(
-        threadMain.getBoundingClientRect().width,
-      );
-      setDocked(nextDocked);
-      if (nextDocked) {
-        setCompactOpen(false);
-      }
-    };
-
-    syncDockedState();
-    if (typeof ResizeObserver === "undefined") {
-      return;
-    }
-    const observer = new ResizeObserver(syncDockedState);
-    observer.observe(threadMain);
-    return () => observer.disconnect();
-  }, [rows.length]);
 
   // Nothing to show when this conversation has no anchored task tree.
   if (!threadId || rows.length === 0) {
@@ -333,7 +313,7 @@ export function ThreadTaskTreePopover({
 
   return (
     <>
-      {triggerHost && !docked
+      {triggerHost && !taskTreeDocked
         ? createPortal(
             <button
               aria-controls={popoverId}

@@ -114,10 +114,6 @@
 /* ============================================================
    Top-right child task tree popover on thread detail
    ============================================================ */
-.thread-layout:has(.thread-subtask-pop) {
-  container: thread-task-tree / inline-size;
-}
-
 .thread-main:has(.thread-subtask-pop) {
   --thread-subtask-width: 296px;
   --thread-subtask-edge-gap: 12px;
@@ -175,35 +171,6 @@
   display: none;
 }
 
-/* Only reserve a task-tree rail when both the full-width composer and the
-   compact tree fit. Below that point the tree behaves like a responsive
-   overlay opened from the conversation header, giving the transcript the
-   whole width while the tree is closed. */
-@container thread-task-tree (min-width: 1088px) {
-  .thread-main:has(.thread-subtask-pop) {
-    padding-right: var(--thread-subtask-rail-width);
-  }
-
-  .thread-main:has(.thread-subtask-pop) .composer-shell-wrap {
-    right: var(--thread-subtask-rail-width);
-    width: min(
-      var(--thread-reading-width),
-      calc(100% - var(--thread-subtask-rail-width) - 32px)
-    );
-  }
-
-  .thread-subtask-pop {
-    width: var(--thread-subtask-width);
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateX(0) scale(1);
-    visibility: visible;
-    transition:
-      opacity 150ms var(--ease-out-quart),
-      transform 180ms var(--ease-out-quart),
-      visibility 0s;
-  }
-}
 .thread-subtask-toggle {
   position: relative;
   display: inline-flex;

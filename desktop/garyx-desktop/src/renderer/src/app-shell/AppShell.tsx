@@ -1205,6 +1205,7 @@ export function AppShell() {
     sidebarResizing,
     sideToolsPanelWidth,
     sideToolsResizing,
+    taskTreeDocked,
     threadLayoutRef,
     threadLogsDocked,
     threadLogsPanelWidth,
@@ -4202,6 +4203,7 @@ export function AppShell() {
         showTailThinking={showTailThinking}
         rateLimit={activeRateLimit}
         onRateLimitContinue={() => handleSendPromptText("continue")}
+        taskTreeDocked={embedded ? false : taskTreeDocked}
         threadLayoutRef={threadLayoutRef}
         threadLayoutStyle={undefined}
         threadLogsMaxWidth={

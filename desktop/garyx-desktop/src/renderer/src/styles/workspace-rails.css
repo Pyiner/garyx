@@ -1,53 +1,5 @@
 /* Bot conversation rail, workspace rows, thread items, settings rail. */
 
-.bot-conversation-rail {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  height: 100vh;
-  max-height: 100vh;
-  padding: var(--inset-toolbar) 8px 10px;
-  background: rgb(255, 255, 255);
-  /* Right side (seam against `.conversation`) is square so the 1px column-gap
-     reads as a single seam line instead of two opposing curves. */
-  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
-  border: none;
-  box-shadow: none;
-  -webkit-app-region: drag;
-  padding-top: 0;
-}
-
-.bot-conversation-rail::after {
-  display: none;
-}
-
-.bot-conversation-rail button,
-.bot-conversation-list {
-  -webkit-app-region: no-drag;
-}
-
-.bot-conversation-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-shrink: 0;
-  /* Span the macOS title bar inset so the rail's title row aligns with
-     the conversation's `.conversation-header` instead of sitting below an
-     empty white strip. */
-  min-height: var(--inset-toolbar);
-  padding: 0 2px 0 14px;
-}
-
-/* Collapsed sidebar: the rail hugs the window's left edge, so its header must
-   clear the traffic lights and the floating sidebar toggle, like
-   `.conversation-header` does. */
-.app-shell.sidebar-collapsed .bot-conversation-rail .bot-conversation-header {
-  padding-left: 122px;
-}
-
 .bot-conversation-heading {
   display: inline-flex;
   align-items: center;
@@ -142,7 +94,6 @@
     var(--color-token-text-primary) 4%,
     transparent
   );
-  -webkit-app-region: no-drag;
 }
 
 .recent-filter-tabs button {
@@ -1313,86 +1264,4 @@ button.recent-feed-footer.failed:hover {
 .left-rail .workspace-empty-block {
   border: 1px dashed rgba(15, 23, 42, 0.12);
   background: rgba(255, 255, 255, 0.36);
-}
-
-.conversation {
-  display: grid;
-  grid-template-rows: var(--inset-toolbar) minmax(0, 1fr);
-  min-width: 0;
-  min-height: 0;
-  background: rgb(255, 255, 255);
-  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
-  overflow: hidden;
-}
-
-/* When the L2 conversation rail is open the right pane sits flush against
-   it, so the left edge needs to be square and carries the single seam
-   hairline. The single-column (L1-only) layout keeps the pill corners and
-   no border so the pane still feels like a floating card. */
-.app-shell.with-bot-conversation-rail .conversation {
-  border-radius: 0;
-  border-left: 1px solid var(--color-token-border-light);
-}
-
-.app-shell.sidebar-collapsed:not(.with-bot-conversation-rail) .conversation {
-  border-radius: 0;
-}
-
-.conversation:not(.settings-view) {
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.conversation.with-side-tools {
-  --side-tools-resizer-width: 10px;
-  position: relative;
-  grid-template-columns:
-    minmax(0, 1fr)
-    var(--side-tools-resizer-width)
-    minmax(320px, var(--side-tools-panel-width, 320px));
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-.conversation.with-side-tools .conversation-header {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.conversation.with-side-tools .conversation-body {
-  grid-column: 1;
-  grid-row: 2;
-}
-
-.conversation.with-side-tools .side-tools-resizer {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-}
-
-.conversation.with-side-tools .thread-side-tools-panel {
-  grid-column: 3;
-  grid-row: 1 / span 2;
-}
-
-.conversation.side-tools-resizing {
-  cursor: col-resize;
-}
-
-.conversation.browser-view {
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.conversation.capsules-view,
-.conversation.tasks-view {
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.conversation.capsules-view .conversation-body,
-.conversation.tasks-view .conversation-body {
-  padding: 0;
-}
-
-.settings-window-toolbar {
-  height: var(--inset-toolbar);
-  border-bottom: none;
-  background: var(--color-token-bg-primary);
-  -webkit-app-region: drag;
 }

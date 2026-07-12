@@ -66,6 +66,7 @@ function ThreadStage({ step }: { step: StoryStep }) {
   return (
     <ThreadPage
       surfaceVariant="side-chat"
+      taskTreeDocked={false}
       agentLabel="Storybook Agent"
       activeMessages={state.messages}
       activePendingAckIntents={state.pendingAckIntents}

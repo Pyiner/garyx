@@ -29,6 +29,7 @@
 @import "./styles/channel-plugins.css";
 @import "./styles/gateway-status.css";
 @import "./styles/task-forest.css";
+@import "./styles/app-shell.css";
 @import "./styles/gateway-panels.css";
 @import "./styles/management.css";
 

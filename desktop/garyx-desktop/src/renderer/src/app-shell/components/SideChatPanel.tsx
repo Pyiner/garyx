@@ -705,6 +705,7 @@ export function SideChatPanel({
   return (
     <ThreadPage
       surfaceVariant="side-chat"
+      taskTreeDocked={false}
       agentLabel={sideChatAgentLabel}
       composerAgentOptions={composerAgentOptions}
       activeMessages={sideChatMessages}

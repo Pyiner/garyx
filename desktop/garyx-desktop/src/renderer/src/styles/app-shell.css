@@ -1,0 +1,456 @@
+/*
+ * Always-loaded owner for the desktop shell's horizontal geometry.
+ *
+ * The layout state machine publishes one atomic --gx-* / data-* frame on
+ * .app-shell. Feature styles may own their contents, but they must not
+ * recreate these L1, L2, conversation, right-panel, resizer, or titlebar
+ * recipes.
+ */
+
+.app-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns:
+    var(--gx-sidebar-width)
+    var(--gx-shell-main-width);
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+  /* Transparent so `vibrancy: "menu"` can peek through body's alpha gap. */
+  background: transparent;
+}
+
+/* The class describes the three-child DOM shape. A hidden L2 rail keeps its
+   zero-width track so the conversation remains the third grid child. */
+.app-shell.with-bot-conversation-rail {
+  grid-template-columns:
+    var(--gx-sidebar-width)
+    var(--gx-conversation-rail-width)
+    var(--gx-shell-main-width);
+}
+
+/* L1 track and its titlebar drag overlay. */
+.left-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: var(--inset-toolbar) 8px 10px;
+  background: transparent;
+  border-right: none;
+  box-shadow: none;
+}
+
+.left-rail::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--inset-toolbar);
+  z-index: 100;
+  pointer-events: auto;
+  -webkit-app-region: drag;
+}
+
+.left-rail::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.left-rail > *:not(.sidebar-resizer) {
+  position: relative;
+  z-index: 1;
+}
+
+.app-shell[data-sidebar-state="collapsed"] .left-rail {
+  visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.app-shell[data-sidebar-state="compact-overlay"] .left-rail {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: var(--z-app-sidebar-resizer);
+  visibility: visible;
+  width: var(--gx-sidebar-preferred-width);
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+/* L2 track. */
+.bot-conversation-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100vh;
+  max-height: 100vh;
+  padding: 0 8px 10px;
+  background: rgb(255, 255, 255);
+  border: none;
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+  box-shadow: none;
+  -webkit-app-region: drag;
+}
+
+.bot-conversation-rail::after {
+  display: none;
+}
+
+.bot-conversation-rail button,
+.bot-conversation-list {
+  -webkit-app-region: no-drag;
+}
+
+.bot-conversation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: var(--inset-toolbar);
+  padding: 0 2px 0 14px;
+}
+
+.app-shell[data-sidebar-state="collapsed"]
+  .bot-conversation-rail
+  .bot-conversation-header {
+  padding-left: 122px;
+}
+
+.app-shell[data-conversation-rail-state="hidden"] .bot-conversation-rail {
+  visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Main conversation track and nested right dock. Vertical tracks stay here
+   too so deleting a feature stylesheet cannot dismantle persistent chrome. */
+.conversation {
+  display: grid;
+  grid-template-columns: var(--gx-conversation-width);
+  grid-template-rows: var(--inset-toolbar) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: rgb(255, 255, 255);
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+
+.app-shell[data-conversation-rail-state="open"] .conversation {
+  border-left: 1px solid var(--color-token-border-light);
+  border-radius: 0;
+}
+
+.app-shell[data-sidebar-state="collapsed"]:not(
+    [data-conversation-rail-state="open"]
+  )
+  > .conversation {
+  border-radius: 0;
+}
+
+.conversation:not(.settings-view) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.conversation.with-side-tools {
+  position: relative;
+  grid-template-columns:
+    var(--gx-thread-main-width)
+    var(--gx-right-resizer-width)
+    var(--gx-right-panel-width);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.conversation.with-side-tools .conversation-header {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.conversation.with-side-tools .conversation-body {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.conversation.with-side-tools .side-tools-resizer {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.conversation.with-side-tools .thread-side-tools-panel {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+}
+
+.app-shell[data-side-tools-state="hidden"] .thread-side-tools-panel {
+  visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.conversation.side-tools-resizing {
+  cursor: col-resize;
+}
+
+.conversation.browser-view,
+.conversation.capsules-view,
+.conversation.tasks-view {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.conversation.capsules-view .conversation-body,
+.conversation.tasks-view .conversation-body {
+  padding: 0;
+}
+
+/* Main thread tracks consume exact frame pixels. Embedded side-chat threads
+   keep their feature-owned intrinsic column recipe. */
+.thread-layout {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.thread-layout:not(.thread-layout--side-chat) {
+  grid-template-columns: var(--gx-thread-main-width);
+}
+
+.thread-layout.with-inspector-panel {
+  column-gap: 0;
+  row-gap: 0;
+  align-items: stretch;
+}
+
+.thread-layout.with-log-panel {
+  position: relative;
+  align-items: stretch;
+  gap: 0;
+}
+
+.app-shell[data-thread-logs-presentation="docked"]
+  .thread-layout.with-log-panel {
+  grid-template-columns:
+    var(--gx-thread-main-width)
+    var(--gx-thread-log-resizer-width)
+    var(--gx-thread-log-panel-width);
+}
+
+.app-shell[data-thread-logs-presentation="overlay"]
+  .thread-layout.with-log-panel {
+  grid-template-columns: var(--gx-thread-main-width);
+}
+
+.app-shell[data-thread-logs-presentation="overlay"] .thread-log-resizer {
+  display: none;
+}
+
+.app-shell[data-thread-logs-presentation="overlay"] .thread-log-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 45;
+  width: var(--gx-thread-logs-preferred-width);
+  max-height: none;
+  padding: 10px 12px 12px;
+  border: 0.5px solid var(--color-token-border);
+  border-radius: 16px;
+  background: var(--color-token-bg-primary);
+  box-shadow: var(--shadow-lg);
+}
+
+.thread-layout.log-panel-resizing {
+  cursor: col-resize;
+}
+
+/* Task-tree docking consumes the same frame as the shell tracks. Below the
+   dock threshold the feature stylesheet's base popover stays closed. */
+.app-shell[data-task-tree-presentation="docked"]
+  .thread-main:has(.thread-subtask-pop) {
+  padding-right: var(--thread-subtask-rail-width);
+}
+
+.app-shell[data-task-tree-presentation="docked"]
+  .thread-main:has(.thread-subtask-pop)
+  .composer-shell-wrap {
+  right: var(--thread-subtask-rail-width);
+  width: min(
+    var(--thread-reading-width),
+    calc(100% - var(--thread-subtask-rail-width) - 32px)
+  );
+}
+
+.app-shell[data-task-tree-presentation="docked"] .thread-subtask-pop {
+  width: var(--thread-subtask-width);
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0) scale(1);
+  visibility: visible;
+  transition:
+    opacity 150ms var(--ease-out-quart),
+    transform 180ms var(--ease-out-quart),
+    visibility 0s;
+}
+
+/* Shell resizers. */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  z-index: var(--z-app-sidebar-resizer);
+  display: flex;
+  width: 8px;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.sidebar-resizer-line {
+  width: 1px;
+  height: 100%;
+  margin: auto;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(26, 28, 31, 0.25),
+    transparent
+  );
+  transition: opacity 150ms ease;
+}
+
+.sidebar-resizer:hover .sidebar-resizer-line,
+.sidebar-resizer.is-resizing .sidebar-resizer-line {
+  opacity: 1;
+}
+
+.thread-log-resizer,
+.side-tools-resizer {
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.thread-log-resizer {
+  width: var(--gx-thread-log-resizer-width);
+  min-width: var(--gx-thread-log-resizer-width);
+}
+
+.side-tools-resizer {
+  width: var(--gx-right-resizer-width);
+  min-width: var(--gx-right-resizer-width);
+  -webkit-app-region: no-drag;
+}
+
+.thread-log-resizer::before,
+.side-tools-resizer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
+  transform: translateX(-50%);
+}
+
+.thread-log-resizer:hover::before,
+.thread-log-resizer:focus-visible::before,
+.thread-layout.log-panel-resizing .thread-log-resizer::before,
+.side-tools-resizer:hover::before,
+.side-tools-resizer:focus-visible::before,
+.conversation.side-tools-resizing .side-tools-resizer::before {
+  background: color-mix(
+    in srgb,
+    var(--color-token-foreground) 22%,
+    transparent
+  );
+}
+
+/* Titlebar drag/no-drag composition. Electron combines these regions in DOM
+   order, so AppShell's painted no-drag carveout must remain its last child. */
+.conversation-header {
+  -webkit-app-region: drag;
+}
+
+.settings-window-toolbar {
+  height: var(--inset-toolbar);
+  border-bottom: none;
+  background: var(--color-token-bg-primary);
+  -webkit-app-region: drag;
+}
+
+.conversation-header button,
+.conversation-header select,
+.conversation-header input,
+.conversation-header label,
+.conversation-header a,
+.conversation-header-actions {
+  -webkit-app-region: no-drag;
+}
+
+.recent-filter-tabs,
+.thread-side-tools-panel,
+.side-tools-tabs,
+.side-tools-tabs button,
+.side-tools-tabs [role="menu"],
+.side-tools-tabs [role="menuitem"] {
+  -webkit-app-region: no-drag;
+}
+
+.app-shell[data-sidebar-state="collapsed"]:not(
+    [data-conversation-rail-state="open"]
+  )
+  > .conversation
+  > .conversation-header {
+  padding-left: 122px;
+}
+
+.sidebar-collapse-toggle {
+  position: absolute;
+  top: 12px;
+  left: 84px;
+  z-index: 120;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-token-description-foreground);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard);
+}
+
+.sidebar-collapse-toggle:hover {
+  background: color-mix(
+    in oklab,
+    var(--color-token-text-primary) 10%,
+    transparent
+  );
+  color: var(--color-token-text-primary);
+}
