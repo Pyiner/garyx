@@ -1159,8 +1159,8 @@ pub(super) async fn save_streaming_partial(
     // can flip later in the same run (a message-tool turn that later emits real
     // assistant text), so a streamed mirror is not a stable prefix of the final
     // authoritative set. The terminal commit re-derives mirrors with full context
-    // and `reconcile_run_tail` rewrites the tail to match; streaming only commits
-    // the stable real session rows.
+    // and `reconcile_run_records_tail` rewrites the tail to match; streaming only
+    // commits the stable real session rows.
     let authoritative_content: Vec<Value> = build_run_messages(&finalized_run)
         .into_iter()
         .filter(|message| {
