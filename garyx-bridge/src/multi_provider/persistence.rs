@@ -15,18 +15,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::warn;
 
+use crate::provider_common::metadata_string;
+
 /// Maximum number of messages to keep per session (matches Python's limit).
 pub(super) const MAX_SESSION_MESSAGES: usize = 100;
 const PROVIDER_SDK_SESSION_IDS_KEY: &str = "provider_sdk_session_ids";
-
-fn metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<String> {
-    metadata
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
 
 fn attach_run_fields(
     object: &mut serde_json::Map<String, Value>,

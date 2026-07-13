@@ -3,6 +3,77 @@ use std::collections::{HashMap, VecDeque};
 use garyx_models::provider::ProviderRateLimit;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use uuid::Uuid;
+
+use crate::gary_prompt::task_cli_env;
+
+pub(crate) fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
+    metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+pub(crate) fn metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub(crate) fn metadata_string_map(
+    metadata: &HashMap<String, Value>,
+    key: &str,
+) -> HashMap<String, String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_object)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(entry_key, entry_value)| {
+                    entry_value
+                        .as_str()
+                        .map(|entry_value| (entry_key.clone(), entry_value.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn normalize_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub(crate) fn resolve_run_id_with(
+    metadata: &HashMap<String, Value>,
+    fallback: impl FnOnce() -> String,
+) -> String {
+    metadata
+        .get("bridge_run_id")
+        .and_then(Value::as_str)
+        .or_else(|| metadata.get("client_run_id").and_then(Value::as_str))
+        .or_else(|| metadata.get("run_id").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(fallback)
+}
+
+pub(crate) fn resolve_uuid_run_id(metadata: &HashMap<String, Value>) -> String {
+    resolve_run_id_with(metadata, || format!("run_{}", Uuid::new_v4()))
+}
+
+pub(crate) fn runtime_env_overlay(
+    config_env: &HashMap<String, String>,
+    metadata: &HashMap<String, Value>,
+    extra_env_key: &str,
+) -> HashMap<String, String> {
+    let mut env = config_env.clone();
+    env.extend(task_cli_env(metadata));
+    env.extend(metadata_string_map(metadata, extra_env_key));
+    env
+}
 
 pub(crate) struct GaryxMcpServer {
     pub(crate) url: String,
@@ -27,23 +98,15 @@ pub(crate) fn garyx_mcp_server(
         ("X-Thread-Id".to_owned(), thread_id.to_owned()),
         ("X-Session-Key".to_owned(), thread_id.to_owned()),
     ]);
-    if let Some(overrides) = metadata.get("garyx_mcp_headers").and_then(Value::as_object) {
-        headers.extend(overrides.iter().filter_map(|(key, value)| {
-            value.as_str().map(|value| (key.clone(), value.to_owned()))
-        }));
-    }
+    headers.extend(metadata_string_map(metadata, "garyx_mcp_headers"));
 
     let encoded_thread = urlencoding::encode(thread_id);
     let encoded_run = urlencoding::encode(run_id);
-    let url = metadata
-        .get("garyx_mcp_auth_token")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    let url = metadata_string(metadata, "garyx_mcp_auth_token")
         .map(|token| {
             format!(
                 "{base_url}/mcp/auth/{}/{encoded_thread}/{encoded_run}",
-                urlencoding::encode(token)
+                urlencoding::encode(&token)
             )
         })
         .unwrap_or_else(|| format!("{base_url}/mcp/{encoded_thread}/{encoded_run}"));
@@ -144,6 +207,106 @@ impl PendingRateLimits {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn metadata_helpers_keep_existing_coercion_and_trimming_rules() {
+        let metadata = HashMap::from([
+            ("flag".to_owned(), Value::Bool(true)),
+            ("text".to_owned(), Value::String(" value ".to_owned())),
+            ("blank".to_owned(), Value::String("   ".to_owned())),
+            (
+                "map".to_owned(),
+                json!({
+                    "string": "kept",
+                    "number": 42,
+                }),
+            ),
+        ]);
+
+        assert!(metadata_bool(&metadata, "flag"));
+        assert!(!metadata_bool(&metadata, "text"));
+        assert_eq!(metadata_string(&metadata, "text").as_deref(), Some("value"));
+        assert_eq!(metadata_string(&metadata, "blank"), None);
+        assert_eq!(
+            metadata_string_map(&metadata, "map"),
+            HashMap::from([("string".to_owned(), "kept".to_owned())])
+        );
+        assert_eq!(
+            normalize_non_empty(Some(" value ")).as_deref(),
+            Some("value")
+        );
+        assert_eq!(normalize_non_empty(Some("  ")), None);
+    }
+
+    #[test]
+    fn resolve_run_id_keeps_priority_and_injected_fallback() {
+        let metadata = HashMap::from([
+            (
+                "bridge_run_id".to_owned(),
+                Value::String("bridge".to_owned()),
+            ),
+            (
+                "client_run_id".to_owned(),
+                Value::String("client".to_owned()),
+            ),
+            ("run_id".to_owned(), Value::String("run".to_owned())),
+        ]);
+        assert_eq!(
+            resolve_run_id_with(&metadata, || "fallback".to_owned()),
+            "bridge"
+        );
+        assert_eq!(
+            resolve_run_id_with(
+                &HashMap::from([("bridge_run_id".to_owned(), Value::String(String::new()),)]),
+                || "fallback".to_owned(),
+            ),
+            "",
+            "run id extraction intentionally does not normalize present strings"
+        );
+        assert_eq!(
+            resolve_run_id_with(&HashMap::new(), || "fallback".to_owned()),
+            "fallback"
+        );
+    }
+
+    #[test]
+    fn runtime_env_overlay_preserves_config_task_and_extra_precedence() {
+        let config_env = HashMap::from([
+            ("CONFIG_ONLY".to_owned(), "config".to_owned()),
+            ("GARYX_CHANNEL".to_owned(), "config".to_owned()),
+            ("GARYX_THREAD_ID".to_owned(), "config".to_owned()),
+        ]);
+        let metadata = HashMap::from([
+            (
+                "runtime_context".to_owned(),
+                json!({
+                    "thread_id": "thread::runtime",
+                    "channel": "runtime-channel",
+                }),
+            ),
+            (
+                "provider_env".to_owned(),
+                json!({
+                    "GARYX_THREAD_ID": "extra-thread",
+                    "EXTRA_ONLY": "extra",
+                }),
+            ),
+        ]);
+
+        let env = runtime_env_overlay(&config_env, &metadata, "provider_env");
+        assert_eq!(env.get("CONFIG_ONLY").map(String::as_str), Some("config"));
+        assert_eq!(
+            env.get("GARYX_CHANNEL").map(String::as_str),
+            Some("runtime-channel"),
+            "task runtime env must override config env"
+        );
+        assert_eq!(
+            env.get("GARYX_THREAD_ID").map(String::as_str),
+            Some("extra-thread"),
+            "extra provider env must override task runtime env"
+        );
+        assert_eq!(env.get("EXTRA_ONLY").map(String::as_str), Some("extra"));
+    }
 
     #[test]
     fn garyx_mcp_server_normalizes_base_url_and_encodes_context() {

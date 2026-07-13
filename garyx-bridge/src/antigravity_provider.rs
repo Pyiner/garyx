@@ -17,10 +17,12 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::gary_prompt::{
-    compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
-};
+use crate::gary_prompt::{compose_gary_instructions, prepend_initial_context_to_user_message};
 use crate::native_slash::build_native_skill_prompt;
+use crate::provider_common::{
+    metadata_bool, normalize_non_empty, resolve_uuid_run_id as resolve_run_id,
+    runtime_env_overlay,
+};
 use crate::provider_trait::{
     ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
@@ -29,50 +31,11 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
 const TRANSCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn resolve_run_id(metadata: &HashMap<String, Value>) -> String {
-    metadata
-        .get("bridge_run_id")
-        .and_then(Value::as_str)
-        .or_else(|| metadata.get("client_run_id").and_then(Value::as_str))
-        .or_else(|| metadata.get("run_id").and_then(Value::as_str))
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("run_{}", Uuid::new_v4()))
-}
-
-fn metadata_string_map(metadata: &HashMap<String, Value>, key: &str) -> HashMap<String, String> {
-    metadata
-        .get(key)
-        .and_then(Value::as_object)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|(name, value)| {
-                    value.as_str().map(|value| (name.clone(), value.to_owned()))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn resolve_runtime_antigravity_env(
     config: &AntigravityCliConfig,
     metadata: &HashMap<String, Value>,
 ) -> HashMap<String, String> {
-    let mut env = config.env.clone();
-    env.extend(task_cli_env(metadata));
-    env.extend(metadata_string_map(metadata, "desktop_antigravity_env"));
-    env
-}
-
-fn normalize_non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
-    metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
+    runtime_env_overlay(&config.env, metadata, "desktop_antigravity_env")
 }
 
 fn antigravity_bin(config: &AntigravityCliConfig) -> &str {

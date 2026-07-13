@@ -29,11 +29,12 @@ use garyx_models::{
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use crate::gary_prompt::{
-    compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
-};
+use crate::gary_prompt::{compose_gary_instructions, prepend_initial_context_to_user_message};
 use crate::native_slash::build_native_skill_prompt;
-use crate::provider_common::{PendingAckQueue, PendingRateLimits, garyx_mcp_server};
+use crate::provider_common::{
+    PendingAckQueue, PendingRateLimits, garyx_mcp_server, metadata_bool, metadata_string,
+    normalize_non_empty, resolve_run_id_with, runtime_env_overlay,
+};
 use crate::provider_trait::{
     ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
@@ -460,17 +461,6 @@ struct CodexCliConfigFile {
     model: Option<String>,
 }
 
-fn normalize_non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
-fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
-    metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
-}
-
 fn is_custom_standalone_agent(metadata: &HashMap<String, Value>) -> bool {
     metadata
         .get("agent_id")
@@ -795,31 +785,11 @@ fn normalize_codex_mcp_servers(metadata: &HashMap<String, Value>) -> Option<Valu
     (!normalized.is_empty()).then_some(Value::Object(normalized))
 }
 
-fn metadata_string_map(metadata: &HashMap<String, Value>, key: &str) -> HashMap<String, String> {
-    metadata
-        .get(key)
-        .and_then(Value::as_object)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|(env_key, env_value)| {
-                    env_value
-                        .as_str()
-                        .map(|env_value| (env_key.clone(), env_value.to_owned()))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn resolve_runtime_codex_env(
     config: &CodexAppServerConfig,
     metadata: &HashMap<String, Value>,
 ) -> HashMap<String, String> {
-    let mut env = config.env.clone();
-    env.extend(task_cli_env(metadata));
-    env.extend(metadata_string_map(metadata, "provider_env"));
-    env
+    runtime_env_overlay(&config.env, metadata, "provider_env")
 }
 
 fn build_codex_thread_config(
@@ -883,15 +853,6 @@ fn build_input_items(options: &ProviderRunOptions, include_memory: bool) -> Vec<
         options.images.as_deref().unwrap_or_default(),
         &attachments,
     )
-}
-
-fn metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<String> {
-    metadata
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn resolve_codex_request_model(
@@ -1971,27 +1932,15 @@ impl CodexAgentProvider {
         let client_guard = client_slot.client.lock().await;
         let client = &*client_guard;
 
-        let run_id = options
-            .metadata
-            .get("bridge_run_id")
-            .and_then(|v| v.as_str())
-            .or_else(|| {
-                options
-                    .metadata
-                    .get("client_run_id")
-                    .and_then(|v| v.as_str())
-            })
-            .or_else(|| options.metadata.get("run_id").and_then(|v| v.as_str()))
-            .map(|s| s.to_owned())
-            .unwrap_or_else(|| {
-                format!(
-                    "run_{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis()
-                )
-            });
+        let run_id = resolve_run_id_with(&options.metadata, || {
+            format!(
+                "run_{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            )
+        });
 
         // Drop any quota stash left by a prior run on this thread so a stale
         // entry (e.g. a usage-limit error that was followed by a successful

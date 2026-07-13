@@ -23,11 +23,12 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::gary_prompt::{
-    compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
-};
+use crate::gary_prompt::{compose_gary_instructions, prepend_initial_context_to_user_message};
 use crate::native_slash::build_native_skill_prompt;
-use crate::provider_common::{PendingAckQueue, PendingRateLimits, garyx_mcp_server};
+use crate::provider_common::{
+    PendingAckQueue, PendingRateLimits, garyx_mcp_server, metadata_bool,
+    resolve_uuid_run_id as resolve_run_id, runtime_env_overlay,
+};
 use crate::provider_trait::{
     ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
@@ -492,10 +493,6 @@ fn non_empty_session_id(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
-    metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
-}
-
 fn custom_standalone_agent_id(metadata: &HashMap<String, Value>) -> Option<&str> {
     metadata
         .get("agent_id")
@@ -519,16 +516,6 @@ fn emit_tool_stream_event(entry: &ProviderMessage, on_chunk: &StreamCallback) {
         }),
         _ => {}
     }
-}
-
-fn resolve_run_id(metadata: &HashMap<String, serde_json::Value>) -> String {
-    metadata
-        .get("bridge_run_id")
-        .and_then(|v| v.as_str())
-        .or_else(|| metadata.get("client_run_id").and_then(|v| v.as_str()))
-        .or_else(|| metadata.get("run_id").and_then(|v| v.as_str()))
-        .map(String::from)
-        .unwrap_or_else(|| format!("run_{}", Uuid::new_v4()))
 }
 
 fn resolve_requested_model(
@@ -983,25 +970,6 @@ fn emit_context_compaction_activity(
     }
 }
 
-fn metadata_string_map(
-    metadata: &HashMap<String, serde_json::Value>,
-    key: &str,
-) -> HashMap<String, String> {
-    metadata
-        .get(key)
-        .and_then(|value| value.as_object())
-        .map(|map| {
-            map.iter()
-                .filter_map(|(entry_key, entry_value)| {
-                    entry_value
-                        .as_str()
-                        .map(|entry_value| (entry_key.clone(), entry_value.to_owned()))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn metadata_mcp_servers(
     metadata: &HashMap<String, serde_json::Value>,
     key: &str,
@@ -1305,9 +1273,7 @@ impl ClaudeCliProvider {
                 );
                 (None, HashMap::new(), Some(merged_instructions), None)
             };
-        let mut env = self.config.env.clone();
-        env.extend(task_cli_env(&options.metadata));
-        env.extend(metadata_string_map(&options.metadata, "provider_env"));
+        let env = runtime_env_overlay(&self.config.env, &options.metadata, "provider_env");
         let cli_path = resolve_claude_sdk_cli_path(&self.config);
         let cli_prefix_args = resolve_claude_sdk_cli_prefix_args(&self.config);
 

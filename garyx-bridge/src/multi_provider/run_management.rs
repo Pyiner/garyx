@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep};
 
+use crate::provider_common::{metadata_bool, metadata_string};
 use crate::provider_trait::{BridgeError, ProviderRuntime, ProviderRuntimeSelection};
 use crate::run_graph::{RunGraphState, execute_agent_run};
 
@@ -79,15 +80,6 @@ fn requested_provider_from_metadata(metadata: &HashMap<String, Value>) -> Option
 fn requested_agent_id_from_metadata(metadata: &HashMap<String, Value>) -> Option<String> {
     metadata
         .get("agent_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn metadata_string(metadata: &HashMap<String, Value>, key: &str) -> Option<String> {
-    metadata
-        .get(key)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -265,10 +257,6 @@ async fn render_streaming_user_message_for_provider(
     message: &str,
 ) -> String {
     message.to_owned()
-}
-
-fn metadata_bool(metadata: &HashMap<String, Value>, key: &str) -> bool {
-    metadata.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn non_empty_trimmed_owned(value: &str) -> Option<String> {
