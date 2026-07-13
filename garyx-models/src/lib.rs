@@ -14,7 +14,6 @@ pub mod messages;
 pub mod provider;
 pub mod quota;
 pub mod routing;
-pub mod session;
 pub mod task;
 pub mod thread_logs;
 pub mod thread_record;
@@ -66,7 +65,6 @@ pub use quota::{
     QuotaCredentialScope, QuotaScope, QuotaStatus, evaluate_quota,
 };
 pub use routing::DeliveryContext;
-pub use session::{ChatType, SessionEntry, SessionOrigin, SessionTokenUsage};
 pub use task::{
     Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskExecutor,
     TaskNotificationTarget, TaskSource, TaskStatus, ThreadTask,

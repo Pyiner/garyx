@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::provider::{ProviderMessage, StreamEvent};
+use crate::provider::ProviderMessage;
 
 /// Channel-facing outbound content.
 ///
@@ -46,14 +46,6 @@ impl ChannelOutboundContent {
         Self::File {
             path: path.into(),
             caption,
-        }
-    }
-
-    pub fn from_stream_event(event: StreamEvent) -> Option<Self> {
-        match event {
-            StreamEvent::ToolUse { message } => Some(Self::ToolUse { message }),
-            StreamEvent::ToolResult { message } => Some(Self::ToolResult { message }),
-            _ => None,
         }
     }
 

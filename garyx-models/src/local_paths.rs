@@ -15,11 +15,6 @@ pub fn gary_home_dir() -> PathBuf {
         .join(".garyx")
 }
 
-/// Previous home dir (~/.gary) — used for automatic migration.
-pub fn legacy_gary_home_dir() -> Option<PathBuf> {
-    home_dir().map(|home| home.join(".gary"))
-}
-
 /// Legacy home dir (~/.garybot) — kept around so existing local state
 /// can be migrated into ~/.garyx on first run.
 pub fn legacy_garybot_home_dir() -> Option<PathBuf> {
@@ -34,16 +29,8 @@ pub fn thread_transcripts_dir_for_data_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("transcripts")
 }
 
-pub fn default_thread_transcripts_dir() -> PathBuf {
-    thread_transcripts_dir_for_data_dir(&default_session_data_dir())
-}
-
 pub fn message_ledger_dir_for_data_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("message-ledger")
-}
-
-pub fn default_message_ledger_dir() -> PathBuf {
-    message_ledger_dir_for_data_dir(&default_session_data_dir())
 }
 
 pub fn custom_agents_state_path_for_data_dir(data_dir: &Path) -> PathBuf {
@@ -74,10 +61,6 @@ pub fn run_terminal_dir_for_data_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("run-terminal")
 }
 
-pub fn default_run_terminal_dir() -> PathBuf {
-    run_terminal_dir_for_data_dir(&default_session_data_dir())
-}
-
 pub fn default_skills_dir() -> PathBuf {
     gary_home_dir().join("skills")
 }
@@ -96,10 +79,6 @@ pub fn default_mcp_sync_state_path() -> PathBuf {
 
 pub fn skills_sync_state_path_for_gary_home(gary_home: &Path) -> PathBuf {
     gary_home.join("skills-sync-state.json")
-}
-
-pub fn default_skills_sync_state_path() -> PathBuf {
-    skills_sync_state_path_for_gary_home(&gary_home_dir())
 }
 
 pub fn agent_memory_key(agent_id: &str) -> String {
@@ -149,10 +128,6 @@ fn sanitized_memory_key(value: &str, fallback: &str) -> String {
     } else {
         sanitized.to_owned()
     }
-}
-
-pub fn default_pending_restart_path() -> PathBuf {
-    gary_home_dir().join("pending-restart.json")
 }
 
 pub fn migrate_legacy_homes() -> Result<(), io::Error> {
