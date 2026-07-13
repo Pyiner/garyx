@@ -201,27 +201,146 @@ async function runOracle(page, frames, rows) {
 
       const events = [];
       const renderRows = [];
+      let committedSeq = 0;
+      let toolRows = 0;
+      let tailKey = null;
       for (let index = 0; index < rowCount; index += 1) {
-        const userSeq = index * 2 + 1;
-        const assistantSeq = userSeq + 1;
+        const userSeq = ++committedSeq;
         const userId = `oracle-user:${userSeq - 1}`;
-        const assistantId = `oracle-assistant:${assistantSeq - 1}`;
-        events.push(
-          {
-            type: "committed_message",
-            runId: "run-oracle-seed",
-            threadId: activeThreadId,
+        events.push({
+          type: "committed_message",
+          runId: "run-oracle-seed",
+          threadId: activeThreadId,
+          seq: userSeq,
+          message: {
+            id: userId,
             seq: userSeq,
-            message: {
-              id: userId,
-              seq: userSeq,
-              role: "user",
-              text: `question ${index}`,
-              content: `question ${index}`,
-              timestamp: "2026-01-01T00:00:00.000Z",
-            },
+            role: "user",
+            text: `question ${index}`,
+            content: `question ${index}`,
+            timestamp: "2026-01-01T00:00:00.000Z",
           },
-          {
+        });
+
+        const activity = [];
+        if (index % 5 === 0 && index < rowCount - 1) {
+          toolRows += 1;
+          const assistantSeq = ++committedSeq;
+          const toolUseSeq = ++committedSeq;
+          const toolResultSeq = ++committedSeq;
+          const assistantId = `oracle-assistant:${assistantSeq - 1}`;
+          const toolUseId = `oracle-tool-use:${toolUseSeq - 1}`;
+          const toolResultId = `oracle-tool-result:${toolResultSeq - 1}`;
+          const callId = `oracle-call-${index}`;
+          const groupId = `oracle-tool-group-${index}`;
+          events.push(
+            {
+              type: "committed_message",
+              runId: "run-oracle-seed",
+              threadId: activeThreadId,
+              seq: assistantSeq,
+              message: {
+                id: assistantId,
+                seq: assistantSeq,
+                role: "assistant",
+                text: `checking ${index}`,
+                content: `checking ${index}`,
+                timestamp: "2026-01-01T00:00:01.000Z",
+              },
+            },
+            {
+              type: "committed_message",
+              runId: "run-oracle-seed",
+              threadId: activeThreadId,
+              seq: toolUseSeq,
+              message: {
+                id: toolUseId,
+                seq: toolUseSeq,
+                role: "tool_use",
+                text: "oracle command",
+                content: { command: "printf oracle" },
+                toolUseId: callId,
+                toolName: "commandExecution",
+                timestamp: "2026-01-01T00:00:02.000Z",
+              },
+            },
+            {
+              type: "committed_message",
+              runId: "run-oracle-seed",
+              threadId: activeThreadId,
+              seq: toolResultSeq,
+              message: {
+                id: toolResultId,
+                seq: toolResultSeq,
+                role: "tool_result",
+                text: "oracle",
+                content: { aggregatedOutput: "oracle" },
+                toolUseId: callId,
+                toolName: "commandExecution",
+                timestamp: "2026-01-01T00:00:03.000Z",
+              },
+            },
+          );
+          activity.push({
+            kind: "step",
+            id: `oracle-step-${index}`,
+            steps: [
+              {
+                kind: "assistant_message",
+                id: `oracle-assistant-step-${index}`,
+                message: { id: assistantId, seq: assistantSeq, role: "assistant" },
+                streaming: false,
+              },
+              {
+                kind: "tool_group",
+                id: groupId,
+                status: "completed",
+                entries: [
+                  {
+                    id: `oracle-tool-entry-${index}`,
+                    tool_use_id: callId,
+                    status: "completed",
+                    tool_use: { id: toolUseId, seq: toolUseSeq, role: "tool_use" },
+                    tool_result: {
+                      id: toolResultId,
+                      seq: toolResultSeq,
+                      role: "tool_result",
+                    },
+                    projection: {
+                      tool_name: "commandExecution",
+                      kind: "command",
+                      visibility: "normal",
+                      call: {
+                        root: "content",
+                        path: ["command"],
+                        format: "code",
+                        label: "command",
+                      },
+                      result: {
+                        root: "content",
+                        path: ["aggregatedOutput"],
+                        format: "code",
+                        label: "output",
+                      },
+                      status: "completed",
+                      exit_code: 0,
+                      duration_ms: 1,
+                    },
+                  },
+                ],
+                started_at: "2026-01-01T00:00:02.000Z",
+                finished_at: "2026-01-01T00:00:03.000Z",
+              },
+            ],
+            final_message: null,
+            running: false,
+            started_at: "2026-01-01T00:00:01.000Z",
+            finished_at: "2026-01-01T00:00:03.000Z",
+          });
+        } else {
+          const assistantSeq = ++committedSeq;
+          const assistantId = `oracle-assistant:${assistantSeq - 1}`;
+          events.push({
             type: "committed_message",
             runId: "run-oracle-seed",
             threadId: activeThreadId,
@@ -234,29 +353,29 @@ async function runOracle(page, frames, rows) {
               content: `answer ${index}`,
               timestamp: "2026-01-01T00:00:01.000Z",
             },
-          },
-        );
+          });
+          activity.push({
+            kind: "assistant_reply",
+            id: `oracle-reply-${index}`,
+            message: { id: assistantId, seq: assistantSeq, role: "assistant" },
+            streaming: false,
+          });
+        }
         renderRows.push({
           kind: "user_turn",
           id: `oracle-turn-${index}`,
           user: { id: userId, seq: userSeq, role: "user" },
-          activity: [
-            {
-              kind: "assistant_reply",
-              message: {
-                id: assistantId,
-                seq: assistantSeq,
-                role: "assistant",
-              },
-            },
-          ],
+          activity,
           capsule_cards: [],
           started_at: "2026-01-01T00:00:00.000Z",
-          finished_at: "2026-01-01T00:00:01.000Z",
+          finished_at: "2026-01-01T00:00:03.000Z",
         });
+        if (index === rowCount - 1) {
+          tailKey = `user-turn:${userId}`;
+        }
       }
       const renderState = {
-        based_on_seq: rowCount * 2,
+        based_on_seq: committedSeq,
         rows: renderRows,
         tailActivity: "none",
         activeToolGroupId: null,
@@ -283,9 +402,8 @@ async function runOracle(page, frames, rows) {
 
       reset();
       const tailRow = renderRows[renderRows.length - 1];
-      const tailKey = `user-turn:oracle-user:${(rowCount - 1) * 2}`;
       for (let frame = 1; frame <= frameCount; frame += 1) {
-        const seq = rowCount * 2 + frame;
+        const seq = committedSeq + frame;
         const id = `oracle-stream:${seq - 1}`;
         const nextTailRow = {
           ...tailRow,
@@ -297,7 +415,10 @@ async function runOracle(page, frames, rows) {
           ],
           finished_at: null,
         };
-        const nextRows = [...renderRows.slice(0, -1), nextTailRow];
+        const nextRows = structuredClone([
+          ...renderRows.slice(0, -1),
+          nextTailRow,
+        ]);
         mirror.ingest({
           type: "thread_render_frame",
           threadId: activeThreadId,
@@ -317,7 +438,13 @@ async function runOracle(page, frames, rows) {
               },
             },
           ],
-          renderState: { ...renderState, based_on_seq: seq, rows: nextRows },
+          // Model a decoded full wire frame: stable history projections have
+          // equal values but fresh object identities on every commit.
+          renderState: structuredClone({
+            ...renderState,
+            based_on_seq: seq,
+            rows: nextRows,
+          }),
         });
         await nextPaint();
       }
@@ -331,6 +458,7 @@ async function runOracle(page, frames, rows) {
       return {
         frames: frameCount,
         rows: rowCount,
+        toolRows,
         background: {
           appShellRenders: background.appShellRenders,
           threadPageRenders: background.threadPageRenders,

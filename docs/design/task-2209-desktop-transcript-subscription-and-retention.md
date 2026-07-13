@@ -1,6 +1,6 @@
 # TASK-2209 Desktop Transcript Subscription And Retention
 
-Status: proposed for review
+Status: v2 proposed for re-review
 
 ## Goal
 
@@ -11,8 +11,9 @@ Bound desktop transcript work to the thread that changed:
 - an active stream frame must render only transcript rows whose presentation
   changed;
 - shell derivations must not allocate again when their inputs are unchanged;
-- inactive mirror transcript entries must be bounded and recover correctly
-  when reopened.
+- recoverable authoritative inactive mirror transcript entries must be bounded
+  and recover correctly when reopened, while unrecoverable local-only state is
+  retained until finalized or cleared.
 
 The deterministic pre-change evidence and oracle protocol are recorded in
 `docs/design/task-2209-transcript-render-baseline.md`.
@@ -108,12 +109,15 @@ The memo comparator is presentation-conservative:
 - message blocks compare their cached message object references;
 - turn running/timestamp/final-block values and activity block sequences are
   compared;
-- tool entries compare their resolved message references and projection
-  identity; a changed projection rerenders the row;
-- two empty Capsule-card lists compare equal, while non-empty changed lists
-  rerender conservatively;
-- an active-tool-group-id change rerenders rows so active shimmer cannot go
-  stale.
+- tool entries compare their resolved message references and compare every
+  lightweight projection selector by value, including selector path elements;
+  an equal projection received as a fresh wire object does not rerender, while
+  any changed projection field does;
+- Capsule cards compare their server fields by value, so equal fresh wire
+  objects are stable and a changed card rerenders;
+- an active-tool-group-id change rerenders only a row containing either the
+  previous or next active group id. Rows with no affected group remain equal,
+  so active shimmer cannot go stale without invalidating the whole list.
 
 This does not infer any transcript semantics. It only decides whether the
 already mapped presentation inputs are equal. The parent still performs the
@@ -162,13 +166,23 @@ An entry is evictable only when all are true:
 
 - `listeners.size === 0` (not selected and no mounted subscriber);
 - retain count is zero (no in-flight entry-scoped operation);
-- `liveStream === null` (all non-null transport/recovery states are protected).
+- `liveStream === null` (all non-null transport/recovery states are protected);
+- no UI message has a local state other than `remote_final`, because queued,
+  failed, and other local-only rows are not recoverable from authoritative
+  history; and
+- the id is not `NEW_THREAD_DRAFT_THREAD_ID`, which has no gateway recovery
+  route. The sentinel moves to a small shared thread-id module so the mirror
+  and dispatch controller use one definition without a UI-layer import.
 
-Reads, subscriptions, and commits touch recency. Pruning runs after entry
-creation, commit, unsubscribe, operation release, and live-stream clearing.
-When more than 32 entries are eligible, it deletes oldest eligible entries
-until 32 remain. A newly accessed entry is protected as the most recent during
-the pruning pass.
+Reads, subscriptions, and commits touch recency. Snapshot getters are
+side-effect-free with respect to the entry table, snapshot invalidation, and
+notifications: an absent id returns a stable empty snapshot, and a read may
+only update an existing entry's unobservable recency ordinal. Pruning never
+runs from a getter or render-time snapshot read. It runs only after mutation
+paths: subscription creation, commit, unsubscribe, operation release, and
+live-stream clearing. When more than 32 entries are eligible, it deletes
+oldest eligible entries until 32 remain. A newly accessed entry is protected
+as the most recent during the pruning pass.
 
 Eviction deletes the whole heavy entry: committed records, UI messages,
 transport snapshot, frontier, and cached snapshot. This is safe only because
@@ -186,6 +200,8 @@ The selected-thread recovery path remains authoritative:
 A contract test will fill beyond the inactive LRU, prove the oldest heavy
 entry was released, reopen it through the real cache/fetch/stream lifecycle,
 and assert restored messages/render state plus the expected stream start.
+Separate cases prove that the draft, a failed local message, a listener, a
+live stream, and an async retain are never evicted.
 
 ## Notification And Concurrency Rules
 
@@ -197,6 +213,16 @@ and assert restored messages/render state plus the expected stream start.
   notification for every deleted key.
 - The one mirror method that retains a raw entry across an async older-page
   fetch holds an operation retain until its final commit completes.
+- Dispatch error recovery currently clears live state immediately before
+  replacing the optimistic message. The 32-entry recency floor makes eviction
+  unreachable in that synchronous short window; any future long async window
+  must acquire an operation retain, while a full authoritative apply already
+  self-heals an absent entry. A focused regression test exercises the current
+  clear-then-update sequence.
+- The bound applies to authoritative heavy `GatewayMirror` `ThreadEntry`
+  caches. The small lifecycle registries outside the mirror are not claimed to
+  be covered by this LRU and can be assessed independently if they become
+  material.
 
 ## Files And Impact
 
@@ -220,14 +246,21 @@ Focused gates:
 
 1. `npm run transcript-render:oracle -- --expect optimized --frames 12 --rows 40`
    must report zero background `AppShell` renders and zero unchanged-row
-   renders.
+   renders. The fixture mixes ordinary and tool-bearing history rows, rebuilds
+   each wire render snapshot with fresh projection objects, and records a row
+   only from inside the memoized row component body.
 2. Mirror contract tests cover snapshot stability, notification isolation,
    eviction protection, LRU order, and reopen recovery.
 3. Row comparator tests cover unchanged message rows, changed tail content,
-   running/tool state, locale identity, and conservative Capsule/tool updates.
+   running/tool state, locale identity, equal-value/different-reference tool
+   projections and Capsule cards, changed selector fields, and active-group
+   changes that do and do not intersect a row.
 4. Source/owner contract verifies `AppShell` and `SideChatPanel` no longer
    subscribe to aggregate transcript maps.
-5. Full required gates: `npm run test:unit` and `npx tsc --noEmit`.
+5. A view-model/cache contract asserts that appending a tail frame preserves
+   unchanged message object references; this pins the memo comparator's main
+   input invariant without editing the parallel-owned materializer/cache.
+6. Full required gates: `npm run test:unit` and `npx tsc --noEmit`.
 
 The post-change raw oracle result will be appended to the baseline document
 before code review.
@@ -237,9 +270,12 @@ before code review.
 - Parent row-list reconciliation and server view-model mapping remain O(N) on
   active frames. This task removes whole-shell fan-out and heavy historical
   React subtree work; it deliberately does not claim windowing.
-- The 32-entry inactive LRU favors quick recent-thread revisits while placing
-  a deterministic bound on session retention. Older revisits may show the
-  existing cache/history loading state before restoration completes.
-- Conservative memo comparison may rerender a tool- or Capsule-bearing row
-  more often than strictly necessary, but it cannot preserve stale
-  server-owned presentation.
+- The 32-entry inactive LRU places a deterministic bound on recoverable,
+  authoritative heavy transcript entries. Draft and local-only state is kept
+  outside that bound because dropping it would be data loss; those protected
+  entries become evictable once finalized or explicitly cleared. Older
+  authoritative revisits may show the existing cache/history loading state
+  before restoration completes.
+- Projection and Capsule comparison is field-wise over small server-owned
+  selector/card records. This bounded comparison avoids historical tool-row
+  subtree work when wire deserialization creates fresh but equal objects.
