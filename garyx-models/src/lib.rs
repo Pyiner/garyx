@@ -23,7 +23,6 @@ pub mod tool_field_projection;
 pub mod transcript_kind;
 pub mod transcript_render_state;
 pub mod transcript_run_state;
-pub mod wiki;
 
 // Re-export commonly used types at the crate root.
 pub use agent::RunState;
@@ -107,4 +106,3 @@ pub use transcript_render_state::{
 pub use transcript_run_state::{
     TranscriptRunActivity, TranscriptRunState, apply_transcript_record, reduce_transcript_run_state,
 };
-pub use wiki::WikiEntry;

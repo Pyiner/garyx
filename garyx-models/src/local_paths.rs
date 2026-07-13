@@ -54,14 +54,6 @@ pub fn default_custom_agents_state_path() -> PathBuf {
     custom_agents_state_path_for_data_dir(&default_session_data_dir())
 }
 
-pub fn wikis_state_path_for_data_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("wikis.json")
-}
-
-pub fn default_wikis_state_path() -> PathBuf {
-    wikis_state_path_for_data_dir(&default_session_data_dir())
-}
-
 pub fn app_database_path_for_data_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("app-database.sqlite3")
 }

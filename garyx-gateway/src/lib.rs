@@ -51,7 +51,6 @@ mod thread_runtime;
 mod thread_type;
 mod tool_image;
 mod transcript_run_projection;
-mod wikis;
 pub mod workspace_files;
 mod workspace_mode;
 pub mod workspaces;

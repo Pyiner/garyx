@@ -250,16 +250,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
                 .delete(api::delete_custom_agent),
         )
         .route(
-            "/api/wikis",
-            axum::routing::get(api::list_wikis).post(api::create_wiki),
-        )
-        .route(
-            "/api/wikis/{wiki_id}",
-            axum::routing::get(api::get_wiki)
-                .put(api::update_wiki)
-                .delete(api::delete_wiki),
-        )
-        .route(
             "/api/skills",
             axum::routing::get(routes::list_skills).post(routes::create_skill),
         )

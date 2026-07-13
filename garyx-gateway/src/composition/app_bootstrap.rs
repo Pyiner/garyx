@@ -7,7 +7,6 @@ use garyx_channels::{
 use garyx_models::config::GaryxConfig;
 use garyx_models::local_paths::default_app_database_path;
 use garyx_models::local_paths::default_custom_agents_state_path;
-use garyx_models::local_paths::default_wikis_state_path;
 use garyx_models::thread_logs::{NoopThreadLogSink, ThreadLogSink};
 use garyx_router::{
     InMemoryThreadStore, MessageLedgerStore, MessageRouter, ThreadCreator, ThreadHistoryRepository,
@@ -36,7 +35,6 @@ use crate::recent_thread_reader::SqlRecentThreadPageReader;
 use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe};
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
-use crate::wikis::WikiStore;
 
 /// Load a persistent `Store` from the given on-disk path, falling back to an
 /// empty in-memory instance **only** if loading fails — but shout about the
@@ -45,7 +43,7 @@ use crate::wikis::WikiStore;
 ///
 /// This replaces the old `Store::file(path).unwrap_or_else(|_| Store::new())`
 /// pattern which swallowed parse errors and left operators wondering why their
-/// agents / wikis had disappeared.
+/// agents had disappeared.
 fn load_store_or_warn<T>(
     store_name: &'static str,
     path: PathBuf,
@@ -84,7 +82,6 @@ pub struct AppStateBuilder {
     thread_logs: Arc<dyn ThreadLogSink>,
     skills: Arc<SkillsService>,
     custom_agents: Arc<CustomAgentStore>,
-    wikis: Arc<WikiStore>,
     app_db: Arc<AppDbService>,
     garyx_db: Arc<GaryxDbService>,
     /// Optional override for the active-run probe. Production leaves this `None`
@@ -146,7 +143,6 @@ impl AppStateBuilder {
             thread_logs: Arc::new(NoopThreadLogSink),
             skills,
             custom_agents: Arc::new(CustomAgentStore::new()),
-            wikis: Arc::new(WikiStore::new()),
             app_db: Arc::new(
                 AppDbService::memory()
                     .unwrap_or_else(|error| panic!("failed to open app database: {error}")),
@@ -157,9 +153,8 @@ impl AppStateBuilder {
         }
     }
 
-    /// Bind the real on-disk `~/.garyx` state: persistent custom-agent and
-    /// wiki stores, the app and garyx databases, and built-in
-    /// skill seeding.
+    /// Bind the real on-disk `~/.garyx` state: the persistent custom-agent
+    /// store, the app and garyx databases, and built-in skill seeding.
     ///
     /// This is the production boot path's explicit opt-in. `new()`
     /// deliberately stays fully in-memory so that tests (unit *and*
@@ -179,12 +174,6 @@ impl AppStateBuilder {
             default_custom_agents_state_path(),
             CustomAgentStore::file,
             CustomAgentStore::new,
-        ));
-        self.wikis = Arc::new(load_store_or_warn(
-            "wikis",
-            default_wikis_state_path(),
-            WikiStore::file,
-            WikiStore::new,
         ));
         self.app_db = Arc::new(
             AppDbService::open(default_app_database_path())
@@ -297,11 +286,6 @@ impl AppStateBuilder {
 
     pub fn with_custom_agent_store(mut self, custom_agents: Arc<CustomAgentStore>) -> Self {
         self.custom_agents = custom_agents;
-        self
-    }
-
-    pub fn with_wiki_store(mut self, wikis: Arc<WikiStore>) -> Self {
-        self.wikis = wikis;
         self
     }
 
@@ -437,7 +421,6 @@ impl AppStateBuilder {
                 thread_logs: self.thread_logs,
                 skills: self.skills,
                 custom_agents: self.custom_agents,
-                wikis: self.wikis,
                 app_db: self.app_db,
                 garyx_db: self.garyx_db,
                 provider_auth_sessions: Arc::new(ClaudeAuthSessionStore::default()),
@@ -482,8 +465,8 @@ mod tests {
     use super::*;
 
     /// Regression guard for the 2026-07-06 gary incident: the builder used to
-    /// bind the real `~/.garyx` stores (custom agents / wikis / app
-    /// db) by default, so every test constructing an `AppState` read and
+    /// bind the real `~/.garyx` stores (custom agents / app db) by default,
+    /// so every test constructing an `AppState` read and
     /// *wrote* live user data — a test's whole-file persist
     /// overwrote `custom-agents.json` and vaporized a real agent definition.
     ///
@@ -495,10 +478,6 @@ mod tests {
         assert!(
             builder.custom_agents.persistence_path().is_none(),
             "default custom-agent store must not persist to real user files"
-        );
-        assert!(
-            builder.wikis.persistence_path().is_none(),
-            "default wiki store must not persist to real user files"
         );
     }
 }

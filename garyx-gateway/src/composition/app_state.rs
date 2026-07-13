@@ -30,8 +30,6 @@ use crate::provider_auth::ClaudeAuthSessionStore;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 
-use crate::wikis::WikiStore;
-
 pub struct RuntimeState {
     pub start_time: Instant,
     pub health_checker: HealthChecker,
@@ -58,7 +56,6 @@ pub struct OpsState {
     pub thread_logs: Arc<dyn ThreadLogSink>,
     pub skills: Arc<SkillsService>,
     pub custom_agents: Arc<CustomAgentStore>,
-    pub wikis: Arc<WikiStore>,
     pub app_db: Arc<AppDbService>,
     pub garyx_db: Arc<GaryxDbService>,
     pub provider_auth_sessions: Arc<ClaudeAuthSessionStore>,
@@ -405,7 +402,6 @@ impl AppState {
                 thread_logs: self.ops.thread_logs.clone(),
                 skills: self.ops.skills.clone(),
                 custom_agents: self.ops.custom_agents.clone(),
-                wikis: self.ops.wikis.clone(),
                 app_db: self.ops.app_db.clone(),
                 garyx_db: self.ops.garyx_db.clone(),
                 provider_auth_sessions: self.ops.provider_auth_sessions.clone(),

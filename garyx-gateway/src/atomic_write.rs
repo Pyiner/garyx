@@ -1,5 +1,5 @@
 //! Crash-safe persistence for the small file-backed gateway stores
-//! (custom agents / wikis).
+//! (custom agents).
 
 use std::path::{Path, PathBuf};
 

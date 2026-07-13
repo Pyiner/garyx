@@ -36,7 +36,6 @@ use crate::optimistic_write::{StoreWriteError, WriteExpectation};
 use crate::server::AppState;
 use crate::thread_runtime::{build_thread_runtime_summary, provider_type_from_key};
 use crate::thread_type::thread_summary_type_from_record;
-use crate::wikis::UpsertWikiRequest;
 
 // ---------------------------------------------------------------------------
 // Shared state for restart cooldown
@@ -2964,92 +2963,6 @@ pub async fn delete_custom_agent(
             }
             StatusCode::NO_CONTENT.into_response()
         }
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Wiki API
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-pub struct WikiUpsertPayload {
-    pub wiki_id: String,
-    pub display_name: String,
-    pub path: String,
-    pub topic: String,
-    pub agent_id: Option<String>,
-}
-
-pub async fn list_wikis(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(json!({
-        "wikis": state.ops.wikis.list_wikis().await,
-    }))
-}
-
-pub async fn get_wiki(
-    State(state): State<Arc<AppState>>,
-    Path(wiki_id): Path<String>,
-) -> impl IntoResponse {
-    match state.ops.wikis.get_wiki(&wiki_id).await {
-        Some(wiki) => (StatusCode::OK, Json(json!(wiki))).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "wiki not found" })),
-        )
-            .into_response(),
-    }
-}
-
-pub async fn create_wiki(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<WikiUpsertPayload>,
-) -> impl IntoResponse {
-    match state
-        .ops
-        .wikis
-        .upsert_wiki(UpsertWikiRequest {
-            wiki_id: payload.wiki_id,
-            display_name: payload.display_name,
-            path: payload.path,
-            topic: payload.topic,
-            agent_id: payload.agent_id,
-        })
-        .await
-    {
-        Ok(wiki) => (StatusCode::CREATED, Json(json!(wiki))).into_response(),
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
-    }
-}
-
-pub async fn update_wiki(
-    State(state): State<Arc<AppState>>,
-    Path(wiki_id): Path<String>,
-    Json(payload): Json<WikiUpsertPayload>,
-) -> impl IntoResponse {
-    match state
-        .ops
-        .wikis
-        .upsert_wiki(UpsertWikiRequest {
-            wiki_id,
-            display_name: payload.display_name,
-            path: payload.path,
-            topic: payload.topic,
-            agent_id: payload.agent_id,
-        })
-        .await
-    {
-        Ok(wiki) => (StatusCode::OK, Json(json!(wiki))).into_response(),
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
-    }
-}
-
-pub async fn delete_wiki(
-    State(state): State<Arc<AppState>>,
-    Path(wiki_id): Path<String>,
-) -> impl IntoResponse {
-    match state.ops.wikis.delete_wiki(&wiki_id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
     }
 }
