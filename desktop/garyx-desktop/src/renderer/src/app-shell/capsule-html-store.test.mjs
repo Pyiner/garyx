@@ -133,3 +133,18 @@ test('stale completion still frees its slot so the queue keeps draining', async 
   assert.equal(calls[4].id, 'e');
   assert.equal(stateOf('a', 1).status, 'deleted');
 });
+
+test('evicts old ready HTML after browsing a bounded number of capsules', async () => {
+  __setCapsuleHtmlFetcherForTest(async (id) => ({
+    status: 'ok',
+    html: `<main>${id}</main>`,
+  }));
+
+  for (let index = 0; index < 257; index += 1) {
+    capsuleHtmlStore.request(`history-${index}`, 1, {});
+  }
+  await flush();
+
+  assert.equal(stateOf('history-0', 1).status, 'idle');
+  assert.equal(stateOf('history-256', 1).status, 'ready');
+});

@@ -203,3 +203,23 @@ test('stale completion still frees its slot so the queue keeps draining', async 
   assert.equal(calls[4].id, 'e');
   assert.equal(stateOf('a', 1, GALLERY_RENDITION).status, 'deleted');
 });
+
+test('evicts old ready data URLs after browsing a bounded number of capsules', async () => {
+  __setCapsuleThumbnailFetcherForTest(async (id) => ({
+    status: 'ok',
+    dataUrl: `data:image/png;base64,${id}`,
+  }));
+
+  for (let index = 0; index < 257; index += 1) {
+    capsuleThumbnailStore.request(
+      `history-${index}`,
+      1,
+      GALLERY_RENDITION,
+      {},
+    );
+  }
+  await flush();
+
+  assert.equal(stateOf('history-0', 1, GALLERY_RENDITION).status, 'idle');
+  assert.equal(stateOf('history-256', 1, GALLERY_RENDITION).status, 'ready');
+});

@@ -7,6 +7,7 @@ import {
   messageMachineReducer,
   shouldTrackProviderAckAfterStreamInputResponse,
 } from './message-machine.ts';
+import { GatewayMirror } from './gateway-mirror/mirror.ts';
 
 function intent(overrides) {
   return {
@@ -277,4 +278,45 @@ test('tracks provider ack only while the streamed input is not already acknowled
     })),
     false,
   );
+});
+
+test('thread clear releases completed attachment intents instead of retaining the session history', () => {
+  const threadId = 'thread-attachment-gc';
+  const intentCount = 64;
+  const attachmentData = 'A'.repeat(16 * 1024);
+  const mirror = new GatewayMirror();
+
+  for (let index = 0; index < intentCount; index += 1) {
+    const intentId = `intent-attachment-${index}`;
+    mirror.dispatchMachineAction({
+      type: 'intent/created',
+      enqueue: false,
+      intent: intent({
+        intentId,
+        threadId,
+        text: `message ${index}`,
+        images: [
+          {
+            id: `image-${index}`,
+            name: `image-${index}.png`,
+            mediaType: 'image/png',
+            data: attachmentData,
+          },
+        ],
+        state: 'awaiting_history',
+        source: 'composer_send',
+      }),
+    });
+    mirror.dispatchMachineAction({
+      type: 'intent/completed',
+      intentId,
+    });
+  }
+
+  let state = mirror.getMachineState();
+  assert.equal(Object.keys(state.intentsById).length, intentCount);
+  state = mirror.dispatchMachineAction({ type: 'thread/clear', threadId });
+
+  assert.equal(Object.keys(state.intentsById).length, 0);
+  assert.equal(state.queueByThread[threadId], undefined);
 });
