@@ -25,6 +25,7 @@ use crate::gary_prompt::{
     compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
+use crate::provider_common::{PendingAckQueue, PendingRateLimits};
 use crate::provider_trait::{
     ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
@@ -1154,24 +1155,18 @@ pub struct ClaudeCliProvider {
     /// Maps run_id to thread_id for reverse lookup during abort.
     run_session_map: Mutex<HashMap<String, String>>,
     /// User inputs accepted but not yet completed per live run.
-    run_pending_inputs: Mutex<HashMap<String, VecDeque<PendingAckMarker>>>,
+    run_pending_inputs: Mutex<HashMap<String, PendingAckQueue>>,
     /// Last user message per thread, used for auto-recovery replay.
     last_messages: Mutex<HashMap<String, String>>,
     /// Quota-exhaustion context staged per thread when a run terminates on the
     /// provider's rolling usage limit; consumed exactly once by the bridge
     /// run-completion path via `take_rate_limit`.
-    pending_rate_limits: Mutex<HashMap<String, ProviderRateLimit>>,
+    pending_rate_limits: PendingRateLimits,
     #[cfg(test)]
     test_run_attempts: Mutex<VecDeque<Result<Option<SdkRunOutcome>, BridgeError>>>,
     #[cfg(test)]
     test_recorded_session_attempts: Mutex<Vec<Option<String>>>,
     ready: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PendingAckMarker {
-    RootUserMessage,
-    QueuedInput(String),
 }
 
 impl ClaudeCliProvider {
@@ -1192,7 +1187,7 @@ impl ClaudeCliProvider {
             run_session_map: Mutex::new(HashMap::new()),
             run_pending_inputs: Mutex::new(HashMap::new()),
             last_messages: Mutex::new(HashMap::new()),
-            pending_rate_limits: Mutex::new(HashMap::new()),
+            pending_rate_limits: PendingRateLimits::default(),
             #[cfg(test)]
             test_run_attempts: Mutex::new(VecDeque::new()),
             #[cfg(test)]
@@ -1451,28 +1446,24 @@ impl ClaudeCliProvider {
     }
 
     async fn initialize_pending_inputs(&self, run_id: &str) {
-        self.run_pending_inputs.lock().await.insert(
-            run_id.to_owned(),
-            VecDeque::from([PendingAckMarker::RootUserMessage]),
-        );
+        self.run_pending_inputs
+            .lock()
+            .await
+            .insert(run_id.to_owned(), PendingAckQueue::with_root_user_message());
     }
 
     #[cfg(test)]
     async fn set_pending_inputs(&self, run_id: &str, count: usize) {
-        let mut queue = VecDeque::with_capacity(count);
-        for _ in 0..count {
-            queue.push_back(PendingAckMarker::RootUserMessage);
-        }
-        self.run_pending_inputs
-            .lock()
-            .await
-            .insert(run_id.to_owned(), queue);
+        self.run_pending_inputs.lock().await.insert(
+            run_id.to_owned(),
+            PendingAckQueue::with_root_user_messages(count),
+        );
     }
 
     async fn enqueue_pending_input(&self, run_id: &str, pending_input_id: String) -> bool {
         let mut pending = self.run_pending_inputs.lock().await;
         if let Some(queue) = pending.get_mut(run_id) {
-            queue.push_back(PendingAckMarker::QueuedInput(pending_input_id));
+            queue.enqueue(pending_input_id);
             true
         } else {
             false
@@ -1481,12 +1472,9 @@ impl ClaudeCliProvider {
 
     async fn rollback_pending_input(&self, run_id: &str, pending_input_id: &str) {
         let mut pending = self.run_pending_inputs.lock().await;
-        if let Some(queue) = pending.get_mut(run_id)
-            && let Some(index) = queue.iter().position(|marker| {
-                matches!(marker, PendingAckMarker::QueuedInput(candidate) if candidate == pending_input_id)
-            }) {
-                queue.remove(index);
-            }
+        if let Some(queue) = pending.get_mut(run_id) {
+            queue.rollback(pending_input_id);
+        }
     }
 
     async fn acknowledge_next_pending_input(
@@ -1495,20 +1483,9 @@ impl ClaudeCliProvider {
         prefer_queued_input: bool,
     ) -> Option<String> {
         let mut pending = self.run_pending_inputs.lock().await;
-        pending.get_mut(run_id).and_then(|queue| {
-            if prefer_queued_input
-                && matches!(queue.front(), Some(PendingAckMarker::RootUserMessage))
-                && queue
-                    .iter()
-                    .any(|marker| matches!(marker, PendingAckMarker::QueuedInput(_)))
-            {
-                queue.pop_front();
-            }
-            match queue.pop_front() {
-                Some(PendingAckMarker::QueuedInput(pending_input_id)) => Some(pending_input_id),
-                Some(PendingAckMarker::RootUserMessage) | None => None,
-            }
-        })
+        pending
+            .get_mut(run_id)
+            .and_then(|queue| queue.acknowledge_next(prefer_queued_input))
     }
 
     /// Atomically check whether the pending-input queue is empty after the
@@ -1523,10 +1500,7 @@ impl ClaudeCliProvider {
         let mut pending = self.run_pending_inputs.lock().await;
         match pending.get(run_id) {
             Some(queue) => {
-                let has_queued = queue
-                    .iter()
-                    .any(|marker| matches!(marker, PendingAckMarker::QueuedInput(_)));
-                if has_queued {
+                if queue.has_queued_input() {
                     false
                 } else {
                     // Empty — remove the entry so enqueue_pending_input cannot
@@ -1614,10 +1588,7 @@ impl ClaudeCliProvider {
         // attempt can never be attributed to this attempt's terminal record.
         // The freshest attempt re-stages at the end of its message loop when
         // it actually hits the quota.
-        self.pending_rate_limits
-            .lock()
-            .await
-            .remove(&options.thread_id);
+        self.pending_rate_limits.clear(&options.thread_id).await;
 
         #[cfg(test)]
         {
@@ -2179,9 +2150,8 @@ impl ClaudeCliProvider {
                     "claude run hit usage quota; staging rate-limit context for auto-resend",
                 );
                 self.pending_rate_limits
-                    .lock()
-                    .await
-                    .insert(thread_id.to_owned(), rate_limit);
+                    .stage(thread_id.to_owned(), rate_limit)
+                    .await;
             }
         }
 
@@ -2368,10 +2338,7 @@ impl ProviderRuntime for ClaudeCliProvider {
         // Drop any quota stash left by a prior run on this thread so a stale
         // entry can never be attributed to this run's terminal record (e.g.
         // when this run dies before its stream loop starts).
-        self.pending_rate_limits
-            .lock()
-            .await
-            .remove(&options.thread_id);
+        self.pending_rate_limits.clear(&options.thread_id).await;
 
         let run_id = resolve_run_id(&options.metadata);
         // Capture the requested model before the run starts so a concurrent
@@ -2536,7 +2503,7 @@ impl ProviderRuntime for ClaudeCliProvider {
     }
 
     async fn take_rate_limit(&self, thread_id: &str) -> Option<ProviderRateLimit> {
-        self.pending_rate_limits.lock().await.remove(thread_id)
+        self.pending_rate_limits.take(thread_id).await
     }
 
     fn supports_streaming_input(&self) -> bool {

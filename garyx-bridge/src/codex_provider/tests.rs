@@ -2150,7 +2150,7 @@ async fn test_streaming_input_ack_waits_for_codex_user_message_item() {
         "thread::garyx".to_owned(),
         (
             "run_1".to_owned(),
-            VecDeque::from([PendingCodexAckMarker::RootUserMessage]),
+            PendingAckQueue::with_root_user_message(),
         ),
     );
 

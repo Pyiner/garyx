@@ -4,7 +4,7 @@
 //! Implements `ProviderRuntime` backed by `codex_sdk::CodexClient`,
 //! managing thread/turn lifecycle and streaming notifications.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -33,6 +33,7 @@ use crate::gary_prompt::{
     compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
+use crate::provider_common::{PendingAckQueue, PendingRateLimits};
 use crate::provider_trait::{
     ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
@@ -1450,7 +1451,7 @@ pub struct CodexAgentProvider {
     /// thread_id -> rate-limit context captured when the last run terminated
     /// because the ChatGPT-plan usage quota was exhausted. Consumed once by the
     /// bridge run-completion path via `take_rate_limit`.
-    pending_rate_limits: Mutex<HashMap<String, ProviderRateLimit>>,
+    pending_rate_limits: PendingRateLimits,
     /// codex_thread_id -> last observed cumulative `(input, output)` token
     /// totals from `thread/tokenUsage/updated`. Serves as the usage baseline
     /// for the next turn on the same in-process thread; resumed threads get
@@ -1461,7 +1462,7 @@ pub struct CodexAgentProvider {
 
 type CodexClientMap = Arc<Mutex<HashMap<String, Arc<CodexClientSlot>>>>;
 type ActiveSessionCallback = (String, Arc<dyn Fn(StreamEvent) + Send + Sync>);
-type PendingCodexAcks = (String, VecDeque<PendingCodexAckMarker>);
+type PendingCodexAcks = (String, PendingAckQueue);
 
 struct CodexClientSlot {
     client: Mutex<CodexClient>,
@@ -1475,12 +1476,6 @@ struct ActiveCodexRun {
     garyx_thread_id: String,
     codex_thread_id: String,
     turn_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PendingCodexAckMarker {
-    RootUserMessage,
-    QueuedInput(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1621,7 +1616,7 @@ impl CodexAgentProvider {
             active_session_turns: Mutex::new(HashMap::new()),
             active_session_callbacks: Mutex::new(HashMap::new()),
             active_session_pending_acks: Mutex::new(HashMap::new()),
-            pending_rate_limits: Mutex::new(HashMap::new()),
+            pending_rate_limits: PendingRateLimits::default(),
             thread_usage_totals: Mutex::new(HashMap::new()),
             ready: Mutex::new(false),
         }
@@ -1786,9 +1781,8 @@ impl CodexAgentProvider {
                 "codex run hit usage quota; staging rate-limit context for auto-resend",
             );
             self.pending_rate_limits
-                .lock()
-                .await
-                .insert(thread_id.to_owned(), rate_limit);
+                .stage(thread_id.to_owned(), rate_limit)
+                .await;
         }
     }
 
@@ -1912,13 +1906,11 @@ impl CodexAgentProvider {
         let mut pending_acks = self.active_session_pending_acks.lock().await;
         let entry = pending_acks
             .entry(garyx_thread_id.to_owned())
-            .or_insert_with(|| (run_id.to_owned(), VecDeque::new()));
+            .or_insert_with(|| (run_id.to_owned(), PendingAckQueue::default()));
         if entry.0 != run_id {
-            *entry = (run_id.to_owned(), VecDeque::new());
+            *entry = (run_id.to_owned(), PendingAckQueue::default());
         }
-        entry
-            .1
-            .push_back(PendingCodexAckMarker::QueuedInput(pending_input_id));
+        entry.1.enqueue(pending_input_id);
         true
     }
 
@@ -1936,11 +1928,9 @@ impl CodexAgentProvider {
         let mut pending_acks = self.active_session_pending_acks.lock().await;
         if let Some((active_run_id, queue)) = pending_acks.get_mut(garyx_thread_id)
             && active_run_id == run_id
-                && let Some(index) = queue.iter().position(|marker| {
-                    matches!(marker, PendingCodexAckMarker::QueuedInput(id) if id == pending_input_id)
-                }) {
-                    queue.remove(index);
-                }
+        {
+            queue.rollback(pending_input_id);
+        }
     }
 
     async fn emit_streaming_input_ack_boundary(
@@ -1984,7 +1974,7 @@ impl CodexAgentProvider {
                 .get_mut(garyx_thread_id)
                 .and_then(|(active_run_id, queue)| {
                     if active_run_id == run_id {
-                        queue.pop_front()
+                        queue.acknowledge_next(false)
                     } else {
                         None
                     }
@@ -1999,7 +1989,7 @@ impl CodexAgentProvider {
         };
 
         match marker {
-            Some(PendingCodexAckMarker::QueuedInput(pending_input_id)) => {
+            Some(pending_input_id) => {
                 self.emit_streaming_input_ack_boundary(
                     garyx_thread_id,
                     run_id,
@@ -2007,7 +1997,7 @@ impl CodexAgentProvider {
                 )
                 .await
             }
-            Some(PendingCodexAckMarker::RootUserMessage) | None => false,
+            None => false,
         }
     }
 
@@ -2047,10 +2037,7 @@ impl CodexAgentProvider {
         // entry (e.g. a usage-limit error that was followed by a successful
         // turn, which never consumes the stash) can never be attributed to this
         // run's terminal record.
-        self.pending_rate_limits
-            .lock()
-            .await
-            .remove(&options.thread_id);
+        self.pending_rate_limits.clear(&options.thread_id).await;
 
         let start = Instant::now();
         let effective_config = self.effective_config();
@@ -2127,10 +2114,7 @@ impl CodexAgentProvider {
             );
             self.active_session_pending_acks.lock().await.insert(
                 options.thread_id.clone(),
-                (
-                    run_id.clone(),
-                    VecDeque::from([PendingCodexAckMarker::RootUserMessage]),
-                ),
+                (run_id.clone(), PendingAckQueue::with_root_user_message()),
             );
         }
 
@@ -2571,7 +2555,7 @@ impl ProviderRuntime for CodexAgentProvider {
     }
 
     async fn take_rate_limit(&self, thread_id: &str) -> Option<ProviderRateLimit> {
-        self.pending_rate_limits.lock().await.remove(thread_id)
+        self.pending_rate_limits.take(thread_id).await
     }
 
     async fn abort(&self, run_id: &str) -> bool {

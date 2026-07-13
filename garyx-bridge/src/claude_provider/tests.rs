@@ -7,13 +7,20 @@ use claude_agent_sdk::{
 };
 use garyx_models::provider::{ClaudeCodeConfig, QueuedUserInput};
 use serde_json::{Value, json};
-use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 fn make_provider() -> ClaudeCliProvider {
     ClaudeCliProvider::new(ClaudeCodeConfig::default())
+}
+
+fn pending_ack_queue(pending_input_ids: &[&str]) -> PendingAckQueue {
+    let mut queue = PendingAckQueue::with_root_user_message();
+    for pending_input_id in pending_input_ids {
+        queue.enqueue((*pending_input_id).to_owned());
+    }
+    queue
 }
 
 #[tokio::test]
@@ -1482,7 +1489,7 @@ async fn test_process_messages_streaming_keeps_input_queue_open_during_post_resu
         .await
         .get_mut("run-post-result")
         .expect("pending queue should still exist")
-        .push_back(PendingAckMarker::QueuedInput("queued-1".to_owned()));
+        .enqueue("queued-1".to_owned());
     tx.send(Ok(Message::User(UserMessage {
         content: UserContent::Text("queued user".to_owned()),
         uuid: None,
@@ -1716,13 +1723,11 @@ async fn test_process_messages_streaming_emits_queued_input_ack_id_after_root_ac
     .unwrap();
     drop(tx);
 
-    provider.run_pending_inputs.lock().await.insert(
-        "run-queued".to_owned(),
-        VecDeque::from([
-            PendingAckMarker::RootUserMessage,
-            PendingAckMarker::QueuedInput("queued-1".to_owned()),
-        ]),
-    );
+    provider
+        .run_pending_inputs
+        .lock()
+        .await
+        .insert("run-queued".to_owned(), pending_ack_queue(&["queued-1"]));
 
     let chunks = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
     let chunks_cb = chunks.clone();
@@ -1821,13 +1826,11 @@ async fn test_process_messages_streaming_suppresses_claude_synthetic_no_response
     .unwrap();
     drop(tx);
 
-    provider.run_pending_inputs.lock().await.insert(
-        "run-synthetic".to_owned(),
-        VecDeque::from([
-            PendingAckMarker::RootUserMessage,
-            PendingAckMarker::QueuedInput("queued-1".to_owned()),
-        ]),
-    );
+    provider
+        .run_pending_inputs
+        .lock()
+        .await
+        .insert("run-synthetic".to_owned(), pending_ack_queue(&["queued-1"]));
 
     let chunks = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
     let chunks_cb = chunks.clone();
@@ -2664,13 +2667,11 @@ async fn test_process_messages_streaming_waits_for_all_pending_results() {
         chunks_cb.lock().expect("chunks mutex poisoned").push(event);
     });
 
-    provider.run_pending_inputs.lock().await.insert(
-        "run-3".to_owned(),
-        VecDeque::from([
-            PendingAckMarker::RootUserMessage,
-            PendingAckMarker::QueuedInput("queued-1".to_owned()),
-        ]),
-    );
+    provider
+        .run_pending_inputs
+        .lock()
+        .await
+        .insert("run-3".to_owned(), pending_ack_queue(&["queued-1"]));
     let (response_text, result_data, _signals) = provider
         .process_messages_streaming("run-3", "thread::test", &mut rx, &cb)
         .await
@@ -3107,10 +3108,11 @@ async fn test_add_streaming_input_with_run_mapping_but_no_handle() {
         .lock()
         .await
         .insert("run-1".to_owned(), "sess::a".to_owned());
-    provider.run_pending_inputs.lock().await.insert(
-        "run-1".to_owned(),
-        VecDeque::from([PendingAckMarker::RootUserMessage]),
-    );
+    provider
+        .run_pending_inputs
+        .lock()
+        .await
+        .insert("run-1".to_owned(), pending_ack_queue(&[]));
     assert!(
         !provider
             .add_streaming_input(
@@ -3144,13 +3146,11 @@ async fn test_interrupt_streaming_session_cleans_stale_run_mapping() {
         .lock()
         .await
         .insert("run-1".to_owned(), "sess::stale".to_owned());
-    provider.run_pending_inputs.lock().await.insert(
-        "run-1".to_owned(),
-        VecDeque::from([
-            PendingAckMarker::RootUserMessage,
-            PendingAckMarker::QueuedInput("queued-1".to_owned()),
-        ]),
-    );
+    provider
+        .run_pending_inputs
+        .lock()
+        .await
+        .insert("run-1".to_owned(), pending_ack_queue(&["queued-1"]));
 
     assert!(!provider.interrupt_streaming_session("sess::stale").await);
     assert!(provider.run_session_map.lock().await.get("run-1").is_none());
@@ -3189,10 +3189,11 @@ async fn test_clear_session_cleans_all_state() {
         .lock()
         .await
         .insert("run-stale".to_owned(), "sess::x".to_owned());
-    provider.run_pending_inputs.lock().await.insert(
-        "run-stale".to_owned(),
-        VecDeque::from([PendingAckMarker::RootUserMessage]),
-    );
+    provider
+        .run_pending_inputs
+        .lock()
+        .await
+        .insert("run-stale".to_owned(), pending_ack_queue(&[]));
 
     assert!(provider.clear_session("sess::x").await);
 
@@ -3866,13 +3867,16 @@ async fn test_execute_sdk_run_entry_clears_stale_rate_limit_stash() {
     let provider = make_provider();
 
     // A previous attempt staged a rate limit for this thread.
-    provider.pending_rate_limits.lock().await.insert(
-        "thread::stale-stash".to_owned(),
-        garyx_models::provider::ProviderRateLimit {
-            provider: "claude_code".to_owned(),
-            ..Default::default()
-        },
-    );
+    provider
+        .pending_rate_limits
+        .stage(
+            "thread::stale-stash".to_owned(),
+            garyx_models::provider::ProviderRateLimit {
+                provider: "claude_code".to_owned(),
+                ..Default::default()
+            },
+        )
+        .await;
 
     // The next attempt dies at connect time (injected before the message
     // loop, mirroring a connect/send failure that never reaches it).
