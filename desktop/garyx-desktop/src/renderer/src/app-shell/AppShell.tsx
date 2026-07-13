@@ -262,6 +262,7 @@ import {
   createBrowserRouteHost,
 } from "./desktop-route-store";
 import { useRecentThreadFeeds } from "./useRecentThreadFeeds";
+import { recordTranscriptRender } from "./transcript-render-probe";
 
 
 type ThreadEntrySelectionSource =
@@ -601,6 +602,7 @@ function inferProviderTypeForThread(
 }
 
 export function AppShell() {
+  recordTranscriptRender("AppShell");
   // Batch 4b: the DesktopRouteStore owns the URL hash. It seeds from the
   // initial location, navigate() is the only hash writer (the legacy
   // state-to-hash replace effect routes through it), and external

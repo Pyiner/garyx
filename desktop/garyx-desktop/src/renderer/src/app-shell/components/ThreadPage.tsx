@@ -84,6 +84,7 @@ import type {
 } from "../types";
 import { RUN_LOADING_LABEL } from "../loading-labels";
 import { resolveThreadFilePreviewTarget } from "../workspace-helpers";
+import { recordTranscriptRender } from "../transcript-render-probe";
 
 function normalizeMessageText(value: string | undefined): string {
   return value?.trim() || "";
@@ -470,6 +471,7 @@ export function ThreadPage({
   visibleRemotePendingInputs,
   workspaceMutation,
 }: ThreadPageProps) {
+  recordTranscriptRender("ThreadPage");
   const { t } = useI18n();
   const loadTranscriptImagePreview = useCallback<MessageImagePreviewLoader>(
     async (path) => {
@@ -918,15 +920,18 @@ export function ThreadPage({
               );
             };
 
-            return turnRows.map((row) => (
-              <MessageScrollerItem
-                className="messages-item"
-                key={row.key}
-                messageId={row.key}
-              >
-                {renderTurnRowBody(row)}
-              </MessageScrollerItem>
-            ));
+            return turnRows.map((row) => {
+              recordTranscriptRender("ThreadPage.row", row.key);
+              return (
+                <MessageScrollerItem
+                  className="messages-item"
+                  key={row.key}
+                  messageId={row.key}
+                >
+                  {renderTurnRowBody(row)}
+                </MessageScrollerItem>
+              );
+            });
           })()}
 
           {activePendingAckIntents.map((intent) =>
