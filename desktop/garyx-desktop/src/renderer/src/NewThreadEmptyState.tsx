@@ -227,7 +227,7 @@ export function NewThreadEmptyState({
           {selectableNewThreadWorkspaces.length ? (
             <button
               aria-label={t("Workspace for the new thread")}
-              className="new-thread-workspace-trigger workspace-picker-trigger"
+              className="new-thread-workspace-trigger"
               onClick={() => setWorkspacePickerOpen(true)}
               type="button"
             >

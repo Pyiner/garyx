@@ -233,7 +233,7 @@ export function BotConsoleView({
           })}
         </div>
       ) : (
-        <UICard className="bot-console-empty-card">
+        <UICard>
           <UICardHeader>
             <UIBadge>{t('Bots')}</UIBadge>
             <UICardTitle>{t('No bots configured')}</UICardTitle>

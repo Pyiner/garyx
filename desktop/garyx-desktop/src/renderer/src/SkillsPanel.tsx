@@ -827,7 +827,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 void handleCreateSkill(event);
               }}
             >
-              <FieldGroup className="skills-create-field-group">
+              <FieldGroup>
               <Field>
                 <FieldLabel>{t('Name')}</FieldLabel>
                 <Input

@@ -109,17 +109,22 @@ export function deriveId(name: string): string {
     .replace(/-{2,}/g, '-');
 }
 
-export function providerLabel(value: ProviderType): string {
-  if (value === 'codex_app_server') {
-    return 'Codex';
+export function providerLabel(value: ProviderType | 'gemini'): string {
+  switch (value) {
+    case 'claude_code':
+      return 'Claude';
+    case 'codex_app_server':
+      return 'Codex';
+    case 'antigravity':
+      return 'Antigravity';
+    case 'traex':
+      return 'Traex';
+    case 'gemini':
+      return 'Gemini';
   }
-  if (value === 'antigravity') {
-    return 'Antigravity';
-  }
-  if (value === 'traex') {
-    return 'Traex';
-  }
-  return 'Claude';
+
+  const exhaustiveValue: never = value;
+  return exhaustiveValue;
 }
 
 export function previewText(value: string | null | undefined, fallback: string): string {

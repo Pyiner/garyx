@@ -107,6 +107,9 @@ test('recipe pins every shared floating slot to the tokens', () => {
     'box-shadow: var(--menu-surface-shadow)',
     'backdrop-filter: blur(var(--menu-surface-blur))',
   ];
+  expectRecipe(rules, '.popover-content', [
+    'z-index: var(--z-app-floating)',
+  ]);
   expectRecipe(rules, "[data-slot='dropdown-menu-content']", [
     'padding: var(--menu-surface-padding)',
     ...surfaceDeclarations,

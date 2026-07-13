@@ -635,7 +635,6 @@ export function TasksPanel({
                     {agentOptions.map((option) => {
                       return (
                         <FloatingActionMenuItem
-                          className="tasks-agent-menu-item"
                           disabled={busy}
                           key={option.id}
                           onSelect={() => {

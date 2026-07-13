@@ -57,6 +57,7 @@ import {
   type ComposerAgentOption,
 } from './app-shell/agent-options';
 import { AgentOptionAvatar, AgentOptionRow } from './app-shell/components/AgentOptionAvatar';
+import { providerLabel as sharedProviderLabel } from './app-shell/components/agents-hub-helpers';
 import { AgentsIcon } from './app-shell/icons';
 import { resolveComposerModelControlState } from './composer-model-control';
 
@@ -135,19 +136,6 @@ type ComposerFormProps = {
 };
 
 const COMPOSER_EDITOR_MAX_LINES = 10;
-
-function providerOptionLabel(providerType: DesktopApiProviderType): string {
-  if (providerType === 'codex_app_server') {
-    return 'Codex';
-  }
-  if (providerType === 'antigravity') {
-    return 'Antigravity';
-  }
-  if (providerType === 'traex') {
-    return 'Traex';
-  }
-  return 'Claude';
-}
 
 type SlashTrigger = {
   end: number;
@@ -522,7 +510,7 @@ function renderComposerProviderControl({
 }) {
   const selectedOption = agentOptions?.find((option) => option.id === selectedAgentId);
   const providerIcon = renderComposerProviderTriggerIcon(selectedOption);
-  const providerLabel = agentLabel || providerOptionLabel(composerProviderType);
+  const providerLabel = agentLabel || sharedProviderLabel(composerProviderType);
 
   if (onSelectAgent) {
     const grouped = groupAgentOptions(agentOptions ?? []);
@@ -631,7 +619,7 @@ function renderComposerBotBindingSubmenu({
         )}
         <span className="composer-menu-label">{selectedBot?.title || t('Bind bot')}</span>
       </FloatingActionMenuSubTrigger>
-      <FloatingActionMenuSubContent className="composer-bot-submenu">
+      <FloatingActionMenuSubContent>
         <FloatingActionMenuItem
           className="composer-bot-menu-item"
           data-active={!activeThreadBotId ? '' : undefined}
@@ -1034,7 +1022,7 @@ export function ComposerForm({
       composerImages.length ||
       composerFiles.length ||
       composerPendingUploads.length ? (
-        <AttachmentGroup className="composer-attachments px-3 pt-2">
+        <AttachmentGroup className="px-3 pt-2">
           {composerBrowserAnnotations.map((annotation) => {
             const label = browserAnnotationChipLabel(annotation, t);
             const meta = browserAnnotationChipMeta(annotation);
@@ -1242,7 +1230,6 @@ export function ComposerForm({
               side="top"
             >
               <FloatingActionMenuItem
-                className="composer-menu-item"
                 disabled={composerEditingLocked}
                 onSelect={() => {
                   composerAttachmentInputRef.current?.click();

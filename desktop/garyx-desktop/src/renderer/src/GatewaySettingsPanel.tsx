@@ -203,7 +203,7 @@ const noopAsync = async () => {};
 const noopAsyncBoolean = async () => false;
 const IDLE_UPDATE_STATUS: DesktopUpdateStatus = { phase: 'idle' };
 const FOLLOW_UP_BEHAVIOR_TOGGLE_ITEM_CLASS =
-  'relative h-8 !rounded-[12px] border-0 px-3 text-[12px] text-[#666663] data-[state=on]:z-10 data-[state=on]:bg-white data-[state=on]:text-[#111111] data-[state=on]:shadow-sm';
+  'relative h-8 !rounded-[12px] border-0 px-3 text-[12px] text-secondary-foreground data-[state=on]:z-10 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm';
 type UpdateFeedback = {
   message: string;
   tone: 'info' | 'success' | 'danger';
@@ -451,9 +451,9 @@ function SummaryChip({ label, value }: SummaryChipProps) {
   return (
     <Badge
       variant="outline"
-      className="h-auto rounded-full border-[#e7e7e5] bg-[#f7f7f6] px-2 py-0.5 text-[11px] font-normal text-[#40403d] shadow-none"
+      className="h-auto rounded-full border-border bg-secondary px-2 py-0.5 text-[11px] font-normal text-secondary-foreground shadow-none"
     >
-      <span className="uppercase tracking-[0.08em] text-[#7d7d79]">{label}</span>
+      <span className="uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
       <span>{value}</span>
     </Badge>
   );
@@ -624,7 +624,7 @@ function GatewayProfileDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="gateway-add-dialog" size="compact">
+      <DialogContent size="compact">
         <DialogHeader>
           <DialogTitle>{profile ? t('Edit Gateway') : t('Add Gateway')}</DialogTitle>
           <DialogDescription>
@@ -675,7 +675,7 @@ function GatewayProfileDialog({
         </div>
         <DialogFooter>
           <Button
-            className="rounded-xl border-[#e7e7e5] bg-white shadow-none hover:bg-[#f7f7f6]"
+            className="rounded-xl shadow-none"
             onClick={() => onOpenChange(false)}
             type="button"
             variant="outline"
@@ -683,7 +683,7 @@ function GatewayProfileDialog({
             {t('Cancel')}
           </Button>
           <Button
-            className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
+            className="rounded-xl shadow-none"
             disabled={!canSave || saving}
             onClick={() => void handleSave()}
             type="button"
@@ -905,7 +905,7 @@ export function GatewaySettingsPanel({
   function renderLocalSaveAction(label = t('Save Desktop Settings')) {
     return (
       <Button
-        className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
+        className="rounded-xl shadow-none"
         disabled={!localSettingsDirty || savingLocalSettings}
         onClick={() => {
           void onSaveLocalSettingsNow();
@@ -1112,7 +1112,7 @@ export function GatewaySettingsPanel({
                 }));
               }}
             >
-              <SelectTrigger className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none">
+              <SelectTrigger className="rounded-[14px] shadow-none">
                 <SelectValue
                   placeholder={languagePreferenceLabel(localSettings.languagePreference, t)}
                 />
@@ -1132,7 +1132,7 @@ export function GatewaySettingsPanel({
         <SettingsControlRow
           control={
             <ToggleGroup
-              className="h-9 rounded-[14px] bg-[#f3f3f1] p-0.5"
+              className="h-9 rounded-[14px] bg-muted p-0.5"
               type="single"
               value={localSettings.followUpBehavior}
               onValueChange={(nextValue) => {
@@ -1184,7 +1184,6 @@ export function GatewaySettingsPanel({
         </div>
         <div className="codex-list-card">
           <SettingsControlRow
-            className="settings-update-row"
             control={
               <div className="settings-update-control">
                 <div className="settings-update-summary">
@@ -1198,7 +1197,7 @@ export function GatewaySettingsPanel({
                 <div className="settings-update-actions">
                   {updateStatus.phase === 'downloaded' ? (
                     <Button
-                      className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
+                      className="rounded-xl shadow-none"
                       disabled={installingUpdate}
                       onClick={() => { void handleInstallUpdate(); }}
                       size="sm"
@@ -1209,7 +1208,7 @@ export function GatewaySettingsPanel({
                   ) : null}
                   {updateStatus.phase !== 'downloaded' ? (
                     <Button
-                      className="rounded-xl border-[#e7e7e5] bg-white text-[#111111] shadow-none hover:bg-[#f6f6f5]"
+                      className="rounded-xl shadow-none"
                       disabled={updateCheckDisabled}
                       onClick={() => { void handleCheckForUpdatesNow(); }}
                       size="sm"

@@ -245,6 +245,7 @@ import {
   summarizeRemoteStateErrors,
 } from "./gateway-errors";
 import { buildAgentOptions, buildAgentTargetOptions } from "./agent-options";
+import { providerLabel } from "./components/agents-hub-helpers";
 import {
   I18nProvider,
   createTranslator,
@@ -1159,7 +1160,7 @@ export function AppShell() {
     const options = buildAgentTargetOptions(desktopAgents);
     return options.length
       ? options
-      : [{ id: "claude", value: "claude", label: "Claude", kind: "builtin" as const, providerType: "claude_code" as const }];
+      : [{ id: "claude", value: "claude", label: providerLabel("claude_code"), kind: "builtin" as const, providerType: "claude_code" as const }];
   }, [desktopAgents]);
   const pendingAgentLabel =
     pendingAgent?.displayName?.trim() ||

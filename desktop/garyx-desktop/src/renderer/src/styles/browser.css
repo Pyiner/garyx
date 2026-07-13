@@ -397,6 +397,27 @@
   background: var(--color-token-bg-primary);
 }
 
+.browser-side-panel-loading {
+  grid-template-rows: minmax(0, 1fr);
+  place-items: center;
+}
+
+.browser-side-panel-loading::after {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-token-border);
+  border-top-color: var(--color-token-text-secondary);
+  border-radius: 50%;
+  content: "";
+  animation: browser-tab-spin 0.65s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-side-panel-loading::after {
+    animation: none;
+  }
+}
+
 .browser-page-side-panel .browser-toolbar {
   background: var(--color-token-bg-primary);
 }
