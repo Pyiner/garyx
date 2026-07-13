@@ -256,6 +256,105 @@ pub(super) fn take_pending_input_for_ack(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn process_thread_persistence_command(
+    command: ThreadPersistenceCommand,
+    snapshot: &mut StreamingRunSnapshot,
+    pending_user_inputs: &mut Vec<PendingUserInput>,
+    committed_event_run_id: Option<&str>,
+    thread_id: &str,
+    transcript_controls: &mut Vec<RunControlRecord>,
+    abort_terminal_ack: &mut Option<tokio::sync::oneshot::Sender<()>>,
+    dirty: &mut bool,
+    finish: &mut bool,
+    after_commit_callbacks: &mut Vec<(Arc<dyn Fn(StreamEvent) + Send + Sync>, StreamEvent)>,
+) {
+    match command {
+        ThreadPersistenceCommand::Stream {
+            event,
+            after_commit,
+        } => {
+            if let Some(callback) = after_commit {
+                after_commit_callbacks.push((callback, event.clone()));
+            }
+            match event {
+                StreamEvent::Boundary {
+                    kind: garyx_models::provider::StreamBoundaryKind::UserAck,
+                    ref pending_input_id,
+                } => {
+                    snapshot.apply_stream_event(&event);
+                    if let Some(pending_input) =
+                        take_pending_input_for_ack(pending_user_inputs, pending_input_id.as_deref())
+                    {
+                        *dirty |= snapshot.acknowledge_pending_input(&pending_input);
+                    }
+                    if let Some(run_id) = committed_event_run_id
+                        && let Some(control) = control_record_for_stream_event(
+                            thread_id,
+                            run_id,
+                            &event,
+                            1 + snapshot.session_messages.len(),
+                        )
+                    {
+                        transcript_controls.push(control);
+                        *dirty = true;
+                    }
+                }
+                other => {
+                    *dirty |= snapshot.apply_stream_event(&other);
+                    if let Some(run_id) = committed_event_run_id
+                        && let StreamEvent::ToolResult { message } = &other
+                    {
+                        *dirty |= maybe_push_capsule_attachment_control(
+                            thread_id,
+                            run_id,
+                            snapshot,
+                            message,
+                            transcript_controls,
+                        );
+                    }
+                    if let Some(run_id) = committed_event_run_id
+                        && let Some(control) = control_record_for_stream_event(
+                            thread_id,
+                            run_id,
+                            &other,
+                            1 + snapshot.session_messages.len(),
+                        )
+                    {
+                        transcript_controls.push(control);
+                        *dirty = true;
+                    }
+                }
+            }
+        }
+        ThreadPersistenceCommand::QueuePendingInput(pending_input) => {
+            pending_user_inputs.push(pending_input);
+            *dirty = true;
+        }
+        ThreadPersistenceCommand::DropPendingInput { pending_input_id } => {
+            let before = pending_user_inputs.len();
+            pending_user_inputs.retain(|input| input.id != pending_input_id);
+            *dirty |= pending_user_inputs.len() != before;
+        }
+        ThreadPersistenceCommand::AbortTerminal { error, ack } => {
+            if let Some(run_id) = committed_event_run_id {
+                transcript_controls.push(abort_terminal_control_record(
+                    thread_id,
+                    run_id,
+                    1 + snapshot.session_messages.len(),
+                    error.as_deref(),
+                ));
+                *dirty = true;
+            }
+            *abort_terminal_ack = Some(ack);
+            *finish = true;
+        }
+        ThreadPersistenceCommand::Finish => {
+            *finish = true;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_partial_thread_persistence_worker(
     store: Arc<dyn ThreadStore>,
     history: Arc<ThreadHistoryRepository>,
@@ -348,177 +447,31 @@ pub(super) fn spawn_partial_thread_persistence_worker(
             let mut dirty = false;
             let mut finish = false;
             let mut after_commit_callbacks = Vec::new();
-            match command {
-                ThreadPersistenceCommand::Stream {
-                    event,
-                    after_commit,
-                } => {
-                    if let Some(callback) = after_commit {
-                        after_commit_callbacks.push((callback, event.clone()));
-                    }
-                    match event {
-                        StreamEvent::Boundary {
-                            kind: garyx_models::provider::StreamBoundaryKind::UserAck,
-                            ref pending_input_id,
-                        } => {
-                            snapshot.apply_stream_event(&event);
-                            if let Some(pending_input) = take_pending_input_for_ack(
-                                &mut pending_user_inputs,
-                                pending_input_id.as_deref(),
-                            ) {
-                                dirty |= snapshot.acknowledge_pending_input(&pending_input);
-                            }
-                            if let Some(run_id) = committed_event_run_id.as_deref()
-                                && let Some(control) = control_record_for_stream_event(
-                                    &thread_id,
-                                    run_id,
-                                    &event,
-                                    1 + snapshot.session_messages.len(),
-                                )
-                            {
-                                transcript_controls.push(control);
-                                dirty = true;
-                            }
-                        }
-                        other => {
-                            dirty |= snapshot.apply_stream_event(&other);
-                            if let Some(run_id) = committed_event_run_id.as_deref()
-                                && let StreamEvent::ToolResult { message } = &other
-                            {
-                                dirty |= maybe_push_capsule_attachment_control(
-                                    &thread_id,
-                                    run_id,
-                                    &mut snapshot,
-                                    message,
-                                    &mut transcript_controls,
-                                );
-                            }
-                            if let Some(run_id) = committed_event_run_id.as_deref()
-                                && let Some(control) = control_record_for_stream_event(
-                                    &thread_id,
-                                    run_id,
-                                    &other,
-                                    1 + snapshot.session_messages.len(),
-                                )
-                            {
-                                transcript_controls.push(control);
-                                dirty = true;
-                            }
-                        }
-                    }
-                }
-                ThreadPersistenceCommand::QueuePendingInput(pending_input) => {
-                    pending_user_inputs.push(pending_input);
-                    dirty = true;
-                }
-                ThreadPersistenceCommand::DropPendingInput { pending_input_id } => {
-                    let before = pending_user_inputs.len();
-                    pending_user_inputs.retain(|input| input.id != pending_input_id);
-                    dirty = pending_user_inputs.len() != before;
-                }
-                ThreadPersistenceCommand::AbortTerminal { error, ack } => {
-                    if let Some(run_id) = committed_event_run_id.as_deref() {
-                        transcript_controls.push(abort_terminal_control_record(
-                            &thread_id,
-                            run_id,
-                            1 + snapshot.session_messages.len(),
-                            error.as_deref(),
-                        ));
-                        dirty = true;
-                    }
-                    abort_terminal_ack = Some(ack);
-                    finish = true;
-                }
-                ThreadPersistenceCommand::Finish => {
-                    finish = true;
-                }
-            }
+            process_thread_persistence_command(
+                command,
+                &mut snapshot,
+                &mut pending_user_inputs,
+                committed_event_run_id.as_deref(),
+                &thread_id,
+                &mut transcript_controls,
+                &mut abort_terminal_ack,
+                &mut dirty,
+                &mut finish,
+                &mut after_commit_callbacks,
+            );
             while let Ok(pending) = event_rx.try_recv() {
-                match pending {
-                    ThreadPersistenceCommand::Stream {
-                        event,
-                        after_commit,
-                    } => {
-                        if let Some(callback) = after_commit {
-                            after_commit_callbacks.push((callback, event.clone()));
-                        }
-                        match event {
-                            StreamEvent::Boundary {
-                                kind: garyx_models::provider::StreamBoundaryKind::UserAck,
-                                ref pending_input_id,
-                            } => {
-                                snapshot.apply_stream_event(&event);
-                                if let Some(pending_input) = take_pending_input_for_ack(
-                                    &mut pending_user_inputs,
-                                    pending_input_id.as_deref(),
-                                ) {
-                                    dirty |= snapshot.acknowledge_pending_input(&pending_input);
-                                }
-                                if let Some(run_id) = committed_event_run_id.as_deref()
-                                    && let Some(control) = control_record_for_stream_event(
-                                        &thread_id,
-                                        run_id,
-                                        &event,
-                                        1 + snapshot.session_messages.len(),
-                                    )
-                                {
-                                    transcript_controls.push(control);
-                                    dirty = true;
-                                }
-                            }
-                            other => {
-                                dirty |= snapshot.apply_stream_event(&other);
-                                if let Some(run_id) = committed_event_run_id.as_deref()
-                                    && let StreamEvent::ToolResult { message } = &other
-                                {
-                                    dirty |= maybe_push_capsule_attachment_control(
-                                        &thread_id,
-                                        run_id,
-                                        &mut snapshot,
-                                        message,
-                                        &mut transcript_controls,
-                                    );
-                                }
-                                if let Some(run_id) = committed_event_run_id.as_deref()
-                                    && let Some(control) = control_record_for_stream_event(
-                                        &thread_id,
-                                        run_id,
-                                        &other,
-                                        1 + snapshot.session_messages.len(),
-                                    )
-                                {
-                                    transcript_controls.push(control);
-                                    dirty = true;
-                                }
-                            }
-                        }
-                    }
-                    ThreadPersistenceCommand::QueuePendingInput(pending_input) => {
-                        pending_user_inputs.push(pending_input);
-                        dirty = true;
-                    }
-                    ThreadPersistenceCommand::DropPendingInput { pending_input_id } => {
-                        let before = pending_user_inputs.len();
-                        pending_user_inputs.retain(|input| input.id != pending_input_id);
-                        dirty |= pending_user_inputs.len() != before;
-                    }
-                    ThreadPersistenceCommand::AbortTerminal { error, ack } => {
-                        if let Some(run_id) = committed_event_run_id.as_deref() {
-                            transcript_controls.push(abort_terminal_control_record(
-                                &thread_id,
-                                run_id,
-                                1 + snapshot.session_messages.len(),
-                                error.as_deref(),
-                            ));
-                            dirty = true;
-                        }
-                        abort_terminal_ack = Some(ack);
-                        finish = true;
-                    }
-                    ThreadPersistenceCommand::Finish => {
-                        finish = true;
-                    }
-                }
+                process_thread_persistence_command(
+                    pending,
+                    &mut snapshot,
+                    &mut pending_user_inputs,
+                    committed_event_run_id.as_deref(),
+                    &thread_id,
+                    &mut transcript_controls,
+                    &mut abort_terminal_ack,
+                    &mut dirty,
+                    &mut finish,
+                    &mut after_commit_callbacks,
+                );
             }
             if dirty {
                 let (cursor, committed) = save_streaming_partial(
