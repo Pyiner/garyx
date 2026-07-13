@@ -4,13 +4,10 @@
 //! `StreamableHttpService`. Replaces the hand-rolled JSON-RPC dispatch
 //! with proper MCP protocol support.
 
-#[cfg(test)]
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-use garyx_channels::OutboundMessage;
+use crate::server::AppState;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
@@ -26,12 +23,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-#[cfg(test)]
-use uuid::Uuid;
-
-#[cfg(test)]
-use crate::delivery_target::resolve_delivery_target_with_recovery;
-use crate::server::AppState;
 
 mod helpers;
 #[cfg(test)]
@@ -45,45 +36,6 @@ pub(crate) mod tools;
 // ---------------------------------------------------------------------------
 // Parameter types (JsonSchema enables auto tool discovery)
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[cfg(test)]
-pub struct MessageParams {
-    /// Message text to send
-    #[serde(default)]
-    pub text: Option<String>,
-    /// Optional local image path. Supported for telegram/weixin/feishu targets.
-    #[serde(default)]
-    pub image: Option<String>,
-    /// Optional local file path. Deprecated; MCP no longer exposes message sending.
-    #[serde(default)]
-    pub file: Option<String>,
-    /// Bot selector as `channel:account_id`, e.g. `telegram:main`.
-    #[serde(default, alias = "botId")]
-    pub bot: Option<String>,
-    // -- fields below are accepted but hidden from the schema --
-    #[serde(default)]
-    #[schemars(skip)]
-    pub action: Option<String>,
-    #[serde(default)]
-    #[schemars(skip)]
-    pub target: Option<String>,
-    #[serde(default)]
-    #[schemars(skip)]
-    pub channel: Option<String>,
-    #[serde(default, alias = "accountId")]
-    #[schemars(skip)]
-    pub account_id: Option<String>,
-    #[serde(default, alias = "replyTo")]
-    #[schemars(skip)]
-    pub reply_to: Option<String>,
-    #[serde(default, alias = "runId")]
-    #[schemars(skip)]
-    pub run_id: Option<String>,
-    #[serde(default)]
-    #[schemars(skip)]
-    pub token: Option<String>,
-}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchParams {
@@ -187,12 +139,6 @@ struct RunContext {
     thread_id: Option<String>,
     channel: Option<String>,
     account_id: Option<String>,
-    #[allow(dead_code)]
-    from_id: Option<String>,
-    #[allow(dead_code)]
-    delivery_thread_id: Option<String>,
-    #[allow(dead_code)]
-    auth_token: Option<String>,
 }
 
 impl RunContext {
@@ -225,25 +171,11 @@ impl RunContext {
             .map(|orig| decode_mcp_path_context(orig.0.path()))
             .unwrap_or((None, None));
 
-        let auth_token = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.strip_prefix("Bearer ").unwrap_or(s).to_owned())
-            .or_else(|| h("x-mcp-token"))
-            .or_else(|| {
-                parts
-                    .extensions
-                    .get::<OriginalMcpUri>()
-                    .and_then(|orig| crate::gateway_auth::token_from_mcp_path(orig.0.path()))
-            });
         let ctx = Self {
             run_id: h("x-run-id").or(path_run_id),
             thread_id: h("x-thread-id").or(path_thread_id),
             channel: h("x-channel"),
             account_id: h("x-account-id"),
-            from_id: h("x-from-id"),
-            delivery_thread_id: h("x-thread-scope"),
-            auth_token,
         };
         tracing::info!(
             run_id = ?ctx.run_id,
@@ -252,18 +184,6 @@ impl RunContext {
         );
         ctx
     }
-}
-
-#[derive(Debug, Clone)]
-#[cfg(test)]
-struct ResolvedMessageTarget {
-    channel: String,
-    account_id: String,
-    chat_id: String,
-    delivery_target_type: String,
-    delivery_target_id: String,
-    delivery_thread_id: Option<String>,
-    thread_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
