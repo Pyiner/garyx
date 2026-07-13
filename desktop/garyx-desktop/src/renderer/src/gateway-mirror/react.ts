@@ -48,12 +48,25 @@ export function useCatalog(): CatalogSnapshot {
 
 /**
  * Read a single thread's mirror snapshot via useSyncExternalStore.
- * Returns null when threadId is null or the thread has no entry yet.
+ * Returns null only when threadId is null. A non-null missing id receives the
+ * mirror's stable empty snapshot for that id until its first commit.
  */
 export function useThreadMirror(
   threadId: string | null,
 ): ThreadMirrorSnapshot | null {
   const mirror = useGatewayMirror();
+  return useGatewayThreadMirror(mirror, threadId);
+}
+
+/**
+ * Explicit-instance variant for owners that render the context provider
+ * themselves (notably AppShell). Both bindings share the same per-thread
+ * subscription and stable-snapshot contract.
+ */
+export function useGatewayThreadMirror(
+  mirror: GatewayMirror,
+  threadId: string | null,
+): ThreadMirrorSnapshot | null {
   const subscribe = useCallback(
     (onChange: () => void) => {
       if (!threadId) {

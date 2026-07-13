@@ -176,9 +176,10 @@ An entry is evictable only when all are true:
 
 Reads, subscriptions, and commits touch recency. Snapshot getters are
 side-effect-free with respect to the entry table, snapshot invalidation, and
-notifications: an absent id returns a stable empty snapshot, and a read may
-only update an existing entry's unobservable recency ordinal. Pruning never
-runs from a getter or render-time snapshot read. It runs only after mutation
+notifications: an absent id returns a stable empty snapshot cached by thread
+id (so its required `threadId` field stays correct), and a read may only update
+an existing entry's unobservable recency ordinal. Pruning never runs from a
+getter or render-time snapshot read. It runs only after mutation
 paths: subscription creation, commit, unsubscribe, operation release, and
 live-stream clearing. When more than 32 entries are eligible, it deletes
 oldest eligible entries until 32 remain. A newly accessed entry is protected

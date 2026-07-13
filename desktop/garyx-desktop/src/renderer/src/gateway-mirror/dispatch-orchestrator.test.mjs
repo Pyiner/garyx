@@ -220,15 +220,16 @@ function makeSide(name, script, options = {}) {
       });
       return next;
     },
-    getLiveStreamMap: () => liveStream.ref.current,
+    getThreadLiveStream: (threadId) => liveStream.get(threadId),
     updateMessagesByThread(updater) {
       const next = updater(messagesByThreadRef.current);
       messagesByThreadRef.current = next;
       record("messages", { map: next });
       return next;
     },
-    getTranscriptMapsSnapshot: () => ({
-      messagesByThread: messagesByThreadRef.current,
+    getThreadSnapshot: (threadId) => ({
+      messages: messagesByThreadRef.current[threadId] || [],
+      threadInfo: null,
     }),
     acceptAuthoritativeTranscript(threadId, transcript) {
       record("applyCanonicalTranscript", {
@@ -284,7 +285,6 @@ function makeSide(name, script, options = {}) {
     settingsDraft: { gatewayUrl: GATEWAY_URL, followUpBehavior: "queue" },
     desktopState: null,
     desktopAgents: [],
-    threadInfoByThread: {},
     canSteerQueuedPrompt: options.canSteerQueuedPrompt ?? true,
     inferProviderTypeForThread: () => "claude_code",
     openChatStream: async (input) => {

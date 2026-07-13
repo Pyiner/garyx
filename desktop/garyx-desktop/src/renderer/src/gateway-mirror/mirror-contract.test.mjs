@@ -18,7 +18,11 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { GatewayMirror } from "./mirror.ts";
+import {
+  GATEWAY_MIRROR_INACTIVE_THREAD_LIMIT,
+  GatewayMirror,
+} from "./mirror.ts";
+import { NEW_THREAD_DRAFT_THREAD_ID } from "./thread-ids.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const casesPath = path.resolve(
@@ -211,10 +215,16 @@ test("per-thread notifications are isolated", () => {
   mirror.ingest(frameA);
   assert.equal(notifiedA, 1, "thread A frame notifies A once");
   assert.equal(notifiedB, 0, "thread A frame must not notify B");
+  const snapshotA = mirror.getThreadSnapshot("thread::contract-a");
 
   mirror.ingest(frameB);
   assert.equal(notifiedA, 1);
   assert.equal(notifiedB, 1);
+  assert.equal(
+    mirror.getThreadSnapshot("thread::contract-a"),
+    snapshotA,
+    "a background commit must preserve the active snapshot reference",
+  );
 
   unsubscribeB();
   mirror.ingest(frameFromCase(caseWithRecords(), "thread::contract-b"));
@@ -1706,5 +1716,390 @@ test("a windowed replay frame drops committed records below the window floor", (
     records.map((record) => record.seq),
     [4801, 4802],
     "below-floor records must be dropped; window records applied",
+  );
+});
+
+function retainedEntryTranscript(threadId, index, pageInfoOverrides = {}) {
+  return {
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(index, "assistant", `entry ${index}`)],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({
+      totalMessages: index,
+      committedMessages: index,
+      returnedMessages: 1,
+      startIndex: index,
+      endIndex: index,
+      ...pageInfoOverrides,
+    }),
+  };
+}
+
+test("inactive authoritative entries are evicted in LRU order", () => {
+  const mirror = new GatewayMirror();
+  const ids = Array.from(
+    { length: GATEWAY_MIRROR_INACTIVE_THREAD_LIMIT + 2 },
+    (_, index) => `thread::lru-${index}`,
+  );
+  ids.forEach((threadId, index) => {
+    mirror.applyRemoteTranscript(
+      threadId,
+      retainedEntryTranscript(threadId, index + 1),
+    );
+  });
+
+  const evicted = mirror.getThreadSnapshot(ids[0]);
+  assert.equal(evicted.threadId, ids[0], "empty snapshot keeps the requested id");
+  assert.equal(evicted.version, 0);
+  assert.equal(evicted.transcriptLoaded, false);
+  assert.equal(evicted.messages.length, 0, "oldest heavy entry was released");
+  assert.equal(
+    mirror.getThreadSnapshot(ids.at(-1)).messages.length,
+    1,
+    "most recently committed entry remains hot",
+  );
+  assert.ok(
+    !(ids[0] in mirror.getTranscriptMapsSnapshot().threadInfoByThread),
+    "aggregate compatibility snapshot drops the evicted loaded key",
+  );
+});
+
+test("draft, local-only, subscribed, and live entries are never evicted", () => {
+  const mirror = new GatewayMirror();
+  const localThreadId = "thread::lru-local-error";
+  const subscribedThreadId = "thread::lru-subscribed";
+  const liveThreadId = "thread::lru-live";
+
+  mirror.syncThreadUiMessages(NEW_THREAD_DRAFT_THREAD_ID, [
+    { id: "draft-row", role: "user", text: "draft" },
+  ]);
+  mirror.syncThreadUiMessages(localThreadId, [
+    {
+      id: "failed-row",
+      role: "user",
+      text: "retry me",
+      localState: "error",
+      error: true,
+    },
+  ]);
+  mirror.syncThreadUiMessages(subscribedThreadId, [
+    { id: "subscribed-row", role: "assistant", text: "subscribed" },
+  ]);
+  const unsubscribe = mirror.subscribeThread(subscribedThreadId, () => {});
+  mirror.syncThreadUiMessages(liveThreadId, [
+    { id: "live-row", role: "assistant", text: "live" },
+  ]);
+  mirror.updateThreadLiveStream(liveThreadId, () => ({
+    threadId: liveThreadId,
+    activeIntentId: "intent-live",
+    assistantEntryId: null,
+    pendingAckIntentIds: [],
+    streamStatus: "streaming",
+  }));
+
+  for (
+    let index = 0;
+    index < GATEWAY_MIRROR_INACTIVE_THREAD_LIMIT + 12;
+    index += 1
+  ) {
+    const threadId = `thread::lru-churn-${index}`;
+    mirror.applyRemoteTranscript(
+      threadId,
+      retainedEntryTranscript(threadId, index + 1),
+    );
+  }
+
+  assert.equal(
+    mirror.getThreadSnapshot(NEW_THREAD_DRAFT_THREAD_ID).messages[0].id,
+    "draft-row",
+  );
+  assert.equal(
+    mirror.getThreadSnapshot(localThreadId).messages[0].id,
+    "failed-row",
+  );
+  assert.equal(
+    mirror.getThreadSnapshot(subscribedThreadId).messages[0].id,
+    "subscribed-row",
+  );
+  assert.equal(
+    mirror.getThreadSnapshot(liveThreadId).messages[0].id,
+    "live-row",
+  );
+  unsubscribe();
+});
+
+test("clear-live then local-error replacement cannot evict the recovering entry", () => {
+  const mirror = new GatewayMirror();
+  const threadId = "thread::lru-clear-then-error";
+  mirror.syncThreadUiMessages(threadId, [
+    { id: "optimistic-row", role: "user", text: "send" },
+  ]);
+  mirror.updateThreadLiveStream(threadId, () => ({
+    threadId,
+    activeIntentId: "intent-clear-error",
+    assistantEntryId: null,
+    pendingAckIntentIds: [],
+    streamStatus: "streaming",
+  }));
+  for (
+    let index = 0;
+    index < GATEWAY_MIRROR_INACTIVE_THREAD_LIMIT + 4;
+    index += 1
+  ) {
+    const churnId = `thread::lru-clear-error-churn-${index}`;
+    mirror.applyRemoteTranscript(
+      churnId,
+      retainedEntryTranscript(churnId, index + 1),
+    );
+  }
+
+  // Dispatch recovery performs these two operations synchronously. Clearing
+  // touches this entry as the newest LRU candidate; the replacement then
+  // makes its local-only state explicitly non-evictable.
+  mirror.clearThreadLiveStream(threadId);
+  mirror.syncThreadUiMessages(threadId, [
+    {
+      id: "optimistic-row",
+      role: "user",
+      text: "send",
+      localState: "error",
+      error: true,
+    },
+  ]);
+  assert.equal(
+    mirror.getThreadSnapshot(threadId).messages[0].localState,
+    "error",
+  );
+});
+
+test("older-page fetch retains its entry across await while LRU churns", async () => {
+  let resolveOlderPage;
+  const olderPage = new Promise((resolve) => {
+    resolveOlderPage = resolve;
+  });
+  const mirror = new GatewayMirror({
+    getState: async () => ({}),
+    listCustomAgents: async () => [],
+    getThreadHistory: async () => olderPage,
+  });
+  const threadId = "thread::lru-retained-fetch";
+  mirror.applyRemoteTranscript(
+    threadId,
+    retainedEntryTranscript(threadId, 5, {
+      totalMessages: 5,
+      committedMessages: 5,
+      startIndex: 5,
+      endIndex: 5,
+      hasMoreBefore: true,
+      nextBeforeIndex: 5,
+    }),
+  );
+
+  const load = mirror.fetchOlderThreadHistoryPage(threadId);
+  await Promise.resolve();
+  for (
+    let index = 0;
+    index < GATEWAY_MIRROR_INACTIVE_THREAD_LIMIT + 8;
+    index += 1
+  ) {
+    const churnId = `thread::lru-fetch-churn-${index}`;
+    mirror.applyRemoteTranscript(
+      churnId,
+      retainedEntryTranscript(churnId, index + 10),
+    );
+  }
+  assert.equal(
+    mirror.getThreadSnapshot(threadId).messages.length,
+    1,
+    "in-flight raw entry remains present",
+  );
+
+  resolveOlderPage({
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(4, "user", "older")],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({
+      totalMessages: 5,
+      committedMessages: 5,
+      returnedMessages: 1,
+      startIndex: 4,
+      endIndex: 4,
+      hasMoreBefore: false,
+      nextBeforeIndex: null,
+    }),
+  });
+  await load;
+  assert.equal(mirror.getThreadSnapshot(threadId).messages.length, 2);
+});
+
+test("an evicted thread reopens through disk cache, authoritative paging, and stream resume", async () => {
+  const threadId = "thread::lru-reopen";
+  const cachedTranscript = {
+    threadId,
+    remoteFound: true,
+    messages: [wireMessage(1, "user", "cached question")],
+    pendingInputs: [],
+    threadInfo: { agentId: "claude" },
+    pageInfo: fullPageInfo({
+      totalMessages: 2,
+      committedMessages: 2,
+      returnedMessages: 1,
+      startIndex: 1,
+      endIndex: 1,
+      hasMoreAfter: false,
+      nextAfterIndex: null,
+    }),
+  };
+  const cachedRenderState = {
+    based_on_seq: 1,
+    rows: [],
+    tailActivity: "none",
+    activeToolGroupId: null,
+    progress_locus: "none",
+    filtered_placeholders: [],
+    window: { floor_seq: 1, has_more_above: false },
+  };
+  const streamStarts = [];
+  const pageRequests = [];
+  const mirror = new GatewayMirror({
+    getState: async () => ({ threads: [], sessions: [] }),
+    listCustomAgents: async () => [],
+    getThreadHistory: async (input) => {
+      pageRequests.push(input);
+      return {
+        threadId,
+        remoteFound: true,
+        messages: [wireMessage(2, "assistant", "fresh answer")],
+        pendingInputs: [],
+        threadInfo: { agentId: "claude" },
+        pageInfo: fullPageInfo({
+          totalMessages: 3,
+          committedMessages: 3,
+          returnedMessages: 1,
+          startIndex: 2,
+          endIndex: 2,
+          hasMoreAfter: false,
+          nextAfterIndex: null,
+        }),
+      };
+    },
+    getThreadHistoryFull: async () => cachedTranscript,
+    loadThreadTranscriptCache: async (requestedThreadId) => {
+      assert.equal(requestedThreadId, threadId);
+      return { transcript: cachedTranscript, renderState: cachedRenderState };
+    },
+    clearThreadTranscriptCache: async () => {},
+    startThreadStream: async (input) => {
+      streamStarts.push(input);
+    },
+    stopThreadStream: async () => {},
+  });
+  let desktopState = {
+    threads: [{ id: threadId, title: "Synthetic thread" }],
+    sessions: [],
+  };
+  mirror.setTranscriptLifecycleDeps({
+    setDesktopState: (updater) => {
+      desktopState = updater(desktopState);
+    },
+    syncThreadTitleDraft: () => {},
+    requestSelectedThreadMessagesBottomSnap: () => {},
+    selectedThreadIdRef: { current: threadId },
+    setError: () => {},
+    setHistoryLoading: () => {},
+    setPendingAutomationRun: () => {},
+    recordGatewayStatusObservation: () => {},
+    scheduleDesktopStateRefresh: () => {},
+    scheduleHistoryRefresh: () => {},
+    connection: null,
+    settingsDraft: { gatewayUrl: "http://gateway.test" },
+    desktopState,
+    refreshDesktopState: async () => desktopState,
+    selectedThreadGenerationRef: { current: 1 },
+    lastRenderedMessageThreadRef: { current: null },
+    messagesRef: { current: null },
+    pendingMessagesPrependAnchorRef: { current: null },
+    sideChatThreadIdRef: { current: null },
+    sideChatStreamConsumerId: (id) => `side-chat:${id}`,
+  });
+
+  mirror.applyRemoteTranscript(threadId, cachedTranscript);
+  for (
+    let index = 0;
+    index < GATEWAY_MIRROR_INACTIVE_THREAD_LIMIT + 4;
+    index += 1
+  ) {
+    const churnId = `thread::lru-reopen-churn-${index}`;
+    mirror.applyRemoteTranscript(
+      churnId,
+      retainedEntryTranscript(churnId, index + 10),
+    );
+  }
+  assert.equal(
+    mirror.getThreadSnapshot(threadId).messages.length,
+    0,
+    "precondition: the heavy entry was evicted",
+  );
+
+  const unsubscribe = mirror.subscribeThread(threadId, () => {});
+  await mirror.loadSelectedThreadTranscript(threadId);
+  const reopened = mirror.getThreadSnapshot(threadId);
+  assert.equal(reopened.transcriptLoaded, true);
+  assert.deepEqual(
+    reopened.messages.map((message) => message.text),
+    ["cached question", "fresh answer"],
+  );
+  assert.equal(reopened.renderState.based_on_seq, 1);
+  assert.deepEqual(pageRequests.map((input) => input.afterIndex), [1]);
+  assert.equal(streamStarts.length, 1, "cache cursor starts the stream once");
+  assert.equal(streamStarts[0].afterSeq, 2);
+  assert.equal(streamStarts[0].renderFloor, 1);
+  unsubscribe();
+});
+
+test("tail transcript apply preserves unchanged message object references", () => {
+  const mirror = new GatewayMirror();
+  const threadId = "thread::message-reference-stability";
+  mirror.applyRemoteTranscript(threadId, {
+    threadId,
+    remoteFound: true,
+    messages: [
+      wireMessage(1, "user", "question"),
+      wireMessage(2, "assistant", "first answer"),
+    ],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo(),
+  });
+  const before = mirror.getThreadSnapshot(threadId).messages;
+
+  mirror.applyRemoteTranscript(threadId, {
+    threadId,
+    remoteFound: true,
+    messages: [
+      wireMessage(1, "user", "question"),
+      wireMessage(2, "assistant", "first answer"),
+      wireMessage(3, "assistant", "stream tail"),
+    ],
+    pendingInputs: [],
+    threadInfo: null,
+    pageInfo: fullPageInfo({
+      totalMessages: 3,
+      committedMessages: 3,
+      returnedMessages: 3,
+      endIndex: 3,
+    }),
+  });
+  const after = mirror.getThreadSnapshot(threadId).messages;
+  assert.equal(after.length, 3);
+  assert.equal(after[0], before[0], "unchanged user message keeps its ref");
+  assert.equal(
+    after[1],
+    before[1],
+    "unchanged historical assistant keeps its ref",
   );
 });

@@ -57,10 +57,27 @@ projection as changed merely because its object identity is new.
 
 ## Post-change gate
 
-The same driver will run with `--expect optimized`. That mode requires:
+The same driver runs with `--expect optimized`. That mode requires:
 
 - zero `AppShell` renders for background transcript frames; and
 - zero renders of unchanged transcript row keys during active streaming.
 
-Post-change raw results will be appended here after implementation and before
-code review.
+## Post-change result
+
+Two consecutive optimized runs returned exactly the same values:
+
+- Background phase: 12 frames, zero `AppShell` renders, zero `ThreadPage`
+  renders, and zero transcript-row renders.
+- Active phase: 12 frames over the same 40 rows (including the eight
+  tool-bearing rows with fresh equal-value projections), 24 `AppShell`
+  renders, 24 `ThreadPage` renders, and 24 transcript-row renders.
+- All 24 row renders were the changing tail row. The 39 unchanged history
+  rows rendered zero times, and only the tail row key was observed after the
+  counter reset.
+
+Against the pre-change result, background shell renders fell from 24 to zero,
+total active row-body renders fell from 960 to 24 (97.5%), and unchanged
+history-row renders fell from 936 to zero. The active thread still renders its
+shell and page once per StrictMode pass, as expected for its per-thread
+subscription; the memo boundary confines expensive transcript subtree work to
+the row whose presentation actually changed.

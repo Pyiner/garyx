@@ -51,9 +51,16 @@ import {
   type MessageIntent,
 } from "../../message-machine";
 import { automationForLatestThread } from "../../thread-model";
-import { useGatewayMirror, useGatewayRoot } from "../../gateway-mirror/react";
-import { transcriptMessageMatchesIntent } from "../../gateway-mirror/transcript-materialize";
+import {
+  useGatewayMirror,
+  useGatewayRoot,
+  useThreadMirror,
+} from "../../gateway-mirror/react";
 import { isRunLoadingPlaceholderMessage } from "../loading-labels";
+import {
+  pendingAckIntentsNotRepresented,
+  representedUserIntentIds,
+} from "../pending-ack-intents";
 import {
   visibleRemotePendingInputsForThread,
   type PendingInputOriginRef,
@@ -122,7 +129,7 @@ export interface SideChatPanelProps {
   boundBotsForThread: (endpoints: DesktopChannelEndpoint[]) => BoundBot[];
   inferProviderTypeForThread: (
     threadId: string,
-    threadInfoByThread: Record<string, ThreadRuntimeInfo | null>,
+    threadInfo: ThreadRuntimeInfo | null,
     desktopState: DesktopState | null,
     desktopAgents: DesktopCustomAgent[],
   ) => DesktopApiProviderType | null;
@@ -206,13 +213,6 @@ export function SideChatPanel({
     sessions.subscribe,
     sessions.getSnapshot,
   );
-  const transcriptMaps = useSyncExternalStore(
-    useCallback(
-      (onChange: () => void) => mirror.subscribeTranscriptMaps(onChange),
-      [mirror],
-    ),
-    () => mirror.getTranscriptMapsSnapshot(),
-  );
   const messageState = useSyncExternalStore(
     useCallback(
       (onChange: () => void) => mirror.subscribeMachine(onChange),
@@ -220,19 +220,6 @@ export function SideChatPanel({
     ),
     () => mirror.getMachineState(),
   );
-  const liveStreamStateByThread = useSyncExternalStore(
-    useCallback(
-      (onChange: () => void) => mirror.subscribeLiveStreams(onChange),
-      [mirror],
-    ),
-    () => mirror.getLiveStreamMap(),
-  );
-  const messagesByThread = transcriptMaps.messagesByThread;
-  const renderStateByThread = transcriptMaps.renderStateByThread;
-  const threadInfoByThread = transcriptMaps.threadInfoByThread;
-  const historyPaginationByThread = transcriptMaps.historyPaginationByThread;
-  const pendingRemoteInputsByThread = transcriptMaps.pendingRemoteInputsByThread;
-
   const sideComposerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const sideComposerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const sideChatThreadLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -251,6 +238,7 @@ export function SideChatPanel({
   const sideChatThreadId = sideChatSourceThreadId
     ? sideChatThreadBySource[sideChatSourceThreadId] || null
     : null;
+  const sideChatMirror = useThreadMirror(sideChatThreadId);
   const sideChatCreating = sideChatSourceThreadId
     ? Boolean(sideChatCreatingBySource[sideChatSourceThreadId])
     : false;
@@ -276,15 +264,13 @@ export function SideChatPanel({
     sideChatThreadId
       ? inferProviderTypeForThread(
           sideChatThreadId,
-          threadInfoByThread,
+          sideChatMirror?.threadInfo || null,
           desktopState,
           desktopAgents,
         ) || "claude_code"
       : composerProviderType;
-  const sideChatRawMessages = sideChatThreadId
-    ? (messagesByThread[sideChatThreadId] as UiTranscriptMessage[]) ||
-      EMPTY_UI_TRANSCRIPT_MESSAGES
-    : EMPTY_UI_TRANSCRIPT_MESSAGES;
+  const sideChatRawMessages = sideChatMirror?.messages ||
+    EMPTY_UI_TRANSCRIPT_MESSAGES;
   const sideChatMessages = useMemo(
     () =>
       sideChatRawMessages.filter(
@@ -292,45 +278,43 @@ export function SideChatPanel({
       ),
     [sideChatRawMessages],
   );
-  const sideChatThreadInfo = sideChatThreadId
-    ? threadInfoByThread[sideChatThreadId] || null
-    : null;
+  const sideChatThreadInfo = sideChatMirror?.threadInfo || null;
   const sideChatThreadWorktree =
     sideChatThreadInfo?.worktree || sideChatThreadSummary?.worktree || null;
   const sideChatComposerWorkspaceMode: DesktopWorkspaceMode | null =
     sideChatThreadId && sideChatThreadWorktree ? "worktree" : null;
   const sideChatComposerWorkspaceBranch =
     sideChatThreadWorktree?.branch?.trim() || null;
-  const sideChatRenderState = sideChatThreadId
-    ? renderStateByThread[sideChatThreadId] || null
-    : null;
+  const sideChatRenderState = sideChatMirror?.renderState || null;
   const sideChatQueue = sideChatThreadId
     ? selectQueueIntentIds(messageState, sideChatThreadId)
         .map((intentId) => messageState.intentsById[intentId])
         .filter((intent): intent is MessageIntent => Boolean(intent))
     : [];
   const sideChatRuntime = selectThreadRuntime(messageState, sideChatThreadId);
-  const sideChatLiveStream: LiveStreamState | null = sideChatThreadId
-    ? liveStreamStateByThread[sideChatThreadId] || null
-    : null;
-  const sideChatPendingAckIntents = (
-    sideChatLiveStream?.pendingAckIntentIds || []
-  )
-    .map((intentId) => messageState.intentsById[intentId])
-    .filter((intent): intent is MessageIntent => Boolean(intent));
-  const sideChatVisiblePendingAckIntents = sideChatPendingAckIntents.filter(
-    (intent) => {
-      return !sideChatMessages.some((message) => {
-        return (
-          message.role === "user" &&
-          (message.intentId === intent.intentId ||
-            transcriptMessageMatchesIntent(message, intent))
-        );
-      });
-    },
+  const sideChatLiveStream: LiveStreamState | null =
+    sideChatMirror?.liveStream || null;
+  const sideChatPendingAckIntents = useMemo(
+    () =>
+      (sideChatLiveStream?.pendingAckIntentIds || [])
+        .map((intentId) => messageState.intentsById[intentId])
+        .filter((intent): intent is MessageIntent => Boolean(intent)),
+    [sideChatLiveStream?.pendingAckIntentIds, messageState.intentsById],
+  );
+  const representedSideChatIntentIds = useMemo(
+    () => representedUserIntentIds(sideChatMessages),
+    [sideChatMessages],
+  );
+  const sideChatVisiblePendingAckIntents = useMemo(
+    () =>
+      pendingAckIntentsNotRepresented(
+        sideChatPendingAckIntents,
+        representedSideChatIntentIds,
+      ),
+    [sideChatPendingAckIntents, representedSideChatIntentIds],
   );
   const sideChatRemotePendingInputs = sideChatThreadId
-    ? pendingRemoteInputsByThread[sideChatThreadId] || []
+    ? sideChatMirror?.pendingRemoteInputs || []
     : [];
   const sideChatPendingInputOriginRefs = useMemo(
     () =>
@@ -386,9 +370,7 @@ export function SideChatPanel({
       renderTailActivity: sideChatRenderState?.tailActivity ?? null,
       renderActiveToolGroupId: sideChatRenderState?.activeToolGroupId ?? null,
     });
-  const sideChatHistoryPagination = sideChatThreadId
-    ? historyPaginationByThread[sideChatThreadId] || null
-    : null;
+  const sideChatHistoryPagination = sideChatMirror?.historyPagination || null;
   const sideChatThreadEndpoints =
     sideChatThreadId && !automationForLatestThread(desktopState, sideChatThreadId)
       ? (desktopState?.endpoints || []).filter(
@@ -624,7 +606,7 @@ export function SideChatPanel({
 
     const machineNow = mirror.getMachineState();
     const runtime = selectThreadRuntime(machineNow, threadId);
-    const liveStream = mirror.getLiveStreamMap()[threadId] || null;
+    const liveStream = mirror.getThreadLiveStream(threadId);
     const streamBusy = Boolean(
       liveStream &&
         ["connecting", "streaming", "reconciling"].includes(

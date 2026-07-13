@@ -53,10 +53,21 @@ import {
   THREAD_HISTORY_USER_QUERY_LIMIT,
 } from "./transcript-materialize.ts";
 import type { ThreadHistoryPaginationState } from "./transcript-materialize.ts";
+import { NEW_THREAD_DRAFT_THREAD_ID } from "./thread-ids.ts";
 
 export type Unsubscribe = () => void;
 
 const DESKTOP_STATE_REFRESH_TRAILING_MS = 350;
+export const GATEWAY_MIRROR_INACTIVE_THREAD_LIMIT = 32;
+
+const EMPTY_COMMITTED_RECORDS: readonly CommittedMessageEvent[] = [];
+const EMPTY_UI_MESSAGES: readonly UiTranscriptMessage[] = [];
+const EMPTY_PENDING_REMOTE_INPUTS: readonly PendingThreadInput[] = [];
+const EMPTY_THREAD_FRONTIER: ThreadFrontierSnapshot = {
+  committedSeq: 0,
+  renderBasedOnSeq: 0,
+  renderFloor: 0,
+};
 
 function connectionEquals(
   a: ConnectionStatus | null,
@@ -187,16 +198,21 @@ export interface TranscriptMapsSnapshot {
 }
 
 interface ThreadEntry {
+  threadId: string;
   cache: ThreadTranscriptCache;
   frontier: ThreadFrontier;
   liveStream: LiveStreamState | null;
   listeners: Set<() => void>;
+  lastAccess: number;
+  retainCount: number;
   version: number;
   snapshot: ThreadMirrorSnapshot | null;
 }
 
 export class GatewayMirror {
   private threads = new Map<string, ThreadEntry>();
+  private emptyThreadSnapshots = new Map<string, ThreadMirrorSnapshot>();
+  private threadAccessOrdinal = 0;
   private services: GatewayMirrorServices | null;
 
   // Root domain: connection + desktop state.
@@ -435,17 +451,17 @@ export class GatewayMirror {
   }
 
   private retainedIntentIdsForThread(threadId: string): Set<string> {
-    const snapshot = this.getTranscriptMapsSnapshot();
+    const snapshot = this.getThreadSnapshot(threadId);
     const retained = new Set<string>();
 
-    for (const message of snapshot.messagesByThread[threadId] ?? []) {
+    for (const message of snapshot.messages) {
       if (message.intentId && message.localState !== "remote_final") {
         retained.add(message.intentId);
       }
     }
 
     const awaitingAckInputIds = new Set(
-      (snapshot.pendingRemoteInputsByThread[threadId] ?? [])
+      snapshot.pendingRemoteInputs
         .filter((input) => input.status === "awaiting_ack")
         .map((input) => input.id),
     );
@@ -764,7 +780,12 @@ export class GatewayMirror {
   }
 
   getThreadLiveStream(threadId: string): LiveStreamState | null {
-    return this.threads.get(threadId)?.liveStream ?? null;
+    const entry = this.threads.get(threadId);
+    if (!entry) {
+      return null;
+    }
+    this.touchThread(entry);
+    return entry.liveStream;
   }
 
   /**
@@ -806,7 +827,11 @@ export class GatewayMirror {
    * identity once.
    */
   replaceLiveStreamThreadId(fromThreadId: string, toThreadId: string): void {
-    const fromEntry = this.threadEntry(fromThreadId);
+    const fromEntry = this.threads.get(fromThreadId);
+    if (!fromEntry) {
+      return;
+    }
+    this.touchThread(fromEntry);
     const draft = fromEntry.liveStream;
     if (!draft) {
       return;
@@ -835,13 +860,23 @@ export class GatewayMirror {
   subscribeThread(threadId: string, listener: () => void): Unsubscribe {
     const entry = this.threadEntry(threadId);
     entry.listeners.add(listener);
+    this.touchThread(entry);
+    this.pruneAndNotifyTranscriptMaps();
     return () => {
-      entry.listeners.delete(listener);
+      if (!entry.listeners.delete(listener)) {
+        return;
+      }
+      this.touchThread(entry);
+      this.pruneAndNotifyTranscriptMaps();
     };
   }
 
   getThreadSnapshot(threadId: string): ThreadMirrorSnapshot {
-    const entry = this.threadEntry(threadId);
+    const entry = this.threads.get(threadId);
+    if (!entry) {
+      return this.emptyThreadSnapshot(threadId);
+    }
+    this.touchThread(entry);
     if (!entry.snapshot) {
       entry.snapshot = {
         version: entry.version,
@@ -868,7 +903,12 @@ export class GatewayMirror {
    * controller no longer keeps its own copy.
    */
   getThreadSnapshotTranscript(threadId: string): ThreadTranscript | null {
-    return this.threads.get(threadId)?.cache.getSnapshotTranscript() ?? null;
+    const entry = this.threads.get(threadId);
+    if (!entry) {
+      return null;
+    }
+    this.touchThread(entry);
+    return entry.cache.getSnapshotTranscript();
   }
 
   /**
@@ -953,7 +993,11 @@ export class GatewayMirror {
    * pagination yet or the flag already matches.
    */
   setThreadHistoryLoadingBefore(threadId: string, loadingBefore: boolean): void {
-    const entry = this.threadEntry(threadId);
+    const entry = this.threads.get(threadId);
+    if (!entry) {
+      return;
+    }
+    this.touchThread(entry);
     const current = entry.cache.getHistoryPagination();
     if (!current || current.loadingBefore === loadingBefore) {
       return;
@@ -979,37 +1023,42 @@ export class GatewayMirror {
       throw new Error("GatewayMirror constructed without services");
     }
     const entry = this.threadEntry(threadId);
-    const pagination = entry.cache.getHistoryPagination();
-    if (
-      !pagination?.hasMoreBefore ||
-      pagination.loadingBefore ||
-      pagination.nextBeforeIndex === null
-    ) {
-      return;
-    }
-
-    entry.cache.setHistoryPagination({
-      hasMoreBefore: pagination.hasMoreBefore,
-      nextBeforeIndex: pagination.nextBeforeIndex,
-      loadingBefore: true,
-    });
-    this.commitThread(entry);
-
+    const release = this.retainThreadEntry(entry);
     try {
-      const transcript = await this.services.getThreadHistory({
-        threadId,
-        beforeIndex: pagination.nextBeforeIndex,
-        limit: THREAD_HISTORY_PAGE_SIZE,
-        userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
+      const pagination = entry.cache.getHistoryPagination();
+      if (
+        !pagination?.hasMoreBefore ||
+        pagination.loadingBefore ||
+        pagination.nextBeforeIndex === null
+      ) {
+        return;
+      }
+
+      entry.cache.setHistoryPagination({
+        hasMoreBefore: pagination.hasMoreBefore,
+        nextBeforeIndex: pagination.nextBeforeIndex,
+        loadingBefore: true,
       });
-      options?.onPageFetched?.(transcript);
-      entry.cache.applyOlderPage(transcript);
-    } finally {
-      const current = entry.cache.getHistoryPagination();
-      entry.cache.setHistoryPagination(
-        current ? { ...current, loadingBefore: false } : current,
-      );
       this.commitThread(entry);
+
+      try {
+        const transcript = await this.services.getThreadHistory({
+          threadId,
+          beforeIndex: pagination.nextBeforeIndex,
+          limit: THREAD_HISTORY_PAGE_SIZE,
+          userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
+        });
+        options?.onPageFetched?.(transcript);
+        entry.cache.applyOlderPage(transcript);
+      } finally {
+        const current = entry.cache.getHistoryPagination();
+        entry.cache.setHistoryPagination(
+          current ? { ...current, loadingBefore: false } : current,
+        );
+        this.commitThread(entry);
+      }
+    } finally {
+      release();
     }
   }
 
@@ -1096,6 +1145,7 @@ export class GatewayMirror {
     }
 
     if (!changed) {
+      this.pruneAndNotifyTranscriptMaps();
       return;
     }
     this.commitThread(entry);
@@ -1110,15 +1160,17 @@ export class GatewayMirror {
    * states.
    */
   private commitThread(entry: ThreadEntry, touchesTranscript = true): void {
+    this.touchThread(entry);
     entry.version += 1;
     entry.snapshot = null;
-    if (touchesTranscript) {
+    const pruned = this.pruneInactiveThreads();
+    if (touchesTranscript || pruned) {
       this.transcriptMapsSnapshot = null;
     }
     for (const listener of [...entry.listeners]) {
       listener();
     }
-    if (touchesTranscript) {
+    if (touchesTranscript || pruned) {
       for (const listener of [...this.transcriptMapsListeners]) {
         listener();
       }
@@ -1132,15 +1184,106 @@ export class GatewayMirror {
     let entry = this.threads.get(threadId);
     if (!entry) {
       entry = {
+        threadId,
         cache: new ThreadTranscriptCache(),
         frontier: new ThreadFrontier(),
         liveStream: null,
         listeners: new Set(),
+        lastAccess: ++this.threadAccessOrdinal,
+        retainCount: 0,
         version: 0,
-        snapshot: null,
+        snapshot: this.emptyThreadSnapshot(threadId),
       };
       this.threads.set(threadId, entry);
+    } else {
+      this.touchThread(entry);
     }
     return entry;
+  }
+
+  private emptyThreadSnapshot(threadId: string): ThreadMirrorSnapshot {
+    let snapshot = this.emptyThreadSnapshots.get(threadId);
+    if (!snapshot) {
+      snapshot = {
+        version: 0,
+        threadId,
+        records: EMPTY_COMMITTED_RECORDS,
+        messages: EMPTY_UI_MESSAGES,
+        threadInfo: null,
+        pendingRemoteInputs: EMPTY_PENDING_REMOTE_INPUTS,
+        renderState: null,
+        historyPagination: null,
+        liveStream: null,
+        transcriptLoaded: false,
+        frontier: EMPTY_THREAD_FRONTIER,
+      };
+      this.emptyThreadSnapshots.set(threadId, snapshot);
+    }
+    return snapshot;
+  }
+
+  private touchThread(entry: ThreadEntry): void {
+    entry.lastAccess = ++this.threadAccessOrdinal;
+  }
+
+  private entryHasUnrecoverableLocalMessages(entry: ThreadEntry): boolean {
+    return entry.cache.getUiMessages().some((message) => {
+      return Boolean(message.localState) && message.localState !== "remote_final";
+    });
+  }
+
+  private threadEntryIsEvictable(entry: ThreadEntry): boolean {
+    return (
+      entry.threadId !== NEW_THREAD_DRAFT_THREAD_ID &&
+      entry.listeners.size === 0 &&
+      entry.retainCount === 0 &&
+      entry.liveStream === null &&
+      !this.entryHasUnrecoverableLocalMessages(entry)
+    );
+  }
+
+  private pruneInactiveThreads(): boolean {
+    const evictable = [...this.threads.values()].filter((entry) =>
+      this.threadEntryIsEvictable(entry),
+    );
+    const removeCount =
+      evictable.length - GATEWAY_MIRROR_INACTIVE_THREAD_LIMIT;
+    if (removeCount <= 0) {
+      return false;
+    }
+    evictable.sort((left, right) => left.lastAccess - right.lastAccess);
+    let removed = false;
+    for (const entry of evictable.slice(0, removeCount)) {
+      if (this.threads.get(entry.threadId) === entry) {
+        this.threads.delete(entry.threadId);
+        removed = true;
+      }
+    }
+    return removed;
+  }
+
+  private pruneAndNotifyTranscriptMaps(): void {
+    if (!this.pruneInactiveThreads()) {
+      return;
+    }
+    this.transcriptMapsSnapshot = null;
+    for (const listener of [...this.transcriptMapsListeners]) {
+      listener();
+    }
+  }
+
+  private retainThreadEntry(entry: ThreadEntry): () => void {
+    entry.retainCount += 1;
+    this.touchThread(entry);
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      entry.retainCount = Math.max(0, entry.retainCount - 1);
+      this.touchThread(entry);
+      this.pruneAndNotifyTranscriptMaps();
+    };
   }
 }

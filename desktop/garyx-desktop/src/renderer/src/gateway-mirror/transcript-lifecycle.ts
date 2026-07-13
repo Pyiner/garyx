@@ -96,7 +96,7 @@ export interface TranscriptLifecycleMirrorPort {
     threadId: string,
     updater: (current: LiveStreamState | null) => LiveStreamState | null,
   ): LiveStreamState | null;
-  getLiveStreamMap(): Record<string, LiveStreamState>;
+  getThreadLiveStream(threadId: string): LiveStreamState | null;
   getThreadSnapshotTranscript(threadId: string): ThreadTranscript | null;
   // Slice 2b: the pure cache-only commits the accept* entries wrap, the
   // aggregate maps the local-write bridge and the persist ride-along read,
@@ -107,6 +107,10 @@ export interface TranscriptLifecycleMirrorPort {
   ): void;
   applyRemoteTranscript(threadId: string, transcript: ThreadTranscript): void;
   getTranscriptMapsSnapshot(): TranscriptMapsSnapshot;
+  getThreadSnapshot(threadId: string): {
+    messages: readonly UiTranscriptMessage[];
+    renderState: RenderState | null;
+  };
   syncThreadUiMessages(
     threadId: string,
     messages: readonly UiTranscriptMessage[],
@@ -276,9 +280,8 @@ export class TranscriptLifecycle {
     );
   }
 
-  // 6b-2d: the mirror's live-stream map is read directly (the AppShell
-  // shadow ref became a getter over getLiveStreamMap, so there is nothing
-  // left to feed).
+  // 6b-2d: live-stream transport state is read directly from the mirror's
+  // per-thread selector, so there is no aggregate map or React shadow to feed.
   private updateLiveStreamState(
     threadId: string,
     updater: (current: LiveStreamState | null) => LiveStreamState | null,
@@ -291,7 +294,7 @@ export class TranscriptLifecycle {
   }
 
   private getLiveStreamState(threadId: string): LiveStreamState | null {
-    return this.port.getLiveStreamMap()[threadId] || null;
+    return this.port.getThreadLiveStream(threadId);
   }
 
   private applyThreadTitleUpdate(threadId: string, title: string): void {
@@ -652,8 +655,7 @@ export class TranscriptLifecycle {
     // next cold/offline open can render folded history before a live frame.
     this.port.persistTranscriptCache(
       cacheTranscript,
-      this.port.getTranscriptMapsSnapshot().renderStateByThread[threadId] ??
-        null,
+      this.port.getThreadSnapshot(threadId).renderState,
     );
   }
 
@@ -927,9 +929,8 @@ export class TranscriptLifecycle {
     }
     const recoveryResult = activeIntentId
       ? reconcileAssistantEntriesForGatewayRecovery(
-          (this.port.getTranscriptMapsSnapshot().messagesByThread as MessageMap)[
-            threadId
-          ] || [],
+          this.port.getThreadSnapshot(threadId)
+            .messages as UiTranscriptMessage[],
           activeIntentId,
           [currentStream?.assistantEntryId],
         )
@@ -1089,8 +1090,7 @@ export class TranscriptLifecycle {
     // call), so the stream keeps the gateway's windowed derivation instead
     // of falling back to the full-transcript path on a caught-up resume.
     const renderFloor =
-      this.port.getTranscriptMapsSnapshot().renderStateByThread[threadId]
-        ?.window?.floor_seq ?? 0;
+      this.port.getThreadSnapshot(threadId).renderState?.window?.floor_seq ?? 0;
     await this.port.startThreadStream({
       threadId,
       consumerId,
@@ -1311,11 +1311,7 @@ export class TranscriptLifecycle {
     } = this.requireDeps();
     const hasRenderedThread = lastRenderedMessageThreadRef.current === threadId;
     const hasCachedMessages =
-      (
-        (this.port.getTranscriptMapsSnapshot().messagesByThread as MessageMap)[
-          threadId
-        ] || []
-      ).length > 0;
+      this.port.getThreadSnapshot(threadId).messages.length > 0;
     requestSelectedThreadMessagesBottomSnap(
       threadId,
       !hasRenderedThread || !hasCachedMessages,

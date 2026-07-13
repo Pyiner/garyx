@@ -1,5 +1,6 @@
 import {
   Fragment,
+  memo,
   useCallback,
   useLayoutEffect,
   useMemo,
@@ -68,6 +69,7 @@ import {
   buildThreadViewRowsWithLocalUsers,
   type MessagesBySeq,
   type RenderTranscriptBlock,
+  type TurnRenderRow,
   type TurnRow,
   type UserTurnActivityRow,
 } from "../../render-view-model";
@@ -77,7 +79,7 @@ import { CapsuleChatCardList } from "./CapsuleChatCard";
 import { ThreadLogDock } from "./ThreadLogDock";
 import { ThreadTaskTreePopover } from "./ThreadTaskTreePopover";
 import { shouldShowThreadTaskTreePopover } from "./thread-task-tree-popover-model";
-import { useI18n } from "../../i18n";
+import { useI18n, type Translate } from "../../i18n";
 import type {
   PendingAutomationRun,
   UiTranscriptMessage,
@@ -85,6 +87,7 @@ import type {
 import { RUN_LOADING_LABEL } from "../loading-labels";
 import { resolveThreadFilePreviewTarget } from "../workspace-helpers";
 import { recordTranscriptRender } from "../transcript-render-probe";
+import { transcriptRenderRowPropsEqual } from "./thread-render-row-equality";
 
 function normalizeMessageText(value: string | undefined): string {
   return value?.trim() || "";
@@ -218,6 +221,230 @@ function renderUserMessageBubbleParts({
     </div>,
   ];
 }
+
+type TranscriptRowActionState = {
+  t: Translate;
+  loadImagePreview: MessageImagePreviewLoader;
+  onLocalFileLinkClick: (path: string) => void;
+  onRetryFailedMessage?: (message: UiTranscriptMessage) => void;
+  onOpenThreadById: (threadId: string) => void;
+  onOpenCapsule?: (card: RenderCapsuleCard) => void;
+};
+
+type TranscriptRowActions = {
+  t: Translate;
+  loadImagePreview: MessageImagePreviewLoader;
+  onLocalFileLinkClick: (path: string) => void;
+  onRetryFailedMessage: (message: UiTranscriptMessage) => void;
+  onOpenThreadById: (threadId: string) => void;
+  onOpenCapsule: (card: RenderCapsuleCard) => void;
+};
+
+type TranscriptRenderRowProps = {
+  row: TurnRenderRow;
+  activeToolGroupId: string | null;
+  actions: TranscriptRowActions;
+  translationIdentity: Translate;
+  imagePreviewIdentity: MessageImagePreviewLoader;
+  canRetryFailedMessage: boolean;
+  canOpenCapsule: boolean;
+};
+
+const TranscriptRenderRow = memo(function TranscriptRenderRow({
+  row,
+  activeToolGroupId,
+  actions,
+  canRetryFailedMessage,
+  canOpenCapsule,
+}: TranscriptRenderRowProps) {
+  recordTranscriptRender("ThreadPage.row", row.key);
+
+  const renderBlockBody = (
+    block: RenderTranscriptBlock,
+    options: { markUserTurnStart?: boolean } = {},
+  ): ReactNode => {
+    if (block.kind === "tool_group") {
+      return (
+        <article
+          className="message-bubble tool-cluster"
+          key={`${block.key}:body`}
+        >
+          <ToolTraceGroup
+            active={block.key === activeToolGroupId}
+            defaultExpanded={block.defaultExpanded}
+            entries={block.entries}
+            loadImagePreview={actions.loadImagePreview}
+            onThreadNavigate={actions.onOpenThreadById}
+          />
+        </article>
+      );
+    }
+    const entry = block.entry;
+    const loopContinuation = isLoopContinuationMessage(entry.message);
+    const displayText = displayTranscriptMessageText(entry.message);
+    const cardMessageClass =
+      entry.message.pending || loopContinuation
+        ? null
+        : parseTaskNotificationText(displayText) !== null
+          ? "task-notification-message"
+          : parseRestartNoticeText(displayText) !== null
+            ? "restart-notice-message"
+            : null;
+    if (cardMessageClass) {
+      return (
+        <article
+          key={`${block.key}:body`}
+          className={`message-bubble ${cardMessageClass} ${entry.message.role} ${entry.message.error ? "error" : ""}`}
+        >
+          <RichMessageContent
+            altPrefix={entry.message.role}
+            content={entry.message.content}
+            loadImagePreview={actions.loadImagePreview}
+            onLocalFileLinkClick={actions.onLocalFileLinkClick}
+            text={displayText}
+          />
+        </article>
+      );
+    }
+    if (entry.message.role === "user" && !loopContinuation) {
+      return renderUserMessageBubbleParts({
+        keyPrefix: `${block.key}:body`,
+        text: displayText,
+        content: entry.message.content,
+        pending: entry.message.pending,
+        error: entry.message.error,
+        loadImagePreview: actions.loadImagePreview,
+        retryLabel: actions.t("Retry"),
+        onRetry:
+          canRetryFailedMessage &&
+          (entry.message as UiTranscriptMessage).intentId
+            ? () =>
+                actions.onRetryFailedMessage(
+                  entry.message as UiTranscriptMessage,
+                )
+            : undefined,
+        onLocalFileLinkClick: actions.onLocalFileLinkClick,
+        markUserTurnStart: options.markUserTurnStart !== false,
+      });
+    }
+    if (loopContinuation) {
+      return (
+        <Marker
+          className="my-0.5"
+          key={`${block.key}:body`}
+          variant="separator"
+        >
+          <MarkerIcon>
+            <Repeat2 aria-hidden size={14} strokeWidth={1.8} />
+          </MarkerIcon>
+          <MarkerContent>{LOOP_CONTINUATION_SUMMARY}</MarkerContent>
+        </Marker>
+      );
+    }
+    if (entry.message.role === "assistant" || entry.message.error) {
+      return (
+        <Bubble
+          className={
+            entry.message.error
+              ? "max-w-[min(77%,680px)] self-start"
+              : `w-[min(100%,736px)] self-start ${entry.message.pending ? "text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]" : ""}`
+          }
+          key={`${block.key}:body`}
+          variant={entry.message.error ? "destructive" : "ghost"}
+        >
+          <BubbleContent
+            className={entry.message.error ? "rounded-[20px]" : "border-0"}
+          >
+            <RichMessageContent
+              altPrefix={entry.message.role}
+              content={entry.message.content}
+              loadImagePreview={actions.loadImagePreview}
+              onLocalFileLinkClick={actions.onLocalFileLinkClick}
+              text={displayText}
+            />
+          </BubbleContent>
+        </Bubble>
+      );
+    }
+    return (
+      <article
+        key={`${block.key}:body`}
+        className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""}`}
+      >
+        <RichMessageContent
+          altPrefix={entry.message.role}
+          content={entry.message.content}
+          loadImagePreview={actions.loadImagePreview}
+          onLocalFileLinkClick={actions.onLocalFileLinkClick}
+          text={displayText}
+        />
+      </article>
+    );
+  };
+
+  // Running/final placement is already server-owned in render_state. This
+  // component only maps the supplied presentation row.
+  const renderActivityRow = (activityRow: UserTurnActivityRow): ReactNode => {
+    if (activityRow.kind === "flat") {
+      return (
+        <Fragment key={activityRow.key}>
+          {renderBlockBody(activityRow.block)}
+        </Fragment>
+      );
+    }
+    const turn: TurnRow = activityRow;
+    return (
+      <Fragment key={turn.key}>
+        <TurnSummary turn={turn}>
+          {turn.steps.map((step) => (
+            <Fragment key={step.key}>{renderBlockBody(step)}</Fragment>
+          ))}
+        </TurnSummary>
+        {turn.finalBlock ? renderBlockBody(turn.finalBlock) : null}
+      </Fragment>
+    );
+  };
+
+  const renderTurnRowBody = (): ReactNode => {
+    if (row.kind === "flat") {
+      return renderBlockBody(row.block);
+    }
+    if (row.kind === "turn") {
+      return renderActivityRow(row);
+    }
+    if (row.kind === "capsule_only") {
+      return (
+        <CapsuleChatCardList
+          cards={row.capsuleCards}
+          onOpenCapsule={canOpenCapsule ? actions.onOpenCapsule : undefined}
+        />
+      );
+    }
+    return (
+      <>
+        {renderBlockBody(row.userBlock, { markUserTurnStart: true })}
+        {row.activityRows.map((activityRow) =>
+          renderActivityRow(activityRow),
+        )}
+        {row.capsuleCards.length ? (
+          <CapsuleChatCardList
+            cards={row.capsuleCards}
+            onOpenCapsule={canOpenCapsule ? actions.onOpenCapsule : undefined}
+          />
+        ) : null}
+      </>
+    );
+  };
+
+  return (
+    <MessageScrollerItem
+      className="messages-item"
+      messageId={row.key}
+    >
+      {renderTurnRowBody()}
+    </MessageScrollerItem>
+  );
+}, transcriptRenderRowPropsEqual);
 
 type ThreadPageProps = {
   surfaceVariant?: "default" | "side-chat";
@@ -496,6 +723,38 @@ export function ThreadPage({
     },
     [activeThreadSummary?.workspacePath],
   );
+  const transcriptRowActionStateRef = useRef<TranscriptRowActionState>({
+    t,
+    loadImagePreview: loadTranscriptImagePreview,
+    onLocalFileLinkClick: onLocalWorkspaceFileLinkClick,
+    onRetryFailedMessage,
+    onOpenThreadById,
+    onOpenCapsule,
+  });
+  transcriptRowActionStateRef.current = {
+    t,
+    loadImagePreview: loadTranscriptImagePreview,
+    onLocalFileLinkClick: onLocalWorkspaceFileLinkClick,
+    onRetryFailedMessage,
+    onOpenThreadById,
+    onOpenCapsule,
+  };
+  const transcriptRowActions = useMemo<TranscriptRowActions>(
+    () => ({
+      t: (key, params) => transcriptRowActionStateRef.current.t(key, params),
+      loadImagePreview: (path) =>
+        transcriptRowActionStateRef.current.loadImagePreview(path),
+      onLocalFileLinkClick: (path) =>
+        transcriptRowActionStateRef.current.onLocalFileLinkClick(path),
+      onRetryFailedMessage: (message) =>
+        transcriptRowActionStateRef.current.onRetryFailedMessage?.(message),
+      onOpenThreadById: (threadId) =>
+        transcriptRowActionStateRef.current.onOpenThreadById(threadId),
+      onOpenCapsule: (card) =>
+        transcriptRowActionStateRef.current.onOpenCapsule?.(card),
+    }),
+    [],
+  );
   // Colocated transcript scroll (endgame batch 5b): stick-to-bottom,
   // prepend anchoring, and scroll-triggered older-page loads. Null for
   // the side-chat instance, which passes lightweight handlers instead.
@@ -733,206 +992,18 @@ export function ThreadPage({
             </>
           ) : null}
 
-          {(() => {
-            const renderBlockBody = (
-              block: RenderTranscriptBlock,
-              options: { markUserTurnStart?: boolean } = {},
-            ): ReactNode => {
-              if (block.kind === "tool_group") {
-                return (
-                  <article
-                    className="message-bubble tool-cluster"
-                    key={`${block.key}:body`}
-                  >
-                    <ToolTraceGroup
-                      active={block.key === activeToolGroupId}
-                      defaultExpanded={block.defaultExpanded}
-                      entries={block.entries}
-                      loadImagePreview={loadTranscriptImagePreview}
-                      onThreadNavigate={onOpenThreadById}
-                    />
-                  </article>
-                );
-              }
-              const entry = block.entry;
-              const loopContinuation = isLoopContinuationMessage(entry.message);
-              const displayText = displayTranscriptMessageText(entry.message);
-              const cardMessageClass =
-                entry.message.pending || loopContinuation
-                  ? null
-                  : parseTaskNotificationText(displayText) !== null
-                    ? "task-notification-message"
-                    : parseRestartNoticeText(displayText) !== null
-                      ? "restart-notice-message"
-                      : null;
-              if (cardMessageClass) {
-                return (
-                  <article
-                    key={`${block.key}:body`}
-                    className={`message-bubble ${cardMessageClass} ${entry.message.role} ${entry.message.error ? "error" : ""}`}
-                  >
-                    <RichMessageContent
-                      altPrefix={entry.message.role}
-                      content={entry.message.content}
-                      loadImagePreview={loadTranscriptImagePreview}
-                      onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
-                      text={displayText}
-                    />
-                  </article>
-                );
-              }
-              if (entry.message.role === "user" && !loopContinuation) {
-                return renderUserMessageBubbleParts({
-                  keyPrefix: `${block.key}:body`,
-                  text: displayText,
-                  content: entry.message.content,
-                  pending: entry.message.pending,
-                  error: entry.message.error,
-                  loadImagePreview: loadTranscriptImagePreview,
-                  retryLabel: t("Retry"),
-                  onRetry:
-                    onRetryFailedMessage &&
-                    (entry.message as UiTranscriptMessage).intentId
-                      ? () => onRetryFailedMessage(entry.message as UiTranscriptMessage)
-                      : undefined,
-                  onLocalFileLinkClick: onLocalWorkspaceFileLinkClick,
-                  markUserTurnStart: options.markUserTurnStart !== false,
-                });
-              }
-              if (loopContinuation) {
-                return (
-                  <Marker
-                    className="my-0.5"
-                    key={`${block.key}:body`}
-                    variant="separator"
-                  >
-                    <MarkerIcon>
-                      <Repeat2 aria-hidden size={14} strokeWidth={1.8} />
-                    </MarkerIcon>
-                    <MarkerContent>{LOOP_CONTINUATION_SUMMARY}</MarkerContent>
-                  </Marker>
-                );
-              }
-              if (entry.message.role === "assistant" || entry.message.error) {
-                return (
-                  <Bubble
-                    className={
-                      entry.message.error
-                        ? "max-w-[min(77%,680px)] self-start"
-                        : `w-[min(100%,736px)] self-start ${entry.message.pending ? "text-[color:var(--color-token-text-tertiary,var(--color-token-description-foreground))]" : ""}`
-                    }
-                    key={`${block.key}:body`}
-                    variant={entry.message.error ? "destructive" : "ghost"}
-                  >
-                    <BubbleContent
-                      className={entry.message.error ? "rounded-[20px]" : "border-0"}
-                    >
-                      <RichMessageContent
-                        altPrefix={entry.message.role}
-                        content={entry.message.content}
-                        loadImagePreview={loadTranscriptImagePreview}
-                        onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
-                        text={displayText}
-                      />
-                    </BubbleContent>
-                  </Bubble>
-                );
-              }
-              return (
-                <article
-                  key={`${block.key}:body`}
-                  className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""}`}
-                >
-                  <RichMessageContent
-                    altPrefix={entry.message.role}
-                    content={entry.message.content}
-                    loadImagePreview={loadTranscriptImagePreview}
-                    onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
-                    text={displayText}
-                  />
-                </article>
-              );
-            };
-
-            // Running/elapsed state comes from render_state (`step.running`,
-            // which already defers the final answer while the run is busy), so
-            // the view only maps the server view model.
-            const renderActivityRow = (
-              activityRow: UserTurnActivityRow,
-            ): ReactNode => {
-              if (activityRow.kind === "flat") {
-                return (
-                  <Fragment key={activityRow.key}>
-                    {renderBlockBody(activityRow.block)}
-                  </Fragment>
-                );
-              }
-              const turn: TurnRow = activityRow;
-              return (
-                <Fragment key={turn.key}>
-                  <TurnSummary turn={turn}>
-                    {turn.steps.map((step) => (
-                      <Fragment key={step.key}>
-                        {renderBlockBody(step)}
-                      </Fragment>
-                    ))}
-                  </TurnSummary>
-                  {turn.finalBlock ? renderBlockBody(turn.finalBlock) : null}
-                </Fragment>
-              );
-            };
-
-            // Each transcript row rides its own MessageScrollerItem so
-            // off-screen turns skip layout via content-visibility while
-            // the primitive tracks them for prepend anchoring.
-            const renderTurnRowBody = (
-              row: (typeof turnRows)[number],
-            ): ReactNode => {
-              if (row.kind === "flat") {
-                return renderBlockBody(row.block);
-              }
-              if (row.kind === "turn") {
-                return renderActivityRow(row);
-              }
-              if (row.kind === "capsule_only") {
-                return (
-                  <CapsuleChatCardList
-                    cards={row.capsuleCards}
-                    onOpenCapsule={onOpenCapsule}
-                  />
-                );
-              }
-              return (
-                <>
-                  {renderBlockBody(row.userBlock, {
-                    markUserTurnStart: true,
-                  })}
-                  {row.activityRows.map((activityRow) =>
-                    renderActivityRow(activityRow),
-                  )}
-                  {row.capsuleCards.length ? (
-                    <CapsuleChatCardList
-                      cards={row.capsuleCards}
-                      onOpenCapsule={onOpenCapsule}
-                    />
-                  ) : null}
-                </>
-              );
-            };
-
-            return turnRows.map((row) => {
-              recordTranscriptRender("ThreadPage.row", row.key);
-              return (
-                <MessageScrollerItem
-                  className="messages-item"
-                  key={row.key}
-                  messageId={row.key}
-                >
-                  {renderTurnRowBody(row)}
-                </MessageScrollerItem>
-              );
-            });
-          })()}
+          {turnRows.map((row) => (
+            <TranscriptRenderRow
+              activeToolGroupId={activeToolGroupId}
+              actions={transcriptRowActions}
+              canOpenCapsule={Boolean(onOpenCapsule)}
+              canRetryFailedMessage={Boolean(onRetryFailedMessage)}
+              imagePreviewIdentity={loadTranscriptImagePreview}
+              key={row.key}
+              row={row}
+              translationIdentity={t}
+            />
+          ))}
 
           {activePendingAckIntents.map((intent) =>
             renderUserMessageBubbleParts({

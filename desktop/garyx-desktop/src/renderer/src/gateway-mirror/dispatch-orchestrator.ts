@@ -15,7 +15,7 @@
 //      destructured once from `deps` at method entry, so the statement
 //      bodies stay byte-identical to the legacy functions.
 //   3. Per-render captured VALUES (connection, settingsDraft,
-//      desktopState, desktopAgents, threadInfoByThread,
+//      desktopState, desktopAgents,
 //      canSteerQueuedPrompt) are also destructured at entry: the deps
 //      object is refreshed every React commit, so an entry-time
 //      destructure reproduces the legacy call-time closure capture for
@@ -106,11 +106,14 @@ export interface DispatchOrchestratorMirrorPort {
     threadId: string,
     updater: (current: LiveStreamState | null) => LiveStreamState | null,
   ): LiveStreamState | null;
-  getLiveStreamMap(): Record<string, LiveStreamState>;
+  getThreadLiveStream(threadId: string): LiveStreamState | null;
   updateMessagesByThread(
     updater: (current: MessageMap) => MessageMap,
   ): MessageMap;
-  getTranscriptMapsSnapshot(): { messagesByThread: Record<string, readonly UiTranscriptMessage[]> };
+  getThreadSnapshot(threadId: string): {
+    messages: readonly UiTranscriptMessage[];
+    threadInfo: ThreadRuntimeInfo | null;
+  };
   acceptAuthoritativeTranscript(
     threadId: string,
     transcript: ThreadTranscript,
@@ -148,11 +151,10 @@ export interface DispatchOrchestratorDeps {
   settingsDraft: DesktopSettings;
   desktopState: DesktopState | null;
   desktopAgents: DesktopCustomAgent[];
-  threadInfoByThread: Record<string, ThreadRuntimeInfo | null>;
   canSteerQueuedPrompt: boolean;
   inferProviderTypeForThread: (
     threadId: string,
-    threadInfoByThread: Record<string, ThreadRuntimeInfo | null>,
+    threadInfo: ThreadRuntimeInfo | null,
     desktopState: DesktopState | null,
     desktopAgents: DesktopCustomAgent[],
   ) => DesktopApiProviderType | null;
@@ -229,7 +231,7 @@ export class DispatchOrchestrator {
   }
 
   private getLiveStreamState(threadId: string): LiveStreamState | null {
-    return this.port.getLiveStreamMap()[threadId] || null;
+    return this.port.getThreadLiveStream(threadId);
   }
 
   private clearLiveStreamState(threadId: string): void {
@@ -259,7 +261,7 @@ export class DispatchOrchestrator {
     const seedUserBubble = options?.seedUserBubble ?? true;
     const userMessage = seededUserBubble(intent);
     const legacyPendingAssistant =
-      ((this.port.getTranscriptMapsSnapshot().messagesByThread as MessageMap)[threadId] || []).find(
+      this.port.getThreadSnapshot(threadId).messages.find(
         (entry) =>
           entry.role === "assistant" &&
           entry.pending &&
@@ -326,7 +328,6 @@ export class DispatchOrchestrator {
       setError,
       settingsDraft,
       sideChatThreadIdsRef,
-      threadInfoByThread,
     } = deps;
     const intent = this.intentForId(intentId);
     if (!intent) {
@@ -549,7 +550,7 @@ export class DispatchOrchestrator {
           : "Garyx request failed before completion";
       const threadProviderType = inferProviderTypeForThread(
         threadId,
-        threadInfoByThread,
+        this.port.getThreadSnapshot(threadId).threadInfo,
         desktopState,
         desktopAgents,
       );
@@ -564,7 +565,7 @@ export class DispatchOrchestrator {
       const liveState = this.getLiveStreamState(threadId);
       const failedIntentId = liveState?.activeIntentId || intent.intentId;
       const recoveryResult = reconcileAssistantEntriesForGatewayRecovery(
-        (this.port.getTranscriptMapsSnapshot().messagesByThread as MessageMap)[threadId] || [],
+        this.port.getThreadSnapshot(threadId).messages as UiTranscriptMessage[],
         failedIntentId,
         [legacyPendingAssistantId, liveState?.assistantEntryId],
       );

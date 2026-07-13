@@ -26,8 +26,9 @@ import type {
   TranscriptEntryState,
   UiTranscriptMessage,
 } from "./types";
+import { NEW_THREAD_DRAFT_THREAD_ID } from "../gateway-mirror/thread-ids";
 
-export const NEW_THREAD_DRAFT_THREAD_ID = "__garyx_new_thread_draft__";
+export { NEW_THREAD_DRAFT_THREAD_ID };
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {

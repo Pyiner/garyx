@@ -165,7 +165,6 @@ import type {
   LiveStreamStatus,
   MessageMap,
   PendingAutomationRun,
-  PendingThreadInputMap,
   UiTranscriptMessage,
   WorkspaceDirectoryState,
 } from "./types";
@@ -208,7 +207,10 @@ import {
 } from "./useMessageDispatchController";
 import { GatewayMirror } from "../gateway-mirror/mirror";
 import type { DispatchOrchestratorDeps } from "../gateway-mirror/dispatch-orchestrator";
-import { GatewayMirrorContext } from "../gateway-mirror/react";
+import {
+  GatewayMirrorContext,
+  useGatewayThreadMirror,
+} from "../gateway-mirror/react";
 import { useSettingsController } from "./useSettingsController";
 import {
   messageTailSignature,
@@ -229,8 +231,11 @@ import {
   messagesNearEarlierUserTurnBoundary,
   normalizeMessageText,
   transcriptHasAutomationResponse,
-  transcriptMessageMatchesIntent,
 } from "../gateway-mirror/transcript-materialize";
+import {
+  pendingAckIntentsNotRepresented,
+  representedUserIntentIds,
+} from "./pending-ack-intents";
 import { useWorkspaceController } from "./useWorkspaceController";
 import {
   compactPathLabel,
@@ -564,11 +569,11 @@ function gatewaySetupMessageForAuthError(
 
 function inferProviderTypeForThread(
   threadId: string,
-  threadInfoByThread: Record<string, ThreadRuntimeInfo | null>,
+  threadInfo: ThreadRuntimeInfo | null,
   desktopState: DesktopState | null,
   desktopAgents: DesktopCustomAgent[],
 ): DesktopApiProviderType | null {
-  const runtimeProvider = threadInfoByThread[threadId]?.providerType;
+  const runtimeProvider = threadInfo?.providerType;
   if (
     runtimeProvider === "claude_code" ||
     runtimeProvider === "codex_app_server" ||
@@ -722,27 +727,17 @@ export function AppShell() {
   const [providerModelsByType, setProviderModelsByType] = useState<
     Record<string, DesktopProviderModels | null>
   >({});
-  // Batch 3d: read-side cutover — the 5 per-thread transcript maps are
-  // read from the mirror's aggregate transcript-maps domain through
-  // useSyncExternalStore (the 3a/3c-1 pattern: AppShell subscribes on its
-  // local mirror instance, not through context — AppShell renders the
-  // Provider, so useContext here would see the parent's null). The mirror
-  // owns the authoritative data (batches 2a-2, 2b-1, 3b); the legacy
-  // useState caches are gone. Key-existence semantics are reproduced by
-  // the mirror per TranscriptMapsSnapshot's contract.
-  const transcriptMaps = useSyncExternalStore(
-    useCallback(
-      (onChange) => gatewayMirror.subscribeTranscriptMaps(onChange),
-      [gatewayMirror],
-    ),
-    () => gatewayMirror.getTranscriptMapsSnapshot(),
+  const hasNewThreadDraft = newThreadDraftActive && !selectedThreadId;
+  const activeThreadMessageKey =
+    selectedThreadId ||
+    (hasNewThreadDraft ? NEW_THREAD_DRAFT_THREAD_ID : null);
+  // AppShell renders the GatewayMirror provider, so it uses the explicit-
+  // instance binding. Only the selected/draft thread can invalidate this
+  // snapshot; background transcript commits never enter the shell.
+  const activeThreadMirror = useGatewayThreadMirror(
+    gatewayMirror,
+    activeThreadMessageKey,
   );
-  const messagesByThread = transcriptMaps.messagesByThread as MessageMap;
-  const renderStateByThread = transcriptMaps.renderStateByThread;
-  const threadInfoByThread = transcriptMaps.threadInfoByThread;
-  const historyPaginationByThread = transcriptMaps.historyPaginationByThread;
-  const pendingRemoteInputsByThread =
-    transcriptMaps.pendingRemoteInputsByThread as PendingThreadInputMap;
   // Batch 3a: the mirror's dispatch-machine module owns machine-state
   // storage; React reads it through useSyncExternalStore (same bail-out
   // semantics as the previous useReducer — an identical reference neither
@@ -831,17 +826,8 @@ export function AppShell() {
   const [workspaceMenuOpenPath, setWorkspaceMenuOpenPath] = useState<string | null>(
     null,
   );
-  // Batch 3c-1: the mirror's live-stream domain owns transport-state
-  // storage; React reads the aggregate map through useSyncExternalStore.
-  // `liveStreamStateRef` (below) stays as the synchronous shadow for
-  // event-path readers, fed by the transcript-controller proxies.
-  const liveStreamStateByThread = useSyncExternalStore(
-    useCallback(
-      (onChange) => gatewayMirror.subscribeLiveStreams(onChange),
-      [gatewayMirror],
-    ),
-    () => gatewayMirror.getLiveStreamMap(),
-  );
+  // The aggregate live-stream map remains an imperative event-path shadow;
+  // React reads selected/side transport state from their thread snapshots.
   const [pendingAutomationRunsByThread, setPendingAutomationRunsByThread] =
     useState<Record<string, PendingAutomationRun>>({});
   const selectedThreadIdRef = useRef<string | null>(null);
@@ -1061,15 +1047,15 @@ export function AppShell() {
   );
   const activeAgentId = activeThread?.agentId || null;
   const activeThreadInfo = selectedThreadId
-    ? threadInfoByThread[selectedThreadId] || null
+    ? activeThreadMirror?.threadInfo || null
     : null;
   const activeThreadInfoLoaded = selectedThreadId
-    ? Object.prototype.hasOwnProperty.call(threadInfoByThread, selectedThreadId)
+    ? Boolean(activeThreadMirror?.transcriptLoaded)
     : false;
   const activeThreadProviderType = selectedThreadId
     ? inferProviderTypeForThread(
         selectedThreadId,
-        threadInfoByThread,
+        activeThreadInfo,
         desktopState,
         desktopAgents,
       )
@@ -1196,13 +1182,8 @@ export function AppShell() {
     desktopState,
     pendingWorkspacePath,
   );
-  const hasNewThreadDraft = newThreadDraftActive && !selectedThreadId;
-  const activeThreadMessageKey =
-    selectedThreadId ||
-    (hasNewThreadDraft ? NEW_THREAD_DRAFT_THREAD_ID : null);
-  const rawActiveMessages = activeThreadMessageKey
-    ? messagesByThread[activeThreadMessageKey] || EMPTY_UI_TRANSCRIPT_MESSAGES
-    : EMPTY_UI_TRANSCRIPT_MESSAGES;
+  const rawActiveMessages = activeThreadMirror?.messages ||
+    EMPTY_UI_TRANSCRIPT_MESSAGES;
   const activeMessages = useMemo(
     () =>
       rawActiveMessages.filter(
@@ -1210,9 +1191,7 @@ export function AppShell() {
       ),
     [rawActiveMessages],
   );
-  const activeHistoryPagination = activeThreadMessageKey
-    ? historyPaginationByThread[activeThreadMessageKey] || null
-    : null;
+  const activeHistoryPagination = activeThreadMirror?.historyPagination || null;
   const secondaryConversationRailRequested =
     contentView === "thread" &&
     Boolean(
@@ -1403,12 +1382,6 @@ export function AppShell() {
   // remains here is wiring — mirror-backed readers, thin delegates the
   // side-chat/dispatch controllers still take as args (until their own
   // colocation cuts), and the three transport React effects.
-  const [messagesByThreadRef] = useState(() => ({
-    get current(): MessageMap {
-      return gatewayMirror.getTranscriptMapsSnapshot()
-        .messagesByThread as MessageMap;
-    },
-  }));
   function intentForId(intentId: string): MessageIntent | null {
     return messageStateRef.current.intentsById[intentId] || null;
   }
@@ -1541,40 +1514,47 @@ export function AppShell() {
       }),
     [activeMessages],
   );
-  const activeRenderState = activeThreadMessageKey
-    ? renderStateByThread[activeThreadMessageKey] || null
-    : null;
-  const activeQueue = selectQueueIntentIds(messageState, activeThreadMessageKey)
-    .map((intentId) => messageState.intentsById[intentId])
-    .filter((intent): intent is MessageIntent => Boolean(intent));
+  const activeRenderState = activeThreadMirror?.renderState || null;
+  const activeQueue = useMemo(
+    () =>
+      selectQueueIntentIds(messageState, activeThreadMessageKey)
+        .map((intentId) => messageState.intentsById[intentId])
+        .filter((intent): intent is MessageIntent => Boolean(intent)),
+    [messageState, activeThreadMessageKey],
+  );
   const activeRuntime = selectThreadRuntime(
     messageState,
     activeThreadMessageKey,
   );
-  const activeLiveStream = activeThreadMessageKey
-    ? liveStreamStateByThread[activeThreadMessageKey] || null
-    : null;
-  const activePendingAckIntents = (activeLiveStream?.pendingAckIntentIds || [])
-    .filter((intentId, index, intentIds) => {
-      return intentIds.indexOf(intentId) === index;
-    })
-    .map((intentId) => messageState.intentsById[intentId])
-    .filter((intent): intent is MessageIntent => {
-      return Boolean(intent) && intent.state === "awaiting_provider_ack";
-    });
-  const visiblePendingAckIntents = activePendingAckIntents.filter((intent) => {
-    return !activeMessages.some((message) => {
-      return (
-        message.role === "user" &&
-        (message.intentId === intent.intentId ||
-          transcriptMessageMatchesIntent(message, intent))
-      );
-    });
-  });
+  const activeLiveStream = activeThreadMirror?.liveStream || null;
+  const activePendingAckIntents = useMemo(
+    () =>
+      (activeLiveStream?.pendingAckIntentIds || [])
+        .filter((intentId, index, intentIds) => {
+          return intentIds.indexOf(intentId) === index;
+        })
+        .map((intentId) => messageState.intentsById[intentId])
+        .filter((intent): intent is MessageIntent => {
+          return Boolean(intent) && intent.state === "awaiting_provider_ack";
+        }),
+    [activeLiveStream?.pendingAckIntentIds, messageState.intentsById],
+  );
+  const representedActiveUserIntentIds = useMemo(
+    () => representedUserIntentIds(activeMessages),
+    [activeMessages],
+  );
+  const visiblePendingAckIntents = useMemo(
+    () =>
+      pendingAckIntentsNotRepresented(
+        activePendingAckIntents,
+        representedActiveUserIntentIds,
+      ),
+    [activePendingAckIntents, representedActiveUserIntentIds],
+  );
   const activeThreadRunId =
     activeLiveStream?.runId || activeThread?.recentRunId || null;
   const activeRemotePendingInputs = selectedThreadId
-    ? pendingRemoteInputsByThread[selectedThreadId] || []
+    ? activeThreadMirror?.pendingRemoteInputs || []
     : [];
   const activePendingInputOriginRefs = useMemo(
     () =>
@@ -1584,27 +1564,40 @@ export function AppShell() {
       ),
     [messageState.intentsById, activeThreadMessageKey],
   );
-  const visibleRemotePendingInputs = visibleRemotePendingInputsForThread({
-    activeMessages,
-    visiblePendingAckIntentCount: visiblePendingAckIntents.length,
-    remotePendingInputs: activeRemotePendingInputs,
-    pendingInputOriginRefs: activePendingInputOriginRefs,
-  });
+  const visibleRemotePendingInputs = useMemo(
+    () =>
+      visibleRemotePendingInputsForThread({
+        activeMessages,
+        visiblePendingAckIntentCount: visiblePendingAckIntents.length,
+        remotePendingInputs: activeRemotePendingInputs,
+        pendingInputOriginRefs: activePendingInputOriginRefs,
+      }),
+    [
+      activeMessages,
+      visiblePendingAckIntents.length,
+      activeRemotePendingInputs,
+      activePendingInputOriginRefs,
+    ],
+  );
   const visibleRemoteAwaitingAckInputs = visibleRemotePendingInputs;
-  const activePendingHistoryIntent = activeThreadMessageKey
-    ? Object.values(messageState.intentsById).some((intent) => {
-        return (
-          intent.threadId === activeThreadMessageKey &&
-          [
-            "dispatching",
-            "remote_accepted",
-            "awaiting_provider_ack",
-            "awaiting_response",
-            "awaiting_history",
-          ].includes(intent.state)
-        );
-      })
-    : false;
+  const activePendingHistoryIntent = useMemo(
+    () =>
+      activeThreadMessageKey
+        ? Object.values(messageState.intentsById).some((intent) => {
+            return (
+              intent.threadId === activeThreadMessageKey &&
+              [
+                "dispatching",
+                "remote_accepted",
+                "awaiting_provider_ack",
+                "awaiting_response",
+                "awaiting_history",
+              ].includes(intent.state)
+            );
+          })
+        : false,
+    [messageState.intentsById, activeThreadMessageKey],
+  );
   const activeRuntimeBusy = Boolean(
     activeRuntime && isRuntimeBusy(activeRuntime.state),
   );
@@ -1797,18 +1790,28 @@ export function AppShell() {
         : { ...group, conversationNodes };
     });
   }, [botGroups, deletingThreadId, desktopState]);
-  const activeThreadEndpoints =
-    activeThread && !activeAutomationThread
-      ? (desktopState?.endpoints || []).filter(
-          (endpoint) => endpoint.threadId === activeThread.id,
-        )
-      : [];
-  const activeThreadBots = boundBotsForThread(activeThreadEndpoints);
-  const mappedThreadBotId = activeThread
-    ? (Object.entries(desktopState?.botMainThreads || {}).find(
-        ([, threadId]) => threadId === activeThread.id,
-      )?.[0] ?? null)
-    : null;
+  const activeThreadEndpoints = useMemo(
+    () =>
+      activeThread && !activeAutomationThread
+        ? (desktopState?.endpoints || []).filter(
+            (endpoint) => endpoint.threadId === activeThread.id,
+          )
+        : [],
+    [activeThread, activeAutomationThread, desktopState?.endpoints],
+  );
+  const activeThreadBots = useMemo(
+    () => boundBotsForThread(activeThreadEndpoints),
+    [activeThreadEndpoints],
+  );
+  const mappedThreadBotId = useMemo(
+    () =>
+      activeThread
+        ? (Object.entries(desktopState?.botMainThreads || {}).find(
+            ([, threadId]) => threadId === activeThread.id,
+          )?.[0] ?? null)
+        : null,
+    [activeThread, desktopState?.botMainThreads],
+  );
   const hasOptimisticActiveThreadBotBinding = Boolean(
     activeThread &&
       optimisticThreadBotBinding?.threadId === activeThread.id,
@@ -1828,9 +1831,13 @@ export function AppShell() {
       ? (activeThreadBots[0]?.id ?? null)
       : null;
   const activeThreadBotId = explicitThreadBotId ?? inferredThreadBotId;
-  const activeThreadBot = activeThreadBotId
-    ? (botGroups.find((g) => g.id === activeThreadBotId) ?? null)
-    : null;
+  const activeThreadBot = useMemo(
+    () =>
+      activeThreadBotId
+        ? (botGroups.find((group) => group.id === activeThreadBotId) ?? null)
+        : null,
+    [activeThreadBotId, botGroups],
+  );
 
   const activeThreadHasMessages = Boolean(
     (activeThread?.messageCount ?? 0) > 0 || activeMessages.length > 0,
@@ -2099,6 +2106,12 @@ export function AppShell() {
   const sideChatThreadId = sideChatSourceThreadId
     ? sideChatSessionsSnapshot.threadBySource[sideChatSourceThreadId] || null
     : null;
+  // Side-chat stream/queue orchestration remains shell-owned while the dock
+  // is hidden, so this is the shell's second and only other thread listener.
+  const shellSideChatMirror = useGatewayThreadMirror(
+    gatewayMirror,
+    sideChatThreadId,
+  );
   const sideChatMessagesRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -2134,7 +2147,7 @@ export function AppShell() {
       api: getDesktopApi(),
       threadId: sideChatThreadId,
       onBeforeLoad: (threadId) => {
-        if (!(messagesByThreadRef.current[threadId] || []).length) {
+        if (!gatewayMirror.getThreadSnapshot(threadId).messages.length) {
           scrollMessagesToLatest(sideChatMessagesRef.current);
         }
       },
@@ -2175,12 +2188,10 @@ export function AppShell() {
   // with the dock hidden because the controller stayed mounted). The
   // busy inputs are rebuilt here verbatim from the same mirror-backed
   // sources the panel derives from, so both read one truth.
-  const shellSideChatMessages = sideChatThreadId
-    ? messagesByThread[sideChatThreadId] || EMPTY_UI_TRANSCRIPT_MESSAGES
-    : EMPTY_UI_TRANSCRIPT_MESSAGES;
-  const shellSideChatRenderState = sideChatThreadId
-    ? renderStateByThread[sideChatThreadId] || null
-    : null;
+  const shellSideChatMessages =
+    (shellSideChatMirror?.messages as UiTranscriptMessage[] | undefined) ||
+    EMPTY_UI_TRANSCRIPT_MESSAGES;
+  const shellSideChatRenderState = shellSideChatMirror?.renderState || null;
   const shellSideChatQueueLength = sideChatThreadId
     ? selectQueueIntentIds(messageState, sideChatThreadId).length
     : 0;
@@ -2188,52 +2199,71 @@ export function AppShell() {
     messageState,
     sideChatThreadId,
   );
-  const shellSideChatLiveStream = sideChatThreadId
-    ? liveStreamStateByThread[sideChatThreadId] || null
-    : null;
-  const shellSideChatPendingAckIntents = (
-    shellSideChatLiveStream?.pendingAckIntentIds || []
-  )
-    .map((intentId) => messageState.intentsById[intentId])
-    .filter((intent): intent is MessageIntent => Boolean(intent));
-  const shellSideChatVisiblePendingAckIntents =
-    shellSideChatPendingAckIntents.filter((intent) => {
-      return !shellSideChatMessages.some((message) => {
-        return (
-          message.role === "user" &&
-          (message.intentId === intent.intentId ||
-            transcriptMessageMatchesIntent(message, intent))
-        );
-      });
-    });
+  const shellSideChatLiveStream = shellSideChatMirror?.liveStream || null;
+  const shellSideChatPendingAckIntents = useMemo(
+    () =>
+      (shellSideChatLiveStream?.pendingAckIntentIds || [])
+        .map((intentId) => messageState.intentsById[intentId])
+        .filter((intent): intent is MessageIntent => Boolean(intent)),
+    [shellSideChatLiveStream?.pendingAckIntentIds, messageState.intentsById],
+  );
+  const representedShellSideChatIntentIds = useMemo(
+    () => representedUserIntentIds(shellSideChatMessages),
+    [shellSideChatMessages],
+  );
+  const shellSideChatVisiblePendingAckIntents = useMemo(
+    () =>
+      pendingAckIntentsNotRepresented(
+        shellSideChatPendingAckIntents,
+        representedShellSideChatIntentIds,
+      ),
+    [shellSideChatPendingAckIntents, representedShellSideChatIntentIds],
+  );
   const shellSideChatRemotePendingInputs = sideChatThreadId
-    ? pendingRemoteInputsByThread[sideChatThreadId] || []
+    ? shellSideChatMirror?.pendingRemoteInputs || []
     : [];
-  const shellSideChatVisibleRemotePendingInputs =
-    visibleRemotePendingInputsForThread({
-      activeMessages: shellSideChatMessages,
-      visiblePendingAckIntentCount:
-        shellSideChatVisiblePendingAckIntents.length,
-      remotePendingInputs: shellSideChatRemotePendingInputs,
-      pendingInputOriginRefs: pendingInputOriginRefsForThread(
+  const shellSideChatPendingInputOriginRefs = useMemo(
+    () =>
+      pendingInputOriginRefsForThread(
         messageState.intentsById,
         sideChatThreadId,
       ),
-    });
-  const shellSideChatPendingHistoryIntent = sideChatThreadId
-    ? Object.values(messageState.intentsById).some((intent) => {
-        return (
-          intent.threadId === sideChatThreadId &&
-          [
-            "dispatching",
-            "remote_accepted",
-            "awaiting_provider_ack",
-            "awaiting_response",
-            "awaiting_history",
-          ].includes(intent.state)
-        );
-      })
-    : false;
+    [messageState.intentsById, sideChatThreadId],
+  );
+  const shellSideChatVisibleRemotePendingInputs = useMemo(
+    () =>
+      visibleRemotePendingInputsForThread({
+        activeMessages: shellSideChatMessages,
+        visiblePendingAckIntentCount:
+          shellSideChatVisiblePendingAckIntents.length,
+        remotePendingInputs: shellSideChatRemotePendingInputs,
+        pendingInputOriginRefs: shellSideChatPendingInputOriginRefs,
+      }),
+    [
+      shellSideChatMessages,
+      shellSideChatVisiblePendingAckIntents.length,
+      shellSideChatRemotePendingInputs,
+      shellSideChatPendingInputOriginRefs,
+    ],
+  );
+  const shellSideChatPendingHistoryIntent = useMemo(
+    () =>
+      sideChatThreadId
+        ? Object.values(messageState.intentsById).some((intent) => {
+            return (
+              intent.threadId === sideChatThreadId &&
+              [
+                "dispatching",
+                "remote_accepted",
+                "awaiting_provider_ack",
+                "awaiting_response",
+                "awaiting_history",
+              ].includes(intent.state)
+            );
+          })
+        : false,
+    [messageState.intentsById, sideChatThreadId],
+  );
   const shellSideChatRuntimeBusy = Boolean(
     shellSideChatRuntime && isRuntimeBusy(shellSideChatRuntime.state),
   );
@@ -2330,7 +2360,6 @@ export function AppShell() {
     setError,
     settingsDraft,
     sideChatThreadIdsRef: sideChatSessions.sideChatThreadIdsRef,
-    threadInfoByThread,
   };
   // Boot instrumentation (perf round 2026-07): cheap performance.marks so
   // packaged boots decompose without an attached profiler. Read them via

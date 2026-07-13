@@ -62,6 +62,7 @@ function makeHarness() {
       return next;
     },
     getLiveStreamMap: () => mirror.getLiveStreamMap(),
+    getThreadLiveStream: (threadId) => mirror.getThreadLiveStream(threadId),
     getThreadSnapshotTranscript: (threadId) =>
       mirror.getThreadSnapshotTranscript(threadId),
     // Slice 2b surface: real mirror commits, recorded persists.
@@ -70,6 +71,7 @@ function makeHarness() {
     applyRemoteTranscript: (threadId, transcript) =>
       mirror.applyRemoteTranscript(threadId, transcript),
     getTranscriptMapsSnapshot: () => mirror.getTranscriptMapsSnapshot(),
+    getThreadSnapshot: (threadId) => mirror.getThreadSnapshot(threadId),
     syncThreadUiMessages: (threadId, messages) =>
       mirror.syncThreadUiMessages(threadId, messages),
     persistTranscriptCache(transcript, renderState) {
