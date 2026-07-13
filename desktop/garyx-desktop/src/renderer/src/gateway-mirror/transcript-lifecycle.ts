@@ -454,8 +454,19 @@ export class TranscriptLifecycle {
       }
     }
 
-    const runtime = selectThreadRuntime(this.port.getMachineState(), threadId);
-    if (runtime && !this.hasPendingHistoryIntents(threadId)) {
+    const machineState = this.port.getMachineState();
+    const runtime = selectThreadRuntime(machineState, threadId);
+    const hasTerminalIntent = Object.values(machineState.intentsById).some(
+      (intent) =>
+        intent.threadId === threadId &&
+        ["completed", "cancelled", "failed", "interrupted"].includes(
+          intent.state,
+        ),
+    );
+    if (
+      (runtime || hasTerminalIntent) &&
+      !this.hasPendingHistoryIntents(threadId)
+    ) {
       this.port.dispatchMachineAction({
         type: "thread/clear",
         threadId,

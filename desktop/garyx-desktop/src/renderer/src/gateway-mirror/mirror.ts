@@ -425,7 +425,43 @@ export class GatewayMirror {
    * committed post-dispatch state for callers that need it synchronously.
    */
   dispatchMachineAction(action: MessageMachineAction): MessageMachineState {
+    if (action.type === "thread/clear") {
+      return this.machine.releaseThread(
+        action.threadId,
+        this.retainedIntentIdsForThread(action.threadId),
+      );
+    }
     return this.machine.dispatch(action);
+  }
+
+  private retainedIntentIdsForThread(threadId: string): Set<string> {
+    const snapshot = this.getTranscriptMapsSnapshot();
+    const retained = new Set<string>();
+
+    for (const message of snapshot.messagesByThread[threadId] ?? []) {
+      if (message.intentId && message.localState !== "remote_final") {
+        retained.add(message.intentId);
+      }
+    }
+
+    const awaitingAckInputIds = new Set(
+      (snapshot.pendingRemoteInputsByThread[threadId] ?? [])
+        .filter((input) => input.status === "awaiting_ack")
+        .map((input) => input.id),
+    );
+    if (awaitingAckInputIds.size > 0) {
+      for (const intent of Object.values(this.machine.getState().intentsById)) {
+        if (
+          intent.threadId === threadId &&
+          intent.pendingInputId &&
+          awaitingAckInputIds.has(intent.pendingInputId)
+        ) {
+          retained.add(intent.intentId);
+        }
+      }
+    }
+
+    return retained;
   }
 
   /** Attach (or refresh) the dispatch-orchestration deps. */

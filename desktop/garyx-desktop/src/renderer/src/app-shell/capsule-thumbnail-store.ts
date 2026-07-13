@@ -58,6 +58,7 @@ const LOADING: CapsuleThumbnailState = { status: 'loading' };
 const DELETED: CapsuleThumbnailState = { status: 'deleted' };
 
 const MAX_CONCURRENT = 4;
+export const CAPSULE_THUMBNAIL_CACHE_MAX_ENTRIES = 64;
 
 type Job = {
   id: string;
@@ -84,7 +85,8 @@ function defaultFetcher(
 class CapsuleThumbnailStore {
   private entries = new Map<string, CapsuleThumbnailState>();
   private generationById = new Map<string, number>();
-  private inflightKeys = new Set<string>();
+  private inflightCountById = new Map<string, number>();
+  private inflightCountByKey = new Map<string, number>();
   private queuedKeys = new Set<string>();
   private queue: Job[] = [];
   private activeCount = 0;
@@ -113,8 +115,39 @@ class CapsuleThumbnailStore {
   }
 
   private setEntry(key: string, state: CapsuleThumbnailState): void {
+    this.entries.delete(key);
     this.entries.set(key, state);
+    this.pruneToLimit();
     this.notify();
+  }
+
+  private touchEntry(key: string, state: CapsuleThumbnailState): void {
+    this.entries.delete(key);
+    this.entries.set(key, state);
+  }
+
+  private pruneToLimit(): boolean {
+    let changed = false;
+    while (this.entries.size > CAPSULE_THUMBNAIL_CACHE_MAX_ENTRIES) {
+      let evicted = false;
+      for (const [key, state] of this.entries) {
+        if (
+          state.status === 'loading' ||
+          this.inflightCountByKey.has(key) ||
+          this.queuedKeys.has(key)
+        ) {
+          continue;
+        }
+        this.entries.delete(key);
+        changed = true;
+        evicted = true;
+        break;
+      }
+      if (!evicted) {
+        break;
+      }
+    }
+    return changed;
   }
 
   private notify(): void {
@@ -139,9 +172,10 @@ class CapsuleThumbnailStore {
     const current = this.entries.get(key);
     if (!options.force) {
       if (current && (current.status === 'ready' || current.status === 'deleted')) {
+        this.touchEntry(key, current);
         return;
       }
-      if (this.inflightKeys.has(key) || this.queuedKeys.has(key)) {
+      if (this.inflightCountByKey.has(key) || this.queuedKeys.has(key)) {
         return;
       }
     } else {
@@ -175,22 +209,26 @@ class CapsuleThumbnailStore {
     });
     const prefix = `${id}:`;
     let changed = false;
-    for (const key of this.entries.keys()) {
+    for (const key of [...this.entries.keys()]) {
       if (key.startsWith(prefix)) {
+        this.entries.delete(key);
         this.entries.set(key, DELETED);
         changed = true;
       }
     }
+    changed = this.pruneToLimit() || changed;
     if (changed) {
       this.notify();
     }
+    this.forgetGenerationIfIdle(id);
   }
 
   private drain(): void {
     while (this.activeCount < MAX_CONCURRENT && this.queue.length > 0) {
       const job = this.queue.shift()!;
       this.queuedKeys.delete(job.key);
-      this.inflightKeys.add(job.key);
+      this.incrementInflight(this.inflightCountByKey, job.key);
+      this.incrementInflight(this.inflightCountById, job.id);
       this.activeCount += 1;
       this.run(job);
     }
@@ -209,7 +247,8 @@ class CapsuleThumbnailStore {
   ): void {
     // Always release the slot and keep draining, even when the result is stale.
     this.activeCount -= 1;
-    this.inflightKeys.delete(job.key);
+    this.decrementInflight(this.inflightCountByKey, job.key);
+    this.decrementInflight(this.inflightCountById, job.id);
     const stale = this.generationFor(job.id) !== job.gen;
     if (!stale) {
       if (error) {
@@ -233,8 +272,33 @@ class CapsuleThumbnailStore {
         // Unexpected empty result: tombstone just this key (retryable shape unknown).
         this.setEntry(job.key, DELETED);
       }
+    } else if (this.pruneToLimit()) {
+      this.notify();
     }
     this.drain();
+    this.forgetGenerationIfIdle(job.id);
+  }
+
+  private incrementInflight(counts: Map<string, number>, key: string): void {
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  private decrementInflight(counts: Map<string, number>, key: string): void {
+    const next = (counts.get(key) ?? 1) - 1;
+    if (next > 0) {
+      counts.set(key, next);
+    } else {
+      counts.delete(key);
+    }
+  }
+
+  private forgetGenerationIfIdle(id: string): void {
+    if (
+      !this.inflightCountById.has(id) &&
+      !this.queue.some((job) => job.id === id)
+    ) {
+      this.generationById.delete(id);
+    }
   }
 
   // --- test-only seams ------------------------------------------------------
@@ -245,7 +309,8 @@ class CapsuleThumbnailStore {
   __reset(): void {
     this.entries.clear();
     this.generationById.clear();
-    this.inflightKeys.clear();
+    this.inflightCountById.clear();
+    this.inflightCountByKey.clear();
     this.queuedKeys.clear();
     this.queue = [];
     this.activeCount = 0;
@@ -256,6 +321,14 @@ class CapsuleThumbnailStore {
 
   __activeCount(): number {
     return this.activeCount;
+  }
+
+  __entryCount(): number {
+    return this.entries.size;
+  }
+
+  __generationCount(): number {
+    return this.generationById.size;
   }
 }
 

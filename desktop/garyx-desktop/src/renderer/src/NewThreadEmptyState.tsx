@@ -27,6 +27,10 @@ import {
 } from "@/components/ui/select";
 import { WorkspaceSelectDialog } from "@/components/WorkspacePathPicker";
 import { useI18n } from "./i18n";
+import {
+  loadWorkspaceGitStatusCached,
+  workspaceGitStatusCache,
+} from "./workspace-git-status-cache";
 
 const GIT_STATUS_CHECK_DELAY_MS = 120;
 const RESUME_PROVIDER_OPTIONS: Array<{
@@ -36,7 +40,6 @@ const RESUME_PROVIDER_OPTIONS: Array<{
   { value: "codex", label: "Codex" },
   { value: "claude", label: "Claude Code" },
 ];
-const workspaceGitStatusCache = new Map<string, DesktopWorkspaceGitStatus>();
 type NewThreadEmptyStateProps = {
   newThreadWorkspaceEntry: DesktopWorkspace | null;
   selectableNewThreadWorkspaces: DesktopWorkspace[];
@@ -81,6 +84,7 @@ export function NewThreadEmptyState({
     workspacePath: string;
     status: DesktopWorkspaceGitStatus;
   } | null>(null);
+  const [gitStatusRefreshVersion, setGitStatusRefreshVersion] = useState(0);
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
 
   useEffect(() => {
@@ -121,11 +125,16 @@ export function NewThreadEmptyState({
     }
 
     const timeout = window.setTimeout(() => {
-      void window.garyxDesktop
-        .getWorkspaceGitStatus({ workspacePath: selectedWorkspacePath })
+      void loadWorkspaceGitStatusCached({
+        cache: workspaceGitStatusCache,
+        workspacePath: selectedWorkspacePath,
+        load: () =>
+          window.garyxDesktop.getWorkspaceGitStatus({
+            workspacePath: selectedWorkspacePath,
+          }),
+      })
         .then((status) => {
           if (cancelled) return;
-          workspaceGitStatusCache.set(selectedWorkspacePath, status);
           setGitStatusResult({ workspacePath: selectedWorkspacePath, status });
           if (!status.isGitRepo) {
             onWorkspaceModeChange("local");
@@ -141,7 +150,22 @@ export function NewThreadEmptyState({
       cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [onWorkspaceModeChange, selectedWorkspacePath]);
+  }, [gitStatusRefreshVersion, onWorkspaceModeChange, selectedWorkspacePath]);
+
+  useEffect(() => {
+    if (!selectedWorkspacePath) {
+      return;
+    }
+    const refreshCachedNegative = () => {
+      if (workspaceGitStatusCache.invalidateNegative(selectedWorkspacePath)) {
+        setGitStatusRefreshVersion((current) => current + 1);
+      }
+    };
+    window.addEventListener("focus", refreshCachedNegative);
+    return () => {
+      window.removeEventListener("focus", refreshCachedNegative);
+    };
+  }, [selectedWorkspacePath]);
 
   function closeResume() {
     setResumeOpen(false);

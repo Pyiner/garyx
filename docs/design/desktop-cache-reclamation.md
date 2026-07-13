@@ -1,6 +1,6 @@
 # Desktop cache reclamation
 
-Status: proposed for #TASK-2210
+Status: approved, implemented, and locally validated for #TASK-2210
 
 Scope: `desktop/garyx-desktop` only. This change bounds renderer intent and
 Capsule memory, bounds the main-process transcript disk cache, and makes the
@@ -9,7 +9,8 @@ derivation or transcript row structure.
 
 ## Reproduce-first baseline
 
-Baseline source revision: `e734a243c`.
+Baseline source revision: `e734a243c`. Reproduction tests were committed
+separately at `974a17cbd` before implementation.
 
 All reproductions run through the repository unit-test entry point. The tests
 are checked in with the design so the same assertions become post-fix guards.
@@ -90,10 +91,11 @@ this thread's unretained terminal states: `completed`, `cancelled`, `failed`,
 and `interrupted`. It also removes the thread's queue property when the queue
 is empty, but preserves a non-empty queue and every other thread.
 
-`markIntentsFromHistory` will request a release whenever the thread has no
-pending-history intent, even if its runtime was cleared earlier. That gives a
-later authoritative apply a chance to collect an intent retained during an
-earlier failure/interruption race.
+`markIntentsFromHistory` requests a release whenever the thread has no
+pending-history intent and either a runtime or a terminal collection candidate
+still exists. The terminal-candidate branch works even if the runtime was
+cleared earlier, giving a later authoritative apply a chance to collect an
+intent retained during an earlier failure/interruption race.
 
 ### Shared conversation-state compatibility
 
@@ -220,3 +222,22 @@ work called out in the task.
 4. Run `npx tsc --noEmit` from `desktop/garyx-desktop`.
 5. Rebase onto the latest `origin/main`, reconcile overlapping upstream
    semantics, and repeat the full desktop checks before merging.
+
+## Pre-review validation evidence
+
+The same checked-in reproductions that failed at the baseline now pass:
+
+- completed attachment-intent release: 1/1 pass (`64 -> 0` intents);
+- transcript disk cache: 5/5 pass, including count, byte, access-LRU, startup,
+  and save/clear ordering guards;
+- Capsule HTML eviction: 1/1 focused baseline pass;
+- Capsule thumbnail eviction: 1/1 focused baseline pass;
+- workspace `git init` refresh: the real temporary-repository test passes;
+- gateway mirror contract: 28/28 pass.
+
+Repository-required aggregate checks also pass before external code review:
+
+```text
+npm run test:unit  -> 604 passed, 0 failed
+npx tsc --noEmit  -> clean
+```

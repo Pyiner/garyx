@@ -1,4 +1,13 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 
 import { app } from "electron";
@@ -15,6 +24,8 @@ export type { CachedThreadTranscript };
 // v1 caches still load (with `renderState` undefined → graceful degradation to
 // an empty render until the first live frame).
 const CACHE_VERSION = 1;
+export const MAX_TRANSCRIPT_CACHE_BYTES = 48 * 1024 * 1024;
+export const MAX_TRANSCRIPT_CACHE_RECORDS = 240;
 
 interface CachedThreadTranscriptFile {
   version: number;
@@ -25,54 +36,21 @@ interface CachedThreadTranscriptFile {
   renderState?: RenderState | null;
 }
 
-const cacheMutationQueues = new Map<string, Promise<void>>();
-const cacheMutationGenerations = new Map<string, number>();
+export interface TranscriptCacheStoreOptions {
+  directory: () => string;
+  maxBytes?: number;
+  maxRecords?: number;
+  now?: () => Date;
+}
 
-function transcriptCacheDir(): string {
-  return join(app.getPath("userData"), "transcript-cache");
+interface CacheRecord {
+  fileName: string;
+  byteCount: number;
+  lastAccessAt: number;
 }
 
 function cacheFileName(threadId: string): string {
   return `${Buffer.from(threadId, "utf8").toString("base64url")}.json`;
-}
-
-function transcriptCachePath(threadId: string): string {
-  return join(transcriptCacheDir(), cacheFileName(threadId));
-}
-
-async function waitForCacheMutations(threadId: string): Promise<void> {
-  const queue = cacheMutationQueues.get(threadId);
-  if (!queue) {
-    return;
-  }
-  await queue.catch(() => undefined);
-}
-
-function enqueueLatestCacheMutation(
-  threadId: string,
-  operation: () => Promise<void>,
-): Promise<void> {
-  const generation = (cacheMutationGenerations.get(threadId) || 0) + 1;
-  cacheMutationGenerations.set(threadId, generation);
-  const previous = cacheMutationQueues.get(threadId) || Promise.resolve();
-  const next = previous
-    .catch(() => undefined)
-    .then(async () => {
-      if (cacheMutationGenerations.get(threadId) !== generation) {
-        return;
-      }
-      await operation();
-  });
-  let queued: Promise<void>;
-  queued = next
-    .catch(() => undefined)
-    .finally(() => {
-      if (cacheMutationQueues.get(threadId) === queued) {
-        cacheMutationQueues.delete(threadId);
-      }
-    });
-  cacheMutationQueues.set(threadId, queued);
-  return next;
 }
 
 function validTranscript(value: unknown): value is ThreadTranscript {
@@ -87,62 +65,208 @@ function validTranscript(value: unknown): value is ThreadTranscript {
   );
 }
 
-export async function loadThreadTranscriptCache(
-  threadId: string,
-): Promise<CachedThreadTranscript | null> {
-  const normalizedThreadId = threadId.trim();
-  if (!normalizedThreadId) {
-    return null;
+export class TranscriptCacheStore {
+  private readonly directory: () => string;
+  private readonly maxBytes: number;
+  private readonly maxRecords: number;
+  private readonly now: () => Date;
+  private operationQueue: Promise<void> = Promise.resolve();
+  private mutationGenerationByThread = new Map<string, number>();
+
+  constructor(options: TranscriptCacheStoreOptions) {
+    this.directory = options.directory;
+    this.maxBytes = options.maxBytes ?? MAX_TRANSCRIPT_CACHE_BYTES;
+    this.maxRecords = options.maxRecords ?? MAX_TRANSCRIPT_CACHE_RECORDS;
+    this.now = options.now ?? (() => new Date());
   }
-  try {
-    await waitForCacheMutations(normalizedThreadId);
-    const raw = await readFile(transcriptCachePath(normalizedThreadId), "utf8");
-    const parsed = JSON.parse(raw) as Partial<CachedThreadTranscriptFile>;
-    if (
-      parsed.version !== CACHE_VERSION ||
-      !validTranscript(parsed.transcript) ||
-      parsed.transcript.threadId !== normalizedThreadId
-    ) {
+
+  async load(threadId: string): Promise<CachedThreadTranscript | null> {
+    const normalizedThreadId = threadId.trim();
+    if (!normalizedThreadId) {
       return null;
     }
-    return {
-      transcript: parsed.transcript,
-      renderState: parsed.renderState ?? null,
-    };
-  } catch {
-    return null;
+    return this.serialize(async () => {
+      const target = this.pathForThread(normalizedThreadId);
+      try {
+        const raw = await readFile(target, "utf8");
+        const parsed = JSON.parse(raw) as Partial<CachedThreadTranscriptFile>;
+        if (
+          parsed.version !== CACHE_VERSION ||
+          !validTranscript(parsed.transcript) ||
+          parsed.transcript.threadId !== normalizedThreadId
+        ) {
+          return null;
+        }
+        const accessedAt = this.now();
+        await utimes(target, accessedAt, accessedAt).catch(() => undefined);
+        return {
+          transcript: parsed.transcript,
+          renderState: parsed.renderState ?? null,
+        };
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  save(
+    transcript: ThreadTranscript,
+    renderState?: RenderState | null,
+  ): Promise<void> {
+    const threadId = transcript.threadId.trim();
+    if (!threadId) {
+      return Promise.resolve();
+    }
+    return this.enqueueLatestMutation(threadId, async () => {
+      const directory = this.directory();
+      await mkdir(directory, { recursive: true });
+      const target = this.pathForThread(threadId);
+      const savedAt = this.now();
+      const temp = `${target}.tmp-${process.pid}-${savedAt.getTime()}`;
+      const payload: CachedThreadTranscriptFile = {
+        version: CACHE_VERSION,
+        savedAt: savedAt.toISOString(),
+        transcript,
+        renderState: renderState ?? null,
+      };
+      try {
+        await writeFile(temp, JSON.stringify(payload), "utf8");
+        await rename(temp, target);
+        await utimes(target, savedAt, savedAt).catch(() => undefined);
+      } finally {
+        await rm(temp, { force: true }).catch(() => undefined);
+      }
+      await this.pruneToLimits();
+    });
+  }
+
+  clear(threadId: string): Promise<void> {
+    const normalizedThreadId = threadId.trim();
+    if (!normalizedThreadId) {
+      return Promise.resolve();
+    }
+    return this.enqueueLatestMutation(normalizedThreadId, async () => {
+      await rm(this.pathForThread(normalizedThreadId), { force: true });
+    });
+  }
+
+  prune(): Promise<void> {
+    return this.serialize(() => this.pruneToLimits());
+  }
+
+  private pathForThread(threadId: string): string {
+    return join(this.directory(), cacheFileName(threadId));
+  }
+
+  private enqueueLatestMutation(
+    threadId: string,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const generation =
+      (this.mutationGenerationByThread.get(threadId) ?? 0) + 1;
+    this.mutationGenerationByThread.set(threadId, generation);
+    return this.serialize(async () => {
+      if (this.mutationGenerationByThread.get(threadId) !== generation) {
+        return;
+      }
+      try {
+        await operation();
+      } finally {
+        if (this.mutationGenerationByThread.get(threadId) === generation) {
+          this.mutationGenerationByThread.delete(threadId);
+        }
+      }
+    });
+  }
+
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationQueue.catch(() => undefined).then(operation);
+    this.operationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async pruneToLimits(): Promise<void> {
+    let names: string[];
+    try {
+      names = (await readdir(this.directory())).filter((name) =>
+        name.endsWith(".json"),
+      );
+    } catch {
+      return;
+    }
+
+    const records = (
+      await Promise.all(
+        names.map(async (fileName): Promise<CacheRecord | null> => {
+          try {
+            const metadata = await stat(join(this.directory(), fileName));
+            return metadata.isFile()
+              ? {
+                  fileName,
+                  byteCount: metadata.size,
+                  lastAccessAt: metadata.mtimeMs,
+                }
+              : null;
+          } catch {
+            return null;
+          }
+        }),
+      )
+    ).filter((record): record is CacheRecord => record !== null);
+
+    let recordCount = records.length;
+    let totalBytes = records.reduce(
+      (total, record) => total + record.byteCount,
+      0,
+    );
+    if (recordCount <= this.maxRecords && totalBytes <= this.maxBytes) {
+      return;
+    }
+
+    records.sort(
+      (left, right) =>
+        left.lastAccessAt - right.lastAccessAt ||
+        left.fileName.localeCompare(right.fileName),
+    );
+    for (const record of records) {
+      if (recordCount <= this.maxRecords && totalBytes <= this.maxBytes) {
+        break;
+      }
+      try {
+        await rm(join(this.directory(), record.fileName), { force: true });
+        recordCount -= 1;
+        totalBytes -= record.byteCount;
+      } catch {
+        // Best-effort cache: keep trying newer candidates if one file is locked.
+      }
+    }
   }
 }
 
-export async function saveThreadTranscriptCache(
+const transcriptCache = new TranscriptCacheStore({
+  directory: () => join(app.getPath("userData"), "transcript-cache"),
+});
+
+export function loadThreadTranscriptCache(
+  threadId: string,
+): Promise<CachedThreadTranscript | null> {
+  return transcriptCache.load(threadId);
+}
+
+export function saveThreadTranscriptCache(
   transcript: ThreadTranscript,
   renderState?: RenderState | null,
 ): Promise<void> {
-  const threadId = transcript.threadId.trim();
-  if (!threadId) {
-    return;
-  }
-  await enqueueLatestCacheMutation(threadId, async () => {
-    await mkdir(transcriptCacheDir(), { recursive: true });
-    const target = transcriptCachePath(threadId);
-    const temp = `${target}.tmp-${process.pid}-${Date.now()}`;
-    const payload: CachedThreadTranscriptFile = {
-      version: CACHE_VERSION,
-      savedAt: new Date().toISOString(),
-      transcript,
-      renderState: renderState ?? null,
-    };
-    await writeFile(temp, JSON.stringify(payload), "utf8");
-    await rename(temp, target);
-  });
+  return transcriptCache.save(transcript, renderState);
 }
 
-export async function clearThreadTranscriptCache(threadId: string): Promise<void> {
-  const normalizedThreadId = threadId.trim();
-  if (!normalizedThreadId) {
-    return;
-  }
-  await enqueueLatestCacheMutation(normalizedThreadId, async () => {
-    await rm(transcriptCachePath(normalizedThreadId), { force: true });
-  });
+export function clearThreadTranscriptCache(threadId: string): Promise<void> {
+  return transcriptCache.clear(threadId);
+}
+
+export function pruneThreadTranscriptCache(): Promise<void> {
+  return transcriptCache.prune();
 }

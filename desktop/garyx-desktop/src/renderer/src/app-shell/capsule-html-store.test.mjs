@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   __resetCapsuleHtmlStoreForTest,
   __setCapsuleHtmlFetcherForTest,
+  CAPSULE_HTML_CACHE_MAX_ENTRIES,
   capsuleHtmlCacheKey,
   capsuleHtmlStore,
 } from './capsule-html-store.ts';
@@ -77,6 +78,7 @@ test('serves cached HTML without refetching, and force refetches', async () => {
   calls[1].resolve({ status: 'ok', html: 'fresh' });
   await flush();
   assert.deepEqual(stateOf('id', 1), { status: 'ready', html: 'fresh' });
+  assert.equal(capsuleHtmlStore.__generationCount(), 0);
 });
 
 test('maps deleted results and keeps transient failures retryable', async () => {
@@ -112,6 +114,7 @@ test('delete while inflight: late result is discarded and stays deleted', async 
   calls[0].resolve({ status: 'ok', html: 'stale-html' });
   await flush();
   assert.equal(stateOf('victim', 3).status, 'deleted');
+  assert.equal(capsuleHtmlStore.__generationCount(), 0);
 });
 
 test('stale completion still frees its slot so the queue keeps draining', async () => {
@@ -147,4 +150,33 @@ test('evicts old ready HTML after browsing a bounded number of capsules', async 
 
   assert.equal(stateOf('history-0', 1).status, 'idle');
   assert.equal(stateOf('history-256', 1).status, 'ready');
+  assert.equal(capsuleHtmlStore.__entryCount(), CAPSULE_HTML_CACHE_MAX_ENTRIES);
+  assert.equal(capsuleHtmlStore.__generationCount(), 0);
+});
+
+test('touches cached HTML in LRU order and refetches an evicted key', async () => {
+  const fetchCounts = new Map();
+  __setCapsuleHtmlFetcherForTest(async (id) => {
+    fetchCounts.set(id, (fetchCounts.get(id) ?? 0) + 1);
+    return { status: 'ok', html: `<main>${id}</main>` };
+  });
+
+  for (let index = 0; index < CAPSULE_HTML_CACHE_MAX_ENTRIES; index += 1) {
+    capsuleHtmlStore.request(`lru-${index}`, 1, {});
+  }
+  await flush();
+  capsuleHtmlStore.request('lru-0', 1, {});
+  capsuleHtmlStore.request('lru-new', 1, {});
+  await flush();
+
+  assert.equal(stateOf('lru-0', 1).status, 'ready');
+  assert.equal(stateOf('lru-1', 1).status, 'idle');
+  assert.equal(stateOf('lru-new', 1).status, 'ready');
+  assert.equal(capsuleHtmlStore.__entryCount(), CAPSULE_HTML_CACHE_MAX_ENTRIES);
+
+  capsuleHtmlStore.request('lru-1', 1, {});
+  await flush();
+  assert.equal(stateOf('lru-1', 1).status, 'ready');
+  assert.equal(fetchCounts.get('lru-1'), 2);
+  assert.equal(capsuleHtmlStore.__entryCount(), CAPSULE_HTML_CACHE_MAX_ENTRIES);
 });

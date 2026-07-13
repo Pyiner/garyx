@@ -185,6 +185,7 @@ import {
 import {
   clearThreadTranscriptCache,
   loadThreadTranscriptCache,
+  pruneThreadTranscriptCache,
   saveThreadTranscriptCache,
 } from "./transcript-cache";
 import {
@@ -1602,6 +1603,7 @@ app
   .then(() => {
     writeBootstrapTrace("whenReady:start");
     app.setName("Garyx");
+    void pruneThreadTranscriptCache().catch(() => undefined);
     registerDeepLinkProtocol();
     registerIpcHandlers();
     registerUpdaterIpc({ prepareForInstall: prepareForAppQuit });

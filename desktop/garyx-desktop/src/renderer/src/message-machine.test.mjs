@@ -315,8 +315,101 @@ test('thread clear releases completed attachment intents instead of retaining th
 
   let state = mirror.getMachineState();
   assert.equal(Object.keys(state.intentsById).length, intentCount);
+  let notifications = 0;
+  const unsubscribe = mirror.subscribeMachine(() => {
+    notifications += 1;
+    const committed = mirror.getMachineState();
+    assert.equal(Object.keys(committed.intentsById).length, 0);
+  });
   state = mirror.dispatchMachineAction({ type: 'thread/clear', threadId });
+  unsubscribe();
 
   assert.equal(Object.keys(state.intentsById).length, 0);
   assert.equal(state.queueByThread[threadId], undefined);
+  assert.equal(notifications, 1, 'runtime clear and compaction publish atomically');
+});
+
+test('desktop thread release retains terminal intents while transcript reconciliation references them', () => {
+  const threadId = 'thread-reference-aware-gc';
+  const localIntentId = 'intent-local-reference';
+  const pendingIntentId = 'intent-pending-reference';
+  const mirror = new GatewayMirror();
+
+  for (const createdIntent of [
+    intent({
+      intentId: localIntentId,
+      threadId,
+      state: 'completed',
+    }),
+    intent({
+      intentId: pendingIntentId,
+      threadId,
+      pendingInputId: 'pending-input-1',
+      state: 'failed',
+    }),
+  ]) {
+    mirror.dispatchMachineAction({
+      type: 'intent/created',
+      enqueue: false,
+      intent: createdIntent,
+    });
+  }
+  mirror.syncThreadUiMessages(threadId, [{
+    id: `origin:${localIntentId}`,
+    role: 'user',
+    text: 'optimistic message',
+    intentId: localIntentId,
+    localState: 'optimistic',
+  }]);
+  mirror.applyRemoteTranscript(threadId, {
+    threadId,
+    remoteFound: true,
+    messages: [],
+    pendingInputs: [{
+      id: 'pending-input-1',
+      text: 'queued input',
+      status: 'awaiting_ack',
+      active: true,
+    }],
+    threadInfo: null,
+  });
+
+  let state = mirror.dispatchMachineAction({ type: 'thread/clear', threadId });
+  assert.ok(state.intentsById[localIntentId]);
+  assert.ok(state.intentsById[pendingIntentId]);
+
+  mirror.syncThreadUiMessages(threadId, [{
+    id: `origin:${localIntentId}`,
+    role: 'user',
+    text: 'optimistic message',
+    intentId: localIntentId,
+    localState: 'remote_final',
+  }]);
+  mirror.applyRemoteTranscript(threadId, {
+    threadId,
+    remoteFound: true,
+    messages: [],
+    pendingInputs: [],
+    threadInfo: null,
+  });
+  state = mirror.dispatchMachineAction({ type: 'thread/clear', threadId });
+
+  assert.equal(state.intentsById[localIntentId], undefined);
+  assert.equal(state.intentsById[pendingIntentId], undefined);
+});
+
+test('canonical thread clear remains runtime-only for shared state-machine callers', () => {
+  const threadId = 'thread-shared-clear-contract';
+  const created = messageMachineReducer(initialMessageMachineState, {
+    type: 'intent/created',
+    enqueue: false,
+    intent: intent({
+      intentId: 'intent-shared-clear-contract',
+      threadId,
+      state: 'completed',
+    }),
+  });
+  const next = messageMachineReducer(created, { type: 'thread/clear', threadId });
+
+  assert.ok(next.intentsById['intent-shared-clear-contract']);
 });

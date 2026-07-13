@@ -29,11 +29,12 @@ export function useCapsuleHtml(
     capsuleHtmlStore.getState(key),
   );
   const { active } = options;
+  const cacheMiss = state.status === 'idle';
   useEffect(() => {
     if (active) {
       capsuleHtmlStore.request(capsuleId, revision, {});
     }
-  }, [active, capsuleId, revision]);
+  }, [active, cacheMiss, capsuleId, revision]);
   return state;
 }
 
@@ -54,11 +55,19 @@ function useCapsuleThumbnail(
     capsuleThumbnailStore.getState(key),
   );
   const { active } = options;
+  const cacheMiss = state.status === 'idle';
   useEffect(() => {
     if (active) {
       capsuleThumbnailStore.request(capsuleId, revision, rendition, {});
     }
-  }, [active, capsuleId, revision, rendition.aspectWidth, rendition.aspectHeight]);
+  }, [
+    active,
+    cacheMiss,
+    capsuleId,
+    revision,
+    rendition.aspectWidth,
+    rendition.aspectHeight,
+  ]);
   return state;
 }
 

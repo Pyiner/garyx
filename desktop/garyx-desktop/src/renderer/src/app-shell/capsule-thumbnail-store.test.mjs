@@ -6,6 +6,7 @@ import {
   __setCapsuleThumbnailFetcherForTest,
   capsuleThumbnailCacheKey,
   capsuleThumbnailStore,
+  CAPSULE_THUMBNAIL_CACHE_MAX_ENTRIES,
   CHAT_CARD_RENDITION,
   GALLERY_RENDITION,
 } from './capsule-thumbnail-store.ts';
@@ -111,6 +112,7 @@ test('serves cached image without re-rendering, and force re-renders', async () 
     status: 'ready',
     dataUrl: 'data:image/png;base64,FRESH',
   });
+  assert.equal(capsuleThumbnailStore.__generationCount(), 0);
 });
 
 test('maps deleted results and keeps transient failures retryable', async () => {
@@ -161,6 +163,7 @@ test('a deleted result for one rendition tombstones every rendition of that id',
   // chat card never keeps serving its stale ready image.
   assert.equal(stateOf('victim', 3, GALLERY_RENDITION).status, 'deleted');
   assert.equal(stateOf('victim', 3, CHAT_CARD_RENDITION).status, 'deleted');
+  assert.equal(capsuleThumbnailStore.__generationCount(), 0);
 });
 
 test('delete while inflight: late result discarded, stays deleted across renditions', async () => {
@@ -222,4 +225,46 @@ test('evicts old ready data URLs after browsing a bounded number of capsules', a
 
   assert.equal(stateOf('history-0', 1, GALLERY_RENDITION).status, 'idle');
   assert.equal(stateOf('history-256', 1, GALLERY_RENDITION).status, 'ready');
+  assert.equal(
+    capsuleThumbnailStore.__entryCount(),
+    CAPSULE_THUMBNAIL_CACHE_MAX_ENTRIES,
+  );
+  assert.equal(capsuleThumbnailStore.__generationCount(), 0);
+});
+
+test('touches cached thumbnails in LRU order and rerenders an evicted key', async () => {
+  const fetchCounts = new Map();
+  __setCapsuleThumbnailFetcherForTest(async (id) => {
+    fetchCounts.set(id, (fetchCounts.get(id) ?? 0) + 1);
+    return { status: 'ok', dataUrl: `data:image/png;base64,${id}` };
+  });
+
+  for (
+    let index = 0;
+    index < CAPSULE_THUMBNAIL_CACHE_MAX_ENTRIES;
+    index += 1
+  ) {
+    capsuleThumbnailStore.request(`lru-${index}`, 1, GALLERY_RENDITION, {});
+  }
+  await flush();
+  capsuleThumbnailStore.request('lru-0', 1, GALLERY_RENDITION, {});
+  capsuleThumbnailStore.request('lru-new', 1, GALLERY_RENDITION, {});
+  await flush();
+
+  assert.equal(stateOf('lru-0', 1, GALLERY_RENDITION).status, 'ready');
+  assert.equal(stateOf('lru-1', 1, GALLERY_RENDITION).status, 'idle');
+  assert.equal(stateOf('lru-new', 1, GALLERY_RENDITION).status, 'ready');
+  assert.equal(
+    capsuleThumbnailStore.__entryCount(),
+    CAPSULE_THUMBNAIL_CACHE_MAX_ENTRIES,
+  );
+
+  capsuleThumbnailStore.request('lru-1', 1, GALLERY_RENDITION, {});
+  await flush();
+  assert.equal(stateOf('lru-1', 1, GALLERY_RENDITION).status, 'ready');
+  assert.equal(fetchCounts.get('lru-1'), 2);
+  assert.equal(
+    capsuleThumbnailStore.__entryCount(),
+    CAPSULE_THUMBNAIL_CACHE_MAX_ENTRIES,
+  );
 });

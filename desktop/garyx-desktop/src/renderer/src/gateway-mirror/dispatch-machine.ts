@@ -17,6 +17,53 @@ import {
 
 export type Unsubscribe = () => void;
 
+const TERMINAL_INTENT_STATES = new Set([
+  "completed",
+  "cancelled",
+  "failed",
+  "interrupted",
+]);
+
+export function collectTerminalThreadIntents(
+  state: MessageMachineState,
+  threadId: string,
+  retainedIntentIds: ReadonlySet<string>,
+): MessageMachineState {
+  const queuedIntentIds = new Set(state.queueByThread[threadId] ?? []);
+  let intentsById: MessageMachineState["intentsById"] | null = null;
+
+  for (const [intentId, intent] of Object.entries(state.intentsById)) {
+    if (
+      intent.threadId !== threadId ||
+      !TERMINAL_INTENT_STATES.has(intent.state) ||
+      retainedIntentIds.has(intentId) ||
+      queuedIntentIds.has(intentId)
+    ) {
+      continue;
+    }
+    intentsById ??= { ...state.intentsById };
+    delete intentsById[intentId];
+  }
+
+  let queueByThread: MessageMachineState["queueByThread"] | null = null;
+  if (
+    Object.prototype.hasOwnProperty.call(state.queueByThread, threadId) &&
+    state.queueByThread[threadId]?.length === 0
+  ) {
+    queueByThread = { ...state.queueByThread };
+    delete queueByThread[threadId];
+  }
+
+  if (!intentsById && !queueByThread) {
+    return state;
+  }
+  return {
+    ...state,
+    intentsById: intentsById ?? state.intentsById,
+    queueByThread: queueByThread ?? state.queueByThread,
+  };
+}
+
 export class DispatchMachine {
   private state: MessageMachineState = initialMessageMachineState;
   private listeners = new Set<() => void>();
@@ -40,6 +87,28 @@ export class DispatchMachine {
    */
   dispatch(action: MessageMachineAction): MessageMachineState {
     const next = messageMachineReducer(this.state, action);
+    return this.commit(next);
+  }
+
+  /**
+   * Desktop storage reclamation layered over the canonical runtime-only clear.
+   * The shared action/reducer contract stays unchanged; both state transforms
+   * publish as one machine commit so subscribers never observe a half-release.
+   */
+  releaseThread(
+    threadId: string,
+    retainedIntentIds: ReadonlySet<string>,
+  ): MessageMachineState {
+    const cleared = messageMachineReducer(this.state, {
+      type: "thread/clear",
+      threadId,
+    });
+    return this.commit(
+      collectTerminalThreadIntents(cleared, threadId, retainedIntentIds),
+    );
+  }
+
+  private commit(next: MessageMachineState): MessageMachineState {
     if (next === this.state) {
       return next;
     }

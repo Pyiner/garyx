@@ -23,6 +23,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { DispatchOrchestrator } from "./dispatch-orchestrator.ts";
+import { collectTerminalThreadIntents } from "./dispatch-machine.ts";
 import { GatewayMirror } from "./mirror.ts";
 import {
   initialMessageMachineState,
@@ -84,6 +85,24 @@ function masked(value) {
       return entry;
     }),
   );
+}
+
+function replayMachineActions(trace, { reclaimReleasedIntents = false } = {}) {
+  let state = initialMessageMachineState;
+  for (const entry of trace) {
+    if (entry.kind !== "action") continue;
+    state = messageMachineReducer(state, entry.action);
+    if (reclaimReleasedIntents && entry.action.type === "thread/clear") {
+      // This harness does not seed transcript-owned local references into the
+      // real mirror, so every terminal intent is reclaimable at release time.
+      state = collectTerminalThreadIntents(
+        state,
+        entry.action.threadId,
+        new Set(),
+      );
+    }
+  }
+  return state;
 }
 
 /**
@@ -359,8 +378,15 @@ async function dualRun(script, scenario, options = {}) {
   assert.deepEqual(masked(mirrorResult), masked(legacyResult));
   assert.deepEqual(
     masked(mirror.messageStateRef.current),
+    masked(
+      replayMachineActions(mirror.trace, { reclaimReleasedIntents: true }),
+    ),
+    "mirror state must match desktop release semantics",
+  );
+  assert.deepEqual(
     masked(legacy.messageStateRef.current),
-    "final machine states must match",
+    masked(replayMachineActions(legacy.trace)),
+    "legacy state must match the canonical reducer",
   );
   assert.deepEqual(
     masked(mirror.liveStream.ref.current),
