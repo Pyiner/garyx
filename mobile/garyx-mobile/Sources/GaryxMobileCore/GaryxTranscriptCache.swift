@@ -398,35 +398,3 @@ public final class GaryxTranscriptFileCacheStore: GaryxTranscriptCacheStore, @un
         }
     }
 }
-
-/// In-memory cache for tests and previews.
-public final class GaryxTranscriptInMemoryCacheStore: GaryxTranscriptCacheStore, @unchecked Sendable {
-    private var storage: [String: GaryxCachedTranscript] = [:]
-    private let lock = NSLock()
-
-    public init() {}
-
-    public func load(threadId: String) -> GaryxCachedTranscript? {
-        lock.lock()
-        defer { lock.unlock() }
-        return storage[threadId]
-    }
-
-    public func save(_ snapshot: GaryxCachedTranscript) {
-        lock.lock()
-        defer { lock.unlock() }
-        storage[snapshot.threadId] = snapshot
-    }
-
-    public func remove(threadId: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        storage[threadId] = nil
-    }
-
-    public func clearAll() {
-        lock.lock()
-        defer { lock.unlock() }
-        storage.removeAll()
-    }
-}

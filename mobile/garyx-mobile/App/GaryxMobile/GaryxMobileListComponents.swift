@@ -45,19 +45,6 @@ struct GaryxCompactRowDivider: View {
     }
 }
 
-struct GaryxCompactGroupDivider: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-                .overlay(GaryxTheme.hairline)
-            GaryxTheme.background
-                .frame(height: 7)
-            Divider()
-                .overlay(GaryxTheme.hairline)
-        }
-    }
-}
-
 struct GaryxDisclosureListRow: View {
     let title: String
     var subtitle: String?
@@ -477,35 +464,5 @@ private struct GaryxRowMenuAccessibilityActions: ViewModifier {
                 }
             }
         }
-    }
-}
-
-struct GaryxCompactInfoRow: View {
-    let title: String
-    let subtitle: String
-    let iconName: String
-
-    var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: iconName)
-                .font(GaryxFont.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 20, height: 20)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(GaryxFont.subheadline(weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
     }
 }

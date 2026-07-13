@@ -101,7 +101,7 @@ private struct GaryxRootRouteContentView: View {
             GaryxAutomationsView()
         case .capsules:
             GaryxCapsulesView()
-        case .workspaceBots:
+        case .workspaceBots, .bots:
             GaryxWorkspaceBotsView()
         case .agents:
             GaryxAgentsView()
@@ -111,8 +111,6 @@ private struct GaryxRootRouteContentView: View {
             GaryxCommandsView()
         case .mcp:
             GaryxMcpServersView()
-        case .bots:
-            GaryxWorkspaceBotsView()
         case .settings:
             GaryxMobileSettingsPanel()
         }
@@ -1414,25 +1412,6 @@ private struct GaryxSidebarSectionHeader: View {
     }
 }
 
-private struct GaryxSidebarDisclosureRow: View {
-    let title: String
-    let systemName: String
-    let action: () -> Void
-
-    var body: some View {
-        GaryxDisclosureListRow(
-            title: title,
-            systemImage: systemName,
-            iconFrame: GaryxSidebarMetrics.iconFrame,
-            horizontalPadding: GaryxSidebarMetrics.rowInnerHorizontalPadding,
-            verticalPadding: 0,
-            minHeight: GaryxSidebarMetrics.rowHeight,
-            titleWeight: .medium,
-            action: action
-        )
-    }
-}
-
 private struct GaryxSidebarThreadButton: View {
     // Plain reference on purpose: rows call model actions but must not each
     // subscribe to the whole observable model, which re-rendered every
@@ -1841,45 +1820,6 @@ private extension GaryxSidebarThreadRowView {
     }
 }
 
-struct GaryxSidebarBottomActionBar: View {
-    let isChatEnabled: Bool
-    let isCreatingThread: Bool
-    let onTapSettings: () -> Void
-    let onTapChat: () -> Void
-
-    var body: some View {
-        GaryxAdaptiveGlassContainer(spacing: 10) {
-            HStack(spacing: 10) {
-                GaryxSidebarActionPill(
-                    title: "Settings",
-                    iconSystemName: "gearshape",
-                    style: .glass,
-                    action: onTapSettings
-                )
-
-                Spacer(minLength: 0)
-
-                GaryxSidebarActionPill(
-                    title: "Chat",
-                    iconSystemName: "square.and.pencil",
-                    style: .accent,
-                    isEnabled: isChatEnabled,
-                    isLoading: isCreatingThread,
-                    action: onTapChat
-                )
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
-        .frame(maxWidth: .infinity)
-        // Absorb taps that land in the bar but miss the pills, so they do not
-        // fall through to the thread rows scrolling behind this overlay bar.
-        .contentShape(Rectangle())
-        .onTapGesture {}
-    }
-}
-
 struct GaryxSidebarActionPill: View {
     enum Style {
         case glass
@@ -1937,21 +1877,6 @@ struct GaryxSidebarActionPill: View {
         case .accent:
             Color(.label)
         }
-    }
-}
-
-struct GaryxSidebarEmptyState: View {
-    var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "bubble.left.and.text.bubble.right")
-                .font(GaryxFont.title2(weight: .medium))
-                .foregroundStyle(.secondary)
-            Text("No threads yet")
-                .font(GaryxFont.body(weight: .medium))
-                .foregroundStyle(.primary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 24)
     }
 }
 

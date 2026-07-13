@@ -435,8 +435,3 @@ public struct GaryxAutomationThreadsPage: Decodable, Equatable, Sendable {
             ?? (offset + count < total)
     }
 }
-
-
-public struct GaryxAutomationEnabledPatch: Encodable, Equatable, Sendable {
-    public var enabled: Bool
-}

@@ -1,27 +1,5 @@
 import SwiftUI
 
-struct GaryxBotsView: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    @State private var showsCreateBot = false
-
-    var body: some View {
-        GaryxPanelScaffold(
-            title: "Bots",
-            subtitle: "\(model.configuredBotAccountSettings.count) configured",
-            onRefresh: { await model.refreshRemoteState() }
-        ) {
-            GaryxBotsContent()
-        } actions: {
-            GaryxAddToolbarButton(label: "Add Bot") {
-                showsCreateBot = true
-            }
-        }
-        .fullScreenCover(isPresented: $showsCreateBot) {
-            GaryxBotAccountForm(account: nil)
-        }
-    }
-}
-
 struct GaryxBotsContent: View {
     @EnvironmentObject private var model: GaryxMobileModel
 

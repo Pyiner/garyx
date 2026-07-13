@@ -875,63 +875,6 @@ struct GaryxWorkspacePathSelectionRow: View {
     }
 }
 
-struct GaryxWorkspacePathPickerField: View {
-    @Binding var path: String
-    let workspacePaths: [String]
-    var placeholder: String = "/path/to/project"
-    @State private var showsPicker = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button {
-                showsPicker = true
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "folder")
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(pathDisplayTitle)
-                            .font(Font.body.weight(selectedPath.isEmpty ? .regular : .semibold))
-                            .foregroundStyle(selectedPath.isEmpty ? .secondary : .primary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(GaryxFont.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .accessibilityHidden(true)
-                }
-                .padding(.horizontal, GaryxFormMetrics.rowInset)
-                .frame(minHeight: GaryxFormMetrics.rowMinHeight)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               !garyxIsAbsoluteWorkspacePath(path) {
-                GaryxFormErrorText(text: "Use an absolute path.")
-            }
-        }
-        .sheet(isPresented: $showsPicker) {
-            GaryxWorkspacePathPickerSheet(
-                title: "Choose workspace",
-                path: $path
-            )
-        }
-    }
-
-    private var selectedPath: String {
-        path.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var pathDisplayTitle: String {
-        guard !selectedPath.isEmpty else { return placeholder }
-        let tail = selectedPath.garyxLastPathComponent
-        return tail.isEmpty ? selectedPath : tail
-    }
-}
-
 struct GaryxWorkspaceSelectSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel

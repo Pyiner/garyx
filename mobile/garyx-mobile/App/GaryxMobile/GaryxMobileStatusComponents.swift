@@ -2,34 +2,6 @@ import Foundation
 import SwiftUI
 import UIKit
 
-struct GaryxInfoRow: View {
-    let title: String
-    let subtitle: String
-    let iconName: String
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: iconName)
-                .foregroundStyle(GaryxTheme.accent)
-                .frame(width: 28, height: 28)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(GaryxFont.body(weight: .medium))
-                    .foregroundStyle(.primary)
-                if !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(GaryxFont.caption(weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-            Spacer()
-        }
-        .padding(9)
-        .contentShape(Rectangle())
-    }
-}
-
 struct GaryxStatusPill: View {
     enum Tone: Equatable {
         case good
@@ -62,29 +34,6 @@ struct GaryxStatusPill: View {
             GaryxTheme.danger
         case .muted:
             .secondary
-        }
-    }
-}
-
-struct GaryxNotice: View {
-    let title: String
-    let text: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title)
-                .font(GaryxFont.footnote(weight: .semibold))
-                .foregroundStyle(.primary)
-            Text(text)
-                .font(GaryxFont.callout())
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(10)
-        .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(GaryxTheme.hairline, lineWidth: 1)
         }
     }
 }
@@ -370,118 +319,6 @@ struct GaryxFieldLabel: View {
             .font(GaryxFont.caption(weight: .semibold))
             .foregroundStyle(.secondary)
             .textCase(.uppercase)
-    }
-}
-
-struct GaryxAppLogo: View {
-    var size: CGFloat
-    var cornerRadius: CGFloat = 22
-    var fontSize: CGFloat = 24
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color(.label))
-
-            Text("GX")
-                .font(.system(size: fontSize, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color(.systemBackground))
-        }
-        .frame(width: size, height: size)
-    }
-}
-
-struct GaryxIonicLoader: View {
-    var text: String = "Garyx"
-    var fontSize: CGFloat = 84
-    var isAnimating: Bool = true
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isAnimating)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            let cycle: Double = 2.6
-            let raw = (t / cycle).truncatingRemainder(dividingBy: 1.0)
-            let sweep = CGFloat(raw)
-            let bob = CGFloat(sin(t * .pi / cycle))
-
-            let baseFont = Font.system(size: fontSize, weight: .black, design: .rounded)
-
-            ZStack {
-                Text(text)
-                    .font(baseFont)
-                    .tracking(-2)
-                    .foregroundStyle(
-                        AngularGradient(
-                            gradient: Gradient(colors: [
-                                Color(red: 0.42, green: 0.55, blue: 1.0),
-                                Color(red: 0.65, green: 0.40, blue: 1.0),
-                                Color(red: 0.30, green: 0.85, blue: 1.0),
-                                Color(red: 0.42, green: 0.55, blue: 1.0),
-                            ]),
-                            center: .center,
-                            angle: .degrees(Double(sweep) * 360.0)
-                        )
-                    )
-                    .blur(radius: 26)
-                    .opacity(0.55 + Double(abs(bob)) * 0.12)
-
-                Text(text)
-                    .font(baseFont)
-                    .tracking(-2)
-                    .foregroundStyle(
-                        LinearGradient(
-                            stops: [
-                                .init(color: Color(.label).opacity(0.92), location: 0.0),
-                                .init(color: Color(.label).opacity(0.55), location: max(0.0, sweep - 0.18)),
-                                .init(color: Color(red: 0.55, green: 0.85, blue: 1.0), location: sweep),
-                                .init(color: Color(.label).opacity(0.55), location: min(1.0, sweep + 0.18)),
-                                .init(color: Color(.label).opacity(0.92), location: 1.0),
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-            }
-        }
-        .accessibilityLabel(Text(text))
-    }
-}
-
-struct GaryxConnectionPill: View {
-    let label: String
-    let color: Color
-    let isBusy: Bool
-
-    @State private var dotPulse = false
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-                .scaleEffect(dotPulse ? 1.4 : 1.0)
-                .opacity(dotPulse ? 0.6 : 1.0)
-                .animation(
-                    isBusy
-                        ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
-                        : .default,
-                    value: dotPulse
-                )
-
-            Text(label)
-                .font(GaryxFont.caption(weight: .medium))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
-        .background(Capsule().fill(Color(.systemBackground)))
-        .overlay(Capsule().stroke(GaryxTheme.hairline, lineWidth: 1))
-        .onAppear {
-            dotPulse = isBusy
-        }
-        .onChange(of: isBusy) { _, newValue in
-            dotPulse = newValue
-        }
     }
 }
 

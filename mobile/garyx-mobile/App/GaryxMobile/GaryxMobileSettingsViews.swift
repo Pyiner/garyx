@@ -300,35 +300,6 @@ struct GaryxGatewayEmptyProfilesRow: View {
     }
 }
 
-struct GaryxGatewayProfileMenuButton: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    var onSelect: ((GaryxGatewayProfile) -> Void)?
-
-    var body: some View {
-        if model.gatewayProfiles.isEmpty {
-            EmptyView()
-        } else {
-            Menu {
-                ForEach(model.gatewayProfiles) { profile in
-                    Button {
-                        if let onSelect {
-                            onSelect(profile)
-                        } else {
-                            Task { await model.activateGatewayProfile(profile) }
-                        }
-                    } label: {
-                        Label(profile.gatewayUrl, systemImage: profile.hasToken ? "key.fill" : "network")
-                    }
-                }
-            } label: {
-                GaryxToolbarIcon(systemName: "clock.arrow.circlepath")
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Choose gateway")
-        }
-    }
-}
-
 struct GaryxSavedGatewayProfileRow: View {
     @Environment(\.isEnabled) private var isEnabled
     @EnvironmentObject private var model: GaryxMobileModel
