@@ -23,4 +23,3 @@ export function recordTranscriptRender(
   }
   window.__garyxTranscriptRenderProbe?.record(surface, key);
 }
-
