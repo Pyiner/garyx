@@ -33,7 +33,6 @@ function desktopSettingsEqual(
     left.accountId === right.accountId &&
     left.fromId === right.fromId &&
     left.timeoutSeconds === right.timeoutSeconds &&
-    left.threadLogsPanelWidth === right.threadLogsPanelWidth &&
     left.languagePreference === right.languagePreference &&
     left.followUpBehavior === right.followUpBehavior
   );

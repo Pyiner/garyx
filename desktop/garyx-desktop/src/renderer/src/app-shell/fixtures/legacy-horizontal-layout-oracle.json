@@ -13,21 +13,18 @@
       "desiredOccupancy": {
         "globalSidebar": true,
         "conversationRail": false,
-        "sideTools": false,
-        "threadLogs": false
+        "sideTools": false
       },
       "legacyControlSignals": {
         "sidebarAriaPressed": "false",
         "conversationRailKind": "closed",
         "sideToolsAriaExpanded": "false",
-        "sideToolsOccupied": false,
-        "threadLogsAriaExpanded": "false"
+        "sideToolsOccupied": false
       },
       "presentation": {
         "globalSidebar": "expanded",
         "conversationRail": "closed",
         "sideTools": "closed",
-        "threadLogs": "closed",
         "taskTree": "docked"
       },
       "elements": {
@@ -205,8 +202,6 @@
             "gridTemplateRows": "none"
           }
         },
-        "threadLogResizer": null,
-        "threadLogPanel": null,
         "taskTree": {
           "rect": {
             "x": 1172,
@@ -263,21 +258,18 @@
       "desiredOccupancy": {
         "globalSidebar": false,
         "conversationRail": false,
-        "sideTools": false,
-        "threadLogs": false
+        "sideTools": false
       },
       "legacyControlSignals": {
         "sidebarAriaPressed": "true",
         "conversationRailKind": "closed",
         "sideToolsAriaExpanded": "false",
-        "sideToolsOccupied": false,
-        "threadLogsAriaExpanded": "false"
+        "sideToolsOccupied": false
       },
       "presentation": {
         "globalSidebar": "collapsed",
         "conversationRail": "closed",
         "sideTools": "closed",
-        "threadLogs": "closed",
         "taskTree": "docked"
       },
       "elements": {
@@ -456,8 +448,6 @@
             "gridTemplateRows": "none"
           }
         },
-        "threadLogResizer": null,
-        "threadLogPanel": null,
         "taskTree": {
           "rect": {
             "x": 1172,
@@ -514,21 +504,18 @@
       "desiredOccupancy": {
         "globalSidebar": true,
         "conversationRail": false,
-        "sideTools": true,
-        "threadLogs": false
+        "sideTools": true
       },
       "legacyControlSignals": {
         "sidebarAriaPressed": "false",
         "conversationRailKind": "closed",
         "sideToolsAriaExpanded": "true",
-        "sideToolsOccupied": true,
-        "threadLogsAriaExpanded": "false"
+        "sideToolsOccupied": true
       },
       "presentation": {
         "globalSidebar": "expanded",
         "conversationRail": "closed",
         "sideTools": "docked",
-        "threadLogs": "closed",
         "taskTree": "absent"
       },
       "elements": {
@@ -755,286 +742,6 @@
             "gridTemplateRows": "none"
           }
         },
-        "threadLogResizer": null,
-        "threadLogPanel": null,
-        "taskTree": null,
-        "taskTreeToggle": null,
-        "sidebarCarveout": {
-          "rect": {
-            "x": 84,
-            "y": 12,
-            "width": 26,
-            "height": 26
-          },
-          "classTokens": [
-            "sidebar-collapse-toggle",
-            "sidebar-collapse-toggle-carveout"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "absolute",
-            "pointerEvents": "auto",
-            "appRegion": "no-drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        }
-      }
-    },
-    {
-      "name": "thread-logs",
-      "viewport": {
-        "width": 1480,
-        "height": 940,
-        "devicePixelRatio": 2
-      },
-      "desiredOccupancy": {
-        "globalSidebar": true,
-        "conversationRail": false,
-        "sideTools": false,
-        "threadLogs": true
-      },
-      "legacyControlSignals": {
-        "sidebarAriaPressed": "false",
-        "conversationRailKind": "closed",
-        "sideToolsAriaExpanded": "false",
-        "sideToolsOccupied": false,
-        "threadLogsAriaExpanded": "true"
-      },
-      "presentation": {
-        "globalSidebar": "expanded",
-        "conversationRail": "closed",
-        "sideTools": "closed",
-        "threadLogs": "docked",
-        "taskTree": "absent"
-      },
-      "elements": {
-        "appShell": {
-          "rect": {
-            "x": 0,
-            "y": 0,
-            "width": 1480,
-            "height": 940
-          },
-          "classTokens": [
-            "app-shell"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "245px 1235px",
-            "gridTemplateRows": "940px"
-          }
-        },
-        "sidebarToggle": {
-          "rect": {
-            "x": 84,
-            "y": 12,
-            "width": 26,
-            "height": 26
-          },
-          "classTokens": [
-            "sidebar-collapse-toggle"
-          ],
-          "attributes": {
-            "aria-pressed": "false"
-          },
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "absolute",
-            "pointerEvents": "auto",
-            "appRegion": "no-drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "leftRail": {
-          "rect": {
-            "x": 0,
-            "y": 0,
-            "width": 245,
-            "height": 940
-          },
-          "classTokens": [
-            "left-rail"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "conversationRail": null,
-        "conversation": {
-          "rect": {
-            "x": 245,
-            "y": 0,
-            "width": 1235,
-            "height": 940
-          },
-          "classTokens": [
-            "conversation",
-            "thread-view"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "static",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "1235px",
-            "gridTemplateRows": "46px 894px"
-          }
-        },
-        "conversationHeader": {
-          "rect": {
-            "x": 245,
-            "y": 0,
-            "width": 1235,
-            "height": 46
-          },
-          "classTokens": [
-            "conversation-header"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "conversationBody": {
-          "rect": {
-            "x": 245,
-            "y": 46,
-            "width": 1235,
-            "height": 894
-          },
-          "classTokens": [
-            "conversation-body"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "1235px",
-            "gridTemplateRows": "894px"
-          }
-        },
-        "sideToolsResizer": null,
-        "sideToolsPanel": null,
-        "threadLayout": {
-          "rect": {
-            "x": 245,
-            "y": 46,
-            "width": 1235,
-            "height": 894
-          },
-          "classTokens": [
-            "thread-layout",
-            "with-log-panel",
-            "log-panel-docked"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "865px 10px 360px",
-            "gridTemplateRows": "894px"
-          }
-        },
-        "threadMain": {
-          "rect": {
-            "x": 245,
-            "y": 46,
-            "width": 865,
-            "height": 894
-          },
-          "classTokens": [
-            "thread-main"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "block",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "threadLogResizer": {
-          "rect": {
-            "x": 1110,
-            "y": 46,
-            "width": 10,
-            "height": 894
-          },
-          "classTokens": [
-            "thread-log-resizer"
-          ],
-          "attributes": {
-            "aria-orientation": "vertical",
-            "aria-valuemax": "685",
-            "aria-valuemin": "280",
-            "aria-valuenow": "360",
-            "role": "separator"
-          },
-          "computed": {
-            "display": "block",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "threadLogPanel": {
-          "rect": {
-            "x": 1120,
-            "y": 46,
-            "width": 360,
-            "height": 894
-          },
-          "classTokens": [
-            "thread-log-panel"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "static",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "347.5px",
-            "gridTemplateRows": "25.6953px 0px 868.305px"
-          }
-        },
         "taskTree": null,
         "taskTreeToggle": null,
         "sidebarCarveout": {
@@ -1071,21 +778,18 @@
       "desiredOccupancy": {
         "globalSidebar": true,
         "conversationRail": true,
-        "sideTools": false,
-        "threadLogs": false
+        "sideTools": false
       },
       "legacyControlSignals": {
         "sidebarAriaPressed": "false",
         "conversationRailKind": "recent",
         "sideToolsAriaExpanded": "false",
-        "sideToolsOccupied": false,
-        "threadLogsAriaExpanded": "false"
+        "sideToolsOccupied": false
       },
       "presentation": {
         "globalSidebar": "expanded",
         "conversationRail": "recent",
         "sideTools": "closed",
-        "threadLogs": "closed",
         "taskTree": "overlay-closed"
       },
       "elements": {
@@ -1285,8 +989,6 @@
             "gridTemplateRows": "none"
           }
         },
-        "threadLogResizer": null,
-        "threadLogPanel": null,
         "taskTree": {
           "rect": {
             "x": 1190.44,
@@ -1365,21 +1067,18 @@
       "desiredOccupancy": {
         "globalSidebar": true,
         "conversationRail": true,
-        "sideTools": true,
-        "threadLogs": false
+        "sideTools": true
       },
       "legacyControlSignals": {
         "sidebarAriaPressed": "false",
         "conversationRailKind": "recent",
         "sideToolsAriaExpanded": "true",
-        "sideToolsOccupied": true,
-        "threadLogsAriaExpanded": "false"
+        "sideToolsOccupied": true
       },
       "presentation": {
         "globalSidebar": "expanded",
         "conversationRail": "recent",
         "sideTools": "docked",
-        "threadLogs": "closed",
         "taskTree": "absent"
       },
       "elements": {
@@ -1626,608 +1325,6 @@
             "appRegion": "none",
             "gridTemplateColumns": "none",
             "gridTemplateRows": "none"
-          }
-        },
-        "threadLogResizer": null,
-        "threadLogPanel": null,
-        "taskTree": null,
-        "taskTreeToggle": null,
-        "sidebarCarveout": {
-          "rect": {
-            "x": 84,
-            "y": 12,
-            "width": 26,
-            "height": 26
-          },
-          "classTokens": [
-            "sidebar-collapse-toggle",
-            "sidebar-collapse-toggle-carveout"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "absolute",
-            "pointerEvents": "auto",
-            "appRegion": "no-drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        }
-      }
-    },
-    {
-      "name": "recent-rail-thread-logs",
-      "viewport": {
-        "width": 1480,
-        "height": 940,
-        "devicePixelRatio": 2
-      },
-      "desiredOccupancy": {
-        "globalSidebar": true,
-        "conversationRail": true,
-        "sideTools": false,
-        "threadLogs": true
-      },
-      "legacyControlSignals": {
-        "sidebarAriaPressed": "false",
-        "conversationRailKind": "recent",
-        "sideToolsAriaExpanded": "false",
-        "sideToolsOccupied": false,
-        "threadLogsAriaExpanded": "true"
-      },
-      "presentation": {
-        "globalSidebar": "expanded",
-        "conversationRail": "recent",
-        "sideTools": "closed",
-        "threadLogs": "docked",
-        "taskTree": "absent"
-      },
-      "elements": {
-        "appShell": {
-          "rect": {
-            "x": 0,
-            "y": 0,
-            "width": 1480,
-            "height": 940
-          },
-          "classTokens": [
-            "app-shell",
-            "with-bot-conversation-rail"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "245px 258px 977px",
-            "gridTemplateRows": "940px"
-          }
-        },
-        "sidebarToggle": {
-          "rect": {
-            "x": 84,
-            "y": 12,
-            "width": 26,
-            "height": 26
-          },
-          "classTokens": [
-            "sidebar-collapse-toggle"
-          ],
-          "attributes": {
-            "aria-pressed": "false"
-          },
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "absolute",
-            "pointerEvents": "auto",
-            "appRegion": "no-drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "leftRail": {
-          "rect": {
-            "x": 0,
-            "y": 0,
-            "width": 245,
-            "height": 940
-          },
-          "classTokens": [
-            "left-rail"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "conversationRail": {
-          "rect": {
-            "x": 245,
-            "y": 0,
-            "width": 258,
-            "height": 940
-          },
-          "classTokens": [
-            "bot-conversation-rail",
-            "recent-conversation-rail"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "conversation": {
-          "rect": {
-            "x": 503,
-            "y": 0,
-            "width": 977,
-            "height": 940
-          },
-          "classTokens": [
-            "conversation",
-            "thread-view"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "static",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "976px",
-            "gridTemplateRows": "46px 894px"
-          }
-        },
-        "conversationHeader": {
-          "rect": {
-            "x": 504,
-            "y": 0,
-            "width": 976,
-            "height": 46
-          },
-          "classTokens": [
-            "conversation-header"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "conversationBody": {
-          "rect": {
-            "x": 504,
-            "y": 46,
-            "width": 976,
-            "height": 894
-          },
-          "classTokens": [
-            "conversation-body"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "976px",
-            "gridTemplateRows": "894px"
-          }
-        },
-        "sideToolsResizer": null,
-        "sideToolsPanel": null,
-        "threadLayout": {
-          "rect": {
-            "x": 504,
-            "y": 46,
-            "width": 976,
-            "height": 894
-          },
-          "classTokens": [
-            "thread-layout",
-            "with-log-panel",
-            "log-panel-docked"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "606px 10px 360px",
-            "gridTemplateRows": "894px"
-          }
-        },
-        "threadMain": {
-          "rect": {
-            "x": 504,
-            "y": 46,
-            "width": 606,
-            "height": 894
-          },
-          "classTokens": [
-            "thread-main"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "block",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "threadLogResizer": {
-          "rect": {
-            "x": 1110,
-            "y": 46,
-            "width": 10,
-            "height": 894
-          },
-          "classTokens": [
-            "thread-log-resizer"
-          ],
-          "attributes": {
-            "aria-orientation": "vertical",
-            "aria-valuemax": "426",
-            "aria-valuemin": "280",
-            "aria-valuenow": "360",
-            "role": "separator"
-          },
-          "computed": {
-            "display": "block",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "threadLogPanel": {
-          "rect": {
-            "x": 1120,
-            "y": 46,
-            "width": 360,
-            "height": 894
-          },
-          "classTokens": [
-            "thread-log-panel"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "static",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "347.5px",
-            "gridTemplateRows": "25.6953px 0px 868.305px"
-          }
-        },
-        "taskTree": null,
-        "taskTreeToggle": null,
-        "sidebarCarveout": {
-          "rect": {
-            "x": 84,
-            "y": 12,
-            "width": 26,
-            "height": 26
-          },
-          "classTokens": [
-            "sidebar-collapse-toggle",
-            "sidebar-collapse-toggle-carveout"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "absolute",
-            "pointerEvents": "auto",
-            "appRegion": "no-drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        }
-      }
-    },
-    {
-      "name": "recent-rail-thread-logs-overlay",
-      "viewport": {
-        "width": 1480,
-        "height": 940,
-        "devicePixelRatio": 2
-      },
-      "desiredOccupancy": {
-        "globalSidebar": true,
-        "conversationRail": true,
-        "sideTools": false,
-        "threadLogs": true
-      },
-      "legacyControlSignals": {
-        "sidebarAriaPressed": "false",
-        "conversationRailKind": "recent",
-        "sideToolsAriaExpanded": "false",
-        "sideToolsOccupied": false,
-        "threadLogsAriaExpanded": "true"
-      },
-      "presentation": {
-        "globalSidebar": "expanded",
-        "conversationRail": "recent",
-        "sideTools": "closed",
-        "threadLogs": "overlay",
-        "taskTree": "absent"
-      },
-      "elements": {
-        "appShell": {
-          "rect": {
-            "x": 0,
-            "y": 0,
-            "width": 1480,
-            "height": 940
-          },
-          "classTokens": [
-            "app-shell",
-            "with-bot-conversation-rail"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "245px 258px 977px",
-            "gridTemplateRows": "940px"
-          }
-        },
-        "sidebarToggle": {
-          "rect": {
-            "x": 84,
-            "y": 12,
-            "width": 26,
-            "height": 26
-          },
-          "classTokens": [
-            "sidebar-collapse-toggle"
-          ],
-          "attributes": {
-            "aria-pressed": "false"
-          },
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "absolute",
-            "pointerEvents": "auto",
-            "appRegion": "no-drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "leftRail": {
-          "rect": {
-            "x": 0,
-            "y": 0,
-            "width": 245,
-            "height": 940
-          },
-          "classTokens": [
-            "left-rail"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "conversationRail": {
-          "rect": {
-            "x": 245,
-            "y": 0,
-            "width": 258,
-            "height": 940
-          },
-          "classTokens": [
-            "bot-conversation-rail",
-            "recent-conversation-rail"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "conversation": {
-          "rect": {
-            "x": 503,
-            "y": 0,
-            "width": 977,
-            "height": 940
-          },
-          "classTokens": [
-            "conversation",
-            "thread-view"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "static",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "976px",
-            "gridTemplateRows": "46px 894px"
-          }
-        },
-        "conversationHeader": {
-          "rect": {
-            "x": 504,
-            "y": 0,
-            "width": 976,
-            "height": 46
-          },
-          "classTokens": [
-            "conversation-header"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "flex",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "drag",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "conversationBody": {
-          "rect": {
-            "x": 504,
-            "y": 46,
-            "width": 976,
-            "height": 894
-          },
-          "classTokens": [
-            "conversation-body"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "976px",
-            "gridTemplateRows": "894px"
-          }
-        },
-        "sideToolsResizer": null,
-        "sideToolsPanel": null,
-        "threadLayout": {
-          "rect": {
-            "x": 504,
-            "y": 46,
-            "width": 976,
-            "height": 894
-          },
-          "classTokens": [
-            "thread-layout",
-            "with-log-panel",
-            "log-panel-overlay"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "976px",
-            "gridTemplateRows": "894px"
-          }
-        },
-        "threadMain": {
-          "rect": {
-            "x": 504,
-            "y": 46,
-            "width": 976,
-            "height": 894
-          },
-          "classTokens": [
-            "thread-main"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "block",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "threadLogResizer": {
-          "rect": {
-            "x": 0,
-            "y": 0,
-            "width": 0,
-            "height": 0
-          },
-          "classTokens": [
-            "thread-log-resizer"
-          ],
-          "attributes": {
-            "aria-orientation": "vertical",
-            "aria-valuemax": "426",
-            "aria-valuemin": "280",
-            "aria-valuenow": "480",
-            "role": "separator"
-          },
-          "computed": {
-            "display": "none",
-            "visibility": "visible",
-            "position": "relative",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "none",
-            "gridTemplateRows": "none"
-          }
-        },
-        "threadLogPanel": {
-          "rect": {
-            "x": 988,
-            "y": 58,
-            "width": 480,
-            "height": 870
-          },
-          "classTokens": [
-            "thread-log-panel"
-          ],
-          "attributes": {},
-          "computed": {
-            "display": "grid",
-            "visibility": "visible",
-            "position": "absolute",
-            "pointerEvents": "auto",
-            "appRegion": "none",
-            "gridTemplateColumns": "455px",
-            "gridTemplateRows": "25.6953px 0px 821.305px"
           }
         },
         "taskTree": null,

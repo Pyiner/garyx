@@ -3,22 +3,19 @@ export type HorizontalLayoutPolicyName = "legacy" | "expand-v1";
 export type WindowLayoutPanelId =
   | "globalSidebar"
   | "conversationRail"
-  | "sideTools"
-  | "threadLogs";
+  | "sideTools";
 
 export const WINDOW_LAYOUT_PANEL_ORDER: readonly WindowLayoutPanelId[] =
   Object.freeze([
     "globalSidebar",
     "conversationRail",
     "sideTools",
-    "threadLogs",
   ]);
 
 export type WindowLayoutPanelOccupancy = Readonly<{
   globalSidebar: boolean;
   conversationRail: boolean;
   sideTools: boolean;
-  threadLogs: boolean;
 }>;
 
 export const CLOSED_WINDOW_LAYOUT_OCCUPANCY: WindowLayoutPanelOccupancy =
@@ -26,7 +23,6 @@ export const CLOSED_WINDOW_LAYOUT_OCCUPANCY: WindowLayoutPanelOccupancy =
     globalSidebar: false,
     conversationRail: false,
     sideTools: false,
-    threadLogs: false,
   });
 
 export type WindowLayoutRectangle = Readonly<{

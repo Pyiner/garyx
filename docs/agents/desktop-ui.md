@@ -78,13 +78,14 @@
   by default. The conversation-header control toggles that rail directly; do
   not add a second inset/overlay form. The rail may still be resized and must
   keep its contents responsive within the available width.
-- Thread logs choose docked versus overlay presentation from the measured
-  thread canvas, the actual panel width, a 10px resizer, and a 540px minimum
-  primary thread. Do not use a viewport-only media query: open rails and
-  user-resized sidebars change the available canvas.
-- Floating task trees and log panels use the available height between their top
-  and bottom insets. Do not cap them to a percentage of viewport height on tall
-  windows or turn the app shell into document-height vertical stacking.
+- Thread logs are a built-in side-tools item and replace the former side-tools
+  Tasks item. They inherit the right rail's open, close, resize, and responsive
+  behavior; they have no independent occupancy, funding, placement, resizer, or
+  width preference. The global Tasks entry and `#/tasks` route and the thread
+  task tree remain unchanged.
+- Floating task trees use the available height between their top and bottom
+  insets. Do not cap them to a percentage of viewport height on tall windows or
+  turn the app shell into document-height vertical stacking.
 - Validate responsive changes in the installed app around the actual seams:
   640, 720/721, 980/981, 1332/1333, and a wide desktop width. Restore the
   user's original window size after CDP measurement.

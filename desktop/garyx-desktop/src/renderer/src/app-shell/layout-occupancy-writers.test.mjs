@@ -3,6 +3,18 @@ import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const appShell = readFileSync(new URL("./AppShell.tsx", import.meta.url), "utf8");
+const leftRail = readFileSync(
+  new URL("./components/AppLeftRail.tsx", import.meta.url),
+  "utf8",
+);
+const sideToolsPanel = readFileSync(
+  new URL("./components/SideToolsPanel.tsx", import.meta.url),
+  "utf8",
+);
+const conversationHeaderActions = readFileSync(
+  new URL("../ConversationHeaderActions.tsx", import.meta.url),
+  "utf8",
+);
 const resizeController = readFileSync(
   new URL("./useLayoutResizeController.ts", import.meta.url),
   "utf8",
@@ -49,7 +61,6 @@ const rendererSources = rendererSourceUrls.map((url) =>
 const legacySetterNames = [
   "setOpenCapsuleTabsLegacy",
   "setInspectorOpenLegacy",
-  "setThreadLogsOpenLegacy",
   "setRecentThreadsRailOpenLegacy",
   "setBotConversationGroupIdLegacy",
   "setWorkspaceConversationPathLegacy",
@@ -74,7 +85,6 @@ test("all legacy occupancy setters have exactly one centralized call site", () =
   for (const retiredSetterName of [
     "setOpenCapsuleTabs",
     "setInspectorOpen",
-    "setThreadLogsOpen",
     "setRecentThreadsRailOpen",
     "setBotConversationGroupId",
     "setWorkspaceConversationPath",
@@ -129,7 +139,7 @@ test("feature-off compact toggles retain the legacy temporary overlay path", () 
   );
 });
 
-test("route, capsule, logs replace, and cleanup writers enter the same bridge", () => {
+test("route, capsule, and cleanup writers enter the same bridge", () => {
   assert.match(
     appShell,
     /onOpenRecent=\{\(\) => \{[\s\S]*?commitLegacyLayoutIntent\("user-route"/,
@@ -150,50 +160,44 @@ test("route, capsule, logs replace, and cleanup writers enter the same bridge", 
     appShell,
     /onOpenCapsule=\{[\s\S]*?commitLegacyLayoutIntent\("user-route"/,
   );
-  assert.match(
-    appShell,
-    /onToggleThreadLogs=\{[\s\S]*?inspectorOpen: false,[\s\S]*?openCapsuleTabs: \[\],[\s\S]*?threadLogsOpen: nextThreadLogsOpen/,
-    "logs replacement supplies one complete target vector",
-  );
   assert.equal(
     (appShell.match(/commitLegacyLayoutIntent\("system-cleanup"/g) || [])
       .length,
-    9,
-    "route, data, Escape, no-thread, and capsule cleanup paths are normalized",
+    6,
+    "route, data, Escape, and capsule cleanup paths are normalized",
   );
 });
 
-test("every side-tools opening writer replaces thread logs in one vector", () => {
+test("thread logs replace Tasks inside side tools without entering layout occupancy", () => {
   assert.match(
-    appShell,
-    /function replaceThreadLogsWithSideTools[\s\S]*?\.\.\.patch,[\s\S]*?threadLogsOpen: false/,
-    "the shared opening constructor makes right-panel exclusion structural",
-  );
-  assert.equal(
-    (appShell.match(/\breplaceThreadLogsWithSideTools\(/g) || []).length,
-    5,
-    "one constructor definition plus all four side-tools opening writers",
+    sideToolsPanel,
+    /\{ id: "logs", label: t\("Logs"\)/,
+    "Logs occupies the former Tasks slot in the side-tools catalog",
   );
   assert.match(
+    sideToolsPanel,
+    /activeTool\?\.id === "logs"[\s\S]*?<ThreadLogsTool/,
+    "the Logs tab owns the polling subtree",
+  );
+  assert.match(sideToolsPanel, /availableThreadSideToolIds\(hasWorkspace\)/);
+  assert.doesNotMatch(conversationHeaderActions, /hasWorkspace|disabled=/);
+  assert.doesNotMatch(
     appShell,
-    /handleWorkspacePreviewRequested[\s\S]*?replaceThreadLogsWithSideTools\(current, \{ inspectorOpen: true \}\)/,
-    "workspace preview applies one mutually-exclusive vector",
+    /if \(!activeWorkspacePath\) \{\s*commitLegacyLayoutIntent\("system-cleanup"/,
+    "a no-workspace thread must keep side tools open for Logs",
+  );
+  assert.doesNotMatch(
+    sideToolsPanel,
+    /id: "tasks"|SideThreadTasksTool|listTasks|onOpenTaskThread/,
+    "the side-tools Tasks implementation is removed",
   );
   assert.match(
-    appShell,
-    /workspacePreviewModalOpen[\s\S]*?replaceThreadLogsWithSideTools\(current, \{ inspectorOpen: true \}\)/,
-    "workspace preview effect uses the same constructor",
+    leftRail,
+    /onOpenTasks|TasksIcon/,
+    "the global Tasks entry remains untouched",
   );
-  assert.match(
-    appShell,
-    /onOpenCapsule=\{[\s\S]*?replaceThreadLogsWithSideTools\(current, \{[\s\S]*?openCapsuleTabs:/,
-    "transcript capsule open replaces logs before opening the side-tools union",
-  );
-  assert.match(
-    appShell,
-    /onToggleInspector=\{[\s\S]*?replaceThreadLogsWithSideTools\(current, \{[\s\S]*?inspectorOpen: nextInspectorOpen/,
-    "inspector toggle keeps the right panels mutually exclusive",
-  );
+  assert.match(appShell, /<TasksPanel/);
+  assert.doesNotMatch(appShell, /threadLogs|ThreadLog/);
 });
 
 test("desired cleanup may lead legacy commits without changing their UI sequence", () => {
@@ -246,7 +250,7 @@ test("Phase 4 switches the whole stack while the feature-off branch stays legacy
   assert.match(frameStore, /data-layout-revision/);
   assert.match(resizeController, /window\.requestAnimationFrame\(flush\)/);
   assert.ok(
-    (resizeController.match(/"pointercancel"/g) || []).length >= 8,
-    "all four resize paths keep pointercancel-as-commit listeners and cleanup",
+    (resizeController.match(/"pointercancel"/g) || []).length >= 6,
+    "all three resize paths keep pointercancel-as-commit listeners and cleanup",
   );
 });

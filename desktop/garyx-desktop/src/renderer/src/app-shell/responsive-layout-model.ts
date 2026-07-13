@@ -55,47 +55,20 @@ export function isDockedTaskTree(threadWidth: number): boolean {
   return threadWidth >= TASK_TREE_DOCK_MIN_WIDTH;
 }
 
-export function isDockedSidePanel({
-  canvasWidth,
-  panelWidth,
-  minMainWidth = SIDE_PANEL_MIN_MAIN_WIDTH,
-  resizerWidth = SIDE_PANEL_RESIZER_WIDTH,
-}: {
-  canvasWidth: number;
-  panelWidth: number;
-  minMainWidth?: number;
-  resizerWidth?: number;
-}): boolean {
-  if (
-    !Number.isFinite(canvasWidth) ||
-    !Number.isFinite(panelWidth) ||
-    canvasWidth <= 0 ||
-    panelWidth <= 0
-  ) {
-    return false;
-  }
-  return canvasWidth >= panelWidth + minMainWidth + resizerWidth;
-}
-
 export const LEGACY_WINDOW_MIN_WIDTH = 1180;
 export const EXPAND_V1_WINDOW_MIN_WIDTH = 480;
 export const MIN_PRIMARY_THREAD_WIDTH = 350;
-export const THREAD_LOG_DOCK_COMFORT_WIDTH = SIDE_PANEL_MIN_MAIN_WIDTH;
 export const RIGHT_DOCK_AUTO_HIDE_WIDTH = 960;
 export const SIDE_TOOLS_DEFAULT_WIDTH = 320;
 export const SIDE_TOOLS_MIN_WIDTH = 320;
 export const SIDE_TOOLS_MAX_WIDTH = 1180;
-export const THREAD_LOGS_DEFAULT_WIDTH = 360;
-export const THREAD_LOGS_MIN_WIDTH = 280;
-export const THREAD_LOGS_MAX_WIDTH = 760;
 export const LAYOUT_EDGE_TOLERANCE = 2;
 
 export type LayoutPolicyName = "legacy" | "expand-v1";
 export type LayoutPanelId =
   | "globalSidebar"
   | "conversationRail"
-  | "sideTools"
-  | "threadLogs";
+  | "sideTools";
 export type LayoutIntentCause =
   | "user-panel"
   | "user-route"
@@ -106,14 +79,12 @@ export type LayoutPanelOccupancy = Readonly<{
   globalSidebar: boolean;
   conversationRail: boolean;
   sideTools: boolean;
-  threadLogs: boolean;
 }>;
 
 export type LayoutWidths = Readonly<{
   globalSidebar: number;
   conversationRail: number;
   sideTools: number;
-  threadLogs: number;
   sideToolsCustomized: boolean;
 }>;
 
@@ -233,12 +204,6 @@ export type LayoutMachineEffect =
     }>
   | Readonly<{ type: "request-frame-commit"; transactionId: string }>
   | Readonly<{
-      type: "persist-preference";
-      preference: "panel-width";
-      panel: LayoutPanelId;
-      value: number;
-    }>
-  | Readonly<{
       type: "diagnostic";
       code: string;
       transactionId?: string;
@@ -277,14 +242,12 @@ export const CLOSED_LAYOUT_OCCUPANCY: LayoutPanelOccupancy = Object.freeze({
   globalSidebar: false,
   conversationRail: false,
   sideTools: false,
-  threadLogs: false,
 });
 
 export const DEFAULT_LAYOUT_WIDTHS: LayoutWidths = Object.freeze({
   globalSidebar: SIDEBAR_DEFAULT_WIDTH,
   conversationRail: CONVERSATION_RAIL_DEFAULT_WIDTH,
   sideTools: SIDE_TOOLS_DEFAULT_WIDTH,
-  threadLogs: THREAD_LOGS_DEFAULT_WIDTH,
   sideToolsCustomized: false,
 });
 
@@ -293,7 +256,6 @@ export const HORIZONTAL_LAYOUT_PANEL_ORDER: readonly LayoutPanelId[] =
     "globalSidebar",
     "conversationRail",
     "sideTools",
-    "threadLogs",
   ]);
 
 export type LayoutPresentationReason =
@@ -308,7 +270,6 @@ export type HorizontalLayoutPresentation = Readonly<{
   globalSidebar: "expanded" | "collapsed" | "compact-overlay";
   conversationRail: "open" | "hidden" | "closed";
   sideTools: "docked" | "hidden" | "closed";
-  threadLogs: "docked" | "overlay" | "closed";
   taskTree: "docked" | "overlay-closed" | "absent";
   taskTreeDocked: boolean;
   compactViewport: boolean;
@@ -327,8 +288,6 @@ export type HorizontalLayoutColumns = Readonly<{
   primaryThread: number;
   sideToolsResizer: number;
   sideTools: number;
-  threadLogsResizer: number;
-  threadLogs: number;
 }>;
 
 export type HorizontalLayoutNestedColumns = Readonly<{
@@ -344,8 +303,6 @@ export type HorizontalLayoutNestedColumns = Readonly<{
   }>;
   thread: Readonly<{
     main: number;
-    threadLogsResizer: number;
-    threadLogs: number;
   }>;
 }>;
 
@@ -353,7 +310,6 @@ export type HorizontalLayoutCssVariables = Readonly<{
   "--gx-sidebar-preferred-width": string;
   "--gx-conversation-rail-preferred-width": string;
   "--gx-side-tools-preferred-width": string;
-  "--gx-thread-logs-preferred-width": string;
   "--gx-sidebar-width": string;
   "--gx-conversation-rail-width": string;
   "--gx-shell-main-width": string;
@@ -361,8 +317,6 @@ export type HorizontalLayoutCssVariables = Readonly<{
   "--gx-right-resizer-width": string;
   "--gx-right-panel-width": string;
   "--gx-thread-main-width": string;
-  "--gx-thread-log-resizer-width": string;
-  "--gx-thread-log-panel-width": string;
 }>;
 
 export type HorizontalLayoutDataAttributes = Readonly<{
@@ -372,8 +326,6 @@ export type HorizontalLayoutDataAttributes = Readonly<{
   "data-conversation-rail-state":
     HorizontalLayoutPresentation["conversationRail"];
   "data-side-tools-state": HorizontalLayoutPresentation["sideTools"];
-  "data-thread-logs-presentation":
-    HorizontalLayoutPresentation["threadLogs"];
   "data-task-tree-presentation": HorizontalLayoutPresentation["taskTree"];
   "data-header-density": HorizontalLayoutPresentation["headerDensity"];
 }>;
@@ -421,7 +373,6 @@ export type HorizontalLayoutFrame =
 
 export type LayoutProjectionRejectionReason =
   | "invalid-viewport"
-  | "invalid-intent"
   | "trigger-capacity"
   | "protocol";
 
@@ -497,7 +448,6 @@ function cloneOccupancy(
     globalSidebar: occupancy.globalSidebar,
     conversationRail: occupancy.conversationRail,
     sideTools: occupancy.sideTools,
-    threadLogs: occupancy.threadLogs,
   };
 }
 
@@ -607,15 +557,6 @@ export function normalizeLayoutWidths(widths: LayoutWidths): LayoutWidths {
         Math.round(finiteWidthOr(widths.sideTools, SIDE_TOOLS_DEFAULT_WIDTH)),
       ),
     ),
-    threadLogs: Math.max(
-      THREAD_LOGS_MIN_WIDTH,
-      Math.min(
-        THREAD_LOGS_MAX_WIDTH,
-        Math.round(
-          finiteWidthOr(widths.threadLogs, THREAD_LOGS_DEFAULT_WIDTH),
-        ),
-      ),
-    ),
     sideToolsCustomized: widths.sideToolsCustomized,
   };
 }
@@ -636,9 +577,7 @@ function sumColumns(columns: HorizontalLayoutColumns): number {
     columns.conversationRail +
     columns.conversationDivider +
     columns.sideToolsResizer +
-    columns.sideTools +
-    columns.threadLogsResizer +
-    columns.threadLogs;
+    columns.sideTools;
   return allocated + columns.primaryThread;
 }
 
@@ -664,14 +603,6 @@ function solveStableHorizontalLayout(
       triggerPanel,
     };
   }
-  if (requestedOccupancy.sideTools && requestedOccupancy.threadLogs) {
-    return {
-      frame: null,
-      rejection: "invalid-intent",
-      triggerPanel,
-    };
-  }
-
   const policy = horizontalLayoutPolicy(state.policy);
   const widths = normalizeLayoutWidths(state.widths);
   const compactViewport = isGlobalSidebarCompact(
@@ -704,26 +635,13 @@ function solveStableHorizontalLayout(
       : 0;
   let sideToolsResizer = sideTools > 0 ? SIDE_PANEL_RESIZER_WIDTH : 0;
 
-  const logsRequested = requestedOccupancy.threadLogs;
-  const canvasBeforeLogs = viewportWidth - sidebar - rail - divider;
-  let logsDocked =
-    logsRequested &&
-    canvasBeforeLogs >=
-      widths.threadLogs +
-        SIDE_PANEL_RESIZER_WIDTH +
-        THREAD_LOG_DOCK_COMFORT_WIDTH;
-  let threadLogs = logsDocked ? widths.threadLogs : 0;
-  let threadLogsResizer = logsDocked ? SIDE_PANEL_RESIZER_WIDTH : 0;
-
   let primaryThread =
     viewportWidth -
     sidebar -
     rail -
     divider -
     sideToolsResizer -
-    sideTools -
-    threadLogsResizer -
-    threadLogs;
+    sideTools;
   let capacityRejected = false;
 
   // The degradation order is contractual. It protects the most recent
@@ -739,9 +657,7 @@ function solveStableHorizontalLayout(
       rail -
       divider -
       sideToolsResizer -
-      sideTools -
-      threadLogsResizer -
-      threadLogs;
+      sideTools;
   }
   if (primaryThread < MIN_PRIMARY_THREAD_WIDTH && sidebar > 0) {
     sidebar = 0;
@@ -750,16 +666,7 @@ function solveStableHorizontalLayout(
       rail -
       divider -
       sideToolsResizer -
-      sideTools -
-      threadLogsResizer -
-      threadLogs;
-  }
-  if (primaryThread < MIN_PRIMARY_THREAD_WIDTH && logsDocked) {
-    logsDocked = false;
-    threadLogs = 0;
-    threadLogsResizer = 0;
-    primaryThread =
-      viewportWidth - rail - divider - sideToolsResizer - sideTools;
+      sideTools;
   }
   if (
     primaryThread < MIN_PRIMARY_THREAD_WIDTH &&
@@ -796,9 +703,7 @@ function solveStableHorizontalLayout(
     rail +
     divider +
     sideToolsResizer +
-    sideTools +
-    threadLogsResizer +
-    threadLogs;
+    sideTools;
   primaryThread = viewportWidth - allocatedNonPrimaryTracks;
 
   const sidebarPresentation: HorizontalLayoutPresentation["globalSidebar"] =
@@ -821,10 +726,7 @@ function solveStableHorizontalLayout(
       : sideTools > 0
         ? "docked"
         : "hidden";
-  const threadLogsPresentation: HorizontalLayoutPresentation["threadLogs"] =
-    !logsRequested ? "closed" : logsDocked ? "docked" : "overlay";
-  const rightPanelVisible =
-    sideToolsPresentation === "docked" || logsRequested;
+  const rightPanelVisible = sideToolsPresentation === "docked";
   const taskTreePresentation: HorizontalLayoutPresentation["taskTree"] =
     rightPanelVisible
       ? "absent"
@@ -838,8 +740,6 @@ function solveStableHorizontalLayout(
     conversationDivider: divider,
     sideToolsResizer,
     sideTools,
-    threadLogsResizer,
-    threadLogs,
     primaryThread,
   };
   const shellMain = viewportWidth - sidebar - rail;
@@ -851,7 +751,6 @@ function solveStableHorizontalLayout(
     globalSidebar: sidebarPresentation,
     conversationRail: conversationRailPresentation,
     sideTools: sideToolsPresentation,
-    threadLogs: threadLogsPresentation,
     taskTree: taskTreePresentation,
     taskTreeDocked: taskTreePresentation === "docked",
     compactViewport,
@@ -868,9 +767,9 @@ function solveStableHorizontalLayout(
         ? "closed"
         : autoHideConversationRail
           ? "auto-hidden"
-        : rail > 0
-          ? "requested"
-          : "capacity",
+          : rail > 0
+            ? "requested"
+            : "capacity",
       sideTools: !requestedOccupancy.sideTools
         ? "closed"
         : autoHideSideTools
@@ -878,11 +777,6 @@ function solveStableHorizontalLayout(
           : sideTools > 0
             ? "requested"
             : "capacity",
-      threadLogs: !logsRequested
-        ? "closed"
-        : logsDocked
-          ? "requested"
-          : "capacity",
     },
   };
   const effectiveOccupancy: LayoutPanelOccupancy = {
@@ -891,7 +785,6 @@ function solveStableHorizontalLayout(
       sidebarPresentation === "compact-overlay",
     conversationRail: conversationRailPresentation === "open",
     sideTools: sideToolsPresentation === "docked",
-    threadLogs: threadLogsPresentation !== "closed",
   };
   const cssVariables: HorizontalLayoutCssVariables = {
     "--gx-sidebar-preferred-width": asPixels(widths.globalSidebar),
@@ -899,7 +792,6 @@ function solveStableHorizontalLayout(
       widths.conversationRail,
     ),
     "--gx-side-tools-preferred-width": asPixels(widths.sideTools),
-    "--gx-thread-logs-preferred-width": asPixels(widths.threadLogs),
     "--gx-sidebar-width": asPixels(sidebar),
     "--gx-conversation-rail-width": asPixels(rail),
     "--gx-shell-main-width": asPixels(shellMain),
@@ -907,10 +799,6 @@ function solveStableHorizontalLayout(
     "--gx-right-resizer-width": asPixels(sideToolsResizer),
     "--gx-right-panel-width": asPixels(sideTools),
     "--gx-thread-main-width": asPixels(primaryThread),
-    "--gx-thread-log-resizer-width": asPixels(threadLogsResizer),
-    "--gx-thread-log-panel-width": asPixels(
-      logsRequested ? widths.threadLogs : 0,
-    ),
   };
   const dataAttributes: HorizontalLayoutDataAttributes = {
     "data-layout-policy": state.policy,
@@ -918,7 +806,6 @@ function solveStableHorizontalLayout(
     "data-sidebar-state": sidebarPresentation,
     "data-conversation-rail-state": conversationRailPresentation,
     "data-side-tools-state": sideToolsPresentation,
-    "data-thread-logs-presentation": threadLogsPresentation,
     "data-task-tree-presentation": taskTreePresentation,
     "data-header-density": presentation.headerDensity,
   };
@@ -944,8 +831,6 @@ function solveStableHorizontalLayout(
       },
       thread: {
         main: primaryThread,
-        threadLogsResizer,
-        threadLogs,
       },
     },
     presentation,
@@ -1001,9 +886,6 @@ function projectionOccupancy(
         sideTools:
           transaction.previousOccupancy.sideTools &&
           !transaction.closingPanels.includes("sideTools"),
-        threadLogs:
-          transaction.previousOccupancy.threadLogs &&
-          !transaction.closingPanels.includes("threadLogs"),
       };
     }
     default:
@@ -1532,30 +1414,11 @@ function requestedPanelContribution(
       ? 0
       : widths.conversationRail;
   }
-  if (panel === "sideTools") {
-    const autoHidden =
-      horizontalLayoutPolicy(state.policy).sideToolsAutoHide &&
-      state.responsiveBasisWidth <= RIGHT_DOCK_AUTO_HIDE_WIDTH &&
-      !state.sideToolsManualOverride;
-    return autoHidden ? 0 : widths.sideTools + SIDE_PANEL_RESIZER_WIDTH;
-  }
-
-  const sidebar = requestedPanelContribution(
-    state,
-    occupancy,
-    "globalSidebar",
-  );
-  const rail = requestedPanelContribution(
-    state,
-    occupancy,
-    "conversationRail",
-  );
-  const divider = rail > 0 ? 1 : 0;
-  const mainBeforeLogs =
-    state.snapshot.contentBounds.width - sidebar - rail - divider;
-  return mainBeforeLogs >= THREAD_LOG_DOCK_COMFORT_WIDTH
-    ? widths.threadLogs + SIDE_PANEL_RESIZER_WIDTH
-    : 0;
+  const autoHidden =
+    horizontalLayoutPolicy(state.policy).sideToolsAutoHide &&
+    state.responsiveBasisWidth <= RIGHT_DOCK_AUTO_HIDE_WIDTH &&
+    !state.sideToolsManualOverride;
+  return autoHidden ? 0 : widths.sideTools + SIDE_PANEL_RESIZER_WIDTH;
 }
 
 function makeFunding(
@@ -1924,9 +1787,6 @@ function initialClaimFunding(
     sideTools:
       solved.frame.columns.sideToolsResizer +
       solved.frame.columns.sideTools,
-    threadLogs:
-      solved.frame.columns.threadLogsResizer +
-      solved.frame.columns.threadLogs,
   };
   const normalWidth = state.snapshot.normalBounds.width;
   let available = Math.max(
@@ -2173,23 +2033,6 @@ function startIntentTransaction(
         {
           type: "diagnostic",
           code: "layout-intent-previous-mismatch",
-          transactionId: event.transactionId,
-        },
-      ],
-    };
-  }
-  if (event.nextOccupancy.sideTools && event.nextOccupancy.threadLogs) {
-    const diagnosed = addDiagnostic(
-      state,
-      "mutually-exclusive-right-panels",
-      event.transactionId,
-    );
-    return {
-      state: diagnosed,
-      effects: [
-        {
-          type: "diagnostic",
-          code: "mutually-exclusive-right-panels",
           transactionId: event.transactionId,
         },
       ],
@@ -2634,19 +2477,7 @@ function updatePanelWidth(
   };
   const widths = normalizeLayoutWidths(candidate);
   const next = withRevision({ ...state, widths });
-  return {
-    state: next,
-    effects: event.commit && event.panel === "threadLogs"
-      ? [
-          {
-            type: "persist-preference",
-            preference: "panel-width",
-            panel: event.panel,
-            value: widths[event.panel],
-          },
-        ]
-      : [],
-  };
+  return { state: next, effects: [] };
 }
 
 function handleCompactSidebarExpansion(

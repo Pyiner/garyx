@@ -10,7 +10,6 @@ const closed = Object.freeze({
   globalSidebar: false,
   conversationRail: false,
   sideTools: false,
-  threadLogs: false,
 });
 const sideToolsOpen = Object.freeze({ ...closed, sideTools: true });
 

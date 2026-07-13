@@ -91,6 +91,11 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   in a removable feature stylesheet; pin the owner import with a contract test.
 - Desktop thread side tools have one presentation: a right-docked rail. The
   header control toggles that rail directly; do not add an overlay variant.
+- Desktop thread logs are a built-in tool inside the right-docked side-tools
+  rail and inherit that rail's responsive behavior. Do not add independent log
+  occupancy, funding, dock/overlay placement, resizers, or width preferences.
+  The side-tools Tasks item is removed; the global Tasks entry and route and
+  the thread task tree remain separate features.
 - Desktop responsive collapse order is the secondary conversation rail at
   980px, then the global sidebar at 720px. An explicit compact-sidebar open is
   an in-flow native-window expansion, never an overlay. Funded panel closes

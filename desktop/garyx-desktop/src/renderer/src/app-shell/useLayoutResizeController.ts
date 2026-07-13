@@ -8,9 +8,6 @@ import {
 } from "react";
 
 import {
-  DEFAULT_DESKTOP_SETTINGS,
-  type DesktopSettings,
-  type DesktopState,
   type WindowLayoutBootstrap,
 } from "@shared/contracts";
 
@@ -18,10 +15,7 @@ import type { SideCapsuleTab } from "./components/SideToolsPanel";
 import {
   SIDE_TOOLS_PANEL_MAX_WIDTH,
   SIDE_TOOLS_PANEL_MIN_WIDTH,
-  THREAD_LOG_PANEL_MAX_WIDTH,
-  THREAD_LOG_PANEL_MIN_WIDTH,
   clampSideToolsPanelWidth,
-  clampThreadLogsPanelWidth,
   defaultSideToolsPanelWidth,
 } from "./diagnostics-helpers";
 import {
@@ -46,13 +40,9 @@ import type { ContentView } from "./types";
 
 type UseLayoutResizeControllerArgs = {
   contentView: ContentView;
-  desktopState: DesktopState | null;
   inspectorOpen: boolean;
   openCapsuleTabs: SideCapsuleTab[];
   secondaryRailOpen: boolean;
-  setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
-  setSettingsDraft: React.Dispatch<React.SetStateAction<DesktopSettings>>;
-  threadLogsOpen: boolean;
   windowLayoutBootstrap: Readonly<{
     bootstrap: WindowLayoutBootstrap;
     rendererEpoch: string;
@@ -94,13 +84,9 @@ function rendererWindowSnapshot(
 
 export function useLayoutResizeController({
   contentView,
-  desktopState,
   inspectorOpen,
   openCapsuleTabs,
   secondaryRailOpen,
-  setDesktopState,
-  setSettingsDraft,
-  threadLogsOpen,
   windowLayoutBootstrap,
 }: UseLayoutResizeControllerArgs) {
   const initialSidebarDesiredOpenRef = useRef<boolean | null>(null);
@@ -121,13 +107,11 @@ export function useLayoutResizeController({
           : initialSidebarDesiredOpenRef.current,
       conversationRail: secondaryRailOpen,
       sideTools: inspectorOpen || openCapsuleTabs.length > 0,
-      threadLogs: threadLogsOpen,
     };
     const widths = {
       globalSidebar: SIDEBAR_DEFAULT_WIDTH,
       conversationRail: CONVERSATION_RAIL_DEFAULT_WIDTH,
       sideTools: defaultSideToolsPanelWidth(null),
-      threadLogs: DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
     };
     if (layoutPolicy === "legacy") {
       storeRef.current = createLegacyHorizontalLayoutFrameStore({
@@ -248,14 +232,8 @@ export function useLayoutResizeController({
     const columns = store.getSnapshot().nestedColumns.conversation;
     return columns.threadLayout + columns.sideToolsResizer + columns.sideTools;
   }, [store]);
-  const currentThreadLayoutWidth = useCallback(
-    () => store.getSnapshot().nestedColumns.conversation.threadLayout,
-    [store],
-  );
-
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [railResizing, setRailResizing] = useState(false);
-  const [threadLogsResizing, setThreadLogsResizing] = useState(false);
   const [sideToolsResizing, setSideToolsResizing] = useState(false);
   const sidebarResizeStateRef = useRef<{
     startX: number;
@@ -265,72 +243,10 @@ export function useLayoutResizeController({
     startX: number;
     startWidth: number;
   } | null>(null);
-  const threadLogsResizeStateRef = useRef<{
-    startX: number;
-    startWidth: number;
-  } | null>(null);
   const sideToolsResizeStateRef = useRef<{
     startX: number;
     startWidth: number;
   } | null>(null);
-  const threadLayoutRef = useRef<HTMLDivElement | null>(null);
-
-  const persistThreadLogsPanelWidth = useCallback(
-    async (nextWidth: number) => {
-      const clampedWidth = clampThreadLogsPanelWidth(
-        nextWidth,
-        currentThreadLayoutWidth(),
-      );
-      dispatchPanelWidth("threadLogs", clampedWidth, true);
-      setSettingsDraft((current) => ({
-        ...current,
-        threadLogsPanelWidth: clampedWidth,
-      }));
-
-      const persistedWidth = desktopState?.settings.threadLogsPanelWidth;
-      if (persistedWidth === clampedWidth) {
-        return;
-      }
-
-      try {
-        const nextState = await window.garyxDesktop.saveSettings({
-          ...(desktopState?.settings || DEFAULT_DESKTOP_SETTINGS),
-          threadLogsPanelWidth: clampedWidth,
-        });
-        setDesktopState(nextState);
-      } catch {
-        // Keep the local width even if persistence fails; this preference is
-        // deliberately non-blocking.
-      }
-    },
-    [
-      currentThreadLayoutWidth,
-      desktopState?.settings,
-      dispatchPanelWidth,
-      setDesktopState,
-      setSettingsDraft,
-    ],
-  );
-
-  useEffect(() => {
-    const nextWidth = clampThreadLogsPanelWidth(
-      desktopState?.settings.threadLogsPanelWidth ??
-        DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
-      currentThreadLayoutWidth(),
-    );
-    dispatchPanelWidth("threadLogs", nextWidth);
-    setSettingsDraft((current) =>
-      current.threadLogsPanelWidth === nextWidth
-        ? current
-        : { ...current, threadLogsPanelWidth: nextWidth },
-    );
-  }, [
-    currentThreadLayoutWidth,
-    desktopState?.settings.threadLogsPanelWidth,
-    dispatchPanelWidth,
-    setSettingsDraft,
-  ]);
-
   useLayoutEffect(() => {
     if (layoutPolicy !== "legacy") {
       return;
@@ -434,54 +350,6 @@ export function useLayoutResizeController({
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
     event.preventDefault();
-  }
-
-  function handleThreadLogsResizeStart(
-    event: React.PointerEvent<HTMLDivElement>,
-  ) {
-    if (!threadLogsOpen) {
-      return;
-    }
-    threadLogsResizeStateRef.current = {
-      startX: event.clientX,
-      startWidth: store.getState().widths.threadLogs,
-    };
-    setThreadLogsResizing(true);
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    event.preventDefault();
-  }
-
-  function handleThreadLogsResizeKeyDown(
-    event: React.KeyboardEvent<HTMLDivElement>,
-  ) {
-    if (!threadLogsOpen) {
-      return;
-    }
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-      return;
-    }
-    event.preventDefault();
-    const currentWidth = store.getState().widths.threadLogs;
-    const step = event.shiftKey ? 48 : 24;
-    const nextWidth =
-      event.key === "Home"
-        ? THREAD_LOG_PANEL_MIN_WIDTH
-        : event.key === "End"
-          ? clampThreadLogsPanelWidth(
-              THREAD_LOG_PANEL_MAX_WIDTH,
-              currentThreadLayoutWidth(),
-            )
-          : event.key === "ArrowLeft"
-            ? clampThreadLogsPanelWidth(
-                currentWidth + step,
-                currentThreadLayoutWidth(),
-              )
-            : clampThreadLogsPanelWidth(
-                currentWidth - step,
-                currentThreadLayoutWidth(),
-              );
-    void persistThreadLogsPanelWidth(nextWidth);
   }
 
   function handleSideToolsResizeStart(
@@ -610,52 +478,6 @@ export function useLayoutResizeController({
   }, [dispatchPanelWidth, railResizing, store]);
 
   useEffect(() => {
-    if (!threadLogsResizing) {
-      return;
-    }
-    const handlePointerMove = (event: PointerEvent) => {
-      const resizeState = threadLogsResizeStateRef.current;
-      if (!resizeState) {
-        return;
-      }
-      const nextWidth = clampThreadLogsPanelWidth(
-        resizeState.startWidth + (resizeState.startX - event.clientX),
-        currentThreadLayoutWidth(),
-      );
-      dispatchPanelWidth("threadLogs", nextWidth);
-      setSettingsDraft((current) => ({
-        ...current,
-        threadLogsPanelWidth: nextWidth,
-      }));
-    };
-    const finishResize = () => {
-      const nextWidth = store.getState().widths.threadLogs;
-      threadLogsResizeStateRef.current = null;
-      setThreadLogsResizing(false);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      void persistThreadLogsPanelWidth(nextWidth);
-    };
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", finishResize);
-    window.addEventListener("pointercancel", finishResize);
-    return () => {
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", finishResize);
-      window.removeEventListener("pointercancel", finishResize);
-    };
-  }, [
-    currentThreadLayoutWidth,
-    dispatchPanelWidth,
-    persistThreadLogsPanelWidth,
-    setSettingsDraft,
-    store,
-    threadLogsResizing,
-  ]);
-
-  useEffect(() => {
     if (!sideToolsResizing) {
       return;
     }
@@ -697,14 +519,11 @@ export function useLayoutResizeController({
   return {
     compactSidebarViewport: frame.presentation.compactViewport,
     currentConversationWidth,
-    currentThreadLayoutWidth,
     dispatchLayoutOccupancyEvent,
     handleRailResizeStart,
     handleSidebarResizeStart,
     handleSideToolsResizeKeyDown,
     handleSideToolsResizeStart,
-    handleThreadLogsResizeKeyDown,
-    handleThreadLogsResizeStart,
     layoutRootRef,
     railResizing,
     persistSidebarDesiredOpen,
@@ -720,11 +539,6 @@ export function useLayoutResizeController({
     sideToolsPanelWidth: store.getState().widths.sideTools,
     sideToolsResizing,
     taskTreeDocked: frame.presentation.taskTreeDocked,
-    threadLayoutRef,
-    threadLogsDocked: frame.presentation.threadLogs === "docked",
-    threadLogsPresented: frame.requestedOccupancy.threadLogs,
-    threadLogsPanelWidth: store.getState().widths.threadLogs,
-    threadLogsResizing,
     toggleSidebarCollapsed,
   };
 }

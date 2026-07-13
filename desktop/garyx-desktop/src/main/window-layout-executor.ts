@@ -71,7 +71,6 @@ function cloneOccupancy(
     globalSidebar: occupancy.globalSidebar,
     conversationRail: occupancy.conversationRail,
     sideTools: occupancy.sideTools,
-    threadLogs: occupancy.threadLogs,
   };
 }
 
@@ -178,10 +177,6 @@ function rectangleContainedBy(
     inner.x + inner.width <= outer.x + outer.width &&
     inner.y + inner.height <= outer.y + outer.height
   );
-}
-
-function validOccupancy(occupancy: WindowLayoutPanelOccupancy): boolean {
-  return !(occupancy.sideTools && occupancy.threadLogs);
 }
 
 function occupanciesEqual(
@@ -610,9 +605,6 @@ export class WindowLayoutExecutor {
     ) {
       return this.#rejected(command, "stale");
     }
-    if (!validOccupancy(command.desiredOccupancy)) {
-      return this.#rejected(command, "invalid");
-    }
     const sessionRevision = this.#acknowledgedSession.sessionRevision + 1;
     this.#acknowledgedSession = {
       ...this.#acknowledgedSession,
@@ -645,7 +637,6 @@ export class WindowLayoutExecutor {
       return this.#rejected(command, "invalid");
     }
     if (
-      !validOccupancy(command.targetDesiredOccupancy) ||
       !isFiniteRectangle(command.targetNormalBaseBounds) ||
       !fundingIsValid(command.targetFundingByPanel) ||
       !rectanglesEqual(
@@ -708,7 +699,6 @@ export class WindowLayoutExecutor {
       return this.#rejected(command, "invalid");
     }
     if (
-      !validOccupancy(command.targetDesiredOccupancy) ||
       !isFiniteRectangle(command.targetBounds) ||
       !isFiniteRectangle(command.targetNormalBaseBounds) ||
       !fundingIsValid(command.targetFundingByPanel) ||

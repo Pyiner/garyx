@@ -95,19 +95,33 @@ test("side tools use one right-docked presentation at every width", () => {
   assert.ok(!browserCss.includes(".thread-side-tools-panel {"));
 });
 
-test("thread logs use measured dock or overlay state instead of a viewport guess", () => {
+test("thread logs are side-tools content and have no independent placement policy", () => {
+  const appShellSource = read("app-shell/AppShell.tsx");
+  const leftRailSource = read("app-shell/components/AppLeftRail.tsx");
+  const sideToolsSource = read("app-shell/components/SideToolsPanel.tsx");
+  const sideToolsModel = read("app-shell/components/side-tools-panel-model.ts");
   const threadPageSource = read("app-shell/components/ThreadPage.tsx");
   const controllerSource = read("app-shell/useLayoutResizeController.ts");
   const frameStoreSource = read("app-shell/horizontal-layout-frame-store.ts");
   const ownerCss = read("styles/app-shell.css");
-  const browserCss = read("styles/browser.css");
+  const headerSource = read("ConversationHeaderActions.tsx");
 
-  assert.ok(threadPageSource.includes('threadLogsDocked ? "log-panel-docked" : "log-panel-overlay"'));
-  assert.ok(controllerSource.includes("frame.presentation.threadLogs === \"docked\""));
-  assert.ok(controllerSource.includes("currentThreadLayoutWidth"));
+  assert.ok(sideToolsSource.includes('{ id: "logs"'));
+  assert.ok(sideToolsSource.includes('<ThreadLogsTool'));
+  assert.ok(sideToolsSource.includes('activeTool?.id === "logs"'));
+  assert.ok(sideToolsSource.includes("availableThreadSideToolIds(hasWorkspace)"));
+  assert.ok(!sideToolsSource.includes('{ id: "tasks"'));
+  assert.ok(!sideToolsSource.includes('SideThreadTasksTool'));
+  assert.ok(sideToolsModel.includes('"files" | "logs" | "chat"'));
+  assert.ok(!sideToolsModel.includes('"tasks"'));
+  assert.ok(leftRailSource.includes("onOpenTasks"));
+  assert.ok(leftRailSource.includes("TasksIcon"));
+  assert.ok(appShellSource.includes("<TasksPanel"));
+  assert.ok(!threadPageSource.includes("ThreadLog"));
+  assert.ok(!controllerSource.includes("threadLogs"));
+  assert.ok(!headerSource.includes("threadLogs"));
   assert.ok(frameStoreSource.includes("projectHorizontalLayout"));
-  assert.ok(!controllerSource.includes("new ResizeObserver"));
-  assert.ok(ownerCss.includes('[data-thread-logs-presentation="overlay"]'));
-  assert.ok(ownerCss.includes("var(--gx-thread-log-panel-width)"));
-  assert.ok(!browserCss.includes(".thread-layout.with-log-panel {"));
+  assert.ok(!frameStoreSource.includes("threadLogs"));
+  assert.ok(!ownerCss.includes("thread-log-resizer"));
+  assert.ok(!ownerCss.includes("data-thread-logs-presentation"));
 });

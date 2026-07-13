@@ -12,7 +12,6 @@ const closed = Object.freeze({
   conversationRailKey: null,
   inspectorOpen: false,
   openCapsuleCount: 0,
-  threadLogs: false,
 });
 
 function append(log, patch, cause = "user-panel") {
@@ -23,28 +22,24 @@ function append(log, patch, cause = "user-panel") {
   );
 }
 
-test("projects all four desired occupancies from legacy source state", () => {
+test("projects all three desired occupancies from legacy source state", () => {
   for (const globalSidebar of [false, true]) {
     for (const conversationRailKey of [null, "recent"]) {
       for (const inspectorOpen of [false, true]) {
         for (const openCapsuleCount of [0, 2]) {
-          for (const threadLogs of [false, true]) {
-            assert.deepEqual(
-              projectLayoutOccupancy({
-                globalSidebar,
-                conversationRailKey,
-                inspectorOpen,
-                openCapsuleCount,
-                threadLogs,
-              }),
-              {
-                globalSidebar,
-                conversationRail: conversationRailKey !== null,
-                sideTools: inspectorOpen || openCapsuleCount > 0,
-                threadLogs,
-              },
-            );
-          }
+          assert.deepEqual(
+            projectLayoutOccupancy({
+              globalSidebar,
+              conversationRailKey,
+              inspectorOpen,
+              openCapsuleCount,
+            }),
+            {
+              globalSidebar,
+              conversationRail: conversationRailKey !== null,
+              sideTools: inspectorOpen || openCapsuleCount > 0,
+            },
+          );
         }
       }
     }
@@ -60,7 +55,6 @@ test("capsule and inspector writers emit only on side-tools union edges", () => 
     globalSidebar: true,
     conversationRail: false,
     sideTools: true,
-    threadLogs: false,
   });
   log = result.log;
 
@@ -115,44 +109,6 @@ test("rail open, identity switch, and cleanup are full-vector events", () => {
   assert.equal(result.event?.nextOccupancy.conversationRail, false);
 });
 
-test("logs replacing side tools records one net full-vector transaction", () => {
-  const sideToolsOpen = {
-    ...closed,
-    inspectorOpen: true,
-    openCapsuleCount: 2,
-  };
-  const log = createLayoutOccupancyEventLog(sideToolsOpen);
-  const result = appendLayoutOccupancyIntent(
-    log,
-    {
-      ...sideToolsOpen,
-      inspectorOpen: false,
-      openCapsuleCount: 0,
-      threadLogs: true,
-    },
-    "user-panel",
-  );
-
-  assert.equal(result.log.events.length, 1);
-  assert.deepEqual(result.event, {
-    type: "LAYOUT_INTENT_CHANGED",
-    previousOccupancy: {
-      globalSidebar: true,
-      conversationRail: false,
-      sideTools: true,
-      threadLogs: false,
-    },
-    nextOccupancy: {
-      globalSidebar: true,
-      conversationRail: false,
-      sideTools: false,
-      threadLogs: true,
-    },
-    cause: "user-panel",
-    transactionId: "layout-intent-1",
-  });
-});
-
 test("transaction ids advance only for emitted events and history stays bounded", () => {
   let log = createLayoutOccupancyEventLog(closed);
   let result = append(log, { openCapsuleCount: 0 }, "hydrate");
@@ -184,25 +140,4 @@ test("rejects invalid source state instead of manufacturing occupancy", () => {
     () => createLayoutOccupancyEventLog({ ...closed, conversationRailKey: "" }),
     /null or non-empty/,
   );
-  assert.throws(
-    () =>
-      createLayoutOccupancyEventLog({
-        ...closed,
-        openCapsuleCount: 1,
-        threadLogs: true,
-      }),
-    /mutually exclusive/,
-  );
-
-  const log = createLayoutOccupancyEventLog({ ...closed, threadLogs: true });
-  assert.throws(
-    () =>
-      appendLayoutOccupancyIntent(
-        log,
-        { ...log.currentSources, openCapsuleCount: 1 },
-        "user-route",
-      ),
-    /mutually exclusive/,
-  );
-  assert.deepEqual(log.currentSources, { ...closed, threadLogs: true });
 });

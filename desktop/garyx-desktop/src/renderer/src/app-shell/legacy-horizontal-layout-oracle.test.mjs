@@ -13,14 +13,11 @@ const rawFixture = readFileSync(fixturePath, 'utf8');
 const oracle = JSON.parse(rawFixture);
 
 const expectedOccupancy = new Map([
-  ['baseline', [true, false, false, false]],
-  ['sidebar-collapsed', [false, false, false, false]],
-  ['side-tools', [true, false, true, false]],
-  ['thread-logs', [true, false, false, true]],
-  ['recent-rail', [true, true, false, false]],
-  ['recent-rail-side-tools', [true, true, true, false]],
-  ['recent-rail-thread-logs', [true, true, false, true]],
-  ['recent-rail-thread-logs-overlay', [true, true, false, true]],
+  ['baseline', [true, false, false]],
+  ['sidebar-collapsed', [false, false, false]],
+  ['side-tools', [true, false, true]],
+  ['recent-rail', [true, true, false]],
+  ['recent-rail-side-tools', [true, true, true]],
 ]);
 
 function pixelTracks(value) {
@@ -45,7 +42,6 @@ test('packaged legacy oracle contains the complete normalized scenario matrix', 
         occupancy.globalSidebar,
         occupancy.conversationRail,
         occupancy.sideTools,
-        occupancy.threadLogs,
       ],
       expectedOccupancy.get(scenario.name),
       scenario.name,
@@ -93,39 +89,21 @@ test('oracle pins classes, semantic attributes, computed tracks, and drag carveo
 
     assert.equal(Boolean(elements.conversationRail), presentation.conversationRail !== 'closed');
     assert.equal(Boolean(elements.sideToolsPanel), presentation.sideTools === 'docked');
-    assert.equal(Boolean(elements.threadLogPanel), presentation.threadLogs !== 'closed');
-    assert.equal(
-      Boolean(elements.sideToolsPanel && elements.threadLogPanel),
-      false,
-      `${scenario.name}: legacy right panels remain mutually exclusive`,
-    );
   }
 });
 
-test('oracle normalizes dynamic task state and deliberately samples logs dock and overlay', () => {
+test('oracle normalizes dynamic task state', () => {
   const scenario = (name) =>
     oracle.scenarios.find((candidate) => candidate.name === name);
   const baseline = scenario('baseline');
   const recentRail = scenario('recent-rail');
-  const defaultLogs = scenario('recent-rail-thread-logs');
-  const overlayLogs = scenario('recent-rail-thread-logs-overlay');
 
   assert.equal(baseline.elements.taskTree.rect.y, 58);
   assert.equal(baseline.elements.taskTree.rect.height, 'dynamic');
   assert.equal(recentRail.elements.taskTree.rect.y, 'dynamic');
   assert.equal(recentRail.elements.taskTree.rect.height, 'dynamic');
   assert.doesNotMatch(rawFixture, /has-active/);
-
-  assert.equal(defaultLogs.presentation.threadLogs, 'docked');
-  assert.equal(
-    defaultLogs.elements.threadLogResizer.attributes['aria-valuenow'],
-    '360',
-  );
-  assert.equal(overlayLogs.presentation.threadLogs, 'overlay');
-  assert.equal(
-    overlayLogs.elements.threadLogResizer.attributes['aria-valuenow'],
-    '480',
-  );
+  assert.doesNotMatch(rawFixture, /threadLogs|threadLogPanel|threadLogResizer/);
 });
 
 test('oracle fixture contains no user data or dynamic thread identity', () => {

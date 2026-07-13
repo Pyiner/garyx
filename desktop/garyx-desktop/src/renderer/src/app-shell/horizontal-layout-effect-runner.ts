@@ -288,9 +288,6 @@ export function createHorizontalLayoutEffectRunner({
             effect.transactionId ?? "",
           );
           break;
-        case "persist-preference":
-          // The controller owns the existing settings/localStorage writers.
-          break;
       }
     }
   };

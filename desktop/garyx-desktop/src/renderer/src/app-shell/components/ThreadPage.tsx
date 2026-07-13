@@ -76,7 +76,6 @@ import {
 import { TurnSummary } from "../../turn-summary";
 import { ToolTraceGroup } from "../../tool-trace";
 import { CapsuleChatCardList } from "./CapsuleChatCard";
-import { ThreadLogDock } from "./ThreadLogDock";
 import { ThreadTaskTreePopover } from "./ThreadTaskTreePopover";
 import { shouldShowThreadTaskTreePopover } from "./thread-task-tree-popover-model";
 import { useI18n, type Translate } from "../../i18n";
@@ -510,13 +509,7 @@ type ThreadPageProps = {
   rateLimit?: RenderRateLimit | null;
   onRateLimitContinue?: () => void | Promise<unknown>;
   taskTreeDocked: boolean;
-  threadLayoutRef: RefObject<HTMLDivElement | null>;
   threadLayoutStyle?: CSSProperties;
-  threadLogsMaxWidth: number;
-  threadLogsDocked: boolean;
-  threadLogsOpen: boolean;
-  threadLogsPanelWidth: number;
-  threadLogsResizing: boolean;
   threadAvatarCatalog: ThreadAvatarCatalog;
   visibleRemoteAwaitingAckInputs: PendingThreadInput[];
   visibleRemotePendingInputs: PendingThreadInput[];
@@ -569,11 +562,6 @@ type ThreadPageProps = {
   onRetryFailedMessage?: (message: UiTranscriptMessage) => void;
   onSelectBotBinding: (botId: string | null) => void;
   onSelectWorkspace: (workspacePath: string) => void;
-  onThreadLogsUnreadChange: (hasUnread: boolean) => void;
-  onThreadLogsResizeKeyDown: (
-    event: React.KeyboardEvent<HTMLDivElement>,
-  ) => void;
-  onThreadLogsResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
   onSteerQueuedPrompt: (intent: MessageIntent) => void;
   onOpenThreadById: (threadId: string) => void;
   onOpenCapsule?: (card: RenderCapsuleCard) => void;
@@ -674,9 +662,6 @@ export function ThreadPage({
   onSteerQueuedPrompt,
   onOpenThreadById,
   onOpenCapsule,
-  onThreadLogsUnreadChange,
-  onThreadLogsResizeKeyDown,
-  onThreadLogsResizeStart,
   preferredWorkspaceForNewThread,
   selectableNewThreadWorkspaces,
   selectedThreadId,
@@ -686,13 +671,7 @@ export function ThreadPage({
   rateLimit,
   onRateLimitContinue,
   taskTreeDocked,
-  threadLayoutRef,
   threadLayoutStyle,
-  threadLogsMaxWidth,
-  threadLogsDocked,
-  threadLogsOpen,
-  threadLogsPanelWidth,
-  threadLogsResizing,
   threadAvatarCatalog,
   visibleRemoteAwaitingAckInputs,
   visibleRemotePendingInputs,
@@ -857,8 +836,7 @@ export function ThreadPage({
 
   return (
     <div
-      className={`thread-layout ${isSideChatSurface ? "thread-layout--side-chat" : ""} ${inspectorOpen ? "with-inspector-panel" : ""} ${threadLogsOpen ? `with-log-panel ${threadLogsDocked ? "log-panel-docked" : "log-panel-overlay"}` : ""} ${threadLogsResizing ? "log-panel-resizing" : ""}`}
-      ref={threadLayoutRef}
+      className={`thread-layout ${isSideChatSurface ? "thread-layout--side-chat" : ""} ${inspectorOpen ? "with-inspector-panel" : ""}`}
       style={threadLayoutStyle}
     >
       <div
@@ -869,7 +847,6 @@ export function ThreadPage({
           inspectorOpen,
           isSideChatSurface,
           selectedThreadId,
-          threadLogsOpen,
         }) && selectedThreadId ? (
           <ThreadTaskTreePopover
             taskTreeDocked={taskTreeDocked}
@@ -1223,28 +1200,6 @@ export function ThreadPage({
             </div>
           </div>
       </div>
-
-      {threadLogsOpen ? (
-        <>
-          <div
-            aria-label={t("Resize logs panel")}
-            aria-orientation="vertical"
-            aria-valuemax={threadLogsMaxWidth}
-            aria-valuemin={280}
-            aria-valuenow={threadLogsPanelWidth}
-            className="thread-log-resizer"
-            onKeyDown={onThreadLogsResizeKeyDown}
-            onPointerDown={onThreadLogsResizeStart}
-            role="separator"
-            tabIndex={0}
-          />
-          <ThreadLogDock
-            activeThreadTitle={activeThreadTitle}
-            onUnreadChange={onThreadLogsUnreadChange}
-            threadId={selectedThreadId}
-          />
-        </>
-      ) : null}
     </div>
   );
 }

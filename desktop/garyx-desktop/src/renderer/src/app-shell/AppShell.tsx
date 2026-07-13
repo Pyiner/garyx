@@ -174,9 +174,7 @@ import { useAutomationController } from "./useAutomationController";
 import {
   SIDE_TOOLS_PANEL_MAX_WIDTH,
   SIDE_TOOLS_PANEL_MIN_WIDTH,
-  THREAD_LOG_PANEL_MAX_WIDTH,
   clampSideToolsPanelWidth,
-  clampThreadLogsPanelWidth,
   computeGatewayIndicator,
 } from "./diagnostics-helpers";
 import {
@@ -220,7 +218,6 @@ import {
 import { SideChatSessions } from "./side-chat-sessions";
 import {
   ensureSideChatThread as ensureSideChatThreadOp,
-  openTaskThreadInSidePanel as openTaskThreadInSidePanelOp,
   type SideChatOpsContext,
 } from "./side-chat-ops";
 import { SideChatPanel } from "./components/SideChatPanel";
@@ -280,33 +277,18 @@ type ThreadEntrySelectionSource =
   | "recent"
   | "bot-root"
   | "bot-conversation"
-  | "workspace-conversation"
-  | "tasks";
+  | "workspace-conversation";
 
 type LegacyLayoutIntentState = {
   globalSidebarOpen: boolean;
   conversationRail: ConversationRailIntent;
   inspectorOpen: boolean;
   openCapsuleTabs: SideCapsuleTab[];
-  threadLogsOpen: boolean;
 };
 
 type LegacyLayoutIntentUpdate = (
   current: LegacyLayoutIntentState,
 ) => LegacyLayoutIntentState;
-
-function replaceThreadLogsWithSideTools(
-  current: LegacyLayoutIntentState,
-  patch: Partial<
-    Pick<LegacyLayoutIntentState, "inspectorOpen" | "openCapsuleTabs">
-  >,
-): LegacyLayoutIntentState {
-  return {
-    ...current,
-    ...patch,
-    threadLogsOpen: false,
-  };
-}
 
 function conversationRailIntentFromLegacyState(input: {
   botConversationGroupId: string | null;
@@ -346,7 +328,6 @@ function layoutOccupancySources(
     conversationRailKey: conversationRailKey(state.conversationRail),
     inspectorOpen: state.inspectorOpen,
     openCapsuleCount: state.openCapsuleTabs.length,
-    threadLogs: state.threadLogsOpen,
   };
 }
 
@@ -759,12 +740,6 @@ export function AppShell() {
   const [inspectorOpen, setInspectorOpenLegacy] = useState(
     restoredLayoutOccupancy?.sideTools ?? false,
   );
-  const [threadLogsOpen, setThreadLogsOpenLegacy] = useState(
-    restoredLayoutOccupancy?.threadLogs ?? false,
-  );
-  // Batch 5b: log content/polling live in ThreadLogDock; the shell keeps
-  // only the open flag and the unread mirror for the header badge.
-  const [threadLogsHasUnread, setThreadLogsHasUnread] = useState(false);
   const [botConversationGroupId, setBotConversationGroupIdLegacy] = useState<
     string | null
   >(null);
@@ -1201,15 +1176,12 @@ export function AppShell() {
   const {
     compactSidebarViewport,
     currentConversationWidth,
-    currentThreadLayoutWidth,
     conversationRailPresented,
     dispatchLayoutOccupancyEvent,
     handleRailResizeStart,
     handleSidebarResizeStart,
     handleSideToolsResizeKeyDown,
     handleSideToolsResizeStart,
-    handleThreadLogsResizeKeyDown,
-    handleThreadLogsResizeStart,
     layoutRootRef,
     railResizing,
     persistSidebarDesiredOpen,
@@ -1221,21 +1193,12 @@ export function AppShell() {
     sideToolsPresented,
     sideToolsResizing,
     taskTreeDocked,
-    threadLayoutRef,
-    threadLogsDocked,
-    threadLogsPresented,
-    threadLogsPanelWidth,
-    threadLogsResizing,
     toggleSidebarCollapsed: toggleSidebarCollapsedLegacy,
   } = useLayoutResizeController({
     contentView,
-    desktopState,
     inspectorOpen,
     openCapsuleTabs,
     secondaryRailOpen: secondaryConversationRailRequested,
-    setDesktopState,
-    setSettingsDraft,
-    threadLogsOpen,
     windowLayoutBootstrap: initialWindowLayout,
   });
   const initialLegacyLayoutIntent: LegacyLayoutIntentState = {
@@ -1249,7 +1212,6 @@ export function AppShell() {
       : { kind: "closed" },
     inspectorOpen,
     openCapsuleTabs,
-    threadLogsOpen,
   };
   const desiredLayoutIntentRef = useRef(initialLegacyLayoutIntent);
   const appliedLayoutIntentRef = useRef(initialLegacyLayoutIntent);
@@ -1263,7 +1225,6 @@ export function AppShell() {
       appliedLayoutIntentRef.current = nextApplied;
       setOpenCapsuleTabsLegacy(nextApplied.openCapsuleTabs);
       setInspectorOpenLegacy(nextApplied.inspectorOpen);
-      setThreadLogsOpenLegacy(nextApplied.threadLogsOpen);
       setRecentThreadsRailOpenLegacy(
         nextApplied.conversationRail.kind === "recent",
       );
@@ -1747,9 +1708,10 @@ export function AppShell() {
       ? activeWorkspace.path
       : "";
   const handleWorkspacePreviewRequested = useCallback(() => {
-    commitLegacyLayoutIntent("user-route", (current) =>
-      replaceThreadLogsWithSideTools(current, { inspectorOpen: true }),
-    );
+    commitLegacyLayoutIntent("user-route", (current) => ({
+      ...current,
+      inspectorOpen: true,
+    }));
   }, [commitLegacyLayoutIntent]);
   const {
     activeWorkspaceDirectoryState,
@@ -2348,8 +2310,8 @@ export function AppShell() {
     });
   }, [shellSideChatIsSendingThread, shellSideChatQueueLength, sideChatThreadId]);
 
-  // Out-of-panel side-chat commands (design ruling, #TASK-1658): both run
-  // while the panel is not mounted.
+  // Out-of-panel side-chat command (design ruling, #TASK-1658) may run while
+  // the panel is not mounted.
   function sideChatOpsContext(): SideChatOpsContext {
     return {
       sessions: sideChatSessions,
@@ -2362,15 +2324,6 @@ export function AppShell() {
       setError,
     };
   }
-  async function handleOpenTaskThreadInSidePanel(threadId: string) {
-    // The design's pendingOpenToolRequest mailbox turned out unnecessary:
-    // SideToolsPanel.openTaskThreadInSideChat awaits this command and then
-    // runs its own openTool("chat") — the binding is committed BEFORE the
-    // chat tab's auto-open, so the default-side-chat race cannot happen,
-    // and the Tasks tab only exists with the dock already open.
-    await openTaskThreadInSidePanelOp(sideChatOpsContext(), threadId);
-  }
-
   // Batch 3c-2: the dispatch orchestration (send/steer/interrupt/queue
   // drain) lives in the mirror; its deps are refreshed on every commit
   // (the streamEventHandlerRef pattern) so orchestration entry points
@@ -3011,19 +2964,12 @@ export function AppShell() {
   }, [commitLegacyLayoutIntent, contentView, selectedThreadId]);
 
   useEffect(() => {
-    if (!inspectorOpen && !threadLogsOpen) {
+    if (!inspectorOpen) {
       return;
     }
 
     function handleKeydown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        if (threadLogsOpen) {
-          commitLegacyLayoutIntent("system-cleanup", (current) => ({
-            ...current,
-            threadLogsOpen: false,
-          }));
-          return;
-        }
         commitLegacyLayoutIntent("system-cleanup", (current) => ({
           ...current,
           inspectorOpen: false,
@@ -3035,30 +2981,21 @@ export function AppShell() {
     return () => {
       window.removeEventListener("keydown", handleKeydown);
     };
-  }, [commitLegacyLayoutIntent, inspectorOpen, threadLogsOpen]);
+  }, [commitLegacyLayoutIntent, inspectorOpen]);
 
   useEffect(() => {
     if (contentView !== "thread") {
       commitLegacyLayoutIntent("system-cleanup", (current) => ({
         ...current,
         inspectorOpen: false,
-        threadLogsOpen: false,
       }));
     }
   }, [commitLegacyLayoutIntent, contentView]);
 
   useEffect(() => {
-    // A non-fresh window-layout session restores inspector intent before the
-    // asynchronous DesktopState hydration resolves its workspace. Do not
-    // misclassify that boot gap as route cleanup and repay valid funding.
-    if (loading || !desktopState) {
-      return;
-    }
-    if (!activeWorkspacePath) {
-      commitLegacyLayoutIntent("system-cleanup", (current) => ({
-        ...current,
-        inspectorOpen: false,
-      }));
+    // Logs keep side tools valid for threads without a workspace. Only the
+    // workspace-directory expansion waits for DesktopState and a real path.
+    if (loading || !desktopState || !activeWorkspacePath) {
       return;
     }
 
@@ -3066,15 +3003,16 @@ export function AppShell() {
       ...current,
       [workspaceDirectoryKey(activeWorkspacePath, "")]: true,
     }));
-  }, [activeWorkspacePath, commitLegacyLayoutIntent, desktopState, loading]);
+  }, [activeWorkspacePath, desktopState, loading]);
 
   useEffect(() => {
     if (!workspacePreviewModalOpen || contentView !== "thread") {
       return;
     }
-    commitLegacyLayoutIntent("user-route", (current) =>
-      replaceThreadLogsWithSideTools(current, { inspectorOpen: true }),
-    );
+    commitLegacyLayoutIntent("user-route", (current) => ({
+      ...current,
+      inspectorOpen: true,
+    }));
   }, [commitLegacyLayoutIntent, contentView, workspacePreviewModalOpen]);
 
   useEffect(() => {
@@ -3095,15 +3033,6 @@ export function AppShell() {
     contentView,
     inspectorOpen,
   ]);
-
-  useEffect(() => {
-    if (threadLogsOpen && !selectedThreadId) {
-      commitLegacyLayoutIntent("system-cleanup", (current) => ({
-        ...current,
-        threadLogsOpen: false,
-      }));
-    }
-  }, [commitLegacyLayoutIntent, selectedThreadId, threadLogsOpen]);
 
   function setPendingAutomationRun(
     threadId: string,
@@ -3382,7 +3311,6 @@ export function AppShell() {
           : { kind: "closed" },
       inspectorOpen: false,
       openCapsuleTabs: [],
-      threadLogsOpen: false,
     });
     commitLegacyLayoutIntent(
       "user-route",
@@ -4033,6 +3961,7 @@ export function AppShell() {
     >
       {(workspaceDirectoryPanel, workspaceFilter) => (
     <ThreadSideToolsPanel
+      activeThreadTitle={activeThread?.title || null}
       activeWorkspaceName={activeWorkspace?.name || null}
       activeWorkspacePath={activeWorkspacePath}
       activeThreadId={selectedThreadId}
@@ -4075,9 +4004,6 @@ export function AppShell() {
         }));
         setPendingActiveCapsuleId(null);
       }}
-      onOpenTaskThread={(task) =>
-        handleOpenTaskThreadInSidePanel(task.threadId)
-      }
       onOpenSideChat={() => {
         void ensureSideChatThreadOp(sideChatOpsContext());
       }}
@@ -4265,7 +4191,7 @@ export function AppShell() {
         }}
         onOpenThreadById={(threadId) => {
           if (embedded) {
-            void selectExistingThreadInPlace(threadId, "tasks");
+            void selectExistingThreadInPlace(threadId);
           } else {
             void openExistingThread(threadId);
           }
@@ -4276,30 +4202,28 @@ export function AppShell() {
           }
           // Open/activate this capsule as a tab in the right dock (#TASK-1470).
           // Dedup by id; refresh title/revision if it is already open. The
-          // capsule path drives the dock without inspector state and replaces
-          // thread logs so the two right-panel presentations stay exclusive.
+          // capsule path drives the dock without inspector state.
           const capsuleId = card.capsule_id;
           const title = card.title?.trim() || "";
-          commitLegacyLayoutIntent("user-route", (current) =>
-            replaceThreadLogsWithSideTools(current, {
-              openCapsuleTabs: current.openCapsuleTabs.some(
-                (tab) => tab.capsuleId === capsuleId,
-              )
-                ? current.openCapsuleTabs.map((tab) =>
-                    tab.capsuleId === capsuleId
-                      ? {
-                          ...tab,
-                          revision: card.revision,
-                          title: title || tab.title,
-                        }
-                      : tab,
-                  )
-                : [
-                    ...current.openCapsuleTabs,
-                    { capsuleId, revision: card.revision, title },
-                  ],
-            }),
-          );
+          commitLegacyLayoutIntent("user-route", (current) => ({
+            ...current,
+            openCapsuleTabs: current.openCapsuleTabs.some(
+              (tab) => tab.capsuleId === capsuleId,
+            )
+              ? current.openCapsuleTabs.map((tab) =>
+                  tab.capsuleId === capsuleId
+                    ? {
+                        ...tab,
+                        revision: card.revision,
+                        title: title || tab.title,
+                      }
+                    : tab,
+                )
+              : [
+                  ...current.openCapsuleTabs,
+                  { capsuleId, revision: card.revision, title },
+                ],
+          }));
           setPendingActiveCapsuleId(capsuleId);
         }}
         onSelectWorkspace={(workspacePath) => {
@@ -4309,9 +4233,6 @@ export function AppShell() {
         onSteerQueuedPrompt={(item) => {
           void handleSteerQueuedPrompt(item);
         }}
-        onThreadLogsUnreadChange={setThreadLogsHasUnread}
-        onThreadLogsResizeKeyDown={embedded ? () => {} : handleThreadLogsResizeKeyDown}
-        onThreadLogsResizeStart={embedded ? () => {} : handleThreadLogsResizeStart}
         preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
         selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
         selectedThreadId={selectedThreadId}
@@ -4321,20 +4242,7 @@ export function AppShell() {
         rateLimit={activeRateLimit}
         onRateLimitContinue={() => handleSendPromptText("continue")}
         taskTreeDocked={embedded ? false : taskTreeDocked}
-        threadLayoutRef={threadLayoutRef}
         threadLayoutStyle={undefined}
-        threadLogsMaxWidth={
-          embedded
-            ? 0
-            : clampThreadLogsPanelWidth(
-                THREAD_LOG_PANEL_MAX_WIDTH,
-                currentThreadLayoutWidth(),
-              )
-        }
-        threadLogsDocked={embedded ? false : threadLogsDocked}
-        threadLogsOpen={embedded ? false : threadLogsPresented}
-        threadLogsPanelWidth={embedded ? 0 : threadLogsPanelWidth}
-        threadLogsResizing={embedded ? false : threadLogsResizing}
         threadAvatarCatalog={threadAvatarCatalog}
         visibleRemoteAwaitingAckInputs={visibleRemoteAwaitingAckInputs}
         visibleRemotePendingInputs={visibleRemotePendingInputs}
@@ -4868,7 +4776,6 @@ export function AppShell() {
               <ConversationHeaderActions
                 gatewayStatusLabel={gatewayIndicator?.label || null}
                 gatewayStatusTone={gatewayIndicator?.tone || null}
-                hasWorkspaceDirectory={Boolean(activeWorkspacePath)}
                 inspectorOpen={inspectorOpen}
                 isAutomationView={isAutomationView}
                 isBotsView={isBotsView}
@@ -4876,8 +4783,6 @@ export function AppShell() {
                 selectedThreadId={selectedThreadId}
                 threadInfo={activeThreadInfo}
                 threadInfoLoaded={activeThreadInfoLoaded}
-                threadLogsHasUnread={threadLogsHasUnread}
-                threadLogsOpen={threadLogsOpen}
                 onCreateAutomation={() => {
                   openAutomationDialog("create");
                 }}
@@ -4887,24 +4792,10 @@ export function AppShell() {
                 onToggleInspector={() => {
                   const nextInspectorOpen =
                     !appliedLayoutIntentRef.current.inspectorOpen;
-                  commitLegacyLayoutIntent("user-panel", (current) =>
-                    replaceThreadLogsWithSideTools(current, {
-                      inspectorOpen: nextInspectorOpen,
-                    }),
-                  );
-                }}
-                onToggleThreadLogs={() => {
-                  // Logs and the side-tools dock are mutually exclusive right
-                  // panels; opening logs closes the dock, capsule tabs included.
-                  const nextThreadLogsOpen =
-                    !appliedLayoutIntentRef.current.threadLogsOpen;
                   commitLegacyLayoutIntent("user-panel", (current) => ({
                     ...current,
-                    inspectorOpen: false,
-                    openCapsuleTabs: [],
-                    threadLogsOpen: nextThreadLogsOpen,
+                    inspectorOpen: nextInspectorOpen,
                   }));
-                  setPendingActiveCapsuleId(null);
                 }}
               />
             </header>

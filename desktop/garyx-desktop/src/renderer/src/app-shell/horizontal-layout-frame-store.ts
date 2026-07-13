@@ -21,7 +21,6 @@ export const HORIZONTAL_LAYOUT_FRAME_VARIABLES = [
   "--gx-sidebar-preferred-width",
   "--gx-conversation-rail-preferred-width",
   "--gx-side-tools-preferred-width",
-  "--gx-thread-logs-preferred-width",
   "--gx-sidebar-width",
   "--gx-conversation-rail-width",
   "--gx-shell-main-width",
@@ -29,8 +28,6 @@ export const HORIZONTAL_LAYOUT_FRAME_VARIABLES = [
   "--gx-right-resizer-width",
   "--gx-right-panel-width",
   "--gx-thread-main-width",
-  "--gx-thread-log-resizer-width",
-  "--gx-thread-log-panel-width",
 ] as const;
 
 // The three omitted main-track values are still projected for diagnostics and
@@ -40,13 +37,10 @@ export const HORIZONTAL_LAYOUT_PAINT_VARIABLES = [
   "--gx-sidebar-preferred-width",
   "--gx-conversation-rail-preferred-width",
   "--gx-side-tools-preferred-width",
-  "--gx-thread-logs-preferred-width",
   "--gx-sidebar-width",
   "--gx-conversation-rail-width",
   "--gx-right-resizer-width",
   "--gx-right-panel-width",
-  "--gx-thread-log-resizer-width",
-  "--gx-thread-log-panel-width",
 ] as const;
 
 export const HORIZONTAL_LAYOUT_FRAME_ATTRIBUTES = [
@@ -54,7 +48,6 @@ export const HORIZONTAL_LAYOUT_FRAME_ATTRIBUTES = [
   "data-sidebar-state",
   "data-conversation-rail-state",
   "data-side-tools-state",
-  "data-thread-logs-presentation",
   "data-task-tree-presentation",
   "data-header-density",
   "data-layout-revision",
@@ -127,7 +120,6 @@ function frameRenderSignature(frame: StableHorizontalLayoutFrame): string {
     requested.globalSidebar,
     requested.conversationRail,
     requested.sideTools,
-    requested.threadLogs,
     ...HORIZONTAL_LAYOUT_PAINT_VARIABLES.map(
       (name) => frame.cssVariables[name],
     ),

@@ -241,53 +241,6 @@
   align-items: stretch;
 }
 
-.thread-layout.with-log-panel {
-  position: relative;
-  align-items: stretch;
-  gap: 0;
-}
-
-.app-shell[data-thread-logs-presentation="docked"]
-  .thread-layout.with-log-panel {
-  grid-template-columns:
-    minmax(0, 1fr)
-    var(--gx-thread-log-resizer-width)
-    var(--gx-thread-log-panel-width);
-}
-
-.app-shell[data-thread-logs-presentation="overlay"]
-  .thread-layout.with-log-panel {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.app-shell[data-thread-logs-presentation="overlay"] .thread-log-resizer {
-  display: none;
-}
-
-.app-shell[data-thread-logs-presentation="overlay"] .thread-log-panel {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  bottom: 12px;
-  z-index: 45;
-  width: min(var(--gx-thread-logs-preferred-width), calc(100% - 24px));
-  max-height: none;
-  padding: 10px 12px 12px;
-  border: 0.5px solid var(--color-token-border);
-  border-radius: 16px;
-  background: var(--color-token-bg-primary);
-  box-shadow: var(--shadow-lg);
-}
-
-.app-shell[data-thread-logs-presentation="closed"] .thread-log-resizer,
-.app-shell[data-thread-logs-presentation="closed"] .thread-log-panel {
-  display: none;
-}
-
-.thread-layout.log-panel-resizing {
-  cursor: col-resize;
-}
-
 /* Task-tree docking consumes the same frame as the shell tracks. Below the
    dock threshold the feature stylesheet's base popover stays closed. */
 .app-shell[data-task-tree-presentation="docked"]
@@ -351,16 +304,10 @@
   opacity: 1;
 }
 
-.thread-log-resizer,
 .side-tools-resizer {
   position: relative;
   cursor: col-resize;
   touch-action: none;
-}
-
-.thread-log-resizer {
-  width: var(--gx-thread-log-resizer-width);
-  min-width: var(--gx-thread-log-resizer-width);
 }
 
 .side-tools-resizer {
@@ -369,7 +316,6 @@
   -webkit-app-region: no-drag;
 }
 
-.thread-log-resizer::before,
 .side-tools-resizer::before {
   content: "";
   position: absolute;
@@ -382,9 +328,6 @@
   transform: translateX(-50%);
 }
 
-.thread-log-resizer:hover::before,
-.thread-log-resizer:focus-visible::before,
-.thread-layout.log-panel-resizing .thread-log-resizer::before,
 .side-tools-resizer:hover::before,
 .side-tools-resizer:focus-visible::before,
 .conversation.side-tools-resizing .side-tools-resizer::before {

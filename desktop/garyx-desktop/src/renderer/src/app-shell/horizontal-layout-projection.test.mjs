@@ -94,21 +94,16 @@ function columnVector(frame) {
     frame.columns.primaryThread,
     frame.columns.sideToolsResizer,
     frame.columns.sideTools,
-    frame.columns.threadLogsResizer,
-    frame.columns.threadLogs,
   ];
 }
 
 test("legacy projection shadows every Phase 0 packaged structure scenario", () => {
   assert.equal(legacyOracle.policy, "legacy");
   for (const scenario of legacyOracle.scenarios) {
-    const logsWidth =
-      scenario.elements.threadLogResizer?.attributes?.["aria-valuenow"];
     const frame = stableProjection({
       policy: "legacy",
       width: scenario.viewport.width,
       desiredOccupancy: scenario.desiredOccupancy,
-      widths: logsWidth ? { threadLogs: Number(logsWidth) } : undefined,
     });
 
     const expectedShellTracks = frame.columns.conversationRail
@@ -128,13 +123,7 @@ test("legacy projection shadows every Phase 0 packaged structure scenario", () =
           frame.nestedColumns.conversation.sideTools,
         ]
       : [frame.nestedColumns.conversation.threadLayout];
-    const expectedThreadTracks = frame.columns.threadLogs
-      ? [
-          frame.nestedColumns.thread.main,
-          frame.nestedColumns.thread.threadLogsResizer,
-          frame.nestedColumns.thread.threadLogs,
-        ]
-      : [frame.nestedColumns.thread.main];
+    const expectedThreadTracks = [frame.nestedColumns.thread.main];
 
     assert.deepEqual(
       pixelTracks(scenario.elements.appShell.computed.gridTemplateColumns),
@@ -165,11 +154,6 @@ test("legacy projection shadows every Phase 0 packaged structure scenario", () =
       frame.presentation.sideTools,
       scenario.presentation.sideTools,
       `${scenario.name}: side-tools presentation`,
-    );
-    assert.equal(
-      frame.presentation.threadLogs,
-      scenario.presentation.threadLogs,
-      `${scenario.name}: logs presentation`,
     );
     assert.equal(
       frame.presentation.taskTree,
@@ -212,7 +196,6 @@ test("expand-v1 intentional differences are isolated in a golden matrix", () => 
       globalSidebar: true,
       conversationRail: false,
       sideTools: true,
-      threadLogs: false,
     },
   });
   assert.equal(legacyAt960.presentation.sideTools, "docked");
@@ -229,39 +212,30 @@ test("both policies satisfy stable geometry invariants across the full matrix", 
         for (const globalSidebar of [false, true]) {
           for (const conversationRail of [false, true]) {
             for (const sideTools of [false, true]) {
-              for (const threadLogs of [false, true]) {
-                if (sideTools && threadLogs) {
-                  continue;
-                }
-                const requested = {
-                  globalSidebar,
-                  conversationRail,
-                  sideTools,
-                  threadLogs,
-                };
-                const frame = stableProjection({
-                  policy,
-                  width,
-                  mode,
-                  desiredOccupancy: requested,
-                });
-                const label = JSON.stringify({ policy, width, mode, requested });
-                assert.equal(horizontalLayoutColumnSum(frame), width, label);
-                assert.ok(
-                  frame.primaryThreadWidth >= MIN_PRIMARY_THREAD_WIDTH,
+              const requested = {
+                globalSidebar,
+                conversationRail,
+                sideTools,
+              };
+              const frame = stableProjection({
+                policy,
+                width,
+                mode,
+                desiredOccupancy: requested,
+              });
+              const label = JSON.stringify({ policy, width, mode, requested });
+              assert.equal(horizontalLayoutColumnSum(frame), width, label);
+              assert.ok(
+                frame.primaryThreadWidth >= MIN_PRIMARY_THREAD_WIDTH,
+                label,
+              );
+              assert.deepEqual(frame.requestedOccupancy, requested, label);
+              if (frame.presentation.sideTools === "hidden") {
+                assert.equal(
+                  frame.effectiveOccupancy.sideTools,
+                  false,
                   label,
                 );
-                if (frame.presentation.threadLogs === "docked") {
-                  assert.ok(frame.threadMainWidth >= 540, label);
-                }
-                assert.deepEqual(frame.requestedOccupancy, requested, label);
-                if (frame.presentation.sideTools === "hidden") {
-                  assert.equal(
-                    frame.effectiveOccupancy.sideTools,
-                    false,
-                    label,
-                  );
-                }
               }
             }
           }
@@ -280,7 +254,6 @@ test("explicit compact sidebar presentation stays in flow", () => {
       globalSidebar: true,
       conversationRail: false,
       sideTools: false,
-      threadLogs: false,
     },
   });
   const compactOpen = { ...state, compactSidebarOpen: true };
@@ -300,7 +273,6 @@ test("legacy compact sidebar remains a temporary overlay without changing intent
       globalSidebar: false,
       conversationRail: false,
       sideTools: false,
-      threadLogs: false,
     },
   });
   const toggled = reduceHorizontalLayout(state, {
@@ -312,24 +284,6 @@ test("legacy compact sidebar remains a temporary overlay without changing intent
   assert.equal(frame.presentation.globalSidebar, "compact-overlay");
   assert.equal(frame.columns.globalSidebar, 0);
   assert.equal(frame.requestedOccupancy.globalSidebar, false);
-});
-
-test("overlay surfaces keep their preferred width outside the in-flow sum", () => {
-  const frame = stableProjection({
-    policy: "legacy",
-    width: 1480,
-    desiredOccupancy: {
-      globalSidebar: true,
-      conversationRail: true,
-      sideTools: false,
-      threadLogs: true,
-    },
-    widths: { threadLogs: 480 },
-  });
-  assert.equal(frame.presentation.threadLogs, "overlay");
-  assert.equal(frame.columns.threadLogs, 0);
-  assert.equal(frame.cssVariables["--gx-thread-log-panel-width"], "480px");
-  assert.equal(horizontalLayoutColumnSum(frame), 1480);
 });
 
 test("invalid viewport is rejected instead of manufacturing a stable frame", () => {

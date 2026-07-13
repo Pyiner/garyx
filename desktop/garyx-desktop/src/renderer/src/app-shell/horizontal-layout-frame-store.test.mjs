@@ -67,7 +67,6 @@ function baselineStore() {
       globalSidebar: true,
       conversationRail: false,
       sideTools: false,
-      threadLogs: false,
     },
   });
 }
@@ -122,13 +121,11 @@ test("legacy store reduces normalized occupancy and width events without wiring 
       globalSidebar: true,
       conversationRail: false,
       sideTools: false,
-      threadLogs: false,
     },
     nextOccupancy: {
       globalSidebar: true,
       conversationRail: true,
       sideTools: false,
-      threadLogs: false,
     },
     cause: "user-route",
     transactionId: "phase-2-open-rail",
@@ -210,7 +207,7 @@ test("live viewport frames do not rewrite fixed tracks or invalidate React insid
   unsubscribe();
 });
 
-test("logs to transcript capsule is one valid replace and later intents stay live", () => {
+test("capsule occupancy and later intents stay live", () => {
   const store = baselineStore();
   const target = mockRoot();
   store.attachRoot(target.root);
@@ -219,7 +216,6 @@ test("logs to transcript capsule is one valid replace and later intents stay liv
     conversationRailKey: null,
     inspectorOpen: false,
     openCapsuleCount: 0,
-    threadLogs: false,
   });
   const commit = (nextSources, cause) => {
     const result = appendLayoutOccupancyIntent(log, nextSources, cause);
@@ -234,25 +230,19 @@ test("logs to transcript capsule is one valid replace and later intents stay liv
     return result.event;
   };
 
-  commit({ ...log.currentSources, threadLogs: true }, "user-panel");
-  assert.equal(store.getSnapshot().presentation.threadLogs, "docked");
-
-  const capsuleReplace = commit(
+  const capsuleOpen = commit(
     {
       ...log.currentSources,
       openCapsuleCount: 1,
-      threadLogs: false,
     },
     "user-route",
   );
-  assert.deepEqual(capsuleReplace?.nextOccupancy, {
+  assert.deepEqual(capsuleOpen?.nextOccupancy, {
     globalSidebar: true,
     conversationRail: false,
     sideTools: true,
-    threadLogs: false,
   });
   assert.equal(store.getSnapshot().presentation.sideTools, "docked");
-  assert.equal(store.getSnapshot().presentation.threadLogs, "closed");
   assert.deepEqual(store.getState().diagnostics, []);
 
   commit(

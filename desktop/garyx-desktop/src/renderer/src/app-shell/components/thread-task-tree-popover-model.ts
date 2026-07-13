@@ -120,13 +120,11 @@ export function shouldShowThreadTaskTreePopover(input: {
   inspectorOpen: boolean;
   isSideChatSurface: boolean;
   selectedThreadId: string | null;
-  threadLogsOpen: boolean;
 }): boolean {
   return Boolean(
     input.selectedThreadId &&
       !input.inspectorOpen &&
-      !input.isSideChatSurface &&
-      !input.threadLogsOpen,
+      !input.isSideChatSurface,
   );
 }
 

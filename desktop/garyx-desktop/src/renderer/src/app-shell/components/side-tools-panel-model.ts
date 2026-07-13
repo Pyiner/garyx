@@ -2,7 +2,22 @@ const EMPTY_WORKSPACE_PREVIEW_TITLE = "Select a file";
 const PENDING_WORKSPACE_PREVIEW_KEY = "pending-workspace-preview";
 
 /** Built-in side-tool tabs. Each is a singleton in the panel's tab track. */
-export type ThreadSideToolId = "files" | "tasks" | "chat" | "browser" | "terminal";
+export type ThreadSideToolId = "files" | "logs" | "chat" | "browser" | "terminal";
+
+export const THREAD_SIDE_TOOL_IDS: readonly ThreadSideToolId[] = [
+  "files",
+  "logs",
+  "chat",
+  "browser",
+  "terminal",
+];
+
+/** Logs are thread-owned; the remaining built-ins require a workspace. */
+export function availableThreadSideToolIds(
+  hasWorkspace: boolean,
+): ThreadSideToolId[] {
+  return hasWorkspace ? [...THREAD_SIDE_TOOL_IDS] : ["logs"];
+}
 
 /** Prefix that marks a capsule tab key, e.g. `capsule:<capsuleId>`. */
 export const CAPSULE_TAB_PREFIX = "capsule:";
@@ -13,6 +28,34 @@ export const CAPSULE_TAB_PREFIX = "capsule:";
  * the same open/close/active mechanism as the built-in tools.
  */
 export type SideTabKey = ThreadSideToolId | `capsule:${string}`;
+
+export function reconcileSideToolAvailability(input: {
+  activeTabKey: SideTabKey | null;
+  capsuleTabKeys: SideTabKey[];
+  hasWorkspace: boolean;
+  openTools: ThreadSideToolId[];
+}): { activeTabKey: SideTabKey | null; openTools: ThreadSideToolId[] } {
+  const allowed = new Set(availableThreadSideToolIds(input.hasWorkspace));
+  const filteredOpenTools = input.openTools.filter((toolId) => allowed.has(toolId));
+  const openTools = filteredOpenTools.length === input.openTools.length
+    ? input.openTools
+    : filteredOpenTools;
+  const activeTabKey = input.activeTabKey;
+  if (
+    !activeTabKey ||
+    isCapsuleTabKey(activeTabKey) ||
+    allowed.has(activeTabKey)
+  ) {
+    return { activeTabKey, openTools };
+  }
+  return {
+    activeTabKey:
+      openTools[openTools.length - 1] ||
+      input.capsuleTabKeys[input.capsuleTabKeys.length - 1] ||
+      null,
+    openTools,
+  };
+}
 
 export function capsuleTabKey(capsuleId: string): SideTabKey {
   return `${CAPSULE_TAB_PREFIX}${capsuleId}`;

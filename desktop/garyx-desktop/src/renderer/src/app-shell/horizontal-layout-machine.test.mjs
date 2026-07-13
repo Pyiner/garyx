@@ -17,13 +17,11 @@ const sidebarOpen = Object.freeze({
   globalSidebar: true,
   conversationRail: false,
   sideTools: false,
-  threadLogs: false,
 });
 const sideToolsOpen = Object.freeze({
   globalSidebar: false,
   conversationRail: false,
   sideTools: true,
-  threadLogs: false,
 });
 
 function snapshot({
@@ -518,75 +516,6 @@ test("funded open then close restores the exact base bounds", () => {
   );
 });
 
-test("side-tools to logs replacement emits one net +40 funding command", () => {
-  const sideFunding = funding("sideTools", 330, "replace-side-tools");
-  const initialSession = acknowledgedSession({
-    desiredOccupancy: sideToolsOpen,
-    fundingByPanel: { sideTools: sideFunding },
-    windowRevision: 3,
-    sessionRevision: 5,
-  });
-  const initial = stateWithSession({
-    desiredOccupancy: sideToolsOpen,
-    session: initialSession,
-  });
-  const logsOpen = {
-    globalSidebar: false,
-    conversationRail: false,
-    sideTools: false,
-    threadLogs: true,
-  };
-  const started = beginIntent(initial, logsOpen, {
-    cause: "user-panel",
-    transactionId: "replace-right-panel",
-  });
-  const pendingFrame = projectHorizontalLayout(started.state).frame;
-  assert.equal(pendingFrame.presentation.sideTools, "closed");
-  assert.equal(
-    pendingFrame.presentation.threadLogs,
-    "closed",
-    "the replacement must not open before its funding checkpoint",
-  );
-  const closing = acknowledgeCheckpoint(started);
-  assert.deepEqual(
-    closing.effects.map((effect) => effect.type),
-    ["request-frame-commit"],
-  );
-  const closeFrame = projectHorizontalLayout(closing.state).frame;
-  assert.equal(closeFrame.presentation.sideTools, "closed");
-  assert.equal(
-    closeFrame.presentation.threadLogs,
-    "closed",
-    "the replacement must stay closed while the close frame commits",
-  );
-  const committed = reduceHorizontalLayout(closing.state, {
-    type: "FRAME_COMMITTED",
-    transactionId: "replace-right-panel",
-  });
-  assert.deepEqual(
-    committed.effects.map((effect) => effect.type),
-    ["window-bounds"],
-  );
-  const awaitingBoundsFrame = projectHorizontalLayout(committed.state).frame;
-  assert.equal(awaitingBoundsFrame.presentation.sideTools, "closed");
-  assert.equal(
-    awaitingBoundsFrame.presentation.threadLogs,
-    "closed",
-    "the replacement must not reopen until its funding bounds are applied",
-  );
-  const command = boundsEffect(committed).command;
-  assert.equal(command.targetBounds.width - initial.snapshot.bounds.width, 40);
-  assert.equal(command.targetFundingByPanel.sideTools, undefined);
-  assert.equal(command.targetFundingByPanel.threadLogs.widthDelta, 370);
-  assert.equal(command.authority.kind, "user-cause");
-  const settled = acceptBounds(committed);
-  const settledFrame = stableFrameFromProjection(
-    projectHorizontalLayout(settled.state),
-  );
-  assert.equal(settledFrame.presentation.sideTools, "closed");
-  assert.equal(settledFrame.presentation.threadLogs, "docked");
-});
-
 test("checkpoint stale retries with the same transaction sequence and token", () => {
   const started = beginIntent(stateWithSession(), sideToolsOpen);
   const first = started.effects[0].command;
@@ -895,7 +824,6 @@ test("fresh claim is ordered, reload restores intent, and orphan funding repays"
     globalSidebar: true,
     conversationRail: true,
     sideTools: false,
-    threadLogs: false,
   };
   const fresh = reduceHorizontalLayout(unhydrated, {
     type: "HYDRATE",
@@ -1104,7 +1032,6 @@ test("responsive narrowing hides the conversation rail before the global sidebar
     globalSidebar: true,
     conversationRail: true,
     sideTools: false,
-    threadLogs: false,
   };
   const session = acknowledgedSession({
     baseWidth: 981,
@@ -1267,7 +1194,7 @@ test("accepted physical facts fold by window revision, never by sequence", () =>
   );
 });
 
-test("panel width events never mint bounds authority and persist only logs", () => {
+test("panel width events never mint bounds authority", () => {
   const initial = stateWithSession({ desiredOccupancy: sidebarOpen });
   const sidePreview = reduceHorizontalLayout(initial, {
     type: "PANEL_WIDTH_CHANGED",
@@ -1286,21 +1213,6 @@ test("panel width events never mint bounds authority and persist only logs", () 
     commit: true,
   });
   assert.deepEqual(sideCommit.effects, []);
-
-  const logsCommit = reduceHorizontalLayout(sideCommit.state, {
-    type: "PANEL_WIDTH_CHANGED",
-    panel: "threadLogs",
-    width: 500,
-    commit: true,
-  });
-  assert.deepEqual(logsCommit.effects, [
-    {
-      type: "persist-preference",
-      preference: "panel-width",
-      panel: "threadLogs",
-      value: 500,
-    },
-  ]);
 });
 
 test("RepayProof cannot add, expand, cite unknown funding, or cross revisions", () => {

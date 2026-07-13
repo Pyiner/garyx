@@ -624,27 +624,6 @@
   opacity: 0.42;
 }
 
-.conversation-header-action-logs {
-  white-space: nowrap;
-}
-
-@media (max-width: 720px) {
-  .conversation.thread-view .conversation-header-action-logs {
-    width: 30px;
-    min-width: 30px;
-    padding: 0;
-  }
-
-  .conversation.thread-view .conversation-header-action-logs > span {
-    display: none;
-  }
-}
-
-.conversation-header-action-button-unread:not(.is-open) {
-  background: rgba(15, 23, 42, 0.035);
-  color: var(--color-token-text-primary);
-}
-
 .conversation-header-action-icon {
   width: 30px;
   min-width: 30px;

@@ -14,9 +14,9 @@
 //
 // The session lifetime stays in the shell store (5b-7a); this panel can
 // unmount freely with the dock. ensureSideChatThread and
-// openTaskThreadInSidePanel live in side-chat-ops.ts because both are
-// ALSO dispatched while this panel is not mounted (dock header auto-open,
-// Tasks tab) — the panel builds the same ops context for its submit path.
+// ensureSideChatThread lives in side-chat-ops.ts because it is also dispatched
+// while this panel is not mounted; the panel builds the same ops context for
+// its submit path.
 
 import {
   useCallback,
@@ -222,7 +222,6 @@ export function SideChatPanel({
   );
   const sideComposerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const sideComposerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const sideChatThreadLayoutRef = useRef<HTMLDivElement | null>(null);
   const sideIsComposingRef = useRef(false);
   const sideIgnoreComposerSubmitUntilRef = useRef(0);
 
@@ -824,9 +823,6 @@ export function SideChatPanel({
           canSteer: sideChatCanSteerQueuedPrompt,
         });
       }}
-      onThreadLogsUnreadChange={() => {}}
-      onThreadLogsResizeKeyDown={() => {}}
-      onThreadLogsResizeStart={() => {}}
       preferredWorkspaceForNewThread={preferredWorkspaceForNewThread}
       selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
       selectedThreadId={sideChatThreadId}
@@ -836,12 +832,6 @@ export function SideChatPanel({
       // opens as an empty thread instead of a loading placeholder.
       showHistoryLoadingPlaceholder={false}
       showTailThinking={sideChatShowTailThinking}
-      threadLayoutRef={sideChatThreadLayoutRef}
-      threadLogsMaxWidth={0}
-      threadLogsDocked={false}
-      threadLogsOpen={false}
-      threadLogsPanelWidth={0}
-      threadLogsResizing={false}
       threadAvatarCatalog={threadAvatarCatalog}
       visibleRemoteAwaitingAckInputs={sideChatVisibleRemotePendingInputs}
       visibleRemotePendingInputs={sideChatVisibleRemotePendingInputs}

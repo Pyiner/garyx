@@ -13,7 +13,6 @@ import {
   TASK_TREE_DOCK_MIN_WIDTH,
   clampConversationRailWidth,
   clampSidebarWidth,
-  isDockedSidePanel,
   isDockedTaskTree,
   isCompactSidebarViewport,
   resolveSidebarCollapsed,
@@ -130,61 +129,4 @@ test("legacy compact presentation resolves every intent combination", () => {
 test("task tree docks only after the full 736px reading column still fits", () => {
   assert.equal(isDockedTaskTree(TASK_TREE_DOCK_MIN_WIDTH - 1), false);
   assert.equal(isDockedTaskTree(TASK_TREE_DOCK_MIN_WIDTH), true);
-});
-
-test("thread logs overlay before they can crush the primary thread", () => {
-  assert.equal(
-    isDockedSidePanel({
-      canvasWidth: 829,
-      panelWidth: 280,
-    }),
-    false,
-  );
-  assert.equal(
-    isDockedSidePanel({
-      canvasWidth: 830,
-      panelWidth: 280,
-    }),
-    true,
-  );
-  assert.equal(
-    isDockedSidePanel({
-      canvasWidth: 736,
-      panelWidth: 280,
-    }),
-    false,
-  );
-  assert.equal(
-    isDockedSidePanel({
-      canvasWidth: 1235,
-      panelWidth: 685,
-    }),
-    true,
-  );
-});
-
-test("legacy dock helper rejects invalid geometry and honors custom budgets", () => {
-  const cases = [
-    { canvasWidth: Number.NaN, panelWidth: 280, expected: false },
-    { canvasWidth: 830, panelWidth: Number.NaN, expected: false },
-    { canvasWidth: 0, panelWidth: 280, expected: false },
-    { canvasWidth: 830, panelWidth: 0, expected: false },
-    {
-      canvasWidth: 710,
-      panelWidth: 300,
-      minMainWidth: 400,
-      resizerWidth: 10,
-      expected: true,
-    },
-    {
-      canvasWidth: 709,
-      panelWidth: 300,
-      minMainWidth: 400,
-      resizerWidth: 10,
-      expected: false,
-    },
-  ];
-  for (const { expected, ...input } of cases) {
-    assert.equal(isDockedSidePanel(input), expected, JSON.stringify(input));
-  }
 });

@@ -315,7 +315,6 @@ test("task tree popover yields to inspector panel", () => {
       inspectorOpen: false,
       isSideChatSurface: false,
       selectedThreadId: "thread::current",
-      threadLogsOpen: false,
     }),
     true,
   );
@@ -324,16 +323,6 @@ test("task tree popover yields to inspector panel", () => {
       inspectorOpen: true,
       isSideChatSurface: false,
       selectedThreadId: "thread::current",
-      threadLogsOpen: false,
-    }),
-    false,
-  );
-  assert.equal(
-    shouldShowThreadTaskTreePopover({
-      inspectorOpen: false,
-      isSideChatSurface: false,
-      selectedThreadId: "thread::current",
-      threadLogsOpen: true,
     }),
     false,
   );
@@ -342,7 +331,6 @@ test("task tree popover yields to inspector panel", () => {
       inspectorOpen: false,
       isSideChatSurface: false,
       selectedThreadId: null,
-      threadLogsOpen: false,
     }),
     false,
   );
@@ -354,7 +342,6 @@ test("task tree popover stays on the primary thread surface", () => {
       inspectorOpen: false,
       isSideChatSurface: true,
       selectedThreadId: "thread::side-chat",
-      threadLogsOpen: false,
     }),
     false,
   );

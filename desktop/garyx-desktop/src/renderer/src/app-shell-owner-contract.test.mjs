@@ -15,7 +15,7 @@ const escapedOwnerPatterns = [
   ["main thread tracks", /(?:^|[},])\s*\.thread-layout(?=[\s.#:\[>])/m],
   ["right conversation tracks", /(?:^|[},])\s*\.conversation\.with-side-tools\b/m],
   ["conversation root", /(?:^|})\s*\.conversation\s*\{/m],
-  ["shell resizers", /(?:^|[},])\s*\.(?:sidebar-resizer|thread-log-resizer|side-tools-resizer)\b/m],
+  ["shell resizers", /(?:^|[},])\s*\.(?:sidebar-resizer|side-tools-resizer)\b/m],
   ["sidebar toggle", /(?:^|[},])\s*\.sidebar-collapse-toggle\b/m],
   ["L1 root", /\.left-rail(?=\s*\{|::(?:before|after))/m],
   ["L2 root", /(?:^|[},])\s*\.bot-conversation-(?:rail|header)(?=\s*(?:\{|::))/m],
@@ -60,7 +60,7 @@ test("owned horizontal tracks combine frame-owned fixed tracks with one CSS rema
     ownerCss.matchAll(/grid-template-columns\s*:\s*([^;]+);/g),
     (match) => match[1].replace(/\s+/g, " ").trim(),
   );
-  assert.equal(columnValues.length, 7, "every shell column recipe is explicit");
+  assert.equal(columnValues.length, 5, "every shell column recipe is explicit");
   for (const value of columnValues) {
     assert.equal(
       value.match(/minmax\(0, 1fr\)/g)?.length,
@@ -85,7 +85,6 @@ test("owned horizontal tracks combine frame-owned fixed tracks with one CSS rema
     "data-sidebar-state",
     "data-conversation-rail-state",
     "data-side-tools-state",
-    "data-thread-logs-presentation",
     "data-task-tree-presentation",
   ]) {
     assert.match(ownerCss, new RegExp(attribute));

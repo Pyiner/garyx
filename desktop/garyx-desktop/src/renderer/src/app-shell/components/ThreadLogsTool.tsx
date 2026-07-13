@@ -1,15 +1,6 @@
-// Thread log dock (endgame architecture batch 5b, "Local state colocation
-// list": ThreadLogPanel owns log text/path/cursor/loading/unread).
-//
-// The dock owns the gateway-log polling and its content state, moved
-// verbatim from AppShell. It mounts only while the log panel is open
-// (ThreadPage renders it behind its threadLogsOpen flag), so the legacy
-// effect's open/content-view gates become the mount boundary and the
-// 1s polling cadence re-renders only this subtree, not the shell.
-//
-// The unread flag is the one piece the shell still needs (the
-// conversation-header badge); it is mirrored up through onUnreadChange,
-// which fires only when the flag actually flips.
+// Gateway-log content for the Logs tab inside the right side-tools rail.
+// The polling loop and content state remain colocated here, so switching
+// away from the tab or closing the rail unmounts this subtree and stops work.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -19,41 +10,22 @@ import {
 } from "../diagnostics-helpers";
 import { ThreadLogPanel } from "./ThreadLogPanel";
 
-type ThreadLogDockProps = {
+type ThreadLogsToolProps = {
   activeThreadTitle: string | null;
-  onUnreadChange: (hasUnread: boolean) => void;
   threadId: string | null;
 };
 
-export function ThreadLogDock({
+export function ThreadLogsTool({
   activeThreadTitle,
-  onUnreadChange,
   threadId,
-}: ThreadLogDockProps) {
+}: ThreadLogsToolProps) {
   const [threadLogsText, setThreadLogsText] = useState("");
   const [threadLogsPath, setThreadLogsPath] = useState("");
   const [threadLogsLoading, setThreadLogsLoading] = useState(false);
   const [threadLogsError, setThreadLogsError] = useState<string | null>(null);
-  const [threadLogsHasUnread, setThreadLogsHasUnreadRaw] = useState(false);
+  const [threadLogsHasUnread, setThreadLogsHasUnread] = useState(false);
   const threadLogsCursorRef = useRef(0);
   const threadLogsRef = useRef<HTMLDivElement | null>(null);
-  const onUnreadChangeRef = useRef(onUnreadChange);
-  useEffect(() => {
-    onUnreadChangeRef.current = onUnreadChange;
-  });
-
-  const setThreadLogsHasUnread = setThreadLogsHasUnreadRaw;
-  // Mirror the unread flag to the shell (header badge) after commit —
-  // state updaters must stay pure, so the notification is an effect.
-  useEffect(() => {
-    onUnreadChangeRef.current(threadLogsHasUnread);
-  }, [threadLogsHasUnread]);
-  // The dock unmounts when the panel closes; the badge must not stay lit.
-  useEffect(() => {
-    return () => {
-      onUnreadChangeRef.current(false);
-    };
-  }, []);
 
   function threadLogsNearBottom() {
     const node = threadLogsRef.current;

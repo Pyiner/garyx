@@ -14,7 +14,6 @@ export type LayoutOccupancySources = Readonly<{
   conversationRailKey: string | null;
   inspectorOpen: boolean;
   openCapsuleCount: number;
-  threadLogs: boolean;
 }>;
 
 export type LayoutOccupancyEvent = Extract<
@@ -50,7 +49,6 @@ export function projectLayoutOccupancy(
     globalSidebar: sources.globalSidebar,
     conversationRail: sources.conversationRailKey !== null,
     sideTools: sources.inspectorOpen || sources.openCapsuleCount > 0,
-    threadLogs: sources.threadLogs,
   };
 }
 
@@ -58,7 +56,6 @@ export function createLayoutOccupancyEventLog(
   initialSources: LayoutOccupancySources,
 ): LayoutOccupancyEventLog {
   assertSources(initialSources);
-  assertRightPanelsExclusive(projectLayoutOccupancy(initialSources));
   return {
     currentSources: initialSources,
     events: [],
@@ -73,17 +70,8 @@ function occupanciesEqual(
   return (
     left.globalSidebar === right.globalSidebar &&
     left.conversationRail === right.conversationRail &&
-    left.sideTools === right.sideTools &&
-    left.threadLogs === right.threadLogs
+    left.sideTools === right.sideTools
   );
-}
-
-function assertRightPanelsExclusive(
-  occupancy: LayoutPanelOccupancy,
-): void {
-  if (occupancy.sideTools && occupancy.threadLogs) {
-    throw new TypeError("side tools and thread logs must be mutually exclusive");
-  }
 }
 
 export function appendLayoutOccupancyIntent(
@@ -97,8 +85,6 @@ export function appendLayoutOccupancyIntent(
   assertSources(nextSources);
   const previousOccupancy = projectLayoutOccupancy(log.currentSources);
   const nextOccupancy = projectLayoutOccupancy(nextSources);
-  assertRightPanelsExclusive(previousOccupancy);
-  assertRightPanelsExclusive(nextOccupancy);
   const conversationRailChanged =
     log.currentSources.conversationRailKey !==
     nextSources.conversationRailKey;

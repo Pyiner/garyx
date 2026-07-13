@@ -4,11 +4,8 @@ import assert from 'node:assert/strict';
 import {
   SIDE_TOOLS_PANEL_MAX_WIDTH,
   SIDE_TOOLS_PANEL_MIN_WIDTH,
-  THREAD_LOG_PANEL_MAX_WIDTH,
-  THREAD_LOG_PANEL_MIN_WIDTH,
   buildThreadLogLines,
   clampSideToolsPanelWidth,
-  clampThreadLogsPanelWidth,
   defaultSideToolsPanelWidth,
 } from './diagnostics-helpers.ts';
 
@@ -35,11 +32,9 @@ test('clamps a customized side-tools rail to the measured canvas', () => {
   assert.equal(clampSideToolsPanelWidth(685, 1235), 685);
 });
 
-test('legacy right-panel width helpers match their complete boundary table', () => {
+test('side-tools width helpers match their complete boundary table', () => {
   assert.equal(SIDE_TOOLS_PANEL_MIN_WIDTH, 320);
   assert.equal(SIDE_TOOLS_PANEL_MAX_WIDTH, 1180);
-  assert.equal(THREAD_LOG_PANEL_MIN_WIDTH, 280);
-  assert.equal(THREAD_LOG_PANEL_MAX_WIDTH, 760);
 
   const cases = [
     ['tools invalid uses default', clampSideToolsPanelWidth, Number.NaN, null, 320],
@@ -48,12 +43,6 @@ test('legacy right-panel width helpers match their complete boundary table', () 
     ['tools above max', clampSideToolsPanelWidth, 1181, null, 1180],
     ['tools narrow canvas', clampSideToolsPanelWidth, 520, 736, 320],
     ['tools exact canvas budget', clampSideToolsPanelWidth, 700, 1235, 685],
-    ['logs invalid uses default', clampThreadLogsPanelWidth, Number.NaN, null, 360],
-    ['logs below min', clampThreadLogsPanelWidth, 279, null, 280],
-    ['logs rounds', clampThreadLogsPanelWidth, 360.5, null, 361],
-    ['logs above max', clampThreadLogsPanelWidth, 761, null, 760],
-    ['logs exact dock threshold', clampThreadLogsPanelWidth, 760, 830, 280],
-    ['logs measured budget', clampThreadLogsPanelWidth, 760, 1000, 450],
   ];
   for (const [label, clamp, width, layoutWidth, expected] of cases) {
     assert.equal(clamp(width, layoutWidth), expected, label);

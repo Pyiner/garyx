@@ -1,14 +1,12 @@
-/* Thread log panel and channel settings surface. Shell resizer geometry lives
-   in the always-loaded app-shell.css owner. */
+/* Thread log panel and channel settings surface. */
 
 .thread-log-panel {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
+  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border-left: 0.5px solid var(--color-token-border);
-  padding-left: 12px;
 }
 
 .thread-log-panel-actions {

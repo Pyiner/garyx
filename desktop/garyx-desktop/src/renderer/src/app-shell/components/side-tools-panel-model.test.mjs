@@ -2,13 +2,47 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  availableThreadSideToolIds,
   capsuleIdFromTabKey,
   capsuleTabKey,
   closeTab,
   isCapsuleTabKey,
+  reconcileSideToolAvailability,
   shouldCollapseFileDirectoryForPreview,
   workspacePreviewDirectoryCollapseKey,
 } from "./side-tools-panel-model.ts";
+
+test("Logs replaces Tasks and stays available without a workspace", () => {
+  assert.deepEqual(availableThreadSideToolIds(true), [
+    "files",
+    "logs",
+    "chat",
+    "browser",
+    "terminal",
+  ]);
+  assert.deepEqual(availableThreadSideToolIds(false), ["logs"]);
+});
+
+test("workspace-only tabs are removed when the active thread has no workspace", () => {
+  assert.deepEqual(
+    reconcileSideToolAvailability({
+      activeTabKey: "files",
+      capsuleTabKeys: ["capsule:x"],
+      hasWorkspace: false,
+      openTools: ["files", "logs", "terminal"],
+    }),
+    { activeTabKey: "logs", openTools: ["logs"] },
+  );
+  assert.deepEqual(
+    reconcileSideToolAvailability({
+      activeTabKey: "browser",
+      capsuleTabKeys: ["capsule:x"],
+      hasWorkspace: false,
+      openTools: ["browser"],
+    }),
+    { activeTabKey: "capsule:x", openTools: [] },
+  );
+});
 
 test("workspace preview has no directory collapse key when preview is absent", () => {
   assert.equal(
@@ -56,6 +90,7 @@ test("capsule tab keys round-trip and are distinguished from built-in tools", ()
   assert.equal(key, "capsule:cap-123");
   assert.equal(isCapsuleTabKey(key), true);
   assert.equal(isCapsuleTabKey("files"), false);
+  assert.equal(isCapsuleTabKey("logs"), false);
   assert.equal(capsuleIdFromTabKey(key), "cap-123");
   assert.equal(capsuleIdFromTabKey("files"), null);
   // Capsule ids may themselves contain a colon; only the first prefix is stripped.
@@ -65,7 +100,7 @@ test("capsule tab keys round-trip and are distinguished from built-in tools", ()
 test("closeTab removes the tab and repicks the active when it was active", () => {
   // Closing the active tab activates the last remaining tab.
   assert.deepEqual(
-    closeTab(["files", "chat", "capsule:x"], "chat", "chat"),
+    closeTab(["files", "logs", "capsule:x"], "logs", "logs"),
     { openTabs: ["files", "capsule:x"], activeKey: "capsule:x" },
   );
   // Closing a non-active tab leaves the active key untouched.

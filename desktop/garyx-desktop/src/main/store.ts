@@ -205,13 +205,6 @@ function normalizeSdkSessionProviderHintInput(
 }
 
 function normalizeSettings(value?: Partial<DesktopSettings>): DesktopSettings {
-  const normalizeThreadLogsPanelWidth = (input: unknown): number => {
-    const numeric = Number(input);
-    if (!Number.isFinite(numeric)) {
-      return DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth;
-    }
-    return Math.max(280, Math.min(760, Math.round(numeric)));
-  };
   const normalizeLanguagePreference = (input: unknown): DesktopLanguagePreference => {
     return input === 'en' || input === 'zh-CN' || input === 'system'
       ? input
@@ -237,7 +230,6 @@ function normalizeSettings(value?: Partial<DesktopSettings>): DesktopSettings {
       10,
       Math.min(600, Math.round(value?.timeoutSeconds ?? DEFAULT_DESKTOP_SETTINGS.timeoutSeconds)),
     ),
-    threadLogsPanelWidth: normalizeThreadLogsPanelWidth(value?.threadLogsPanelWidth),
     languagePreference: normalizeLanguagePreference(value?.languagePreference),
     followUpBehavior: normalizeFollowUpBehavior(value?.followUpBehavior),
   };

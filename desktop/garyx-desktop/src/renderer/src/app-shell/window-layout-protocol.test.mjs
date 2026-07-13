@@ -17,7 +17,6 @@ const sideToolsOpen = Object.freeze({
   globalSidebar: false,
   conversationRail: false,
   sideTools: true,
-  threadLogs: false,
 });
 
 function snapshot({

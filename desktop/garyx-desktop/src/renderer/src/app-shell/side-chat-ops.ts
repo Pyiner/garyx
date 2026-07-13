@@ -2,11 +2,8 @@
 // 5b-7b, docs/design/appshell-sidechat-colocation.md). Both entry points
 // live OUTSIDE the panel's lifetime: `ensureSideChatThread` is invoked by
 // the dock header's chat auto-open (panel not yet mounted) and by the
-// panel's composer submit; `openTaskThreadInSidePanel` is invoked from
-// the Tasks tool tab (panel not mounted). They are plain async commands
-// over the session store + mirror facades — implementation note recorded
-// against the design doc's "moves verbatim into the panel" wording, which
-// the call topology contradicts for ensureSideChatThread.
+// panel's composer submit. It is a plain async command over the session
+// store + mirror facades.
 
 import type {
   DesktopState,
@@ -115,43 +112,4 @@ export async function ensureSideChatThread(
 
   sessions.setCreationPromise(sourceThreadId, creation);
   return creation;
-}
-
-/**
- * Bind an existing (task) thread as the active source's side chat. The
- * shell command wraps this with dock-open + the chat-tab mailbox; the
- * binding is written FIRST so the chat tab's auto-open sees it and does
- * not create a default side chat (design ruling, review #TASK-1658).
- */
-export async function openTaskThreadInSidePanel(
-  ctx: SideChatOpsContext,
-  threadId: string,
-): Promise<void> {
-  const { sessions, mirror, setError } = ctx;
-  const sourceThreadId = ctx.sourceThreadId;
-  const targetThreadId = threadId.trim();
-  if (!sourceThreadId || !targetThreadId) {
-    return;
-  }
-
-  sessions.setCreating(sourceThreadId, true);
-  sessions.setError(sourceThreadId, null);
-
-  try {
-    if (!(await mirror.ensureThreadOpenable(targetThreadId))) {
-      throw new Error(`Thread not found: ${targetThreadId}`);
-    }
-    sessions.rememberSideThreadId(targetThreadId);
-    sessions.rememberThread(sourceThreadId, targetThreadId);
-  } catch (openError) {
-    const message =
-      openError instanceof Error
-        ? openError.message
-        : `Failed to open thread: ${targetThreadId}`;
-    sessions.setError(sourceThreadId, message);
-    setError(message);
-    throw openError;
-  } finally {
-    sessions.setCreating(sourceThreadId, false);
-  }
 }

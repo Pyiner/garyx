@@ -49,7 +49,6 @@ function noop() {}
 function ThreadStage({ step }: { step: StoryStep }) {
   const state = step.state;
   const messagesRef = useRef<HTMLDivElement | null>(null);
-  const threadLayoutRef = useRef<HTMLDivElement | null>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const composerAttachmentInputRef = useRef<HTMLInputElement | null>(null);
   const ignoreComposerSubmitUntilRef = useRef(0);
@@ -137,21 +136,12 @@ function ThreadStage({ step }: { step: StoryStep }) {
       onOpenThreadById={noop}
       onSelectWorkspace={noop}
       onSteerQueuedPrompt={noop}
-      onThreadLogsUnreadChange={noop}
-      onThreadLogsResizeKeyDown={noop}
-      onThreadLogsResizeStart={noop}
       preferredWorkspaceForNewThread={null}
       selectableNewThreadWorkspaces={[]}
       selectedThreadId="storybook-thread"
       showAutomationRunInitialPlaceholder={false}
       showHistoryLoadingPlaceholder={state.showHistoryLoadingPlaceholder}
       showTailThinking={activity.showPendingAckLoading}
-      threadLayoutRef={threadLayoutRef}
-      threadLogsMaxWidth={0}
-      threadLogsDocked={false}
-      threadLogsOpen={false}
-      threadLogsPanelWidth={0}
-      threadLogsResizing={false}
       threadAvatarCatalog={EMPTY_THREAD_AVATAR_CATALOG}
       visibleRemoteAwaitingAckInputs={[]}
       visibleRemotePendingInputs={[]}

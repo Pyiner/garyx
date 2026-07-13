@@ -10,9 +10,6 @@ import {
 // wall clock, space-separated) and older RFC3339 lines (`...T...+08:00`/`Z`).
 const THREAD_LOG_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}\S*\s+/;
 export const MAX_GATEWAY_THREAD_LOG_LINES = 100;
-export const THREAD_LOG_PANEL_MIN_WIDTH = 280;
-export const THREAD_LOG_PANEL_MAX_WIDTH = 760;
-const DEFAULT_THREAD_LOG_PANEL_WIDTH = 360;
 export const SIDE_TOOLS_PANEL_MIN_WIDTH = 320;
 export const SIDE_TOOLS_PANEL_MAX_WIDTH = 1180;
 const DEFAULT_SIDE_TOOLS_PANEL_WIDTH = 320;
@@ -66,23 +63,6 @@ function formatThreadLogTimestamp(value: string): string | undefined {
   const seconds = String(date.getSeconds()).padStart(2, '0');
   // Unified human-readable style: local wall-clock time, timezone implicit.
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-}
-
-export function clampThreadLogsPanelWidth(
-  width: number,
-  layoutWidth?: number | null,
-): number {
-  const baseWidth = Number.isFinite(width) ? width : DEFAULT_THREAD_LOG_PANEL_WIDTH;
-  const layoutMax = layoutWidth && layoutWidth > 0
-    ? Math.max(
-        THREAD_LOG_PANEL_MIN_WIDTH,
-        layoutWidth - SIDE_PANEL_MIN_MAIN_WIDTH - SIDE_PANEL_RESIZER_WIDTH,
-      )
-    : THREAD_LOG_PANEL_MAX_WIDTH;
-  return Math.max(
-    THREAD_LOG_PANEL_MIN_WIDTH,
-    Math.min(THREAD_LOG_PANEL_MAX_WIDTH, Math.min(layoutMax, Math.round(baseWidth))),
-  );
 }
 
 export function clampSideToolsPanelWidth(

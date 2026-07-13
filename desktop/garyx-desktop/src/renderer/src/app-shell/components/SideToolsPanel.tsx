@@ -1,7 +1,6 @@
 import {
   lazy,
   Suspense,
-  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -10,25 +9,21 @@ import {
   type ReactNode,
 } from "react";
 import {
+  Activity,
   Copy,
   FileText,
   FolderOpen,
   Globe,
-  ListTodo,
   MessageSquare,
   PanelRightClose,
   PanelRightOpen,
   Plus,
-  RefreshCcw,
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
 
 import type {
   BrowserAnnotationCommentRequest,
-  DesktopTaskPrincipal,
-  DesktopTaskStatus,
-  DesktopTaskSummary,
   DesktopTerminalEvent,
   DesktopTerminalState,
   DesktopWorkspaceFilePreview,
@@ -56,11 +51,14 @@ const SideTerminalTool = lazy(() =>
 );
 import { workspaceFileAbsolutePath } from "../workspace-helpers";
 import { CapsuleLivePreviewFrame } from "./CapsuleLivePreviewFrame";
+import { ThreadLogsTool } from "./ThreadLogsTool";
 import {
+  availableThreadSideToolIds,
   capsuleIdFromTabKey,
   capsuleTabKey,
   closeTab,
   isCapsuleTabKey,
+  reconcileSideToolAvailability,
   shouldCollapseFileDirectoryForPreview,
   workspacePreviewDirectoryCollapseKey,
   type SideTabKey,
@@ -88,6 +86,7 @@ export type SideToolWorkspaceFile = {
 };
 
 type ThreadSideToolsPanelProps = {
+  activeThreadTitle?: string | null;
   activeWorkspaceName?: string | null;
   activeWorkspacePath?: string | null;
   activeThreadId?: string | null;
@@ -102,8 +101,8 @@ type ThreadSideToolsPanelProps = {
   workspacePreviewOpen?: boolean;
   workspacePreviewTitle?: string;
   sideChatPanel: ReactNode;
-  /** Whether a workspace is attached. Built-in tools (files/terminal/…) need
-   * one; without it the dock only hosts capsule tabs and hides the add menu. */
+  /** Whether a workspace is attached. Workspace tools remain gated while
+   * thread logs stay available for every selected thread. */
   hasWorkspace: boolean;
   /** Capsules currently open as tabs (gateway-owned; #TASK-1470). */
   openCapsuleTabs: SideCapsuleTab[];
@@ -116,7 +115,6 @@ type ThreadSideToolsPanelProps = {
   onRevealSelectedWorkspaceFile?: () => Promise<void> | void;
   onAddBrowserAnnotationComment: (request: BrowserAnnotationCommentRequest) => void;
   onCloseSideTools: () => void;
-  onOpenTaskThread?: (task: DesktopTaskSummary) => Promise<void> | void;
   onOpenSideChat: () => void;
   onWorkspaceFileFilterChange: (value: string) => void;
 };
@@ -128,226 +126,9 @@ type ToolDescriptor = {
   icon: typeof FileText;
 };
 
-const TASK_STATUS_LABELS: Record<DesktopTaskStatus, string> = {
-  todo: "Todo",
-  in_progress: "In Progress",
-  in_review: "In Review",
-  done: "Done",
-};
-
-const TASK_STATUS_TONES: Record<DesktopTaskStatus, string> = {
-  todo: "todo",
-  in_progress: "progress",
-  in_review: "review",
-  done: "done",
-};
-
-function formatTaskPrincipal(
-  principal: DesktopTaskPrincipal | null | undefined,
-  t: ReturnType<typeof useI18n>["t"],
-): string {
-  if (!principal) {
-    return t("Unassigned");
-  }
-  if (principal.kind === "human") {
-    return `@${principal.userId}`;
-  }
-  return principal.agentId;
-}
-
-function formatTaskTimestamp(value?: string | null): string {
-  if (!value) {
-    return "";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-  const sameDay = date.toDateString() === new Date().toDateString();
-  return new Intl.DateTimeFormat(
-    undefined,
-    sameDay
-      ? { hour: "numeric", minute: "2-digit" }
-      : { month: "short", day: "numeric" },
-  ).format(date);
-}
-
-function taskDisplayId(task: DesktopTaskSummary): string {
-  return task.taskId || `#TASK-${task.number}`;
-}
-
-function taskTabLabel(task: DesktopTaskSummary): string {
-  return task.title.trim() || taskDisplayId(task);
-}
-
-function SideThreadTasksTool({
-  sourceThreadId,
-  onOpenTaskThread,
-}: {
-  sourceThreadId?: string | null;
-  onOpenTaskThread?: (task: DesktopTaskSummary) => Promise<void> | void;
-}) {
-  const { t } = useI18n();
-  const [tasks, setTasks] = useState<DesktopTaskSummary[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const requestIdRef = useRef(0);
-
-  const loadTasks = useCallback(async (options?: { silent?: boolean }) => {
-    const threadId = sourceThreadId?.trim() || "";
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-
-    if (!threadId) {
-      setTasks([]);
-      setTotal(0);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-
-    if (!options?.silent) {
-      setLoading(true);
-    }
-    setError(null);
-    try {
-      const page = await window.garyxDesktop.listTasks({
-        includeDone: true,
-        sourceThread: threadId,
-        limit: 200,
-      });
-      if (requestIdRef.current !== requestId) {
-        return;
-      }
-      setTasks(page.tasks);
-      setTotal(page.total);
-    } catch (loadError) {
-      if (requestIdRef.current !== requestId) {
-        return;
-      }
-      setTasks([]);
-      setTotal(0);
-      setError(
-        loadError instanceof Error
-          ? loadError.message
-          : String(loadError || "Failed to load tasks"),
-      );
-    } finally {
-      if (requestIdRef.current === requestId && !options?.silent) {
-        setLoading(false);
-      }
-    }
-  }, [sourceThreadId]);
-
-  useEffect(() => {
-    void loadTasks();
-  }, [loadTasks]);
-
-  const visibleCount = tasks.length;
-  const countLabel = loading
-    ? t("Loading tasks…")
-    : t("{count} tasks", { count: total || visibleCount });
-
-  return (
-    <div className="side-tool-tasks" aria-busy={loading}>
-      <header className="side-tool-tasks-header">
-        <div className="side-tool-tasks-title-block">
-          <div className="side-tool-tasks-title-row">
-            <ListTodo aria-hidden size={16} strokeWidth={1.8} />
-            <strong>{t("Tasks")}</strong>
-          </div>
-          <span>{countLabel}</span>
-        </div>
-        <button
-          aria-label={t("Refresh")}
-          className="codex-icon-button side-tool-tasks-refresh"
-          disabled={!sourceThreadId || loading}
-          onClick={() => {
-            void loadTasks();
-          }}
-          title={t("Refresh")}
-          type="button"
-        >
-          <RefreshCcw aria-hidden size={14} strokeWidth={1.8} />
-        </button>
-      </header>
-
-      {error ? (
-        <div className="side-tool-tasks-state is-error">{error}</div>
-      ) : null}
-
-      {!sourceThreadId ? (
-        <div className="side-tool-tasks-empty">
-          {t("Open a thread to see its tasks.")}
-        </div>
-      ) : loading && !tasks.length ? (
-        <div className="side-tool-tasks-empty">{t("Loading tasks…")}</div>
-      ) : !error && !tasks.length ? (
-        <div className="side-tool-tasks-empty">
-          {t("No tasks from this thread yet.")}
-        </div>
-      ) : (
-        <div className="side-tool-tasks-list">
-          {tasks.map((task) => {
-            const taskId = taskDisplayId(task);
-            const canOpen = Boolean(task.threadId && onOpenTaskThread);
-            return (
-              <article className="side-tool-task-card" key={task.taskId || taskId}>
-                <div className="side-tool-task-topline">
-                  <span className="side-tool-task-id">{taskId}</span>
-                  <span
-                    className={`tasks-status-chip tone-${TASK_STATUS_TONES[task.status]}`}
-                  >
-                    {t(TASK_STATUS_LABELS[task.status])}
-                  </span>
-                </div>
-                <button
-                  className="side-tool-task-title"
-                  disabled={!canOpen}
-                  onClick={() => {
-                    if (task.threadId && onOpenTaskThread) {
-                      void onOpenTaskThread(task);
-                    }
-                  }}
-                  type="button"
-                >
-                  {task.title}
-                </button>
-                <div className="side-tool-task-meta">
-                  <span>
-                    {t("assignee")} {formatTaskPrincipal(task.assignee, t)}
-                  </span>
-                  {formatTaskTimestamp(task.updatedAt) ? (
-                    <span>{formatTaskTimestamp(task.updatedAt)}</span>
-                  ) : null}
-                </div>
-                {task.threadId ? (
-                  <button
-                    className="side-tool-task-open"
-                    disabled={!onOpenTaskThread}
-                    onClick={() => {
-                      if (onOpenTaskThread) {
-                        void onOpenTaskThread(task);
-                      }
-                    }}
-                    type="button"
-                  >
-                    <MessageSquare aria-hidden size={13} strokeWidth={1.8} />
-                    {t("Open thread")}
-                  </button>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function ThreadSideToolsPanel({
   activeThreadId,
+  activeThreadTitle,
   activeWorkspacePath,
   selectedWorkspaceFile,
   sideChatPanel,
@@ -368,7 +149,6 @@ export function ThreadSideToolsPanel({
   onRevealSelectedWorkspaceFile,
   onAddBrowserAnnotationComment,
   onCloseSideTools,
-  onOpenTaskThread,
   onOpenSideChat,
   onWorkspaceFileFilterChange,
 }: ThreadSideToolsPanelProps) {
@@ -376,13 +156,15 @@ export function ThreadSideToolsPanel({
   const tools = useMemo<ToolDescriptor[]>(
     () => [
       { id: "files", label: t("Files"), shortcut: "⌘P", icon: FileText },
-      { id: "tasks", label: t("Tasks"), shortcut: "", icon: ListTodo },
+      { id: "logs", label: t("Logs"), shortcut: "", icon: Activity },
       { id: "chat", label: t("Side Chat"), shortcut: "", icon: MessageSquare },
       { id: "browser", label: t("Browser"), shortcut: "⌘T", icon: Globe },
       { id: "terminal", label: t("Terminal"), shortcut: "⌃`", icon: TerminalIcon },
     ],
     [t],
   );
+  const availableToolIds = availableThreadSideToolIds(hasWorkspace);
+  const availableTools = tools.filter((tool) => availableToolIds.includes(tool.id));
   // The panel opens with no tool chosen so the body shows a tool picker;
   // workspace file previews still force the Files tool open below.
   const [openTools, setOpenTools] = useState<ThreadSideToolId[]>([]);
@@ -391,9 +173,6 @@ export function ThreadSideToolsPanel({
   // both kinds without crossing component boundaries (#TASK-1470).
   const [activeTabKey, setActiveTabKey] = useState<SideTabKey | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [taskThreadTabTitle, setTaskThreadTabTitle] = useState<string | null>(
-    null,
-  );
   const [filePathCopied, setFilePathCopied] = useState(false);
   const [fileDirectoryCollapsed, setFileDirectoryCollapsed] = useState(false);
   const [browserMenuObstructionBottom, setBrowserMenuObstructionBottom] =
@@ -449,10 +228,6 @@ export function ThreadSideToolsPanel({
   }, [previewCopyPath]);
 
   useEffect(() => {
-    setTaskThreadTabTitle(null);
-  }, [activeThreadId]);
-
-  useEffect(() => {
     if (activeTabKey === "browser") {
       return;
     }
@@ -485,6 +260,23 @@ export function ThreadSideToolsPanel({
     setActiveTabKey(capsuleTabKey(pendingActiveCapsuleId));
     onActivatePendingCapsuleHandled();
   }, [pendingActiveCapsuleId, onActivatePendingCapsuleHandled]);
+
+  useEffect(() => {
+    const next = reconcileSideToolAvailability({
+      activeTabKey,
+      capsuleTabKeys: openCapsuleTabs.map((capsule) =>
+        capsuleTabKey(capsule.capsuleId),
+      ),
+      hasWorkspace,
+      openTools,
+    });
+    if (next.openTools !== openTools) {
+      setOpenTools(next.openTools);
+    }
+    if (next.activeTabKey !== activeTabKey) {
+      setActiveTabKey(next.activeTabKey);
+    }
+  }, [activeTabKey, hasWorkspace, openCapsuleTabs, openTools]);
 
   // If the active capsule tab is removed externally (closed elsewhere or cleared
   // on a thread switch), repick the last remaining tab so nothing dangles.
@@ -583,30 +375,14 @@ export function ThreadSideToolsPanel({
     onAddBrowserAnnotationComment(request);
   }
 
-  function openTool(
-    toolId: ThreadSideToolId,
-    options?: { taskThreadTabTitle?: string | null },
-  ) {
+  function openTool(toolId: ThreadSideToolId) {
     setOpenTools((current) =>
       current.includes(toolId) ? current : [...current, toolId],
     );
     setActiveTabKey(toolId);
     setMenuOpen(false);
     if (toolId === "chat") {
-      setTaskThreadTabTitle(options?.taskThreadTabTitle || null);
       onOpenSideChat();
-    }
-  }
-
-  async function openTaskThreadInSideChat(task: DesktopTaskSummary) {
-    if (!onOpenTaskThread) {
-      return;
-    }
-    try {
-      await onOpenTaskThread(task);
-      openTool("chat", { taskThreadTabTitle: taskTabLabel(task) });
-    } catch {
-      // AppShell owns the user-visible error state.
     }
   }
 
@@ -645,10 +421,7 @@ export function ThreadSideToolsPanel({
             {openToolDescriptors.map((tool) => {
               const Icon = tool.icon;
               const selected = tool.id === activeTabKey;
-              const tabLabel =
-                tool.id === "chat" && taskThreadTabTitle
-                  ? taskThreadTabTitle
-                  : tool.label;
+              const tabLabel = tool.label;
               return (
                 <div
                   className={`side-tools-tab-shell ${selected ? "is-active" : ""}`}
@@ -659,7 +432,7 @@ export function ThreadSideToolsPanel({
                     className={`side-tools-tab ${selected ? "is-active" : ""}`}
                     onClick={() => {
                       setActiveTabKey(tool.id);
-                      if (tool.id === "chat" && !taskThreadTabTitle) {
+                      if (tool.id === "chat") {
                         onOpenSideChat();
                       }
                     }}
@@ -727,7 +500,7 @@ export function ThreadSideToolsPanel({
               );
             })}
           </div>
-          {hasWorkspace ? (
+          {availableTools.length ? (
             <div className="side-tools-add-shell">
               <DropdownMenu modal={false} onOpenChange={setMenuOpen} open={menuOpen}>
                 <DropdownMenuTrigger asChild>
@@ -744,7 +517,7 @@ export function ThreadSideToolsPanel({
                   className="min-w-[190px]"
                   ref={menuRef}
                 >
-                  {tools.map((tool) => {
+                  {availableTools.map((tool) => {
                     const Icon = tool.icon;
                     return (
                       <DropdownMenuItem
@@ -782,10 +555,10 @@ export function ThreadSideToolsPanel({
           activeCapsuleId ? "capsule" : activeTool?.id ?? "picker"
         }`}
       >
-        {!activeTool && !activeCapsuleId && hasWorkspace ? (
+        {!activeTool && !activeCapsuleId && availableTools.length ? (
           <div className="side-tools-picker">
             <div className="side-tools-picker-list">
-              {tools.map((tool) => {
+              {availableTools.map((tool) => {
                 const Icon = tool.icon;
                 return (
                   <button
@@ -943,11 +716,13 @@ export function ThreadSideToolsPanel({
         {activeTool?.id === "chat" ? (
           <div className="side-tool-chat-thread">{sideChatPanel}</div>
         ) : null}
-        {activeTool?.id === "tasks" ? (
-          <SideThreadTasksTool
-            onOpenTaskThread={openTaskThreadInSideChat}
-            sourceThreadId={activeThreadId}
-          />
+        {activeTool?.id === "logs" ? (
+          <div className="side-tool-logs">
+              <ThreadLogsTool
+              activeThreadTitle={activeThreadTitle || null}
+              threadId={activeThreadId || null}
+            />
+          </div>
         ) : null}
         {activeTool?.id === "browser" ? (
           <Suspense

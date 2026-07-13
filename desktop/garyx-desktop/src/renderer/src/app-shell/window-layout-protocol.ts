@@ -76,7 +76,6 @@ function cloneOccupancy(
     globalSidebar: occupancy.globalSidebar,
     conversationRail: occupancy.conversationRail,
     sideTools: occupancy.sideTools,
-    threadLogs: occupancy.threadLogs,
   };
 }
 
@@ -187,10 +186,6 @@ function accepted(
   };
 }
 
-function isValidOccupancy(occupancy: LayoutPanelOccupancy): boolean {
-  return !(occupancy.sideTools && occupancy.threadLogs);
-}
-
 function isFiniteRectangle(rectangle: LayoutRectangle): boolean {
   return (
     Number.isFinite(rectangle.x) &&
@@ -267,9 +262,6 @@ function checkpointDesiredOccupancy(
   if (command.expectedSessionRevision !== state.acknowledgedSession.sessionRevision) {
     return reject(state, command, "stale");
   }
-  if (!isValidOccupancy(command.desiredOccupancy)) {
-    return reject(state, command, "invalid");
-  }
   const sessionRevision = state.acknowledgedSession.sessionRevision + 1;
   const session: AcknowledgedLayoutSession = {
     ...state.acknowledgedSession,
@@ -306,7 +298,6 @@ function claimInitialLayout(
     return reject(state, command, "invalid");
   }
   if (
-    !isValidOccupancy(command.targetDesiredOccupancy) ||
     !isFiniteRectangle(command.targetNormalBaseBounds) ||
     !fundingIsValid(command.targetFundingByPanel)
   ) {
@@ -381,7 +372,6 @@ function applyWindowBounds(
     return reject(state, command, "fixed-mode");
   }
   if (
-    !isValidOccupancy(command.targetDesiredOccupancy) ||
     !isFiniteRectangle(command.targetBounds) ||
     !isFiniteRectangle(command.targetNormalBaseBounds) ||
     !fundingIsValid(command.targetFundingByPanel) ||

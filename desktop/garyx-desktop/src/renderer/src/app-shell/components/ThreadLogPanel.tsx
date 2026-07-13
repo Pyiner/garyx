@@ -118,7 +118,7 @@ export function ThreadLogPanel({
   }
 
   return (
-    <aside
+    <section
       aria-label={threadLogsLabel}
       className="thread-log-panel"
       title={activeThreadLogsPath}
@@ -164,6 +164,6 @@ export function ThreadLogPanel({
           </div>
         )}
       </div>
-    </aside>
+    </section>
   );
 }

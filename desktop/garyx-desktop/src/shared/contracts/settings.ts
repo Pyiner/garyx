@@ -9,7 +9,6 @@ export interface DesktopSettings {
   accountId: string;
   fromId: string;
   timeoutSeconds: number;
-  threadLogsPanelWidth: number;
   languagePreference: DesktopLanguagePreference;
   followUpBehavior: DesktopFollowUpBehavior;
 }
@@ -75,7 +74,6 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   accountId: "main",
   fromId: "mac-desktop",
   timeoutSeconds: 120,
-  threadLogsPanelWidth: 360,
   languagePreference: "system",
   followUpBehavior: "queue",
 };
