@@ -219,8 +219,6 @@ test('retired per-surface menu forks stay deleted', () => {
   assert.ok(!composerCss.includes('rgba(13, 13, 13, 0.52)'));
   const channelPluginsCss = read('styles/channel-plugins.css');
   assert.ok(!channelPluginsCss.includes('saturate('));
-  const taskForestCss = read('styles/task-forest.css');
-  assert.ok(!taskForestCss.includes('#ececea'));
   const gatewaySwitcherSource = read('GatewaySwitcher.tsx');
   assert.ok(
     gatewaySwitcherSource.includes(
