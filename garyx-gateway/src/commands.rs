@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path as AxumPath, Query, State},
+    extract::{Path as AxumPath, State},
     http::StatusCode,
     response::IntoResponse,
 };
 use garyx_models::command_catalog::{
-    CommandCatalogOptions, is_valid_shortcut_command_name, normalize_shortcut_command_name,
+    is_valid_shortcut_command_name, normalize_shortcut_command_name,
 };
 use garyx_models::config::SlashCommand;
 use serde::Deserialize;
@@ -84,15 +84,6 @@ fn normalize_shortcut(body: UpsertShortcutBody) -> Result<SlashCommand, (StatusC
         prompt,
         skill_id: None,
     })
-}
-
-pub async fn list_commands(
-    State(state): State<Arc<AppState>>,
-    Query(options): Query<CommandCatalogOptions>,
-) -> impl IntoResponse {
-    let config = state.config_snapshot();
-    let catalog = garyx_router::command_catalog_for_config(&config, options);
-    (StatusCode::OK, Json(catalog))
 }
 
 fn shortcut_value(command: &SlashCommand) -> Value {

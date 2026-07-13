@@ -415,16 +415,12 @@ infrastructure for the actual endpoint.
 
 ## Commands
 
-Garyx exposes one command list with two command kinds:
+Garyx has one command catalog with two command kinds:
 
 - `channel_native`: built-in channel-only management commands, such as thread
   navigation. They are not editable and are only exposed to channel plugins.
 - `shortcut`: global custom prompt shortcuts persisted in `commands`; each
   shortcut maps a slash name to prompt text.
-
-```bash
-curl 'http://127.0.0.1:31337/api/commands?surface=plugin&channel=telegram&account_id=main'
-```
 
 Shortcut commands are managed through:
 

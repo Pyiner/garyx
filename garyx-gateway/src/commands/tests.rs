@@ -37,67 +37,6 @@ async fn request_json(
 }
 
 #[tokio::test]
-async fn test_commands_route_hides_channel_native_by_default() {
-    let mut config = crate::test_support::with_gateway_auth(GaryxConfig::default());
-    config.commands.push(SlashCommand {
-        name: "summary".to_owned(),
-        description: "Summarize the thread".to_owned(),
-        prompt: Some("Please summarize.".to_owned()),
-        skill_id: None,
-    });
-    let state = crate::server::create_app_state(config);
-    let router = crate::route_graph::build_router(state);
-
-    let (status, payload) = request_json(router, Method::GET, "/api/commands", None).await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(payload["version"], 1);
-    assert!(payload["revision"].as_str().unwrap().starts_with("v1:"));
-    let names = payload["commands"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|entry| entry["name"].as_str().unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(names, vec!["summary"]);
-    assert_eq!(payload["commands"][0]["kind"], "shortcut");
-}
-
-#[tokio::test]
-async fn test_commands_route_returns_channel_native_for_plugin_surface() {
-    let mut config = crate::test_support::with_gateway_auth(GaryxConfig::default());
-    config.commands.push(SlashCommand {
-        name: "summary".to_owned(),
-        description: "Summarize the thread".to_owned(),
-        prompt: Some("Please summarize.".to_owned()),
-        skill_id: None,
-    });
-    let state = crate::server::create_app_state(config);
-    let router = crate::route_graph::build_router(state);
-
-    let (status, payload) = request_json(
-        router,
-        Method::GET,
-        "/api/commands?surface=plugin&channel=telegram&account_id=main",
-        None,
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    let commands = payload["commands"].as_array().unwrap();
-    assert!(
-        commands
-            .iter()
-            .any(|entry| entry["name"] == "newthread" && entry["kind"] == "channel_native")
-    );
-    assert!(
-        commands
-            .iter()
-            .any(|entry| entry["name"] == "summary" && entry["kind"] == "shortcut")
-    );
-}
-
-#[tokio::test]
 async fn test_shortcut_create_rejects_channel_native_collision() {
     let state = crate::server::create_app_state(crate::test_support::with_gateway_auth(
         GaryxConfig::default(),

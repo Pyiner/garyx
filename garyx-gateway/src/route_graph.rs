@@ -101,10 +101,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(tasks::list_tasks).post(tasks::create_task),
         )
         .route(
-            "/api/tasks/batch",
-            axum::routing::post(tasks::create_tasks_batch),
-        )
-        .route(
             "/api/tasks/forest",
             axum::routing::get(tasks::list_task_forest),
         )
@@ -297,7 +293,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
             "/api/tools/image",
             axum::routing::post(tool_image::generate_image),
         )
-        .route("/api/commands", axum::routing::get(commands::list_commands))
         .route(
             "/api/commands/shortcuts",
             axum::routing::get(commands::list_shortcuts).post(commands::create_shortcut),

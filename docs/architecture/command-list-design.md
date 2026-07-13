@@ -17,22 +17,14 @@ this command list.
 
 ## API
 
-Use the direct commands API:
+Use the shortcut management API:
 
-- `GET /api/commands`
 - `GET /api/commands/shortcuts`
 - `POST /api/commands/shortcuts`
 - `PUT /api/commands/shortcuts/{name}`
 - `DELETE /api/commands/shortcuts/{name}`
 
-`GET /api/commands` accepts filters:
-
-- `surface=plugin&channel=telegram&account_id=main`
-- `surface=telegram&channel=telegram&account_id=main`
-- `surface=desktop_composer`
-- `include_hidden=true`
-
-Response shape:
+The internal command catalog and plugin RPC response use this shape:
 
 ```json
 {
@@ -61,7 +53,6 @@ Response shape:
 
 ## Visibility Rules
 
-- Default `GET /api/commands` returns shortcuts only.
 - Mac app/API/default views do not show `channel_native`.
 - Channel/plugin views can request `channel_native` through `surface=plugin`
   plus a concrete `channel`.
@@ -109,9 +100,8 @@ Suggested params:
 }
 ```
 
-The response is the same command-list shape as `GET /api/commands`, including
-the stable `revision` field. Plugins use `revision` to avoid unnecessary remote
-menu sync calls.
+The response includes the stable `revision` field. Plugins use `revision` to
+avoid unnecessary remote menu sync calls.
 
 ## Telegram Sync
 
@@ -135,7 +125,6 @@ Gateway core does not expose a manual Telegram command-sync endpoint.
 
 ## Acceptance Criteria
 
-- Command API uses `/api/commands`.
 - Payload uses `revision`.
 - Plugin RPC uses `commands/list` and returns the command-list shape.
 - Telegram sync includes both `channel_native` and `shortcut` commands.
