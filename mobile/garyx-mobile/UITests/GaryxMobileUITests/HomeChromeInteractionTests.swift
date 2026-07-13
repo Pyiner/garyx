@@ -98,6 +98,69 @@ final class HomeChromeInteractionTests: XCTestCase {
         XCTAssertEqual(pinAction.frame.height, 44, accuracy: 2)
     }
 
+    func testThresholdLongPressPresentsMenuWithoutOpeningThread() throws {
+        let app = launchHome(useScrollFixture: true)
+        let row = app.staticTexts["Synthetic thread 7"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "archiveable unpinned thread row")
+
+        // Releasing just after the 0.36s recognition threshold is the human
+        // path that can satisfy both the row tap and the simultaneous long
+        // press. A deliberately long 0.8s XCTest press masks that race.
+        row.press(forDuration: 0.42)
+
+        XCTAssertTrue(
+            app.buttons["Pin thread"].waitForExistence(timeout: 3),
+            "a threshold long press must keep the action menu visible"
+        )
+        XCTAssertFalse(
+            app.buttons["Back"].exists,
+            "releasing a recognized long press must not also open the thread"
+        )
+        XCTAssertTrue(row.exists, "the pressed Home row must stay on the Home surface")
+    }
+
+    func testThreadRowShortTapStillOpensThread() throws {
+        let app = launchHome(useScrollFixture: true)
+        let row = app.staticTexts["Synthetic thread 7"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "tappable synthetic thread row")
+
+        row.tap()
+
+        XCTAssertTrue(
+            app.buttons["Back"].waitForExistence(timeout: 5),
+            "an ordinary short tap must still open the selected thread"
+        )
+        XCTAssertFalse(app.buttons["Pin thread"].exists)
+    }
+
+    func testThreadRowDragStillScrollsWithoutOpeningOrPresentingMenu() throws {
+        let app = launchHome(useScrollFixture: true)
+        let row = app.staticTexts["Synthetic thread 0"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "top synthetic thread row")
+        let initialMinY = row.frame.minY
+        let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        start.press(
+            forDuration: 0.1,
+            thenDragTo: origin.withOffset(
+                CGVector(dx: row.frame.midX, dy: max(120, row.frame.midY - 280))
+            )
+        )
+
+        let deadline = Date().addingTimeInterval(5)
+        while row.isHittable,
+              row.frame.minY >= initialMinY - 40,
+              Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        XCTAssertTrue(
+            !row.isHittable || row.frame.minY < initialMinY - 40,
+            "dragging from a thread row must preserve the List scroll gesture"
+        )
+        XCTAssertFalse(app.buttons["Back"].exists)
+        XCTAssertFalse(app.buttons["Pin thread"].exists)
+    }
+
     private func launchHome(useScrollFixture: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["GARYX_MOBILE_DEBUG_SNAPSHOT"] = "1"

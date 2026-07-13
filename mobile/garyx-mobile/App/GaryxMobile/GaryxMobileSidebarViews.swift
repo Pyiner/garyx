@@ -24,7 +24,6 @@ struct GaryxRootNavigationView: View, Equatable {
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
-    let onUnpinThread: (String) -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
 
     static func == (lhs: GaryxRootNavigationView, rhs: GaryxRootNavigationView) -> Bool {
@@ -51,7 +50,6 @@ struct GaryxRootNavigationView: View, Equatable {
                 onStartNewChat: onStartNewChat,
                 onOpenThread: onOpenThread,
                 onTogglePinnedThread: onTogglePinnedThread,
-                onUnpinThread: onUnpinThread,
                 onArchiveThread: onArchiveThread
             )
                 .equatable()
@@ -156,7 +154,6 @@ struct GaryxHomeThreadListView: View, Equatable {
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
-    let onUnpinThread: (String) -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
     private let silentRefreshIntervalNanos: UInt64 = 10_000_000_000
 
@@ -256,7 +253,6 @@ struct GaryxHomeThreadListView: View, Equatable {
                     motion: homeListStore.rowMotion(threadId: row.id),
                     onOpenThread: onOpenThread,
                     onTogglePinnedThread: onTogglePinnedThread,
-                    onUnpinThread: onUnpinThread,
                     onArchiveThread: onArchiveThread
                 )
                 .equatable()
@@ -364,7 +360,6 @@ private struct GaryxHomeThreadButton: View, Equatable {
     let motion: GaryxHomeThreadRowMotion
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
-    let onUnpinThread: (String) -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -387,15 +382,14 @@ private struct GaryxHomeThreadButton: View, Equatable {
                 presentation: row.presentation,
                 avatar: row.avatar,
                 liveTimestampValue: row.timestampValue,
+                usesExternalSelectionGesture: true,
                 onSelect: {
                     onOpenThread(row.thread)
-                },
-                onUnpin: {
-                    guard motion != .pinning else { return }
-                    onUnpinThread(row.id)
                 }
             )
-            .garyxThreadActionMenu {
+            .garyxThreadActionMenu(primaryAction: {
+                onOpenThread(row.thread)
+            }) {
                 var items = [
                     GaryxThreadActionMenuItem(
                         title: row.presentation.isPinned ? "Unpin thread" : "Pin thread",
@@ -1598,6 +1592,9 @@ struct GaryxSidebarThreadRowView: View {
     /// When set (home rows), render a self-refreshing relative timestamp from
     /// this raw ISO value instead of `presentation.trailingTimestamp`.
     var liveTimestampValue: String?
+    /// Home rows let the long-press menu own one exclusive tap/long-press
+    /// recognizer. Other sidebar rows keep their direct tap gesture.
+    var usesExternalSelectionGesture = false
     var onSelect: (() -> Void)?
     var onUnpin: (() -> Void)?
     // `.onTapGesture` ignores `.disabled`, so honor the environment manually:
@@ -1634,19 +1631,26 @@ struct GaryxSidebarThreadRowView: View {
                         .layoutPriority(1)
 
                     if presentation.isPinned {
-                        Button {
-                            onUnpin?()
-                        } label: {
+                        if let onUnpin {
+                            Button(action: onUnpin) {
+                                Image(systemName: "pin.fill")
+                                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.tertiary)
+                                    .rotationEffect(.degrees(28))
+                                    .frame(width: 20, height: 20)
+                            }
+                            .frame(width: 26, height: 22)
+                            .contentShape(Rectangle())
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Unpin thread")
+                        } else {
                             Image(systemName: "pin.fill")
                                 .font(GaryxFont.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.tertiary)
                                 .rotationEffect(.degrees(28))
                                 .frame(width: 20, height: 20)
+                                .accessibilityHidden(true)
                         }
-                        .frame(width: 26, height: 22)
-                        .contentShape(Rectangle())
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Unpin thread")
                     }
 
                     Spacer(minLength: 8)
@@ -1667,7 +1671,7 @@ struct GaryxSidebarThreadRowView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            guard isEnabled else { return }
+            guard isEnabled, !usesExternalSelectionGesture else { return }
             onSelect?()
         }
         .accessibilityElement(children: .contain)

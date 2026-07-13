@@ -267,9 +267,15 @@ private struct GaryxThreadActionMenuPreferenceKey: PreferenceKey {
 
 extension View {
     func garyxThreadActionMenu(
+        primaryAction: @escaping () -> Void,
         items: @escaping () -> [GaryxThreadActionMenuItem]
     ) -> some View {
-        modifier(GaryxThreadActionMenuModifier(itemsProvider: items))
+        modifier(
+            GaryxThreadActionMenuModifier(
+                primaryAction: primaryAction,
+                itemsProvider: items
+            )
+        )
     }
 
     func garyxThreadActionMenuHost(bottomInset: CGFloat = 0) -> some View {
@@ -278,9 +284,11 @@ extension View {
 }
 
 private struct GaryxThreadActionMenuModifier: ViewModifier {
+    let primaryAction: () -> Void
     let itemsProvider: () -> [GaryxThreadActionMenuItem]
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
     @State private var presented: PresentedMenu?
 
     private struct PresentedMenu {
@@ -297,15 +305,11 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
                 }
             }
             .animation(focusAnimation, value: presented?.token)
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.36, maximumDistance: 16)
-                    .onEnded { _ in
-                        let items = itemsProvider()
-                        guard items.contains(where: \.isEnabled) else { return }
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                        presented = PresentedMenu(token: UUID(), items: items)
-                    }
-            )
+            // Keep this gesture simultaneous with the List's pan recognizer so
+            // scrolling still wins after movement. Inside the row, however,
+            // long press and tap are exclusive: once the menu gesture succeeds,
+            // releasing the same touch can never also open the thread.
+            .simultaneousGesture(primaryInteractionGesture)
             .anchorPreference(key: GaryxThreadActionMenuPreferenceKey.self, value: .bounds) { anchor in
                 guard let presented else { return nil }
                 return GaryxThreadActionMenuRequest(
@@ -318,6 +322,23 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
             .accessibilityActions {
                 ForEach(itemsProvider().filter(\.isEnabled)) { item in
                     Button(item.title, action: item.handler)
+                }
+            }
+    }
+
+    private var primaryInteractionGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.36, maximumDistance: 16)
+            .exclusively(before: TapGesture())
+            .onEnded { result in
+                guard isEnabled else { return }
+                switch result {
+                case .first:
+                    let items = itemsProvider()
+                    guard items.contains(where: \.isEnabled) else { return }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    presented = PresentedMenu(token: UUID(), items: items)
+                case .second:
+                    primaryAction()
                 }
             }
     }
