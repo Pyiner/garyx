@@ -1,4 +1,8 @@
+use super::task_quota::{
+    TaskCreateQuotaExhausted, check_agent_quota, check_agent_quota_with_options,
+};
 use super::*;
+use garyx_models::QuotaStatus;
 
 pub(crate) async fn cmd_task_list(
     config_path: &str,
@@ -115,7 +119,60 @@ pub(crate) async fn cmd_task_create(
     notify: Vec<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let executor = task_executor_payload(agent)?;
+    cmd_task_create_inner(
+        config_path,
+        title,
+        body,
+        workspace_dir,
+        worktree,
+        agent,
+        notify,
+        json_output,
+        None,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(super) async fn cmd_task_create_with_quota_timeout(
+    config_path: &str,
+    title: Option<String>,
+    body: Option<String>,
+    workspace_dir: Option<String>,
+    worktree: bool,
+    agent: Option<String>,
+    notify: Vec<String>,
+    json_output: bool,
+    quota_timeout: Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    cmd_task_create_inner(
+        config_path,
+        title,
+        body,
+        workspace_dir,
+        worktree,
+        agent,
+        notify,
+        json_output,
+        Some(quota_timeout),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_task_create_inner(
+    config_path: &str,
+    title: Option<String>,
+    body: Option<String>,
+    workspace_dir: Option<String>,
+    worktree: bool,
+    agent: Option<String>,
+    notify: Vec<String>,
+    json_output: bool,
+    quota_timeout_override: Option<Duration>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let agent_id = required_task_agent_id(agent)?;
+    let executor = task_executor_payload(&agent_id);
     let notification_target = task_notification_target_payload(notify)?;
     let notify_current_thread = notification_targets_current_thread(&notification_target);
     let source = task_source_payload_from_env();
@@ -138,6 +195,25 @@ pub(crate) async fn cmd_task_create(
         "notification_target": notification_target,
         "source": source,
     });
+    let quota = match quota_timeout_override {
+        Some(timeout) => {
+            check_agent_quota_with_options(&gateway, &agent_id, chrono::Utc::now(), timeout).await
+        }
+        None => check_agent_quota(&gateway, &agent_id).await,
+    };
+    match quota {
+        Ok(status @ QuotaStatus::Exhausted { .. }) => {
+            let error = TaskCreateQuotaExhausted::from_status(&agent_id, status)
+                .expect("matched exhausted quota status");
+            return Err(error.into());
+        }
+        Ok(QuotaStatus::Ok | QuotaStatus::Unsupported) => {}
+        Err(error) => {
+            eprintln!(
+                "Warning: could not verify provider quota for agent '{agent_id}' ({error}); continuing task creation."
+            );
+        }
+    }
     let payload = post_gateway_json_as_cli_actor(&gateway, "/api/tasks", &request).await?;
     if json_output {
         return print_pretty_json(&payload);
@@ -168,17 +244,21 @@ fn notification_targets_current_thread(target: &Value) -> bool {
     }
 }
 
-fn task_executor_payload(agent: Option<String>) -> Result<Value, Box<dyn std::error::Error>> {
+fn required_task_agent_id(agent: Option<String>) -> Result<String, Box<dyn std::error::Error>> {
     let agent_id = agent
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     if let Some(agent_id) = agent_id {
-        return Ok(json!({
-            "type": "agent",
-            "agentId": agent_id,
-        }));
+        return Ok(agent_id);
     }
     Err("Task creation is a delegation feature, so you must specify an Agent with --agent.".into())
+}
+
+fn task_executor_payload(agent_id: &str) -> Value {
+    json!({
+        "type": "agent",
+        "agentId": agent_id,
+    })
 }
 
 fn task_source_payload_from_env() -> Option<Value> {
@@ -960,9 +1040,9 @@ mod tests {
     use tokio::{net::TcpListener, task::JoinHandle};
 
     #[test]
-    fn task_executor_payload_requires_a_delegation_target() {
+    fn required_task_agent_id_requires_a_delegation_target() {
         for agent in [None, Some(" \t".to_owned())] {
-            let error = task_executor_payload(agent)
+            let error = required_task_agent_id(agent)
                 .expect_err("task creation without an executor should fail");
 
             assert_eq!(

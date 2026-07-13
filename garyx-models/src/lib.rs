@@ -12,6 +12,7 @@ pub mod message_lifecycle;
 pub mod message_preview;
 pub mod messages;
 pub mod provider;
+pub mod quota;
 pub mod routing;
 pub mod session;
 pub mod task;
@@ -60,6 +61,10 @@ pub use provider::{
     attachments_from_metadata, attachments_to_metadata_value,
     build_prompt_message_with_attachments, build_user_content_from_parts,
     file_attachments_from_paths, stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
+};
+pub use quota::{
+    CodingModelUsage, CodingProviderUsage, CodingUsageSnapshot, CodingUsageWindow, QuotaCheckError,
+    QuotaCredentialScope, QuotaScope, QuotaStatus, evaluate_quota,
 };
 pub use routing::DeliveryContext;
 pub use session::{ChatType, SessionEntry, SessionOrigin, SessionTokenUsage};
