@@ -1,3 +1,5 @@
+import type { ProviderType } from "./components/agents-hub-helpers";
+
 /**
  * Pure presentation logic for the thread-tail rate-limit card, kept out of the
  * component so the state machine, countdown formatting, and provider-message
@@ -18,6 +20,34 @@ export interface RateLimitBannerState {
   kind: RateLimitBannerStateKind;
   /** Manual Continue makes sense only when no automatic resend is scheduled. */
   showContinue: boolean;
+}
+
+/** Normalize free-form bridge provider strings for shared presentation. */
+export function normalizeRateLimitProvider(
+  provider?: string | null,
+): ProviderType | "gemini" | null {
+  const slug = (provider ?? "").trim().toLowerCase();
+  if (slug.startsWith("claude")) {
+    return "claude_code";
+  }
+  if (slug.startsWith("codex")) {
+    return "codex_app_server";
+  }
+  if (
+    slug.startsWith("antigravity")
+    || slug === "agy"
+    || slug.startsWith("agy-")
+    || slug.startsWith("agy_")
+  ) {
+    return "antigravity";
+  }
+  if (slug.startsWith("trae")) {
+    return "traex";
+  }
+  if (slug.startsWith("gemini")) {
+    return "gemini";
+  }
+  return null;
 }
 
 /**

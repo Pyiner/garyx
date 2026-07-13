@@ -14,7 +14,9 @@ import {
   formatRemaining,
   formatResetClock,
   messageSegments,
+  normalizeRateLimitProvider,
 } from "../rate-limit-banner-model";
+import { providerLabel as sharedProviderLabel } from "./agents-hub-helpers";
 
 /**
  * Quota / rate-limit card rendered at the tail of a thread when its most
@@ -65,7 +67,11 @@ export function RateLimitBanner({
     return null;
   }
 
-  const provider = providerLabel(rateLimit.provider);
+  const rawProvider = rateLimit.provider?.trim() ?? "";
+  const normalizedProvider = normalizeRateLimitProvider(rawProvider);
+  const provider = normalizedProvider
+    ? sharedProviderLabel(normalizedProvider)
+    : rawProvider || "Provider";
   const windowText = windowLabel(rateLimit.window, t);
   const message = rateLimit.message?.trim() ?? "";
   const state = deriveRateLimitBannerState({
@@ -184,17 +190,6 @@ export function RateLimitBanner({
       ) : null}
     </article>
   );
-}
-
-function providerLabel(provider?: string | null): string {
-  const slug = (provider ?? "").trim().toLowerCase();
-  if (slug.startsWith("codex")) {
-    return "Codex";
-  }
-  if (slug.startsWith("trae")) {
-    return "TRAE";
-  }
-  return provider && provider.trim() ? provider.trim() : "Provider";
 }
 
 function windowLabel(

@@ -6,9 +6,39 @@ import {
   formatRemaining,
   formatResetClock,
   messageSegments,
+  normalizeRateLimitProvider,
 } from "./rate-limit-banner-model.ts";
 
 const NOW = Date.parse("2030-01-01T06:00:00Z");
+
+test("free-form provider prefixes normalize to shared presentation keys", () => {
+  assert.deepEqual(
+    [
+      " claude_sdk ",
+      "codex_app_server",
+      "Antigravity CLI",
+      "agy_local",
+      "TRAE",
+      "traex_bridge",
+      "gemini_cli",
+      "custom-provider",
+      "",
+      null,
+    ].map((provider) => normalizeRateLimitProvider(provider)),
+    [
+      "claude_code",
+      "codex_app_server",
+      "antigravity",
+      "antigravity",
+      "traex",
+      "traex",
+      "gemini",
+      null,
+      null,
+      null,
+    ],
+  );
+});
 
 test("auto-resend with future reset counts down without Continue", () => {
   const state = deriveRateLimitBannerState({
