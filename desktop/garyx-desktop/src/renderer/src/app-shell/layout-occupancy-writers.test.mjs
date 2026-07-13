@@ -15,6 +15,14 @@ const mainWindow = readFileSync(
   new URL("../../../main/index.ts", import.meta.url),
   "utf8",
 );
+const mainExecutor = readFileSync(
+  new URL("../../../main/window-layout-executor.ts", import.meta.url),
+  "utf8",
+);
+const effectRunner = readFileSync(
+  new URL("./horizontal-layout-effect-runner.ts", import.meta.url),
+  "utf8",
+);
 
 function rendererSourceFiles(directory) {
   const files = [];
@@ -38,14 +46,6 @@ const rendererSourceUrls = rendererSourceFiles(
 const rendererSources = rendererSourceUrls.map((url) =>
   readFileSync(url, "utf8"),
 );
-const liveNativeEffectSources = rendererSourceUrls
-  .filter(
-    (url) =>
-      !url.pathname.endsWith("/responsive-layout-model.ts") &&
-      !url.pathname.endsWith("/window-layout-protocol.ts"),
-  )
-  .map((url) => readFileSync(url, "utf8"));
-
 const legacySetterNames = [
   "setOpenCapsuleTabsLegacy",
   "setInspectorOpenLegacy",
@@ -200,19 +200,26 @@ test("desired cleanup may lead legacy commits without changing their UI sequence
   );
 });
 
-test("Phase 2 consumes legacy frames while native window effects remain disconnected", () => {
+test("Phase 4 switches the whole stack while the feature-off branch stays legacy", () => {
   assert.match(frameStore, /\breduceHorizontalLayout\b/);
   assert.match(frameStore, /\bprojectHorizontalLayout\b/);
   assert.match(resizeController, /createLegacyHorizontalLayoutFrameStore/);
+  assert.match(resizeController, /createHorizontalLayoutEffectRunner/);
   assert.match(resizeController, /useSyncExternalStore/);
   assert.match(appShell, /dispatchLayoutOccupancyEvent\(appendResult\.event\)/);
-  for (const source of liveNativeEffectSources) {
-    assert.doesNotMatch(source, /\bAPPLY_WINDOW_BOUNDS\b/);
-    assert.doesNotMatch(source, /\bCLAIM_INITIAL_LAYOUT\b/);
-  }
   assert.doesNotMatch(resizeController, /adjustWindow|setBounds/);
-  assert.match(mainWindow, /minWidth: 1180/);
-  assert.doesNotMatch(mainWindow, /minWidth: 480/);
+  assert.match(
+    mainWindow,
+    /minWidth: horizontalLayoutPolicy === "expand-v1" \? 480 : 1180/,
+  );
+  assert.match(mainWindow, /GARYX_DESKTOP_EXPAND_V1/);
+  assert.match(
+    resizeController,
+    /if \(layoutPolicy === "legacy"\)[\s\S]*createLegacyHorizontalLayoutFrameStore/,
+  );
+  assert.match(effectRunner, /executeWindowLayoutCommand/);
+  assert.match(mainExecutor, /#host\.setBounds\(command\.targetBounds\)/);
+  assert.match(mainExecutor, /#host\.readEnvironment\(\)/);
   assert.doesNotMatch(
     appShell,
     /--spacing-token-sidebar|--side-tools-panel-width|--thread-log-panel-width/,

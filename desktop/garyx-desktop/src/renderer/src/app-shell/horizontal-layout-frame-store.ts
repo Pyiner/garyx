@@ -8,6 +8,7 @@ import {
   type HorizontalLayoutFrame,
   type HorizontalLayoutState,
   type LayoutMachineEffect,
+  type LayoutPolicyName,
   type StableHorizontalLayoutFrame,
 } from "./responsive-layout-model.ts";
 
@@ -43,13 +44,13 @@ export const HORIZONTAL_LAYOUT_FRAME_ATTRIBUTES = [
   "data-layout-revision",
 ] as const;
 
-function requiredStableFrame(
+function requiredPaintFrame(
   projection: HorizontalLayoutFrame,
 ): StableHorizontalLayoutFrame {
   const frame = stableFrameFromProjection(projection);
-  if (!frame || projection.kind !== "stable") {
+  if (!frame) {
     throw new Error(
-      `legacy horizontal layout must project a stable frame, received ${projection.kind}`,
+      `horizontal layout must project a paintable frame, received ${projection.kind}`,
     );
   }
   return frame;
@@ -65,7 +66,7 @@ export function applyFrame(
   root: HorizontalLayoutFrameRoot,
   projection: HorizontalLayoutFrame,
 ): StableHorizontalLayoutFrame {
-  const frame = requiredStableFrame(projection);
+  const frame = requiredPaintFrame(projection);
   for (const [name, value] of Object.entries(frame.cssVariables)) {
     root.style.setProperty(name, value);
   }
@@ -90,7 +91,7 @@ export function clearFrame(root: HorizontalLayoutFrameRoot): void {
   }
 }
 
-export type LegacyHorizontalLayoutFrameStore = Readonly<{
+export type HorizontalLayoutFrameStore = Readonly<{
   attachRoot(root: HorizontalLayoutFrameRoot | null): void;
   dispatch(event: HorizontalLayoutEvent): readonly LayoutMachineEffect[];
   getSnapshot(): StableHorizontalLayoutFrame;
@@ -98,16 +99,20 @@ export type LegacyHorizontalLayoutFrameStore = Readonly<{
   subscribe(listener: () => void): () => void;
 }>;
 
-export function createLegacyHorizontalLayoutFrameStore(
-  input: Omit<CreateHorizontalLayoutStateInput, "policy">,
-): LegacyHorizontalLayoutFrameStore {
-  let state = createHorizontalLayoutState({ ...input, policy: "legacy" });
-  let frame = requiredStableFrame(projectHorizontalLayout(state));
+export type LegacyHorizontalLayoutFrameStore = HorizontalLayoutFrameStore;
+
+export function createHorizontalLayoutFrameStore(
+  input: Omit<CreateHorizontalLayoutStateInput, "policy"> & {
+    policy: LayoutPolicyName;
+  },
+): HorizontalLayoutFrameStore {
+  let state = createHorizontalLayoutState(input);
+  let frame = requiredPaintFrame(projectHorizontalLayout(state));
   let root: HorizontalLayoutFrameRoot | null = null;
   const listeners = new Set<() => void>();
 
   const publish = () => {
-    frame = requiredStableFrame(projectHorizontalLayout(state));
+    frame = requiredPaintFrame(projectHorizontalLayout(state));
     if (root) {
       applyFrame(root, frame);
     }
@@ -129,9 +134,11 @@ export function createLegacyHorizontalLayoutFrameStore(
     dispatch(event) {
       const reduction = reduceHorizontalLayout(state, event);
       state = reduction.state;
-      const checkpoint = reduction.effects.find(
-        (effect) => effect.type === "window-layout-session",
-      );
+      const checkpoint = state.policy === "legacy"
+        ? reduction.effects.find(
+            (effect) => effect.type === "window-layout-session",
+          )
+        : undefined;
       if (checkpoint?.type === "window-layout-session") {
         const acknowledgedSession = {
           ...state.acknowledgedSession,
@@ -148,9 +155,9 @@ export function createLegacyHorizontalLayoutFrameStore(
         if (settled.effects.length > 0) {
           throw new Error("legacy checkpoint acknowledgement emitted effects");
         }
-        // Phase 2 has no native result that could ever refer back to a legacy
+        // Legacy mode has no native result that could ever refer back to a
         // transaction. Compact it after its ordered local checkpoint so the
-        // live adapter cannot retain an unbounded history of settled intents.
+        // adapter cannot retain an unbounded history of settled intents.
         state = {
           ...settled.state,
           transactions: {},
@@ -173,4 +180,10 @@ export function createLegacyHorizontalLayoutFrameStore(
       };
     },
   };
+}
+
+export function createLegacyHorizontalLayoutFrameStore(
+  input: Omit<CreateHorizontalLayoutStateInput, "policy">,
+): LegacyHorizontalLayoutFrameStore {
+  return createHorizontalLayoutFrameStore({ ...input, policy: "legacy" });
 }

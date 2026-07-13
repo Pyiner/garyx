@@ -11,6 +11,7 @@ import {
   DEFAULT_DESKTOP_SETTINGS,
   type DesktopSettings,
   type DesktopState,
+  type WindowLayoutBootstrap,
 } from "@shared/contracts";
 
 import type { SideCapsuleTab } from "./components/SideToolsPanel";
@@ -24,14 +25,21 @@ import {
   defaultSideToolsPanelWidth,
 } from "./diagnostics-helpers";
 import {
+  createHorizontalLayoutFrameStore,
   createLegacyHorizontalLayoutFrameStore,
-  type LegacyHorizontalLayoutFrameStore,
+  type HorizontalLayoutFrameStore,
 } from "./horizontal-layout-frame-store";
+import {
+  createHorizontalLayoutEffectRunner,
+  type HorizontalLayoutEffectRunner,
+} from "./horizontal-layout-effect-runner";
 import type { LayoutOccupancyEvent } from "./layout-occupancy-events";
 import {
   CONVERSATION_RAIL_DEFAULT_WIDTH,
   SIDEBAR_DEFAULT_WIDTH,
+  type HorizontalLayoutEvent,
   type LayoutPanelId,
+  type LayoutMachineEffect,
   type WindowLayoutSnapshot,
 } from "./responsive-layout-model";
 import type { ContentView } from "./types";
@@ -45,6 +53,10 @@ type UseLayoutResizeControllerArgs = {
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
   setSettingsDraft: React.Dispatch<React.SetStateAction<DesktopSettings>>;
   threadLogsOpen: boolean;
+  windowLayoutBootstrap: Readonly<{
+    bootstrap: WindowLayoutBootstrap;
+    rendererEpoch: string;
+  }> | null;
 };
 
 function readSidebarDesiredOpen(): boolean {
@@ -89,29 +101,67 @@ export function useLayoutResizeController({
   setDesktopState,
   setSettingsDraft,
   threadLogsOpen,
+  windowLayoutBootstrap,
 }: UseLayoutResizeControllerArgs) {
   const initialSidebarDesiredOpenRef = useRef<boolean | null>(null);
   if (initialSidebarDesiredOpenRef.current === null) {
     initialSidebarDesiredOpenRef.current = readSidebarDesiredOpen();
   }
-  const storeRef = useRef<LegacyHorizontalLayoutFrameStore | null>(null);
+  const layoutPolicy = window.garyxDesktop.horizontalLayoutPolicy;
+  const pendingEffectsRef = useRef<LayoutMachineEffect[]>([]);
+  const effectRunnerRef = useRef<HorizontalLayoutEffectRunner | null>(null);
+  const storeRef = useRef<HorizontalLayoutFrameStore | null>(null);
   if (!storeRef.current) {
-    storeRef.current = createLegacyHorizontalLayoutFrameStore({
-      rendererEpoch: "legacy-live-renderer",
-      snapshot: rendererWindowSnapshot(1, "hydrate"),
-      desiredOccupancy: {
-        globalSidebar: initialSidebarDesiredOpenRef.current,
-        conversationRail: secondaryRailOpen,
-        sideTools: inspectorOpen || openCapsuleTabs.length > 0,
-        threadLogs: threadLogsOpen,
-      },
-      widths: {
-        globalSidebar: SIDEBAR_DEFAULT_WIDTH,
-        conversationRail: CONVERSATION_RAIL_DEFAULT_WIDTH,
-        sideTools: defaultSideToolsPanelWidth(null),
-        threadLogs: DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
-      },
-    });
+    const desiredOccupancy = {
+      globalSidebar:
+        windowLayoutBootstrap &&
+        !windowLayoutBootstrap.bootstrap.freshSession
+          ? windowLayoutBootstrap.bootstrap.acknowledgedSession
+              .desiredOccupancy.globalSidebar
+          : initialSidebarDesiredOpenRef.current,
+      conversationRail: secondaryRailOpen,
+      sideTools: inspectorOpen || openCapsuleTabs.length > 0,
+      threadLogs: threadLogsOpen,
+    };
+    const widths = {
+      globalSidebar: SIDEBAR_DEFAULT_WIDTH,
+      conversationRail: CONVERSATION_RAIL_DEFAULT_WIDTH,
+      sideTools: defaultSideToolsPanelWidth(null),
+      threadLogs: DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
+    };
+    if (layoutPolicy === "legacy") {
+      storeRef.current = createLegacyHorizontalLayoutFrameStore({
+        rendererEpoch: "legacy-live-renderer",
+        snapshot: rendererWindowSnapshot(1, "hydrate"),
+        desiredOccupancy,
+        widths,
+      });
+    } else {
+      if (!windowLayoutBootstrap) {
+        throw new Error("expand-v1 requires a window layout bootstrap");
+      }
+      const { bootstrap, rendererEpoch } = windowLayoutBootstrap;
+      const store = createHorizontalLayoutFrameStore({
+        policy: "expand-v1",
+        rendererEpoch,
+        snapshot: bootstrap.snapshot,
+        desiredOccupancy,
+        widths,
+        hydrated: false,
+      });
+      pendingEffectsRef.current.push(
+        ...store.dispatch({
+          type: "HYDRATE",
+          freshSession: bootstrap.freshSession,
+          snapshot: bootstrap.snapshot,
+          desiredOccupancy,
+          acknowledgedSession: bootstrap.freshSession
+            ? undefined
+            : bootstrap.acknowledgedSession,
+        }),
+      );
+      storeRef.current = store;
+    }
   }
   const store = storeRef.current;
   const frame = useSyncExternalStore(
@@ -132,29 +182,62 @@ export function useLayoutResizeController({
     [store],
   );
 
+  const dispatchStoreEvent = useCallback(
+    (event: HorizontalLayoutEvent) => {
+      if (effectRunnerRef.current) {
+        effectRunnerRef.current.dispatch(event);
+        return;
+      }
+      pendingEffectsRef.current.push(...store.dispatch(event));
+    },
+    [store],
+  );
+
+  useLayoutEffect(() => {
+    if (layoutPolicy !== "expand-v1") {
+      return;
+    }
+    const runner = createHorizontalLayoutEffectRunner({
+      api: window.garyxDesktop,
+      store,
+    });
+    effectRunnerRef.current = runner;
+    const pending = pendingEffectsRef.current;
+    pendingEffectsRef.current = [];
+    runner.run(pending);
+    return () => {
+      if (effectRunnerRef.current === runner) {
+        effectRunnerRef.current = null;
+      }
+      runner.stop();
+    };
+  }, [layoutPolicy, store]);
+
   const dispatchLayoutOccupancyEvent = useCallback(
     (event: LayoutOccupancyEvent) => {
-      // Phase 2 deliberately consumes only the pure legacy frame. The
-      // checkpoint/native effect channel remains disconnected until the
-      // expand-v1 activation phase.
       const previousFrame = store.getSnapshot();
-      store.dispatch(event);
+      dispatchStoreEvent(event);
       const nextFrame = store.getSnapshot();
       if (
         nextFrame.presentation.compactViewport &&
         !previousFrame.presentation.compactViewport &&
         store.getState().compactSidebarOpen
       ) {
-        store.dispatch({ type: "COMPACT_SIDEBAR_TOGGLED" });
+        dispatchStoreEvent({ type: "COMPACT_SIDEBAR_TOGGLED" });
       }
     },
-    [store],
+    [dispatchStoreEvent, store],
   );
   const dispatchPanelWidth = useCallback(
     (panel: LayoutPanelId, width: number, commit = false) => {
-      store.dispatch({ type: "PANEL_WIDTH_CHANGED", panel, width, commit });
+      dispatchStoreEvent({
+        type: "PANEL_WIDTH_CHANGED",
+        panel,
+        width,
+        commit,
+      });
     },
-    [store],
+    [dispatchStoreEvent],
   );
 
   const currentConversationWidth = useCallback(() => {
@@ -248,20 +331,22 @@ export function useLayoutResizeController({
     const syncViewport = () => {
       const previousFrame = store.getSnapshot();
       const state = store.getState();
-      store.dispatch({
-        type: "WINDOW_SNAPSHOT_CHANGED",
-        snapshot: rendererWindowSnapshot(
-          state.snapshot.windowRevision + 1,
-          "user",
-        ),
-      });
+      if (layoutPolicy === "legacy") {
+        dispatchStoreEvent({
+          type: "WINDOW_SNAPSHOT_CHANGED",
+          snapshot: rendererWindowSnapshot(
+            state.snapshot.windowRevision + 1,
+            "user",
+          ),
+        });
+      }
       const nextFrame = store.getSnapshot();
       if (
         nextFrame.presentation.compactViewport &&
         !previousFrame.presentation.compactViewport &&
         store.getState().compactSidebarOpen
       ) {
-        store.dispatch({ type: "COMPACT_SIDEBAR_TOGGLED" });
+        dispatchStoreEvent({ type: "COMPACT_SIDEBAR_TOGGLED" });
       }
 
       const widths = store.getState().widths;
@@ -295,7 +380,9 @@ export function useLayoutResizeController({
   }, [
     currentConversationWidth,
     currentThreadLayoutWidth,
+    dispatchStoreEvent,
     dispatchPanelWidth,
+    layoutPolicy,
     setSettingsDraft,
     store,
   ]);
@@ -333,7 +420,7 @@ export function useLayoutResizeController({
 
   const toggleSidebarCollapsed = useCallback(() => {
     if (store.getSnapshot().presentation.compactViewport) {
-      store.dispatch({ type: "COMPACT_SIDEBAR_TOGGLED" });
+      dispatchStoreEvent({ type: "COMPACT_SIDEBAR_TOGGLED" });
       return;
     }
     try {
@@ -344,7 +431,7 @@ export function useLayoutResizeController({
     } catch {
       // Ignore storage failures; collapse state just will not persist.
     }
-  }, [store]);
+  }, [dispatchStoreEvent, store]);
 
   function handleSidebarResizeStart(
     event: React.PointerEvent<HTMLDivElement>,
@@ -644,12 +731,18 @@ export function useLayoutResizeController({
     sidebarCollapsed: frame.presentation.globalSidebar === "collapsed",
     sidebarDesiredOpen: store.getState().desiredOccupancy.globalSidebar,
     sidebarResizing,
+    conversationRailPresented:
+      frame.requestedOccupancy.conversationRail,
+    sideToolsEffectiveVisible:
+      frame.presentation.sideTools === "docked",
+    sideToolsPresented: frame.requestedOccupancy.sideTools,
     sidebarWidth: store.getState().widths.globalSidebar,
     sideToolsPanelWidth: store.getState().widths.sideTools,
     sideToolsResizing,
     taskTreeDocked: frame.presentation.taskTreeDocked,
     threadLayoutRef,
     threadLogsDocked: frame.presentation.threadLogs === "docked",
+    threadLogsPresented: frame.requestedOccupancy.threadLogs,
     threadLogsPanelWidth: store.getState().widths.threadLogs,
     threadLogsResizing,
     toggleSidebarCollapsed,

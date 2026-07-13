@@ -34,6 +34,11 @@ import {
   registerUpdaterIpc,
   subscribeUpdateStatus,
 } from "./updater";
+import {
+  bindWindowLayoutRuntime,
+  registerWindowLayoutIpc,
+} from "./window-layout-runtime";
+import { resolveHorizontalLayoutPolicy } from "@shared/contracts";
 
 import type {
   ArchiveThreadInput,
@@ -294,6 +299,9 @@ function restartThreadEventForwarders(): void {
 }
 const recentDeepLinkTimestamps = new Map<string, number>();
 const startupDeepLinkUrls = extractProtocolUrls(process.argv);
+const horizontalLayoutPolicy = resolveHorizontalLayoutPolicy(
+  process.env.GARYX_DESKTOP_EXPAND_V1,
+);
 
 const DEFAULT_USER_DATA_DIR_NAME = "Garyx";
 const LEGACY_USER_DATA_DIR_NAME = "garyx-desktop";
@@ -443,7 +451,7 @@ function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1480,
     height: 940,
-    minWidth: 1180,
+    minWidth: horizontalLayoutPolicy === "expand-v1" ? 480 : 1180,
     minHeight: 760,
     backgroundColor: useMacSidebarVibrancy ? "#00000000" : "#ffffff",
     transparent: useMacSidebarVibrancy,
@@ -464,8 +472,13 @@ function createMainWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      additionalArguments: [
+        `--garyx-horizontal-layout-policy=${horizontalLayoutPolicy}`,
+      ],
     },
   });
+
+  bindWindowLayoutRuntime(window, horizontalLayoutPolicy);
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (url) {
@@ -536,6 +549,7 @@ function messagePreviewText(input: SendMessageInput): string {
 
 function registerIpcHandlers(): void {
   writeBootstrapTrace("registerIpcHandlers:start");
+  registerWindowLayoutIpc();
   ipcMain.handle("garyx:get-state", async () => {
     return getDesktopState();
   });

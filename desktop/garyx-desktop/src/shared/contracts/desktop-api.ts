@@ -171,8 +171,28 @@ import type {
   UploadWorkspaceFilesResult,
   WorkspaceGitMutationResult,
 } from "./workspace.ts";
+import type {
+  HorizontalLayoutPolicyName,
+  WindowLayoutBootstrap,
+  WindowLayoutCommand,
+  WindowLayoutCommandResult,
+  WindowLayoutSnapshotListener,
+} from "./window-layout.ts";
 
 export interface GaryxDesktopApi {
+  horizontalLayoutPolicy: HorizontalLayoutPolicyName;
+  getWindowLayoutBootstrap: (input: {
+    rendererEpoch: string;
+  }) => WindowLayoutBootstrap;
+  executeWindowLayoutCommand: (
+    command: WindowLayoutCommand,
+  ) => Promise<WindowLayoutCommandResult>;
+  subscribeWindowLayoutSnapshots: (
+    listener: WindowLayoutSnapshotListener,
+  ) => void;
+  unsubscribeWindowLayoutSnapshots: (
+    listener: WindowLayoutSnapshotListener,
+  ) => void;
   getState: () => Promise<DesktopState>;
   /**
    * Boot-only fast hydration: the threads slice is a recent page (plus

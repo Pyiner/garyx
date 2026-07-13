@@ -17,4 +17,5 @@ export * from "./contracts/thread.ts";
 export * from "./contracts/state.ts";
 export * from "./contracts/browser-terminal.ts";
 export * from "./contracts/update.ts";
+export * from "./contracts/window-layout.ts";
 export * from "./contracts/desktop-api.ts";

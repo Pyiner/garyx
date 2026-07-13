@@ -195,7 +195,8 @@
   grid-row: 1 / span 2;
 }
 
-.app-shell[data-side-tools-state="hidden"] .thread-side-tools-panel {
+.app-shell[data-side-tools-state="hidden"] .thread-side-tools-panel,
+.app-shell[data-side-tools-state="hidden"] .side-tools-resizer {
   visibility: hidden;
   pointer-events: none;
   overflow: hidden;

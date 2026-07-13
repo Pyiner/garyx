@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-import type { GaryxDesktopApi } from "@shared/contracts";
+import {
+  resolveHorizontalLayoutPolicy,
+  type GaryxDesktopApi,
+} from "@shared/contracts";
 
 const chatStreamListeners = new Map<
   Parameters<GaryxDesktopApi["subscribeChatStream"]>[0],
@@ -44,7 +47,39 @@ const updateStatusListeners = new Map<
   (_event: Electron.IpcRendererEvent, payload: unknown) => void
 >();
 
+const windowLayoutSnapshotListeners = new Map<
+  Parameters<GaryxDesktopApi["subscribeWindowLayoutSnapshots"]>[0],
+  (_event: Electron.IpcRendererEvent, payload: unknown) => void
+>();
+
+const horizontalLayoutPolicyArgument = process.argv.find((argument) =>
+  argument.startsWith("--garyx-horizontal-layout-policy="),
+);
+const horizontalLayoutPolicy = resolveHorizontalLayoutPolicy(
+  horizontalLayoutPolicyArgument?.split("=", 2)[1],
+);
+
 const api: GaryxDesktopApi = {
+  horizontalLayoutPolicy,
+  getWindowLayoutBootstrap: (input) =>
+    ipcRenderer.sendSync("garyx:get-window-layout-bootstrap", input),
+  executeWindowLayoutCommand: (command) =>
+    ipcRenderer.invoke("garyx:execute-window-layout-command", command),
+  subscribeWindowLayoutSnapshots: (listener) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      listener(payload as Parameters<typeof listener>[0]);
+    };
+    windowLayoutSnapshotListeners.set(listener, wrapped);
+    ipcRenderer.on("garyx:window-layout-snapshot", wrapped);
+  },
+  unsubscribeWindowLayoutSnapshots: (listener) => {
+    const wrapped = windowLayoutSnapshotListeners.get(listener);
+    if (!wrapped) {
+      return;
+    }
+    ipcRenderer.removeListener("garyx:window-layout-snapshot", wrapped);
+    windowLayoutSnapshotListeners.delete(listener);
+  },
   getState: () => ipcRenderer.invoke("garyx:get-state"),
   getStateFast: () => ipcRenderer.invoke("garyx:get-state-fast"),
   saveSettings: (settings) =>

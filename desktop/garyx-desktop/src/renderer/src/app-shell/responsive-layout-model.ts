@@ -1385,13 +1385,13 @@ function updateTransaction(
   if (!current) {
     return state;
   }
-  return {
+  return withRevision({
     ...state,
     transactions: {
       ...state.transactions,
       [transactionId]: { ...current, ...patch },
     },
-  };
+  });
 }
 
 function addDiagnostic(

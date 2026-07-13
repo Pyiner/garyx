@@ -45,6 +45,7 @@ import {
   type UpdateSlashCommandInput,
   type UpsertMcpServerInput,
   type UpsertSlashCommandInput,
+  type WindowLayoutBootstrap,
 } from "@shared/contracts";
 import { desktopStateWithoutThread } from "@shared/desktop-state";
 import {
@@ -611,6 +612,31 @@ export function AppShell() {
     initialRouteRef.current = desktopRouteStore.getSnapshot().route;
   }
   const initialRouteValue = initialRouteRef.current;
+  const initialWindowLayoutRef = useRef<Readonly<{
+    bootstrap: WindowLayoutBootstrap;
+    rendererEpoch: string;
+  }> | null | undefined>(undefined);
+  if (initialWindowLayoutRef.current === undefined) {
+    if (window.garyxDesktop.horizontalLayoutPolicy === "expand-v1") {
+      const rendererEpoch =
+        typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `renderer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      initialWindowLayoutRef.current = {
+        rendererEpoch,
+        bootstrap: window.garyxDesktop.getWindowLayoutBootstrap({
+          rendererEpoch,
+        }),
+      };
+    } else {
+      initialWindowLayoutRef.current = null;
+    }
+  }
+  const initialWindowLayout = initialWindowLayoutRef.current;
+  const restoredLayoutOccupancy =
+    initialWindowLayout && !initialWindowLayout.bootstrap.freshSession
+      ? initialWindowLayout.bootstrap.acknowledgedSession.desiredOccupancy
+      : null;
   // Endgame architecture (docs/design/appshell-endgame-architecture.md):
   // the mirror instance is created once and provided via context. During
   // the migration it runs alongside the legacy React state; batches move
@@ -733,8 +759,12 @@ export function AppShell() {
   const conversationTitleRef = useRef<ConversationTitleHandle | null>(null);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
   const [bindingMutation, setBindingMutation] = useState<string | null>(null);
-  const [inspectorOpen, setInspectorOpenLegacy] = useState(false);
-  const [threadLogsOpen, setThreadLogsOpenLegacy] = useState(false);
+  const [inspectorOpen, setInspectorOpenLegacy] = useState(
+    restoredLayoutOccupancy?.sideTools ?? false,
+  );
+  const [threadLogsOpen, setThreadLogsOpenLegacy] = useState(
+    restoredLayoutOccupancy?.threadLogs ?? false,
+  );
   // Batch 5b: log content/polling live in ThreadLogDock; the shell keeps
   // only the open flag and the unread mirror for the header badge.
   const [threadLogsHasUnread, setThreadLogsHasUnread] = useState(false);
@@ -744,7 +774,7 @@ export function AppShell() {
   const [workspaceConversationPath, setWorkspaceConversationPathLegacy] =
     useState<string | null>(null);
   const [recentThreadsRailOpen, setRecentThreadsRailOpenLegacy] =
-    useState(false);
+    useState(restoredLayoutOccupancy?.conversationRail ?? false);
   // Batch 6c-2b: contentView is a SELECTOR over the committed route — the
   // route store is the only view state (AppShell subscribes on its local
   // store instance, not through context: AppShell renders the Provider).
@@ -1191,6 +1221,7 @@ export function AppShell() {
     compactSidebarViewport,
     currentConversationWidth,
     currentThreadLayoutWidth,
+    conversationRailPresented,
     dispatchLayoutOccupancyEvent,
     handleRailResizeStart,
     handleSidebarResizeStart,
@@ -1204,10 +1235,13 @@ export function AppShell() {
     sidebarDesiredOpen,
     sidebarResizing,
     sideToolsPanelWidth,
+    sideToolsEffectiveVisible,
+    sideToolsPresented,
     sideToolsResizing,
     taskTreeDocked,
     threadLayoutRef,
     threadLogsDocked,
+    threadLogsPresented,
     threadLogsPanelWidth,
     threadLogsResizing,
     toggleSidebarCollapsed: toggleSidebarCollapsedLegacy,
@@ -1220,6 +1254,7 @@ export function AppShell() {
     setDesktopState,
     setSettingsDraft,
     threadLogsOpen,
+    windowLayoutBootstrap: initialWindowLayout,
   });
   const initialLegacyLayoutIntent: LegacyLayoutIntentState = {
     globalSidebarOpen: sidebarDesiredOpen,
@@ -1243,9 +1278,8 @@ export function AppShell() {
   );
 
   // Every horizontal panel writer enters here. The desired update is logged
-  // synchronously as one full vector and Phase 2 feeds that exact event into
-  // the legacy-policy frame store. updateApplied still preserves the old
-  // component-state sequence while expand/native effects remain disconnected.
+  // synchronously as one full vector and fed into the active policy store.
+  // updateApplied preserves the component state used to render panel content.
   const commitLegacyLayoutIntent = useCallback(
     (
       cause: LayoutIntentCause,
@@ -2000,9 +2034,7 @@ export function AppShell() {
   const appShellClassName = [
     "app-shell",
     sidebarCollapsed ? "sidebar-collapsed" : null,
-    activeBotConversationGroup ||
-    activeWorkspaceThreadGroup ||
-    (shouldShowConversationRail && recentThreadsRailOpen)
+    conversationRailPresented
       ? "with-bot-conversation-rail"
       : null,
   ]
@@ -2937,6 +2969,12 @@ export function AppShell() {
   }, [commitLegacyLayoutIntent, contentView]);
 
   useEffect(() => {
+    // A non-fresh window-layout session restores inspector intent before the
+    // asynchronous DesktopState hydration resolves its workspace. Do not
+    // misclassify that boot gap as route cleanup and repay valid funding.
+    if (loading || !desktopState) {
+      return;
+    }
     if (!activeWorkspacePath) {
       commitLegacyLayoutIntent("system-cleanup", (current) => ({
         ...current,
@@ -2949,7 +2987,7 @@ export function AppShell() {
       ...current,
       [workspaceDirectoryKey(activeWorkspacePath, "")]: true,
     }));
-  }, [activeWorkspacePath, commitLegacyLayoutIntent]);
+  }, [activeWorkspacePath, commitLegacyLayoutIntent, desktopState, loading]);
 
   useEffect(() => {
     if (!workspacePreviewModalOpen || contentView !== "thread") {
@@ -3985,7 +4023,7 @@ export function AppShell() {
     isAgentsView ? "agents-view" : null,
     isSkillsView ? "skills-view" : null,
     isTasksView ? "tasks-view" : null,
-    showConversationSideTools ? "with-side-tools" : null,
+    sideToolsPresented ? "with-side-tools" : null,
     sideToolsResizing ? "side-tools-resizing" : null,
   ]
     .filter(Boolean)
@@ -4037,7 +4075,7 @@ export function AppShell() {
         historyLoading={historyLoading}
         historyLoadingEarlier={Boolean(activeHistoryPagination?.loadingBefore)}
         ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
-        inspectorOpen={embedded ? false : showConversationSideTools}
+        inspectorOpen={embedded ? false : sideToolsEffectiveVisible}
         isActiveSendingThread={isActiveSendingThread}
         canSteerQueuedPrompt={canSteerQueuedPrompt}
         isComposingRef={isComposingRef}
@@ -4215,7 +4253,7 @@ export function AppShell() {
               )
         }
         threadLogsDocked={embedded ? false : threadLogsDocked}
-        threadLogsOpen={embedded ? false : threadLogsOpen}
+        threadLogsOpen={embedded ? false : threadLogsPresented}
         threadLogsPanelWidth={embedded ? 0 : threadLogsPanelWidth}
         threadLogsResizing={embedded ? false : threadLogsResizing}
         threadAvatarCatalog={threadAvatarCatalog}
@@ -4584,7 +4622,7 @@ export function AppShell() {
         workspaceMutation={workspaceMutation}
         workspaceThreadGroups={workspaceThreadGroups}
       />
-      {activeBotConversationGroup ? (
+      {conversationRailPresented && activeBotConversationGroup ? (
         <BotConversationSidebar
           deletingThreadId={deletingThreadId}
           formatThreadTimestamp={formatThreadTimestamp}
@@ -4610,7 +4648,7 @@ export function AppShell() {
           railResizing={railResizing}
           selectedThreadId={botConversationSelectedThreadId}
         />
-      ) : activeWorkspaceThreadGroup ? (
+      ) : conversationRailPresented && activeWorkspaceThreadGroup ? (
         <WorkspaceConversationSidebar
           deletingThreadId={deletingThreadId}
           desktopState={desktopState}
@@ -4638,7 +4676,9 @@ export function AppShell() {
           selectedThreadId={workspaceConversationSelectedThreadId}
           threadAvatarCatalog={threadAvatarCatalog}
         />
-      ) : shouldShowConversationRail && recentThreadsRailOpen ? (
+      ) : conversationRailPresented &&
+        shouldShowConversationRail &&
+        recentThreadsRailOpen ? (
         <RecentConversationSidebar
           collapseLabel={t("Collapse recent threads")}
           feed={recentThreadFeeds.selectedFeed}
@@ -4677,6 +4717,8 @@ export function AppShell() {
           }))}
           selectedFilter={recentThreadFeeds.state.selectedFilter}
         />
+      ) : conversationRailPresented ? (
+        <div aria-hidden="true" className="bot-conversation-rail" />
       ) : null}
       <AddBotDialogRoot
         agentTargets={addBotAgentTargets}
@@ -5006,7 +5048,7 @@ export function AppShell() {
             )}
             </Suspense>
           </section>
-          {showConversationSideTools ? (
+          {sideToolsPresented ? (
             <>
               <div
                 aria-label={t("Resize side tools")}
@@ -5023,7 +5065,14 @@ export function AppShell() {
                 role="separator"
                 tabIndex={0}
               />
-              {sideToolsPanel}
+              {showConversationSideTools ? (
+                sideToolsPanel
+              ) : (
+                <aside
+                  aria-hidden="true"
+                  className="thread-side-tools-panel"
+                />
+              )}
             </>
           ) : null}
         </main>
