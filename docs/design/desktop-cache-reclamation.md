@@ -73,8 +73,8 @@ apply/match pass.
 
 ### Retention set
 
-The production `GatewayMirror` will enrich a `thread/clear` dispatch with a
-thread-local retention set computed from its existing snapshot:
+The production `GatewayMirror` will compute a thread-local retention set from
+its existing snapshot when it receives a `thread/clear` dispatch:
 
 - retain an intent referenced by a non-`remote_final` local UI message (the
   optimistic/error/interrupted row still needs it);
@@ -83,10 +83,12 @@ thread-local retention set computed from its existing snapshot:
 - non-terminal intents are never collection candidates, irrespective of the
   retention set.
 
-The reducer then deletes only this thread's unretained terminal states:
-`completed`, `cancelled`, `failed`, and `interrupted`. It also removes the
-thread's queue property when the queue is empty, but preserves a non-empty
-queue and every other thread.
+`DispatchMachine` will expose a desktop-local release operation that first
+applies the canonical `thread/clear` reducer and then applies a pure storage
+compaction before committing and notifying once. The compaction deletes only
+this thread's unretained terminal states: `completed`, `cancelled`, `failed`,
+and `interrupted`. It also removes the thread's queue property when the queue
+is empty, but preserves a non-empty queue and every other thread.
 
 `markIntentsFromHistory` will request a release whenever the thread has no
 pending-history intent, even if its runtime was cleared earlier. That gives a
@@ -95,19 +97,19 @@ earlier failure/interruption race.
 
 ### Shared conversation-state compatibility
 
-`thread/clear` is shared with the iOS state-machine fixture and currently means
-"remove runtime". To preserve that contract, the desktop action gains an
-optional `retainedIntentIds` field:
+`thread/clear` is shared with the iOS state-machine fixture and means "remove
+runtime". `MessageMachineAction` and `messageMachineReducer` remain unchanged;
+there is no desktop-only field or branch in the canonical reference
+implementation. Existing shared fixtures and iOS semantics therefore remain
+identical and fully covered by their current conformance suites.
 
-- omitted: current runtime-only behavior, so existing shared fixtures and iOS
-  semantics are unchanged;
-- present: runtime clear plus desktop terminal-intent GC and empty-queue
-  cleanup.
-
-Every production desktop clear goes through `GatewayMirror`, which supplies
-the field. Focused reducer tests can pass an explicit empty or non-empty set.
-`intent/cancelled` on an unknown record keeps its existing unconditional queue
-removal semantics, and `thread/delete` remains the unconditional full purge.
+Every production desktop clear goes through `GatewayMirror`, which routes that
+action to the desktop-local `DispatchMachine` release operation. Direct reducer
+callers still get the canonical runtime-only behavior. The checked-in leak
+regression already drives `GatewayMirror`, so it covers the production path
+without extending the shared action vocabulary. `intent/cancelled` on an
+unknown record keeps its existing unconditional queue-removal semantics, and
+`thread/delete` remains the unconditional full purge.
 
 This design does not derive, group, pair, or reorder transcript rows. Server
 `render_state` remains the only semantic render source.
@@ -173,12 +175,13 @@ Both singleton stores become access-ordered maps:
 - HTML store: at most 32 terminal entries;
 - thumbnail store: at most 64 terminal entries.
 
-`getState` and cache-hit `request` touch recency. `setEntry` inserts as newest
-and prunes the oldest terminal entries. Loading/in-flight/queued keys are not
-evicted; they become eligible when they settle, so concurrency and generation
-guards remain intact. The per-id generation entry is dropped once that id has
-no queued or in-flight job, preventing invalidation metadata from becoming a
-second unbounded map.
+`getState` remains a pure, referentially stable snapshot read for
+`useSyncExternalStore`. Cache-hit `request` touches recency; `setEntry` inserts
+as newest and prunes the oldest terminal entries. Loading/in-flight/queued keys
+are not evicted; they become eligible when they settle, so concurrency and
+generation guards remain intact. The per-id generation entry is dropped once
+that id has no queued or in-flight job, preventing invalidation metadata from
+becoming a second unbounded map.
 
 Eviction returns the stable `idle` snapshot. The two Capsule hooks request
 again when an active key becomes `idle`; the renderer then normally hits the
@@ -194,8 +197,10 @@ re-request an evicted key (recoverability).
 
 Expected files:
 
-- intent GC: `message-machine.ts`, `gateway-mirror/mirror.ts`,
-  `gateway-mirror/transcript-lifecycle.ts`, and focused tests;
+- intent GC: `gateway-mirror/dispatch-machine.ts`, `gateway-mirror/mirror.ts`,
+  `gateway-mirror/transcript-lifecycle.ts`, and focused tests (the canonical
+  `message-machine.ts` reducer remains unchanged; its test file retains the
+  production-mirror leak guard);
 - disk LRU: `main/transcript-cache.ts`, `main/index.ts`, and focused tests;
 - Git status: `NewThreadEmptyState.tsx`, one React-free cache helper, and its
   test;
