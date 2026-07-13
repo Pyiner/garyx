@@ -132,6 +132,9 @@ function assertExpectation(result, expectation) {
   if (result.active.stableRowRenders !== 0) {
     throw new Error("unchanged transcript rows still rendered during active streaming");
   }
+  if (result.active.tailRowRenders < result.frames) {
+    throw new Error("the changing transcript tail was incorrectly memoized away");
+  }
 }
 
 async function runOracle(page, frames, rows) {
