@@ -797,19 +797,13 @@ fn build_codex_thread_config(
     metadata: &HashMap<String, Value>,
     thread_id: &str,
     run_id: &str,
-    workspace_dir: Option<&Path>,
 ) -> Option<Value> {
     let mut thread_config = serde_json::Map::new();
 
     let runtime_instructions = metadata_string(metadata, "developer_instructions")
         .or_else(|| metadata_string(metadata, "system_prompt"));
-    let automation_id = metadata.get("automation_id").and_then(|v| v.as_str());
     if runtime_instructions.is_some() || !is_custom_standalone_agent(metadata) {
-        let instructions = compose_gary_instructions(
-            runtime_instructions.as_deref(),
-            workspace_dir,
-            automation_id,
-        );
+        let instructions = compose_gary_instructions(runtime_instructions.as_deref());
         thread_config.insert(
             "developer_instructions".to_owned(),
             Value::String(instructions),
@@ -1237,7 +1231,6 @@ fn build_thread_start_params(
             metadata,
             thread_id,
             run_id,
-            cwd.as_deref().map(Path::new),
         ),
         model,
         model_reasoning_effort,

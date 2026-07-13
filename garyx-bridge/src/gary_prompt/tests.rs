@@ -1,14 +1,13 @@
 use super::{
-    GARY_BASE_INSTRUCTIONS, compose_gary_instructions_with_layout,
-    prepend_initial_context_to_user_message, prepend_memory_context_to_user_message,
-    prepend_runtime_metadata_to_user_message, task_cli_env,
+    GARY_BASE_INSTRUCTIONS, compose_gary_instructions, prepend_initial_context_to_user_message,
+    prepend_memory_context_to_user_message, prepend_runtime_metadata_to_user_message, task_cli_env,
 };
 use serde_json::json;
 use std::collections::HashMap;
 
 #[test]
 fn compose_without_extra_returns_base_only() {
-    let value = compose_gary_instructions_with_layout(None);
+    let value = compose_gary_instructions(None);
 
     assert!(value.starts_with(GARY_BASE_INSTRUCTIONS.trim_end()));
     assert!(value.contains("Self-evolution:"));
@@ -25,7 +24,7 @@ fn compose_without_extra_returns_base_only() {
 
 #[test]
 fn compose_with_extra_appends_section() {
-    let value = compose_gary_instructions_with_layout(Some("Use concise bullets."));
+    let value = compose_gary_instructions(Some("Use concise bullets."));
 
     assert!(value.contains("Garyx runtime guidance:"));
     assert!(value.contains("Additional runtime instructions:"));

@@ -120,7 +120,6 @@ fn run_log_path() -> PathBuf {
 
 fn build_prompt_text(
     options: &ProviderRunOptions,
-    workspace_dir: Option<&Path>,
     include_instructions: bool,
 ) -> String {
     let mut attachments = attachments_from_metadata(&options.metadata);
@@ -130,12 +129,11 @@ fn build_prompt_text(
             options.images.as_deref().unwrap_or_default(),
         ));
     }
-    build_prompt_text_from_attachments(options, workspace_dir, include_instructions, &attachments)
+    build_prompt_text_from_attachments(options, include_instructions, &attachments)
 }
 
 fn build_prompt_text_from_attachments(
     options: &ProviderRunOptions,
-    workspace_dir: Option<&Path>,
     include_instructions: bool,
     attachments: &[PromptAttachment],
 ) -> String {
@@ -152,12 +150,7 @@ fn build_prompt_text_from_attachments(
         .metadata
         .get("system_prompt")
         .and_then(Value::as_str);
-    let automation_id = options
-        .metadata
-        .get("automation_id")
-        .and_then(Value::as_str);
-    let instructions =
-        compose_gary_instructions(runtime_system_prompt, workspace_dir, automation_id);
+    let instructions = compose_gary_instructions(runtime_system_prompt);
 
     if user_message.trim().is_empty() {
         format!("<system_instructions>\n{instructions}\n</system_instructions>")
@@ -984,7 +977,7 @@ impl AntigravityCliProvider {
         let conversations_dir = antigravity_base_dir(&brain_root).join("conversations");
         let timeout = request_timeout(&self.config);
         let model = model_id(&self.effective_config(), &options.metadata);
-        let prompt = build_prompt_text(options, Some(cwd.as_path()), session_id.is_none());
+        let prompt = build_prompt_text(options, session_id.is_none());
         let run_log = run_log_path();
         let baseline_step_index = session_id
             .map(|id| max_step_index(&transcript_path(&brain_root, id)))

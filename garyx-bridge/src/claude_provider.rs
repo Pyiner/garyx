@@ -1263,14 +1263,7 @@ impl ClaudeCliProvider {
                 }
             } else {
                 // Default Garyx: compose full instructions with --system-prompt
-                let merged_instructions = compose_gary_instructions(
-                    runtime_system_prompt,
-                    cwd.as_deref(),
-                    options
-                        .metadata
-                        .get("automation_id")
-                        .and_then(|v| v.as_str()),
-                );
+                let merged_instructions = compose_gary_instructions(runtime_system_prompt);
                 (None, HashMap::new(), Some(merged_instructions), None)
             };
         let env = runtime_env_overlay(&self.config.env, &options.metadata, "provider_env");

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 
 use serde_json::Value;
 
@@ -23,12 +22,15 @@ pub(crate) const GARY_BASE_INSTRUCTIONS: &str = concat!(
     "- If you restart the managed gateway while working as an agent, queue a wake: `garyx gateway restart --wake thread <thread_id> --wake-message \"continue\"`. Use `--no-wake` only when continuation is intentionally unnecessary.\n",
 );
 
-pub(crate) fn compose_gary_instructions(
-    extra: Option<&str>,
-    _workspace_dir: Option<&Path>,
-    _automation_id: Option<&str>,
-) -> String {
-    compose_gary_instructions_with_layout(extra)
+pub(crate) fn compose_gary_instructions(extra: Option<&str>) -> String {
+    let trimmed_extra = extra.map(str::trim).filter(|value| !value.is_empty());
+    let mut sections = vec![GARY_BASE_INSTRUCTIONS.trim_end().to_owned()];
+
+    if let Some(extra) = trimmed_extra {
+        sections.push(format!("Additional runtime instructions:\n{extra}"));
+    }
+
+    sections.join("\n\n")
 }
 
 pub(crate) fn prepend_initial_context_to_user_message(
@@ -202,17 +204,6 @@ fn escape_xml_text(value: &str) -> String {
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-}
-
-fn compose_gary_instructions_with_layout(extra: Option<&str>) -> String {
-    let trimmed_extra = extra.map(str::trim).filter(|value| !value.is_empty());
-    let mut sections = vec![GARY_BASE_INSTRUCTIONS.trim_end().to_owned()];
-
-    if let Some(extra) = trimmed_extra {
-        sections.push(format!("Additional runtime instructions:\n{extra}"));
-    }
-
-    sections.join("\n\n")
 }
 
 #[cfg(test)]
