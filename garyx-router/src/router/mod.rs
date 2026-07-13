@@ -24,7 +24,7 @@ mod threading;
 pub use command_catalog::{command_catalog_for_config, reserved_command_names};
 pub use contracts::ThreadCreator;
 pub use contracts::{
-    AgentDispatcher, InboundRequest, InboundResult, InboundSink, ThreadMessageRequest,
+    AgentDispatcher, InboundRequest, InboundResult, ThreadMessageRequest,
 };
 pub(crate) use contracts::{DispatchMetadataContext, NavigationContext, RouteContext};
 pub use inbound::is_native_command_text;
@@ -61,7 +61,6 @@ pub struct MessageRouter {
     recent_thread_page_reader: Option<Arc<dyn RecentThreadPageReader>>,
     recent_thread_browser: RecentThreadBrowserState,
     endpoint_binding_mutator: Option<Arc<dyn EndpointBindingMutator>>,
-    inbound_sink: Option<Arc<dyn InboundSink>>,
     thread_nav: threading::ThreadNavigationState,
     reply_routing: message::ReplyRoutingState,
     delivery_ctx: message::DeliveryContextState,
@@ -87,7 +86,6 @@ impl MessageRouter {
             recent_thread_page_reader: None,
             recent_thread_browser: RecentThreadBrowserState::default(),
             endpoint_binding_mutator: None,
-            inbound_sink: None,
             thread_nav: threading::ThreadNavigationState::default(),
             reply_routing: message::ReplyRoutingState::default(),
             delivery_ctx: message::DeliveryContextState::default(),
@@ -114,10 +112,6 @@ impl MessageRouter {
 
     pub fn endpoint_binding_mutator(&self) -> Option<Arc<dyn EndpointBindingMutator>> {
         self.endpoint_binding_mutator.clone()
-    }
-
-    pub fn set_inbound_sink(&mut self, sink: Arc<dyn InboundSink>) {
-        self.inbound_sink = Some(sink);
     }
 
     pub async fn create_thread_with_options(

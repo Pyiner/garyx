@@ -43,19 +43,6 @@ pub(crate) struct RecentLocalProviderSession {
     pub(crate) path: String,
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
-pub(crate) fn locate_local_provider_session(
-    session_id: &str,
-    provider_hint: Option<ProviderType>,
-) -> Result<Option<LocalProviderSessionBinding>, String> {
-    locate_local_provider_session_with_roots(
-        session_id,
-        provider_hint,
-        &default_provider_session_search_roots(),
-    )
-}
-
 pub(crate) fn recover_local_provider_session(
     session_id: &str,
     provider_hint: Option<ProviderType>,

@@ -203,18 +203,6 @@ impl ThreadHistoryRepository {
         Err(ThreadHistoryError::MissingTranscript(thread_id.to_owned()))
     }
 
-    pub async fn latest_message_text(
-        &self,
-        thread_id: &str,
-    ) -> Result<Option<String>, ThreadHistoryError> {
-        let snapshot = self.thread_snapshot(thread_id, 1).await?;
-        let combined = snapshot.combined_messages();
-        Ok(combined
-            .last()
-            .and_then(message_text)
-            .map(|value| value.to_owned()))
-    }
-
     pub async fn latest_message_text_for_role(
         &self,
         thread_id: &str,

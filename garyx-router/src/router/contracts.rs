@@ -26,11 +26,6 @@ pub trait ThreadCreator: Send + Sync {
     ) -> Result<(String, Value), String>;
 }
 
-#[async_trait]
-pub trait InboundSink: Send + Sync {
-    async fn try_handle(&self, request: &InboundRequest) -> Option<Result<InboundResult, String>>;
-}
-
 pub struct InboundRequest {
     pub channel: String,
     pub account_id: String,

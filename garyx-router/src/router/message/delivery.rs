@@ -202,40 +202,8 @@ impl MessageRouter {
             .retain(|key| key != thread_id);
     }
 
-    pub fn clear_last_delivery_for_chat(
-        &mut self,
-        thread_id: &str,
-        channel: &str,
-        account_id: &str,
-        chat_id: &str,
-        thread_binding_key: Option<&str>,
-    ) {
-        let expected_binding_key = thread_binding_key
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(chat_id);
-        let should_clear = self
-            .delivery_ctx
-            .last_delivery
-            .get(thread_id)
-            .is_some_and(|ctx| {
-                ctx.channel == channel
-                    && ctx.account_id == account_id
-                    && ctx.chat_id == chat_id
-                    && Self::delivery_binding_key(ctx) == expected_binding_key
-            });
-        if should_clear {
-            self.clear_last_delivery(thread_id);
-        }
-    }
-
     pub async fn clear_last_delivery_with_persistence(&mut self, thread_id: &str) {
         self.clear_last_delivery_with_persistence_mode(thread_id, true)
-            .await;
-    }
-
-    pub async fn clear_last_delivery_with_known_thread_persistence(&mut self, thread_id: &str) {
-        self.clear_last_delivery_with_persistence_mode(thread_id, false)
             .await;
     }
 
@@ -305,25 +273,6 @@ impl MessageRouter {
             )
             .await;
         }
-    }
-
-    pub async fn clear_last_delivery_for_chat_with_persistence(
-        &mut self,
-        thread_id: &str,
-        channel: &str,
-        account_id: &str,
-        chat_id: &str,
-        thread_binding_key: Option<&str>,
-    ) {
-        self.clear_last_delivery_for_chat_with_persistence_mode(
-            thread_id,
-            channel,
-            account_id,
-            chat_id,
-            thread_binding_key,
-            true,
-        )
-        .await;
     }
 
     pub async fn clear_last_delivery_for_chat_with_known_thread_persistence(

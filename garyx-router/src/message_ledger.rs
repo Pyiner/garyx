@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use garyx_models::{
-    BotThreadProblemSummary, MessageLedgerEvent, MessageLedgerRecord, MessageTerminalReason,
+    BotThreadProblemSummary, MessageLedgerEvent, MessageLedgerRecord,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -285,12 +285,6 @@ fn limit_tail<T>(mut items: Vec<T>, limit: usize) -> Vec<T> {
     }
     items.drain(0..items.len() - limit);
     items
-}
-
-pub fn default_terminal_reason(record: &MessageLedgerRecord) -> MessageTerminalReason {
-    record
-        .terminal_reason
-        .unwrap_or(MessageTerminalReason::None)
 }
 
 pub type SharedMessageLedgerStore = Arc<MessageLedgerStore>;

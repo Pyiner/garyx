@@ -139,17 +139,6 @@ impl MessageRouter {
             .remove(binding_context_key);
     }
 
-    pub fn clear_account_thread_context(
-        &mut self,
-        channel: &str,
-        account_id: &str,
-        thread_binding_key: &str,
-    ) {
-        let binding_context_key =
-            Self::build_binding_context_key(channel, account_id, thread_binding_key);
-        self.clear_binding_thread_context(&binding_context_key);
-    }
-
     /// Ensure a thread record exists with baseline metadata.
     pub async fn ensure_thread_entry(
         &self,

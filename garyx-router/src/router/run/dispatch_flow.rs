@@ -24,12 +24,6 @@ impl MessageRouter {
         dispatcher: &dyn AgentDispatcher,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
     ) -> Result<InboundResult, String> {
-        if let Some(sink) = &self.inbound_sink
-            && let Some(result) = sink.try_handle(&request).await
-        {
-            return result;
-        }
-
         if let Some(command_text) = InboundCommandClassifier::command_text(&request)
             && let Some(command) = InboundCommandClassifier::parse(command_text, &request.channel)
         {

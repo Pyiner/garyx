@@ -21,7 +21,7 @@ pub mod inbound {
 
 pub mod routing {
     pub use crate::router::{
-        AgentDispatcher, InboundRequest, InboundResult, InboundSink, MessageRouter, ThreadCreator,
+        AgentDispatcher, InboundRequest, InboundResult, MessageRouter, ThreadCreator,
         ThreadMessageRequest,
     };
 }
@@ -73,7 +73,7 @@ pub use memory_store::InMemoryThreadStore;
 pub use message_ledger::{MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore};
 pub use message_routing::{MessageRoutingIndex, MessageRoutingStats, OutboundMessageRecord};
 pub use router::{
-    AgentDispatcher, InboundRequest, InboundResult, InboundSink, MessageRouter,
+    AgentDispatcher, InboundRequest, InboundResult, MessageRouter,
     NATIVE_COMMAND_TEXT_METADATA_KEY, ThreadCreator, ThreadMessageRequest,
     command_catalog_for_config, is_native_command_text, reserved_command_names,
 };
