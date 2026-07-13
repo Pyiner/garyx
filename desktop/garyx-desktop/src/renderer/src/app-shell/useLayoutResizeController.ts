@@ -188,9 +188,12 @@ export function useLayoutResizeController({
         effectRunnerRef.current.dispatch(event);
         return;
       }
-      pendingEffectsRef.current.push(...store.dispatch(event));
+      const effects = store.dispatch(event);
+      if (layoutPolicy === "expand-v1") {
+        pendingEffectsRef.current.push(...effects);
+      }
     },
-    [store],
+    [layoutPolicy, store],
   );
 
   useLayoutEffect(() => {

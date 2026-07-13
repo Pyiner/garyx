@@ -205,6 +205,11 @@ test("Phase 4 switches the whole stack while the feature-off branch stays legacy
   assert.match(frameStore, /\bprojectHorizontalLayout\b/);
   assert.match(resizeController, /createLegacyHorizontalLayoutFrameStore/);
   assert.match(resizeController, /createHorizontalLayoutEffectRunner/);
+  assert.match(
+    resizeController,
+    /if \(layoutPolicy === "expand-v1"\) \{\s*pendingEffectsRef\.current\.push\(\.\.\.effects\);/,
+    "legacy mode discards effects already settled by its local checkpoint",
+  );
   assert.match(resizeController, /useSyncExternalStore/);
   assert.match(appShell, /dispatchLayoutOccupancyEvent\(appendResult\.event\)/);
   assert.doesNotMatch(resizeController, /adjustWindow|setBounds/);

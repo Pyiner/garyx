@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { WindowLayoutExecutor } from "../../../main/window-layout-executor.ts";
+
 import { createHorizontalLayoutEffectRunner } from "./horizontal-layout-effect-runner.ts";
 import { createHorizontalLayoutFrameStore } from "./horizontal-layout-frame-store.ts";
-import {
-  createLayoutProtocolExecutorState,
-  executeLayoutProtocolCommand,
-} from "./window-layout-protocol.ts";
 
 const closed = Object.freeze({
   globalSidebar: false,
@@ -31,16 +29,6 @@ function snapshot(width = 1480, revision = 1) {
   };
 }
 
-function session() {
-  return {
-    normalBaseBounds: snapshot().normalBounds,
-    fundingByPanel: {},
-    desiredOccupancy: closed,
-    windowRevision: 1,
-    sessionRevision: 1,
-  };
-}
-
 async function flushEffects() {
   for (let index = 0; index < 8; index += 1) {
     await Promise.resolve();
@@ -49,20 +37,64 @@ async function flushEffects() {
 
 test("live effect runner closes open/checkpoint/bounds and close/frame/repay loops", async () => {
   const epoch = "effect-runner-epoch";
-  let protocol = createLayoutProtocolExecutorState({
-    activeRendererEpoch: epoch,
-    snapshot: snapshot(),
-    acknowledgedSession: session(),
-    freshSession: false,
-  });
-  const commands = [];
+  const sender = { senderWindowId: 17 };
+  const initialSnapshot = snapshot();
+  let environment = {
+    bounds: structuredClone(initialSnapshot.bounds),
+    contentBounds: structuredClone(initialSnapshot.contentBounds),
+    normalBounds: structuredClone(initialSnapshot.normalBounds),
+    workArea: structuredClone(initialSnapshot.workArea),
+    mode: initialSnapshot.mode,
+    displayId: initialSnapshot.displayId,
+    scaleFactor: initialSnapshot.scaleFactor,
+  };
+  let setBoundsCount = 0;
   const listeners = new Set();
+  const executor = new WindowLayoutExecutor({
+    policy: "expand-v1",
+    host: {
+      windowId: sender.senderWindowId,
+      readEnvironment() {
+        return structuredClone(environment);
+      },
+      setBounds(bounds) {
+        setBoundsCount += 1;
+        environment = {
+          ...environment,
+          bounds: structuredClone(bounds),
+          contentBounds: structuredClone(bounds),
+          normalBounds: structuredClone(bounds),
+        };
+      },
+    },
+    onSnapshot(update) {
+      for (const listener of listeners) {
+        listener(update);
+      }
+    },
+  });
+  const bootstrap = executor.bootstrap(epoch, sender);
+  const claim = await executor.execute(
+    {
+      type: "CLAIM_INITIAL_LAYOUT",
+      expectedWindowRevision: bootstrap.snapshot.windowRevision,
+      expectedSessionRevision:
+        bootstrap.acknowledgedSession.sessionRevision,
+      targetNormalBaseBounds: bootstrap.snapshot.normalBounds,
+      targetFundingByPanel: {},
+      targetDesiredOccupancy: closed,
+      transactionId: "claim-initial-layout",
+      rendererEpoch: epoch,
+      sequence: 0,
+    },
+    sender,
+  );
+  assert.equal(claim.accepted, true);
+  const commands = [];
   const api = {
     executeWindowLayoutCommand(command) {
       commands.push(command);
-      const execution = executeLayoutProtocolCommand(protocol, command);
-      protocol = execution.state;
-      return Promise.resolve(execution.result);
+      return executor.execute(command, sender);
     },
     subscribeWindowLayoutSnapshots(listener) {
       listeners.add(listener);
@@ -77,9 +109,9 @@ test("live effect runner closes open/checkpoint/bounds and close/frame/repay loo
   const store = createHorizontalLayoutFrameStore({
     policy: "expand-v1",
     rendererEpoch: epoch,
-    snapshot: snapshot(),
+    snapshot: claim.snapshot,
     desiredOccupancy: closed,
-    acknowledgedSession: session(),
+    acknowledgedSession: claim.acknowledgedSession,
   });
   const runner = createHorizontalLayoutEffectRunner({
     api,
@@ -147,6 +179,7 @@ test("live effect runner closes open/checkpoint/bounds and close/frame/repay loo
   assert.equal(store.getState().transactions["close-side-tools"].phase, "settled");
   assert.equal(store.getSnapshot().contentViewportWidth, 1480);
   assert.equal(store.getSnapshot().presentation.sideTools, "closed");
+  assert.equal(setBoundsCount, 2);
   assert.equal(listeners.size, 1);
 
   runner.stop();

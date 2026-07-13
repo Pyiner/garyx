@@ -60,8 +60,9 @@ the boot gap.
 - `window-layout-executor.test.mjs` covers sender binding, fresh claim, dual
   CAS, coalescing, work-area TOCTOU, fixed mode, one-call `setBounds`, actual
   readback, delayed acknowledgement, epoch takeover, and external rebasing;
-- `horizontal-layout-effect-runner.test.mjs` closes the live
-  open/checkpoint/bounds and close/watchdog/frame/repay loops;
+- `horizontal-layout-effect-runner.test.mjs` drives the production main
+  executor through a fake host and closes the live open/checkpoint/bounds and
+  close/watchdog/frame/repay loops;
 - the complete desktop unit suite and production renderer build pass;
 - packaged feature-off matches all eight legacy oracle scenarios.
 
