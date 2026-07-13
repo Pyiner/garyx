@@ -45,7 +45,7 @@
       "columns": [245, 0, 0, 386, 10, 320, 0, 0]
     },
     {
-      "name": "dual-rail-sidebar-compact-at-980",
+      "name": "conversation-rail-auto-hidden-before-sidebar-at-980",
       "width": 980,
       "desiredOccupancy": {
         "globalSidebar": true,
@@ -54,16 +54,16 @@
         "threadLogs": false
       },
       "presentation": {
-        "globalSidebar": "collapsed",
-        "conversationRail": "open",
+        "globalSidebar": "expanded",
+        "conversationRail": "hidden",
         "sideTools": "closed",
         "threadLogs": "closed",
         "taskTree": "overlay-closed",
         "taskTreeDocked": false,
-        "compactViewport": true,
-        "headerDensity": "compact"
+        "compactViewport": false,
+        "headerDensity": "regular"
       },
-      "columns": [0, 258, 1, 721, 0, 0, 0, 0]
+      "columns": [245, 0, 0, 735, 0, 0, 0, 0]
     },
     {
       "name": "dual-rail-sidebar-restored-at-981",

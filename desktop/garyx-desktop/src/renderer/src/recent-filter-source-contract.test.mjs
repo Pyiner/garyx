@@ -60,6 +60,15 @@ test("AppShell owns the feed hook outside the conditional rail", () => {
   assert.match(hook, /queuedRefreshesRef\.current\.add\("all"\)/);
 });
 
+test("closing Recent retains its content until the layout frame releases the rail", () => {
+  assert.match(appShell, /deferConversationRailUnmount/);
+  assert.match(appShell, /settleDeferredConversationRailUnmount/);
+  assert.doesNotMatch(
+    appShell,
+    /<div aria-hidden="true" className="bot-conversation-rail" \/>/,
+  );
+});
+
 test("preload forwards a narrow input while only main owns the Recent URL", () => {
   assert.match(
     preload,

@@ -164,11 +164,12 @@ export function useLayoutResizeController({
     }
   }
   const store = storeRef.current;
-  const frame = useSyncExternalStore(
+  useSyncExternalStore(
     store.subscribe,
-    store.getSnapshot,
-    store.getSnapshot,
+    store.getRenderRevision,
+    store.getRenderRevision,
   );
+  const frame = store.getSnapshot();
   const layoutRootRef = useCallback(
     (root: HTMLDivElement | null) => {
       store.attachRoot(root);
@@ -331,18 +332,19 @@ export function useLayoutResizeController({
   ]);
 
   useLayoutEffect(() => {
+    if (layoutPolicy !== "legacy") {
+      return;
+    }
     const syncViewport = () => {
       const previousFrame = store.getSnapshot();
       const state = store.getState();
-      if (layoutPolicy === "legacy") {
-        dispatchStoreEvent({
-          type: "WINDOW_SNAPSHOT_CHANGED",
-          snapshot: rendererWindowSnapshot(
-            state.snapshot.windowRevision + 1,
-            "user",
-          ),
-        });
-      }
+      dispatchStoreEvent({
+        type: "WINDOW_SNAPSHOT_CHANGED",
+        snapshot: rendererWindowSnapshot(
+          state.snapshot.windowRevision + 1,
+          "user",
+        ),
+      });
       const nextFrame = store.getSnapshot();
       if (
         nextFrame.presentation.compactViewport &&
@@ -350,28 +352,6 @@ export function useLayoutResizeController({
         store.getState().compactSidebarOpen
       ) {
         dispatchStoreEvent({ type: "COMPACT_SIDEBAR_TOGGLED" });
-      }
-
-      const widths = store.getState().widths;
-      const nextLogsWidth = clampThreadLogsPanelWidth(
-        widths.threadLogs,
-        currentThreadLayoutWidth(),
-      );
-      if (nextLogsWidth !== widths.threadLogs) {
-        dispatchPanelWidth("threadLogs", nextLogsWidth);
-        setSettingsDraft((current) => ({
-          ...current,
-          threadLogsPanelWidth: nextLogsWidth,
-        }));
-      }
-      const nextSideToolsWidth = widths.sideToolsCustomized
-        ? clampSideToolsPanelWidth(
-            widths.sideTools,
-            currentConversationWidth(),
-          )
-        : defaultSideToolsPanelWidth(currentConversationWidth());
-      if (nextSideToolsWidth !== store.getState().widths.sideTools) {
-        dispatchPanelWidth("sideTools", nextSideToolsWidth);
       }
     };
 
@@ -381,12 +361,8 @@ export function useLayoutResizeController({
       window.removeEventListener("resize", syncViewport);
     };
   }, [
-    currentConversationWidth,
-    currentThreadLayoutWidth,
     dispatchStoreEvent,
-    dispatchPanelWidth,
     layoutPolicy,
-    setSettingsDraft,
     store,
   ]);
 
@@ -422,19 +398,19 @@ export function useLayoutResizeController({
   ]);
 
   const toggleSidebarCollapsed = useCallback(() => {
-    if (store.getSnapshot().presentation.compactViewport) {
-      dispatchStoreEvent({ type: "COMPACT_SIDEBAR_TOGGLED" });
-      return;
-    }
+    dispatchStoreEvent({ type: "COMPACT_SIDEBAR_TOGGLED" });
+  }, [dispatchStoreEvent]);
+
+  const persistSidebarDesiredOpen = useCallback((desiredOpen: boolean) => {
     try {
       window.localStorage.setItem(
         "garyx.sidebarCollapsed",
-        store.getState().desiredOccupancy.globalSidebar ? "0" : "1",
+        desiredOpen ? "0" : "1",
       );
     } catch {
       // Ignore storage failures; collapse state just will not persist.
     }
-  }, [dispatchStoreEvent, store]);
+  }, []);
 
   function handleSidebarResizeStart(
     event: React.PointerEvent<HTMLDivElement>,
@@ -731,6 +707,7 @@ export function useLayoutResizeController({
     handleThreadLogsResizeStart,
     layoutRootRef,
     railResizing,
+    persistSidebarDesiredOpen,
     sidebarCollapsed: frame.presentation.globalSidebar === "collapsed",
     sidebarDesiredOpen: store.getState().desiredOccupancy.globalSidebar,
     sidebarResizing,

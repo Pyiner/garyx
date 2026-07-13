@@ -1,14 +1,14 @@
-# Garyx 桌面横向布局状态机 + 面板扩窗 — 综合设计裁决(final v4)
+# Garyx 桌面横向布局状态机 + 面板扩窗 — 综合设计裁决(final v5)
 
-日期:2026-07-12(v4:第三轮复审唯一残留——desiredOccupancy checkpoint 时机——修订)
+日期:2026-07-13(v5:验收修订——L2 优先折叠、compact 原生扩窗、resize 热路径与即时关闭帧)
 综合自:A 版 [`design-a-codex.md`](./design-a-codex.md)、B 版 [`design-b-claude.md`](./design-b-claude.md)(rev2)。
 评审记录:[`review.md`](./review.md)(首轮 15 FAIL → v2 闭合 8 → v3 闭合残留 3 组)。
 本文件是**裁决层**:实现以本文为准,细节查对应原文;与两版原文冲突处一律以本文为准。
 
 ## 0. 已拍板的产品行为(用户)
 
-1. 面板显式开合 = 窗口宽度扩展/缩回,内容整体平移,不挤压主消息区;约束下(贴边/最大化/全屏/空间不足)降级为窗口内 reflow,主消息区硬保护 350px。**例外**:compact 视口下的 sidebar 临时展开是窗口内 overlay(#27),不适用扩窗规则。
-2. 整个横向布局是 **JS 纯函数状态机的计算题**:布局决策 100% 在状态机,CSS 只消费输出(px 变量 + presentation 属性),不用 flex 挤压/media query/DOM 测量承载 responsive 决策。
+1. 面板显式开合 = 窗口宽度扩展/缩回,内容整体平移,不挤压主消息区;约束下(贴边/最大化/全屏/空间不足)降级为窗口内 reflow,主消息区硬保护 350px。compact 视口下用户显式展开 sidebar 也进入同一原生扩窗事务,保持 in-flow,不使用 overlay。
+2. 整个横向布局是 **JS 纯函数状态机的计算题**:布局决策 100% 在状态机;CSS 消费固定 rail 的 px 变量、presentation 属性与唯一 `minmax(0,1fr)` 主列机械余量,不用 flex 挤压/media query/DOM 测量承载 responsive 决策。连续 resize 不逐帧发布嵌套主列 px。
 
 ## 1. 核心协议(v3)
 
@@ -37,7 +37,7 @@ BoundsAuthority =
 - **responsive-presentation 不属于 intent 事件**(它按 §3-4 不改 requested intent):断点收起、auto-hide、overlay 降级由 environment 事件(`WINDOW_SNAPSHOT_CHANGED`/`VIEWPORT_RESIZED*`)驱动 projection 直接得出,走独立通道,不进 `LAYOUT_INTENT_CHANGED`。
 - 现有全部入口的映射(对照 AppShell 现实现):
   - sidebar 普通 toggle → user-panel;
-  - **compact 临时展开 → 裁定为 in-window temporary presentation(compact-overlay),不占列、不 funding、无窗口 effect**(v1 未裁,现裁定);
+  - **compact 显式展开 → user-panel 的虚拟 false→true transaction,先为 sidebar funding 原生扩窗,再以 in-flow track 呈现;约束下只允许 in-window reflow,不允许 overlay**;
   - L2 rail open/close/switch(recent/bot/workspace)→ user-route 全向量事件(switch 是 replace,不是 close+open);funded rail 因 route cleanup 消失 → system-cleanup repay;
   - side tools 占用 = `inspectorOpen || openCapsuleTabs>0` 的 **union 0↔1 边沿**才是 panel transaction;单个 capsule tab 增减不是;
   - workspace 文件预览自动拉开 side tools → 用户动作的后续,携带 user-route cause;
@@ -97,9 +97,9 @@ main 在**同一串行操作**内完成:`validate → setBounds → read actual 
 | 任意 pending | 快速反向 toggle / 右栏 replace | token2 铸造并 supersede token1;旧 accepted 仍按 revision 折叠,仅链头 token2 发反向 reconcile |
 | 任意 pending | maximize/fullscreen/display/workArea 变化 | 旧 expected revision 失效;按权威 snapshot 走 deferred-funding/constrained 或 deferred reconcile |
 
-关闭(对称):funding=0 → 只删 track 不发 shrink;有 funding → 退出动画完(`PRESENTATION_ANIMATION_FINISHED`,420ms watchdog,均 token 化)→ `FRAME_COMMITTED` → 发 shrink;期间 reopen/replace 使旧 timer/animationend 对该 panel **no-op**;fixed mode 中只记 deferred reconcile,退出后以原 token continuation 缩回。无退出动画的 panel 走即时 `FRAME_COMMITTED` 分支。
+关闭(对称):funding=0 → 只删 track 不发 shrink;有 funding → 立即发布 closed frame → 下一 animation frame 收到 `FRAME_COMMITTED` → 发 shrink;期间 reopen/replace 使旧 frame callback 对该 panel **no-op**;fixed mode 中只记 deferred reconcile,退出后以原 token continuation 缩回。只有未来真实存在且可监听完成事件的退出动画才可增加等待,不得用固定时长模拟动画。
 
-- deadline 由显式事件表达:`OPEN_DEADLINE_EXPIRED / CLOSE_DEADLINE_EXPIRED / FRAME_COMMITTED (transactionId)`;timer 只 dispatch,**reducer 不读时间**。
+- deadline/paint 由显式事件表达:`OPEN_DEADLINE_EXPIRED / FRAME_COMMITTED (transactionId)`;timer/rAF 只 dispatch,**reducer 不读时间**。
 - 100ms 语义 = 「开始显示 constrained fallback 的视觉 deadline」,不是取消。
 
 ### 1.5 Hydrate、fresh session 与 reload(v3 修订)
@@ -129,9 +129,9 @@ main 在**同一串行操作**内完成:`validate → setBounds → read actual 
 | 12 | thread logs | docked/overlay 双态保留;540 写成 implication 不变量(见 §3-3) |
 | 13 | 手动拖宽 | v1 只做窗口内分配、不动窗;**pointercancel/keyboard 行为守恒现状**(现实现 pointercancel 是 commit 非回滚,v1 保持,A 的 rollback 语义随 resize session 一起进 P2);v1 验收删除一切 native bounds effect 条目 |
 | 14 | 打开时序 | **v2 改:§1.4 状态表**(先扩后开 + 100ms 视觉 deadline + pending 保持 + late ack 折叠) |
-| 15 | 关闭时序 | **v2 改:§1.4 对称表**(FRAME_COMMITTED 门 + token 化 watchdog + 无动画即时分支) |
+| 15 | 关闭时序 | **v5 改:§1.4 对称表**(closed frame 立即发布 + 下一 rAF 的 FRAME_COMMITTED 门;无真实动画时无固定 watchdog) |
 | 16 | 动画 | 窗口无 tween;面板 surface **沿用现有动画时长(170ms enter 等)**,Codex 370ms 仅参考;**v1 验收不含 370ms 断言** |
-| 17 | CSS 收口 | **v2 改:新建 always-loaded `styles/app-shell.css` owner**,收口顶层 `.app-shell`、conversation 主 grid、L1/L2/right tracks、shell resizers、collapsed/hidden 几何、drag/no-drag recipe(修复现状分散于 gateway-setup/workspace-rails/conversation/sidebar 四文件——那本身就违反 owner 合约);contract test 用 `sidebar-footer-design.test.mjs` 的「import exactly once + selector 不可逃逸」模式;**grep 只扫 horizontal shell selector/property 白名单**,不全局禁 feature CSS 的 minmax/media;变量 `--gx-*` + `data-*` presentation 属性 |
+| 17 | CSS 收口 | **v5 改:always-loaded `styles/app-shell.css` owner**,收口顶层 `.app-shell`、conversation 主 grid、L1/L2/right tracks、shell resizers、collapsed/hidden 几何、drag/no-drag recipe;固定 tracks 消费 `--gx-*` px,每层主 track 只用一个 `minmax(0,1fr)` 机械余量,避免 native resize 逐帧重写嵌套主列;responsive 决策仍只来自 `data-*` frame |
 | 18 | 迁移 | **v2 改:七步 + legacy policy gate(§4)** |
 | 19 | 不变量 | **v2 改:替换为 §3 九条** |
 | 20 | 持久化 | v1 裁定:**现状即契约**——持久化仅 `garyx.sidebarCollapsed`(localStorage)与 `threadLogsPanelWidth`(DesktopSettings);sidebar/rail/sideTools 宽度 session-only;新增宽度持久化 → P2;responsive/临时态永不写偏好 |
@@ -141,10 +141,11 @@ main 在**同一串行操作**内完成:`validate → setBounds → read actual 
 | 24 | minHeight | 不动(760);Codex 600 记独立事项 |
 | 25 | P2 清单 | ①bounds+isMaximized 持久化;②贴边左移补偿;③拖宽 resize session 扩窗(含 xCompensation、rollback 语义);④minHeight 600;⑤sidebar/rail/sideTools 宽度持久化。**v1 验收表与 P2 验收表分列(§5),v1 不含任何 P2 条目** |
 | 26 | sidebar 常量(新增) | **保留 Garyx 现值 default/min 245、max 520**;不采 Codex 275/240(避免无收益的行为变化);Codex 值仅作锚参考 |
-| 27 | compact 临时展开(新增) | in-window temporary presentation(compact-overlay):不占列、不 funding、无窗口 effect、不写偏好 |
+| 27 | compact 显式展开(新增) | user-panel 虚拟 open transaction:有空间时先 funding 扩原生窗再 in-flow 呈现;受约束时 in-window reflow;禁止 overlay。responsive auto-hide 不写偏好;显式 toggle 沿用普通 user-panel 持久化语义 |
 | 28 | task tree(新增) | `ThreadTaskTreePopover` 的 docked 判定改为消费 frame prop(`presentation.taskTreeDocked`),删除其 JS DOM ResizeObserver policy 与 `gateway-panels.css` 容器查询;**保留 Browser/Terminal/composer 等非横向布局的 ResizeObserver**(它们是 native child-view/终端/纵向机制,不是横向 policy,禁止笼统删除) |
-| 29 | 帧原子性(新增) | controller 提供同步 `applyFrame(root, frame)`:同一 pre-paint 操作写完**全部 px vars + `data-*` attrs**(同 revision);React 只跟随该 external-store frame 渲染,不得持有第二份政策状态;live native resize 走 renderer 本地 `VIEWPORT_RESIZED_DURING_NATIVE_SESSION` 事件同帧 applyFrame,origin 由 main 的 will-resize/will-move session + 权威 snapshot 收口 |
+| 29 | 帧原子性(新增) | controller 提供同步 `applyFrame(root, frame)`:同一 pre-paint 操作只差量写固定-track paint vars + presentation attrs,revision 最后写;诊断 frame 仍保留完整精确几何;React 仅在 requested/presentation/固定宽度语义变化时跟随 external store,native resize 同一 presentation band 不重渲染;同 origin-class snapshot 每 rAF 合一 |
 | 30 | drag region(新增) | source contract:drag/no-drag 按 document order 合成、最后一个 carveout 常驻且保持最后 child、不可条件渲染;packaged 验收:sidebar/L2/right 各开合与扩窗后,toggle/header 按钮可点击、空白 title strip 可拖窗 |
+| 31 | responsive 折叠顺序(v5) | `≤980` 先 auto-hide L2 conversation rail,保留 global sidebar;`≤720` 再 collapse global sidebar;两者只改 presentation 不改 intent,回宽自动恢复;用户显式打开可建立 manual override,下一次 user/display resize 清除 |
 
 ## 3. 不变量(v2,替换 I1–I5;全部表驱动 headless)
 

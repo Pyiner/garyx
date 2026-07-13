@@ -87,7 +87,7 @@ test("all legacy occupancy setters have exactly one centralized call site", () =
   }
 });
 
-test("sidebar normal intent is logged while compact presentation stays legacy-only", () => {
+test("compact sidebar expansion enters the layout machine instead of opening an overlay", () => {
   assert.match(
     resizeController,
     /compactSidebarViewport: frame\.presentation\.compactViewport/,
@@ -107,12 +107,25 @@ test("sidebar normal intent is logged while compact presentation stays legacy-on
   );
   assert.match(
     appShell,
-    /if \(!compactSidebarViewport\) \{\s*commitLegacyLayoutIntent\("user-panel"/,
+    /compactSidebarViewport &&\s*\(window\.garyxDesktop\.horizontalLayoutPolicy === "legacy" \|\|\s*\(sidebarCollapsed && sidebarDesiredOpen\)\)/,
   );
   assert.match(
     appShell,
-    /\}\s*toggleSidebarCollapsedLegacy\(\);/,
-    "compact toggles still call only the old in-window controller",
+    /commitLegacyLayoutIntent\("user-panel"/,
+    "a user opening a compact sidebar must still own a layout transaction",
+  );
+  assert.doesNotMatch(resizeController, /"compact-overlay"/);
+});
+
+test("feature-off compact toggles retain the legacy temporary overlay path", () => {
+  assert.match(
+    appShell,
+    /compactSidebarViewport &&\s*\(window\.garyxDesktop\.horizontalLayoutPolicy === "legacy" \|\|/,
+    "legacy compact toggles must bypass the desired-state/persistence path in both overlay states",
+  );
+  assert.match(
+    appShell,
+    /toggleSidebarCollapsedLegacy\(\);\s*return;/,
   );
 });
 

@@ -91,6 +91,11 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   in a removable feature stylesheet; pin the owner import with a contract test.
 - Desktop thread side tools have one presentation: a right-docked rail. The
   header control toggles that rail directly; do not add an overlay variant.
+- Desktop responsive collapse order is the secondary conversation rail at
+  980px, then the global sidebar at 720px. An explicit compact-sidebar open is
+  an in-flow native-window expansion, never an overlay. Funded panel closes
+  publish the closed frame before shrinking the native window on the next
+  frame; do not add a fixed delay without a real matching transition.
 - Mobile route state, presentation mapping, formatting, and business-rule
   transformations should live in `GaryxMobileCore` with SwiftPM tests.
 - Message, transcript, and tool-row display is server-render-state first:

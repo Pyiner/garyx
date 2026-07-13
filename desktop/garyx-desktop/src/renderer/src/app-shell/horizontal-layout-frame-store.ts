@@ -33,6 +33,22 @@ export const HORIZONTAL_LAYOUT_FRAME_VARIABLES = [
   "--gx-thread-log-panel-width",
 ] as const;
 
+// The three omitted main-track values are still projected for diagnostics and
+// geometry invariants. CSS owns those mechanical remainders with 1fr so a
+// native resize does not dirty the full app-shell subtree every frame.
+export const HORIZONTAL_LAYOUT_PAINT_VARIABLES = [
+  "--gx-sidebar-preferred-width",
+  "--gx-conversation-rail-preferred-width",
+  "--gx-side-tools-preferred-width",
+  "--gx-thread-logs-preferred-width",
+  "--gx-sidebar-width",
+  "--gx-conversation-rail-width",
+  "--gx-right-resizer-width",
+  "--gx-right-panel-width",
+  "--gx-thread-log-resizer-width",
+  "--gx-thread-log-panel-width",
+] as const;
+
 export const HORIZONTAL_LAYOUT_FRAME_ATTRIBUTES = [
   "data-layout-policy",
   "data-sidebar-state",
@@ -65,20 +81,34 @@ function requiredPaintFrame(
 export function applyFrame(
   root: HorizontalLayoutFrameRoot,
   projection: HorizontalLayoutFrame,
+  previousProjection?: HorizontalLayoutFrame,
 ): StableHorizontalLayoutFrame {
   const frame = requiredPaintFrame(projection);
-  for (const [name, value] of Object.entries(frame.cssVariables)) {
-    root.style.setProperty(name, value);
+  const previous = previousProjection
+    ? requiredPaintFrame(previousProjection)
+    : null;
+  for (const name of HORIZONTAL_LAYOUT_PAINT_VARIABLES) {
+    const value = frame.cssVariables[name];
+    if (!previous || previous.cssVariables[name] !== value) {
+      root.style.setProperty(name, value);
+    }
   }
-  for (const [name, value] of Object.entries(frame.dataAttributes)) {
-    if (name !== "data-layout-revision") {
+  for (const name of HORIZONTAL_LAYOUT_FRAME_ATTRIBUTES) {
+    if (name === "data-layout-revision") {
+      continue;
+    }
+    const value = frame.dataAttributes[name];
+    if (!previous || previous.dataAttributes[name] !== value) {
       root.setAttribute(name, value);
     }
   }
-  root.setAttribute(
-    "data-layout-revision",
-    frame.dataAttributes["data-layout-revision"],
-  );
+  const revision = frame.dataAttributes["data-layout-revision"];
+  if (
+    !previous ||
+    previous.dataAttributes["data-layout-revision"] !== revision
+  ) {
+    root.setAttribute("data-layout-revision", revision);
+  }
   return frame;
 }
 
@@ -91,9 +121,26 @@ export function clearFrame(root: HorizontalLayoutFrameRoot): void {
   }
 }
 
+function frameRenderSignature(frame: StableHorizontalLayoutFrame): string {
+  const requested = frame.requestedOccupancy;
+  return [
+    requested.globalSidebar,
+    requested.conversationRail,
+    requested.sideTools,
+    requested.threadLogs,
+    ...HORIZONTAL_LAYOUT_PAINT_VARIABLES.map(
+      (name) => frame.cssVariables[name],
+    ),
+    ...HORIZONTAL_LAYOUT_FRAME_ATTRIBUTES.filter(
+      (name) => name !== "data-layout-revision",
+    ).map((name) => frame.dataAttributes[name]),
+  ].join("\u001f");
+}
+
 export type HorizontalLayoutFrameStore = Readonly<{
   attachRoot(root: HorizontalLayoutFrameRoot | null): void;
   dispatch(event: HorizontalLayoutEvent): readonly LayoutMachineEffect[];
+  getRenderRevision(): number;
   getSnapshot(): StableHorizontalLayoutFrame;
   getState(): HorizontalLayoutState;
   subscribe(listener: () => void): () => void;
@@ -108,16 +155,24 @@ export function createHorizontalLayoutFrameStore(
 ): HorizontalLayoutFrameStore {
   let state = createHorizontalLayoutState(input);
   let frame = requiredPaintFrame(projectHorizontalLayout(state));
+  let renderRevision = 0;
+  let renderSignature = frameRenderSignature(frame);
   let root: HorizontalLayoutFrameRoot | null = null;
   const listeners = new Set<() => void>();
 
   const publish = () => {
+    const previousFrame = frame;
     frame = requiredPaintFrame(projectHorizontalLayout(state));
     if (root) {
-      applyFrame(root, frame);
+      applyFrame(root, frame, previousFrame);
     }
-    for (const listener of [...listeners]) {
-      listener();
+    const nextRenderSignature = frameRenderSignature(frame);
+    if (nextRenderSignature !== renderSignature) {
+      renderSignature = nextRenderSignature;
+      renderRevision += 1;
+      for (const listener of [...listeners]) {
+        listener();
+      }
     }
   };
 
@@ -169,6 +224,9 @@ export function createHorizontalLayoutFrameStore(
     },
     getSnapshot() {
       return frame;
+    },
+    getRenderRevision() {
+      return renderRevision;
     },
     getState() {
       return state;

@@ -12,7 +12,7 @@
   display: grid;
   grid-template-columns:
     var(--gx-sidebar-width)
-    var(--gx-shell-main-width);
+    minmax(0, 1fr);
   height: 100vh;
   max-height: 100vh;
   overflow: hidden;
@@ -26,7 +26,7 @@
   grid-template-columns:
     var(--gx-sidebar-width)
     var(--gx-conversation-rail-width)
-    var(--gx-shell-main-width);
+    minmax(0, 1fr);
 }
 
 /* L1 track and its titlebar drag overlay. */
@@ -128,7 +128,8 @@
   padding-left: 122px;
 }
 
-.app-shell[data-conversation-rail-state="hidden"] .bot-conversation-rail {
+.app-shell[data-conversation-rail-state="hidden"] .bot-conversation-rail,
+.app-shell[data-conversation-rail-state="closed"] .bot-conversation-rail {
   visibility: hidden;
   pointer-events: none;
   overflow: hidden;
@@ -140,8 +141,9 @@
 /* Main conversation track and nested right dock. Vertical tracks stay here
    too so deleting a feature stylesheet cannot dismantle persistent chrome. */
 .conversation {
+  grid-column: -2 / -1;
   display: grid;
-  grid-template-columns: var(--gx-conversation-width);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: var(--inset-toolbar) minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
@@ -169,7 +171,7 @@
 .conversation.with-side-tools {
   position: relative;
   grid-template-columns:
-    var(--gx-thread-main-width)
+    minmax(0, 1fr)
     var(--gx-right-resizer-width)
     var(--gx-right-panel-width);
   grid-template-rows: auto minmax(0, 1fr);
@@ -196,7 +198,9 @@
 }
 
 .app-shell[data-side-tools-state="hidden"] .thread-side-tools-panel,
-.app-shell[data-side-tools-state="hidden"] .side-tools-resizer {
+.app-shell[data-side-tools-state="hidden"] .side-tools-resizer,
+.app-shell[data-side-tools-state="closed"] .thread-side-tools-panel,
+.app-shell[data-side-tools-state="closed"] .side-tools-resizer {
   visibility: hidden;
   pointer-events: none;
   overflow: hidden;
@@ -217,8 +221,8 @@
   padding: 0;
 }
 
-/* Main thread tracks consume exact frame pixels. Embedded side-chat threads
-   keep their feature-owned intrinsic column recipe. */
+/* CSS consumes the main-track remainder. Embedded side-chat threads keep
+   their feature-owned intrinsic column recipe. */
 .thread-layout {
   display: grid;
   gap: 18px;
@@ -228,7 +232,7 @@
 }
 
 .thread-layout:not(.thread-layout--side-chat) {
-  grid-template-columns: var(--gx-thread-main-width);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .thread-layout.with-inspector-panel {
@@ -246,14 +250,14 @@
 .app-shell[data-thread-logs-presentation="docked"]
   .thread-layout.with-log-panel {
   grid-template-columns:
-    var(--gx-thread-main-width)
+    minmax(0, 1fr)
     var(--gx-thread-log-resizer-width)
     var(--gx-thread-log-panel-width);
 }
 
 .app-shell[data-thread-logs-presentation="overlay"]
   .thread-layout.with-log-panel {
-  grid-template-columns: var(--gx-thread-main-width);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .app-shell[data-thread-logs-presentation="overlay"] .thread-log-resizer {
@@ -266,13 +270,18 @@
   right: 12px;
   bottom: 12px;
   z-index: 45;
-  width: var(--gx-thread-logs-preferred-width);
+  width: min(var(--gx-thread-logs-preferred-width), calc(100% - 24px));
   max-height: none;
   padding: 10px 12px 12px;
   border: 0.5px solid var(--color-token-border);
   border-radius: 16px;
   background: var(--color-token-bg-primary);
   box-shadow: var(--shadow-lg);
+}
+
+.app-shell[data-thread-logs-presentation="closed"] .thread-log-resizer,
+.app-shell[data-thread-logs-presentation="closed"] .thread-log-panel {
+  display: none;
 }
 
 .thread-layout.log-panel-resizing {

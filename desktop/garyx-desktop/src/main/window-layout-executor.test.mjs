@@ -316,3 +316,57 @@ test("external user/display snapshots rebase the acknowledged normal session mon
   assert.equal(update.acknowledgedSession.normalBaseBounds.width, 1600);
   assert.equal(executor.syncExternalEnvironment("display"), null);
 });
+
+test("a manual width resize adopts the user's bounds and clears prior panel funding", async () => {
+  const epoch = "manual-resize-rebase";
+  const { executor, fake, claim } = await claimedExecutor({ epoch });
+  const checkpoint = await executor.execute(
+    sideToolsCheckpoint(claim.acknowledgedSession, epoch),
+    sender,
+  );
+  const expanded = await executor.execute(sideToolsBounds(checkpoint, epoch), sender);
+  assert.equal(expanded.accepted, true);
+  assert.ok(expanded.acknowledgedSession.fundingByPanel.sideTools);
+
+  fake.environment = {
+    ...fake.environment,
+    bounds: { ...fake.environment.bounds, width: 1200 },
+    contentBounds: { ...fake.environment.contentBounds, width: 1200 },
+    normalBounds: { ...fake.environment.normalBounds, width: 1200 },
+  };
+  const resized = executor.syncExternalEnvironment("user");
+
+  assert.deepEqual(resized.acknowledgedSession.fundingByPanel, {});
+  assert.equal(resized.acknowledgedSession.normalBaseBounds.width, 1200);
+  assert.equal(resized.snapshot.bounds.width, 1200);
+});
+
+test("a height-only resize preserves horizontal panel funding", async () => {
+  const epoch = "height-resize-keeps-funding";
+  const { executor, fake, claim } = await claimedExecutor({ epoch });
+  const checkpoint = await executor.execute(
+    sideToolsCheckpoint(claim.acknowledgedSession, epoch),
+    sender,
+  );
+  const expanded = await executor.execute(sideToolsBounds(checkpoint, epoch), sender);
+  assert.equal(expanded.accepted, true);
+  assert.ok(expanded.acknowledgedSession.fundingByPanel.sideTools);
+
+  fake.environment = {
+    ...fake.environment,
+    bounds: { ...fake.environment.bounds, height: 720 },
+    contentBounds: { ...fake.environment.contentBounds, height: 720 },
+    normalBounds: { ...fake.environment.normalBounds, height: 720 },
+  };
+  const resized = executor.syncExternalEnvironment("user");
+
+  assert.deepEqual(
+    resized.acknowledgedSession.fundingByPanel,
+    expanded.acknowledgedSession.fundingByPanel,
+  );
+  assert.equal(
+    resized.acknowledgedSession.normalBaseBounds.width,
+    expanded.acknowledgedSession.normalBaseBounds.width,
+  );
+  assert.equal(resized.snapshot.bounds.height, 720);
+});

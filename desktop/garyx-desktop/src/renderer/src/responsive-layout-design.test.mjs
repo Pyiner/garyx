@@ -16,6 +16,18 @@ test("narrow windows keep the app shell horizontal instead of stacking rails", (
   assert.ok(!css.includes(".messages {\n    padding-inline: 0;"));
 });
 
+test("live resize leaves mechanical remainder tracks to CSS instead of rewriting viewport pixels", () => {
+  const ownerCss = read("styles/app-shell.css");
+  const frameStore = read("app-shell/horizontal-layout-frame-store.ts");
+
+  assert.ok(ownerCss.includes("minmax(0, 1fr)"));
+  assert.ok(!ownerCss.includes("var(--gx-shell-main-width)"));
+  assert.ok(!ownerCss.includes("var(--gx-conversation-width)"));
+  assert.ok(!ownerCss.includes("var(--gx-thread-main-width)"));
+  assert.ok(frameStore.includes("HORIZONTAL_LAYOUT_PAINT_VARIABLES"));
+  assert.ok(frameStore.includes("getRenderRevision"));
+});
+
 test("transcript and composer share Codex's 736px reading edge", () => {
   const conversationCss = read("styles/conversation.css");
   const composerCss = read("styles/composer.css");

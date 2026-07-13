@@ -268,6 +268,11 @@ import {
 } from "./desktop-route-store";
 import { useRecentThreadFeeds } from "./useRecentThreadFeeds";
 import { recordTranscriptRender } from "./transcript-render-probe";
+import {
+  deferConversationRailUnmount,
+  settleDeferredConversationRailUnmount,
+  type ConversationRailIntent,
+} from "./conversation-rail-lifecycle";
 
 
 type ThreadEntrySelectionSource =
@@ -277,12 +282,6 @@ type ThreadEntrySelectionSource =
   | "bot-conversation"
   | "workspace-conversation"
   | "tasks";
-
-type ConversationRailIntent =
-  | { kind: "closed" }
-  | { kind: "recent" }
-  | { kind: "bot"; groupId: string }
-  | { kind: "workspace"; workspacePath: string };
 
 type LegacyLayoutIntentState = {
   globalSidebarOpen: boolean;
@@ -1213,6 +1212,7 @@ export function AppShell() {
     handleThreadLogsResizeStart,
     layoutRootRef,
     railResizing,
+    persistSidebarDesiredOpen,
     sidebarCollapsed,
     sidebarDesiredOpen,
     sidebarResizing,
@@ -1258,6 +1258,28 @@ export function AppShell() {
       layoutOccupancySources(initialLegacyLayoutIntent),
     ),
   );
+  const applyLegacyLayoutIntentState = useCallback(
+    (nextApplied: LegacyLayoutIntentState) => {
+      appliedLayoutIntentRef.current = nextApplied;
+      setOpenCapsuleTabsLegacy(nextApplied.openCapsuleTabs);
+      setInspectorOpenLegacy(nextApplied.inspectorOpen);
+      setThreadLogsOpenLegacy(nextApplied.threadLogsOpen);
+      setRecentThreadsRailOpenLegacy(
+        nextApplied.conversationRail.kind === "recent",
+      );
+      setBotConversationGroupIdLegacy(
+        nextApplied.conversationRail.kind === "bot"
+          ? nextApplied.conversationRail.groupId
+          : null,
+      );
+      setWorkspaceConversationPathLegacy(
+        nextApplied.conversationRail.kind === "workspace"
+          ? nextApplied.conversationRail.workspacePath
+          : null,
+      );
+    },
+    [],
+  );
 
   // Every horizontal panel writer enters here. The desired update is logged
   // synchronously as one full vector and fed into the active policy store.
@@ -1280,38 +1302,55 @@ export function AppShell() {
         dispatchLayoutOccupancyEvent(appendResult.event);
       }
 
-      const nextApplied = updateApplied(appliedLayoutIntentRef.current);
-      appliedLayoutIntentRef.current = nextApplied;
-      setOpenCapsuleTabsLegacy(nextApplied.openCapsuleTabs);
-      setInspectorOpenLegacy(nextApplied.inspectorOpen);
-      setThreadLogsOpenLegacy(nextApplied.threadLogsOpen);
-      setRecentThreadsRailOpenLegacy(
-        nextApplied.conversationRail.kind === "recent",
-      );
-      setBotConversationGroupIdLegacy(
-        nextApplied.conversationRail.kind === "bot"
-          ? nextApplied.conversationRail.groupId
-          : null,
-      );
-      setWorkspaceConversationPathLegacy(
-        nextApplied.conversationRail.kind === "workspace"
-          ? nextApplied.conversationRail.workspacePath
-          : null,
-      );
+      const currentApplied = appliedLayoutIntentRef.current;
+      const appliedCandidate = updateApplied(currentApplied);
+      const nextApplied = {
+        ...appliedCandidate,
+        conversationRail: deferConversationRailUnmount(
+          currentApplied.conversationRail,
+          appliedCandidate.conversationRail,
+        ),
+      };
+      applyLegacyLayoutIntentState(nextApplied);
     },
-    [dispatchLayoutOccupancyEvent],
+    [applyLegacyLayoutIntentState, dispatchLayoutOccupancyEvent],
   );
-  const toggleSidebarCollapsed = useCallback(() => {
-    if (!compactSidebarViewport) {
-      commitLegacyLayoutIntent("user-panel", (current) => ({
-        ...current,
-        globalSidebarOpen: !current.globalSidebarOpen,
-      }));
+  useEffect(() => {
+    const currentApplied = appliedLayoutIntentRef.current;
+    const settledRail = settleDeferredConversationRailUnmount(
+      currentApplied.conversationRail,
+      desiredLayoutIntentRef.current.conversationRail,
+      conversationRailPresented,
+    );
+    if (settledRail === currentApplied.conversationRail) {
+      return;
     }
-    toggleSidebarCollapsedLegacy();
+    applyLegacyLayoutIntentState({
+      ...currentApplied,
+      conversationRail: settledRail,
+    });
+  }, [applyLegacyLayoutIntentState, conversationRailPresented]);
+  const toggleSidebarCollapsed = useCallback(() => {
+    if (
+      compactSidebarViewport &&
+      (window.garyxDesktop.horizontalLayoutPolicy === "legacy" ||
+        (sidebarCollapsed && sidebarDesiredOpen))
+    ) {
+      toggleSidebarCollapsedLegacy();
+      return;
+    }
+    const nextOpen = !sidebarDesiredOpen;
+    commitLegacyLayoutIntent("user-panel", (current) => ({
+      ...current,
+      globalSidebarOpen: nextOpen,
+    }));
+    persistSidebarDesiredOpen(nextOpen);
   }, [
     commitLegacyLayoutIntent,
     compactSidebarViewport,
+    persistSidebarDesiredOpen,
+    sidebarCollapsed,
+    sidebarDesiredOpen,
     toggleSidebarCollapsedLegacy,
   ]);
   // Batch 5b scroll colocation: the DOM-bound effects/scheduler live in
@@ -1995,7 +2034,7 @@ export function AppShell() {
     }
   }, [botConversationGroupId, commitLegacyLayoutIntent, visibleBotGroups]);
   const activeBotConversationGroup = useMemo(() => {
-    if (!shouldShowConversationRail || !botConversationGroupId) {
+    if (!botConversationGroupId) {
       return null;
     }
     return (
@@ -2005,7 +2044,7 @@ export function AppShell() {
           (group.conversationNodes || []).length > 0,
       ) || null
     );
-  }, [botConversationGroupId, shouldShowConversationRail, visibleBotGroups]);
+  }, [botConversationGroupId, visibleBotGroups]);
   useEffect(() => {
     if (!workspaceConversationPath) {
       return;
@@ -2030,7 +2069,6 @@ export function AppShell() {
   ]);
   const activeWorkspaceThreadGroup = useMemo(() => {
     if (
-      !shouldShowConversationRail ||
       activeBotConversationGroup ||
       !workspaceConversationPath
     ) {
@@ -2047,7 +2085,6 @@ export function AppShell() {
     );
   }, [
     activeBotConversationGroup,
-    shouldShowConversationRail,
     workspaceConversationPath,
     workspaceThreadGroups,
   ]);
@@ -4718,9 +4755,7 @@ export function AppShell() {
           selectedThreadId={workspaceConversationSelectedThreadId}
           threadAvatarCatalog={threadAvatarCatalog}
         />
-      ) : conversationRailPresented &&
-        shouldShowConversationRail &&
-        recentThreadsRailOpen ? (
+      ) : conversationRailPresented && recentThreadsRailOpen ? (
         <RecentConversationSidebar
           collapseLabel={t("Collapse recent threads")}
           feed={recentThreadFeeds.selectedFeed}
@@ -4759,8 +4794,6 @@ export function AppShell() {
           }))}
           selectedFilter={recentThreadFeeds.state.selectedFilter}
         />
-      ) : conversationRailPresented ? (
-        <div aria-hidden="true" className="bot-conversation-rail" />
       ) : null}
       <AddBotDialogRoot
         agentTargets={addBotAgentTargets}

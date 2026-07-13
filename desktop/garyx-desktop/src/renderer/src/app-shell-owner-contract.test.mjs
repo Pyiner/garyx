@@ -49,16 +49,35 @@ test("app-shell owner is imported once and horizontal selectors cannot escape", 
   );
 });
 
-test("owned horizontal tracks consume frame pixels without CSS policy", () => {
+test("owned horizontal tracks combine frame-owned fixed tracks with one CSS remainder", () => {
   const ownerCss = stripComments(read("styles/app-shell.css"));
+  assert.match(
+    ownerCss,
+    /\.conversation\s*\{[^}]*grid-column:\s*-2\s*\/\s*-1;/s,
+    "the main conversation must stay in the final shell column when rail content is transiently absent",
+  );
   const columnValues = Array.from(
     ownerCss.matchAll(/grid-template-columns\s*:\s*([^;]+);/g),
     (match) => match[1].replace(/\s+/g, " ").trim(),
   );
   assert.equal(columnValues.length, 7, "every shell column recipe is explicit");
   for (const value of columnValues) {
-    assert.match(value, /var\(--gx-/);
-    assert.doesNotMatch(value, /\bfr\b|minmax\(|calc\(|%/);
+    assert.equal(
+      value.match(/minmax\(0, 1fr\)/g)?.length,
+      1,
+      `${value}: exactly one mechanical main-track remainder`,
+    );
+    assert.doesNotMatch(value, /calc\(|%/);
+    const fixedTracks = value.replace("minmax(0, 1fr)", "").trim();
+    if (fixedTracks) {
+      assert.equal(
+        fixedTracks
+          .split(/\s+/)
+          .every((track) => /^var\(--gx-[a-z-]+\)$/.test(track)),
+        true,
+        `${value}: every non-remainder track comes from the frame`,
+      );
+    }
   }
   assert.doesNotMatch(ownerCss, /@media\b|@container\b/);
 
