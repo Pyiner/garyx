@@ -1489,6 +1489,16 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
+    const flushTranscriptCaches = () => {
+      gatewayMirror.flushAllTranscriptPersistence();
+    };
+    window.addEventListener("pagehide", flushTranscriptCaches);
+    return () => {
+      window.removeEventListener("pagehide", flushTranscriptCaches);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!selectedThreadId || !desktopState) {
       return;
     }
@@ -2152,7 +2162,7 @@ export function AppShell() {
 
     return () => {
       cancelled = true;
-      void window.garyxDesktop.stopThreadStream({
+      void gatewayMirror.stopCommittedThreadStream({
         threadId: sideChatThreadId,
         consumerId,
       });

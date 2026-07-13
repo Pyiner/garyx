@@ -77,6 +77,7 @@ import { isTransientGatewayErrorMessage } from "../app-shell/gateway-errors.ts";
 import type { TranscriptMessage } from "@shared/contracts";
 import type { PendingAutomationRun } from "../app-shell/types";
 import type { TranscriptMapsSnapshot } from "./mirror.ts";
+import { TranscriptPersistScheduler } from "./transcript-persist-scheduler.ts";
 
 export const SELECTED_THREAD_STREAM_CONSUMER_ID = "selected-thread";
 
@@ -206,9 +207,13 @@ export class TranscriptLifecycle {
   // de-dupe for the single-owner rewrite refetch.
   private selectedLoadGenerationByThread = new Map<string, number>();
   private refetchInFlightByThread = new Map<string, Promise<void>>();
+  private persistScheduler: TranscriptPersistScheduler;
 
   constructor(port: TranscriptLifecycleMirrorPort) {
     this.port = port;
+    this.persistScheduler = new TranscriptPersistScheduler((threadId) => {
+      this.persistLatestTranscriptSnapshot(threadId);
+    });
   }
 
   setDeps(deps: TranscriptLifecycleDeps): void {
@@ -416,7 +421,6 @@ export class TranscriptLifecycle {
     threadId: string,
     transcript: TranscriptMessage[],
   ): void {
-    const visibleTranscript = visibleTranscriptMessages(transcript);
     const intents = Object.values(
       this.port.getMachineState().intentsById,
     ).filter((intent) => {
@@ -431,6 +435,8 @@ export class TranscriptLifecycle {
         ].includes(intent.state)
       );
     });
+    const visibleTranscript =
+      intents.length > 0 ? visibleTranscriptMessages(transcript) : [];
 
     for (const intent of intents) {
       const match = resolveIntentHistoryMatch(intent, visibleTranscript);
@@ -609,26 +615,58 @@ export class TranscriptLifecycle {
     transcript: ThreadTranscript,
     persist = true,
     syncRunState = true,
+    persistMode: "immediate" | "scheduled" = "immediate",
   ): void {
     if (syncRunState) {
       this.syncTranscriptRunState(threadId, transcript);
     }
     if (persist) {
-      const cacheTranscript = transcriptForCommittedCache(transcript);
-      if (
-        cacheTranscript.messages.length > 0 ||
-        !transcript.threadInfo?.activeRun
-      ) {
-        // Persist the last render snapshot alongside committed messages so
-        // the next cold/offline open can render folded history before a
-        // live frame.
-        this.port.persistTranscriptCache(
-          cacheTranscript,
-          this.port.getTranscriptMapsSnapshot().renderStateByThread[threadId] ??
-            null,
-        );
+      if (persistMode === "scheduled") {
+        this.persistScheduler.schedule(threadId);
+      } else {
+        this.persistScheduler.cancel(threadId);
+        this.persistTranscriptSnapshot(threadId, transcript);
       }
     }
+  }
+
+  private persistLatestTranscriptSnapshot(threadId: string): void {
+    const transcript = this.port.getThreadSnapshotTranscript(threadId);
+    if (transcript) {
+      this.persistTranscriptSnapshot(threadId, transcript);
+    }
+  }
+
+  private persistTranscriptSnapshot(
+    threadId: string,
+    transcript: ThreadTranscript,
+  ): void {
+    const cacheTranscript = transcriptForCommittedCache(transcript);
+    if (
+      cacheTranscript.messages.length === 0 &&
+      transcript.threadInfo?.activeRun
+    ) {
+      return;
+    }
+    // Persist the last render snapshot alongside committed messages so the
+    // next cold/offline open can render folded history before a live frame.
+    this.port.persistTranscriptCache(
+      cacheTranscript,
+      this.port.getTranscriptMapsSnapshot().renderStateByThread[threadId] ??
+        null,
+    );
+  }
+
+  flushTranscriptPersistence(threadId: string): boolean {
+    return this.persistScheduler.flush(threadId);
+  }
+
+  cancelTranscriptPersistence(threadId: string): boolean {
+    return this.persistScheduler.cancel(threadId);
+  }
+
+  flushAllTranscriptPersistence(): number {
+    return this.persistScheduler.flushAll();
   }
 
   /**
@@ -648,10 +686,7 @@ export class TranscriptLifecycle {
       true,
       options?.syncRunState ?? true,
     );
-    this.markIntentsFromHistory(
-      threadId,
-      visibleTranscriptMessages(resolvedTranscript.messages),
-    );
+    this.markIntentsFromHistory(threadId, resolvedTranscript.messages);
   }
 
   private threadSummaryFromTranscript(
@@ -701,11 +736,11 @@ export class TranscriptLifecycle {
     transcript: ThreadTranscript,
   ): void {
     const { setDesktopState } = this.requireDeps();
-    const summary = this.threadSummaryFromTranscript(threadId, transcript);
     setDesktopState((current) => {
       if (!current || current.threads.some((thread) => thread.id === threadId)) {
         return current;
       }
+      const summary = this.threadSummaryFromTranscript(threadId, transcript);
       // Hidden threads (side chats, child threads) live only in `sessions`,
       // so this cache write runs on every transcript application. Re-writing
       // an equivalent summary must keep `desktopState` identity stable, or
@@ -740,24 +775,26 @@ export class TranscriptLifecycle {
        * apply the same data twice per event.
        */
       mirrorAlreadyApplied?: boolean;
+      /** Commit-stream applies coalesce persistence; HTTP applies stay eager. */
+      deferPersist?: boolean;
     },
   ): void {
     const { setDesktopState } = this.requireDeps();
     if (!options?.mirrorAlreadyApplied) {
       this.port.applyRemoteTranscript(threadId, transcript);
     }
-    const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
+    const resolvedTranscript = options?.mirrorAlreadyApplied
+      ? transcript
+      : transcriptWithResolvedActiveRun(transcript);
     this.rememberTranscriptSnapshot(
       threadId,
       resolvedTranscript,
       options?.persist !== false,
       options?.syncRunState ?? true,
+      options?.deferPersist ? "scheduled" : "immediate",
     );
     this.cacheOpenableTranscriptThread(threadId, resolvedTranscript);
-    this.markIntentsFromHistory(
-      threadId,
-      visibleTranscriptMessages(resolvedTranscript.messages),
-    );
+    this.markIntentsFromHistory(threadId, resolvedTranscript.messages);
   }
 
   /**
@@ -771,6 +808,7 @@ export class TranscriptLifecycle {
       this.requireDeps();
     const threadId = event.threadId;
     if (transcriptRewriteAction(event.message) === "refetch_authoritative") {
+      this.cancelTranscriptPersistence(threadId);
       void this.refetchAuthoritativeTranscriptAfterRewrite(threadId);
       return;
     }
@@ -790,8 +828,16 @@ export class TranscriptLifecycle {
     this.acceptRemoteTranscript(threadId, merged, {
       syncRunState: false,
       mirrorAlreadyApplied: true,
+      deferPersist: true,
     });
     const controlKind = transcriptControlKind(event.message);
+    if (
+      controlKind === "run_complete" ||
+      controlKind === "run_interrupted" ||
+      controlKind === "interrupt_confirmed"
+    ) {
+      this.flushTranscriptPersistence(threadId);
+    }
     if (controlKind === "user_ack") {
       const control =
         event.message.content &&
@@ -848,6 +894,9 @@ export class TranscriptLifecycle {
     }
     if (event.type !== "error") {
       return;
+    }
+    if (event.terminal === true) {
+      this.flushTranscriptPersistence(threadId);
     }
     const currentStream = this.getLiveStreamState(threadId);
     const activeIntentId = currentStream?.activeIntentId;
@@ -997,6 +1046,7 @@ export class TranscriptLifecycle {
     } = this.requireDeps();
     const startSelectionGeneration = selectedThreadGenerationRef.current;
     try {
+      this.cancelTranscriptPersistence(threadId);
       await this.port.clearThreadTranscriptCache(threadId);
       const transcript = await this.port.getThreadHistoryFull(threadId);
       if (selectedThreadIdRef.current === threadId) {
@@ -1050,6 +1100,16 @@ export class TranscriptLifecycle {
       }),
       ...(renderFloor > 0 ? { renderFloor } : {}),
     });
+  }
+
+  async stopCommittedThreadStream(input: StopThreadStreamInput): Promise<void> {
+    const threadId = input.threadId?.trim() || "";
+    if (threadId) {
+      this.flushTranscriptPersistence(threadId);
+    } else {
+      this.flushAllTranscriptPersistence();
+    }
+    await this.port.stopThreadStream(input);
   }
 
   /**
@@ -1148,7 +1208,7 @@ export class TranscriptLifecycle {
       threadId,
       (this.selectedLoadGenerationByThread.get(threadId) ?? 0) + 1,
     );
-    void this.port.stopThreadStream({
+    void this.stopCommittedThreadStream({
       threadId,
       consumerId: SELECTED_THREAD_STREAM_CONSUMER_ID,
     });
@@ -1198,6 +1258,7 @@ export class TranscriptLifecycle {
         totalMessagesInThread: page.pageInfo?.totalMessages,
       });
       if (action.type === "reset" || action.type === "shrink_refetch") {
+        this.cancelTranscriptPersistence(threadId);
         await this.port.clearThreadTranscriptCache(threadId);
         return {
           transcript: await this.port.getThreadHistoryFull(threadId),
@@ -1227,6 +1288,7 @@ export class TranscriptLifecycle {
         hasMoreAfter: latestHasMoreAfter,
       })
     ) {
+      this.cancelTranscriptPersistence(threadId);
       await this.port.clearThreadTranscriptCache(threadId);
       return {
         transcript: await this.port.getThreadHistoryFull(threadId),
@@ -1266,6 +1328,7 @@ export class TranscriptLifecycle {
     let streamReady = false;
     let streamStarted = false;
     try {
+      this.flushTranscriptPersistence(threadId);
       const cached = await this.port.loadThreadTranscriptCache(threadId);
       if (isCancelled()) {
         return;
@@ -1325,13 +1388,14 @@ export class TranscriptLifecycle {
         isMissingThreadTranscript(fetched.transcript)
       ) {
         if (streamStarted) {
-          await this.port.stopThreadStream({
+          await this.stopCommittedThreadStream({
             threadId,
             consumerId: SELECTED_THREAD_STREAM_CONSUMER_ID,
           });
           streamStarted = false;
         }
         if (latestTranscript) {
+          this.cancelTranscriptPersistence(threadId);
           void this.port.clearThreadTranscriptCache(threadId);
           this.port.clearThreadTranscript(threadId);
           latestTranscript = null;

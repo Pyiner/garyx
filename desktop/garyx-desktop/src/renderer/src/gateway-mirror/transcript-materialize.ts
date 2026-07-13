@@ -12,6 +12,7 @@ import {
   isControlTranscriptMessage,
   isToolRole,
   mergeForwardTranscriptPage,
+  transcriptMessageIndex,
   toolMessagesEquivalent,
   transcriptControlKind,
 } from "../../../shared/transcript-sync.ts";
@@ -267,8 +268,203 @@ export function normalizeTranscriptMessageId(
 
 const GENERATED_IMAGE_TOOL_USE_METADATA_KEY = "generated_image_tool_use_id";
 
+type JsonComparisonContext = "top" | "array" | "object";
+
+const jsonWireValidity = new WeakMap<object, boolean>();
+
+function jsonValueIsOmitted(value: unknown): boolean {
+  const valueType = typeof value;
+  return (
+    valueType === "undefined" ||
+    valueType === "function" ||
+    valueType === "symbol"
+  );
+}
+
+function isJsonWireValue(
+  value: unknown,
+  context: JsonComparisonContext,
+  visiting: Set<object>,
+): boolean {
+  if (value === null) {
+    return true;
+  }
+  const valueType = typeof value;
+  if (
+    valueType === "string" ||
+    valueType === "boolean" ||
+    valueType === "number"
+  ) {
+    return true;
+  }
+  if (valueType === "bigint") {
+    return false;
+  }
+  if (
+    valueType === "undefined" ||
+    valueType === "function" ||
+    valueType === "symbol"
+  ) {
+    return context !== "top";
+  }
+  if (valueType !== "object") {
+    return false;
+  }
+
+  const objectValue = value as object;
+  const cached = jsonWireValidity.get(objectValue);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (visiting.has(objectValue)) {
+    jsonWireValidity.set(objectValue, false);
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(objectValue);
+  if (
+    !Array.isArray(objectValue) &&
+    prototype !== Object.prototype &&
+    prototype !== null
+  ) {
+    jsonWireValidity.set(objectValue, false);
+    return false;
+  }
+  if (
+    "toJSON" in (objectValue as Record<string, unknown>) &&
+    typeof (objectValue as { toJSON?: unknown }).toJSON === "function"
+  ) {
+    jsonWireValidity.set(objectValue, false);
+    return false;
+  }
+
+  visiting.add(objectValue);
+  let valid = true;
+  if (Array.isArray(objectValue)) {
+    for (let index = 0; index < objectValue.length; index += 1) {
+      if (!isJsonWireValue(objectValue[index], "array", visiting)) {
+        valid = false;
+        break;
+      }
+    }
+  } else {
+    const record = objectValue as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      if (!isJsonWireValue(record[key], "object", visiting)) {
+        valid = false;
+        break;
+      }
+    }
+  }
+  visiting.delete(objectValue);
+  jsonWireValidity.set(objectValue, valid);
+  return valid;
+}
+
+function jsonComparableValuesEqual(
+  left: unknown,
+  right: unknown,
+  context: JsonComparisonContext,
+): boolean {
+  if (context === "array") {
+    if (jsonValueIsOmitted(left)) {
+      left = null;
+    }
+    if (jsonValueIsOmitted(right)) {
+      right = null;
+    }
+  }
+  if (left === right) {
+    return true;
+  }
+  if (
+    (left === null ||
+      (typeof left === "number" && !Number.isFinite(left))) &&
+    (right === null ||
+      (typeof right === "number" && !Number.isFinite(right)))
+  ) {
+    return true;
+  }
+  if (typeof left !== typeof right) {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) {
+      return false;
+    }
+    if (left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if (!jsonComparableValuesEqual(left[index], right[index], "array")) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (
+    !left ||
+    !right ||
+    typeof left !== "object" ||
+    typeof right !== "object"
+  ) {
+    return false;
+  }
+
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord);
+  const rightKeys = Object.keys(rightRecord);
+  let leftIndex = 0;
+  let rightIndex = 0;
+  while (true) {
+    while (
+      leftIndex < leftKeys.length &&
+      jsonValueIsOmitted(leftRecord[leftKeys[leftIndex]])
+    ) {
+      leftIndex += 1;
+    }
+    while (
+      rightIndex < rightKeys.length &&
+      jsonValueIsOmitted(rightRecord[rightKeys[rightIndex]])
+    ) {
+      rightIndex += 1;
+    }
+    if (leftIndex >= leftKeys.length || rightIndex >= rightKeys.length) {
+      return leftIndex >= leftKeys.length && rightIndex >= rightKeys.length;
+    }
+    const leftKey = leftKeys[leftIndex];
+    const rightKey = rightKeys[rightIndex];
+    if (
+      leftKey !== rightKey ||
+      !jsonComparableValuesEqual(
+        leftRecord[leftKey],
+        rightRecord[rightKey],
+        "object",
+      )
+    ) {
+      return false;
+    }
+    leftIndex += 1;
+    rightIndex += 1;
+  }
+}
+
+/**
+ * Compare parsed JSON values using the equality relation previously supplied
+ * by `JSON.stringify(left ?? null) === JSON.stringify(right ?? null)`, without
+ * allocating full serialized strings. Unsupported non-wire values are never
+ * reusable.
+ */
 export function jsonValuesEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+  const normalizedLeft = left ?? null;
+  const normalizedRight = right ?? null;
+  if (
+    !isJsonWireValue(normalizedLeft, "top", new Set()) ||
+    !isJsonWireValue(normalizedRight, "top", new Set())
+  ) {
+    return false;
+  }
+  return jsonComparableValuesEqual(normalizedLeft, normalizedRight, "top");
 }
 
 export function remoteTranscriptMessageCanReuseExisting(
@@ -301,13 +497,73 @@ export function materializeRemoteTranscript(
   options?: { ignoreTimestampForStableMessages?: boolean },
 ): UiTranscriptMessage[] {
   const usedExistingIndexes = new Set<number>();
+  type ExistingIndexQueue = { indexes: number[]; cursor: number };
+  const indexesById = new Map<string, ExistingIndexQueue>();
+  const generatedImageIndexesByToolUseId = new Map<
+    string,
+    ExistingIndexQueue
+  >();
+  const generatedImageContentCandidates: number[] = [];
+
+  const appendIndex = (
+    index: Map<string, ExistingIndexQueue>,
+    key: string,
+    existingIndex: number,
+  ) => {
+    const queue = index.get(key);
+    if (queue) {
+      queue.indexes.push(existingIndex);
+      return;
+    }
+    index.set(key, { indexes: [existingIndex], cursor: 0 });
+  };
+
+  existing.forEach((entry, index) => {
+    appendIndex(indexesById, entry.id, index);
+    if (entry.role !== "assistant") {
+      return;
+    }
+    const generatedImageToolUseIdValue = asRecord(entry.metadata)?.[
+      GENERATED_IMAGE_TOOL_USE_METADATA_KEY
+    ];
+    const generatedImageToolUseId =
+      typeof generatedImageToolUseIdValue === "string"
+        ? generatedImageToolUseIdValue
+        : "";
+    if (generatedImageToolUseId) {
+      appendIndex(
+        generatedImageIndexesByToolUseId,
+        generatedImageToolUseId,
+        index,
+      );
+    }
+    if (!entry.text.trim()) {
+      generatedImageContentCandidates.push(index);
+    }
+  });
+
+  const takeFirstUnused = (queue: ExistingIndexQueue | undefined): number => {
+    if (!queue) {
+      return -1;
+    }
+    while (
+      queue.cursor < queue.indexes.length &&
+      usedExistingIndexes.has(queue.indexes[queue.cursor])
+    ) {
+      queue.cursor += 1;
+    }
+    if (queue.cursor >= queue.indexes.length) {
+      return -1;
+    }
+    const index = queue.indexes[queue.cursor];
+    queue.cursor += 1;
+    return index;
+  };
 
   const materializeMessage = (
     message: TranscriptMessage,
   ): UiTranscriptMessage => {
-    let matchedIndex = existing.findIndex((entry, index) => {
-      return !usedExistingIndexes.has(index) && entry.id === message.id;
-    });
+    const matchedIndex = takeFirstUnused(indexesById.get(message.id));
 
     const matchedEntry = matchedIndex >= 0 ? existing[matchedIndex] : null;
     if (matchedIndex >= 0) {
@@ -357,29 +613,20 @@ export function materializeRemoteTranscript(
       },
       kind: "assistant_reply",
     };
-    let matchedIndex = existing.findIndex((entry, index) => {
-      return !usedExistingIndexes.has(index) && entry.id === synthetic.id;
-    });
+    let matchedIndex = takeFirstUnused(indexesById.get(synthetic.id));
     if (matchedIndex < 0 && toolUseId) {
-      matchedIndex = existing.findIndex((entry, index) => {
-        const metadata = asRecord(entry.metadata);
-        return (
-          !usedExistingIndexes.has(index) &&
-          entry.role === "assistant" &&
-          metadata?.[GENERATED_IMAGE_TOOL_USE_METADATA_KEY] === toolUseId
-        );
-      });
+      matchedIndex = takeFirstUnused(
+        generatedImageIndexesByToolUseId.get(toolUseId),
+      );
     }
     if (matchedIndex < 0) {
-      const contentSignature = JSON.stringify(content);
-      matchedIndex = existing.findIndex((entry, index) => {
-        return (
-          !usedExistingIndexes.has(index) &&
-          entry.role === "assistant" &&
-          !entry.text.trim() &&
-          JSON.stringify(entry.content) === contentSignature
-        );
-      });
+      matchedIndex =
+        generatedImageContentCandidates.find((index) => {
+          return (
+            !usedExistingIndexes.has(index) &&
+            jsonValuesEqual(existing[index].content, content)
+          );
+        }) ?? -1;
     }
 
     const matchedEntry = matchedIndex >= 0 ? existing[matchedIndex] : null;
@@ -540,11 +787,22 @@ export function mergeRemotePaginationState(
   incoming: ThreadHistoryPaginationState,
   existingMessages: UiTranscriptMessage[],
 ): ThreadHistoryPaginationState {
+  return mergeRemotePaginationStateWithEarliestIndex(
+    current,
+    incoming,
+    earliestRemoteHistoryIndex(existingMessages),
+  );
+}
+
+export function mergeRemotePaginationStateWithEarliestIndex(
+  current: ThreadHistoryPaginationState | null,
+  incoming: ThreadHistoryPaginationState,
+  earliestLoadedIndex: number | null,
+): ThreadHistoryPaginationState {
   if (!current) {
     return incoming;
   }
   if (!current.hasMoreBefore) {
-    const earliestLoadedIndex = earliestRemoteHistoryIndex(existingMessages);
     if (earliestLoadedIndex === 0 || !incoming.hasMoreBefore) {
       return { ...current, loadingBefore: false };
     }
@@ -604,27 +862,133 @@ export function committedMessageForwardPage(
   });
 }
 
+/**
+ * Constant-history-work specialization of committedMessageForwardPage for a
+ * provably contiguous raw tail append. Returning null keeps every uncertain
+ * shape on the reference full fold.
+ */
+export function appendCommittedMessageForwardPage(
+  base: ThreadTranscript | null,
+  event: Extract<DesktopChatStreamEvent, { type: "committed_message" }>,
+): ThreadTranscript | null {
+  if (
+    !base ||
+    base.threadId !== event.threadId ||
+    event.message.seq !== event.seq ||
+    base.pageInfo?.reset === true ||
+    base.pageInfo?.hasMoreAfter === true
+  ) {
+    return null;
+  }
+  const incomingIndex = transcriptMessageIndex(event.message);
+  const lastMessage = base.messages[base.messages.length - 1];
+  const lastIndex = lastMessage ? transcriptMessageIndex(lastMessage) : null;
+  if (
+    incomingIndex === null ||
+    incomingIndex !== event.seq - 1 ||
+    lastIndex === null ||
+    incomingIndex !== lastIndex + 1
+  ) {
+    return null;
+  }
+
+  // Reuse the canonical forward merge for every non-message field and its
+  // page-info math. Its message normalization sees only the new singleton;
+  // the already-proven ordered base is appended directly.
+  const metadataOnlyBase = { ...base, messages: [] };
+  const merged = committedMessageForwardPage(metadataOnlyBase, event);
+  return {
+    ...merged,
+    messages: [...base.messages, event.message],
+  };
+}
+
+export interface MergeRemoteTranscriptOptions {
+  activeRunLiveRows?: boolean;
+  preserveRemoteBeforeIndex?: number | null;
+  /**
+   * Whether the fetched transcript reports an active run. Streamed local
+   * tool bubbles outrank the canonical page only while the run is active.
+   */
+  threadRunActive?: boolean;
+  intentForId: (intentId: string) => MessageIntent | null;
+}
+
+/**
+ * Apply the legacy local-overlay preservation rules to a materialized remote
+ * candidate set. `existing` may be the whole UI array (full reconcile) or its
+ * local suffix (incremental append); priorExistingIds represents entries that
+ * preceded that suffix for the legacy first-occurrence rule.
+ */
+export function preserveLocalTranscriptEntries(
+  visibleTranscript: TranscriptMessage[],
+  materializedRemote: UiTranscriptMessage[],
+  existing: readonly UiTranscriptMessage[],
+  options: MergeRemoteTranscriptOptions,
+  priorExistingIds: ReadonlySet<string> = new Set(),
+): UiTranscriptMessage[] {
+  const materializedRemoteIds = new Set(
+    materializedRemote.map((entry) => entry.id),
+  );
+  const seenExistingIds = new Set(priorExistingIds);
+  const preservedLocalEntries: UiTranscriptMessage[] = [];
+
+  for (const entry of existing) {
+    const duplicate = seenExistingIds.has(entry.id);
+    seenExistingIds.add(entry.id);
+    if (entry.localState === "remote_final" || duplicate) {
+      continue;
+    }
+    if (!entry.intentId) {
+      if (entry.localState === "error" || entry.localState === "interrupted") {
+        preservedLocalEntries.push(entry);
+      }
+      continue;
+    }
+
+    const intent = options.intentForId(entry.intentId);
+    if (!intent) {
+      if (entry.localState === "error" || entry.localState === "interrupted") {
+        preservedLocalEntries.push(entry);
+      }
+      continue;
+    }
+
+    if (entry.role === "user") {
+      if (
+        !materializedRemoteIds.has(entry.id) &&
+        !materializedRemoteIds.has(userMessageIdForOrigin(intent.intentId))
+      ) {
+        preservedLocalEntries.push(entry);
+      }
+      continue;
+    }
+    const match = resolveIntentHistoryMatch(intent, visibleTranscript);
+    if (entry.role === "assistant") {
+      if (!match.assistantVisible) {
+        preservedLocalEntries.push(entry);
+      }
+      continue;
+    }
+    if (isToolRole(entry.role)) {
+      if (
+        options.threadRunActive !== false &&
+        !materializedRemote.some((candidate) =>
+          toolMessagesEquivalent(candidate, entry),
+        )
+      ) {
+        preservedLocalEntries.push(entry);
+      }
+    }
+  }
+  return preservedLocalEntries;
+}
+
 export function mergeRemoteTranscriptWithLocal(
   transcript: TranscriptMessage[],
   existing: UiTranscriptMessage[],
-  options: {
-    activeRunLiveRows?: boolean;
-    preserveRemoteBeforeIndex?: number | null;
-    /**
-     * Whether the fetched transcript reports an active run. Streamed local
-     * tool bubbles outrank the canonical page only while the run is
-     * actually active; once the gateway reports the run finished, the page
-     * already contains every tool row, so an unmatched local bubble lost
-     * its terminal events (dropped stream, missed `done`) or its rows fell
-     * outside the fetched page. Keeping it would re-append it after the
-     * final assistant answer on every reconcile. Mirrors the iOS
-     * `GaryxTranscriptMerge` `threadRunActive` rule.
-     */
-    threadRunActive?: boolean;
-    intentForId: (intentId: string) => MessageIntent | null;
-  },
+  options: MergeRemoteTranscriptOptions,
 ): UiTranscriptMessage[] {
-  const intentForId = options.intentForId;
   const visibleTranscript = visibleTranscriptMessages(transcript);
   if (visibleTranscript.length === 0) {
     return existing.length > 0 ? existing : [];
@@ -641,7 +1005,7 @@ export function mergeRemoteTranscriptWithLocal(
     materializedRemote.map((entry) => entry.id),
   );
   const preservedRemoteBeforeEntries: UiTranscriptMessage[] = [];
-  const preservedLocalEntries = existing.filter((entry, index, entries) => {
+  for (const entry of existing) {
     if (entry.localState === "remote_final") {
       const historyIndex = transcriptEntryHistoryIndex(entry);
       if (
@@ -652,46 +1016,14 @@ export function mergeRemoteTranscriptWithLocal(
       ) {
         preservedRemoteBeforeEntries.push(entry);
       }
-      return false;
     }
-    if (
-      entries.findIndex((candidate) => candidate.id === entry.id) !== index
-    ) {
-      return false;
-    }
-    if (!entry.intentId) {
-      return (
-        entry.localState === "error" || entry.localState === "interrupted"
-      );
-    }
-
-    const intent = intentForId(entry.intentId);
-    if (!intent) {
-      return (
-        entry.localState === "error" || entry.localState === "interrupted"
-      );
-    }
-
-    if (entry.role === "user") {
-      return !(
-        materializedRemoteIds.has(entry.id) ||
-        materializedRemoteIds.has(userMessageIdForOrigin(intent.intentId))
-      );
-    }
-    const match = resolveIntentHistoryMatch(intent, visibleTranscript);
-    if (entry.role === "assistant") {
-      return !match.assistantVisible;
-    }
-    if (isToolRole(entry.role)) {
-      if (options?.threadRunActive === false) {
-        return false;
-      }
-      return !materializedRemote.some((candidate) =>
-        toolMessagesEquivalent(candidate, entry),
-      );
-    }
-    return false;
-  });
+  }
+  const preservedLocalEntries = preserveLocalTranscriptEntries(
+    visibleTranscript,
+    materializedRemote,
+    existing,
+    options,
+  );
 
   return [
     ...preservedRemoteBeforeEntries,

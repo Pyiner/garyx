@@ -15,18 +15,27 @@ import type {
   ThreadTranscript,
 } from "@shared/contracts";
 import {
+  isControlTranscriptMessage,
+  transcriptMessageIndex,
   transcriptRewriteAction,
   transcriptWithResolvedActiveRun,
 } from "../../../shared/transcript-sync.ts";
 
 import type { MessageIntent } from "../message-machine.ts";
 import type { UiTranscriptMessage } from "../app-shell/types";
+import { extractImageGenerationImageContent } from "../app-shell/image-generation-content.ts";
+import { isRunLoadingPlaceholderMessage } from "../app-shell/loading-labels.ts";
 import {
+  appendCommittedMessageForwardPage,
   committedMessageForwardPage,
+  earliestRemoteHistoryIndex,
   materializeRemoteTranscript,
   mergeRemotePaginationState,
+  mergeRemotePaginationStateWithEarliestIndex,
   mergeRemoteTranscriptWithLocal,
+  normalizeTranscriptMessageId,
   paginationStateFromTranscript,
+  preserveLocalTranscriptEntries,
   visibleTranscriptMessages,
   type ThreadHistoryPaginationState,
 } from "./transcript-materialize.ts";
@@ -38,6 +47,14 @@ import {
  */
 export interface RemoteApplyOptions {
   intentForId: (intentId: string) => MessageIntent | null;
+}
+
+interface IncrementalTranscriptState {
+  snapshotLastIndex: number;
+  remotePrefixLength: number;
+  remoteIds: Set<string>;
+  currentRemoteIds: Set<string>;
+  earliestRemoteIndex: number | null;
 }
 
 export class ThreadTranscriptCache {
@@ -55,6 +72,8 @@ export class ThreadTranscriptCache {
   private pendingRemoteInputs: readonly PendingThreadInput[] = [];
   private snapshotTranscript: ThreadTranscript | null = null;
   private historyPagination: ThreadHistoryPaginationState | null = null;
+  private incrementalState: IncrementalTranscriptState | null = null;
+  private committedApplyStats = { incremental: 0, fullFallback: 0 };
   // Batch 3d: mirrors the legacy "threadInfoByThread key exists" gate —
   // true once any authoritative/remote transcript apply has landed
   // (exactly the writes that created the legacy key).
@@ -78,6 +97,7 @@ export class ThreadTranscriptCache {
     this.uiMessages = materializeRemoteTranscript(visible, [
       ...this.uiMessages,
     ]);
+    this.rebuildIncrementalState();
   }
 
   getUiMessages(): readonly UiTranscriptMessage[] {
@@ -104,6 +124,13 @@ export class ThreadTranscriptCache {
     return this.transcriptLoaded;
   }
 
+  getCommittedApplyStats(): Readonly<{
+    incremental: number;
+    fullFallback: number;
+  }> {
+    return { ...this.committedApplyStats };
+  }
+
   /**
    * Replace the UI message array wholesale. Batch-3b bridge for local
    * (optimistic/recovery) writes that still run through the legacy
@@ -115,6 +142,7 @@ export class ThreadTranscriptCache {
    */
   setUiMessages(messages: readonly UiTranscriptMessage[]): void {
     this.uiMessages = messages;
+    this.rebuildIncrementalState();
   }
 
   setHistoryPagination(state: ThreadHistoryPaginationState | null): void {
@@ -156,9 +184,11 @@ export class ThreadTranscriptCache {
       merged.length === existing.length &&
       merged.every((entry, index) => entry === existing[index])
     ) {
+      this.rebuildIncrementalState();
       return;
     }
     this.uiMessages = merged;
+    this.rebuildIncrementalState();
   }
 
   /**
@@ -175,6 +205,11 @@ export class ThreadTranscriptCache {
     if (transcriptRewriteAction(event.message) === "refetch_authoritative") {
       return "refetch_authoritative";
     }
+    if (this.applyCommittedMessageIncrementally(event, options)) {
+      this.committedApplyStats.incremental += 1;
+      return "applied";
+    }
+    this.committedApplyStats.fullFallback += 1;
     this.applyRemote(
       committedMessageForwardPage(this.snapshotTranscript, event),
       options,
@@ -191,6 +226,7 @@ export class ThreadTranscriptCache {
     this.historyPagination = paginationStateFromTranscript(transcript);
     const visibleMessages = visibleTranscriptMessages(transcript.messages);
     if (visibleMessages.length === 0) {
+      this.rebuildIncrementalState();
       return;
     }
     const existing = this.uiMessages;
@@ -199,9 +235,164 @@ export class ThreadTranscriptCache {
       (entry) => !existingIds.has(entry.id),
     );
     if (olderEntries.length === 0) {
+      this.rebuildIncrementalState();
       return;
     }
     this.uiMessages = [...olderEntries, ...existing];
+    this.rebuildIncrementalState();
+  }
+
+  private rebuildIncrementalState(): void {
+    const snapshot = this.snapshotTranscript;
+    if (
+      !snapshot ||
+      snapshot.messages.length === 0 ||
+      snapshot.pageInfo?.reset === true ||
+      snapshot.pageInfo?.hasMoreAfter === true
+    ) {
+      this.incrementalState = null;
+      return;
+    }
+
+    let previousIndex: number | null = null;
+    for (const message of snapshot.messages) {
+      const index = transcriptMessageIndex(message);
+      if (
+        index === null ||
+        message.seq !== index + 1 ||
+        (previousIndex !== null && index !== previousIndex + 1)
+      ) {
+        this.incrementalState = null;
+        return;
+      }
+      previousIndex = index;
+    }
+    if (previousIndex === null) {
+      this.incrementalState = null;
+      return;
+    }
+
+    let remotePrefixLength = 0;
+    let localSuffixStarted = false;
+    const remoteIds = new Set<string>();
+    for (const entry of this.uiMessages) {
+      if (entry.localState === "remote_final") {
+        if (localSuffixStarted || remoteIds.has(entry.id)) {
+          this.incrementalState = null;
+          return;
+        }
+        remoteIds.add(entry.id);
+        remotePrefixLength += 1;
+        continue;
+      }
+      localSuffixStarted = true;
+    }
+
+    this.incrementalState = {
+      snapshotLastIndex: previousIndex,
+      remotePrefixLength,
+      currentRemoteIds: new Set(
+        materializeRemoteTranscript(
+          visibleTranscriptMessages(snapshot.messages),
+          [...this.uiMessages],
+        ).map((entry) => entry.id),
+      ),
+      remoteIds,
+      earliestRemoteIndex: earliestRemoteHistoryIndex([...this.uiMessages]),
+    };
+  }
+
+  private applyCommittedMessageIncrementally(
+    event: CommittedMessageEvent,
+    options: RemoteApplyOptions,
+  ): boolean {
+    const state = this.incrementalState;
+    const snapshot = this.snapshotTranscript;
+    if (
+      !state ||
+      !snapshot ||
+      snapshot.threadId !== event.threadId ||
+      state.snapshotLastIndex !== event.seq - 2 ||
+      isControlTranscriptMessage(event.message) ||
+      isRunLoadingPlaceholderMessage(event.message) ||
+      (event.message.role === "tool_result" &&
+        extractImageGenerationImageContent(event.message) !== null)
+    ) {
+      return false;
+    }
+
+    const normalizedMessage = normalizeTranscriptMessageId(event.message);
+    if (state.remoteIds.has(normalizedMessage.id)) {
+      return false;
+    }
+    const nextTranscript = appendCommittedMessageForwardPage(snapshot, event);
+    if (!nextTranscript) {
+      return false;
+    }
+
+    const localTail = this.uiMessages.slice(state.remotePrefixLength);
+    const materializedTail = materializeRemoteTranscript(
+      [event.message],
+      localTail,
+      {
+        ignoreTimestampForStableMessages: Boolean(
+          nextTranscript.threadInfo?.activeRun,
+        ),
+      },
+    );
+    if (materializedTail.length !== 1) {
+      return false;
+    }
+
+    const remotePrefix = this.uiMessages.slice(0, state.remotePrefixLength);
+    const nextRemote = [...remotePrefix, ...materializedTail];
+    const preservedLocal =
+      localTail.length === 0
+        ? []
+        : preserveLocalTranscriptEntries(
+            visibleTranscriptMessages(nextTranscript.messages),
+            [
+              ...remotePrefix.filter((entry) =>
+                state.currentRemoteIds.has(entry.id),
+              ),
+              ...materializedTail,
+            ],
+            localTail,
+            {
+              activeRunLiveRows: Boolean(nextTranscript.threadInfo?.activeRun),
+              preserveRemoteBeforeIndex:
+                nextTranscript.pageInfo?.startIndex ?? null,
+              threadRunActive: Boolean(nextTranscript.threadInfo?.activeRun),
+              intentForId: options.intentForId,
+            },
+            state.remoteIds,
+          );
+
+    this.snapshotTranscript = nextTranscript;
+    this.transcriptLoaded = true;
+    this.historyPagination = mergeRemotePaginationStateWithEarliestIndex(
+      this.historyPagination,
+      paginationStateFromTranscript(nextTranscript),
+      state.earliestRemoteIndex,
+    );
+    this.threadInfo = nextTranscript.threadInfo ?? null;
+    this.pendingRemoteInputs = nextTranscript.pendingInputs ?? [];
+    this.uiMessages = [...nextRemote, ...preservedLocal];
+
+    const nextRemoteIds = new Set(state.remoteIds);
+    nextRemoteIds.add(materializedTail[0].id);
+    const nextCurrentRemoteIds = new Set(state.currentRemoteIds);
+    nextCurrentRemoteIds.add(materializedTail[0].id);
+    this.incrementalState = {
+      snapshotLastIndex: event.seq - 1,
+      remotePrefixLength: nextRemote.length,
+      remoteIds: nextRemoteIds,
+      currentRemoteIds: nextCurrentRemoteIds,
+      earliestRemoteIndex:
+        state.earliestRemoteIndex ??
+        transcriptMessageIndex(event.message),
+    };
+    return true;
   }
 
   /**

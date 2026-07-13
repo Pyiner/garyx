@@ -663,6 +663,14 @@ export class GatewayMirror {
     );
   }
 
+  stopCommittedThreadStream(input: StopThreadStreamInput): Promise<void> {
+    return this.transcriptLifecycle.stopCommittedThreadStream(input);
+  }
+
+  flushAllTranscriptPersistence(): number {
+    return this.transcriptLifecycle.flushAllTranscriptPersistence();
+  }
+
   refetchAuthoritativeTranscriptAfterRewrite(threadId: string): Promise<void> {
     return this.transcriptLifecycle.refetchAuthoritativeTranscriptAfterRewrite(
       threadId,

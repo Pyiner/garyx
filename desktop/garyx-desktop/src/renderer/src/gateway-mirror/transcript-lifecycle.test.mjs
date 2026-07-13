@@ -1169,8 +1169,8 @@ test("dual-run: lifecycle matches the legacy apply chain (6b-2b)", async () => {
   );
   assert.deepEqual(
     nextH.persistTrace,
-    legacyH.persistTrace,
-    "persist ride-along traces must match",
+    legacyH.persistTrace.filter((_, index) => index !== 2),
+    "the committed write is deferred, then cancelled before rewrite clear",
   );
   assert.deepEqual(
     nextH.ipcTrace,
@@ -1191,6 +1191,88 @@ test("dual-run: lifecycle matches the legacy apply chain (6b-2b)", async () => {
     nextH.ipcTrace.some(([name]) => name === "getThreadHistoryFull"),
     "the rewrite must run the single-owner refetch",
   );
+});
+
+test("committed persistence is deferred and forced at switch and terminal boundaries", async () => {
+  lifecycleModule = await import("./transcript-lifecycle.ts");
+  const h = makeHarness();
+  const bindings = makeLifecycleBindings(h);
+  const initial = {
+    threadId: THREAD,
+    remoteFound: true,
+    messages: [userMessage(0, "hello"), assistantMessage(1, "reply")],
+    pendingInputs: [],
+    threadInfo: null,
+  };
+  bindings.applyCanonicalTranscript(THREAD, initial);
+  assert.equal(h.persistTrace.length, 1, "HTTP apply persists immediately");
+
+  const committed3 = {
+    type: "committed_message",
+    threadId: THREAD,
+    runId: "run-persist",
+    seq: 3,
+    message: { ...assistantMessage(2, "streamed"), seq: 3 },
+  };
+  bindings.notifyStreamEvent({
+    type: "thread_render_frame",
+    threadId: THREAD,
+    events: [committed3],
+    renderState: {
+      based_on_seq: 3,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      filtered_placeholders: [],
+    },
+  });
+  assert.equal(h.persistTrace.length, 1, "committed append is only scheduled");
+
+  bindings.cancelSelectedThreadLoad(THREAD);
+  assert.equal(h.persistTrace.length, 2, "thread switch flushes the latest append");
+  assert.equal(h.persistTrace.at(-1).transcript.messages.at(-1).seq, 3);
+
+  const committed4 = {
+    ...committed3,
+    seq: 4,
+    message: { ...assistantMessage(3, "final answer"), seq: 4 },
+  };
+  const terminal5 = {
+    ...committed3,
+    seq: 5,
+    message: {
+      id: `${THREAD}:4`,
+      seq: 5,
+      role: "system",
+      text: "",
+      kind: "control",
+      internal: true,
+      internalKind: "control",
+      content: {
+        control: {
+          kind: "run_complete",
+          thread_id: THREAD,
+          run_id: "run-persist",
+        },
+      },
+    },
+  };
+  bindings.notifyStreamEvent({
+    type: "thread_render_frame",
+    threadId: THREAD,
+    events: [committed4, terminal5],
+    renderState: {
+      based_on_seq: 5,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      filtered_placeholders: [],
+    },
+  });
+  assert.equal(h.persistTrace.length, 3, "terminal control forces one latest write");
+  assert.equal(h.persistTrace.at(-1).transcript.messages.at(-1).seq, 5);
 });
 
 async function replayLifecycleSequence(bindings, h) {
