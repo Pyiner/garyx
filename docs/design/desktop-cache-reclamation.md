@@ -239,12 +239,12 @@ The same checked-in reproductions that failed at the baseline now pass:
 - Capsule HTML eviction: 1/1 focused baseline pass;
 - Capsule thumbnail eviction: 1/1 focused baseline pass;
 - workspace `git init` refresh: the real temporary-repository test passes;
-- gateway mirror contract: 28/28 pass.
+- gateway mirror contract: 30/30 pass after reconciling the latest main branch.
 
 Repository-required aggregate checks also pass after correcting the external
 review's stale-sibling force-race finding:
 
 ```text
-npm run test:unit  -> 606 passed, 0 failed
+npm run test:unit  -> 620 passed, 0 failed after rebase onto origin/main
 npx tsc --noEmit  -> clean
 ```
