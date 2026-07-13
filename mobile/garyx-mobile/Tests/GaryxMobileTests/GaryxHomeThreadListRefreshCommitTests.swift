@@ -24,10 +24,10 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         // pins arrived while `thread-pinned` was still live.
         let page = try makeRecentThreadsPage(threads: [pinned, recent, incoming])
 
-        // Backfill await window: the user archives the pinned thread. The
-        // archive flow marks it pending and removes it locally before its
-        // gateway call completes.
+        // Backfill await window: the gateway accepts the archive and the app
+        // commits its one local removal while this older page is suspended.
         model.pendingThreadArchives.startArchive(threadId: pinned.id)
+        model.pendingThreadArchives.commitArchive(threadId: pinned.id)
         model.removeArchivedThreadLocally(pinned.id)
 
         // The refresh resumes, but the filter-owned pager rejects every
@@ -457,7 +457,101 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         )
     }
 
-    func testArchiveSuccessInvalidatesRefreshIssuedAfterOptimisticRemoval() async throws {
+    func testArchiveFailureKeepsListSnapshotStableUntilRemoteCommit() async throws {
+        let archiveStarted = expectation(description: "archive request started")
+        let archiveGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "POST", components.path.hasSuffix("/archive") {
+                archiveStarted.fulfill()
+                guard archiveGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    statusCode: 500,
+                    data: Data(#"{"error":"archive failed"}"#.utf8)
+                )
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            archiveGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let archived = makeThread(id: "thread-archived", title: "Archived thread")
+        let survivor = makeThread(id: "thread-survivor", title: "Surviving thread")
+        model.threads = [archived, survivor]
+        model.pinnedThreadIds = [archived.id]
+        primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .all)
+        primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .nonTask)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        let initialSnapshot = model.homeThreadListStore.snapshot
+
+        let archiveTask = Task { @MainActor in
+            await model.archiveThreadRecord(threadId: archived.id)
+        }
+        await fulfillment(of: [archiveStarted], timeout: 2)
+
+        // A refresh may finish while the remote operation is still pending.
+        // It must keep the existing row visible until the archive commits.
+        let concurrentRefresh = try XCTUnwrap(
+            model.recentThreadFeeds.requestRefresh(filter: .all)
+        )
+        XCTAssertEqual(
+            model.recentThreadFeeds.completeRefresh(
+                concurrentRefresh,
+                pageIds: [archived.id, survivor.id],
+                pageOffset: 0,
+                pageCount: 2,
+                hasMore: false
+            ),
+            .apply(.replaceHead)
+        )
+        model.commitRefreshedRecentThreadsPage(
+            pinsPageThreadIds: [archived.id],
+            fetchedThreads: [archived, survivor],
+            previousThreadSummaries: [archived, survivor],
+            previouslyRemoteBusyThreadIds: [],
+            selectionIdForThisRefresh: nil,
+            runtimeGeneration: model.gatewayRuntimeGeneration
+        )
+        await model.homeProjectionGateway.waitForIdleForTesting()
+
+        XCTAssertTrue(model.pendingThreadArchives.isRequestInFlight(threadId: archived.id))
+        XCTAssertEqual(model.pinnedThreadIds, [archived.id])
+        XCTAssertEqual(model.allRecentThreadIds, [archived.id, survivor.id])
+        XCTAssertEqual(model.threads, [archived, survivor])
+        XCTAssertEqual(
+            model.homeThreadListStore.snapshot,
+            initialSnapshot,
+            "a remote archive that has not committed must not delete List rows"
+        )
+        XCTAssertEqual(model.homeThreadListStore.rowMotion(threadId: archived.id), .archiving)
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.allRows.map(\.id),
+            initialSnapshot.sections.allRows.map(\.id),
+            "the optimistic exit keeps the physical List item alive until the remote commit"
+        )
+
+        archiveGate.signal()
+        await archiveTask.value
+        await model.homeProjectionGateway.waitForIdleForTesting()
+
+        XCTAssertFalse(model.pendingThreadArchives.contains(threadId: archived.id))
+        XCTAssertEqual(model.pinnedThreadIds, [archived.id])
+        XCTAssertEqual(model.allRecentThreadIds, [archived.id, survivor.id])
+        XCTAssertEqual(model.threads, [archived, survivor])
+        XCTAssertEqual(model.homeThreadListStore.snapshot, initialSnapshot)
+        XCTAssertEqual(model.homeThreadListStore.rowMotion(threadId: archived.id), .stable)
+    }
+
+    func testArchiveSuccessMakesOneListCommitAndInvalidatesEarlierRefresh() async throws {
         let archiveStarted = expectation(description: "archive request started")
         let archiveGate = DispatchSemaphore(value: 0)
         let session = makeStubSession { request in
@@ -492,25 +586,35 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         model.threads = [archived, survivor]
         primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .all)
         primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .nonTask)
+        let allMutationSequence = model.recentThreadFeeds.allFeed.pager.localMutationSequence
+        let chatsMutationSequence = model.recentThreadFeeds.nonTaskFeed.pager.localMutationSequence
 
         let archiveTask = Task { @MainActor in
             await model.archiveThreadRecord(threadId: archived.id)
         }
         await fulfillment(of: [archiveStarted], timeout: 2)
-        XCTAssertTrue(model.pendingThreadArchives.contains(threadId: archived.id))
-        XCTAssertEqual(model.allRecentThreadIds, [survivor.id])
+        XCTAssertTrue(model.pendingThreadArchives.isRequestInFlight(threadId: archived.id))
+        XCTAssertEqual(model.allRecentThreadIds, [archived.id, survivor.id])
+        XCTAssertEqual(model.homeThreadListStore.rowMotion(threadId: archived.id), .archiving)
 
-        // This ticket is newer than the optimistic removal, so only the
-        // successful archive's second local removal can invalidate its stale
-        // server page after the pending tombstone has been resolved.
+        // The request is pending but has not changed the List. Its single
+        // success commit must invalidate this pre-commit server page.
         let staleTicket = try XCTUnwrap(model.recentThreadFeeds.requestRefresh(filter: .all))
         archiveGate.signal()
-        let archiveResolved = await waitUntil {
-            !model.pendingThreadArchives.contains(threadId: archived.id)
+        let archiveCommitted = await waitUntil {
+            model.pendingThreadArchives.isCommitted(threadId: archived.id)
         }
         XCTAssertTrue(
-            archiveResolved,
-            "the real archive success path must resolve its pending tombstone"
+            archiveCommitted,
+            "the real archive success path must commit its stale-response tombstone"
+        )
+        XCTAssertEqual(
+            model.recentThreadFeeds.allFeed.pager.localMutationSequence,
+            allMutationSequence + 1
+        )
+        XCTAssertEqual(
+            model.recentThreadFeeds.nonTaskFeed.pager.localMutationSequence,
+            chatsMutationSequence + 1
         )
 
         let completion = model.recentThreadFeeds.completeRefresh(
@@ -525,6 +629,335 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertFalse(model.threads.contains { $0.id == archived.id })
 
         await archiveTask.value
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        XCTAssertEqual(model.homeThreadListStore.rowMotion(threadId: archived.id), .stable)
+        XCTAssertFalse(
+            model.homeThreadListStore.presentationSnapshot.sections.allRows.contains { $0.id == archived.id }
+        )
+    }
+
+    func testPinMovesPresentationSynchronouslyThenSettlesOnceAfterRemoteCommit() async throws {
+        let pinStarted = expectation(description: "pin request started")
+        let pinGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "PUT", components.path.hasSuffix("/api/thread-pins/thread-moved") {
+                pinStarted.fulfill()
+                guard pinGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    data: Data(#"{"thread_ids":["thread-moved"]}"#.utf8)
+                )
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            pinGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let first = makeThread(id: "thread-first", title: "First thread")
+        let moved = makeThread(id: "thread-moved", title: "Moved thread")
+        let last = makeThread(id: "thread-last", title: "Last thread")
+        model.threads = [first, moved, last]
+        primeRecentFeed(model, ids: [first.id, moved.id, last.id], filter: .all)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        XCTAssertTrue(model.homeThreadListStore.snapshot.sections.pinned.isEmpty)
+
+        model.togglePinnedThread(moved.id)
+
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id),
+            [moved.id],
+            "the row must move in the same synchronous gesture turn, before the actor or network responds"
+        )
+        XCTAssertEqual(model.homeThreadListStore.rowMotion(threadId: moved.id), .pinning)
+        await fulfillment(of: [pinStarted], timeout: 2)
+
+        pinGate.signal()
+        let pinSettled = await waitUntil {
+            model.homeThreadListStore.rowMotion(threadId: moved.id) == .stable
+                && model.homeThreadListStore.snapshot.sections.pinned.map(\.id) == [moved.id]
+        }
+        XCTAssertTrue(pinSettled)
+        XCTAssertEqual(model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id), [moved.id])
+    }
+
+    func testUnpinReturnsToFeedRelativePositionWithoutCountingPinnedRows() async throws {
+        let unpinStarted = expectation(description: "unpin request started")
+        let unpinGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "DELETE", components.path.hasSuffix("/api/thread-pins/thread-two") {
+                unpinStarted.fulfill()
+                guard unpinGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    data: Data(#"{"thread_ids":["thread-zero","thread-one"]}"#.utf8)
+                )
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            unpinGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let zero = makeThread(id: "thread-zero", title: "Pinned zero")
+        let one = makeThread(id: "thread-one", title: "Pinned one")
+        let two = makeThread(id: "thread-two", title: "Pinned two")
+        let recentA = makeThread(id: "thread-recent-a", title: "Recent A")
+        let recentB = makeThread(id: "thread-recent-b", title: "Recent B")
+        model.threads = [zero, one, two, recentA, recentB]
+        model.pinnedThreadIds = [zero.id, one.id, two.id]
+        primeRecentFeed(
+            model,
+            ids: [zero.id, one.id, two.id, recentA.id, recentB.id],
+            filter: .all
+        )
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        XCTAssertEqual(
+            model.homeThreadListStore.snapshot.sections.recent.map(\.id),
+            [recentA.id, recentB.id]
+        )
+
+        model.unpinThread(two.id)
+
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id),
+            [zero.id, one.id]
+        )
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.recent.map(\.id),
+            [two.id, recentA.id, recentB.id],
+            "the raw feed's earlier pinned ids must not push the unpinned row down"
+        )
+        await fulfillment(of: [unpinStarted], timeout: 2)
+
+        unpinGate.signal()
+        let settled = await waitUntil {
+            model.homeThreadListStore.rowMotion(threadId: two.id) == .stable
+                && model.homeThreadListStore.snapshot.sections.recent.map(\.id)
+                    == [two.id, recentA.id, recentB.id]
+        }
+        XCTAssertTrue(settled)
+    }
+
+    func testConcurrentPinFailuresRollBackOnlyTheirOwnThreads() async throws {
+        let firstStarted = expectation(description: "first pin request started")
+        let secondStarted = expectation(description: "second pin request started")
+        let firstGate = DispatchSemaphore(value: 0)
+        let secondGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "PUT", components.path.hasSuffix("/api/thread-pins/thread-first") {
+                firstStarted.fulfill()
+                guard firstGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    statusCode: 500,
+                    data: Data(#"{"error":"first pin failed"}"#.utf8)
+                )
+            }
+            if request.httpMethod == "PUT", components.path.hasSuffix("/api/thread-pins/thread-second") {
+                secondStarted.fulfill()
+                guard secondGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    statusCode: 500,
+                    data: Data(#"{"error":"second pin failed"}"#.utf8)
+                )
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            firstGate.signal()
+            secondGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let first = makeThread(id: "thread-first", title: "First pin")
+        let second = makeThread(id: "thread-second", title: "Second pin")
+        model.threads = [first, second]
+        primeRecentFeed(model, ids: [first.id, second.id], filter: .all)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+
+        model.togglePinnedThread(first.id)
+        model.togglePinnedThread(second.id)
+
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id),
+            [second.id, first.id]
+        )
+        await fulfillment(of: [firstStarted, secondStarted], timeout: 2)
+
+        firstGate.signal()
+        let firstRolledBack = await waitUntil {
+            model.homeThreadListStore.rowMotion(threadId: first.id) == .stable
+                && model.homeThreadListStore.rowMotion(threadId: second.id) == .pinning
+                && model.pinnedThreadIds == [second.id]
+        }
+        XCTAssertTrue(firstRolledBack)
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id),
+            [second.id],
+            "a failed first request must leave the second optimistic pin in place"
+        )
+
+        secondGate.signal()
+        let secondRolledBack = await waitUntil {
+            model.homeThreadListStore.rowMotion(threadId: second.id) == .stable
+                && model.pinnedThreadIds.isEmpty
+        }
+        XCTAssertTrue(secondRolledBack)
+        XCTAssertTrue(model.homeThreadListStore.presentationSnapshot.sections.pinned.isEmpty)
+    }
+
+    func testConcurrentPinAndUnpinFailuresRestoreOriginalPinnedOrder() async throws {
+        let pinStarted = expectation(description: "pin request started")
+        let unpinStarted = expectation(description: "unpin request started")
+        let pinGate = DispatchSemaphore(value: 0)
+        let unpinGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "PUT", components.path.hasSuffix("/api/thread-pins/thread-new") {
+                pinStarted.fulfill()
+                guard pinGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, statusCode: 500, data: Data())
+            }
+            if request.httpMethod == "DELETE", components.path.hasSuffix("/api/thread-pins/thread-one") {
+                unpinStarted.fulfill()
+                guard unpinGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, statusCode: 500, data: Data())
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            pinGate.signal()
+            unpinGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let zero = makeThread(id: "thread-zero", title: "Pinned zero")
+        let one = makeThread(id: "thread-one", title: "Pinned one")
+        let two = makeThread(id: "thread-two", title: "Pinned two")
+        let new = makeThread(id: "thread-new", title: "New pin")
+        model.threads = [zero, one, two, new]
+        model.pinnedThreadIds = [zero.id, one.id, two.id]
+        primeRecentFeed(model, ids: [zero.id, one.id, two.id, new.id], filter: .all)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+
+        model.togglePinnedThread(new.id)
+        model.unpinThread(one.id)
+
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id),
+            [new.id, zero.id, two.id]
+        )
+        await fulfillment(of: [pinStarted, unpinStarted], timeout: 2)
+
+        pinGate.signal()
+        let pinRolledBack = await waitUntil {
+            model.pinnedThreadIds == [zero.id, two.id]
+                && model.homeThreadListStore.rowMotion(threadId: one.id) == .pinning
+        }
+        XCTAssertTrue(pinRolledBack)
+
+        unpinGate.signal()
+        let unpinRolledBack = await waitUntil {
+            model.pinnedThreadIds == [zero.id, one.id, two.id]
+                && model.homeThreadListStore.rowMotion(threadId: one.id) == .stable
+        }
+        XCTAssertTrue(unpinRolledBack)
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id),
+            [zero.id, one.id, two.id],
+            "The failed unpin must restore between its stable neighbors after the earlier pin fails."
+        )
+    }
+
+    func testUnpinOutsideSelectedFilterCollapsesThenRestoresInPlaceOnFailure() async throws {
+        let unpinStarted = expectation(description: "unpin request started")
+        let unpinGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "DELETE", components.path.hasSuffix("/api/thread-pins/thread-pinned") {
+                unpinStarted.fulfill()
+                guard unpinGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    statusCode: 500,
+                    data: Data(#"{"error":"unpin failed"}"#.utf8)
+                )
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            unpinGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let pinned = makeThread(id: "thread-pinned", title: "Pinned task")
+        let chat = makeThread(id: "thread-chat", title: "Visible chat")
+        model.threads = [pinned, chat]
+        model.pinnedThreadIds = [pinned.id]
+        primeRecentFeed(model, ids: [pinned.id, chat.id], filter: .all)
+        primeRecentFeed(model, ids: [chat.id], filter: .nonTask)
+        model.recentThreadFeeds.select(.nonTask)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+
+        model.unpinThread(pinned.id)
+
+        XCTAssertEqual(model.homeThreadListStore.rowMotion(threadId: pinned.id), .leavingFilteredList)
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id),
+            [pinned.id],
+            "the source item remains physically present while its content collapses"
+        )
+        await fulfillment(of: [unpinStarted], timeout: 2)
+
+        unpinGate.signal()
+        let unpinRolledBack = await waitUntil {
+            model.homeThreadListStore.rowMotion(threadId: pinned.id) == .stable
+                && model.pinnedThreadIds == [pinned.id]
+        }
+        XCTAssertTrue(unpinRolledBack)
+        XCTAssertEqual(model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id), [pinned.id])
+        XCTAssertEqual(model.homeThreadListStore.presentationSnapshot.sections.recent.map(\.id), [chat.id])
     }
 
     private func makeModel(

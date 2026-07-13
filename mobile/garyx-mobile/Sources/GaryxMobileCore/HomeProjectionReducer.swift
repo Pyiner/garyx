@@ -34,21 +34,6 @@ enum HomeProjectionEvent: Sendable {
         basedOnSeq: Int
     )
     case selectedThreadChanged(threadId: String?)
-    case optimisticPin(
-        threadId: String,
-        pinnedThreadIds: [String],
-        recentThreadIds: [String]
-    )
-    case optimisticArchive(
-        threadId: String,
-        pinnedThreadIds: [String],
-        recentThreadIds: [String]
-    )
-    case optimisticRollback(
-        threadId: String,
-        restoredPinnedThreadIds: [String],
-        restoredRecentThreadIds: [String]
-    )
     case loadingChanged(isLoading: Bool)
     case homeVisibilityChanged(isVisible: Bool)
 }
@@ -211,27 +196,6 @@ enum HomeProjectionReducer {
             rebuildSnapshotFromBase(&next)
             evaluatesRowDifference = true
 
-        case let .optimisticPin(_, pinnedThreadIds, recentThreadIds):
-            next.pinnedThreadIds = normalizedThreadIds(pinnedThreadIds)
-            next.recentThreadIds = normalizedThreadIds(recentThreadIds)
-            rebuildBaseSectionsIfNeeded(&next)
-            rebuildSnapshotFromBase(&next)
-            evaluatesRowDifference = true
-
-        case let .optimisticArchive(_, pinnedThreadIds, recentThreadIds):
-            next.pinnedThreadIds = normalizedThreadIds(pinnedThreadIds)
-            next.recentThreadIds = normalizedThreadIds(recentThreadIds)
-            rebuildBaseSectionsIfNeeded(&next)
-            rebuildSnapshotFromBase(&next)
-            evaluatesRowDifference = true
-
-        case let .optimisticRollback(_, restoredPinnedThreadIds, restoredRecentThreadIds):
-            next.pinnedThreadIds = normalizedThreadIds(restoredPinnedThreadIds)
-            next.recentThreadIds = normalizedThreadIds(restoredRecentThreadIds)
-            rebuildBaseSectionsIfNeeded(&next)
-            rebuildSnapshotFromBase(&next)
-            evaluatesRowDifference = true
-
         case let .loadingChanged(isLoading):
             next.isLoadingThreads = isLoading
             next.snapshot = HomeSnapshot(
@@ -259,7 +223,9 @@ enum HomeProjectionReducer {
         if evaluatesRowDifference {
             next.rowDifferenceEvaluationCount += 1
             let rowIds = next.snapshot.sections.allRows.map(\.id)
-            difference = next.lastRowIds == rowIds ? nil : rowIds.difference(from: next.lastRowIds)
+            difference = next.lastRowIds == rowIds
+                ? nil
+                : rowIds.difference(from: next.lastRowIds).inferringMoves()
             next.lastRowIds = rowIds
         } else {
             difference = nil

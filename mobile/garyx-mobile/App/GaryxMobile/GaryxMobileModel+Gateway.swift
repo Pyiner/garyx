@@ -103,6 +103,7 @@ extension GaryxMobileModel {
         workspaceRefreshRequestId = nil
         agentTargetsLoadPhase = .idle
         connectionState = .disconnected
+        homeThreadListStore.resetTransitions()
         threads = []
         pinnedThreadIds = []
         pendingThreadArchives = GaryxPendingThreadArchiveState()

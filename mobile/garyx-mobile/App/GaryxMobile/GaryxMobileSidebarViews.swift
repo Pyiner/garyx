@@ -145,6 +145,7 @@ private enum GaryxSidebarMetrics {
 
 struct GaryxHomeThreadListView: View, Equatable {
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let isSidebarDragActive: Bool
     let onOpenDrawer: () -> Void
     let onRefreshAll: () async -> Void
@@ -179,7 +180,7 @@ struct GaryxHomeThreadListView: View, Equatable {
             }
             .garyxAdaptiveTopBar {
                 GaryxHomeHeaderView(
-                    selectedRecentFilter: homeListStore.snapshot.selectedRecentFilter,
+                    selectedRecentFilter: homeListStore.presentationSnapshot.selectedRecentFilter,
                     onOpenDrawer: onOpenDrawer,
                     onSelectRecentFilter: onSelectRecentFilter
                 )
@@ -187,6 +188,7 @@ struct GaryxHomeThreadListView: View, Equatable {
             .task(id: homeListStore.snapshot.isHomeVisible) {
                 await runSilentSidebarRefreshLoop()
             }
+            .garyxThreadActionMenuHost(bottomInset: 88)
     }
 
     private var threadListWithBottomBar: some View {
@@ -235,61 +237,23 @@ struct GaryxHomeThreadListView: View, Equatable {
     // row.id == thread.id stays stable for correct cell reuse.
     @ViewBuilder
     private var sidebarThreadSections: some View {
-        let snapshot = homeListStore.snapshot
-        let sections = snapshot.sections
-        if !sections.pinned.isEmpty {
-            GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
-                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                .padding(.bottom, 4)
-
-            ForEach(sections.pinned) { row in
-                GaryxHomeThreadButton(
-                    row: row,
-                    onOpenThread: onOpenThread,
-                    onTogglePinnedThread: onTogglePinnedThread,
-                    onUnpinThread: onUnpinThread,
-                    onArchiveThread: onArchiveThread
-                )
-                .equatable()
-            }
-
-            spacerRow(height: 10)
-        }
-
-        GaryxSidebarSectionHeader(
-            title: "Recent",
-            systemImage: "clock.fill",
-            statusLabel: snapshot.selectedRecentFilter.activeStatusLabel
+        let snapshot = homeListStore.presentationSnapshot
+        let items = GaryxHomeThreadListLayout.primaryItems(for: snapshot)
+        let prefetchTriggerRowId = GaryxThreadListPageMerge.prefetchTriggerRowId(
+            recentIds: snapshot.sections.recent.map(\.id)
         )
-            .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-            .padding(.bottom, 4)
 
-        switch snapshot.recentPlaceholder {
-        case .loadingSkeleton(let rowCount):
-            GaryxSidebarSkeletonRows(rowCount: rowCount)
-        case .empty:
-            GaryxSidebarEmptyRow(
-                title: snapshot.selectedRecentFilter == .all
-                    ? "No recent threads"
-                    : "No recent chats"
-            )
-        case .unavailable:
-            Button {
-                Task { await onRefreshSidebarThreads() }
-            } label: {
-                GaryxSidebarEmptyRow(title: "Recent threads unavailable · Tap to retry")
-            }
-            .buttonStyle(.plain)
-        case .none:
-            // Near-tail prefetch: the row K places from the end starts the
-            // next page before the user reaches the bottom. The trigger is
-            // gated by the pager, so repeat appearances are free.
-            let prefetchTriggerRowId = GaryxThreadListPageMerge.prefetchTriggerRowId(
-                recentIds: sections.recent.map(\.id)
-            )
-            ForEach(sections.recent) { row in
+        ForEach(items) { item in
+            switch item {
+            case .pinnedHeader:
+                GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
+                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                    .padding(.bottom, 4)
+
+            case let .thread(row, region):
                 GaryxHomeThreadButton(
                     row: row,
+                    motion: homeListStore.rowMotion(threadId: row.id),
                     onOpenThread: onOpenThread,
                     onTogglePinnedThread: onTogglePinnedThread,
                     onUnpinThread: onUnpinThread,
@@ -297,12 +261,28 @@ struct GaryxHomeThreadListView: View, Equatable {
                 )
                 .equatable()
                 .onAppear {
-                    if row.id == prefetchTriggerRowId {
+                    if region == .recent, row.id == prefetchTriggerRowId {
                         Task { await onLoadMoreThreads(.nearTail) }
                     }
                 }
+
+            case .pinnedSpacer:
+                spacerRow(height: 10)
+
+            case .recentHeader:
+                GaryxSidebarSectionHeader(
+                    title: "Recent",
+                    systemImage: "clock.fill",
+                    statusLabel: snapshot.selectedRecentFilter.activeStatusLabel
+                )
+                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                    .padding(.bottom, 4)
+
+            case let .recentPlaceholder(placeholder):
+                recentPlaceholder(placeholder, selectedFilter: snapshot.selectedRecentFilter)
             }
         }
+        .animation(threadListAnimation, value: items.map(\.id))
 
         spacerRow(height: 10)
 
@@ -319,6 +299,34 @@ struct GaryxHomeThreadListView: View, Equatable {
         GaryxSidebarThreadAutoLoadFooter()
             .environment(\.garyxLoadMoreThreads, onLoadMoreThreads)
             .environment(\.garyxRetryLoadMoreThreads, onRetryLoadMoreThreads)
+    }
+
+    @ViewBuilder
+    private func recentPlaceholder(
+        _ placeholder: GaryxHomeRecentPlaceholder,
+        selectedFilter: GaryxRecentThreadFilter
+    ) -> some View {
+        switch placeholder {
+        case .loadingSkeleton(let rowCount):
+            GaryxSidebarSkeletonRows(rowCount: rowCount)
+        case .empty:
+            GaryxSidebarEmptyRow(
+                title: selectedFilter == .all ? "No recent threads" : "No recent chats"
+            )
+        case .unavailable:
+            Button {
+                Task { await onRefreshSidebarThreads() }
+            } label: {
+                GaryxSidebarEmptyRow(title: "Recent threads unavailable · Tap to retry")
+            }
+            .buttonStyle(.plain)
+        case .none:
+            EmptyView()
+        }
+    }
+
+    private var threadListAnimation: Animation? {
+        reduceMotion ? nil : .timingCurve(0.22, 1, 0.36, 1, duration: 0.28)
     }
 
     private func refreshAll() async {
@@ -346,20 +354,22 @@ struct GaryxHomeThreadListView: View, Equatable {
     }
 
     private var shouldRefreshSidebarThreads: Bool {
-        homeListStore.snapshot.isHomeVisible
+        homeListStore.presentationSnapshot.isHomeVisible
     }
 
 }
 
 private struct GaryxHomeThreadButton: View, Equatable {
     let row: GaryxHomeThreadRow
+    let motion: GaryxHomeThreadRowMotion
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onUnpinThread: (String) -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static func == (lhs: GaryxHomeThreadButton, rhs: GaryxHomeThreadButton) -> Bool {
-        lhs.row == rhs.row
+        lhs.row == rhs.row && lhs.motion == rhs.motion
     }
 
     var body: some View {
@@ -381,28 +391,53 @@ private struct GaryxHomeThreadButton: View, Equatable {
                     onOpenThread(row.thread)
                 },
                 onUnpin: {
+                    guard motion != .pinning else { return }
                     onUnpinThread(row.id)
                 }
             )
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            if row.canArchive {
-                Button(role: .destructive) {
-                    Task { await onArchiveThread(row.thread) }
-                } label: {
-                    Label("Archive thread", systemImage: "archivebox")
+            .garyxThreadActionMenu {
+                var items = [
+                    GaryxThreadActionMenuItem(
+                        title: row.presentation.isPinned ? "Unpin thread" : "Pin thread",
+                        systemImage: row.presentation.isPinned ? "pin.slash" : "pin",
+                        isEnabled: motion != .pinning
+                    ) {
+                        guard motion != .pinning else { return }
+                        onTogglePinnedThread(row.id)
+                    }
+                ]
+                if row.canArchive {
+                    items.append(
+                        GaryxThreadActionMenuItem(
+                            title: "Archive thread",
+                            systemImage: "archivebox",
+                            role: .destructive,
+                            isEnabled: motion != .pinning
+                        ) {
+                            guard motion != .pinning else { return }
+                            Task { await onArchiveThread(row.thread) }
+                        }
+                    )
                 }
+                return items
             }
-            Button {
-                onTogglePinnedThread(row.id)
-            } label: {
-                Label(
-                    row.presentation.isPinned ? "Unpin thread" : "Pin thread",
-                    systemImage: row.presentation.isPinned ? "pin.slash" : "pin"
-                )
-            }
-            .tint(Color(.systemGray))
         }
+        .frame(height: isExiting ? 0 : nil, alignment: .top)
+        .opacity(isExiting ? 0 : 1)
+        .scaleEffect(isExiting ? 0.98 : 1, anchor: .trailing)
+        .offset(x: isExiting ? 18 : 0)
+        .clipped()
+        .allowsHitTesting(!isExiting)
+        .accessibilityHidden(isExiting)
+        .animation(archiveAnimation, value: isExiting)
+    }
+
+    private var archiveAnimation: Animation? {
+        reduceMotion ? nil : .timingCurve(0.22, 1, 0.36, 1, duration: 0.2)
+    }
+
+    private var isExiting: Bool {
+        motion == .archiving || motion == .leavingFilteredList
     }
 }
 

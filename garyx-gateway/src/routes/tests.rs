@@ -736,6 +736,95 @@ async fn thread_stream_replay_render_floor_windows_event_frame() {
 }
 
 #[tokio::test]
+async fn thread_stream_frame_keeps_cross_floor_result_out_of_task_turn() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-floor-task-owner";
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some("run::render-floor-task-owner"),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "Earlier request"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "tool_use",
+                        "kind": "tool_trace",
+                        "tool_use_id": "tool-frame-boundary",
+                        "content": {"tool": "Bash", "input": {"command": "true"}}
+                    }),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "user",
+                        "content": "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-42\" status=\"in_review\">Test review</garyx_task_notification>"
+                    }),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({
+                        "role": "tool_result",
+                        "kind": "tool_trace",
+                        "tool_use_id": "tool-frame-boundary",
+                        "content": {"result": {"stdout": "done"}}
+                    }),
+                    "2026-06-18T12:00:03Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "Notification handled"}),
+                    "2026-06-18T12:00:04Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        2,
+        ThreadStreamReplayOptions::resume(3),
+        None,
+    )
+    .await;
+    assert_eq!(replay.events.len(), 1);
+    let event = replay.events[0].as_ref().unwrap();
+    assert_eq!(event.id, 5);
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    assert_eq!(
+        frame
+            .get("events")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(|event| event.get("seq").and_then(Value::as_u64))
+            .collect::<Vec<_>>(),
+        vec![3, 4, 5],
+        "event delivery still follows the SSE cursor"
+    );
+    let render_state = frame.get("render_state").unwrap();
+    assert_eq!(render_state_ref_ids(render_state), ["seq:3", "seq:5"]);
+    assert_eq!(
+        render_state.get("based_on_seq").and_then(Value::as_u64),
+        Some(5),
+        "the narrowed rows must keep the committed window tail"
+    );
+    assert_eq!(
+        render_state
+            .get("window")
+            .and_then(|window| window.get("floor_seq"))
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+}
+
+#[tokio::test]
 async fn thread_stream_replay_initial_user_turn_window_trims_and_carries_bodies() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::render-replay-initial-window";

@@ -2,9 +2,10 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxPendingThreadArchiveStateTests: XCTestCase {
-    func testPendingArchiveFiltersRefreshRowsAndThreadIds() {
+    func testInFlightArchiveKeepsRowsVisibleAndCoalescesDuplicateStart() {
         var state = GaryxPendingThreadArchiveState()
-        state.startArchive(threadId: " thread::archive-me ")
+        XCTAssertTrue(state.startArchive(threadId: " thread::archive-me "))
+        XCTAssertFalse(state.startArchive(threadId: "thread::archive-me"))
 
         XCTAssertEqual(
             state.visibleThreads([
@@ -12,7 +13,7 @@ final class GaryxPendingThreadArchiveStateTests: XCTestCase {
                 thread("thread::archive-me"),
                 thread("thread::keep-b"),
             ]).map(\.id),
-            ["thread::keep-a", "thread::keep-b"]
+            ["thread::keep-a", "thread::archive-me", "thread::keep-b"]
         )
         XCTAssertEqual(
             state.visibleThreadIds([
@@ -21,21 +22,44 @@ final class GaryxPendingThreadArchiveStateTests: XCTestCase {
                 " thread::archive-me ",
                 "thread::keep-b",
             ]),
-            ["thread::keep-a", "thread::keep-b"]
+            [
+                "thread::archive-me",
+                "thread::keep-a",
+                " thread::archive-me ",
+                "thread::keep-b",
+            ]
         )
+        XCTAssertTrue(state.isRequestInFlight(threadId: "thread::archive-me"))
+        XCTAssertFalse(state.isCommitted(threadId: "thread::archive-me"))
     }
 
-    func testResolvingArchiveAllowsRefreshRowsAgain() {
+    func testCommittedArchiveFiltersStaleRefreshRowsAndThreadIds() {
         let archived = thread("thread::archive-me")
         var state = GaryxPendingThreadArchiveState()
         state.startArchive(threadId: archived.id)
+        state.commitArchive(threadId: archived.id)
 
         XCTAssertTrue(state.contains(threadId: archived.id))
-        state.resolveArchive(threadId: archived.id)
+        XCTAssertFalse(state.isRequestInFlight(threadId: archived.id))
+        XCTAssertTrue(state.isCommitted(threadId: archived.id))
+        XCTAssertEqual(
+            state.visibleThreads([thread("thread::keep"), archived]).map(\.id),
+            ["thread::keep"]
+        )
+        XCTAssertEqual(state.visibleThreadIds([archived.id, "thread::keep"]), ["thread::keep"])
+        XCTAssertFalse(state.startArchive(threadId: archived.id))
+    }
+
+    func testCancelledArchiveLeavesRowsVisibleAndAllowsRetry() {
+        let archived = thread("thread::archive-me")
+        var state = GaryxPendingThreadArchiveState()
+        state.startArchive(threadId: archived.id)
+        state.cancelArchive(threadId: archived.id)
 
         XCTAssertFalse(state.contains(threadId: archived.id))
         XCTAssertEqual(state.visibleThreads([archived]), [archived])
         XCTAssertEqual(state.visibleThreadIds([archived.id]), [archived.id])
+        XCTAssertTrue(state.startArchive(threadId: archived.id))
     }
 
     private func thread(_ id: String) -> GaryxThreadSummary {

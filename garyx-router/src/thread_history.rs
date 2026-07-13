@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use garyx_models::{
-    RenderSnapshot, RenderWindow, TranscriptRunState, apply_transcript_record,
-    reduce_transcript_render_state, reduce_transcript_render_state_with_run_state,
-    reduce_transcript_run_state,
+    RenderSnapshot, RenderWindow, TranscriptRenderPrefixState, TranscriptRunState,
+    apply_transcript_record, apply_transcript_render_prefix_record,
+    reduce_transcript_render_prefix_state, reduce_transcript_render_state,
+    reduce_transcript_render_state_with_prefix_state, reduce_transcript_run_state,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
