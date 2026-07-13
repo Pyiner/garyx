@@ -3,14 +3,104 @@ import assert from "node:assert/strict";
 
 import {
   buildTaskRows,
+  createTaskForestPollingState,
+  evictTaskTreeSnapshots,
   isCurrentTaskTreeNode,
   resolveTaskTreeActiveCount,
+  shouldLoadTaskForest,
   shouldShowThreadTaskTreePopover,
+  taskForestPollingStateAfterSnapshot,
   taskStatusLabel,
   taskStatusTone,
   taskTreeBadgeCount,
   visibleTaskTreeTasks,
 } from "./thread-task-tree-popover-model.ts";
+
+test("an empty first live snapshot stops polling until a fresh thread state", () => {
+  const initial = createTaskForestPollingState("thread::ordinary");
+  const stopped = taskForestPollingStateAfterSnapshot(initial, {
+    threadId: "thread::ordinary",
+    nodeCount: 0,
+  });
+
+  assert.equal(stopped.stopped, true);
+  assert.equal(
+    shouldLoadTaskForest({
+      state: stopped,
+      threadId: "thread::ordinary",
+      hidden: false,
+    }),
+    false,
+  );
+  assert.equal(
+    taskForestPollingStateAfterSnapshot(stopped, {
+      threadId: "thread::ordinary",
+      nodeCount: 2,
+    }),
+    stopped,
+    "run activity cannot silently re-arm an explicitly stopped empty tree",
+  );
+
+  const reset = createTaskForestPollingState("thread::other");
+  assert.equal(reset.stopped, false, "thread switches probe once again");
+  assert.equal(reset.awaitingFirstSnapshot, true);
+});
+
+test("hidden skips and errors do not count as the first successful snapshot", () => {
+  const state = createTaskForestPollingState("thread::tree");
+  assert.equal(
+    shouldLoadTaskForest({
+      state,
+      threadId: "thread::tree",
+      hidden: true,
+    }),
+    false,
+  );
+  assert.equal(state.awaitingFirstSnapshot, true);
+  assert.equal(state.stopped, false);
+  assert.equal(
+    shouldLoadTaskForest({
+      state,
+      threadId: "thread::tree",
+      hidden: false,
+    }),
+    true,
+    "visibility restoration remains eligible after a hidden skip or error",
+  );
+});
+
+test("a nonempty first snapshot keeps polling even if a later snapshot empties", () => {
+  const initial = createTaskForestPollingState("thread::tree");
+  const active = taskForestPollingStateAfterSnapshot(initial, {
+    threadId: "thread::tree",
+    nodeCount: 2,
+  });
+  const laterEmpty = taskForestPollingStateAfterSnapshot(active, {
+    threadId: "thread::tree",
+    nodeCount: 0,
+  });
+
+  assert.equal(active.stopped, false);
+  assert.equal(active.awaitingFirstSnapshot, false);
+  assert.equal(laterEmpty, active);
+});
+
+test("snapshot eviction removes every reverse anchor for the evicted tree", () => {
+  const anchors = new Map([
+    ["thread::old-root", "tree::old"],
+    ["thread::old-child", "tree::old"],
+    ["thread::new", "tree::new"],
+  ]);
+  const snapshots = new Map([
+    ["tree::old", { nodes: [] }],
+    ["tree::new", { nodes: [] }],
+  ]);
+
+  evictTaskTreeSnapshots(anchors, snapshots, 1);
+
+  assert.deepEqual([...snapshots.keys()], ["tree::new"]);
+  assert.deepEqual([...anchors.entries()], [["thread::new", "tree::new"]]);
+});
 
 function task(overrides) {
   const number = overrides.number;

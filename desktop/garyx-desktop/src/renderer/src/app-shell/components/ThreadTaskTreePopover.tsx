@@ -25,8 +25,12 @@ import {
 import { AgentOptionAvatar } from "./AgentOptionAvatar";
 import {
   buildTaskRows,
+  createTaskForestPollingState,
+  evictTaskTreeSnapshots,
   isCurrentTaskTreeNode,
   resolveTaskTreeActiveCount,
+  shouldLoadTaskForest,
+  taskForestPollingStateAfterSnapshot,
   taskStatusLabel,
   taskStatusTone,
 } from "./thread-task-tree-popover-model";
@@ -81,13 +85,11 @@ function storeTreeSnapshot(anchorThreadId: string, snapshot: ForestSnapshot) {
   // Re-insert to keep Map iteration order as a recency list for eviction.
   treeSnapshotByKey.delete(key);
   treeSnapshotByKey.set(key, snapshot);
-  while (treeSnapshotByKey.size > MAX_CACHED_TREES) {
-    const oldest = treeSnapshotByKey.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    treeSnapshotByKey.delete(oldest);
-  }
+  evictTaskTreeSnapshots(
+    treeKeyByAnchor,
+    treeSnapshotByKey,
+    MAX_CACHED_TREES,
+  );
 }
 
 export function ThreadTaskTreePopover({
@@ -99,12 +101,15 @@ export function ThreadTaskTreePopover({
   const { t } = useI18n();
   const [snapshot, setSnapshot] = useState<ForestSnapshot>(EMPTY_SNAPSHOT);
   const [compactOpen, setCompactOpen] = useState(false);
+  const [pollingStopped, setPollingStopped] = useState(false);
   const [triggerHost, setTriggerHost] = useState<HTMLElement | null>(null);
   const compactTriggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const popoverId = useId();
   const mountedRef = useRef(true);
   const currentThreadRef = useRef<string | null>(threadId);
+  const loadInFlightThreadIdsRef = useRef(new Set<string>());
+  const pollingStateRef = useRef(createTaskForestPollingState(threadId));
 
   useEffect(() => {
     mountedRef.current = true;
@@ -171,6 +176,17 @@ export function ThreadTaskTreePopover({
       setSnapshot(EMPTY_SNAPSHOT);
       return;
     }
+    if (
+      !shouldLoadTaskForest({
+        state: pollingStateRef.current,
+        threadId,
+        hidden: document.hidden,
+      }) ||
+      loadInFlightThreadIdsRef.current.has(threadId)
+    ) {
+      return;
+    }
+    loadInFlightThreadIdsRef.current.add(threadId);
     try {
       const page = await getDesktopApi().listTaskForest({
         anchorThreadId: threadId,
@@ -185,22 +201,52 @@ export function ThreadTaskTreePopover({
       };
       storeTreeSnapshot(threadId, next);
       setSnapshot(next);
+      const nextPollingState = taskForestPollingStateAfterSnapshot(
+        pollingStateRef.current,
+        { threadId, nodeCount: next.nodes.length },
+      );
+      pollingStateRef.current = nextPollingState;
+      setPollingStopped(nextPollingState.stopped);
     } catch {
       /* leave previous state on transient errors */
+    } finally {
+      loadInFlightThreadIdsRef.current.delete(threadId);
     }
   }, [threadId]);
 
   // Thread switches restore the cached tree snapshot (no flicker, no refetch
   // gap) and revalidate it with a live fetch; unknown trees start empty.
   useEffect(() => {
-    setSnapshot(threadId ? (cachedSnapshotFor(threadId) ?? EMPTY_SNAPSHOT) : EMPTY_SNAPSHOT);
+    pollingStateRef.current = createTaskForestPollingState(threadId);
+    setPollingStopped(false);
+    setSnapshot(
+      threadId ? (cachedSnapshotFor(threadId) ?? EMPTY_SNAPSHOT) : EMPTY_SNAPSHOT,
+    );
     void load();
   }, [threadId, load]);
 
   useEffect(() => {
+    if (!threadId || pollingStopped) {
+      return;
+    }
     const interval = window.setInterval(() => void load(), REFRESH_MS);
     return () => window.clearInterval(interval);
-  }, [load]);
+  }, [load, pollingStopped, threadId]);
+
+  useEffect(() => {
+    if (!threadId || pollingStopped) {
+      return;
+    }
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void load();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [load, pollingStopped, threadId]);
 
   const rows = useMemo(() => buildTaskRows(snapshot.nodes), [snapshot.nodes]);
   const activeCount = useMemo(

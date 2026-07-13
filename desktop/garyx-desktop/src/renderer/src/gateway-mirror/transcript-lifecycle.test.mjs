@@ -1212,6 +1212,13 @@ async function replayLifecycleSequence(bindings, h) {
         type: "committed_message",
         threadId: THREAD,
         runId: "run-5",
+        seq: 20,
+        message: runStartMessage("run-5"),
+      },
+      {
+        type: "committed_message",
+        threadId: THREAD,
+        runId: "run-5",
         seq: 21,
         message: assistantMessage(2, "streamed reply"),
       },
@@ -1280,6 +1287,12 @@ test("dual-run: lifecycle matches the legacy fetch/stream lifecycle (6b-2c)", as
       ([name, value]) => name === "setError" && value === "provider exploded",
     ),
     "the terminal error must surface through setError",
+  );
+  assert.ok(
+    nextH.seamTrace.some(
+      ([name]) => name === "scheduleDesktopStateRefresh",
+    ),
+    "run-lifecycle events must retain the mutation refresh signal",
   );
 });
 

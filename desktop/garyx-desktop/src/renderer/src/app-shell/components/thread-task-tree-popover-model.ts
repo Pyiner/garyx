@@ -8,6 +8,75 @@ import type {
 
 const MAX_ROW_DEPTH = 4;
 
+export type TaskForestPollingState = {
+  awaitingFirstSnapshot: boolean;
+  stopped: boolean;
+  threadId: string | null;
+};
+
+export function createTaskForestPollingState(
+  threadId: string | null,
+): TaskForestPollingState {
+  return {
+    awaitingFirstSnapshot: Boolean(threadId),
+    stopped: false,
+    threadId,
+  };
+}
+
+export function shouldLoadTaskForest(input: {
+  hidden: boolean;
+  state: TaskForestPollingState;
+  threadId: string | null;
+}): boolean {
+  return Boolean(
+    input.threadId &&
+      input.state.threadId === input.threadId &&
+      !input.state.stopped &&
+      !input.hidden,
+  );
+}
+
+/** Only the first successful live snapshot can quiesce an empty tree. */
+export function taskForestPollingStateAfterSnapshot(
+  state: TaskForestPollingState,
+  input: { nodeCount: number; threadId: string },
+): TaskForestPollingState {
+  if (
+    state.threadId !== input.threadId ||
+    state.stopped ||
+    !state.awaitingFirstSnapshot
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    awaitingFirstSnapshot: false,
+    stopped: input.nodeCount === 0,
+  };
+}
+
+/** Keep the tree snapshot LRU and its reverse anchor index consistent. */
+export function evictTaskTreeSnapshots<T>(
+  treeKeyByAnchor: Map<string, string>,
+  treeSnapshotByKey: Map<string, T>,
+  maxCachedTrees: number,
+): void {
+  const boundedMax = Math.max(0, maxCachedTrees);
+  while (treeSnapshotByKey.size > boundedMax) {
+    const oldest = treeSnapshotByKey.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    treeSnapshotByKey.delete(oldest);
+    for (const [anchor, treeKey] of treeKeyByAnchor) {
+      if (treeKey === oldest) {
+        treeKeyByAnchor.delete(anchor);
+      }
+    }
+  }
+}
+
 export type TaskTreeRow =
   | { kind: "task"; task: DesktopTaskForestTaskNode; depth: number }
   | { kind: "thread"; thread: DesktopTaskForestThreadNode; depth: number };

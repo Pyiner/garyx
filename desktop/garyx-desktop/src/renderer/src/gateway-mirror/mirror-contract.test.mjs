@@ -61,6 +61,114 @@ function caseWithRecords() {
   return found;
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function desktopStateServices(states) {
+  let stateCalls = 0;
+  let agentCalls = 0;
+  return {
+    services: {
+      getState() {
+        const next = states[stateCalls];
+        stateCalls += 1;
+        assert.ok(next, `unexpected desktop-state request ${stateCalls}`);
+        return next.promise;
+      },
+      listCustomAgents() {
+        agentCalls += 1;
+        return Promise.resolve([]);
+      },
+      getThreadHistory() {
+        return Promise.reject(new Error("unused in desktop-state test"));
+      },
+    },
+    counts() {
+      return { stateCalls, agentCalls };
+    },
+  };
+}
+
+async function flushPromises() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+test("desktop state refresh is single-flight with one shared trailing round", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  t.after(() => t.mock.timers.reset());
+  const states = [deferred(), deferred()];
+  const harness = desktopStateServices(states);
+  const mirror = new GatewayMirror(harness.services);
+  let rootNotifications = 0;
+  let catalogNotifications = 0;
+  mirror.subscribeRoot(() => (rootNotifications += 1));
+  mirror.subscribeCatalog(() => (catalogNotifications += 1));
+
+  const first = mirror.refreshDesktopState();
+  const joined = mirror.refreshDesktopState();
+  const joinedAgain = mirror.refreshDesktopState();
+  assert.equal(joined, first, "in-flight callers must share exact Promise");
+  assert.equal(joinedAgain, first, "an in-flight burst stays single-flight");
+  await flushPromises();
+  assert.deepEqual(harness.counts(), { stateCalls: 1, agentCalls: 1 });
+
+  const firstState = { marker: "first" };
+  states[0].resolve(firstState);
+  assert.equal(await first, firstState);
+
+  const trailingA = mirror.refreshDesktopState();
+  const trailingB = mirror.refreshDesktopState();
+  assert.equal(
+    trailingB,
+    trailingA,
+    "callers waiting on the tail must share exact Promise",
+  );
+  assert.notEqual(trailingA, first);
+  t.mock.timers.tick(349);
+  await flushPromises();
+  assert.deepEqual(harness.counts(), { stateCalls: 1, agentCalls: 1 });
+
+  t.mock.timers.tick(1);
+  await flushPromises();
+  assert.deepEqual(harness.counts(), { stateCalls: 2, agentCalls: 2 });
+  const trailingState = { marker: "trailing" };
+  states[1].resolve(trailingState);
+  assert.equal(await trailingA, trailingState);
+  assert.equal(mirror.getRootSnapshot().desktopState, trailingState);
+  assert.equal(rootNotifications, 2, "both landed rounds notify root bridges");
+  assert.equal(
+    catalogNotifications,
+    2,
+    "both landed rounds notify catalog bridges",
+  );
+});
+
+test("failed desktop state refresh releases the single-flight slot", async () => {
+  const states = [deferred(), deferred()];
+  const harness = desktopStateServices(states);
+  const mirror = new GatewayMirror(harness.services);
+
+  const failed = mirror.refreshDesktopState();
+  await flushPromises();
+  states[0].reject(new Error("temporary gateway failure"));
+  await assert.rejects(failed, /temporary gateway failure/);
+
+  const retry = mirror.refreshDesktopState();
+  assert.notEqual(retry, failed);
+  await flushPromises();
+  assert.deepEqual(harness.counts(), { stateCalls: 2, agentCalls: 2 });
+  states[1].resolve({ marker: "recovered" });
+  await retry;
+});
+
 test("getThreadSnapshot returns a stable reference until a change applies", () => {
   const mirror = new GatewayMirror();
   const threadId = "thread::contract-stability";

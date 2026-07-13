@@ -14,13 +14,13 @@ import {
   type MessageMachineState,
 } from "../message-machine";
 import type { ToastTone } from "../toast";
+import { desktopStateRefreshDecision } from "./desktop-state-refresh-policy";
 import { isTransientGatewayErrorMessage } from "./gateway-errors";
 import type { LiveStreamState } from "./types";
 
 const GATEWAY_HEALTHY_POLL_MS = 12000;
 const SILENT_DESKTOP_STATE_REFRESH_MS = 60000;
 const RUN_STATE_LIST_REFRESH_DEBOUNCE_MS = 350;
-const GATEWAY_READY_STATE_REFRESH_THROTTLE_MS = 12000;
 const GATEWAY_RETRY_BACKOFF_MS = [2500, 4000, 6500, 10000, 15000];
 
 function normalizeGatewayUrlForMatch(value: string): string {
@@ -36,6 +36,16 @@ function isConnectionValidForSettings(
     return false;
   }
   return normalizeGatewayUrlForMatch(status.gatewayUrl) === savedGatewayUrl;
+}
+
+function agentCatalogReferencesEqual(
+  current: readonly DesktopCustomAgent[],
+  next: readonly DesktopCustomAgent[],
+): boolean {
+  return (
+    current.length === next.length &&
+    current.every((agent, index) => agent === next[index])
+  );
 }
 
 type UseGatewayConnectionControllerArgs = {
@@ -106,7 +116,42 @@ export function useGatewayConnectionController({
   const gatewaySetupSavedConnectionRef = useRef<ConnectionStatus | null>(null);
   const previousConnectionOkRef = useRef<boolean | null>(null);
   const desktopStateRefreshTimeoutRef = useRef<number | null>(null);
-  const lastGatewayReadyStateRefreshAtRef = useRef(0);
+  const desktopStateRefreshRequiresVisibleRef = useRef(false);
+
+  // Most AppShell root consumers still read legacy React state. Mirror-owned
+  // trailing refreshes have no direct hook caller to copy their result, so
+  // keep those bridge states subscribed until the root/catalog migration is
+  // complete.
+  useEffect(
+    () =>
+      mirror.subscribeRoot(() => {
+        const nextState = mirror.getRootSnapshot().desktopState;
+        if (!nextState) {
+          return;
+        }
+        startTransition(() => {
+          setDesktopState((current) =>
+            current === nextState ? current : nextState,
+          );
+        });
+      }),
+    [mirror, setDesktopState],
+  );
+
+  useEffect(
+    () =>
+      mirror.subscribeCatalog(() => {
+        const nextAgents = mirror.getCatalogSnapshot().agents;
+        startTransition(() => {
+          setDesktopAgents((current) =>
+            agentCatalogReferencesEqual(current, nextAgents)
+              ? current
+              : [...nextAgents],
+          );
+        });
+      }),
+    [mirror, setDesktopAgents],
+  );
 
   useEffect(() => {
     if (!error) {
@@ -328,33 +373,38 @@ export function useGatewayConnectionController({
     const catalog = mirror.getCatalogSnapshot();
     startTransition(() => {
       setDesktopState(nextState);
-      setDesktopAgents([...catalog.agents]);
+      setDesktopAgents((current) =>
+        agentCatalogReferencesEqual(current, catalog.agents)
+          ? current
+          : [...catalog.agents],
+      );
     });
     return nextState;
   }
 
-  function scheduleDesktopStateRefresh(delayMs = RUN_STATE_LIST_REFRESH_DEBOUNCE_MS) {
+  function scheduleDesktopStateRefresh(
+    delayMs = RUN_STATE_LIST_REFRESH_DEBOUNCE_MS,
+    options?: { requiresVisible?: boolean },
+  ) {
+    const requiresVisible = options?.requiresVisible === true;
     if (desktopStateRefreshTimeoutRef.current !== null) {
       window.clearTimeout(desktopStateRefreshTimeoutRef.current);
+      desktopStateRefreshRequiresVisibleRef.current =
+        desktopStateRefreshRequiresVisibleRef.current && requiresVisible;
+    } else {
+      desktopStateRefreshRequiresVisibleRef.current = requiresVisible;
     }
     desktopStateRefreshTimeoutRef.current = window.setTimeout(() => {
       desktopStateRefreshTimeoutRef.current = null;
+      const skipWhileHidden = desktopStateRefreshRequiresVisibleRef.current;
+      desktopStateRefreshRequiresVisibleRef.current = false;
+      if (skipWhileHidden && document.hidden) {
+        return;
+      }
       void refreshDesktopState().catch((refreshError) => {
         console.debug("Desktop state refresh failed.", refreshError);
       });
     }, delayMs);
-  }
-
-  function scheduleGatewayReadyStateRefresh() {
-    const now = Date.now();
-    if (
-      now - lastGatewayReadyStateRefreshAtRef.current <
-      GATEWAY_READY_STATE_REFRESH_THROTTLE_MS
-    ) {
-      return;
-    }
-    lastGatewayReadyStateRefreshAtRef.current = now;
-    scheduleDesktopStateRefresh(0);
   }
 
   useEffect(() => {
@@ -363,6 +413,7 @@ export function useGatewayConnectionController({
         window.clearTimeout(desktopStateRefreshTimeoutRef.current);
         desktopStateRefreshTimeoutRef.current = null;
       }
+      desktopStateRefreshRequiresVisibleRef.current = false;
     };
   }, []);
 
@@ -396,7 +447,6 @@ export function useGatewayConnectionController({
         }
         if (nextOk) {
           gatewayRetryStepRef.current = 0;
-          scheduleGatewayReadyStateRefresh();
         } else {
           gatewayRetryStepRef.current = Math.min(
             gatewayRetryStepRef.current + 1,
@@ -430,46 +480,46 @@ export function useGatewayConnectionController({
       return;
     }
 
-    let cancelled = false;
-    let refreshing = false;
-
-    const refreshSilently = async () => {
-      if (cancelled || document.hidden || refreshing) {
-        return;
-      }
-
-      refreshing = true;
-      try {
-        await refreshDesktopState();
-      } catch (refreshError) {
-        console.debug("Silent desktop state refresh failed.", refreshError);
-      } finally {
-        refreshing = false;
+    const schedulePeriodicRefresh = () => {
+      const decision = desktopStateRefreshDecision({
+        kind: "periodic",
+        hidden: document.hidden,
+      });
+      if (decision.desktopRefresh === "debounced") {
+        scheduleDesktopStateRefresh(undefined, {
+          requiresVisible: decision.requiresVisible,
+        });
       }
     };
 
     const timer = window.setInterval(() => {
-      void refreshSilently();
+      schedulePeriodicRefresh();
     }, SILENT_DESKTOP_STATE_REFRESH_MS);
 
     const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        void refreshSilently();
-        // Defensive: the persistent main-process stream may have silently died
-        // while hidden; re-fetch the open thread's canonical transcript so it
-        // converges to the server's latest state on return, instead of relying
-        // solely on the connection never stopping (#TASK-1449 symptom 2).
-        const openThreadId = selectedThreadIdRef.current;
-        if (openThreadId) {
-          scheduleHistoryRefresh(openThreadId, 1, 0, true);
-        }
+      const openThreadId = selectedThreadIdRef.current;
+      const decision = desktopStateRefreshDecision({
+        kind: "visibility",
+        hidden: document.hidden,
+        hasSelectedThread: Boolean(openThreadId),
+      });
+      if (decision.desktopRefresh === "debounced") {
+        scheduleDesktopStateRefresh(0, {
+          requiresVisible: decision.requiresVisible,
+        });
+      }
+      // Defensive: the persistent main-process stream may have silently died
+      // while hidden; re-fetch the open thread's canonical transcript so it
+      // converges to the server's latest state on return, instead of relying
+      // solely on the connection never stopping (#TASK-1449 symptom 2).
+      if (decision.refreshSelectedThreadHistory && openThreadId) {
+        scheduleHistoryRefresh(openThreadId, 1, 0, true);
       }
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      cancelled = true;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
@@ -477,8 +527,14 @@ export function useGatewayConnectionController({
 
   useEffect(() => {
     const previousOk = previousConnectionOkRef.current;
-    previousConnectionOkRef.current = connection?.ok ?? null;
-    if (!connection?.ok || previousOk !== false) {
+    const nextOk = connection?.ok ?? null;
+    previousConnectionOkRef.current = nextOk;
+    const decision = desktopStateRefreshDecision({
+      kind: "connection",
+      previousOk,
+      nextOk,
+    });
+    if (decision.desktopRefresh !== "immediate") {
       return;
     }
 

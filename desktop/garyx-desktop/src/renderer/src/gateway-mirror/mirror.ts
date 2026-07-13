@@ -56,6 +56,8 @@ import type { ThreadHistoryPaginationState } from "./transcript-materialize.ts";
 
 export type Unsubscribe = () => void;
 
+const DESKTOP_STATE_REFRESH_TRAILING_MS = 350;
+
 function connectionEquals(
   a: ConnectionStatus | null,
   b: ConnectionStatus | null,
@@ -203,6 +205,9 @@ export class GatewayMirror {
   private rootVersion = 0;
   private rootSnapshot: GatewayRootSnapshot | null = null;
   private rootListeners = new Set<() => void>();
+  private desktopStateRefreshInFlight: Promise<DesktopState> | null = null;
+  private desktopStateRefreshTailRequested = false;
+  private desktopStateRefreshTrailing: Promise<DesktopState> | null = null;
 
   // Catalog domain: agents.
   private agents: readonly DesktopCustomAgent[] = [];
@@ -298,19 +303,96 @@ export class GatewayMirror {
    * The catalog fetch is best-effort. Updates root/catalog snapshots atomically
    * per domain and returns the fresh DesktopState for callers that need it.
    */
-  async refreshDesktopState(): Promise<DesktopState> {
+  refreshDesktopState(): Promise<DesktopState> {
     if (!this.services) {
-      throw new Error("GatewayMirror constructed without services");
+      return Promise.reject(
+        new Error("GatewayMirror constructed without services"),
+      );
     }
-    const [nextState, nextAgents] = await Promise.all([
-      this.services.getState(),
-      this.services.listCustomAgents().catch(() => [] as DesktopCustomAgent[]),
-    ]);
-    this.desktopState = nextState;
-    this.bumpRoot();
-    this.agents = nextAgents;
-    this.bumpCatalog();
-    return nextState;
+    if (this.desktopStateRefreshInFlight) {
+      this.desktopStateRefreshTailRequested = true;
+      return this.desktopStateRefreshInFlight;
+    }
+    if (this.desktopStateRefreshTrailing) {
+      return this.desktopStateRefreshTrailing;
+    }
+    return this.startDesktopStateRefresh();
+  }
+
+  private executeDesktopStateRefresh(): Promise<DesktopState> {
+    const services = this.services;
+    if (!services) {
+      return Promise.reject(
+        new Error("GatewayMirror constructed without services"),
+      );
+    }
+    return Promise.all([
+      Promise.resolve().then(() => services.getState()),
+      Promise.resolve()
+        .then(() => services.listCustomAgents())
+        .catch(() => [] as DesktopCustomAgent[]),
+    ]).then(([nextState, nextAgents]) => {
+      this.desktopState = nextState;
+      this.bumpRoot();
+      this.agents = nextAgents;
+      this.bumpCatalog();
+      return nextState;
+    });
+  }
+
+  private startDesktopStateRefresh(): Promise<DesktopState> {
+    const refresh = this.executeDesktopStateRefresh();
+    this.desktopStateRefreshInFlight = refresh;
+    this.observeDesktopStateRefreshSettlement(refresh);
+    return refresh;
+  }
+
+  private observeDesktopStateRefreshSettlement(
+    refresh: Promise<DesktopState>,
+  ): void {
+    void refresh.then(
+      () => this.settleDesktopStateRefresh(refresh),
+      () => this.settleDesktopStateRefresh(refresh),
+    );
+  }
+
+  private settleDesktopStateRefresh(refresh: Promise<DesktopState>): void {
+    if (this.desktopStateRefreshInFlight !== refresh) {
+      return;
+    }
+    this.desktopStateRefreshInFlight = null;
+    if (!this.desktopStateRefreshTailRequested) {
+      return;
+    }
+    this.desktopStateRefreshTailRequested = false;
+    this.scheduleTrailingDesktopStateRefresh();
+  }
+
+  private scheduleTrailingDesktopStateRefresh(): Promise<DesktopState> {
+    if (this.desktopStateRefreshTrailing) {
+      return this.desktopStateRefreshTrailing;
+    }
+
+    let resolveTrailing: (state: DesktopState) => void = () => undefined;
+    let rejectTrailing: (reason?: unknown) => void = () => undefined;
+    const trailing = new Promise<DesktopState>((resolve, reject) => {
+      resolveTrailing = resolve;
+      rejectTrailing = reject;
+    });
+    this.desktopStateRefreshTrailing = trailing;
+    // A trailing refresh can be scheduled only because callers joined the
+    // prior flight, so nobody necessarily awaits this second round.
+    void trailing.catch(() => undefined);
+    globalThis.setTimeout(() => {
+      if (this.desktopStateRefreshTrailing !== trailing) {
+        return;
+      }
+      this.desktopStateRefreshTrailing = null;
+      this.desktopStateRefreshInFlight = trailing;
+      this.executeDesktopStateRefresh().then(resolveTrailing, rejectTrailing);
+    }, DESKTOP_STATE_REFRESH_TRAILING_MS);
+    this.observeDesktopStateRefreshSettlement(trailing);
+    return trailing;
   }
 
   private bumpRoot(): void {
