@@ -85,6 +85,7 @@ mod self_update;
 mod shared;
 mod shortcuts;
 mod task;
+mod task_quota;
 #[cfg(test)]
 mod test_support;
 mod thread;
@@ -108,6 +109,7 @@ pub(crate) use self_update::*;
 use shared::*;
 pub(crate) use shortcuts::*;
 pub(crate) use task::*;
+pub(crate) use task_quota::TaskCreateQuotaExhausted;
 pub(crate) use thread::*;
 pub(crate) use tool::*;
 

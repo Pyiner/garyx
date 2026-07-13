@@ -235,10 +235,13 @@ async fn main() -> std::process::ExitCode {
 /// found, 5 concurrent-modification conflict. Clap keeps its own exit 2 for
 /// usage errors.
 fn report_cli_failure(error: &(dyn std::error::Error + 'static)) -> std::process::ExitCode {
-    let kind = error
+    let gateway_kind = error
         .downcast_ref::<commands::GatewayCliError>()
         .map(|gateway_error| gateway_error.kind);
-    let exit_code = match kind {
+    let quota_kind = error
+        .downcast_ref::<commands::TaskCreateQuotaExhausted>()
+        .map(commands::TaskCreateQuotaExhausted::error_kind);
+    let exit_code = match gateway_kind {
         Some(commands::GatewayErrorKind::Unreachable) => 3,
         Some(commands::GatewayErrorKind::NotFound) => 4,
         Some(commands::GatewayErrorKind::Conflict) => 5,
@@ -248,7 +251,9 @@ fn report_cli_failure(error: &(dyn std::error::Error + 'static)) -> std::process
         let envelope = serde_json::json!({
             "ok": false,
             "error": {
-                "kind": kind.map_or("error", |kind| kind.slug()),
+                "kind": quota_kind
+                    .or_else(|| gateway_kind.map(commands::GatewayErrorKind::slug))
+                    .unwrap_or("error"),
                 "message": error.to_string(),
             },
         });

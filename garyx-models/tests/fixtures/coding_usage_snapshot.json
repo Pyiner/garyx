@@ -1,0 +1,51 @@
+{
+  "providers": [
+    {
+      "id": "claude_code",
+      "name": "Claude Code",
+      "available": true,
+      "weekly": {
+        "used_percent": 40.0,
+        "remaining_percent": 60.0,
+        "resets_at": "2030-01-08T12:00:00Z",
+        "reset_after_seconds": 604800
+      },
+      "session": {
+        "used_percent": 20.0,
+        "remaining_percent": 80.0,
+        "resets_at": "2030-01-01T17:00:00Z",
+        "reset_after_seconds": 18000
+      }
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "available": true,
+      "stale": false,
+      "weekly": {
+        "used_percent": 25.0,
+        "remaining_percent": 75.0,
+        "resets_at": "2030-01-08T12:00:00Z",
+        "reset_after_seconds": 604800
+      }
+    },
+    {
+      "id": "antigravity",
+      "name": "Antigravity",
+      "available": true,
+      "models": [
+        {
+          "id": "test-model",
+          "name": "Test Model",
+          "remaining_fraction": 0.5,
+          "remaining_percent": 50.0,
+          "used_percent": 50.0,
+          "resets_at": "2030-01-02T12:00:00Z",
+          "reset_after_seconds": 86400,
+          "description": "Synthetic fixture"
+        }
+      ]
+    }
+  ],
+  "refreshed_at": "2030-01-01T12:00:00Z"
+}
