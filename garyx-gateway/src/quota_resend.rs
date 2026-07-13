@@ -6,7 +6,9 @@
 //! authoritative reset time (sourced from Codex's own
 //! `account/rateLimits/updated` snapshot). This reactor watches the committed
 //! event stream and, the moment such a record appears, schedules a one-shot
-//! resend of the thread's original user message for when the window recovers.
+//! `continue` followup for when the window recovers — the exact prompt the
+//! rate-limit banner's manual Continue button sends, so the auto and manual
+//! recovery paths stay behaviorally identical.
 //!
 //! Scheduling reuses the file-backed `InternalDispatch` cron primitive so a
 //! pending resend survives a gateway restart and is retried on transient
@@ -29,6 +31,13 @@ use crate::server::AppState;
 /// Fire the resend one minute after the reported reset so the provider window
 /// has actually rolled over by the time we resubmit.
 const RESEND_BUFFER_SECS: i64 = 60;
+
+/// The literal prompt dispatched when the quota window recovers. Matches the
+/// rate-limit banner's manual Continue button, which sends the same literal
+/// `continue` through the regular send pipeline; the followup metadata block
+/// prepended by the cron dispatch path carries the "why" (the auto-resend
+/// reason), so the prompt itself stays minimal.
+const RESEND_PROMPT: &str = "continue";
 
 /// How many recent events to replay after a broadcast lag, to recover any
 /// `rate_limited` record that was dropped from the subscriber buffer. Matches
@@ -158,35 +167,6 @@ async fn schedule_resend(state: &Arc<AppState>, plan: ResendPlan) {
         return;
     };
 
-    let prompt = match state
-        .threads
-        .history
-        .latest_message_text_for_role(&plan.thread_id, "user")
-        .await
-    {
-        // Strip any leading cron `<garyx_followup_metadata>` block so resending
-        // an already-auto-resent message recovers the user's original text
-        // instead of nesting metadata on every repeated quota hit.
-        Ok(Some(text)) if !strip_followup_metadata(&text).trim().is_empty() => {
-            strip_followup_metadata(&text)
-        }
-        Ok(_) => {
-            warn!(
-                thread_id = %plan.thread_id,
-                "quota auto-resend skipped: no user message to resend"
-            );
-            return;
-        }
-        Err(error) => {
-            warn!(
-                thread_id = %plan.thread_id,
-                error = %error,
-                "quota auto-resend skipped: could not read original user message"
-            );
-            return;
-        }
-    };
-
     let now = Utc::now();
     let earliest = now + Duration::seconds(RESEND_BUFFER_SECS);
     let fire_at = (plan.reset_at + Duration::seconds(RESEND_BUFFER_SECS)).max(earliest);
@@ -207,7 +187,7 @@ async fn schedule_resend(state: &Arc<AppState>, plan: ResendPlan) {
         id: resend_job_id(&plan.thread_id),
         kind: CronJobKind::InternalDispatch {
             payload: InternalDispatchJobPayload {
-                prompt,
+                prompt: RESEND_PROMPT.to_owned(),
                 reason: Some(reason),
                 originating_run_id: Some(plan.run_id.clone()),
                 scheduled_at: now,
@@ -268,24 +248,6 @@ fn non_empty(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-/// Strip a leading `<garyx_followup_metadata>...</garyx_followup_metadata>`
-/// block (prepended by the cron `InternalDispatch` path) so a resend of an
-/// already-resent message recovers the user's original text. Idempotent: a
-/// message that was never wrapped is returned unchanged, and because we strip
-/// before re-scheduling, the wrapper never accumulates past depth one.
-fn strip_followup_metadata(text: &str) -> String {
-    const OPEN: &str = "<garyx_followup_metadata>";
-    const CLOSE: &str = "</garyx_followup_metadata>";
-    let trimmed = text.trim_start();
-    if trimmed.starts_with(OPEN) {
-        if let Some(close) = trimmed.find(CLOSE) {
-            let rest = &trimmed[close + CLOSE.len()..];
-            return rest.trim_start_matches(['\n', '\r', ' ', '\t']).to_string();
-        }
-    }
-    text.to_string()
 }
 
 #[cfg(test)]
@@ -368,18 +330,50 @@ mod tests {
         );
     }
 
-    #[test]
-    fn strip_followup_metadata_recovers_original_and_is_idempotent() {
-        let wrapped = "<garyx_followup_metadata>\nschedule_id: x\nreason: codex auto-resend\n</garyx_followup_metadata>\n\nFix the failing test.";
-        assert_eq!(strip_followup_metadata(wrapped), "Fix the failing test.");
-        // A plain message is returned unchanged.
-        assert_eq!(
-            strip_followup_metadata("Fix the failing test."),
-            "Fix the failing test."
+    /// The scheduled followup dispatches the literal `continue` prompt — the
+    /// same prompt the rate-limit banner's manual Continue button sends — and
+    /// never a copy of the thread's prior user message.
+    #[tokio::test]
+    async fn schedules_literal_continue_followup() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cron = Arc::new(crate::cron::CronService::new(tmp.path().to_path_buf()));
+        let state = crate::composition::app_bootstrap::AppStateBuilder::new(
+            garyx_models::config::GaryxConfig::default(),
+        )
+        .with_cron_service(cron.clone())
+        .build();
+
+        schedule_resend(
+            &state,
+            ResendPlan {
+                thread_id: "thread::abc".to_owned(),
+                run_id: "run::xyz".to_owned(),
+                provider: "claude".to_owned(),
+                window: Some("weekly".to_owned()),
+                reset_at: Utc::now() + Duration::seconds(300),
+            },
+        )
+        .await;
+
+        let job = cron
+            .get("quota-resend:thread__abc")
+            .await
+            .expect("resend job scheduled");
+        let CronJobKind::InternalDispatch { payload } = &job.kind else {
+            panic!("expected internal-dispatch job, got {:?}", job.kind);
+        };
+        assert_eq!(payload.prompt, "continue");
+        assert_eq!(payload.originating_run_id.as_deref(), Some("run::xyz"));
+        assert!(
+            payload
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("claude usage-limit auto-resend"),
+            "reason should carry the auto-resend context: {:?}",
+            payload.reason
         );
-        // Stripping is depth-one stable: re-stripping the result is a no-op, so
-        // wrapping never accumulates across repeated resends.
-        let once = strip_followup_metadata(wrapped);
-        assert_eq!(strip_followup_metadata(&once), once);
+        assert_eq!(job.thread_id.as_deref(), Some("thread::abc"));
+        assert!(job.delete_after_run);
     }
 }
