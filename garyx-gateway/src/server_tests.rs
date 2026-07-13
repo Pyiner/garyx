@@ -823,10 +823,14 @@ async fn test_detach_channel_endpoint_clears_endpoint_runtime_routing() {
 
     {
         let mut router = state.threads.router.lock().await;
-        router
-            .message_routing_index_mut()
-            .rebuild_from_store(&state.threads.thread_store, "telegram")
-            .await;
+        router.record_outbound_message_for_chat(
+            "thread::bound",
+            "telegram",
+            "main",
+            "alice",
+            None,
+            "msg-alice-1",
+        );
         router.set_last_delivery(
             "thread::bound",
             garyx_models::routing::DeliveryContext {
@@ -938,11 +942,35 @@ async fn test_detach_channel_endpoint_preserves_other_topic_routing_in_same_chat
 
     {
         let mut router = state.threads.router.lock().await;
-        router
-            .message_routing_index_mut()
-            .rebuild_from_store(&state.threads.thread_store, "telegram")
-            .await;
-        router.rebuild_last_delivery_cache().await;
+        router.record_outbound_message_for_chat(
+            "thread::bound",
+            "telegram",
+            "main",
+            "42",
+            Some("42_t100"),
+            "msg-topic-100",
+        );
+        router.record_outbound_message_for_chat(
+            "thread::bound",
+            "telegram",
+            "main",
+            "42",
+            Some("42_t200"),
+            "msg-topic-200",
+        );
+        router.set_last_delivery(
+            "thread::bound",
+            garyx_models::routing::DeliveryContext {
+                channel: "telegram".to_owned(),
+                account_id: "main".to_owned(),
+                chat_id: "42".to_owned(),
+                user_id: "alice".to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: "42".to_owned(),
+                thread_id: Some("42_t200".to_owned()),
+                metadata: Default::default(),
+            },
+        );
         assert_eq!(
             router.resolve_reply_thread_for_chat(
                 "telegram",
@@ -1083,11 +1111,35 @@ async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat
 
     {
         let mut router = state.threads.router.lock().await;
-        router
-            .message_routing_index_mut()
-            .rebuild_from_store(&state.threads.thread_store, "telegram")
-            .await;
-        router.rebuild_last_delivery_cache().await;
+        router.record_outbound_message_for_chat(
+            "thread::bound",
+            "telegram",
+            "main",
+            "42",
+            None,
+            "msg-primary",
+        );
+        router.record_outbound_message_for_chat(
+            "thread::bound",
+            "telegram",
+            "main",
+            "42",
+            Some("42_t100"),
+            "msg-topic-100",
+        );
+        router.set_last_delivery(
+            "thread::bound",
+            garyx_models::routing::DeliveryContext {
+                channel: "telegram".to_owned(),
+                account_id: "main".to_owned(),
+                chat_id: "42".to_owned(),
+                user_id: "alice".to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: "42".to_owned(),
+                thread_id: None,
+                metadata: Default::default(),
+            },
+        );
         assert_eq!(
             router.resolve_reply_thread_for_chat(
                 "telegram",

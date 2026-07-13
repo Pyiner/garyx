@@ -3740,67 +3740,6 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_feishu_reply_routing_after_router_restart() {
-        let (_server, client) = setup_feishu_mock().await;
-        let provider = Arc::new(ConfigurableTestProvider::echo());
-        let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
-        let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = make_router_with_store(store.clone());
-        let account = make_default_account();
-
-        let event1 = FeishuEventBuilder::dm("ou_user123", "first msg")
-            .with_message_id("om_test_msg_restart_001")
-            .build();
-        dispatch_im_message_event(
-            "app1",
-            &event1,
-            &router,
-            &bridge,
-            &client,
-            &account,
-            "",
-            &account.app_id,
-        )
-        .await;
-        wait_for_provider_calls(provider.as_ref(), 1).await;
-        let first_thread = {
-            let calls = provider.calls.lock().unwrap();
-            calls[0].thread_id.clone()
-        };
-        wait_for_thread_delivery_persistence(&store, &first_thread).await;
-
-        // Simulate router restart: rebuild reply index and delivery cache from persisted store.
-        let restarted_router = make_router_with_store(store.clone());
-        {
-            let mut guard = restarted_router.lock().await;
-            assert_eq!(guard.rebuild_routing_index("feishu").await, 1);
-            assert!(guard.rebuild_last_delivery_cache().await >= 1);
-        }
-
-        let event2 = FeishuEventBuilder::dm("ou_user123", "follow up after restart")
-            .with_message_id("om_test_msg_restart_002")
-            .with_parent_id("om_mock_reply_dm")
-            .build();
-        dispatch_im_message_event(
-            "app1",
-            &event2,
-            &restarted_router,
-            &bridge,
-            &client,
-            &account,
-            "",
-            &account.app_id,
-        )
-        .await;
-        wait_for_provider_calls(provider.as_ref(), 2).await;
-
-        assert_eq!(provider.call_count.load(Ordering::Relaxed), 2);
-        let calls = provider.calls.lock().unwrap();
-        assert!(calls[0].thread_id.starts_with("thread::"));
-        assert_eq!(calls[0].thread_id, calls[1].thread_id);
-    }
-
-    #[tokio::test]
     async fn test_e2e_feishu_addressed_recent_pages_bind_exact_external_thread() {
         let (server, client) = setup_feishu_mock().await;
         let provider = Arc::new(ConfigurableTestProvider::echo());

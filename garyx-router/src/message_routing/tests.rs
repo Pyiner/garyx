@@ -1,6 +1,4 @@
 use super::*;
-use crate::memory_store::InMemoryThreadStore;
-use serde_json::json;
 
 #[test]
 fn test_record_and_lookup() {
@@ -157,75 +155,5 @@ fn test_clear_thread_chat_for_topic_preserves_primary_routes() {
             "topic-1",
         ),
         None
-    );
-}
-
-#[tokio::test]
-async fn test_rebuild_from_store() {
-    let store: std::sync::Arc<dyn crate::ThreadStore> =
-        std::sync::Arc::new(InMemoryThreadStore::new());
-    store
-        .set(
-            "s1",
-            json!({
-                "outbound_message_ids": [
-                    {"channel": "telegram", "account_id": "bot1", "message_id": "100"},
-                    {"channel": "telegram", "account_id": "bot1", "message_id": "101"},
-                ]
-            }),
-        )
-        .await
-        .unwrap();
-
-    let mut idx = MessageRoutingIndex::new();
-    let count = idx.rebuild_from_store(&store, "telegram").await;
-    assert_eq!(count, 2);
-    assert_eq!(
-        idx.lookup_thread_for_chat("telegram", "bot1", Some(""), None, "100"),
-        Some("s1")
-    );
-    assert_eq!(
-        idx.lookup_thread_for_chat("telegram", "bot1", Some(""), None, "101"),
-        Some("s1")
-    );
-}
-
-#[tokio::test]
-async fn test_rebuild_from_store_restores_chat_scoped_routing() {
-    let store: std::sync::Arc<dyn crate::ThreadStore> =
-        std::sync::Arc::new(InMemoryThreadStore::new());
-    store
-        .set(
-            "s1",
-            json!({
-                "outbound_message_ids": [
-                    {"channel": "telegram", "account_id": "bot1", "chat_id": "chat-1", "message_id": "42"}
-                ]
-            }),
-        )
-        .await
-        .unwrap();
-    store
-        .set(
-            "s2",
-            json!({
-                "outbound_message_ids": [
-                    {"channel": "telegram", "account_id": "bot1", "chat_id": "chat-2", "message_id": "42"}
-                ]
-            }),
-        )
-        .await
-        .unwrap();
-
-    let mut idx = MessageRoutingIndex::new();
-    let count = idx.rebuild_from_store(&store, "telegram").await;
-    assert_eq!(count, 2);
-    assert_eq!(
-        idx.lookup_thread_for_chat("telegram", "bot1", Some("chat-1"), None, "42"),
-        Some("s1")
-    );
-    assert_eq!(
-        idx.lookup_thread_for_chat("telegram", "bot1", Some("chat-2"), None, "42"),
-        Some("s2")
     );
 }

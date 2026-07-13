@@ -273,14 +273,6 @@ impl MessageRouter {
         self.threads.set_logged(thread_id, thread_data).await;
     }
 
-    /// Rebuild the message routing index from the thread store.
-    pub async fn rebuild_routing_index(&mut self, channel: &str) -> usize {
-        self.reply_routing
-            .message_routing_index
-            .rebuild_from_store(&self.threads, channel)
-            .await
-    }
-
     /// Get a reference to the message routing index.
     pub fn message_routing_index(&self) -> &MessageRoutingIndex {
         &self.reply_routing.message_routing_index

@@ -1,9 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
-use tracing::{debug, info, warn};
-
-use crate::store::ThreadStore;
+use tracing::{debug, info};
 
 /// Record of an outbound message used for reply routing.
 #[derive(Debug, Clone)]
@@ -228,39 +225,6 @@ impl MessageRoutingIndex {
         self.index.clear();
         self.reverse_index.clear();
         info!("Cleared all message routing entries");
-    }
-
-    /// Rebuild index from the outbound-route projection.
-    pub async fn rebuild_from_store(
-        &mut self,
-        thread_store: &Arc<dyn ThreadStore>,
-        channel: &str,
-    ) -> usize {
-        let routes = match crate::endpoint_projection::channel_endpoint_projection_for(thread_store)
-            .outbound_routes()
-            .await
-        {
-            Ok(routes) => routes,
-            Err(error) => {
-                warn!(error = %error, "failed to read outbound route projection");
-                return 0;
-            }
-        };
-        let mut count: usize = 0;
-        for route in routes {
-            self.record_outbound(
-                &route.thread_id,
-                route.channel.as_deref().unwrap_or(channel),
-                &route.account_id,
-                &route.chat_id,
-                route.thread_binding_key.as_deref(),
-                &route.message_id,
-            );
-            count += 1;
-        }
-
-        info!("Rebuilt message routing index: {} entries", count);
-        count
     }
 
     /// Index statistics.

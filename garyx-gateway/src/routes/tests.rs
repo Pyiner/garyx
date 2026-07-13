@@ -6331,10 +6331,14 @@ async fn delete_thread_clears_in_memory_reply_routing() {
         .unwrap();
     {
         let mut router = state.threads.router.lock().await;
-        router
-            .message_routing_index_mut()
-            .rebuild_from_store(&state.threads.thread_store, "telegram")
-            .await;
+        router.record_outbound_message_for_chat(
+            thread_id,
+            "telegram",
+            "main",
+            "42",
+            None,
+            "msg-delete-1",
+        );
         assert_eq!(
             router.resolve_reply_thread_for_chat(
                 "telegram",

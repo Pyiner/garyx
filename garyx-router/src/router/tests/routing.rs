@@ -140,31 +140,7 @@ fn test_update_config() {
 }
 
 #[tokio::test]
-async fn test_rebuild_routing_index() {
-    let store = Arc::new(InMemoryThreadStore::new());
-    store
-        .set(
-            "s1",
-            json!({
-                "outbound_message_ids": [
-                    {"channel": "telegram", "account_id": "bot1", "message_id": "42"}
-                ]
-            }),
-        )
-        .await
-        .unwrap();
-
-    let mut router = MessageRouter::new(store, GaryxConfig::default());
-    let count = router.rebuild_routing_index("telegram").await;
-    assert_eq!(count, 1);
-    assert_eq!(
-        router.resolve_reply_thread("telegram", "bot1", "42"),
-        Some("s1")
-    );
-}
-
-#[tokio::test]
-async fn test_record_outbound_message_with_persistence_rebuilds() {
+async fn test_record_outbound_message_with_persistence_persists_route() {
     let store = Arc::new(InMemoryThreadStore::new());
     let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
     store
@@ -198,22 +174,6 @@ async fn test_record_outbound_message_with_persistence_rebuilds() {
     assert_eq!(records[0]["message_id"], "m-001");
     assert_eq!(records[0]["chat_id"], "42");
     assert_eq!(records[0]["thread_binding_key"], "42_t9");
-
-    let mut router_after_restart = MessageRouter::new(store, GaryxConfig::default());
-    assert_eq!(
-        router_after_restart.rebuild_routing_index("telegram").await,
-        1
-    );
-    assert_eq!(
-        router_after_restart.resolve_reply_thread_for_chat(
-            "telegram",
-            "bot1",
-            Some("42"),
-            Some("42_t9"),
-            "m-001",
-        ),
-        Some("s_outbound")
-    );
 }
 
 #[tokio::test]
