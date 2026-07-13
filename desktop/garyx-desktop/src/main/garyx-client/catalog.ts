@@ -16,7 +16,16 @@ import type {
   UpsertMcpServerInput,
   UpsertSlashCommandInput,
 } from "@shared/contracts";
-import { parseRecord, requestJson } from "./http.ts";
+import {
+  GatewayContractError,
+  requestJson,
+  requireContractArray,
+  requireContractBoolean,
+  requireContractField,
+  requireContractRecord,
+  requireContractString,
+  requireContractNonEmptyString,
+} from "./http.ts";
 
 interface SkillPayload {
   id?: string;
@@ -25,7 +34,6 @@ interface SkillPayload {
   installed?: boolean;
   enabled?: boolean;
   source_path?: string | null;
-  sourcePath?: string | null;
 }
 
 interface SkillsPayload {
@@ -35,7 +43,6 @@ interface SkillsPayload {
 interface SkillEntryPayload {
   path?: string | null;
   name?: string | null;
-  entry_type?: string | null;
   entryType?: string | null;
   children?: SkillEntryPayload[] | null;
 }
@@ -50,11 +57,8 @@ interface SkillFileDocumentPayload {
   path?: string | null;
   content?: string | null;
   mediaType?: string | null;
-  media_type?: string | null;
   previewKind?: string | null;
-  preview_kind?: string | null;
   dataBase64?: string | null;
-  data_base64?: string | null;
   editable?: boolean | null;
 }
 
@@ -76,10 +80,8 @@ interface McpServerPayload {
   env?: unknown;
   enabled?: boolean;
   working_dir?: string | null;
-  workingDir?: string | null;
   url?: string | null;
   bearer_token_env?: string | null;
-  bearerTokenEnv?: string | null;
   headers?: unknown;
 }
 
@@ -87,49 +89,83 @@ interface McpServersPayload {
   servers?: McpServerPayload[];
 }
 
-function mapSkill(value: SkillPayload): DesktopSkillInfo {
+function mapSkill(value: unknown, path = "skill"): DesktopSkillInfo {
+  const record = requireContractRecord(value, path);
   return {
-    id: value.id || "",
-    name:
-      typeof value.name === "string" && value.name.trim()
-        ? value.name.trim()
-        : value.id || "",
-    description:
-      typeof value.description === "string" && value.description.trim()
-        ? value.description.trim()
-        : "",
-    installed: value.installed !== false,
-    enabled: value.enabled !== false,
-    sourcePath:
-      (typeof value.source_path === "string" && value.source_path) ||
-      (typeof value.sourcePath === "string" && value.sourcePath) ||
-      "",
+    id: requireContractNonEmptyString(
+      requireContractField(record, "id", path),
+      `${path}.id`,
+    ),
+    name: requireContractNonEmptyString(
+      requireContractField(record, "name", path),
+      `${path}.name`,
+    ),
+    description: requireContractString(
+      requireContractField(record, "description", path),
+      `${path}.description`,
+    ),
+    installed: requireContractBoolean(
+      requireContractField(record, "installed", path),
+      `${path}.installed`,
+    ),
+    enabled: requireContractBoolean(
+      requireContractField(record, "enabled", path),
+      `${path}.enabled`,
+    ),
+    sourcePath: requireContractNonEmptyString(
+      requireContractField(record, "source_path", path),
+      `${path}.source_path`,
+    ),
   };
 }
 
-function mapSkillEntry(value: SkillEntryPayload): DesktopSkillEntryNode {
-  const entryType =
-    value.entry_type === "directory" || value.entryType === "directory"
-      ? "directory"
-      : "file";
+function mapSkillEntry(value: unknown, path: string): DesktopSkillEntryNode {
+  const record = requireContractRecord(value, path);
+  const entryType = requireContractString(
+    requireContractField(record, "entryType", path),
+    `${path}.entryType`,
+  );
+  if (entryType !== "directory" && entryType !== "file") {
+    throw new GatewayContractError(
+      `${path}.entryType`,
+      "must be directory or file",
+    );
+  }
   return {
-    path: (typeof value.path === "string" && value.path.trim()) || "",
-    name: (typeof value.name === "string" && value.name.trim()) || "",
+    path: requireContractString(
+      requireContractField(record, "path", path),
+      `${path}.path`,
+    ),
+    name: requireContractString(
+      requireContractField(record, "name", path),
+      `${path}.name`,
+    ),
     entryType,
-    children: Array.isArray(value.children)
-      ? value.children.map(mapSkillEntry)
-      : [],
+    children: requireContractArray(
+      requireContractField(record, "children", path),
+      `${path}.children`,
+    ).map((child, index) =>
+      mapSkillEntry(child, `${path}.children[${index}]`),
+    ),
   };
 }
 
 function mapSkillEditorState(
-  value: SkillEditorPayload,
+  value: unknown,
 ): DesktopSkillEditorState {
+  const path = "skill editor";
+  const record = requireContractRecord(value, path);
   return {
-    skill: mapSkill(value.skill || {}),
-    entries: Array.isArray(value.entries)
-      ? value.entries.map(mapSkillEntry)
-      : [],
+    skill: mapSkill(
+      requireContractField(record, "skill", path),
+      `${path}.skill`,
+    ),
+    entries: requireContractArray(
+      requireContractField(record, "entries", path),
+      `${path}.entries`,
+    ).map((entry, index) =>
+      mapSkillEntry(entry, `${path}.entries[${index}]`),
+    ),
   };
 }
 
@@ -143,83 +179,130 @@ function normalizeSkillFilePreviewKind(
     case "unsupported":
       return value;
     default:
-      return "unsupported";
+      throw new GatewayContractError(
+        "skill file.previewKind",
+        "must be a current preview kind",
+      );
   }
 }
 
 function mapSkillFileDocument(
-  value: SkillFileDocumentPayload,
+  value: unknown,
 ): DesktopSkillFileDocument {
+  const path = "skill file";
+  const record = requireContractRecord(value, path);
+  const dataBase64 = requireContractField(record, "dataBase64", path);
   return {
-    skill: mapSkill(value.skill || {}),
-    path: typeof value.path === "string" ? value.path : "",
-    content: typeof value.content === "string" ? value.content : "",
-    mediaType:
-      (typeof value.mediaType === "string" && value.mediaType) ||
-      (typeof value.media_type === "string" ? value.media_type : "") ||
-      "text/plain",
+    skill: mapSkill(
+      requireContractField(record, "skill", path),
+      `${path}.skill`,
+    ),
+    path: requireContractString(
+      requireContractField(record, "path", path),
+      `${path}.path`,
+    ),
+    content: requireContractString(
+      requireContractField(record, "content", path),
+      `${path}.content`,
+    ),
+    mediaType: requireContractNonEmptyString(
+      requireContractField(record, "mediaType", path),
+      `${path}.mediaType`,
+    ),
     previewKind: normalizeSkillFilePreviewKind(
-      value.previewKind || value.preview_kind,
+      requireContractField(record, "previewKind", path),
     ),
-    dataBase64:
-      typeof value.dataBase64 === "string"
-        ? value.dataBase64
-        : typeof value.data_base64 === "string"
-          ? value.data_base64
-          : null,
-    editable: value.editable !== false,
+    dataBase64: dataBase64 === null
+      ? null
+      : requireContractString(dataBase64, `${path}.dataBase64`),
+    editable: requireContractBoolean(
+      requireContractField(record, "editable", path),
+      `${path}.editable`,
+    ),
   };
 }
 
-function mapSlashCommand(value: SlashCommandPayload): SlashCommand {
+function mapSlashCommand(value: unknown, path = "shortcut command"): SlashCommand {
+  const record = requireContractRecord(value, path);
+  const prompt = requireContractField(record, "prompt", path);
   return {
-    name: value.name || "",
-    description:
-      typeof value.description === "string" && value.description.trim()
-        ? value.description.trim()
-        : "",
-    prompt:
-      typeof value.prompt === "string" && value.prompt.trim()
-        ? value.prompt
-        : null,
+    name: requireContractNonEmptyString(
+      requireContractField(record, "name", path),
+      `${path}.name`,
+    ),
+    description: requireContractString(
+      requireContractField(record, "description", path),
+      `${path}.description`,
+    ),
+    prompt: prompt === null
+      ? null
+      : requireContractString(prompt, `${path}.prompt`),
   };
 }
 
-function mapMcpServer(value: McpServerPayload): DesktopMcpServer {
-  const envRecord = parseRecord(value.env);
-  const headersRecord = parseRecord(value.headers);
-  const transport =
-    value.transport === "streamable_http"
-      ? ("streamable_http" as const)
-      : ("stdio" as const);
+function mapStringRecord(value: unknown, path: string): Record<string, string> {
+  const record = requireContractRecord(value, path);
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [
+      key,
+      requireContractString(entry, `${path}.${key}`),
+    ]),
+  );
+}
+
+function mapMcpServer(value: unknown, index?: number): DesktopMcpServer {
+  const path = index === undefined
+    ? "MCP server"
+    : `MCP server list.servers[${index}]`;
+  const record = requireContractRecord(value, path);
+  const transport = requireContractString(
+    requireContractField(record, "transport", path),
+    `${path}.transport`,
+  );
+  if (transport !== "stdio" && transport !== "streamable_http") {
+    throw new GatewayContractError(
+      `${path}.transport`,
+      "must be stdio or streamable_http",
+    );
+  }
+  const nullableString = (field: string): string | null => {
+    const fieldValue = requireContractField(record, field, path);
+    return fieldValue === null
+      ? null
+      : requireContractString(fieldValue, `${path}.${field}`);
+  };
+  // Present on every response even though the current desktop view does not
+  // expose it.
+  nullableString("bearer_token_env");
   return {
-    name: value.name || "",
+    name: requireContractNonEmptyString(
+      requireContractField(record, "name", path),
+      `${path}.name`,
+    ),
     transport,
-    command:
-      typeof value.command === "string" && value.command.trim()
-        ? value.command.trim()
-        : "",
-    args: Array.isArray(value.args)
-      ? value.args.filter((entry): entry is string => typeof entry === "string")
-      : [],
-    env: Object.fromEntries(
-      Object.entries(envRecord).flatMap(([key, entryValue]) => {
-        return typeof entryValue === "string" ? [[key, entryValue]] : [];
-      }),
+    command: requireContractString(
+      requireContractField(record, "command", path),
+      `${path}.command`,
     ),
-    enabled: value.enabled !== false,
-    workingDir:
-      (typeof value.working_dir === "string" && value.working_dir.trim()) ||
-      (typeof value.workingDir === "string" && value.workingDir.trim()) ||
-      null,
-    url:
-      typeof value.url === "string" && value.url.trim()
-        ? value.url.trim()
-        : null,
-    headers: Object.fromEntries(
-      Object.entries(headersRecord).flatMap(([key, entryValue]) => {
-        return typeof entryValue === "string" ? [[key, entryValue]] : [];
-      }),
+    args: requireContractArray(
+      requireContractField(record, "args", path),
+      `${path}.args`,
+    ).map((entry, entryIndex) =>
+      requireContractString(entry, `${path}.args[${entryIndex}]`),
+    ),
+    env: mapStringRecord(
+      requireContractField(record, "env", path),
+      `${path}.env`,
+    ),
+    enabled: requireContractBoolean(
+      requireContractField(record, "enabled", path),
+      `${path}.enabled`,
+    ),
+    workingDir: nullableString("working_dir"),
+    url: nullableString("url"),
+    headers: mapStringRecord(
+      requireContractField(record, "headers", path),
+      `${path}.headers`,
     ),
   };
 }
@@ -231,7 +314,11 @@ export async function listSkills(
     signal: AbortSignal.timeout(8000),
   });
 
-  return Array.isArray(payload.skills) ? payload.skills.map(mapSkill) : [];
+  const record = requireContractRecord(payload, "skill list");
+  return requireContractArray(
+    requireContractField(record, "skills", "skill list"),
+    "skill list.skills",
+  ).map((skill, index) => mapSkill(skill, `skill list.skills[${index}]`));
 }
 
 export async function createSkill(
@@ -395,9 +482,13 @@ export async function listSlashCommands(
     },
   );
 
-  return Array.isArray(payload.commands)
-    ? payload.commands.map(mapSlashCommand)
-    : [];
+  const record = requireContractRecord(payload, "shortcut command list");
+  return requireContractArray(
+    requireContractField(record, "commands", "shortcut command list"),
+    "shortcut command list.commands",
+  ).map((command, index) =>
+    mapSlashCommand(command, `shortcut command list.commands[${index}]`),
+  );
 }
 
 export async function createSlashCommand(
@@ -467,9 +558,11 @@ export async function listMcpServers(
     },
   );
 
-  return Array.isArray(payload.servers)
-    ? payload.servers.map(mapMcpServer)
-    : [];
+  const record = requireContractRecord(payload, "MCP server list");
+  return requireContractArray(
+    requireContractField(record, "servers", "MCP server list"),
+    "MCP server list.servers",
+  ).map(mapMcpServer);
 }
 
 export async function createMcpServer(

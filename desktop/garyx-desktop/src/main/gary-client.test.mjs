@@ -18,6 +18,65 @@ import {
   validateListRecentThreadsInput,
 } from "./gary-client.ts";
 
+function canonicalHistoryStats(overrides = {}) {
+  return {
+    total_messages_in_thread: 0,
+    total_messages_in_session: 0,
+    committed_message_count: 0,
+    returned_messages: 0,
+    returned_user_queries: 0,
+    returned_start_index: 0,
+    returned_end_index: 0,
+    has_more_before: false,
+    next_before_index: null,
+    has_more_after: false,
+    next_after_index: null,
+    reset: false,
+    user_query_limit: 10,
+    ...overrides,
+  };
+}
+
+function canonicalStandardThread(overrides = {}) {
+  return {
+    thread_id: "thread::synthetic",
+    thread_key: "thread::synthetic",
+    thread_type: "chat",
+    label: "Synthetic thread",
+    workspace_dir: null,
+    channel_bindings: [],
+    updated_at: "2026-01-02T00:00:00Z",
+    created_at: "2026-01-01T00:00:00Z",
+    message_count: 0,
+    last_user_message: null,
+    last_assistant_message: null,
+    last_message_preview: null,
+    agent_id: null,
+    provider_type: null,
+    worktree: null,
+    recent_run_id: null,
+    active_run_id: null,
+    ...overrides,
+  };
+}
+
+function canonicalThreadRuntime(overrides = {}) {
+  return {
+    agent_id: null,
+    provider_type: null,
+    provider_label: "-",
+    model: null,
+    model_reasoning_effort: null,
+    model_service_tier: null,
+    model_override: null,
+    model_reasoning_effort_override: null,
+    model_service_tier_override: null,
+    sdk_session_id: null,
+    active_run: null,
+    ...overrides,
+  };
+}
+
 test("fetchThreadHistory preserves kind parity fields for committed reducers", async () => {
   const originalFetch = globalThis.fetch;
   const urls = [];
@@ -32,6 +91,11 @@ test("fetchThreadHistory preserves kind parity fields for committed reducers", a
             role: "tool",
             kind: "tool_trace",
             timestamp: "2026-06-18T12:00:00Z",
+            text: "",
+            content: "",
+            internal: false,
+            internal_kind: null,
+            loop_origin: null,
             message: {
               role: "tool",
               input: {
@@ -47,6 +111,11 @@ test("fetchThreadHistory preserves kind parity fields for committed reducers", a
             role: "assistant",
             kind: "assistant_reply",
             timestamp: "2026-06-18T12:00:01Z",
+            text: "Synthetic answer",
+            content: "Synthetic answer",
+            internal: false,
+            internal_kind: null,
+            loop_origin: null,
             message: {
               role: "assistant",
               input: {
@@ -56,6 +125,15 @@ test("fetchThreadHistory preserves kind parity fields for committed reducers", a
           },
         ],
         pending_user_inputs: [],
+        thread_runtime: null,
+        message_stats: canonicalHistoryStats({
+          total_messages_in_thread: 2,
+          total_messages_in_session: 2,
+          committed_message_count: 2,
+          returned_messages: 2,
+          returned_user_queries: 0,
+          returned_end_index: 2,
+        }),
       }),
       { status: 200, statusText: "OK" },
     );
@@ -102,6 +180,8 @@ test("fetchThreadHistory sends configured gateway headers", async () => {
         ok: true,
         messages: [],
         pending_user_inputs: [],
+        thread_runtime: null,
+        message_stats: canonicalHistoryStats(),
       }),
       { status: 200, statusText: "OK" },
     );
@@ -126,6 +206,76 @@ test("fetchThreadHistory sends configured gateway headers", async () => {
     assert.equal(capturedHeaders.get("Authorization"), "Bearer test-token");
     assert.equal(capturedHeaders.get("X-Garyx-Proxy"), "proxy-token");
     assert.equal(capturedHeaders.get("X-Trace-Id"), "trace-123");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fetchThreadHistory maps canonical runtime and sparse stored detail metadata", async () => {
+  const originalFetch = globalThis.fetch;
+  const detailPayload = canonicalStandardThread({
+    thread_id: "thread::history-runtime",
+    thread_key: "thread::history-runtime",
+    channel_bindings: [
+      {
+        channel: "test-channel",
+        account_id: "test-account",
+        chat_id: "test-chat",
+        delivery_target_type: "chat",
+        delivery_target_id: "test-target",
+        display_label: "Test chat",
+      },
+    ],
+    thread_runtime: canonicalThreadRuntime(),
+  });
+  delete detailPayload.workspace_dir;
+  delete detailPayload.worktree;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/api/threads/history?")) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          messages: [],
+          pending_user_inputs: [],
+          thread_runtime: canonicalThreadRuntime({
+            agent_id: "test-agent",
+            provider_type: "codex_app_server",
+            provider_label: "Codex",
+          }),
+          message_stats: canonicalHistoryStats(),
+        }),
+        { status: 200, statusText: "OK" },
+      );
+    }
+    return new Response(
+      JSON.stringify(detailPayload),
+      { status: 200, statusText: "OK" },
+    );
+  };
+
+  try {
+    const transcript = await fetchThreadHistory(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      "thread::history-runtime",
+    );
+    assert.equal(transcript.threadInfo.providerType, "codex_app_server");
+    assert.equal(transcript.threadInfo.workspacePath, null);
+    assert.equal(transcript.threadInfo.worktree, null);
+    assert.equal(transcript.threadInfo.channelBindings.length, 1);
+    assert.equal(transcript.threadInfo.channelBindings[0].bindingKey, "");
+
+    delete detailPayload.channel_bindings;
+    const withoutBindings = await fetchThreadHistory(
+      {
+        gatewayUrl: "http://127.0.0.1:31337",
+        gatewayAuthToken: "",
+      },
+      "thread::history-runtime",
+    );
+    assert.deepEqual(withoutBindings.threadInfo.channelBindings, []);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -181,14 +331,23 @@ test("getTask fetches task detail and preserves backing thread id", async () => 
     return new Response(
       JSON.stringify({
         task_id: "#TASK-42",
-        number: 42,
-        title: "Synthetic agent task",
-        status: "in_progress",
         thread_id: "thread::task-42",
-        executor: {
-          type: "agent",
-          agent_id: "claude",
+        task: {
+          schema_version: 1,
+          number: 42,
+          title: "Synthetic agent task",
+          status: "in_progress",
+          creator: { kind: "agent", agent_id: "claude" },
+          executor: {
+            type: "agent",
+            agent_id: "claude",
+          },
+          created_at: "2026-06-22T00:00:00Z",
+          updated_at: "2026-06-22T00:00:00Z",
+          updated_by: { kind: "agent", agent_id: "claude" },
+          events: [],
         },
+        thread: { message_count: 3 },
       }),
       { status: 200, statusText: "OK" },
     );
@@ -211,6 +370,8 @@ test("getTask fetches task detail and preserves backing thread id", async () => 
       type: "agent",
       agentId: "claude",
     });
+    assert.equal(task.runtimeAgentId, "");
+    assert.equal(task.replyCount, 3);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -318,16 +479,31 @@ test("createTask serializes child task source fields", async () => {
     requestBody = JSON.parse(options.body);
     return new Response(
       JSON.stringify({
+        thread_id: "thread::forest-created-child",
         task_id: "#TASK-8",
         number: 8,
-        title: "Synthetic child",
         status: "in_progress",
-        thread_id: "thread::forest-created-child",
-        creator: { kind: "agent", agent_id: "claude" },
-        updated_by: { kind: "agent", agent_id: "claude" },
-        updated_at: "2026-06-22T00:02:00Z",
         runtime_agent_id: "claude",
-        reply_count: 0,
+        task: {
+          schema_version: 1,
+          number: 8,
+          title: "Synthetic child",
+          status: "in_progress",
+          creator: { kind: "agent", agent_id: "claude" },
+          source: {
+            thread_id: "thread::forest-parent",
+            task_id: "#TASK-7",
+            task_thread_id: "thread::forest-parent",
+            bot_id: "test-bot",
+            channel: "test-channel",
+            account_id: "test-account",
+          },
+          executor: { type: "agent", agent_id: "claude" },
+          updated_by: { kind: "agent", agent_id: "claude" },
+          created_at: "2026-06-22T00:02:00Z",
+          updated_at: "2026-06-22T00:02:00Z",
+          events: [],
+        },
       }),
       { status: 201, statusText: "Created" },
     );
@@ -359,6 +535,8 @@ test("createTask serializes child task source fields", async () => {
     );
 
     assert.equal(task.taskId, "#TASK-8");
+    assert.equal(task.runtimeAgentId, "claude");
+    assert.equal(task.replyCount, 0);
     assert.deepEqual(requestBody.source, {
       thread_id: "thread::forest-parent",
       task_id: "#TASK-7",
@@ -721,7 +899,7 @@ test("streamThreadEvents rejects first replay gap relative to requested cursor",
   }
 });
 
-test("streamThreadEvents ignores non-render per-thread frames", async () => {
+test("streamThreadEvents routes non-render per-thread frames through the gap path", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {
     const legacyPayload = JSON.stringify({
@@ -740,20 +918,23 @@ test("streamThreadEvents ignores non-render per-thread frames", async () => {
 
   try {
     const events = [];
-    await streamThreadEvents(
-      {
-        gatewayUrl: "http://127.0.0.1:31337",
-        gatewayAuthToken: "",
+    await assert.rejects(
+      () =>
+        streamThreadEvents(
+          {
+            gatewayUrl: "http://127.0.0.1:31337",
+            gatewayAuthToken: "",
+          },
+          "thread::per-thread-failed",
+          (event) => events.push(event),
+        ),
+      (error) => {
+        assert.equal(error instanceof ThreadStreamGapError, true);
+        assert.equal(error.resumeAfterSeq, 0);
+        return true;
       },
-      "thread::per-thread-failed",
-      (event) => events.push(event),
     );
-
-    assert.equal(events.length, 1);
-    assert.equal(events[0].type, "thread_render_frame");
-    assert.equal(events[0].threadId, "thread::per-thread-failed");
-    assert.equal(events[0].events[0].seq, 1);
-    assert.equal(events[0].events[0].message.text, "committed");
+    assert.equal(events.length, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -924,7 +1105,16 @@ test("updateCustomAgent carries the optimistic concurrency token", async () => {
         agent_id: "occ-agent",
         display_name: "OCC",
         provider_type: "claude_code",
+        model: "",
+        model_reasoning_effort: "",
+        model_service_tier: "",
+        provider_env: {},
+        default_workspace_dir: "",
+        avatar_data_url: "",
+        provider_icon: null,
+        system_prompt: "",
         built_in: false,
+        standalone: false,
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-02T00:00:00Z",
       }),
@@ -1018,7 +1208,20 @@ test("fetchThreads keeps the full limit by default and honors a fast page limit"
   globalThis.fetch = async (url) => {
     urls.push(String(url));
     return new Response(
-      JSON.stringify({ threads: [{ thread_id: "thread::a", thread_label: "A" }] }),
+      JSON.stringify({
+        threads: [
+          canonicalStandardThread({
+            thread_id: "thread::a",
+            thread_key: "thread::a",
+            label: "A",
+            thread_runtime: canonicalThreadRuntime(),
+          }),
+        ],
+        count: 1,
+        total: 1,
+        limit: 1000,
+        offset: 0,
+      }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   };
@@ -1046,10 +1249,22 @@ test("fetchRecentThreads sends an explicit task filter and maps the filtered pag
           {
             thread_id: "thread::chat-page",
             title: "Chat page",
+            workspace_dir: null,
             thread_type: "chat",
+            provider_type: "codex_app_server",
+            agent_id: null,
+            message_count: 3,
+            last_message_preview: "Synthetic recent message",
+            recent_run_id: null,
+            active_run_id: "run::recent",
             last_active_at: "2026-07-11T12:00:00Z",
+            recorded_at: "2026-07-11T12:00:00Z",
+            updated_at: null,
             run_state: "running",
-            thread_runtime: { provider_type: "codex" },
+            thread_runtime: canonicalThreadRuntime({
+              provider_type: "codex_app_server",
+              provider_label: "Codex",
+            }),
           },
         ],
         count: 1,
@@ -1174,8 +1389,11 @@ test("fetchThreadSummary maps a metadata payload and resolves null on miss", asy
     return new Response(
       JSON.stringify({
         thread_id: "thread::pinned-old",
+        thread_key: "thread::pinned-old",
+        thread_type: "chat",
         label: "Pinned old thread",
         workspace_dir: "/Users/test/project",
+        thread_runtime: canonicalThreadRuntime(),
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );

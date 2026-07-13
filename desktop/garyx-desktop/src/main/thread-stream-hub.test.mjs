@@ -22,13 +22,19 @@ function sseFrame(threadId, seqs, basedOnSeq) {
     type: "thread_render_frame",
     thread_id: threadId,
     events: seqs.map((seq) => ({
+      type: "committed_message",
       seq,
       thread_id: threadId,
+      run_id: null,
       message: { role: "assistant", text: `m${seq}` },
     })),
     render_state: {
       based_on_seq: basedOnSeq ?? (seqs.length ? seqs[seqs.length - 1] : 0),
       rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      filtered_placeholders: [],
     },
   };
   return `data: ${JSON.stringify(payload)}\n\n`;

@@ -173,6 +173,112 @@ export class GatewayRequestError extends Error {
   }
 }
 
+export class GatewayContractError extends Error {
+  constructor(path: string, expectation: string) {
+    super(`Gateway contract violation: ${path} ${expectation}`);
+    this.name = "GatewayContractError";
+  }
+}
+
+export function hasContractField(
+  record: Record<string, unknown>,
+  field: string,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(record, field);
+}
+
+export function requireContractField(
+  record: Record<string, unknown>,
+  field: string,
+  context: string,
+): unknown {
+  if (!hasContractField(record, field)) {
+    throw new GatewayContractError(`${context}.${field}`, "is required");
+  }
+  return record[field];
+}
+
+export function requireContractRecord(
+  value: unknown,
+  path: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new GatewayContractError(path, "must be an object");
+  }
+  return value as Record<string, unknown>;
+}
+
+export function requireContractArray(
+  value: unknown,
+  path: string,
+): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new GatewayContractError(path, "must be an array");
+  }
+  return value;
+}
+
+export function requireContractString(
+  value: unknown,
+  path: string,
+): string {
+  if (typeof value !== "string") {
+    throw new GatewayContractError(path, "must be a string");
+  }
+  return value;
+}
+
+export function requireContractNonEmptyString(
+  value: unknown,
+  path: string,
+): string {
+  const result = requireContractString(value, path).trim();
+  if (!result) {
+    throw new GatewayContractError(path, "must be a non-empty string");
+  }
+  return result;
+}
+
+export function requireContractBoolean(
+  value: unknown,
+  path: string,
+): boolean {
+  if (typeof value !== "boolean") {
+    throw new GatewayContractError(path, "must be a boolean");
+  }
+  return value;
+}
+
+export function requireContractFiniteNumber(
+  value: unknown,
+  path: string,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new GatewayContractError(path, "must be a finite number");
+  }
+  return value;
+}
+
+export function requireContractNonNegativeInteger(
+  value: unknown,
+  path: string,
+): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new GatewayContractError(path, "must be a non-negative integer");
+  }
+  return value as number;
+}
+
+export function requireContractInteger(
+  value: unknown,
+  path: string,
+): number {
+  if (!Number.isSafeInteger(value)) {
+    throw new GatewayContractError(path, "must be an integer");
+  }
+  return value as number;
+}
+
 export async function requestJson<T>(
   settings: DesktopSettings,
   path: string,

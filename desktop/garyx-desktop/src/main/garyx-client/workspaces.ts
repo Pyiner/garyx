@@ -12,55 +12,52 @@ import type {
   UploadWorkspaceFilesInput,
   UploadWorkspaceFilesResult,
 } from "@shared/contracts";
-import { REMOTE_STATE_FETCH_TIMEOUT_MS, requestJson } from "./http.ts";
+import {
+  GatewayContractError,
+  REMOTE_STATE_FETCH_TIMEOUT_MS,
+  requestJson,
+  requireContractArray,
+  requireContractBoolean,
+  requireContractField,
+  requireContractNonEmptyString,
+  requireContractNonNegativeInteger,
+  requireContractRecord,
+  requireContractString,
+} from "./http.ts";
 
 interface WorkspaceFileEntryPayload {
   path?: string | null;
   name?: string | null;
   entryType?: string | null;
-  entry_type?: string | null;
   size?: number | null;
   modifiedAt?: string | null;
-  modified_at?: string | null;
   mediaType?: string | null;
-  media_type?: string | null;
   hasChildren?: boolean;
-  has_children?: boolean;
 }
 
 interface WorkspaceFileListingPayload {
   workspaceDir?: string | null;
-  workspace_dir?: string | null;
   directoryPath?: string | null;
-  directory_path?: string | null;
   entries?: WorkspaceFileEntryPayload[] | null;
 }
 
 interface WorkspaceFilePreviewPayload {
   workspaceDir?: string | null;
-  workspace_dir?: string | null;
   path?: string | null;
   name?: string | null;
   mediaType?: string | null;
-  media_type?: string | null;
   previewKind?: string | null;
-  preview_kind?: string | null;
   size?: number | null;
   modifiedAt?: string | null;
-  modified_at?: string | null;
   truncated?: boolean;
   text?: string | null;
   dataBase64?: string | null;
-  data_base64?: string | null;
 }
 
 interface UploadWorkspaceFilesPayload {
   workspaceDir?: string | null;
-  workspace_dir?: string | null;
   directoryPath?: string | null;
-  directory_path?: string | null;
   uploadedPaths?: string[] | null;
-  uploaded_paths?: string[] | null;
 }
 
 interface UploadedChatAttachmentPayload {
@@ -68,7 +65,6 @@ interface UploadedChatAttachmentPayload {
   path?: string | null;
   name?: string | null;
   mediaType?: string | null;
-  media_type?: string | null;
 }
 
 interface UploadChatAttachmentsPayload {
@@ -76,48 +72,69 @@ interface UploadChatAttachmentsPayload {
 }
 
 function mapWorkspaceFileEntry(
-  value: WorkspaceFileEntryPayload,
+  value: unknown,
+  path: string,
 ): DesktopWorkspaceFileEntry {
-  const entryType = value.entryType || value.entry_type;
+  const record = requireContractRecord(value, path);
+  const entryType = requireContractString(
+    requireContractField(record, "entryType", path),
+    `${path}.entryType`,
+  );
+  if (entryType !== "directory" && entryType !== "file") {
+    throw new GatewayContractError(
+      `${path}.entryType`,
+      "must be directory or file",
+    );
+  }
+  const nullableString = (field: string): string | null => {
+    const fieldValue = requireContractField(record, field, path);
+    return fieldValue === null
+      ? null
+      : requireContractString(fieldValue, `${path}.${field}`);
+  };
+  const size = requireContractField(record, "size", path);
   return {
-    path: typeof value.path === "string" ? value.path : "",
-    name: typeof value.name === "string" ? value.name : "",
-    entryType: entryType === "directory" ? "directory" : "file",
-    size:
-      typeof value.size === "number" && Number.isFinite(value.size)
-        ? value.size
-        : null,
-    modifiedAt:
-      typeof value.modifiedAt === "string"
-        ? value.modifiedAt
-        : typeof value.modified_at === "string"
-          ? value.modified_at
-          : null,
-    mediaType:
-      typeof value.mediaType === "string"
-        ? value.mediaType
-        : typeof value.media_type === "string"
-          ? value.media_type
-          : null,
-    hasChildren: value.hasChildren === true || value.has_children === true,
+    path: requireContractString(
+      requireContractField(record, "path", path),
+      `${path}.path`,
+    ),
+    name: requireContractString(
+      requireContractField(record, "name", path),
+      `${path}.name`,
+    ),
+    entryType,
+    size: size === null
+      ? null
+      : requireContractNonNegativeInteger(size, `${path}.size`),
+    modifiedAt: nullableString("modifiedAt"),
+    mediaType: nullableString("mediaType"),
+    hasChildren: requireContractBoolean(
+      requireContractField(record, "hasChildren", path),
+      `${path}.hasChildren`,
+    ),
   };
 }
 
 function mapWorkspaceFileListing(
-  value: WorkspaceFileListingPayload,
+  value: unknown,
 ): DesktopWorkspaceFileListing {
+  const path = "workspace file listing";
+  const record = requireContractRecord(value, path);
   return {
-    workspacePath:
-      (typeof value.workspaceDir === "string" && value.workspaceDir) ||
-      (typeof value.workspace_dir === "string" && value.workspace_dir) ||
-      "",
-    directoryPath:
-      (typeof value.directoryPath === "string" && value.directoryPath) ||
-      (typeof value.directory_path === "string" && value.directory_path) ||
-      "",
-    entries: Array.isArray(value.entries)
-      ? value.entries.map(mapWorkspaceFileEntry)
-      : [],
+    workspacePath: requireContractNonEmptyString(
+      requireContractField(record, "workspaceDir", path),
+      `${path}.workspaceDir`,
+    ),
+    directoryPath: requireContractString(
+      requireContractField(record, "directoryPath", path),
+      `${path}.directoryPath`,
+    ),
+    entries: requireContractArray(
+      requireContractField(record, "entries", path),
+      `${path}.entries`,
+    ).map((entry, index) =>
+      mapWorkspaceFileEntry(entry, `${path}.entries[${index}]`),
+    ),
   };
 }
 
@@ -133,88 +150,82 @@ function normalizeWorkspaceFilePreviewKind(
     case "unsupported":
       return value;
     default:
-      return "unsupported";
+      throw new GatewayContractError(
+        "workspace file preview.previewKind",
+        "must be a current preview kind",
+      );
   }
 }
 
 function mapWorkspaceFilePreview(
-  value: WorkspaceFilePreviewPayload,
+  value: unknown,
 ): DesktopWorkspaceFilePreview {
+  const path = "workspace file preview";
+  const record = requireContractRecord(value, path);
+  const nullableString = (field: string): string | null => {
+    const fieldValue = requireContractField(record, field, path);
+    return fieldValue === null
+      ? null
+      : requireContractString(fieldValue, `${path}.${field}`);
+  };
   return {
-    workspacePath:
-      (typeof value.workspaceDir === "string" && value.workspaceDir) ||
-      (typeof value.workspace_dir === "string" && value.workspace_dir) ||
-      "",
-    path: typeof value.path === "string" ? value.path : "",
-    name: typeof value.name === "string" ? value.name : "",
-    mediaType:
-      (typeof value.mediaType === "string" && value.mediaType) ||
-      (typeof value.media_type === "string" ? value.media_type : "") ||
-      "application/octet-stream",
-    previewKind: normalizeWorkspaceFilePreviewKind(
-      value.previewKind || value.preview_kind,
+    workspacePath: requireContractNonEmptyString(
+      requireContractField(record, "workspaceDir", path),
+      `${path}.workspaceDir`,
     ),
-    size:
-      typeof value.size === "number" && Number.isFinite(value.size)
-        ? value.size
-        : 0,
-    modifiedAt:
-      typeof value.modifiedAt === "string"
-        ? value.modifiedAt
-        : typeof value.modified_at === "string"
-          ? value.modified_at
-          : null,
-    truncated: value.truncated === true,
-    text: typeof value.text === "string" ? value.text : null,
-    dataBase64:
-      typeof value.dataBase64 === "string"
-        ? value.dataBase64
-        : typeof value.data_base64 === "string"
-          ? value.data_base64
-          : null,
+    path: requireContractString(
+      requireContractField(record, "path", path),
+      `${path}.path`,
+    ),
+    name: requireContractString(
+      requireContractField(record, "name", path),
+      `${path}.name`,
+    ),
+    mediaType: requireContractNonEmptyString(
+      requireContractField(record, "mediaType", path),
+      `${path}.mediaType`,
+    ),
+    previewKind: normalizeWorkspaceFilePreviewKind(
+      requireContractField(record, "previewKind", path),
+    ),
+    size: requireContractNonNegativeInteger(
+      requireContractField(record, "size", path),
+      `${path}.size`,
+    ),
+    modifiedAt: nullableString("modifiedAt"),
+    truncated: requireContractBoolean(
+      requireContractField(record, "truncated", path),
+      `${path}.truncated`,
+    ),
+    text: nullableString("text"),
+    dataBase64: nullableString("dataBase64"),
   };
 }
 
 type WorkspaceGitStatusPayload = {
   workspace_dir?: string;
-  workspaceDir?: string;
   is_git_repo?: boolean;
-  isGitRepo?: boolean;
   repo_root?: string | null;
-  repoRoot?: string | null;
   current_branch?: string | null;
-  currentBranch?: string | null;
   is_dirty?: boolean;
-  isDirty?: boolean;
 };
 
 type WorkspacePayload = {
   name?: string | null;
   path?: string | null;
-  workspace_dir?: string | null;
-  workspaceDir?: string | null;
 };
 
-function workspaceNameFromPathPayload(path: string): string {
-  const normalized = path.trim().replace(/[\\/]+$/, "");
-  if (!normalized) {
-    return "Workspace";
-  }
-  const segments = normalized.split(/[\\/]/).filter(Boolean);
-  return segments[segments.length - 1] || normalized;
-}
-
-function mapWorkspace(value: WorkspacePayload): DesktopWorkspace | null {
-  const path = (
-    value.path ||
-    value.workspaceDir ||
-    value.workspace_dir ||
-    ""
-  ).trim();
-  if (!path) {
-    return null;
-  }
-  const name = (value.name || "").trim() || workspaceNameFromPathPayload(path);
+function mapWorkspace(value: unknown, index: number): DesktopWorkspace {
+  const context = `workspace list.workspaces[${index}]`;
+  const record = requireContractRecord(value, context);
+  const path = requireContractNonEmptyString(
+    requireContractField(record, "path", context),
+    `${context}.path`,
+  );
+  const name = requireContractNonEmptyString(
+    requireContractField(record, "name", context),
+    `${context}.name`,
+  );
   const now = new Date().toISOString();
   return {
     name,
@@ -226,12 +237,16 @@ function mapWorkspace(value: WorkspacePayload): DesktopWorkspace | null {
   };
 }
 
-function mapWorkspaces(payload: { workspaces?: WorkspacePayload[] | null }): DesktopWorkspace[] {
-  return Array.isArray(payload.workspaces)
-    ? payload.workspaces
-        .map(mapWorkspace)
-        .filter((workspace): workspace is DesktopWorkspace => Boolean(workspace))
-    : [];
+function mapWorkspaces(payload: unknown): DesktopWorkspace[] {
+  const record = requireContractRecord(payload, "workspace list");
+  requireContractBoolean(
+    requireContractField(record, "workspace_state_initialized", "workspace list"),
+    "workspace list.workspace_state_initialized",
+  );
+  return requireContractArray(
+    requireContractField(record, "workspaces", "workspace list"),
+    "workspace list.workspaces",
+  ).map(mapWorkspace);
 }
 
 export async function fetchWorkspaces(
@@ -296,12 +311,28 @@ export async function getWorkspaceGitStatus(
       signal: AbortSignal.timeout(8000),
     },
   );
+  const record = requireContractRecord(payload, "workspace git status");
+  const nullableString = (field: string): string | null => {
+    const value = requireContractField(record, field, "workspace git status");
+    return value === null
+      ? null
+      : requireContractString(value, `workspace git status.${field}`);
+  };
   return {
-    workspaceDir: payload.workspaceDir || payload.workspace_dir || input.workspacePath,
-    isGitRepo: Boolean(payload.isGitRepo ?? payload.is_git_repo),
-    repoRoot: payload.repoRoot ?? payload.repo_root ?? null,
-    currentBranch: payload.currentBranch ?? payload.current_branch ?? null,
-    isDirty: Boolean(payload.isDirty ?? payload.is_dirty),
+    workspaceDir: requireContractNonEmptyString(
+      requireContractField(record, "workspace_dir", "workspace git status"),
+      "workspace git status.workspace_dir",
+    ),
+    isGitRepo: requireContractBoolean(
+      requireContractField(record, "is_git_repo", "workspace git status"),
+      "workspace git status.is_git_repo",
+    ),
+    repoRoot: nullableString("repo_root"),
+    currentBranch: nullableString("current_branch"),
+    isDirty: requireContractBoolean(
+      requireContractField(record, "is_dirty", "workspace git status"),
+      "workspace git status.is_dirty",
+    ),
   };
 }
 
@@ -317,7 +348,6 @@ export async function listWorkspaceDirectories(
   const payload = await requestJson<{
     path?: string;
     parentPath?: string | null;
-    parent_path?: string | null;
     entries?: Array<{ name?: string | null; path?: string | null }> | null;
   }>(
     settings,
@@ -326,17 +356,40 @@ export async function listWorkspaceDirectories(
       signal: AbortSignal.timeout(8000),
     },
   );
+  const record = requireContractRecord(payload, "workspace directory listing");
+  const parentPath = requireContractField(
+    record,
+    "parentPath",
+    "workspace directory listing",
+  );
   return {
-    path: payload.path || "",
-    parentPath: payload.parentPath ?? payload.parent_path ?? null,
-    entries: Array.isArray(payload.entries)
-      ? payload.entries
-          .map((entry) => ({
-            name: entry.name?.trim() || entry.path?.trim() || "",
-            path: entry.path?.trim() || "",
-          }))
-          .filter((entry) => Boolean(entry.path))
-      : [],
+    path: requireContractString(
+      requireContractField(record, "path", "workspace directory listing"),
+      "workspace directory listing.path",
+    ),
+    parentPath: parentPath === null
+      ? null
+      : requireContractString(
+          parentPath,
+          "workspace directory listing.parentPath",
+        ),
+    entries: requireContractArray(
+      requireContractField(record, "entries", "workspace directory listing"),
+      "workspace directory listing.entries",
+    ).map((entry, index) => {
+      const path = `workspace directory listing.entries[${index}]`;
+      const entryRecord = requireContractRecord(entry, path);
+      return {
+        name: requireContractNonEmptyString(
+          requireContractField(entryRecord, "name", path),
+          `${path}.name`,
+        ),
+        path: requireContractNonEmptyString(
+          requireContractField(entryRecord, "path", path),
+          `${path}.path`,
+        ),
+      };
+    }),
   };
 }
 
@@ -399,35 +452,40 @@ export async function uploadChatAttachments(
     },
   );
 
+  const record = requireContractRecord(payload, "chat attachment upload");
   return {
-    files: Array.isArray(payload.files)
-      ? payload.files
-          .map((file) => {
-            const path =
-              (typeof file.path === "string" && file.path) || "";
-            const name =
-              (typeof file.name === "string" && file.name) || "";
-            const mediaType =
-              (typeof file.mediaType === "string" && file.mediaType) ||
-              (typeof file.media_type === "string" ? file.media_type : "") ||
-              "";
-            if (!path || !name) {
-              return null;
-            }
-            return {
-              kind: file.kind === "image" ? "image" : "file",
-              path,
-              name,
-              mediaType,
-            };
-          })
-          .filter(
-            (
-              file,
-            ): file is UploadChatAttachmentsResult["files"][number] =>
-              Boolean(file),
-          )
-      : [],
+    files: requireContractArray(
+      requireContractField(record, "files", "chat attachment upload"),
+      "chat attachment upload.files",
+    ).map((file, index) => {
+      const path = `chat attachment upload.files[${index}]`;
+      const fileRecord = requireContractRecord(file, path);
+      const kind = requireContractString(
+        requireContractField(fileRecord, "kind", path),
+        `${path}.kind`,
+      );
+      if (kind !== "image" && kind !== "file") {
+        throw new GatewayContractError(
+          `${path}.kind`,
+          "must be image or file",
+        );
+      }
+      return {
+        kind,
+        path: requireContractNonEmptyString(
+          requireContractField(fileRecord, "path", path),
+          `${path}.path`,
+        ),
+        name: requireContractNonEmptyString(
+          requireContractField(fileRecord, "name", path),
+          `${path}.name`,
+        ),
+        mediaType: requireContractNonEmptyString(
+          requireContractField(fileRecord, "mediaType", path),
+          `${path}.mediaType`,
+        ),
+      };
+    }),
   };
 }
 
@@ -453,23 +511,24 @@ export async function uploadWorkspaceFiles(
     },
   );
 
+  const record = requireContractRecord(payload, "workspace file upload");
   return {
-    workspacePath:
-      (typeof payload.workspaceDir === "string" && payload.workspaceDir) ||
-      (typeof payload.workspace_dir === "string"
-        ? payload.workspace_dir
-        : "") ||
-      input.workspacePath,
-    directoryPath:
-      (typeof payload.directoryPath === "string" && payload.directoryPath) ||
-      (typeof payload.directory_path === "string"
-        ? payload.directory_path
-        : "") ||
-      "",
-    uploadedPaths: Array.isArray(payload.uploadedPaths)
-      ? payload.uploadedPaths
-      : Array.isArray(payload.uploaded_paths)
-        ? payload.uploaded_paths
-        : [],
+    workspacePath: requireContractNonEmptyString(
+      requireContractField(record, "workspaceDir", "workspace file upload"),
+      "workspace file upload.workspaceDir",
+    ),
+    directoryPath: requireContractString(
+      requireContractField(record, "directoryPath", "workspace file upload"),
+      "workspace file upload.directoryPath",
+    ),
+    uploadedPaths: requireContractArray(
+      requireContractField(record, "uploadedPaths", "workspace file upload"),
+      "workspace file upload.uploadedPaths",
+    ).map((uploadedPath, index) =>
+      requireContractNonEmptyString(
+        uploadedPath,
+        `workspace file upload.uploadedPaths[${index}]`,
+      ),
+    ),
   };
 }

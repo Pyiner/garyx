@@ -17,7 +17,27 @@ import {
   decideStreamSeq,
   isControlTranscriptMessage,
 } from "../../shared/transcript-sync.ts";
-import { applyGatewayAuthHeader, applyGatewayCustomHeaders, asBoolean, asFiniteNumber, asString, buildUrl, gatewayStreamFetch, parseRecord, requestJson, tryParseJson } from "./http.ts";
+import {
+  GatewayContractError,
+  applyGatewayAuthHeader,
+  applyGatewayCustomHeaders,
+  asBoolean,
+  asFiniteNumber,
+  asString,
+  buildUrl,
+  gatewayStreamFetch,
+  hasContractField,
+  parseRecord,
+  requestJson,
+  requireContractArray,
+  requireContractBoolean,
+  requireContractField,
+  requireContractNonEmptyString,
+  requireContractNonNegativeInteger,
+  requireContractRecord,
+  requireContractString,
+  tryParseJson,
+} from "./http.ts";
 
 type SerializedMessageAttachments = {
   attachments: Array<{
@@ -199,20 +219,40 @@ function roleFromCommittedMessage(role: unknown): TranscriptMessage["role"] {
 }
 
 function mapCommittedMessageEvent(
-  payload: Record<string, unknown>,
-  eventId?: number | null,
-): DesktopChatStreamEvent | null {
-  const seq = asFiniteNumber(payload.seq) ?? eventId ?? undefined;
-  if (typeof seq !== "number" || seq < 1) {
-    return null;
+  value: unknown,
+  path: string,
+): CommittedMessageEvent {
+  const payload = requireContractRecord(value, path);
+  const eventType = requireContractString(
+    requireContractField(payload, "type", path),
+    `${path}.type`,
+  );
+  if (eventType !== "committed_message") {
+    throw new GatewayContractError(
+      `${path}.type`,
+      'must be "committed_message"',
+    );
   }
-  const threadId =
-    asString(payload.threadId) || asString(payload.thread_id) || "";
-  const runId = asString(payload.runId) || asString(payload.run_id) || "";
-  const rawMessage = parseRecord(payload.message);
-  if (!threadId || Object.keys(rawMessage).length === 0) {
-    return null;
+  const seq = requireContractNonNegativeInteger(
+    requireContractField(payload, "seq", path),
+    `${path}.seq`,
+  );
+  if (seq < 1) {
+    throw new GatewayContractError(`${path}.seq`, "must be at least 1");
   }
+  const threadId = requireContractNonEmptyString(
+    requireContractField(payload, "thread_id", path),
+    `${path}.thread_id`,
+  );
+  const rawRunId = requireContractField(payload, "run_id", path);
+  const runId =
+    rawRunId === null
+      ? ""
+      : requireContractString(rawRunId, `${path}.run_id`);
+  const rawMessage = requireContractRecord(
+    requireContractField(payload, "message", path),
+    `${path}.message`,
+  );
   const role = roleFromCommittedMessage(rawMessage.role);
   const metadata = parseRecord(rawMessage.metadata);
   const contentRecord = parseRecord(rawMessage.content);
@@ -227,8 +267,7 @@ function mapCommittedMessageEvent(
     content: isControlRecord ? rawMessage : rawMessage.content,
     input: rawMessage.input,
     result: rawMessage.result,
-    timestamp:
-      asString(rawMessage.timestamp) || asString(payload.timestamp) || null,
+    timestamp: asString(rawMessage.timestamp) || null,
     toolUseId:
       asString(rawMessage.tool_use_id) ||
       asString(rawMessage.toolUseId) ||
@@ -273,19 +312,69 @@ function mapCommittedMessageEvent(
 }
 
 // The wire `render_state` already matches the locked `RenderSnapshot` serde
-// shape (snake_case + the documented renames), so this only validates the
-// top-level envelope; the render-view-model mapping tolerates any structural
-// surprises by skipping unresolvable refs.
-function parseRenderState(value: unknown): RenderState | null {
-  const record = parseRecord(value);
-  if (Object.keys(record).length === 0) {
-    return null;
+// shape (snake_case + the documented explicit renames). Validate its complete
+// required top-level contract without deriving or rewriting any render rows.
+function parseRenderState(value: unknown, path: string): RenderState {
+  const record = requireContractRecord(value, path);
+  requireContractNonNegativeInteger(
+    requireContractField(record, "based_on_seq", path),
+    `${path}.based_on_seq`,
+  );
+  requireContractArray(
+    requireContractField(record, "rows", path),
+    `${path}.rows`,
+  );
+  const tailActivity = requireContractString(
+    requireContractField(record, "tailActivity", path),
+    `${path}.tailActivity`,
+  );
+  if (
+    tailActivity !== "none" &&
+    tailActivity !== "thinking" &&
+    tailActivity !== "assistant_streaming" &&
+    tailActivity !== "tool_active"
+  ) {
+    throw new GatewayContractError(`${path}.tailActivity`, "has an unknown value");
   }
-  if (typeof asFiniteNumber(record.based_on_seq) !== "number") {
-    return null;
+  const activeToolGroupId = requireContractField(
+    record,
+    "activeToolGroupId",
+    path,
+  );
+  if (activeToolGroupId !== null) {
+    requireContractString(activeToolGroupId, `${path}.activeToolGroupId`);
   }
-  if (!Array.isArray(record.rows)) {
-    return null;
+  const progressLocus = requireContractString(
+    requireContractField(record, "progress_locus", path),
+    `${path}.progress_locus`,
+  );
+  if (
+    progressLocus !== "none" &&
+    progressLocus !== "tail" &&
+    progressLocus !== "tool_group"
+  ) {
+    throw new GatewayContractError(`${path}.progress_locus`, "has an unknown value");
+  }
+  requireContractArray(
+    requireContractField(record, "filtered_placeholders", path),
+    `${path}.filtered_placeholders`,
+  );
+  if (hasContractField(record, "rateLimit")) {
+    requireContractRecord(record.rateLimit, `${path}.rateLimit`);
+  }
+  if (hasContractField(record, "window")) {
+    const window = requireContractRecord(record.window, `${path}.window`);
+    requireContractNonNegativeInteger(
+      requireContractField(window, "floor_seq", `${path}.window`),
+      `${path}.window.floor_seq`,
+    );
+    requireContractBoolean(
+      requireContractField(window, "has_more_above", `${path}.window`),
+      `${path}.window.has_more_above`,
+    );
+  }
+  if (hasContractField(record, "rows_hash")) {
+    requireContractNonEmptyString(record.rows_hash, `${path}.rows_hash`);
   }
   return record as unknown as RenderState;
 }
@@ -327,13 +416,43 @@ function applyRenderDeltaFrame(
   const rowsHash = asString(delta.rows_hash);
   if (
     typeof fromSeq !== "number" ||
+    !Number.isSafeInteger(fromSeq) ||
+    fromSeq < 0 ||
     typeof basedOnSeq !== "number" ||
+    !Number.isSafeInteger(basedOnSeq) ||
+    basedOnSeq < 0 ||
     !fromRowsHash ||
     !rowsHash ||
     !Array.isArray(delta.row_order) ||
-    !Array.isArray(delta.upsert_rows)
+    !Array.isArray(delta.upsert_rows) ||
+    !Array.isArray(delta.filtered_placeholders) ||
+    typeof delta.tailActivity !== "string" ||
+    !(delta.activeToolGroupId === null ||
+      typeof delta.activeToolGroupId === "string") ||
+    typeof delta.progress_locus !== "string"
   ) {
     throw violation("frame is malformed");
+  }
+  if (
+    !["none", "thinking", "assistant_streaming", "tool_active"].includes(
+      delta.tailActivity,
+    ) ||
+    !["none", "tail", "tool_group"].includes(delta.progress_locus)
+  ) {
+    throw violation("frame carries an unknown render enum");
+  }
+  if (delta.rateLimit !== undefined && !Object.keys(parseRecord(delta.rateLimit)).length) {
+    throw violation("rateLimit must be an object when present");
+  }
+  if (delta.window !== undefined) {
+    const window = parseRecord(delta.window);
+    if (
+      !Number.isSafeInteger(window.floor_seq) ||
+      (window.floor_seq as number) < 0 ||
+      typeof window.has_more_above !== "boolean"
+    ) {
+      throw violation("window is malformed");
+    }
   }
   if (!held || fromSeq !== held.based_on_seq) {
     throw violation(
@@ -396,9 +515,8 @@ function applyRenderDeltaFrame(
     activeToolGroupId:
       (delta.activeToolGroupId as RenderState["activeToolGroupId"]) ?? null,
     progress_locus: delta.progress_locus as RenderState["progress_locus"],
-    filtered_placeholders: Array.isArray(delta.filtered_placeholders)
-      ? (delta.filtered_placeholders as RenderState["filtered_placeholders"])
-      : [],
+    filtered_placeholders:
+      delta.filtered_placeholders as RenderState["filtered_placeholders"],
     ...(delta.rateLimit !== undefined
       ? { rateLimit: delta.rateLimit as RenderState["rateLimit"] }
       : {}),
@@ -426,38 +544,57 @@ function mapThreadRenderFrameEvent(
   payload: Record<string, unknown>,
   connectionLastSeq: number,
   reassembly: RenderFrameReassembly,
-): { event: DesktopChatStreamEvent; lastSeq: number } | null {
-  const threadId =
-    asString(payload.threadId) || asString(payload.thread_id) || "";
-  if (!threadId) {
-    return null;
+): { event: DesktopChatStreamEvent; lastSeq: number } {
+  const context = "thread render frame";
+  const threadId = requireContractNonEmptyString(
+    requireContractField(payload, "thread_id", context),
+    `${context}.thread_id`,
+  );
+  const hasRenderState = hasContractField(payload, "render_state");
+  const hasRenderDelta = hasContractField(payload, "render_delta");
+  if (hasRenderState === hasRenderDelta) {
+    throw new GatewayContractError(
+      context,
+      "must carry exactly one of render_state or render_delta",
+    );
   }
-  let renderState = parseRenderState(payload.render_state ?? payload.renderState);
-  if (!renderState) {
-    const rawDelta = payload.render_delta ?? payload.renderDelta;
-    if (rawDelta === undefined || rawDelta === null) {
-      return null;
-    }
+  let renderState: RenderState;
+  if (hasRenderState) {
+    renderState = parseRenderState(payload.render_state, `${context}.render_state`);
+  } else {
     renderState = applyRenderDeltaFrame(
       reassembly.held,
-      rawDelta,
+      payload.render_delta,
       connectionLastSeq,
     );
   }
   reassembly.held = renderState;
-  const rawEvents = Array.isArray(payload.events) ? payload.events : [];
+  const rawEvents = requireContractArray(
+    requireContractField(payload, "events", context),
+    `${context}.events`,
+  );
   // A frame marked replay:"windowed" is a server-degraded stale resume:
   // its records start at the window floor, deliberately NOT contiguous
   // with our cursor. The marker (never seq arithmetic) authorizes the
   // discontinuity; ordinary frames keep the per-event gap guard.
-  const windowedReplay = asString(payload.replay) === "windowed";
+  let windowedReplay = false;
+  if (hasContractField(payload, "replay")) {
+    const replay = requireContractString(payload.replay, `${context}.replay`);
+    if (replay !== "windowed") {
+      throw new GatewayContractError(
+        `${context}.replay`,
+        'must be "windowed" when present',
+      );
+    }
+    windowedReplay = true;
+  }
   let lastSeq = connectionLastSeq;
   const events: CommittedMessageEvent[] = [];
-  for (const raw of rawEvents) {
-    const mapped = mapCommittedMessageEvent(parseRecord(raw));
-    if (!mapped || mapped.type !== "committed_message") {
-      continue;
-    }
+  for (const [index, raw] of rawEvents.entries()) {
+    const mapped = mapCommittedMessageEvent(
+      raw,
+      `${context}.events[${index}]`,
+    );
     if (!windowedReplay) {
       const decision = decideStreamSeq({
         incomingSeq: mapped.seq,
@@ -633,14 +770,33 @@ async function forwardThreadStreamBody(
     dataLines = [];
     const payload = tryParseJson<Record<string, unknown>>(payloadText);
     if (!payload) {
-      return;
+      throw new ThreadStreamGapError(
+        connectionLastSeq,
+        "thread render frame is not valid JSON",
+      );
     }
-    if (asString(payload.type) !== "thread_render_frame") {
-      return;
-    }
-    const frame = mapThreadRenderFrameEvent(payload, connectionLastSeq, reassembly);
-    if (!frame) {
-      return;
+    let frame: ReturnType<typeof mapThreadRenderFrameEvent>;
+    try {
+      const frameType = requireContractString(
+        requireContractField(payload, "type", "thread render frame"),
+        "thread render frame.type",
+      );
+      if (frameType !== "thread_render_frame") {
+        throw new GatewayContractError(
+          "thread render frame.type",
+          'must be "thread_render_frame"',
+        );
+      }
+      frame = mapThreadRenderFrameEvent(
+        payload,
+        connectionLastSeq,
+        reassembly,
+      );
+    } catch (error) {
+      if (error instanceof GatewayContractError) {
+        throw new ThreadStreamGapError(connectionLastSeq, error.message);
+      }
+      throw error;
     }
     onEvent(frame.event);
     connectionLastSeq = frame.lastSeq;
@@ -722,7 +878,6 @@ export async function openChatStream(
 ): Promise<{
   runId: string;
   threadId: string;
-  sessionId?: string;
   response: string;
   status: OpenChatStreamResult["status"];
 }> {
@@ -731,13 +886,7 @@ export async function openChatStream(
     input.images,
     input.files,
   );
-  const payload = await requestJson<{
-    status?: unknown;
-    runId?: unknown;
-    run_id?: unknown;
-    threadId?: unknown;
-    thread_id?: unknown;
-  }>(settings, "/api/chat/start", {
+  const payloadValue = await requestJson<unknown>(settings, "/api/chat/start", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -758,15 +907,40 @@ export async function openChatStream(
     }),
     signal: AbortSignal.timeout(8000),
   });
-  const responseThreadId =
-    asString(payload.threadId) || asString(payload.thread_id) || threadId;
+  const payload = requireContractRecord(payloadValue, "chat start response");
+  const status = requireContractString(
+    requireContractField(payload, "status", "chat start response"),
+    "chat start response.status",
+  );
+  if (status !== "accepted") {
+    throw new GatewayContractError(
+      "chat start response.status",
+      'must be "accepted"',
+    );
+  }
   return {
-    runId: asString(payload.runId) || asString(payload.run_id) || "",
-    threadId: responseThreadId,
-    sessionId: responseThreadId,
+    runId: requireContractNonEmptyString(
+      requireContractField(payload, "runId", "chat start response"),
+      "chat start response.runId",
+    ),
+    threadId: requireContractNonEmptyString(
+      requireContractField(payload, "threadId", "chat start response"),
+      "chat start response.threadId",
+    ),
     response: "",
-    status: asString(payload.status) === "accepted" ? "accepted" : "disconnected",
+    status,
   };
+}
+
+function optionalChatResponseString(
+  payload: Record<string, unknown>,
+  field: string,
+  context: string,
+): string | undefined {
+  if (!hasContractField(payload, field)) {
+    return undefined;
+  }
+  return requireContractString(payload[field], `${context}.${field}`);
 }
 
 export async function sendStreamingInput(
@@ -779,16 +953,7 @@ export async function sendStreamingInput(
     input.files,
   );
   try {
-    const payload = await requestJson<{
-      status?: unknown;
-      threadId?: unknown;
-      thread_id?: unknown;
-      sessionId?: unknown;
-      clientIntentId?: unknown;
-      client_intent_id?: unknown;
-      pendingInputId?: unknown;
-      pending_input_id?: unknown;
-    }>(settings, "/api/chat/stream-input", {
+    const payloadValue = await requestJson<unknown>(settings, "/api/chat/stream-input", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -801,26 +966,56 @@ export async function sendStreamingInput(
       }),
       signal: AbortSignal.timeout(8000),
     });
-    const responseThreadId =
-      asString(payload.threadId) || asString(payload.thread_id) || threadId;
+    const payload = requireContractRecord(
+      payloadValue,
+      "chat stream-input response",
+    );
+    const status = requireContractString(
+      requireContractField(payload, "status", "chat stream-input response"),
+      "chat stream-input response.status",
+    );
+    if (status !== "queued" && status !== "no_active_session") {
+      throw new GatewayContractError(
+        "chat stream-input response.status",
+        'must be "queued" or "no_active_session"',
+      );
+    }
+    if (hasContractField(payload, "threadStatus")) {
+      requireContractString(
+        payload.threadStatus,
+        "chat stream-input response.threadStatus",
+      );
+    }
     return {
-      status: asString(payload.status) || "no_active_session",
-      threadId: responseThreadId,
-      sessionId: asString(payload.sessionId) || responseThreadId,
-      clientIntentId:
-        asString(payload.clientIntentId) ||
-        asString(payload.client_intent_id) ||
-        input.clientIntentId,
-      pendingInputId:
-        asString(payload.pendingInputId) || asString(payload.pending_input_id),
+      status,
+      threadId: requireContractNonEmptyString(
+        requireContractField(
+          payload,
+          "threadId",
+          "chat stream-input response",
+        ),
+        "chat stream-input response.threadId",
+      ),
+      clientIntentId: optionalChatResponseString(
+        payload,
+        "clientIntentId",
+        "chat stream-input response",
+      ),
+      pendingInputId: optionalChatResponseString(
+        payload,
+        "pendingInputId",
+        "chat stream-input response",
+      ),
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof GatewayContractError) {
+      throw error;
+    }
     // Preserve the old local-only response when the gateway cannot be reached.
   }
   return {
     status: "no_active_session",
     threadId,
-    sessionId: input.sessionId || threadId,
     clientIntentId: input.clientIntentId,
   };
 }
@@ -830,39 +1025,53 @@ export async function interruptThread(
   threadId: string,
 ): Promise<InterruptResult> {
   try {
-    const payload = await requestJson<{
-      status?: unknown;
-      threadId?: unknown;
-      thread_id?: unknown;
-      sessionId?: unknown;
-      abortedRuns?: unknown;
-      aborted_runs?: unknown;
-    }>(settings, "/api/chat/interrupt", {
+    const payloadValue = await requestJson<unknown>(settings, "/api/chat/interrupt", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ threadId }),
       signal: AbortSignal.timeout(8000),
     });
-    const responseThreadId =
-      asString(payload.threadId) || asString(payload.thread_id) || threadId;
-    const abortedRunsPayload = Array.isArray(payload.abortedRuns)
-      ? payload.abortedRuns
-      : Array.isArray(payload.aborted_runs)
-        ? payload.aborted_runs
-        : [];
+    const payload = requireContractRecord(payloadValue, "chat interrupt response");
+    const status = requireContractString(
+      requireContractField(payload, "status", "chat interrupt response"),
+      "chat interrupt response.status",
+    );
+    if (status !== "interrupted" && status !== "not_found") {
+      throw new GatewayContractError(
+        "chat interrupt response.status",
+        'must be "interrupted" or "not_found"',
+      );
+    }
+    const abortedRunsPayload = requireContractArray(
+      requireContractField(
+        payload,
+        "abortedRuns",
+        "chat interrupt response",
+      ),
+      "chat interrupt response.abortedRuns",
+    );
     return {
-      status: asString(payload.status) || "not_found",
-      threadId: responseThreadId,
-      sessionId: asString(payload.sessionId) || responseThreadId,
-      abortedRuns: abortedRunsPayload.map((entry) => String(entry)),
+      status,
+      threadId: requireContractNonEmptyString(
+        requireContractField(payload, "threadId", "chat interrupt response"),
+        "chat interrupt response.threadId",
+      ),
+      abortedRuns: abortedRunsPayload.map((entry, index) =>
+        requireContractNonEmptyString(
+          entry,
+          `chat interrupt response.abortedRuns[${index}]`,
+        ),
+      ),
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof GatewayContractError) {
+      throw error;
+    }
     // Preserve local abort behavior when the gateway is unreachable.
   }
   return {
     status: "local_abort_only",
     threadId,
-    sessionId: threadId,
     abortedRuns: [],
   };
 }

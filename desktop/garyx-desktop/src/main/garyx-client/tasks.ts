@@ -18,21 +18,28 @@ import type {
   UpdateTaskStatusInput,
   UpdateTaskTitleInput,
 } from "@shared/contracts";
-import { asFiniteNumber, asString, asStringList, parseRecord, requestJson } from "./http.ts";
+import {
+  GatewayContractError,
+  hasContractField,
+  requestJson,
+  requireContractArray,
+  requireContractBoolean,
+  requireContractField,
+  requireContractNonEmptyString,
+  requireContractNonNegativeInteger,
+  requireContractRecord,
+  requireContractString,
+} from "./http.ts";
 
 interface TaskPrincipalPayload {
   kind?: string;
   user_id?: string;
-  userId?: string;
   agent_id?: string;
-  agentId?: string;
 }
 
 interface TaskSummaryPayload {
   thread_id?: string;
-  threadId?: string;
   task_id?: string;
-  taskId?: string;
   number?: number;
   title?: string | null;
   status?: string | null;
@@ -40,13 +47,9 @@ interface TaskSummaryPayload {
   assignee?: TaskPrincipalPayload | null;
   source?: TaskSourcePayload | null;
   updated_at?: string | null;
-  updatedAt?: string | null;
   updated_by?: TaskPrincipalPayload | null;
-  updatedBy?: TaskPrincipalPayload | null;
   runtime_agent_id?: string | null;
-  runtimeAgentId?: string | null;
   reply_count?: number;
-  replyCount?: number;
   executor?: TaskExecutorPayload | null;
   task?: TaskSummaryPayload | null;
 }
@@ -54,56 +57,37 @@ interface TaskSummaryPayload {
 interface TaskExecutorPayload {
   type?: string | null;
   agent_id?: string | null;
-  agentId?: string | null;
 }
 
 interface TaskSourcePayload {
   thread_id?: string | null;
-  threadId?: string | null;
   task_id?: string | null;
-  taskId?: string | null;
   task_thread_id?: string | null;
-  taskThreadId?: string | null;
   bot_id?: string | null;
-  botId?: string | null;
   channel?: string | null;
   account_id?: string | null;
-  accountId?: string | null;
 }
 
 interface TasksPayload {
   tasks?: TaskSummaryPayload[];
   total?: number;
   has_more?: boolean;
-  hasMore?: boolean;
 }
 
 interface TaskForestNodePayload extends TaskSummaryPayload {
   kind?: string | null;
   node_id?: string | null;
-  nodeId?: string | null;
   parent_node_id?: string | null;
-  parentNodeId?: string | null;
   parent_task_number?: number | null;
-  parentTaskNumber?: number | null;
   parent_thread_id?: string | null;
-  parentThreadId?: string | null;
   active_run_id?: string | null;
-  activeRunId?: string | null;
   run_state?: string | null;
-  runState?: string | null;
   last_active_at?: string | null;
-  lastActiveAt?: string | null;
   thread_type?: string | null;
-  threadType?: string | null;
   provider_type?: string | null;
-  providerType?: string | null;
   agent_id?: string | null;
-  agentId?: string | null;
   message_count?: number | null;
-  messageCount?: number | null;
   last_message_preview?: string | null;
-  lastMessagePreview?: string | null;
   depth?: number | null;
 }
 
@@ -111,51 +95,63 @@ interface TaskForestPayload {
   tasks?: TaskForestNodePayload[];
   total?: number;
   active_count?: number | null;
-  activeCount?: number | null;
   root_thread_ids?: unknown[];
-  rootThreadIds?: unknown[];
   skipped_pinned_thread_ids?: unknown[];
-  skippedPinnedThreadIds?: unknown[];
 }
 
-function normalizeTaskStatus(value: unknown): DesktopTaskStatus {
+function mapTaskStatus(value: unknown, path: string): DesktopTaskStatus {
   switch (value) {
+    case "todo":
     case "in_progress":
     case "in_review":
     case "done":
       return value;
     default:
-      return "todo";
+      throw new GatewayContractError(path, "must be a current task status");
   }
 }
 
-function mapTaskPrincipal(value: unknown): DesktopTaskPrincipal {
-  const record = parseRecord(value);
+function mapTaskPrincipal(value: unknown, path: string): DesktopTaskPrincipal {
+  const record = requireContractRecord(value, path);
   if (record.kind === "human") {
     return {
       kind: "human",
-      userId: asString(record.user_id) || asString(record.userId) || "owner",
+      userId: requireContractNonEmptyString(
+        requireContractField(record, "user_id", path),
+        `${path}.user_id`,
+      ),
     };
   }
-  return {
-    kind: "agent",
-    agentId: asString(record.agent_id) || asString(record.agentId) || "claude",
-  };
+  if (record.kind === "agent") {
+    return {
+      kind: "agent",
+      agentId: requireContractNonEmptyString(
+        requireContractField(record, "agent_id", path),
+        `${path}.agent_id`,
+      ),
+    };
+  }
+  throw new GatewayContractError(`${path}.kind`, "must be human or agent");
 }
 
-function mapTaskSource(value: unknown): DesktopTaskSource | null {
-  if (!value || typeof value !== "object") {
+function mapTaskSource(value: unknown, path: string): DesktopTaskSource | null {
+  if (value === undefined || value === null) {
     return null;
   }
-  const record = parseRecord(value);
+  const record = requireContractRecord(value, path);
+  const optionalString = (field: string): string | null => {
+    if (!hasContractField(record, field)) {
+      return null;
+    }
+    return requireContractString(record[field], `${path}.${field}`);
+  };
   const source: DesktopTaskSource = {
-    threadId: asString(record.thread_id) || asString(record.threadId) || null,
-    taskId: asString(record.task_id) || asString(record.taskId) || null,
-    taskThreadId:
-      asString(record.task_thread_id) || asString(record.taskThreadId) || null,
-    botId: asString(record.bot_id) || asString(record.botId) || null,
-    channel: asString(record.channel) || null,
-    accountId: asString(record.account_id) || asString(record.accountId) || null,
+    threadId: optionalString("thread_id"),
+    taskId: optionalString("task_id"),
+    taskThreadId: optionalString("task_thread_id"),
+    botId: optionalString("bot_id"),
+    channel: optionalString("channel"),
+    accountId: optionalString("account_id"),
   };
   return source.threadId ||
     source.taskId ||
@@ -167,133 +163,307 @@ function mapTaskSource(value: unknown): DesktopTaskSource | null {
     : null;
 }
 
-function mapTaskExecutor(value: unknown): DesktopTaskSummary["executor"] {
-  if (!value || typeof value !== "object") {
+function mapTaskExecutor(
+  value: unknown,
+  path: string,
+): DesktopTaskSummary["executor"] {
+  if (value === undefined || value === null) {
     return null;
   }
-  const record = parseRecord(value);
-  const type = asString(record.type);
-  if (type === "agent") {
-    const agentId = asString(record.agent_id) || asString(record.agentId);
-    return agentId ? { type: "agent", agentId } : null;
+  const record = requireContractRecord(value, path);
+  if (record.type !== "agent") {
+    throw new GatewayContractError(`${path}.type`, "must be agent");
   }
-  return null;
-}
-
-function mapTaskSummary(value: TaskSummaryPayload): DesktopTaskSummary {
-  const task: TaskSummaryPayload =
-    value.task && typeof value.task === "object" ? value.task : {};
-  const number = asFiniteNumber(value.number) ?? asFiniteNumber(task.number) ?? 0;
-  const title =
-    asString(value.title) ||
-    asString(task.title) ||
-    (number > 0 ? `#TASK-${number}` : "") ||
-    "Untitled task";
   return {
-    threadId:
-      asString(value.thread_id) ||
-      asString(value.threadId) ||
-      asString(task.thread_id) ||
-      asString(task.threadId) ||
-      "",
-    taskId:
-      asString(value.task_id) ||
-      asString(value.taskId) ||
-      asString(task.task_id) ||
-      asString(task.taskId) ||
-      (number > 0 ? `#TASK-${number}` : ""),
-    number,
-    title,
-    status: normalizeTaskStatus(value.status ?? task.status),
-    creator: mapTaskPrincipal(value.creator ?? task.creator),
-    assignee:
-      value.assignee || task.assignee
-        ? mapTaskPrincipal(value.assignee ?? task.assignee)
-        : null,
-    source: mapTaskSource(value.source ?? task.source),
-    executor: mapTaskExecutor(value.executor ?? task.executor),
-    updatedAt:
-      asString(value.updated_at) ||
-      asString(value.updatedAt) ||
-      asString(task.updated_at) ||
-      asString(task.updatedAt) ||
-      new Date(0).toISOString(),
-    updatedBy: mapTaskPrincipal(
-      value.updated_by ?? value.updatedBy ?? task.updated_by ?? task.updatedBy,
+    type: "agent",
+    agentId: requireContractNonEmptyString(
+      requireContractField(record, "agent_id", path),
+      `${path}.agent_id`,
     ),
-    runtimeAgentId:
-      asString(value.runtime_agent_id) ||
-      asString(value.runtimeAgentId) ||
-      asString(task.runtime_agent_id) ||
-      asString(task.runtimeAgentId) ||
-      "",
-    replyCount:
-      asFiniteNumber(value.reply_count) ??
-      asFiniteNumber(value.replyCount) ??
-      asFiniteNumber(task.reply_count) ??
-      asFiniteNumber(task.replyCount) ??
-      0,
   };
 }
 
-function mapTaskForestNode(value: TaskForestNodePayload): DesktopTaskForestNode {
-  const kind = (asString(value.kind) || "").trim().toLowerCase();
+function optionalTaskPrincipal(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): DesktopTaskPrincipal | null {
+  if (!hasContractField(record, field)) {
+    return null;
+  }
+  return mapTaskPrincipal(record[field], `${path}.${field}`);
+}
+
+function mapTaskSummaryRecord(
+  value: unknown,
+  path: string,
+): DesktopTaskSummary {
+  const record = requireContractRecord(value, path);
+  return {
+    threadId: requireContractNonEmptyString(
+      requireContractField(record, "thread_id", path),
+      `${path}.thread_id`,
+    ),
+    taskId: requireContractNonEmptyString(
+      requireContractField(record, "task_id", path),
+      `${path}.task_id`,
+    ),
+    number: requireContractNonNegativeInteger(
+      requireContractField(record, "number", path),
+      `${path}.number`,
+    ),
+    title: requireContractString(
+      requireContractField(record, "title", path),
+      `${path}.title`,
+    ),
+    status: mapTaskStatus(
+      requireContractField(record, "status", path),
+      `${path}.status`,
+    ),
+    creator: mapTaskPrincipal(
+      requireContractField(record, "creator", path),
+      `${path}.creator`,
+    ),
+    assignee: optionalTaskPrincipal(record, "assignee", path),
+    source: mapTaskSource(record.source, `${path}.source`),
+    executor: mapTaskExecutor(record.executor, `${path}.executor`),
+    updatedAt: requireContractNonEmptyString(
+      requireContractField(record, "updated_at", path),
+      `${path}.updated_at`,
+    ),
+    updatedBy: mapTaskPrincipal(
+      requireContractField(record, "updated_by", path),
+      `${path}.updated_by`,
+    ),
+    runtimeAgentId: requireContractString(
+      requireContractField(record, "runtime_agent_id", path),
+      `${path}.runtime_agent_id`,
+    ),
+    replyCount: requireContractNonNegativeInteger(
+      requireContractField(record, "reply_count", path),
+      `${path}.reply_count`,
+    ),
+  };
+}
+
+type TaskEnvelopeFields = Omit<
+  DesktopTaskSummary,
+  "threadId" | "taskId" | "runtimeAgentId" | "replyCount"
+>;
+
+function mapTaskEnvelopeFields(
+  record: Record<string, unknown>,
+  path: string,
+): TaskEnvelopeFields {
+  const task = requireContractRecord(
+    requireContractField(record, "task", path),
+    `${path}.task`,
+  );
+  const taskPath = `${path}.task`;
+  return {
+    number: requireContractNonNegativeInteger(
+      requireContractField(task, "number", taskPath),
+      `${taskPath}.number`,
+    ),
+    title: requireContractString(
+      requireContractField(task, "title", taskPath),
+      `${taskPath}.title`,
+    ),
+    status: mapTaskStatus(
+      requireContractField(task, "status", taskPath),
+      `${taskPath}.status`,
+    ),
+    creator: mapTaskPrincipal(
+      requireContractField(task, "creator", taskPath),
+      `${taskPath}.creator`,
+    ),
+    assignee: optionalTaskPrincipal(task, "assignee", taskPath),
+    source: mapTaskSource(task.source, `${taskPath}.source`),
+    executor: mapTaskExecutor(task.executor, `${taskPath}.executor`),
+    updatedAt: requireContractNonEmptyString(
+      requireContractField(task, "updated_at", taskPath),
+      `${taskPath}.updated_at`,
+    ),
+    updatedBy: mapTaskPrincipal(
+      requireContractField(task, "updated_by", taskPath),
+      `${taskPath}.updated_by`,
+    ),
+  };
+}
+
+function mapTaskEnvelopeIdentity(
+  record: Record<string, unknown>,
+  path: string,
+): Pick<DesktopTaskSummary, "threadId" | "taskId"> {
+  return {
+    threadId: requireContractNonEmptyString(
+      requireContractField(record, "thread_id", path),
+      `${path}.thread_id`,
+    ),
+    taskId: requireContractNonEmptyString(
+      requireContractField(record, "task_id", path),
+      `${path}.task_id`,
+    ),
+  };
+}
+
+function mapCreatedTaskEnvelope(value: unknown, path: string): DesktopTaskSummary {
+  const record = requireContractRecord(value, path);
+  const fields = mapTaskEnvelopeFields(record, path);
+  const number = requireContractNonNegativeInteger(
+    requireContractField(record, "number", path),
+    `${path}.number`,
+  );
+  const status = mapTaskStatus(
+    requireContractField(record, "status", path),
+    `${path}.status`,
+  );
+  if (number !== fields.number || status !== fields.status) {
+    throw new GatewayContractError(
+      path,
+      "must keep its task number and status projections consistent",
+    );
+  }
+  return {
+    ...mapTaskEnvelopeIdentity(record, path),
+    ...fields,
+    runtimeAgentId: requireContractString(
+      requireContractField(record, "runtime_agent_id", path),
+      `${path}.runtime_agent_id`,
+    ),
+    // A successful create returns a brand-new backing thread, so no replies can
+    // predate this response; the create envelope intentionally has no counter.
+    replyCount: 0,
+  };
+}
+
+function mapTaskDetailEnvelope(value: unknown, path: string): DesktopTaskSummary {
+  const record = requireContractRecord(value, path);
+  const threadPath = `${path}.thread`;
+  const thread = requireContractRecord(
+    requireContractField(record, "thread", path),
+    threadPath,
+  );
+  const agentId = hasContractField(thread, "agent_id")
+    ? thread.agent_id
+    : null;
+  return {
+    ...mapTaskEnvelopeIdentity(record, path),
+    ...mapTaskEnvelopeFields(record, path),
+    runtimeAgentId: agentId === null
+      ? ""
+      : requireContractString(agentId, `${threadPath}.agent_id`),
+    replyCount: requireContractNonNegativeInteger(
+      requireContractField(thread, "message_count", threadPath),
+      `${threadPath}.message_count`,
+    ),
+  };
+}
+
+function requiredNullableString(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): string | null {
+  const value = requireContractField(record, field, path);
+  return value === null
+    ? null
+    : requireContractString(value, `${path}.${field}`);
+}
+
+function requiredNullableInteger(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): number | null {
+  const value = requireContractField(record, field, path);
+  return value === null
+    ? null
+    : requireContractNonNegativeInteger(value, `${path}.${field}`);
+}
+
+function mapTaskForestNode(value: unknown, index: number): DesktopTaskForestNode {
+  const path = `task forest.tasks[${index}]`;
+  const record = requireContractRecord(value, path);
+  const kind = requireContractString(
+    requireContractField(record, "kind", path),
+    `${path}.kind`,
+  );
   if (kind === "thread") {
-    const threadId = asString(value.thread_id) || asString(value.threadId) || "";
     return {
       kind: "thread",
-      nodeId:
-        asString(value.node_id) ||
-        asString(value.nodeId) ||
-        `thread-root:${threadId}`,
-      threadId,
-      title: asString(value.title) || threadId || "Pinned thread",
-      threadType:
-        asString(value.thread_type) || asString(value.threadType) || "chat",
-      providerType:
-        asString(value.provider_type) || asString(value.providerType) || null,
-      agentId: asString(value.agent_id) || asString(value.agentId) || null,
-      messageCount:
-        asFiniteNumber(value.message_count) ??
-        asFiniteNumber(value.messageCount) ??
-        0,
-      lastMessagePreview:
-        asString(value.last_message_preview) ||
-        asString(value.lastMessagePreview) ||
-        "",
-      activeRunId:
-        asString(value.active_run_id) || asString(value.activeRunId) || null,
-      runState: asString(value.run_state) || asString(value.runState) || "idle",
-      updatedAt:
-        asString(value.updated_at) || asString(value.updatedAt) || null,
-      lastActiveAt:
-        asString(value.last_active_at) || asString(value.lastActiveAt) || null,
-      depth: asFiniteNumber(value.depth) ?? null,
+      nodeId: requireContractNonEmptyString(
+        requireContractField(record, "node_id", path),
+        `${path}.node_id`,
+      ),
+      threadId: requireContractNonEmptyString(
+        requireContractField(record, "thread_id", path),
+        `${path}.thread_id`,
+      ),
+      title: requireContractString(
+        requireContractField(record, "title", path),
+        `${path}.title`,
+      ),
+      threadType: requireContractNonEmptyString(
+        requireContractField(record, "thread_type", path),
+        `${path}.thread_type`,
+      ),
+      providerType: requiredNullableString(record, "provider_type", path),
+      agentId: requiredNullableString(record, "agent_id", path),
+      messageCount: requireContractNonNegativeInteger(
+        requireContractField(record, "message_count", path),
+        `${path}.message_count`,
+      ),
+      lastMessagePreview: requireContractString(
+        requireContractField(record, "last_message_preview", path),
+        `${path}.last_message_preview`,
+      ),
+      activeRunId: requiredNullableString(record, "active_run_id", path),
+      runState: requireContractNonEmptyString(
+        requireContractField(record, "run_state", path),
+        `${path}.run_state`,
+      ),
+      updatedAt: requiredNullableString(record, "updated_at", path),
+      lastActiveAt: requiredNullableString(record, "last_active_at", path),
+      depth: hasContractField(record, "depth")
+        ? requireContractNonNegativeInteger(record.depth, `${path}.depth`)
+        : null,
     };
   }
-  const task = mapTaskSummary(value);
+  if (kind !== "task") {
+    throw new GatewayContractError(`${path}.kind`, "must be thread or task");
+  }
+  const task = mapTaskSummaryRecord(record, path);
   return {
     ...task,
     kind: "task",
-    nodeId:
-      asString(value.node_id) ||
-      asString(value.nodeId) ||
-      `task:${task.threadId}`,
-    parentNodeId:
-      asString(value.parent_node_id) || asString(value.parentNodeId) || null,
-    parentTaskNumber:
-      asFiniteNumber(value.parent_task_number) ??
-      asFiniteNumber(value.parentTaskNumber) ??
-      null,
-    parentThreadId:
-      asString(value.parent_thread_id) || asString(value.parentThreadId) || null,
-    activeRunId:
-      asString(value.active_run_id) || asString(value.activeRunId) || null,
-    runState: asString(value.run_state) || asString(value.runState) || "idle",
-    lastActiveAt:
-      asString(value.last_active_at) || asString(value.lastActiveAt) || null,
-    depth: asFiniteNumber(value.depth) ?? null,
+    nodeId: requireContractNonEmptyString(
+      requireContractField(record, "node_id", path),
+      `${path}.node_id`,
+    ),
+    parentNodeId: requiredNullableString(record, "parent_node_id", path),
+    parentTaskNumber: requiredNullableInteger(
+      record,
+      "parent_task_number",
+      path,
+    ),
+    parentThreadId: requiredNullableString(record, "parent_thread_id", path),
+    activeRunId: requiredNullableString(record, "active_run_id", path),
+    runState: requireContractNonEmptyString(
+      requireContractField(record, "run_state", path),
+      `${path}.run_state`,
+    ),
+    lastActiveAt: requiredNullableString(record, "last_active_at", path),
+    depth: hasContractField(record, "depth")
+      ? requireContractNonNegativeInteger(record.depth, `${path}.depth`)
+      : null,
   };
+}
+
+function mapRequiredStringList(value: unknown, path: string): string[] {
+  return requireContractArray(value, path).map((entry, index) =>
+    requireContractNonEmptyString(entry, `${path}[${index}]`),
+  );
 }
 
 function principalPayload(principal: string): TaskPrincipalPayload {
@@ -354,13 +524,21 @@ export async function listTasks(
     },
   );
 
-  const tasks = Array.isArray(payload.tasks)
-    ? payload.tasks.map(mapTaskSummary)
-    : [];
+  const record = requireContractRecord(payload, "task list");
+  const tasks = requireContractArray(
+    requireContractField(record, "tasks", "task list"),
+    "task list.tasks",
+  ).map((task, index) => mapTaskSummaryRecord(task, `task list.tasks[${index}]`));
   return {
     tasks,
-    total: asFiniteNumber(payload.total) ?? tasks.length,
-    hasMore: payload.has_more ?? payload.hasMore ?? false,
+    total: requireContractNonNegativeInteger(
+      requireContractField(record, "total", "task list"),
+      "task list.total",
+    ),
+    hasMore: requireContractBoolean(
+      requireContractField(record, "has_more", "task list"),
+      "task list.has_more",
+    ),
   };
 }
 
@@ -396,19 +574,34 @@ export async function listTaskForest(
     },
   );
 
-  const tasks = Array.isArray(payload.tasks)
-    ? payload.tasks.map(mapTaskForestNode)
-    : [];
+  const record = requireContractRecord(payload, "task forest");
+  const tasks = requireContractArray(
+    requireContractField(record, "tasks", "task forest"),
+    "task forest.tasks",
+  ).map(mapTaskForestNode);
   return {
     tasks,
-    total: asFiniteNumber(payload.total) ?? tasks.length,
-    activeCount:
-      asFiniteNumber(payload.active_count) ??
-      asFiniteNumber(payload.activeCount) ??
-      null,
-    rootThreadIds: asStringList(payload.root_thread_ids ?? payload.rootThreadIds),
-    skippedPinnedThreadIds: asStringList(
-      payload.skipped_pinned_thread_ids ?? payload.skippedPinnedThreadIds,
+    total: requireContractNonNegativeInteger(
+      requireContractField(record, "total", "task forest"),
+      "task forest.total",
+    ),
+    activeCount: hasContractField(record, "active_count")
+      ? requireContractNonNegativeInteger(
+          record.active_count,
+          "task forest.active_count",
+        )
+      : null,
+    rootThreadIds: mapRequiredStringList(
+      requireContractField(record, "root_thread_ids", "task forest"),
+      "task forest.root_thread_ids",
+    ),
+    skippedPinnedThreadIds: mapRequiredStringList(
+      requireContractField(
+        record,
+        "skipped_pinned_thread_ids",
+        "task forest",
+      ),
+      "task forest.skipped_pinned_thread_ids",
     ),
   };
 }
@@ -428,7 +621,7 @@ export async function getTask(
       signal: AbortSignal.timeout(8000),
     },
   );
-  return mapTaskSummary(payload);
+  return mapTaskDetailEnvelope(payload, "get task response");
 }
 
 export async function createTask(
@@ -460,7 +653,7 @@ export async function createTask(
       notification_target: taskNotificationTargetPayload(input.notificationTarget),
     }),
   });
-  return mapTaskSummary(payload);
+  return mapCreatedTaskEnvelope(payload, "create task response");
 }
 
 function taskSourcePayload(

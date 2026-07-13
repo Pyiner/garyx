@@ -5,29 +5,32 @@ import type {
   DesktopCapsulesPage,
   DesktopSettings,
 } from "@shared/contracts";
-import { GatewayRequestError, asFiniteNumber, asString, requestJson, requestText } from "./http.ts";
+import {
+  GatewayContractError,
+  GatewayRequestError,
+  requestJson,
+  requestText,
+  requireContractArray,
+  requireContractField,
+  requireContractNonEmptyString,
+  requireContractNonNegativeInteger,
+  requireContractRecord,
+  requireContractString,
+} from "./http.ts";
 
 interface CapsulePayload {
   id?: string;
   title?: string | null;
   description?: string | null;
   thread_id?: string | null;
-  threadId?: string | null;
   run_id?: string | null;
-  runId?: string | null;
   agent_id?: string | null;
-  agentId?: string | null;
   provider_type?: string | null;
-  providerType?: string | null;
   html_sha256?: string | null;
-  htmlSha256?: string | null;
   byte_size?: number | null;
-  byteSize?: number | null;
   revision?: number | null;
   created_at?: string | null;
-  createdAt?: string | null;
   updated_at?: string | null;
-  updatedAt?: string | null;
 }
 
 interface CapsulesPayload {
@@ -35,47 +38,73 @@ interface CapsulesPayload {
   capsule?: CapsulePayload | null;
 }
 
-function normalizeCapsuleProviderType(value: unknown): DesktopCapsuleSummary["providerType"] {
-  return asString(value) || null;
+function requiredNullableString(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): string | null {
+  const value = requireContractField(record, field, path);
+  return value === null
+    ? null
+    : requireContractString(value, `${path}.${field}`);
 }
 
-function mapCapsuleSummary(value: CapsulePayload): DesktopCapsuleSummary | null {
-  const id = asString(value.id);
-  if (!id) {
-    return null;
+function mapCapsuleSummary(value: unknown, path: string): DesktopCapsuleSummary {
+  const record = requireContractRecord(value, path);
+  const revision = requireContractNonNegativeInteger(
+    requireContractField(record, "revision", path),
+    `${path}.revision`,
+  );
+  if (revision < 1) {
+    throw new GatewayContractError(`${path}.revision`, "must be at least 1");
   }
-  const byteSize =
-    asFiniteNumber(value.byte_size) ?? asFiniteNumber(value.byteSize) ?? 0;
-  const revision = asFiniteNumber(value.revision) ?? 1;
   return {
-    id,
-    title: asString(value.title) || "Untitled Capsule",
-    description: asString(value.description) || "",
-    threadId: asString(value.thread_id) || asString(value.threadId) || null,
-    runId: asString(value.run_id) || asString(value.runId) || null,
-    agentId: asString(value.agent_id) || asString(value.agentId) || null,
-    providerType: normalizeCapsuleProviderType(value.provider_type ?? value.providerType),
-    htmlSha256: asString(value.html_sha256) || asString(value.htmlSha256) || "",
-    byteSize: Math.max(0, Math.trunc(byteSize)),
-    revision: Math.max(1, Math.trunc(revision)),
-    createdAt:
-      asString(value.created_at) ||
-      asString(value.createdAt) ||
-      new Date(0).toISOString(),
-    updatedAt:
-      asString(value.updated_at) ||
-      asString(value.updatedAt) ||
-      new Date(0).toISOString(),
+    id: requireContractNonEmptyString(
+      requireContractField(record, "id", path),
+      `${path}.id`,
+    ),
+    title: requireContractString(
+      requireContractField(record, "title", path),
+      `${path}.title`,
+    ),
+    description: requireContractString(
+      requireContractField(record, "description", path),
+      `${path}.description`,
+    ),
+    threadId: requiredNullableString(record, "thread_id", path),
+    runId: requiredNullableString(record, "run_id", path),
+    agentId: requiredNullableString(record, "agent_id", path),
+    providerType: requiredNullableString(record, "provider_type", path),
+    htmlSha256: requireContractNonEmptyString(
+      requireContractField(record, "html_sha256", path),
+      `${path}.html_sha256`,
+    ),
+    byteSize: requireContractNonNegativeInteger(
+      requireContractField(record, "byte_size", path),
+      `${path}.byte_size`,
+    ),
+    revision,
+    createdAt: requireContractNonEmptyString(
+      requireContractField(record, "created_at", path),
+      `${path}.created_at`,
+    ),
+    updatedAt: requireContractNonEmptyString(
+      requireContractField(record, "updated_at", path),
+      `${path}.updated_at`,
+    ),
   };
 }
 
-function mapCapsulesPage(payload: CapsulesPayload): DesktopCapsulesPage {
-  const capsules = Array.isArray(payload.capsules)
-    ? payload.capsules
-        .map(mapCapsuleSummary)
-        .filter((capsule): capsule is DesktopCapsuleSummary => Boolean(capsule))
-    : [];
-  return { capsules };
+function mapCapsulesPage(payload: unknown): DesktopCapsulesPage {
+  const record = requireContractRecord(payload, "capsule list");
+  return {
+    capsules: requireContractArray(
+      requireContractField(record, "capsules", "capsule list"),
+      "capsule list.capsules",
+    ).map((capsule, index) =>
+      mapCapsuleSummary(capsule, `capsule list.capsules[${index}]`),
+    ),
+  };
 }
 
 export async function listCapsules(
@@ -101,7 +130,11 @@ export async function getCapsule(
       `/api/capsules/${encodeURIComponent(id)}`,
       { signal: AbortSignal.timeout(8000) },
     );
-    return payload.capsule ? mapCapsuleSummary(payload.capsule) : null;
+    const record = requireContractRecord(payload, "get capsule response");
+    return mapCapsuleSummary(
+      requireContractField(record, "capsule", "get capsule response"),
+      "get capsule response.capsule",
+    );
   } catch (error) {
     if (error instanceof GatewayRequestError && error.status === 404) {
       return null;

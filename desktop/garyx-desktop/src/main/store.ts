@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join, basename } from 'node:path';
 
 import { app } from 'electron';
@@ -49,7 +49,6 @@ import {
   updateRemoteThread,
 } from './gary-client';
 const STATE_FILE_NAME = 'garyx-desktop-state.json';
-const LEGACY_STATE_FILE_NAME = 'garyx-desktop-state.json';
 const MAX_GATEWAY_PROFILES = 12;
 const LEGACY_DEFAULT_GATEWAY_URLS = new Set([
   'http://127.0.0.1:3000',
@@ -58,43 +57,6 @@ const LEGACY_DEFAULT_GATEWAY_URLS = new Set([
 
 function stateFilePath(): string {
   return join(app.getPath('userData'), STATE_FILE_NAME);
-}
-
-function legacyStateFilePath(): string {
-  return join(app.getPath('userData'), LEGACY_STATE_FILE_NAME);
-}
-
-async function migrateLegacyStateFile(): Promise<void> {
-  const nextPath = stateFilePath();
-  const legacyPath = legacyStateFilePath();
-
-  try {
-    await access(nextPath);
-    return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error;
-    }
-  }
-
-  try {
-    await access(legacyPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return;
-    }
-    throw error;
-  }
-
-  await mkdir(dirname(nextPath), { recursive: true });
-  try {
-    await rename(legacyPath, nextPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      return;
-    }
-    throw error;
-  }
 }
 
 function sortThreads(threads: DesktopThreadSummary[]): DesktopThreadSummary[] {
@@ -902,7 +864,7 @@ async function mergeRemoteDesktopState(
     ? remoteConfiguredBots.map((bot) => ({
         channel: bot.channel,
         accountId: bot.account_id,
-        displayName: bot.display_name?.trim() || bot.displayName?.trim() || bot.name?.trim() || bot.account_id,
+        displayName: bot.display_name.trim(),
         enabled: bot.enabled,
         workspaceDir: bot.workspace_dir?.trim() || null,
         rootBehavior: bot.root_behavior === 'expand_only' ? 'expand_only' as const : 'open_default' as const,
@@ -977,7 +939,6 @@ function requireThread(state: DesktopState, threadId: string): DesktopThreadSumm
 
 async function getLocalDesktopState(): Promise<DesktopState> {
   const resolvedDefaults = await resolveDefaultDesktopSettings();
-  await migrateLegacyStateFile();
   try {
     const filePath = stateFilePath();
     const raw = await readFile(filePath, 'utf8');

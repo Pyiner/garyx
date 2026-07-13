@@ -10,7 +10,19 @@ import type {
   DesktopUsageWindow,
   ListProviderRecentSessionsInput,
 } from "@shared/contracts";
-import { asFiniteNumber, asString, parseRecord, requestJson } from "./http.ts";
+import {
+  GatewayContractError,
+  hasContractField,
+  requestJson,
+  requireContractArray,
+  requireContractBoolean,
+  requireContractField,
+  requireContractFiniteNumber,
+  requireContractInteger,
+  requireContractNonEmptyString,
+  requireContractRecord,
+  requireContractString,
+} from "./http.ts";
 
 interface ProviderRecentSessionsPayload {
   sessions?: unknown[];
@@ -22,59 +34,39 @@ interface ProviderModelOptionPayload {
   description?: unknown;
   recommended?: unknown;
   default_reasoning_effort?: unknown;
-  defaultReasoningEffort?: unknown;
   supported_reasoning_efforts?: unknown;
-  supportedReasoningEfforts?: unknown;
   service_tiers?: unknown;
-  serviceTiers?: unknown;
 }
 
 interface ProviderModelsPayload {
   provider_type?: unknown;
-  providerType?: unknown;
   supports_model_selection?: unknown;
-  supportsModelSelection?: unknown;
   models?: unknown;
   supports_reasoning_effort_selection?: unknown;
-  supportsReasoningEffortSelection?: unknown;
   reasoning_efforts?: unknown;
-  reasoningEfforts?: unknown;
   supports_service_tier_selection?: unknown;
-  supportsServiceTierSelection?: unknown;
   service_tiers?: unknown;
-  serviceTiers?: unknown;
   default_model?: unknown;
-  defaultModel?: unknown;
   default_reasoning_effort?: unknown;
-  defaultReasoningEffort?: unknown;
   source?: unknown;
   error?: unknown;
 }
 
 interface UsageWindowPayload {
   used_percent?: unknown;
-  usedPercent?: unknown;
   remaining_percent?: unknown;
-  remainingPercent?: unknown;
   resets_at?: unknown;
-  resetsAt?: unknown;
   reset_after_seconds?: unknown;
-  resetAfterSeconds?: unknown;
 }
 
 interface ModelUsagePayload {
   id?: unknown;
   name?: unknown;
   remaining_fraction?: unknown;
-  remainingFraction?: unknown;
   remaining_percent?: unknown;
-  remainingPercent?: unknown;
   used_percent?: unknown;
-  usedPercent?: unknown;
   resets_at?: unknown;
-  resetsAt?: unknown;
   reset_after_seconds?: unknown;
-  resetAfterSeconds?: unknown;
   description?: unknown;
 }
 
@@ -93,7 +85,6 @@ interface ProviderUsagePayload {
 interface CodingUsagePayload {
   providers?: unknown;
   refreshed_at?: unknown;
-  refreshedAt?: unknown;
 }
 
 export function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
@@ -110,175 +101,288 @@ export function normalizeDesktopProviderType(value: unknown): DesktopApiProvider
 }
 
 function mapProviderModelOption(
-  value: ProviderModelOptionPayload,
-): DesktopProviderModelOption | null {
-  const id = typeof value.id === "string" ? value.id.trim() : "";
-  if (!id) {
-    return null;
-  }
-  const label =
-    typeof value.label === "string" && value.label.trim()
-      ? value.label.trim()
-      : id;
+  value: unknown,
+  path: string,
+): DesktopProviderModelOption {
+  const record = requireContractRecord(value, path);
+  const optionalString = (field: string): string | null => {
+    if (!hasContractField(record, field)) {
+      return null;
+    }
+    return requireContractString(record[field], `${path}.${field}`);
+  };
+  const optionalBoolean = (field: string): boolean => {
+    if (!hasContractField(record, field)) {
+      return false;
+    }
+    return requireContractBoolean(record[field], `${path}.${field}`);
+  };
   return {
-    id,
-    label,
-    description:
-      typeof value.description === "string" && value.description.trim()
-        ? value.description.trim()
-        : null,
-    recommended: value.recommended === true,
-    defaultReasoningEffort:
-      typeof value.default_reasoning_effort === "string"
-        ? value.default_reasoning_effort
-        : typeof value.defaultReasoningEffort === "string"
-          ? value.defaultReasoningEffort
-          : null,
+    id: requireContractNonEmptyString(
+      requireContractField(record, "id", path),
+      `${path}.id`,
+    ),
+    label: requireContractNonEmptyString(
+      requireContractField(record, "label", path),
+      `${path}.label`,
+    ),
+    description: optionalString("description"),
+    recommended: optionalBoolean("recommended"),
+    defaultReasoningEffort: optionalString("default_reasoning_effort"),
     supportedReasoningEfforts: mapProviderModelOptionArray(
-      value.supported_reasoning_efforts || value.supportedReasoningEfforts,
+      record.supported_reasoning_efforts,
+      `${path}.supported_reasoning_efforts`,
+      true,
     ),
     serviceTiers: mapProviderModelOptionArray(
-      value.service_tiers || value.serviceTiers,
+      record.service_tiers,
+      `${path}.service_tiers`,
+      true,
     ),
   };
 }
 
 function mapProviderModelOptionArray(
   value: unknown,
+  path: string,
+  mayBeOmitted = false,
 ): DesktopProviderModelOption[] {
-  const options: DesktopProviderModelOption[] = [];
-  if (!Array.isArray(value)) {
-    return options;
+  if (value === undefined && mayBeOmitted) {
+    return [];
   }
-  for (const item of value) {
-    if (item && typeof item === "object") {
-      const option = mapProviderModelOption(item as ProviderModelOptionPayload);
-      if (option) {
-        options.push(option);
-      }
-    }
-  }
-  return options;
+  return requireContractArray(value, path).map((item, index) =>
+    mapProviderModelOption(item, `${path}[${index}]`),
+  );
 }
 
-function mapProviderModels(value: ProviderModelsPayload): DesktopProviderModels {
-  const models = mapProviderModelOptionArray(value.models);
-  const rawReasoningEfforts = value.reasoning_efforts || value.reasoningEfforts;
-  const reasoningEfforts = mapProviderModelOptionArray(rawReasoningEfforts);
-  const rawServiceTiers = value.service_tiers || value.serviceTiers;
-  const serviceTiers = mapProviderModelOptionArray(rawServiceTiers);
-
+function mapReasoningEffortOption(
+  value: unknown,
+  path: string,
+): DesktopProviderModelOption {
+  const record = requireContractRecord(value, path);
   return {
-    providerType: normalizeDesktopProviderType(
-      value.provider_type || value.providerType,
+    id: requireContractNonEmptyString(
+      requireContractField(record, "id", path),
+      `${path}.id`,
     ),
-    supportsModelSelection:
-      value.supports_model_selection === true ||
-      value.supportsModelSelection === true,
-    models,
-    supportsReasoningEffortSelection:
-      value.supports_reasoning_effort_selection === true ||
-      value.supportsReasoningEffortSelection === true,
-    reasoningEfforts,
-    supportsServiceTierSelection:
-      value.supports_service_tier_selection === true ||
-      value.supportsServiceTierSelection === true,
-    serviceTiers,
-    defaultModel:
-      typeof value.default_model === "string"
-        ? value.default_model
-        : typeof value.defaultModel === "string"
-          ? value.defaultModel
-          : null,
-    defaultReasoningEffort:
-      typeof value.default_reasoning_effort === "string"
-        ? value.default_reasoning_effort
-        : typeof value.defaultReasoningEffort === "string"
-          ? value.defaultReasoningEffort
-          : null,
-    source: typeof value.source === "string" ? value.source : "",
-    error: typeof value.error === "string" ? value.error : null,
+    label: requireContractNonEmptyString(
+      requireContractField(record, "label", path),
+      `${path}.label`,
+    ),
+    description: hasContractField(record, "description")
+      ? requireContractString(record.description, `${path}.description`)
+      : null,
+    recommended: hasContractField(record, "recommended")
+      ? requireContractBoolean(record.recommended, `${path}.recommended`)
+      : false,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    serviceTiers: [],
   };
 }
 
-function mapUsageWindow(value: unknown): DesktopUsageWindow | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
+function mapReasoningEffortOptionArray(
+  value: unknown,
+  path: string,
+): DesktopProviderModelOption[] {
+  if (value === undefined) {
+    return [];
   }
-  const payload = value as UsageWindowPayload;
-  const usedPercent = asFiniteNumber(payload.used_percent ?? payload.usedPercent) ?? 0;
-  const remainingPercent = asFiniteNumber(payload.remaining_percent ?? payload.remainingPercent)
-    ?? Math.max(0, 100 - usedPercent);
+  return requireContractArray(value, path).map((item, index) =>
+    mapReasoningEffortOption(item, `${path}[${index}]`),
+  );
+}
+
+function mapWireProviderType(value: unknown, path: string): DesktopApiProviderType {
+  switch (value) {
+    case "claude_code":
+    case "codex_app_server":
+    case "traex":
+    case "antigravity":
+      return value;
+    default:
+      throw new GatewayContractError(path, "must be a current provider type");
+  }
+}
+
+function mapProviderModels(value: unknown): DesktopProviderModels {
+  const path = "provider models";
+  const record = requireContractRecord(value, path);
   return {
-    usedPercent,
-    remainingPercent,
-    resetsAt: asString(payload.resets_at ?? payload.resetsAt) ?? null,
-    resetAfterSeconds: asFiniteNumber(payload.reset_after_seconds ?? payload.resetAfterSeconds) ?? null,
+    providerType: mapWireProviderType(
+      requireContractField(record, "provider_type", path),
+      `${path}.provider_type`,
+    ),
+    supportsModelSelection: requireContractBoolean(
+      requireContractField(record, "supports_model_selection", path),
+      `${path}.supports_model_selection`,
+    ),
+    models: mapProviderModelOptionArray(
+      requireContractField(record, "models", path),
+      `${path}.models`,
+    ),
+    supportsReasoningEffortSelection: hasContractField(
+      record,
+      "supports_reasoning_effort_selection",
+    )
+      ? requireContractBoolean(
+          record.supports_reasoning_effort_selection,
+          `${path}.supports_reasoning_effort_selection`,
+        )
+      : false,
+    reasoningEfforts: mapReasoningEffortOptionArray(
+      record.reasoning_efforts,
+      `${path}.reasoning_efforts`,
+    ),
+    supportsServiceTierSelection: hasContractField(
+      record,
+      "supports_service_tier_selection",
+    )
+      ? requireContractBoolean(
+          record.supports_service_tier_selection,
+          `${path}.supports_service_tier_selection`,
+        )
+      : false,
+    serviceTiers: mapProviderModelOptionArray(
+      record.service_tiers,
+      `${path}.service_tiers`,
+      true,
+    ),
+    defaultModel: hasContractField(record, "default_model")
+      ? requireContractString(record.default_model, `${path}.default_model`)
+      : null,
+    defaultReasoningEffort: hasContractField(
+      record,
+      "default_reasoning_effort",
+    )
+      ? requireContractString(
+          record.default_reasoning_effort,
+          `${path}.default_reasoning_effort`,
+        )
+      : null,
+    source: requireContractNonEmptyString(
+      requireContractField(record, "source", path),
+      `${path}.source`,
+    ),
+    error: hasContractField(record, "error")
+      ? requireContractString(record.error, `${path}.error`)
+      : null,
   };
 }
 
-function mapModelUsage(value: unknown): DesktopModelUsage | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const payload = value as ModelUsagePayload;
-  const id = asString(payload.id);
-  const name = asString(payload.name) || id;
-  if (!id || !name) {
-    return null;
-  }
-  const remainingFraction = asFiniteNumber(payload.remaining_fraction ?? payload.remainingFraction) ?? 0;
-  const remainingPercent = asFiniteNumber(payload.remaining_percent ?? payload.remainingPercent)
-    ?? remainingFraction * 100;
-  const usedPercent = asFiniteNumber(payload.used_percent ?? payload.usedPercent)
-    ?? Math.max(0, 100 - remainingPercent);
+function mapUsageWindow(value: unknown, path: string): DesktopUsageWindow {
+  const record = requireContractRecord(value, path);
   return {
-    id,
-    name,
-    remainingFraction,
-    remainingPercent,
-    usedPercent,
-    resetsAt: asString(payload.resets_at ?? payload.resetsAt) ?? null,
-    resetAfterSeconds: asFiniteNumber(payload.reset_after_seconds ?? payload.resetAfterSeconds) ?? null,
-    description: asString(payload.description) ?? null,
+    usedPercent: requireContractFiniteNumber(
+      requireContractField(record, "used_percent", path),
+      `${path}.used_percent`,
+    ),
+    remainingPercent: requireContractFiniteNumber(
+      requireContractField(record, "remaining_percent", path),
+      `${path}.remaining_percent`,
+    ),
+    resetsAt: hasContractField(record, "resets_at")
+      ? requireContractString(record.resets_at, `${path}.resets_at`)
+      : null,
+    resetAfterSeconds: hasContractField(record, "reset_after_seconds")
+      ? requireContractInteger(
+          record.reset_after_seconds,
+          `${path}.reset_after_seconds`,
+        )
+      : null,
   };
 }
 
-function mapProviderUsage(value: unknown): DesktopProviderUsage | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const payload = value as ProviderUsagePayload;
-  const id = asString(payload.id);
-  const name = asString(payload.name) || id;
-  if (!id || !name) {
-    return null;
-  }
-  const models = Array.isArray(payload.models)
-    ? payload.models.map(mapModelUsage).filter((model): model is DesktopModelUsage => Boolean(model))
-    : [];
+function mapModelUsage(value: unknown, path: string): DesktopModelUsage {
+  const record = requireContractRecord(value, path);
   return {
-    id,
-    name,
-    available: payload.available === true,
-    stale: payload.stale === true,
-    plan: asString(payload.plan) ?? null,
-    weekly: mapUsageWindow(payload.weekly),
-    session: mapUsageWindow(payload.session),
-    models,
-    error: asString(payload.error) ?? null,
+    id: requireContractNonEmptyString(
+      requireContractField(record, "id", path),
+      `${path}.id`,
+    ),
+    name: requireContractNonEmptyString(
+      requireContractField(record, "name", path),
+      `${path}.name`,
+    ),
+    remainingFraction: requireContractFiniteNumber(
+      requireContractField(record, "remaining_fraction", path),
+      `${path}.remaining_fraction`,
+    ),
+    remainingPercent: requireContractFiniteNumber(
+      requireContractField(record, "remaining_percent", path),
+      `${path}.remaining_percent`,
+    ),
+    usedPercent: requireContractFiniteNumber(
+      requireContractField(record, "used_percent", path),
+      `${path}.used_percent`,
+    ),
+    resetsAt: hasContractField(record, "resets_at")
+      ? requireContractString(record.resets_at, `${path}.resets_at`)
+      : null,
+    resetAfterSeconds: hasContractField(record, "reset_after_seconds")
+      ? requireContractInteger(
+          record.reset_after_seconds,
+          `${path}.reset_after_seconds`,
+        )
+      : null,
+    description: hasContractField(record, "description")
+      ? requireContractString(record.description, `${path}.description`)
+      : null,
   };
 }
 
-function mapCodingUsage(value: CodingUsagePayload): DesktopCodingUsage {
-  const providers = Array.isArray(value.providers)
-    ? value.providers
-        .map(mapProviderUsage)
-        .filter((provider): provider is DesktopProviderUsage => Boolean(provider))
-    : [];
+function mapProviderUsage(value: unknown, path: string): DesktopProviderUsage {
+  const record = requireContractRecord(value, path);
   return {
-    providers,
-    refreshedAt: asString(value.refreshed_at ?? value.refreshedAt) ?? null,
+    id: requireContractNonEmptyString(
+      requireContractField(record, "id", path),
+      `${path}.id`,
+    ),
+    name: requireContractNonEmptyString(
+      requireContractField(record, "name", path),
+      `${path}.name`,
+    ),
+    available: requireContractBoolean(
+      requireContractField(record, "available", path),
+      `${path}.available`,
+    ),
+    stale: hasContractField(record, "stale")
+      ? requireContractBoolean(record.stale, `${path}.stale`)
+      : false,
+    plan: hasContractField(record, "plan")
+      ? requireContractString(record.plan, `${path}.plan`)
+      : null,
+    weekly: hasContractField(record, "weekly")
+      ? mapUsageWindow(record.weekly, `${path}.weekly`)
+      : null,
+    session: hasContractField(record, "session")
+      ? mapUsageWindow(record.session, `${path}.session`)
+      : null,
+    models: hasContractField(record, "models")
+      ? requireContractArray(record.models, `${path}.models`).map((model, index) =>
+          mapModelUsage(model, `${path}.models[${index}]`),
+        )
+      : [],
+    error: hasContractField(record, "error")
+      ? requireContractString(record.error, `${path}.error`)
+      : null,
+  };
+}
+
+function mapCodingUsage(value: unknown): DesktopCodingUsage {
+  const path = "coding usage";
+  const record = requireContractRecord(value, path);
+  return {
+    providers: requireContractArray(
+      requireContractField(record, "providers", path),
+      `${path}.providers`,
+    ).map((provider, index) =>
+      mapProviderUsage(provider, `${path}.providers[${index}]`),
+    ),
+    refreshedAt: requireContractNonEmptyString(
+      requireContractField(record, "refreshed_at", path),
+      `${path}.refreshed_at`,
+    ),
   };
 }
 
@@ -313,31 +417,46 @@ export async function getCodingUsage(
 
 function mapProviderRecentSession(
   value: unknown,
-): DesktopProviderRecentSession | null {
-  const record = parseRecord(value);
-  const sessionId =
-    asString(record.sessionId) || asString(record.session_id) || "";
-  const providerHint =
-    asString(record.providerHint) || asString(record.provider_hint) || "";
-  if (
-    !sessionId ||
-    !["claude", "codex"].includes(providerHint)
-  ) {
-    return null;
+  index: number,
+): DesktopProviderRecentSession {
+  const path = `recent provider sessions.sessions[${index}]`;
+  const record = requireContractRecord(value, path);
+  const providerHint = requireContractNonEmptyString(
+    requireContractField(record, "providerHint", path),
+    `${path}.providerHint`,
+  );
+  if (providerHint !== "claude" && providerHint !== "codex") {
+    throw new GatewayContractError(
+      `${path}.providerHint`,
+      "must be claude or codex",
+    );
   }
   return {
-    providerType:
-      asString(record.providerType) || asString(record.provider_type) || "",
-    providerHint: providerHint as DesktopProviderRecentSession["providerHint"],
-    sessionId,
-    title: asString(record.title) || sessionId,
-    workspaceDir:
-      asString(record.workspaceDir) || asString(record.workspace_dir) || "",
-    updatedAt:
-      asString(record.updatedAt) ||
-      asString(record.updated_at) ||
-      new Date(0).toISOString(),
-    path: asString(record.path) || null,
+    providerType: mapWireProviderType(
+      requireContractField(record, "providerType", path),
+      `${path}.providerType`,
+    ),
+    providerHint,
+    sessionId: requireContractNonEmptyString(
+      requireContractField(record, "sessionId", path),
+      `${path}.sessionId`,
+    ),
+    title: requireContractString(
+      requireContractField(record, "title", path),
+      `${path}.title`,
+    ),
+    workspaceDir: requireContractString(
+      requireContractField(record, "workspaceDir", path),
+      `${path}.workspaceDir`,
+    ),
+    updatedAt: requireContractNonEmptyString(
+      requireContractField(record, "updatedAt", path),
+      `${path}.updatedAt`,
+    ),
+    path: requireContractString(
+      requireContractField(record, "path", path),
+      `${path}.path`,
+    ),
   };
 }
 
@@ -357,8 +476,9 @@ export async function listProviderRecentSessions(
       signal: AbortSignal.timeout(8000),
     },
   );
-  const records = Array.isArray(payload.sessions) ? payload.sessions : [];
-  return records
-    .map(mapProviderRecentSession)
-    .filter((entry): entry is DesktopProviderRecentSession => Boolean(entry));
+  const record = requireContractRecord(payload, "recent provider sessions");
+  return requireContractArray(
+    requireContractField(record, "sessions", "recent provider sessions"),
+    "recent provider sessions.sessions",
+  ).map(mapProviderRecentSession);
 }

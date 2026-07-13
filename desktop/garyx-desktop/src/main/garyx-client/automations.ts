@@ -6,29 +6,34 @@ import type {
   DesktopAutomationSummary,
   DesktopSettings,
 } from "@shared/contracts";
-import { REMOTE_STATE_FETCH_TIMEOUT_MS, asString, parseRecord, requestJson } from "./http.ts";
+import {
+  GatewayContractError,
+  REMOTE_STATE_FETCH_TIMEOUT_MS,
+  hasContractField,
+  requestJson,
+  requireContractArray,
+  requireContractBoolean,
+  requireContractField,
+  requireContractNonEmptyString,
+  requireContractNonNegativeInteger,
+  requireContractRecord,
+  requireContractString,
+} from "./http.ts";
 
 interface AutomationSummaryPayload {
   id?: string;
   label?: string | null;
   prompt?: string | null;
-  agent_id?: string | null;
   agentId?: string | null;
   enabled?: boolean;
-  workspace_dir?: string | null;
   workspaceDir?: string | null;
-  target_thread_id?: string | null;
   targetThreadId?: string | null;
-  thread_id?: string | null;
   threadId?: string | null;
-  next_run?: string | null;
   nextRun?: string | null;
-  last_run_at?: string | null;
   lastRunAt?: string | null;
-  last_status?: string | null;
   lastStatus?: string | null;
-  unread_hint_timestamp?: string | null;
   unreadHintTimestamp?: string | null;
+  threadMode?: string | null;
   schedule?: unknown;
 }
 
@@ -38,103 +43,206 @@ interface AutomationsPayload {
 
 interface AutomationActivityPayload {
   items?: Array<{
-    run_id?: string;
+    runId?: string;
     status?: string | null;
-    started_at?: string | null;
-    finished_at?: string | null;
-    duration_ms?: number | null;
+    startedAt?: string | null;
+    finishedAt?: string | null;
+    durationMs?: number | null;
     excerpt?: string | null;
-    thread_id?: string | null;
+    threadId?: string | null;
   }>;
-  threadId?: string;
+  threadId?: string | null;
   count?: number;
 }
 
-function normalizeAutomationStatus(value: unknown): DesktopAutomationStatus {
-  return value === "failed" || value === "skipped" ? value : "success";
+function mapAutomationStatus(
+  value: unknown,
+  path: string,
+): DesktopAutomationStatus {
+  switch (value) {
+    case "success":
+    case "running":
+    case "never_run":
+      return "success";
+    case "failed":
+    case "failed_dropped":
+      return "failed";
+    default:
+      throw new GatewayContractError(path, "must be a current JobRunStatus");
+  }
 }
 
-function mapAutomationSchedule(value: unknown): DesktopAutomationSchedule {
-  const record = parseRecord(value);
+function mapAutomationSchedule(
+  value: unknown,
+  path: string,
+): DesktopAutomationSchedule {
+  const record = requireContractRecord(value, path);
   if (record.kind === "daily") {
     return {
       kind: "daily",
-      time: asString(record.time) || "09:00",
-      weekdays: Array.isArray(record.weekdays)
-        ? record.weekdays.filter(
-            (entry): entry is string => typeof entry === "string",
-          )
-        : [],
-      timezone:
-        asString(record.timezone) ||
-        Intl.DateTimeFormat().resolvedOptions().timeZone ||
-        "UTC",
+      time: requireContractNonEmptyString(
+        requireContractField(record, "time", path),
+        `${path}.time`,
+      ),
+      weekdays: requireContractArray(
+        requireContractField(record, "weekdays", path),
+        `${path}.weekdays`,
+      ).map((entry, index) =>
+        requireContractNonEmptyString(entry, `${path}.weekdays[${index}]`),
+      ),
+      timezone: requireContractNonEmptyString(
+        requireContractField(record, "timezone", path),
+        `${path}.timezone`,
+      ),
     };
   }
 
   if (record.kind === "once") {
     return {
       kind: "once",
-      at: asString(record.at) || "",
+      at: requireContractNonEmptyString(
+        requireContractField(record, "at", path),
+        `${path}.at`,
+      ),
     };
   }
 
-  const hoursValue =
-    typeof record.hours === "number" && Number.isFinite(record.hours)
-      ? Math.max(1, Math.round(record.hours))
-      : 24;
-  return {
-    kind: "interval",
-    hours: hoursValue,
-  };
+  if (record.kind === "interval") {
+    const hours = requireContractNonNegativeInteger(
+      requireContractField(record, "hours", path),
+      `${path}.hours`,
+    );
+    if (hours < 1) {
+      throw new GatewayContractError(`${path}.hours`, "must be at least 1");
+    }
+    return { kind: "interval", hours };
+  }
+
+  if (record.kind === "monthly") {
+    requireContractNonNegativeInteger(
+      requireContractField(record, "day", path),
+      `${path}.day`,
+    );
+    requireContractNonEmptyString(
+      requireContractField(record, "time", path),
+      `${path}.time`,
+    );
+    requireContractNonEmptyString(
+      requireContractField(record, "timezone", path),
+      `${path}.timezone`,
+    );
+    // The current shared desktop model has no monthly variant. Preserve the
+    // existing explicit presentation until that shared contract is expanded.
+    return { kind: "interval", hours: 24 };
+  }
+
+  throw new GatewayContractError(
+    `${path}.kind`,
+    "must be daily, interval, monthly, or once",
+  );
 }
 
-function mapAutomationSummary(
-  value: AutomationSummaryPayload,
-): DesktopAutomationSummary {
-  const agentId = value.agentId ?? value.agent_id;
+function optionalAutomationString(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): string | null {
+  if (!hasContractField(record, field)) {
+    return null;
+  }
+  return requireContractString(record[field], `${path}.${field}`);
+}
+
+function mapAutomationSummary(value: unknown, index?: number): DesktopAutomationSummary {
+  const path = index === undefined
+    ? "automation summary"
+    : `automation list.automations[${index}]`;
+  const record = requireContractRecord(value, path);
+  requireContractNonEmptyString(
+    requireContractField(record, "threadMode", path),
+    `${path}.threadMode`,
+  );
   return {
-    id: value.id || "",
-    label:
-      typeof value.label === "string" && value.label.trim()
-        ? value.label.trim()
-        : value.id || "",
-    prompt: typeof value.prompt === "string" ? value.prompt : "",
-    agentId:
-      typeof agentId === "string" && agentId.trim() ? agentId.trim() : "claude",
-    enabled: value.enabled !== false,
-    workspacePath: value.workspaceDir || value.workspace_dir || "",
-    targetThreadId: value.targetThreadId || value.target_thread_id || "",
-    threadId: value.threadId || value.thread_id || "",
-    nextRun: value.nextRun || value.next_run || new Date(0).toISOString(),
-    lastRunAt: value.lastRunAt ?? value.last_run_at ?? null,
-    lastStatus: normalizeAutomationStatus(
-      value.lastStatus ?? value.last_status,
+    id: requireContractNonEmptyString(
+      requireContractField(record, "id", path),
+      `${path}.id`,
     ),
-    unreadHintTimestamp:
-      value.unreadHintTimestamp ?? value.unread_hint_timestamp ?? null,
-    schedule: mapAutomationSchedule(value.schedule),
+    label: requireContractNonEmptyString(
+      requireContractField(record, "label", path),
+      `${path}.label`,
+    ),
+    prompt: requireContractString(
+      requireContractField(record, "prompt", path),
+      `${path}.prompt`,
+    ),
+    agentId: requireContractNonEmptyString(
+      requireContractField(record, "agentId", path),
+      `${path}.agentId`,
+    ),
+    enabled: requireContractBoolean(
+      requireContractField(record, "enabled", path),
+      `${path}.enabled`,
+    ),
+    workspacePath: requireContractString(
+      requireContractField(record, "workspaceDir", path),
+      `${path}.workspaceDir`,
+    ),
+    targetThreadId: optionalAutomationString(record, "targetThreadId", path) ?? "",
+    threadId: optionalAutomationString(record, "threadId", path) ?? "",
+    nextRun: requireContractNonEmptyString(
+      requireContractField(record, "nextRun", path),
+      `${path}.nextRun`,
+    ),
+    lastRunAt: optionalAutomationString(record, "lastRunAt", path),
+    lastStatus: mapAutomationStatus(
+      requireContractField(record, "lastStatus", path),
+      `${path}.lastStatus`,
+    ),
+    unreadHintTimestamp: optionalAutomationString(
+      record,
+      "unreadHintTimestamp",
+      path,
+    ),
+    schedule: mapAutomationSchedule(
+      requireContractField(record, "schedule", path),
+      `${path}.schedule`,
+    ),
   };
 }
 
 function mapAutomationActivityEntry(
-  value: NonNullable<AutomationActivityPayload["items"]>[number],
+  value: unknown,
+  path: string,
 ): DesktopAutomationActivityEntry {
+  const record = requireContractRecord(value, path);
+  const optionalString = (field: string): string | null => {
+    if (!hasContractField(record, field)) {
+      return null;
+    }
+    return requireContractString(record[field], `${path}.${field}`);
+  };
   return {
-    runId: value.run_id || "",
-    status: normalizeAutomationStatus(value.status),
-    startedAt: value.started_at || new Date(0).toISOString(),
-    finishedAt: value.finished_at ?? null,
-    durationMs:
-      typeof value.duration_ms === "number" &&
-      Number.isFinite(value.duration_ms)
-        ? value.duration_ms
-        : null,
-    excerpt:
-      typeof value.excerpt === "string" && value.excerpt.trim()
-        ? value.excerpt.trim()
-        : null,
-    threadId: value.thread_id || "",
+    runId: requireContractNonEmptyString(
+      requireContractField(record, "runId", path),
+      `${path}.runId`,
+    ),
+    status: mapAutomationStatus(
+      requireContractField(record, "status", path),
+      `${path}.status`,
+    ),
+    startedAt: requireContractNonEmptyString(
+      requireContractField(record, "startedAt", path),
+      `${path}.startedAt`,
+    ),
+    finishedAt: optionalString("finishedAt"),
+    durationMs: hasContractField(record, "durationMs")
+      ? requireContractNonNegativeInteger(record.durationMs, `${path}.durationMs`)
+      : null,
+    excerpt: optionalString("excerpt")?.trim() || null,
+    threadId: requireContractString(
+      requireContractField(record, "threadId", path),
+      `${path}.threadId`,
+    ),
   };
 }
 
@@ -149,9 +257,11 @@ export async function fetchAutomations(
     },
   );
 
-  return Array.isArray(payload.automations)
-    ? payload.automations.map(mapAutomationSummary)
-    : [];
+  const record = requireContractRecord(payload, "automation list");
+  return requireContractArray(
+    requireContractField(record, "automations", "automation list"),
+    "automation list.automations",
+  ).map(mapAutomationSummary);
 }
 
 export async function createRemoteAutomation(
@@ -243,16 +353,26 @@ export async function fetchAutomationActivity(
     },
   );
 
+  const record = requireContractRecord(payload, "automation activity");
+  const threadId = requireContractField(record, "threadId", "automation activity");
   return {
     automationId,
-    threadId: payload.threadId || "",
-    count:
-      typeof payload.count === "number" && Number.isFinite(payload.count)
-        ? payload.count
-        : 0,
-    items: Array.isArray(payload.items)
-      ? payload.items.map(mapAutomationActivityEntry)
-      : [],
+    threadId: threadId === null
+      ? ""
+      : requireContractString(threadId, "automation activity.threadId"),
+    count: requireContractNonNegativeInteger(
+      requireContractField(record, "count", "automation activity"),
+      "automation activity.count",
+    ),
+    items: requireContractArray(
+      requireContractField(record, "items", "automation activity"),
+      "automation activity.items",
+    ).map((entry, index) =>
+      mapAutomationActivityEntry(
+        entry,
+        `automation activity.items[${index}]`,
+      ),
+    ),
   };
 }
 
@@ -273,20 +393,5 @@ export async function runRemoteAutomationNow(
     signal: AbortSignal.timeout(8000),
   });
 
-  return {
-    runId: payload.runId || "",
-    status: normalizeAutomationStatus(payload.status),
-    startedAt: payload.startedAt || new Date(0).toISOString(),
-    finishedAt: payload.finishedAt ?? null,
-    durationMs:
-      typeof payload.durationMs === "number" &&
-      Number.isFinite(payload.durationMs)
-        ? payload.durationMs
-        : null,
-    excerpt:
-      typeof payload.excerpt === "string" && payload.excerpt.trim()
-        ? payload.excerpt.trim()
-        : null,
-    threadId: payload.threadId || "",
-  };
+  return mapAutomationActivityEntry(payload, "run automation response");
 }

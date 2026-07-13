@@ -95,9 +95,7 @@ function mapBotConsoleSummary(
 export interface ConfiguredBotPayload {
   channel: string;
   account_id: string;
-  display_name?: string | null;
-  displayName?: string | null;
-  name?: string | null;
+  display_name: string;
   enabled: boolean;
   workspace_dir?: string | null;
   root_behavior?: "open_default" | "expand_only" | string;

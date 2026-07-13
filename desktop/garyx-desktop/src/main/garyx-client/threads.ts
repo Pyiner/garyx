@@ -13,7 +13,23 @@ import type {
   ThreadTranscript,
   TranscriptMessage,
 } from "@shared/contracts";
-import { REMOTE_STATE_FETCH_TIMEOUT_MS, asBoolean, asFiniteNumber, asString, normalizeGatewayUrl, parseRecord, requestJson } from "./http.ts";
+import {
+  GatewayContractError,
+  REMOTE_STATE_FETCH_TIMEOUT_MS,
+  asBoolean,
+  asString,
+  hasContractField,
+  normalizeGatewayUrl,
+  parseRecord,
+  requestJson,
+  requireContractArray,
+  requireContractBoolean,
+  requireContractField,
+  requireContractNonEmptyString,
+  requireContractNonNegativeInteger,
+  requireContractRecord,
+  requireContractString,
+} from "./http.ts";
 
 const DEFAULT_THREAD_HISTORY_PAGE_SIZE = 100;
 
@@ -25,220 +41,138 @@ const MAX_THREAD_HISTORY_USER_QUERY_LIMIT = 50;
 
 const MAX_RECENT_THREAD_PAGE_SIZE = 200;
 
-interface HistoryPayload {
-  ok?: boolean;
-  messages?: Array<{
-    index?: number;
-    role?: string;
-    kind?: string;
-    timestamp?: string | null;
-    text?: string | null;
-    content?: unknown;
-    input?: unknown;
-    result?: unknown;
-    message?: Record<string, unknown> | null;
-  }>;
-  pending_user_inputs?: Array<{
-    id?: string;
-    run_id?: string | null;
-    timestamp?: string | null;
-    status?: string;
-    active?: boolean;
-    text?: string | null;
-    content?: unknown;
-  }>;
-  message_stats?: {
-    total_messages_in_thread?: number;
-    total_messages_in_session?: number;
-    committed_message_count?: number;
-    returned_messages?: number;
-    returned_user_queries?: number;
-    returned_start_index?: number;
-    returned_end_index?: number;
-    has_more_before?: boolean;
-    next_before_index?: number | null;
-    has_more_after?: boolean;
-    next_after_index?: number | null;
-    reset?: boolean;
-    user_query_limit?: number | null;
-  };
-  thread_runtime?: ThreadRuntimePayload | null;
+const EPOCH_ISO = new Date(0).toISOString();
+
+function requireNullableStringField(
+  record: Record<string, unknown>,
+  field: string,
+  context: string,
+): string | null {
+  const value = requireContractField(record, field, context);
+  if (value === null) {
+    return null;
+  }
+  return requireContractString(value, `${context}.${field}`);
 }
 
-interface ThreadMetadataPayload extends ThreadSummaryPayload {
-  sdk_session_id?: string | null;
-  provider_type?: string | null;
-  active_run?: ThreadActiveRunPayload | null;
-  thread_runtime?: ThreadRuntimePayload | null;
-}
-
-interface ThreadRuntimePayload {
-  agent_id?: string | null;
-  provider_type?: string | null;
-  provider_label?: string | null;
-  model?: string | null;
-  model_reasoning_effort?: string | null;
-  model_service_tier?: string | null;
-  model_override?: string | null;
-  model_reasoning_effort_override?: string | null;
-  model_service_tier_override?: string | null;
-  sdk_session_id?: string | null;
-  active_run?: ThreadActiveRunPayload | null;
+function optionalNullableStringField(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): string | null {
+  if (!hasContractField(record, field) || record[field] === null) {
+    return null;
+  }
+  return requireContractString(record[field], path);
 }
 
 function mapThreadWorktreeInfo(value: unknown) {
-  const record = parseRecord(value);
-  if (!Object.keys(record).length) {
+  if (value === null) {
     return null;
   }
-  return {
-    mode: asString(record.mode) || null,
-    enabled: asBoolean(record.enabled) ?? null,
-    branch: asString(record.branch) || null,
-    sourceBranch:
-      asString(record.source_branch) || asString(record.sourceBranch) || null,
-    path: asString(record.path) || null,
-    worktreeDir: asString(record.worktree_dir) || asString(record.worktreeDir) || null,
-    sourceWorkspaceDir:
-      asString(record.source_workspace_dir) ||
-      asString(record.sourceWorkspaceDir) ||
-      null,
-    sourceRepoRoot:
-      asString(record.source_repo_root) || asString(record.sourceRepoRoot) || null,
+  const record = requireContractRecord(value, "thread worktree");
+  const nullableString = (field: string): string | null => {
+    const raw = requireContractField(record, field, "thread worktree");
+    if (raw === null) {
+      return null;
+    }
+    return requireContractString(raw, `thread worktree.${field}`);
   };
-}
-
-interface ThreadActiveRunPayload {
-  run_id?: string | null;
-  provider_type?: string | null;
-  provider_label?: string | null;
-  assistant_response?: string | null;
-  updated_at?: string | null;
-  pending_user_input_count?: number;
-}
-
-interface ThreadLogPayload {
-  threadId?: string;
-  thread_id?: string;
-  path?: string;
-  text?: string;
-  cursor?: number;
-  reset?: boolean;
-}
-
-export interface ThreadSummaryPayload {
-  thread_key?: string;
-  session_key?: string;
-  thread_id?: string;
-  thread_type?: string | null;
-  threadType?: string | null;
-  agent_id?: string | null;
-  agentId?: string | null;
-  label?: string | null;
-  title?: string | null;
-  workspace_dir?: string | null;
-  channel_bindings?: Array<{
-    channel?: string;
-    account_id?: string;
-    binding_key?: string;
-    peer_id?: string;
-    chat_id?: string;
-    thread_scope?: string | null;
-    delivery_target_type?: string;
-    delivery_target_id?: string;
-    display_label?: string;
-    last_inbound_at?: string | null;
-    last_delivery_at?: string | null;
-  }>;
-  updated_at?: string | null;
-  created_at?: string | null;
-  last_active_at?: string | null;
-  recorded_at?: string | null;
-  message_count?: number;
-  last_user_message?: string | null;
-  last_assistant_message?: string | null;
-  last_message_preview?: string | null;
-  recent_run_id?: string | null;
-  recentRunId?: string | null;
-  run_state?: string | null;
-  runState?: string | null;
-  sdk_session_id?: string | null;
-  worktree?: unknown;
-}
-
-interface ThreadsPayload {
-  threads?: ThreadSummaryPayload[];
-  sessions?: ThreadSummaryPayload[];
-}
-
-interface RecentThreadsPayload {
-  threads?: ThreadSummaryPayload[];
-  count?: number;
-  total?: number;
-  limit?: number;
-  offset?: number;
-  has_more?: boolean;
-  hasMore?: boolean;
-}
-
-interface ThreadPinsPayload {
-  thread_ids?: string[];
-  threadIds?: string[];
-  pins?: Array<{
-    thread_id?: string;
-    threadId?: string;
-  }>;
+  return {
+    mode: requireContractString(
+      requireContractField(record, "mode", "thread worktree"),
+      "thread worktree.mode",
+    ),
+    enabled: requireContractBoolean(
+      requireContractField(record, "enabled", "thread worktree"),
+      "thread worktree.enabled",
+    ),
+    branch: requireContractString(
+      requireContractField(record, "branch", "thread worktree"),
+      "thread worktree.branch",
+    ),
+    sourceBranch: nullableString("source_branch"),
+    path: requireContractString(
+      requireContractField(record, "path", "thread worktree"),
+      "thread worktree.path",
+    ),
+    worktreeDir: requireContractString(
+      requireContractField(record, "worktree_dir", "thread worktree"),
+      "thread worktree.worktree_dir",
+    ),
+    sourceWorkspaceDir: requireContractString(
+      requireContractField(record, "source_workspace_dir", "thread worktree"),
+      "thread worktree.source_workspace_dir",
+    ),
+    sourceRepoRoot: requireContractString(
+      requireContractField(record, "source_repo_root", "thread worktree"),
+      "thread worktree.source_repo_root",
+    ),
+  };
 }
 
 function parseThreadProviderType(
   value: unknown,
+  path: string,
 ): DesktopThreadProviderType | null {
+  if (value === null) {
+    return null;
+  }
   if (
     value === "claude_code" ||
-    value === "claude_tty" ||
     value === "codex_app_server" ||
     value === "antigravity" ||
     value === "traex"
   ) {
-    if (value === "claude_tty") {
-      return "claude_code";
-    }
     return value;
   }
-  return null;
-}
-
-function providerLabelForThread(
-  value: DesktopThreadProviderType | null | undefined,
-): string | null {
-  switch (value) {
-    case "claude_code":
-      return "Claude";
-    case "codex_app_server":
-      return "Codex";
-    case "antigravity":
-      return "Antigravity";
-    case "traex":
-      return "Traex";
-    default:
-      return null;
-  }
+  throw new GatewayContractError(
+    path,
+    "must be null or a current provider type",
+  );
 }
 
 function mapHistoryMessage(
   sessionId: string,
-  value: NonNullable<HistoryPayload["messages"]>[number],
+  value: unknown,
+  path: string,
 ) {
-  const normalized = parseRecord(value.message);
+  const envelope = requireContractRecord(value, path);
+  const index = requireContractNonNegativeInteger(
+    requireContractField(envelope, "index", path),
+    `${path}.index`,
+  );
+  const envelopeRole = requireContractString(
+    requireContractField(envelope, "role", path),
+    `${path}.role`,
+  );
+  const kind = requireContractString(
+    requireContractField(envelope, "kind", path),
+    `${path}.kind`,
+  );
+  const timestamp = requireNullableStringField(envelope, "timestamp", path);
+  const envelopeText = requireContractString(
+    requireContractField(envelope, "text", path),
+    `${path}.text`,
+  );
+  const envelopeContent = requireContractField(envelope, "content", path);
+  const internal = requireContractBoolean(
+    requireContractField(envelope, "internal", path),
+    `${path}.internal`,
+  );
+  const internalKind = requireNullableStringField(envelope, "internal_kind", path);
+  const loopOrigin = requireNullableStringField(envelope, "loop_origin", path);
+  const normalized = requireContractRecord(
+    requireContractField(envelope, "message", path),
+    `${path}.message`,
+  );
   const isControlRecord =
-    value.kind === "control" ||
+    kind === "control" ||
     asString(normalized.kind) === "control" ||
     asString(normalized.internal_kind) === "control";
   const isLoopContinuation =
-    Boolean((value as { internal?: boolean }).internal) &&
-    (value as { internal_kind?: unknown }).internal_kind ===
-      "loop_continuation";
-  const sourceRole = asString(value.role) || asString(normalized.role);
+    internal && internalKind === "loop_continuation";
+  const sourceRole = envelopeRole || asString(normalized.role);
   const role = isLoopContinuation
     ? "system"
     : sourceRole === "assistant"
@@ -256,28 +190,28 @@ function mapHistoryMessage(
     ? normalized
     : "content" in normalized
       ? normalized.content
-      : value.content;
+      : envelopeContent;
   const metadataValue = normalized.metadata;
   const input = Object.prototype.hasOwnProperty.call(normalized, "input")
     ? normalized.input
-    : value.input;
+    : undefined;
   const result = Object.prototype.hasOwnProperty.call(normalized, "result")
     ? normalized.result
-    : value.result;
+    : undefined;
   const metadataRecord =
     metadataValue && typeof metadataValue === "object"
       ? (metadataValue as Record<string, unknown>)
       : null;
   const contentRecord = parseRecord(content);
   const fallbackText =
-    isLoopContinuation && value.role === "user"
+    isLoopContinuation && envelopeRole === "user"
       ? "System triggered an automatic continuation."
       : "";
   const text = isControlRecord
     ? ""
     : asString(normalized.text) ||
-      (typeof value.text === "string" ? value.text.trim() : "") ||
-      (typeof value.content === "string" ? value.content.trim() : "") ||
+      envelopeText.trim() ||
+      (typeof envelopeContent === "string" ? envelopeContent.trim() : "") ||
       fallbackText;
   const hasStructuredContent =
     isControlRecord ||
@@ -298,17 +232,17 @@ function mapHistoryMessage(
   ]);
   if (
     !isControlRecord &&
-    !visibleKinds.has(value.kind || "") &&
+    !visibleKinds.has(kind) &&
     role === "system"
   ) {
     return null;
   }
 
   const message: TranscriptMessage = {
-    id: `${sessionId}:${value.index ?? Math.random().toString(16).slice(2)}`,
+    id: `${sessionId}:${index}`,
     // History exposes a 0-based global `index`; the raw record seq is index + 1
     // (seq is 1-based and gapless across all records, control included).
-    seq: typeof value.index === "number" ? value.index + 1 : undefined,
+    seq: index + 1,
     role,
     text,
     content,
@@ -327,215 +261,416 @@ function mapHistoryMessage(
       null,
     isError: asBoolean(normalized.is_error) ?? asBoolean(normalized.isError),
     metadata: metadataRecord,
-    timestamp: value.timestamp,
-    kind: value.kind,
-    internal: Boolean((value as { internal?: boolean }).internal),
-    internalKind:
-      typeof (value as { internal_kind?: unknown }).internal_kind === "string"
-        ? ((value as { internal_kind?: string }).internal_kind ?? null)
-        : null,
-    loopOrigin:
-      typeof (value as { loop_origin?: unknown }).loop_origin === "string"
-        ? ((value as { loop_origin?: string }).loop_origin ?? null)
-        : null,
+    timestamp,
+    kind,
+    internal,
+    internalKind,
+    loopOrigin,
   };
   return message;
 }
 
 function mapPendingUserInput(
-  value: NonNullable<HistoryPayload["pending_user_inputs"]>[number],
-): PendingThreadInput | null {
-  const id = asString(value.id);
-  const status = value.status === "orphaned" ? "orphaned" : "awaiting_ack";
-  const content = value.content;
-  const text =
-    asString(value.text) || (typeof content === "string" ? content.trim() : "");
-
-  if (!id || (!text && (content === null || content === undefined))) {
-    return null;
+  value: unknown,
+  path: string,
+): PendingThreadInput {
+  const record = requireContractRecord(value, path);
+  const id = requireContractNonEmptyString(
+    requireContractField(record, "id", path),
+    `${path}.id`,
+  );
+  const statusValue = requireContractField(record, "status", path);
+  if (statusValue !== "awaiting_ack") {
+    throw new GatewayContractError(
+      `${path}.status`,
+      'must be "awaiting_ack"',
+    );
   }
+  const content = requireContractField(record, "content", path);
+  const text = requireContractString(
+    requireContractField(record, "text", path),
+    `${path}.text`,
+  );
+  const active = requireContractBoolean(
+    requireContractField(record, "active", path),
+    `${path}.active`,
+  );
 
   return {
     id,
-    runId: asString(value.run_id) || null,
+    runId: requireNullableStringField(record, "run_id", path),
     text,
     content,
-    timestamp: asString(value.timestamp) || null,
-    status,
-    active: value.active !== false && status === "awaiting_ack",
+    timestamp: requireNullableStringField(record, "timestamp", path),
+    status: "awaiting_ack",
+    active,
   };
 }
 
 function mapThreadChannelBinding(
-  value:
-    | NonNullable<ThreadSummaryPayload["channel_bindings"]>[number]
-    | null
-    | undefined,
-): ThreadChannelBindingInfo | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const channel = typeof value.channel === "string" ? value.channel : "";
-  const accountId =
-    typeof value.account_id === "string" ? value.account_id : "";
-  const bindingKey =
-    typeof value.binding_key === "string"
-      ? value.binding_key
-      : typeof value.peer_id === "string"
-        ? value.peer_id
-        : typeof value.thread_scope === "string"
-          ? value.thread_scope
-          : "";
-  const chatId = typeof value.chat_id === "string" ? value.chat_id : "";
-  const deliveryTargetType =
-    typeof value.delivery_target_type === "string"
-      ? value.delivery_target_type
-      : "chat_id";
-  const deliveryTargetId =
-    typeof value.delivery_target_id === "string"
-      ? value.delivery_target_id
-      : chatId;
+  value: unknown,
+  path: string,
+): ThreadChannelBindingInfo {
+  const record = requireContractRecord(value, path);
+  const optionalString = (field: string): string | null =>
+    optionalNullableStringField(record, field, `${path}.${field}`);
+  const chatId = optionalString("chat_id") ?? "";
   return {
-    channel,
-    accountId,
-    bindingKey,
+    channel: optionalString("channel") ?? "",
+    accountId: optionalString("account_id") ?? "",
+    bindingKey: optionalString("binding_key") ?? "",
     chatId,
-    deliveryTargetType,
-    deliveryTargetId,
-    displayLabel:
-      typeof value.display_label === "string" ? value.display_label : "",
-    lastInboundAt:
-      typeof value.last_inbound_at === "string" ? value.last_inbound_at : null,
-    lastDeliveryAt:
-      typeof value.last_delivery_at === "string"
-        ? value.last_delivery_at
-        : null,
+    deliveryTargetType: optionalString("delivery_target_type") ?? "chat_id",
+    deliveryTargetId: optionalString("delivery_target_id") ?? chatId,
+    displayLabel: optionalString("display_label") ?? "",
+    lastInboundAt: optionalString("last_inbound_at"),
+    lastDeliveryAt: optionalString("last_delivery_at"),
   };
 }
 
 function mapThreadRuntimeInfo(
-  value: ThreadMetadataPayload | null | undefined,
+  value: unknown,
+  detail: Record<string, unknown> | null,
 ): ThreadRuntimeInfo | null {
-  if (!value || typeof value !== "object") {
+  if (value === null) {
     return null;
   }
-  const runtime = parseRecord(value.thread_runtime);
+  const runtime = requireContractRecord(value, "thread runtime");
   const providerType = parseThreadProviderType(
-    value.provider_type || asString(runtime.provider_type),
+    requireContractField(runtime, "provider_type", "thread runtime"),
+    "thread runtime.provider_type",
   );
-  const channelBindings = Array.isArray(value.channel_bindings)
-    ? value.channel_bindings
-        .map((entry) => mapThreadChannelBinding(entry))
-        .filter((entry): entry is ThreadChannelBindingInfo => Boolean(entry))
+  const channelBindings = detail && hasContractField(detail, "channel_bindings")
+    ? requireContractArray(
+        detail.channel_bindings,
+        "thread metadata.channel_bindings",
+      ).map((entry, index) =>
+        mapThreadChannelBinding(
+          entry,
+          `thread metadata.channel_bindings[${index}]`,
+        ),
+      )
     : [];
   const activeRun = mapThreadActiveRun(
-    (value.active_run as ThreadActiveRunPayload | null | undefined) ||
-      (runtime.active_run as ThreadActiveRunPayload | null | undefined),
+    requireContractField(runtime, "active_run", "thread runtime"),
+    "thread runtime.active_run",
   );
   return {
-    agentId:
-      typeof value.agent_id === "string"
-        ? value.agent_id
-        : asString(runtime.agent_id) || value.agentId || null,
+    agentId: requireNullableStringField(runtime, "agent_id", "thread runtime"),
     providerType,
-    providerLabel: asString(runtime.provider_label) || providerLabelForThread(providerType),
-    model: asString(runtime.model) || null,
-    modelReasoningEffort: asString(runtime.model_reasoning_effort) || null,
-    modelServiceTier: asString(runtime.model_service_tier) || null,
-    modelOverride: asString(runtime.model_override) || null,
-    modelReasoningEffortOverride:
-      asString(runtime.model_reasoning_effort_override) || null,
-    modelServiceTierOverride: asString(runtime.model_service_tier_override) || null,
-    sdkSessionId:
-      typeof value.sdk_session_id === "string"
-        ? value.sdk_session_id
-        : asString(runtime.sdk_session_id) || null,
-    workspacePath:
-      typeof value.workspace_dir === "string" ? value.workspace_dir : null,
-    worktree: mapThreadWorktreeInfo(value.worktree),
+    providerLabel: requireContractString(
+      requireContractField(runtime, "provider_label", "thread runtime"),
+      "thread runtime.provider_label",
+    ),
+    model: requireNullableStringField(runtime, "model", "thread runtime"),
+    modelReasoningEffort: requireNullableStringField(
+      runtime,
+      "model_reasoning_effort",
+      "thread runtime",
+    ),
+    modelServiceTier: requireNullableStringField(
+      runtime,
+      "model_service_tier",
+      "thread runtime",
+    ),
+    modelOverride: requireNullableStringField(
+      runtime,
+      "model_override",
+      "thread runtime",
+    ),
+    modelReasoningEffortOverride: requireNullableStringField(
+      runtime,
+      "model_reasoning_effort_override",
+      "thread runtime",
+    ),
+    modelServiceTierOverride: requireNullableStringField(
+      runtime,
+      "model_service_tier_override",
+      "thread runtime",
+    ),
+    sdkSessionId: requireNullableStringField(
+      runtime,
+      "sdk_session_id",
+      "thread runtime",
+    ),
+    workspacePath: detail
+      ? optionalNullableStringField(
+          detail,
+          "workspace_dir",
+          "thread metadata.workspace_dir",
+        )
+      : null,
+    worktree: detail && hasContractField(detail, "worktree")
+      ? mapThreadWorktreeInfo(detail.worktree)
+      : null,
     activeRun,
     channelBindings,
   };
 }
 
 function mapThreadActiveRun(
-  value: ThreadActiveRunPayload | null | undefined,
+  value: unknown,
+  path: string,
 ): ThreadActiveRunInfo | null {
-  if (!value || typeof value !== "object") {
+  if (value === null) {
     return null;
   }
-  const runId = asString(value.run_id);
-  if (!runId) {
-    return null;
-  }
-  const providerType = parseThreadProviderType(value.provider_type);
+  const record = requireContractRecord(value, path);
+  const runId = requireContractNonEmptyString(
+    requireContractField(record, "run_id", path),
+    `${path}.run_id`,
+  );
+  const providerType = parseThreadProviderType(
+    requireContractField(record, "provider_type", path),
+    `${path}.provider_type`,
+  );
+  const pendingUserInputCount = requireContractNonNegativeInteger(
+    requireContractField(record, "pending_user_input_count", path),
+    `${path}.pending_user_input_count`,
+  );
   return {
     runId,
     providerType,
-    providerLabel: asString(value.provider_label) || providerLabelForThread(providerType),
-    assistantResponse: asString(value.assistant_response) || null,
-    updatedAt: asString(value.updated_at) || null,
-    pendingUserInputCount:
-      typeof value.pending_user_input_count === "number" &&
-      Number.isFinite(value.pending_user_input_count)
-        ? value.pending_user_input_count
-        : undefined,
+    providerLabel: requireNullableStringField(record, "provider_label", path),
+    assistantResponse: requireNullableStringField(
+      record,
+      "assistant_response",
+      path,
+    ),
+    updatedAt: requireNullableStringField(record, "updated_at", path),
+    pendingUserInputCount,
   };
 }
 
-export function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
-  const id = value.thread_id || value.thread_key || value.session_key || "";
-  const labelTrimmed =
-    typeof value.label === "string" && value.label.trim()
-      ? value.label.trim()
-      : "";
-  const titleTrimmed =
-    typeof value.title === "string" && value.title.trim()
-      ? value.title.trim()
-      : "";
-  const title = labelTrimmed || titleTrimmed || id;
-  const lastMessagePreview =
-    (typeof value.last_message_preview === "string" &&
-      value.last_message_preview.trim()) ||
-    (typeof value.last_assistant_message === "string" &&
-      value.last_assistant_message.trim()) ||
-    (typeof value.last_user_message === "string" &&
-      value.last_user_message.trim()) ||
-    "";
-  const createdAt =
-    value.created_at ||
-    value.recorded_at ||
-    value.last_active_at ||
-    new Date(0).toISOString();
-  const updatedAt =
-    value.updated_at ||
-    value.last_active_at ||
-    value.recorded_at ||
-    value.created_at ||
-    new Date(0).toISOString();
+function mapStandardThreadSummary(
+  value: unknown,
+  context: string,
+  requireMetaPreview: boolean,
+): DesktopThreadSummary {
+  const record = requireContractRecord(value, context);
+  const id = requireContractNonEmptyString(
+    requireContractField(record, "thread_id", context),
+    `${context}.thread_id`,
+  );
+  requireContractNonEmptyString(
+    requireContractField(record, "thread_key", context),
+    `${context}.thread_key`,
+  );
+  const threadType = requireContractNonEmptyString(
+    requireContractField(record, "thread_type", context),
+    `${context}.thread_type`,
+  );
+  const label = requireNullableStringField(record, "label", context);
+  const workspacePath = requireNullableStringField(
+    record,
+    "workspace_dir",
+    context,
+  );
+  requireContractArray(
+    requireContractField(record, "channel_bindings", context),
+    `${context}.channel_bindings`,
+  );
+  const updatedAt = requireNullableStringField(record, "updated_at", context);
+  const createdAt = requireNullableStringField(record, "created_at", context);
+  const messageCount = requireContractNonNegativeInteger(
+    requireContractField(record, "message_count", context),
+    `${context}.message_count`,
+  );
+  const lastUserMessage = requireNullableStringField(
+    record,
+    "last_user_message",
+    context,
+  );
+  const lastAssistantMessage = requireNullableStringField(
+    record,
+    "last_assistant_message",
+    context,
+  );
+  const agentId = requireNullableStringField(record, "agent_id", context);
+  requireNullableStringField(record, "provider_type", context);
+  const worktreeValue = requireContractField(record, "worktree", context);
+  const recentRunId = requireNullableStringField(
+    record,
+    "recent_run_id",
+    context,
+  );
+  requireNullableStringField(record, "active_run_id", context);
+  const lastMessagePreview = requireMetaPreview
+    ? requireNullableStringField(record, "last_message_preview", context)
+    : null;
+
   return {
     id,
-    title,
-    threadType:
-      asString(value.thread_type) || asString(value.threadType) || null,
-    createdAt,
-    updatedAt,
-    lastMessagePreview,
-    workspacePath: value.workspace_dir ?? null,
-    messageCount:
-      typeof value.message_count === "number" &&
-      Number.isFinite(value.message_count)
-        ? value.message_count
-        : undefined,
-    agentId:
-      typeof (value as { agent_id?: unknown }).agent_id === "string"
-        ? ((value as { agent_id?: string }).agent_id ?? null)
-        : null,
-    recentRunId:
-      asString(value.recent_run_id) || asString(value.recentRunId) || null,
-    runState: asString(value.run_state) || asString(value.runState) || null,
-    worktree: mapThreadWorktreeInfo(value.worktree),
+    title: label?.trim() || id,
+    threadType,
+    createdAt: createdAt || EPOCH_ISO,
+    updatedAt: updatedAt || createdAt || EPOCH_ISO,
+    lastMessagePreview:
+      lastMessagePreview?.trim() ||
+      lastAssistantMessage?.trim() ||
+      lastUserMessage?.trim() ||
+      "",
+    workspacePath,
+    messageCount,
+    agentId,
+    recentRunId,
+    runState: null,
+    worktree: mapThreadWorktreeInfo(worktreeValue),
   };
+}
+
+function mapRecentThreadSummary(
+  value: unknown,
+  context: string,
+): DesktopThreadSummary {
+  const record = requireContractRecord(value, context);
+  const id = requireContractNonEmptyString(
+    requireContractField(record, "thread_id", context),
+    `${context}.thread_id`,
+  );
+  const title = requireContractString(
+    requireContractField(record, "title", context),
+    `${context}.title`,
+  );
+  const workspacePath = requireNullableStringField(
+    record,
+    "workspace_dir",
+    context,
+  );
+  const threadType = requireContractNonEmptyString(
+    requireContractField(record, "thread_type", context),
+    `${context}.thread_type`,
+  );
+  requireNullableStringField(record, "provider_type", context);
+  const agentId = requireNullableStringField(record, "agent_id", context);
+  const messageCount = requireContractNonNegativeInteger(
+    requireContractField(record, "message_count", context),
+    `${context}.message_count`,
+  );
+  const lastMessagePreview = requireContractString(
+    requireContractField(record, "last_message_preview", context),
+    `${context}.last_message_preview`,
+  );
+  const recentRunId = requireNullableStringField(
+    record,
+    "recent_run_id",
+    context,
+  );
+  requireNullableStringField(record, "active_run_id", context);
+  const runState = requireContractNonEmptyString(
+    requireContractField(record, "run_state", context),
+    `${context}.run_state`,
+  );
+  const updatedAt = requireNullableStringField(record, "updated_at", context);
+  const lastActiveAt = requireContractNonEmptyString(
+    requireContractField(record, "last_active_at", context),
+    `${context}.last_active_at`,
+  );
+  const recordedAt = requireContractNonEmptyString(
+    requireContractField(record, "recorded_at", context),
+    `${context}.recorded_at`,
+  );
+
+  return {
+    id,
+    title: title.trim() || id,
+    threadType,
+    createdAt: recordedAt,
+    updatedAt: updatedAt || lastActiveAt,
+    lastMessagePreview: lastMessagePreview.trim(),
+    workspacePath,
+    messageCount,
+    agentId,
+    recentRunId,
+    runState,
+    worktree: null,
+  };
+}
+
+function mapThreadMetadataSummary(
+  value: unknown,
+  context: string,
+): DesktopThreadSummary {
+  const record = requireContractRecord(value, context);
+  const id = requireContractNonEmptyString(
+    requireContractField(record, "thread_id", context),
+    `${context}.thread_id`,
+  );
+  requireContractNonEmptyString(
+    requireContractField(record, "thread_key", context),
+    `${context}.thread_key`,
+  );
+  const threadType = requireContractNonEmptyString(
+    requireContractField(record, "thread_type", context),
+    `${context}.thread_type`,
+  );
+  const label = optionalNullableStringField(record, "label", `${context}.label`);
+  const createdAt = optionalNullableStringField(
+    record,
+    "created_at",
+    `${context}.created_at`,
+  );
+  const updatedAt = optionalNullableStringField(
+    record,
+    "updated_at",
+    `${context}.updated_at`,
+  );
+  const lastMessagePreview = optionalNullableStringField(
+    record,
+    "last_message_preview",
+    `${context}.last_message_preview`,
+  );
+  const lastAssistantMessage = optionalNullableStringField(
+    record,
+    "last_assistant_message",
+    `${context}.last_assistant_message`,
+  );
+  const lastUserMessage = optionalNullableStringField(
+    record,
+    "last_user_message",
+    `${context}.last_user_message`,
+  );
+  const messageCount = hasContractField(record, "message_count")
+    ? requireContractNonNegativeInteger(record.message_count, `${context}.message_count`)
+    : undefined;
+  const worktree = hasContractField(record, "worktree")
+    ? mapThreadWorktreeInfo(record.worktree)
+    : null;
+
+  return {
+    id,
+    title: label?.trim() || id,
+    threadType,
+    createdAt: createdAt || EPOCH_ISO,
+    updatedAt: updatedAt || createdAt || EPOCH_ISO,
+    lastMessagePreview:
+      lastMessagePreview?.trim() ||
+      lastAssistantMessage?.trim() ||
+      lastUserMessage?.trim() ||
+      "",
+    workspacePath: optionalNullableStringField(
+      record,
+      "workspace_dir",
+      `${context}.workspace_dir`,
+    ),
+    messageCount,
+    agentId: optionalNullableStringField(record, "agent_id", `${context}.agent_id`),
+    recentRunId: optionalNullableStringField(
+      record,
+      "recent_run_id",
+      `${context}.recent_run_id`,
+    ),
+    runState: optionalNullableStringField(
+      record,
+      "run_state",
+      `${context}.run_state`,
+    ),
+    worktree,
+  };
+}
+
+export function mapThreadSummary(value: unknown): DesktopThreadSummary {
+  return mapStandardThreadSummary(value, "standard thread summary", false);
 }
 
 function normalizeThreadHistoryInput(
@@ -602,39 +737,83 @@ function normalizeThreadHistoryInput(
 }
 
 function mapThreadTranscriptPageInfo(
-  payload: HistoryPayload,
+  payload: Record<string, unknown>,
   limit: number,
+  remoteFound: boolean,
 ): ThreadTranscript["pageInfo"] {
-  const stats = payload.message_stats;
-  if (!stats) {
-    return null;
+  const stats = requireContractRecord(
+    requireContractField(payload, "message_stats", "thread history"),
+    "thread history.message_stats",
+  );
+  const returnedMessages = requireContractNonNegativeInteger(
+    requireContractField(
+      stats,
+      "returned_messages",
+      "thread history.message_stats",
+    ),
+    "thread history.message_stats.returned_messages",
+  );
+  if (!remoteFound) {
+    return {
+      totalMessages: 0,
+      committedMessages: null,
+      returnedMessages,
+      returnedUserQueries: null,
+      startIndex: 0,
+      endIndex: 0,
+      hasMoreBefore: false,
+      nextBeforeIndex: null,
+      hasMoreAfter: false,
+      nextAfterIndex: null,
+      reset: false,
+      limit,
+      userQueryLimit: null,
+    };
   }
-  const totalMessages =
-    asFiniteNumber(stats.total_messages_in_thread) ??
-    asFiniteNumber(stats.total_messages_in_session) ??
-    0;
-  const committedMessages = asFiniteNumber(stats.committed_message_count);
-  const returnedMessages = asFiniteNumber(stats.returned_messages) ?? 0;
-  const returnedUserQueries = asFiniteNumber(stats.returned_user_queries);
-  const startIndex = asFiniteNumber(stats.returned_start_index) ?? 0;
-  const endIndex = asFiniteNumber(stats.returned_end_index) ?? startIndex;
-  const nextBeforeIndex = asFiniteNumber(stats.next_before_index);
-  const nextAfterIndex = asFiniteNumber(stats.next_after_index);
-  const userQueryLimit = asFiniteNumber(stats.user_query_limit);
+  const statsContext = "thread history.message_stats";
+  const requiredCount = (field: string) =>
+    requireContractNonNegativeInteger(
+      requireContractField(stats, field, statsContext),
+      `${statsContext}.${field}`,
+    );
+  const nullableCount = (field: string) => {
+    const value = requireContractField(stats, field, statsContext);
+    return value === null
+      ? null
+      : requireContractNonNegativeInteger(value, `${statsContext}.${field}`);
+  };
+  const totalMessages = requiredCount("total_messages_in_thread");
+  requiredCount("total_messages_in_session");
+  const committedMessages = requiredCount("committed_message_count");
+  const returnedUserQueries = requiredCount("returned_user_queries");
+  const startIndex = requiredCount("returned_start_index");
+  const endIndex = requiredCount("returned_end_index");
+  const nextBeforeIndex = nullableCount("next_before_index");
+  const nextAfterIndex = nullableCount("next_after_index");
+  const userQueryLimit = nullableCount("user_query_limit");
   return {
     totalMessages,
-    committedMessages: committedMessages ?? null,
+    committedMessages,
     returnedMessages,
-    returnedUserQueries: returnedUserQueries ?? null,
+    returnedUserQueries,
     startIndex,
     endIndex,
-    hasMoreBefore: Boolean(stats.has_more_before),
-    nextBeforeIndex: nextBeforeIndex ?? null,
-    hasMoreAfter: Boolean(stats.has_more_after),
-    nextAfterIndex: nextAfterIndex ?? null,
-    reset: Boolean(stats.reset),
+    hasMoreBefore: requireContractBoolean(
+      requireContractField(stats, "has_more_before", statsContext),
+      `${statsContext}.has_more_before`,
+    ),
+    nextBeforeIndex,
+    hasMoreAfter: requireContractBoolean(
+      requireContractField(stats, "has_more_after", statsContext),
+      `${statsContext}.has_more_after`,
+    ),
+    nextAfterIndex,
+    reset: requireContractBoolean(
+      requireContractField(stats, "reset", statsContext),
+      `${statsContext}.reset`,
+    ),
     limit,
-    userQueryLimit: userQueryLimit ?? null,
+    userQueryLimit,
   };
 }
 
@@ -655,8 +834,8 @@ export async function fetchThreadHistory(
   } else if (beforeIndex !== undefined) {
     query.set("before_index", String(beforeIndex));
   }
-  const [payload, detail] = await Promise.all([
-    requestJson<HistoryPayload>(
+  const [payloadValue, detailValue] = await Promise.all([
+    requestJson<unknown>(
       settings,
       `/api/threads/history?${query.toString()}`,
       {
@@ -664,40 +843,66 @@ export async function fetchThreadHistory(
       },
     ),
     beforeIndex === undefined && afterIndex === undefined
-      ? requestJson<ThreadMetadataPayload>(
+      ? requestJson<unknown>(
           settings,
           `/api/threads/${encodeURIComponent(threadId)}`,
           {
             signal: AbortSignal.timeout(8000),
           },
-        ).catch(() => null)
+        ).catch((error) => {
+          if (error instanceof GatewayContractError) {
+            throw error;
+          }
+          return null;
+        })
       : Promise.resolve(null),
   ]);
 
-  const messages =
-    payload.messages
-      ?.map((value) => mapHistoryMessage(threadId, value))
-      .filter((value): value is TranscriptMessage => Boolean(value)) ?? [];
-  const pendingInputs =
-    payload.pending_user_inputs
-      ?.map((value) => mapPendingUserInput(value))
-      .filter((value): value is PendingThreadInput => Boolean(value)) ?? [];
-  const threadInfoPayload =
-    detail || payload.thread_runtime
-      ? ({
-          ...(detail ?? {}),
-          thread_runtime: payload.thread_runtime ?? detail?.thread_runtime ?? null,
-        } as ThreadMetadataPayload)
-      : null;
-
+  const payload = requireContractRecord(payloadValue, "thread history");
+  const remoteFound = requireContractBoolean(
+    requireContractField(payload, "ok", "thread history"),
+    "thread history.ok",
+  );
+  const rawMessages = requireContractArray(
+    requireContractField(payload, "messages", "thread history"),
+    "thread history.messages",
+  );
+  const rawPendingInputs = requireContractArray(
+    requireContractField(payload, "pending_user_inputs", "thread history"),
+    "thread history.pending_user_inputs",
+  );
+  const historyRuntime = requireContractField(
+    payload,
+    "thread_runtime",
+    "thread history",
+  );
+  if (historyRuntime !== null) {
+    requireContractRecord(historyRuntime, "thread history.thread_runtime");
+  }
+  const detail = detailValue
+    ? requireContractRecord(detailValue, "thread metadata")
+    : null;
+  const messages = rawMessages
+    .map((value, index) =>
+      mapHistoryMessage(threadId, value, `thread history.messages[${index}]`),
+    )
+    .filter((value): value is TranscriptMessage => Boolean(value));
+  const pendingInputs = rawPendingInputs.map((value, index) =>
+    mapPendingUserInput(
+      value,
+      `thread history.pending_user_inputs[${index}]`,
+    ),
+  );
   return {
     threadId,
-    remoteFound: Boolean(payload.ok),
+    remoteFound,
     messages,
     pendingInputs,
-    thread: detail ? mapThreadSummary(detail) : null,
-    threadInfo: mapThreadRuntimeInfo(threadInfoPayload),
-    pageInfo: mapThreadTranscriptPageInfo(payload, limit),
+    thread: detail
+      ? mapThreadMetadataSummary(detail, "thread metadata")
+      : null,
+    threadInfo: mapThreadRuntimeInfo(historyRuntime, detail),
+    pageInfo: mapThreadTranscriptPageInfo(payload, limit, remoteFound),
   };
 }
 
@@ -711,25 +916,36 @@ export async function fetchThreadLogs(
     query.set("cursor", String(Math.floor(cursor)));
   }
   const suffix = query.size ? `?${query.toString()}` : "";
-  const payload = await requestJson<ThreadLogPayload>(
+  const payloadValue = await requestJson<unknown>(
     settings,
     `/api/threads/${encodeURIComponent(threadId)}/logs${suffix}`,
     {
       signal: AbortSignal.timeout(8000),
     },
   );
+  const payload = requireContractRecord(payloadValue, "thread log chunk");
 
   return {
-    threadId: payload.threadId || payload.thread_id || threadId,
-    path: typeof payload.path === "string" ? payload.path : "",
-    text: typeof payload.text === "string" ? payload.text : "",
-    cursor:
-      typeof payload.cursor === "number" &&
-      Number.isFinite(payload.cursor) &&
-      payload.cursor >= 0
-        ? payload.cursor
-        : 0,
-    reset: payload.reset !== false,
+    threadId: requireContractNonEmptyString(
+      requireContractField(payload, "threadId", "thread log chunk"),
+      "thread log chunk.threadId",
+    ),
+    path: requireContractString(
+      requireContractField(payload, "path", "thread log chunk"),
+      "thread log chunk.path",
+    ),
+    text: requireContractString(
+      requireContractField(payload, "text", "thread log chunk"),
+      "thread log chunk.text",
+    ),
+    cursor: requireContractNonNegativeInteger(
+      requireContractField(payload, "cursor", "thread log chunk"),
+      "thread log chunk.cursor",
+    ),
+    reset: requireContractBoolean(
+      requireContractField(payload, "reset", "thread log chunk"),
+      "thread log chunk.reset",
+    ),
   };
 }
 
@@ -738,20 +954,31 @@ export async function fetchThreads(
   options?: { limit?: number },
 ): Promise<DesktopThreadSummary[]> {
   const limit = options?.limit ?? 1000;
-  const payload = await requestJson<ThreadsPayload>(
+  const payloadValue = await requestJson<unknown>(
     settings,
     `/api/threads?limit=${limit}`,
     {
       signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
     },
   );
-
-  const threads = Array.isArray(payload.threads)
-    ? payload.threads
-    : Array.isArray(payload.sessions)
-      ? payload.sessions
-      : [];
-  return threads.map(mapThreadSummary);
+  const payload = requireContractRecord(payloadValue, "thread page");
+  const threads = requireContractArray(
+    requireContractField(payload, "threads", "thread page"),
+    "thread page.threads",
+  );
+  for (const field of ["count", "total", "limit", "offset"] as const) {
+    requireContractNonNegativeInteger(
+      requireContractField(payload, field, "thread page"),
+      `thread page.${field}`,
+    );
+  }
+  return threads.map((thread, index) =>
+    mapStandardThreadSummary(
+      thread,
+      `thread page.threads[${index}]`,
+      true,
+    ),
+  );
 }
 
 export function validateListRecentThreadsInput(
@@ -806,26 +1033,44 @@ export async function fetchRecentThreads(
     limit: String(options.limit),
     offset: String(options.offset),
   });
-  const payload = await requestJson<RecentThreadsPayload>(
+  const payloadValue = await requestJson<unknown>(
     settings,
     `/api/recent-threads?${query.toString()}`,
     {
       signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
     },
   );
-  const threads = Array.isArray(payload.threads)
-    ? payload.threads.map(mapThreadSummary)
-    : [];
-  const count = payloadInteger(payload.count, threads.length);
-  const limit = payloadInteger(payload.limit, options.limit);
-  const offset = payloadInteger(payload.offset, options.offset);
-  const total = payloadInteger(payload.total, offset + count);
-  const hasMore =
-    typeof payload.has_more === "boolean"
-      ? payload.has_more
-      : typeof payload.hasMore === "boolean"
-        ? payload.hasMore
-        : offset + count < total;
+  const payload = requireContractRecord(payloadValue, "recent thread page");
+  const rawThreads = requireContractArray(
+    requireContractField(payload, "threads", "recent thread page"),
+    "recent thread page.threads",
+  );
+  const threads = rawThreads.map((thread, index) =>
+    mapRecentThreadSummary(
+      thread,
+      `recent thread page.threads[${index}]`,
+    ),
+  );
+  const count = requireContractNonNegativeInteger(
+    requireContractField(payload, "count", "recent thread page"),
+    "recent thread page.count",
+  );
+  const limit = requireContractNonNegativeInteger(
+    requireContractField(payload, "limit", "recent thread page"),
+    "recent thread page.limit",
+  );
+  const offset = requireContractNonNegativeInteger(
+    requireContractField(payload, "offset", "recent thread page"),
+    "recent thread page.offset",
+  );
+  const total = requireContractNonNegativeInteger(
+    requireContractField(payload, "total", "recent thread page"),
+    "recent thread page.total",
+  );
+  const hasMore = requireContractBoolean(
+    requireContractField(payload, "has_more", "recent thread page"),
+    "recent thread page.has_more",
+  );
   return {
     gatewayScope: normalizeGatewayUrl(settings.gatewayUrl),
     threads,
@@ -835,12 +1080,6 @@ export async function fetchRecentThreads(
     offset,
     hasMore,
   };
-}
-
-function payloadInteger(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : fallback;
 }
 
 /**
@@ -853,35 +1092,36 @@ export async function fetchThreadSummary(
   threadId: string,
 ): Promise<DesktopThreadSummary | null> {
   try {
-    const payload = await requestJson<ThreadMetadataPayload>(
+    const payload = await requestJson<unknown>(
       settings,
       `/api/threads/${encodeURIComponent(threadId)}`,
       {
         signal: AbortSignal.timeout(8000),
       },
     );
-    return mapThreadSummary(payload);
-  } catch {
+    return mapThreadMetadataSummary(payload, "thread metadata");
+  } catch (error) {
+    if (error instanceof GatewayContractError) {
+      throw error;
+    }
     return null;
   }
 }
 
-function mapThreadPinIds(payload: ThreadPinsPayload): string[] {
-  const rawIds = Array.isArray(payload.thread_ids)
-    ? payload.thread_ids
-    : Array.isArray(payload.threadIds)
-      ? payload.threadIds
-      : Array.isArray(payload.pins)
-        ? payload.pins.map((pin) => pin.thread_id || pin.threadId || "")
-        : [];
+function mapThreadPinIds(value: unknown): string[] {
+  const payload = requireContractRecord(value, "thread pins");
+  const rawIds = requireContractArray(
+    requireContractField(payload, "thread_ids", "thread pins"),
+    "thread pins.thread_ids",
+  );
   const seen = new Set<string>();
   const ids: string[] = [];
-  for (const rawId of rawIds) {
-    if (typeof rawId !== "string") {
-      continue;
-    }
-    const id = rawId.trim();
-    if (!id || seen.has(id)) {
+  for (const [index, rawId] of rawIds.entries()) {
+    const id = requireContractNonEmptyString(
+      rawId,
+      `thread pins.thread_ids[${index}]`,
+    );
+    if (seen.has(id)) {
       continue;
     }
     seen.add(id);
@@ -893,7 +1133,7 @@ function mapThreadPinIds(payload: ThreadPinsPayload): string[] {
 export async function fetchThreadPins(
   settings: DesktopSettings,
 ): Promise<string[]> {
-  const payload = await requestJson<ThreadPinsPayload>(settings, "/api/thread-pins", {
+  const payload = await requestJson<unknown>(settings, "/api/thread-pins", {
     signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
   });
   return mapThreadPinIds(payload);
@@ -904,7 +1144,7 @@ export async function setRemoteThreadPinned(
   threadId: string,
   pinned: boolean,
 ): Promise<string[]> {
-  const payload = await requestJson<ThreadPinsPayload>(
+  const payload = await requestJson<unknown>(
     settings,
     `/api/thread-pins/${encodeURIComponent(threadId)}`,
     {
@@ -931,7 +1171,7 @@ export async function createRemoteThread(
     metadata?: Record<string, unknown> | null;
   },
 ): Promise<DesktopThreadSummary> {
-  const payload = await requestJson<ThreadSummaryPayload>(
+  const payload = await requestJson<unknown>(
     settings,
     "/api/threads",
     {
@@ -955,7 +1195,7 @@ export async function createRemoteThread(
       }),
     },
   );
-  return mapThreadSummary(payload);
+  return mapStandardThreadSummary(payload, "created thread summary", false);
 }
 
 export async function updateRemoteThread(
@@ -982,7 +1222,7 @@ export async function updateRemoteThread(
   if (Object.prototype.hasOwnProperty.call(input, "modelServiceTier")) {
     body.modelServiceTier = input.modelServiceTier || "";
   }
-  const payload = await requestJson<ThreadSummaryPayload>(
+  const payload = await requestJson<unknown>(
     settings,
     `/api/threads/${encodeURIComponent(threadId)}`,
     {
@@ -991,7 +1231,7 @@ export async function updateRemoteThread(
       body: JSON.stringify(body),
     },
   );
-  return mapThreadSummary(payload);
+  return mapStandardThreadSummary(payload, "updated thread summary", false);
 }
 
 export async function deleteRemoteThread(

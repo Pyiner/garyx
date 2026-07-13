@@ -7,48 +7,40 @@ import type {
   DesktopSettings,
   UpdateCustomAgentInput,
 } from "@shared/contracts";
-import { baseUrl, requestJson } from "./http.ts";
+import {
+  GatewayContractError,
+  hasContractField,
+  requestJson,
+  requireContractArray,
+  requireContractBoolean,
+  requireContractField,
+  requireContractNonEmptyString,
+  requireContractRecord,
+  requireContractString,
+} from "./http.ts";
 import { normalizeDesktopProviderType } from "./provider.ts";
 
 interface CustomAgentPayload {
   agent_id?: string;
-  agentId?: string;
   display_name?: string;
-  displayName?: string;
-  role?: string | null;
   provider_type?: string;
-  providerType?: string;
   model?: string | null;
   model_reasoning_effort?: string | null;
-  modelReasoningEffort?: string | null;
   model_service_tier?: string | null;
-  modelServiceTier?: string | null;
   provider_env?: Record<string, string> | null;
-  providerEnv?: Record<string, string> | null;
-  env?: Record<string, string> | null;
   default_workspace_dir?: string | null;
-  defaultWorkspaceDir?: string | null;
   avatar_data_url?: string | null;
-  avatarDataUrl?: string | null;
   provider_icon?: ProviderIconDescriptorPayload | null;
-  providerIcon?: ProviderIconDescriptorPayload | null;
-  workspace_dir?: string | null;
-  workspaceDir?: string | null;
   system_prompt?: string | null;
-  systemPrompt?: string | null;
   built_in?: boolean;
-  builtIn?: boolean;
   standalone?: boolean;
   created_at?: string;
-  createdAt?: string;
   updated_at?: string;
-  updatedAt?: string;
 }
 
 interface ProviderIconDescriptorPayload {
   key?: unknown;
   provider_type?: unknown;
-  providerType?: unknown;
   label?: unknown;
 }
 
@@ -56,62 +48,152 @@ interface CustomAgentsPayload {
   agents?: CustomAgentPayload[];
 }
 
-function normalizeProviderIconKey(value: unknown): DesktopProviderIconKey | null {
+function normalizeProviderIconKey(
+  value: unknown,
+  path: string,
+): DesktopProviderIconKey {
   if (value === "claude" || value === "codex" || value === "traex" || value === "gemini") {
     return value;
   }
-  return null;
+  throw new GatewayContractError(path, "must be a current provider icon key");
 }
 
 function mapProviderIconDescriptor(
-  value: ProviderIconDescriptorPayload | null | undefined,
+  value: unknown,
+  path: string,
 ): DesktopProviderIconDescriptor | null {
-  if (!value || typeof value !== "object") {
+  if (value === null) {
     return null;
   }
-  const key = normalizeProviderIconKey(value.key);
-  if (!key) {
-    return null;
-  }
+  const record = requireContractRecord(value, path);
+  const providerType = requireContractField(record, "provider_type", path);
   return {
-    key,
-    providerType:
-      value.provider_type || value.providerType
-        ? normalizeDesktopProviderType(value.provider_type || value.providerType)
-        : null,
-    label: typeof value.label === "string" ? value.label : null,
+    key: normalizeProviderIconKey(
+      requireContractField(record, "key", path),
+      `${path}.key`,
+    ),
+    providerType: mapAgentProviderType(
+      providerType,
+      `${path}.provider_type`,
+    ),
+    label: requireContractString(
+      requireContractField(record, "label", path),
+      `${path}.label`,
+    ),
   };
 }
 
-function mapCustomAgent(value: CustomAgentPayload): DesktopCustomAgent {
-  const provider = normalizeDesktopProviderType(
-    value.provider_type || value.providerType,
+function mapAgentProviderType(value: unknown, path: string): DesktopCustomAgent["providerType"] {
+  if (
+    value !== "claude_code" &&
+    value !== "codex_app_server" &&
+    value !== "traex" &&
+    value !== "antigravity"
+  ) {
+    throw new GatewayContractError(path, "must be a current provider type");
+  }
+  return normalizeDesktopProviderType(value);
+}
+
+function optionalAgentString(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): string {
+  if (!hasContractField(record, field)) {
+    return "";
+  }
+  return requireContractString(record[field], `${path}.${field}`);
+}
+
+function requiredNullableAgentString(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): string {
+  const value = requireContractField(record, field, path);
+  return value === null
+    ? ""
+    : requireContractString(value, `${path}.${field}`);
+}
+
+function mapProviderEnv(value: unknown, path: string): Record<string, string> {
+  const record = requireContractRecord(value, path);
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [
+      key,
+      requireContractString(entry, `${path}.${key}`),
+    ]),
   );
+}
+
+function mapCustomAgent(value: unknown, index?: number): DesktopCustomAgent {
+  const path = index === undefined
+    ? "custom agent"
+    : `custom agent list.agents[${index}]`;
+  const record = requireContractRecord(value, path);
   return {
-    agentId: value.agent_id || value.agentId || "",
-    displayName: value.display_name || value.displayName || "",
-    providerType: provider,
-    model: value.model || "",
-    modelReasoningEffort:
-      value.model_reasoning_effort || value.modelReasoningEffort || "",
-    modelServiceTier: value.model_service_tier || value.modelServiceTier || "",
-    providerEnv:
-      value.provider_env || value.providerEnv || value.env || {},
-    defaultWorkspaceDir:
-      value.default_workspace_dir ??
-      value.defaultWorkspaceDir ??
-      value.workspace_dir ??
-      value.workspaceDir ??
-      "",
-    avatarDataUrl: value.avatar_data_url || value.avatarDataUrl || "",
-    providerIcon: mapProviderIconDescriptor(
-      value.provider_icon || value.providerIcon,
+    agentId: requireContractNonEmptyString(
+      requireContractField(record, "agent_id", path),
+      `${path}.agent_id`,
     ),
-    systemPrompt: value.system_prompt || value.systemPrompt || "",
-    builtIn: value.built_in === true || value.builtIn === true,
-    standalone: value.standalone !== false,
-    createdAt: value.created_at || value.createdAt || "",
-    updatedAt: value.updated_at || value.updatedAt || "",
+    displayName: requireContractNonEmptyString(
+      requireContractField(record, "display_name", path),
+      `${path}.display_name`,
+    ),
+    providerType: mapAgentProviderType(
+      requireContractField(record, "provider_type", path),
+      `${path}.provider_type`,
+    ),
+    model: requireContractString(
+      requireContractField(record, "model", path),
+      `${path}.model`,
+    ),
+    modelReasoningEffort: requireContractString(
+      requireContractField(record, "model_reasoning_effort", path),
+      `${path}.model_reasoning_effort`,
+    ),
+    modelServiceTier: requireContractString(
+      requireContractField(record, "model_service_tier", path),
+      `${path}.model_service_tier`,
+    ),
+    providerEnv: hasContractField(record, "provider_env")
+      ? mapProviderEnv(record.provider_env, `${path}.provider_env`)
+      : {},
+    defaultWorkspaceDir: optionalAgentString(
+      record,
+      "default_workspace_dir",
+      path,
+    ),
+    avatarDataUrl: requiredNullableAgentString(
+      record,
+      "avatar_data_url",
+      path,
+    ),
+    providerIcon: mapProviderIconDescriptor(
+      requireContractField(record, "provider_icon", path),
+      `${path}.provider_icon`,
+    ),
+    systemPrompt: requireContractString(
+      requireContractField(record, "system_prompt", path),
+      `${path}.system_prompt`,
+    ),
+    builtIn: requireContractBoolean(
+      requireContractField(record, "built_in", path),
+      `${path}.built_in`,
+    ),
+    standalone: requireContractBoolean(
+      requireContractField(record, "standalone", path),
+      `${path}.standalone`,
+    ),
+    createdAt: requireContractNonEmptyString(
+      requireContractField(record, "created_at", path),
+      `${path}.created_at`,
+    ),
+    updatedAt: requireContractNonEmptyString(
+      requireContractField(record, "updated_at", path),
+      `${path}.updated_at`,
+    ),
   };
 }
 
@@ -126,9 +208,11 @@ export async function listCustomAgents(
     },
   );
 
-  return Array.isArray(payload.agents)
-    ? payload.agents.map(mapCustomAgent)
-    : [];
+  const record = requireContractRecord(payload, "custom agent list");
+  return requireContractArray(
+    requireContractField(record, "agents", "custom agent list"),
+    "custom agent list.agents",
+  ).map(mapCustomAgent);
 }
 
 export async function createCustomAgent(
