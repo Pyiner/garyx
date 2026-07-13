@@ -85,6 +85,14 @@ inside the measurement window. The independently cached bot-console slice was
 also due once during this final run, so every full-state slice is represented
 in the after evidence.
 
+The merge gate repeated the same cold-start procedure after fetching and
+rebasing onto the latest `origin/main` (the rebase was a no-op). That 60.172
+second window again recorded 23 requests: zero task-forest requests, 15 health
+requests totaling 9,915 bytes, and exactly one request for every full-state
+slice. Total traffic was 2,419,634 bytes; the 2,068-byte difference from the
+table above came from live thread, agent, endpoint, and pin payload growth, not
+from an extra request or a scheduling change.
+
 ## Current causes
 
 ### Healthy connection polls trigger data refreshes
