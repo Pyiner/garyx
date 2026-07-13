@@ -2586,44 +2586,6 @@ export function AppShell() {
     pushToast(t("Bot added."), "success");
   }
 
-  async function handleStartWeixinChannelAuth(input: {
-    accountId?: string | null;
-    name?: string | null;
-    workspaceDir?: string | null;
-    baseUrl?: string | null;
-  }) {
-    return window.garyxDesktop.startWeixinChannelAuth(input);
-  }
-
-  async function handlePollWeixinChannelAuth(input: { sessionId: string }) {
-    const result = await window.garyxDesktop.pollWeixinChannelAuth(input);
-    if (result.status === "confirmed") {
-      await refreshDesktopState();
-      await loadGatewaySettings({ clearStatus: true });
-      pushToast(t("Weixin bot connected."), "success");
-    }
-    return result;
-  }
-
-  async function handleStartFeishuChannelAuth(input: {
-    accountId?: string | null;
-    name?: string | null;
-    workspaceDir?: string | null;
-    domain?: "feishu" | "lark" | null;
-  }) {
-    return window.garyxDesktop.startFeishuChannelAuth(input);
-  }
-
-  async function handlePollFeishuChannelAuth(input: { sessionId: string }) {
-    const result = await window.garyxDesktop.pollFeishuChannelAuth(input);
-    if (result.status === "confirmed") {
-      await refreshDesktopState();
-      await loadGatewaySettings({ clearStatus: true });
-      pushToast(t("Feishu bot connected."), "success");
-    }
-    return result;
-  }
-
   // Batch 6b-2d: the openability gate lives in the mirror's transcript
   // lifecycle (with loadSelectedThreadTranscript it fulfills the parent
   // design's mirror.openThread contract; route semantics stay here).
@@ -4707,10 +4669,6 @@ export function AppShell() {
         agentTargets={addBotAgentTargets}
         onAddWorkspace={addWorkspacePathFromPicker}
         onCreateChannel={handleAddChannelAccount}
-        onPollFeishuAuth={handlePollFeishuChannelAuth}
-        onPollWeixinAuth={handlePollWeixinChannelAuth}
-        onStartFeishuAuth={handleStartFeishuChannelAuth}
-        onStartWeixinAuth={handleStartWeixinChannelAuth}
         ref={addBotDialogRef}
         workspaces={workspacePickerWorkspaces}
       />
@@ -4869,10 +4827,6 @@ export function AppShell() {
                       return handleDeleteMcpServer(name);
                     }}
                     onAddChannelAccount={handleAddChannelAccount}
-                    onStartWeixinChannelAuth={handleStartWeixinChannelAuth}
-                    onPollWeixinChannelAuth={handlePollWeixinChannelAuth}
-                    onStartFeishuChannelAuth={handleStartFeishuChannelAuth}
-                    onPollFeishuChannelAuth={handlePollFeishuChannelAuth}
                     onDeleteSlashCommand={(name) => {
                       return handleDeleteSlashCommand(name);
                     }}

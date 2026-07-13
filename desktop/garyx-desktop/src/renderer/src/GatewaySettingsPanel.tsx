@@ -27,11 +27,6 @@ import {
   type UpdateSlashCommandInput,
   type UpsertMcpServerInput,
   type UpsertSlashCommandInput,
-  type PollWeixinChannelAuthResult,
-  type StartFeishuChannelAuthInput,
-  type StartFeishuChannelAuthResult,
-  type PollFeishuChannelAuthInput,
-  type PollFeishuChannelAuthResult,
 } from '@shared/contracts';
 
 import { defaultChannelAgentId } from '@renderer/gateway-settings';
@@ -165,19 +160,6 @@ type GatewaySettingsPanelProps = {
     domain?: 'feishu' | 'lark' | null;
     config?: Record<string, unknown> | null;
   }) => Promise<void>;
-  onStartWeixinChannelAuth?: (input: {
-    accountId?: string | null;
-    name?: string | null;
-    workspaceDir?: string | null;
-    baseUrl?: string | null;
-  }) => Promise<{ sessionId: string; qrCodeDataUrl: string }>;
-  onPollWeixinChannelAuth?: (input: { sessionId: string }) => Promise<PollWeixinChannelAuthResult>;
-  onStartFeishuChannelAuth?: (
-    input: StartFeishuChannelAuthInput,
-  ) => Promise<StartFeishuChannelAuthResult>;
-  onPollFeishuChannelAuth?: (
-    input: PollFeishuChannelAuthInput,
-  ) => Promise<PollFeishuChannelAuthResult>;
 };
 
 function providerTypeValue(provider: any): string {
@@ -759,18 +741,6 @@ export function GatewaySettingsPanel({
   onMutateGatewayDraft = noop,
   onRefreshAgentTargets = noopAsync,
   onAddChannelAccount = noopAsync,
-  onStartWeixinChannelAuth = async () => ({ sessionId: '', qrCodeDataUrl: '' }),
-  onPollWeixinChannelAuth = async () => ({ status: 'wait', accountId: null }),
-  onStartFeishuChannelAuth = async () => ({
-    sessionId: '',
-    verificationUrl: '',
-    qrCodeDataUrl: '',
-    userCode: '',
-    expiresIn: 0,
-    interval: 5,
-    domain: 'feishu' as const,
-  }),
-  onPollFeishuChannelAuth = async () => ({ status: 'pending' as const, accountId: null }),
 }: GatewaySettingsPanelProps) {
   const { t } = useI18n();
   const normalizedActiveTab: SettingsTabId =
@@ -1264,10 +1234,6 @@ export function GatewaySettingsPanel({
           onSaveGatewaySettings={onSaveGatewaySettings}
           onRefreshAgentTargets={onRefreshAgentTargets}
           onAddChannelAccount={onAddChannelAccount}
-          onStartWeixinChannelAuth={onStartWeixinChannelAuth}
-          onPollWeixinChannelAuth={onPollWeixinChannelAuth}
-          onStartFeishuChannelAuth={onStartFeishuChannelAuth}
-          onPollFeishuChannelAuth={onPollFeishuChannelAuth}
         />
       );
       break;

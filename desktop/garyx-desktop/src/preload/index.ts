@@ -209,14 +209,6 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:run-automation-now", input),
   addChannelAccount: (input) =>
     ipcRenderer.invoke("garyx:add-channel-account", input),
-  startWeixinChannelAuth: (input) =>
-    ipcRenderer.invoke("garyx:start-weixin-channel-auth", input),
-  pollWeixinChannelAuth: (input) =>
-    ipcRenderer.invoke("garyx:poll-weixin-channel-auth", input),
-  startFeishuChannelAuth: (input) =>
-    ipcRenderer.invoke("garyx:start-feishu-channel-auth", input),
-  pollFeishuChannelAuth: (input) =>
-    ipcRenderer.invoke("garyx:poll-feishu-channel-auth", input),
   setBotBinding: (input) => ipcRenderer.invoke("garyx:set-bot-binding", input),
   listChannelEndpoints: () => ipcRenderer.invoke("garyx:list-channel-endpoints"),
   bindChannelEndpoint: (input) =>

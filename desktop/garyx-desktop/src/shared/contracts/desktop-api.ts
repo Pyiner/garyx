@@ -72,14 +72,6 @@ import type {
   ChannelPluginCatalogEntry,
   DesktopChannelEndpoint,
   DetachChannelEndpointInput,
-  PollFeishuChannelAuthInput,
-  PollFeishuChannelAuthResult,
-  PollWeixinChannelAuthInput,
-  PollWeixinChannelAuthResult,
-  StartFeishuChannelAuthInput,
-  StartFeishuChannelAuthResult,
-  StartWeixinChannelAuthInput,
-  StartWeixinChannelAuthResult,
 } from "./channel.ts";
 import type {
   DeleteCapsuleInput,
@@ -381,18 +373,6 @@ export interface GaryxDesktopApi {
     activity: DesktopAutomationActivityEntry;
   }>;
   addChannelAccount: (input: AddChannelAccountInput) => Promise<DesktopState>;
-  startWeixinChannelAuth: (
-    input: StartWeixinChannelAuthInput,
-  ) => Promise<StartWeixinChannelAuthResult>;
-  pollWeixinChannelAuth: (
-    input: PollWeixinChannelAuthInput,
-  ) => Promise<PollWeixinChannelAuthResult>;
-  startFeishuChannelAuth: (
-    input: StartFeishuChannelAuthInput,
-  ) => Promise<StartFeishuChannelAuthResult>;
-  pollFeishuChannelAuth: (
-    input: PollFeishuChannelAuthInput,
-  ) => Promise<PollFeishuChannelAuthResult>;
   setBotBinding: (input: SetBotBindingInput) => Promise<DesktopState>;
   listChannelEndpoints: () => Promise<DesktopChannelEndpoint[]>;
   bindChannelEndpoint: (

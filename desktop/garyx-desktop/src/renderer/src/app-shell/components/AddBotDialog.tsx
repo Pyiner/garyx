@@ -18,11 +18,8 @@
  * generic `config: Record<string, unknown>` payload, the mapping
  * disappears and this file drops another ~30 lines.
  *
- * The auth-flow callback props (onStartWeixinAuth, onStartFeishuAuth,
- * their poll counterparts) are retained in the props signature for
- * AppShell compatibility but are IGNORED — the new flow drives
- * auth through the generic `AuthFlowDriver` via
- * `garyx:start-channel-auth-flow` IPC.
+ * Auto-login is channel-blind: the generic `AuthFlowDriver` uses
+ * `garyx:start-channel-auth-flow` IPC for every catalog plugin.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
@@ -31,9 +28,6 @@ import type {
   ChannelPluginCatalogEntry,
   DesktopWorkspace,
   DesktopWorkspaceMode,
-  PollFeishuChannelAuthResult,
-  PollWeixinChannelAuthResult,
-  StartFeishuChannelAuthResult,
 } from "@shared/contracts";
 
 import { Button } from "@/components/ui/button";
@@ -97,25 +91,6 @@ type AddBotDialogProps = {
      * legacy built-ins which use the typed fields above. */
     config?: Record<string, unknown> | null;
   }) => Promise<void>;
-  /** Retained for prop compatibility; no longer called by the new
-   * generic auth path. Wired through AppShell's legacy handlers. */
-  onStartWeixinAuth?: (input: {
-    accountId?: string | null;
-    name?: string | null;
-    workspaceDir?: string | null;
-    baseUrl?: string | null;
-  }) => Promise<{ sessionId: string; qrCodeDataUrl: string }>;
-  /** Retained for prop compatibility; no longer called. */
-  onPollWeixinAuth?: (input: { sessionId: string }) => Promise<PollWeixinChannelAuthResult>;
-  /** Retained for prop compatibility; no longer called. */
-  onStartFeishuAuth?: (input: {
-    accountId?: string | null;
-    name?: string | null;
-    workspaceDir?: string | null;
-    domain?: FeishuDomain | null;
-  }) => Promise<StartFeishuChannelAuthResult>;
-  /** Retained for prop compatibility; no longer called. */
-  onPollFeishuAuth?: (input: { sessionId: string }) => Promise<PollFeishuChannelAuthResult>;
   onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
 };
 

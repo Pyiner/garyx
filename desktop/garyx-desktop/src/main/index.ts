@@ -189,13 +189,7 @@ import {
   pruneThreadTranscriptCache,
   saveThreadTranscriptCache,
 } from "./transcript-cache";
-import {
-  addChannelAccount,
-  pollFeishuChannelAuth,
-  pollWeixinChannelAuth,
-  startFeishuChannelAuth,
-  startWeixinChannelAuth,
-} from "./channel-setup";
+import { addChannelAccount } from "./channel-setup";
 import {
   cancelCustomAgentAvatarGeneration,
   generateCustomAgentAvatar,
@@ -665,8 +659,7 @@ function registerIpcHandlers(): void {
   // Channel-blind auth-flow IPC. The renderer never cares which
   // plugin it's talking to; these two handlers proxy straight to
   // the gateway's `/api/channels/plugins/{id}/auth_flow/{start,poll}`
-  // endpoints. A later pass deprecates the per-channel
-  // `start-{weixin,feishu}-channel-auth` handlers below.
+  // endpoints.
   ipcMain.handle(
     "garyx:start-channel-auth-flow",
     async (_event, input: { pluginId: string; formState?: Record<string, unknown> }) => {
@@ -699,24 +692,6 @@ function registerIpcHandlers(): void {
     const settings = await resolveSettings();
     await addChannelAccount(settings, input);
     return getDesktopState();
-  });
-
-  ipcMain.handle("garyx:start-weixin-channel-auth", async (_event, input) => {
-    return startWeixinChannelAuth(input);
-  });
-
-  ipcMain.handle("garyx:poll-weixin-channel-auth", async (_event, input) => {
-    const settings = await resolveSettings();
-    return pollWeixinChannelAuth(settings, input);
-  });
-
-  ipcMain.handle("garyx:start-feishu-channel-auth", async (_event, input) => {
-    return startFeishuChannelAuth(input);
-  });
-
-  ipcMain.handle("garyx:poll-feishu-channel-auth", async (_event, input) => {
-    const settings = await resolveSettings();
-    return pollFeishuChannelAuth(settings, input);
   });
 
   ipcMain.handle(

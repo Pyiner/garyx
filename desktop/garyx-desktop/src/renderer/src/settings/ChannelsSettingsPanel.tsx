@@ -6,11 +6,6 @@ import type {
   DesktopCustomAgent,
   DesktopWorkspace,
   GatewaySettingsSource,
-  PollFeishuChannelAuthInput,
-  PollFeishuChannelAuthResult,
-  PollWeixinChannelAuthResult,
-  StartFeishuChannelAuthInput,
-  StartFeishuChannelAuthResult,
 } from '@shared/contracts';
 import { defaultChannelAgentId } from '@renderer/gateway-settings';
 import {
@@ -173,19 +168,6 @@ type ChannelsSettingsPanelProps = {
     domain?: 'feishu' | 'lark' | null;
     config?: Record<string, unknown> | null;
   }) => Promise<void>;
-  onStartWeixinChannelAuth?: (input: {
-    accountId?: string | null;
-    name?: string | null;
-    workspaceDir?: string | null;
-    baseUrl?: string | null;
-  }) => Promise<{ sessionId: string; qrCodeDataUrl: string }>;
-  onPollWeixinChannelAuth?: (input: { sessionId: string }) => Promise<PollWeixinChannelAuthResult>;
-  onStartFeishuChannelAuth?: (
-    input: StartFeishuChannelAuthInput,
-  ) => Promise<StartFeishuChannelAuthResult>;
-  onPollFeishuChannelAuth?: (
-    input: PollFeishuChannelAuthInput,
-  ) => Promise<PollFeishuChannelAuthResult>;
 };
 
 export function ChannelsSettingsPanel({
@@ -199,10 +181,6 @@ export function ChannelsSettingsPanel({
   onSaveGatewaySettings = async () => true,
   onRefreshAgentTargets = noopAsync,
   onAddChannelAccount = noopAsync,
-  onStartWeixinChannelAuth = async () => ({ sessionId: '', qrCodeDataUrl: '' }),
-  onPollWeixinChannelAuth = async () => ({ status: 'pending' } as PollWeixinChannelAuthResult),
-  onStartFeishuChannelAuth = async () => ({}) as StartFeishuChannelAuthResult,
-  onPollFeishuChannelAuth = async () => ({}) as PollFeishuChannelAuthResult,
 }: ChannelsSettingsPanelProps) {
   const { t } = useI18n();
   const pluginAccounts = configuredChannelAccountsFromDraft(gatewayDraft?.channels);
@@ -475,10 +453,6 @@ export function ChannelsSettingsPanel({
           setIsAddingChannel(false);
         }}
         onCreateChannel={onAddChannelAccount}
-        onPollWeixinAuth={onPollWeixinChannelAuth}
-        onStartWeixinAuth={onStartWeixinChannelAuth}
-        onPollFeishuAuth={onPollFeishuChannelAuth}
-        onStartFeishuAuth={onStartFeishuChannelAuth}
         open={isAddingChannel}
         workspaces={workspaces}
       />
