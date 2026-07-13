@@ -137,6 +137,37 @@ test('stale completion still frees its slot so the queue keeps draining', async 
   assert.equal(stateOf('a', 1).status, 'deleted');
 });
 
+test('stale sibling completion releases an orphaned loading revision', async () => {
+  const { calls, fetcher } = makeController();
+  __setCapsuleHtmlFetcherForTest(fetcher);
+
+  capsuleHtmlStore.request('shared', 1, {});
+  capsuleHtmlStore.request('shared', 2, {});
+  capsuleHtmlStore.request('shared', 1, { force: true });
+  assert.equal(calls.length, 3);
+
+  // The force refresh advances the id-wide generation, so the sibling
+  // revision settles stale with no successor for its own key.
+  calls[1].resolve({ status: 'ok', html: 'stale sibling' });
+  await flush();
+  assert.equal(stateOf('shared', 2).status, 'idle');
+
+  // Returning to idle lets an active hook request the sibling again.
+  capsuleHtmlStore.request('shared', 2, {});
+  assert.equal(calls.length, 4);
+  calls[0].resolve({ status: 'ok', html: 'stale original' });
+  calls[2].resolve({ status: 'ok', html: 'fresh forced' });
+  calls[3].resolve({ status: 'ok', html: 'fresh sibling' });
+  await flush();
+
+  assert.deepEqual(stateOf('shared', 2), {
+    status: 'ready',
+    html: 'fresh sibling',
+  });
+  assert.equal(capsuleHtmlStore.__activeCount(), 0);
+  assert.equal(capsuleHtmlStore.__generationCount(), 0);
+});
+
 test('evicts old ready HTML after browsing a bounded number of capsules', async () => {
   __setCapsuleHtmlFetcherForTest(async (id) => ({
     status: 'ok',

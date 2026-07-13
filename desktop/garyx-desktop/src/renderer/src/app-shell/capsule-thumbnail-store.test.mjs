@@ -207,6 +207,51 @@ test('stale completion still frees its slot so the queue keeps draining', async 
   assert.equal(stateOf('a', 1, GALLERY_RENDITION).status, 'deleted');
 });
 
+test('stale sibling completion releases an orphaned loading rendition', async () => {
+  const { calls, fetcher } = makeController();
+  __setCapsuleThumbnailFetcherForTest(fetcher);
+
+  capsuleThumbnailStore.request('shared', 1, GALLERY_RENDITION, {});
+  capsuleThumbnailStore.request('shared', 1, CHAT_CARD_RENDITION, {});
+  capsuleThumbnailStore.request('shared', 1, GALLERY_RENDITION, {
+    force: true,
+  });
+  assert.equal(calls.length, 3);
+
+  calls[1].resolve({
+    status: 'ok',
+    dataUrl: 'data:image/png;base64,STALE_SIBLING',
+  });
+  await flush();
+  assert.equal(
+    stateOf('shared', 1, CHAT_CARD_RENDITION).status,
+    'idle',
+  );
+
+  capsuleThumbnailStore.request('shared', 1, CHAT_CARD_RENDITION, {});
+  assert.equal(calls.length, 4);
+  calls[0].resolve({
+    status: 'ok',
+    dataUrl: 'data:image/png;base64,STALE_ORIGINAL',
+  });
+  calls[2].resolve({
+    status: 'ok',
+    dataUrl: 'data:image/png;base64,FRESH_FORCED',
+  });
+  calls[3].resolve({
+    status: 'ok',
+    dataUrl: 'data:image/png;base64,FRESH_SIBLING',
+  });
+  await flush();
+
+  assert.deepEqual(stateOf('shared', 1, CHAT_CARD_RENDITION), {
+    status: 'ready',
+    dataUrl: 'data:image/png;base64,FRESH_SIBLING',
+  });
+  assert.equal(capsuleThumbnailStore.__activeCount(), 0);
+  assert.equal(capsuleThumbnailStore.__generationCount(), 0);
+});
+
 test('evicts old ready data URLs after browsing a bounded number of capsules', async () => {
   __setCapsuleThumbnailFetcherForTest(async (id) => ({
     status: 'ok',

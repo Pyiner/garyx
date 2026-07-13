@@ -272,11 +272,27 @@ class CapsuleThumbnailStore {
         // Unexpected empty result: tombstone just this key (retryable shape unknown).
         this.setEntry(job.key, DELETED);
       }
-    } else if (this.pruneToLimit()) {
-      this.notify();
+    } else {
+      const releasedLoading = this.releaseOrphanedLoadingEntry(job.key);
+      const pruned = this.pruneToLimit();
+      if (releasedLoading || pruned) {
+        this.notify();
+      }
     }
     this.drain();
     this.forgetGenerationIfIdle(job.id);
+  }
+
+  private releaseOrphanedLoadingEntry(key: string): boolean {
+    if (
+      this.entries.get(key) !== LOADING ||
+      this.inflightCountByKey.has(key) ||
+      this.queuedKeys.has(key)
+    ) {
+      return false;
+    }
+    this.entries.delete(key);
+    return true;
   }
 
   private incrementInflight(counts: Map<string, number>, key: string): void {

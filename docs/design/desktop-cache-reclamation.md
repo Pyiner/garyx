@@ -185,6 +185,12 @@ generation guards remain intact. The per-id generation entry is dropped once
 that id has no queued or in-flight job, preventing invalidation metadata from
 becoming a second unbounded map.
 
+An id-wide force refresh can make an in-flight sibling revision/rendition
+stale. If that sibling has no queued or in-flight successor for its own key,
+settlement deletes its leftover `loading` entry and notifies subscribers. The
+stable `idle` snapshot then makes an active hook request it again; a newer
+same-key job or a deletion tombstone is never disturbed.
+
 Eviction returns the stable `idle` snapshot. The two Capsule hooks request
 again when an active key becomes `idle`; the renderer then normally hits the
 already-bounded main-process thumbnail disk LRU. Deleted/404 cross-store
@@ -223,7 +229,7 @@ work called out in the task.
 5. Rebase onto the latest `origin/main`, reconcile overlapping upstream
    semantics, and repeat the full desktop checks before merging.
 
-## Pre-review validation evidence
+## Validation evidence
 
 The same checked-in reproductions that failed at the baseline now pass:
 
@@ -235,9 +241,10 @@ The same checked-in reproductions that failed at the baseline now pass:
 - workspace `git init` refresh: the real temporary-repository test passes;
 - gateway mirror contract: 28/28 pass.
 
-Repository-required aggregate checks also pass before external code review:
+Repository-required aggregate checks also pass after correcting the external
+review's stale-sibling force-race finding:
 
 ```text
-npm run test:unit  -> 604 passed, 0 failed
+npm run test:unit  -> 606 passed, 0 failed
 npx tsc --noEmit  -> clean
 ```

@@ -217,11 +217,27 @@ class CapsuleHtmlStore {
         this.setEntry(job.key, DELETED);
         this.crossInvalidate?.(job.id);
       }
-    } else if (this.pruneToLimit()) {
-      this.notify();
+    } else {
+      const releasedLoading = this.releaseOrphanedLoadingEntry(job.key);
+      const pruned = this.pruneToLimit();
+      if (releasedLoading || pruned) {
+        this.notify();
+      }
     }
     this.drain();
     this.forgetGenerationIfIdle(job.id);
+  }
+
+  private releaseOrphanedLoadingEntry(key: string): boolean {
+    if (
+      this.entries.get(key) !== LOADING ||
+      this.inflightCountByKey.has(key) ||
+      this.queuedKeys.has(key)
+    ) {
+      return false;
+    }
+    this.entries.delete(key);
+    return true;
   }
 
   private incrementInflight(counts: Map<string, number>, key: string): void {
