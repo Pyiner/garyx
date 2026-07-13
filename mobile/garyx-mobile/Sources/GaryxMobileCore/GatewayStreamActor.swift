@@ -204,8 +204,7 @@ public struct GatewayStreamFrameProcessor: Sendable {
             case .stale:
                 continue
             case .apply:
-                message.index = seq - 1
-                message.id = "history:\(seq - 1)"
+                message.applyCommittedIndex(seq - 1)
                 if GaryxTranscriptControlRewritePlanner.action(for: message) == .refetchAuthoritativeTranscript {
                     connectionLastSeq = max(connectionLastSeq, seq)
                     madeProgressOnConnection = true

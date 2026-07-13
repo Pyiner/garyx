@@ -653,6 +653,15 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         self.id = Self.messageId(index: index, role: role, metadata: metadata)
     }
 
+    /// Applies the ledger index assigned by a committed stream event while
+    /// preserving the same identity rule used by REST and cache decoding.
+    /// Origin-bearing user messages keep their stable optimistic `origin:*`
+    /// identity; all other committed messages use `history:<index>`.
+    mutating func applyCommittedIndex(_ committedIndex: Int) {
+        index = committedIndex
+        id = Self.messageId(index: committedIndex, role: role, metadata: metadata)
+    }
+
     private static func messageId(index: Int?, role: GaryxTranscriptRole, metadata: GaryxJSONValue?) -> String {
         if let originId = originId(role: role, metadata: metadata) {
             return "origin:\(originId)"

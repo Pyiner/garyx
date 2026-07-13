@@ -1085,9 +1085,9 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
             return XCTFail("the frame must end by applying the render snapshot")
         }
         XCTAssertEqual(thinkingSnapshot.tailActivity, .thinking)
-        // The stream path rewrites committed identities to history:<seq-1>;
-        // ref resolution must then work through the history index.
-        XCTAssertEqual(committed.map(\.id), ["history:2"])
+        // Live committed users keep the same origin identity as the local
+        // optimistic row and the server render ref.
+        XCTAssertEqual(committed.map(\.id), ["origin:\(origin)"])
         XCTAssertEqual(committed.map(\.index), [2])
 
         // Step 2 — bodies merged into the transcript cache, snapshot not yet
