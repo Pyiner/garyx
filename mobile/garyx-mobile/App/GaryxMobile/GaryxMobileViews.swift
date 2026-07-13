@@ -57,6 +57,9 @@ struct GaryxRootView: View {
                     onTogglePinnedThread: { threadId in
                         model.togglePinnedThread(threadId)
                     },
+                    onUnpinThread: { threadId in
+                        model.unpinThread(threadId)
+                    },
                     onArchiveThread: { thread in
                         await model.archiveThread(thread)
                     },
@@ -491,6 +494,7 @@ struct GaryxShellView: View, Equatable {
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
+    let onUnpinThread: (String) -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
     let onOpenPanel: (GaryxMobilePanel) -> Void
     let onOpenBotGroup: (GaryxMobileBotGroup) -> Void
@@ -614,6 +618,7 @@ struct GaryxShellView: View, Equatable {
                     onStartNewChat: onStartNewChat,
                     onOpenThread: onOpenThread,
                     onTogglePinnedThread: onTogglePinnedThread,
+                    onUnpinThread: onUnpinThread,
                     onArchiveThread: onArchiveThread
                 )
                 .equatable()

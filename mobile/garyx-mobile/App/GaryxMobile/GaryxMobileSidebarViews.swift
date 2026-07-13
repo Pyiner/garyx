@@ -24,6 +24,7 @@ struct GaryxRootNavigationView: View, Equatable {
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
+    let onUnpinThread: (String) -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
 
     static func == (lhs: GaryxRootNavigationView, rhs: GaryxRootNavigationView) -> Bool {
@@ -50,6 +51,7 @@ struct GaryxRootNavigationView: View, Equatable {
                 onStartNewChat: onStartNewChat,
                 onOpenThread: onOpenThread,
                 onTogglePinnedThread: onTogglePinnedThread,
+                onUnpinThread: onUnpinThread,
                 onArchiveThread: onArchiveThread
             )
                 .equatable()
@@ -154,6 +156,7 @@ struct GaryxHomeThreadListView: View, Equatable {
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
+    let onUnpinThread: (String) -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
     private let silentRefreshIntervalNanos: UInt64 = 10_000_000_000
 
@@ -253,6 +256,7 @@ struct GaryxHomeThreadListView: View, Equatable {
                     motion: homeListStore.rowMotion(threadId: row.id),
                     onOpenThread: onOpenThread,
                     onTogglePinnedThread: onTogglePinnedThread,
+                    onUnpinThread: onUnpinThread,
                     onArchiveThread: onArchiveThread
                 )
                 .equatable()
@@ -360,8 +364,10 @@ private struct GaryxHomeThreadButton: View, Equatable {
     let motion: GaryxHomeThreadRowMotion
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
+    let onUnpinThread: (String) -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var suppressNextPrimaryTap = false
 
     static func == (lhs: GaryxHomeThreadButton, rhs: GaryxHomeThreadButton) -> Bool {
         lhs.row == rhs.row && lhs.motion == rhs.motion
@@ -385,10 +391,32 @@ private struct GaryxHomeThreadButton: View, Equatable {
                 usesExternalSelectionGesture: true,
                 onSelect: {
                     onOpenThread(row.thread)
+                },
+                onUnpin: {
+                    guard motion != .pinning else { return }
+                    suppressNextPrimaryTap = true
+                    onUnpinThread(row.id)
+                    // The ancestor's simultaneous exclusive gesture also sees
+                    // this release. Keep suppression alive through its deferred
+                    // primary action, then clear it if recognition ever changes
+                    // and the ancestor does not complete.
+                    DispatchQueue.main.async {
+                        DispatchQueue.main.async {
+                            suppressNextPrimaryTap = false
+                        }
+                    }
                 }
             )
             .garyxThreadActionMenu(primaryAction: {
-                onOpenThread(row.thread)
+                // Defer one run-loop turn so a nested direct Unpin button can
+                // mark the same touch as consumed before the row opens.
+                DispatchQueue.main.async {
+                    guard !suppressNextPrimaryTap else {
+                        suppressNextPrimaryTap = false
+                        return
+                    }
+                    onOpenThread(row.thread)
+                }
             }) {
                 var items = [
                     GaryxThreadActionMenuItem(

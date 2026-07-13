@@ -133,6 +133,23 @@ final class HomeChromeInteractionTests: XCTestCase {
         XCTAssertFalse(app.buttons["Pin thread"].exists)
     }
 
+    func testPinnedThreadPinButtonRemainsDirectActionWithoutOpeningThread() throws {
+        let app = launchHome(useScrollFixture: true)
+        let row = app.staticTexts["Synthetic thread 0"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "pinned synthetic thread row")
+
+        let unpinButtons = app.buttons.matching(identifier: "Unpin thread")
+        XCTAssertGreaterThan(unpinButtons.count, 0, "Home keeps the direct Unpin affordance")
+
+        unpinButtons.firstMatch.tap()
+
+        XCTAssertFalse(
+            app.buttons["Back"].waitForExistence(timeout: 1),
+            "the direct Unpin action must not also open the thread"
+        )
+        XCTAssertTrue(row.exists, "the direct Unpin action must keep the row on Home")
+    }
+
     func testThreadRowDragStillScrollsWithoutOpeningOrPresentingMenu() throws {
         let app = launchHome(useScrollFixture: true)
         let row = app.staticTexts["Synthetic thread 0"].firstMatch
