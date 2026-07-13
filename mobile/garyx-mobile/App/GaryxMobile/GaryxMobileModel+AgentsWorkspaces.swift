@@ -538,12 +538,16 @@ extension GaryxMobileModel {
         identifier: String,
         displayName: String,
         stylePrompt: String
-    ) async -> String? {
+    ) async -> GaryxAvatarGenerationOutcome {
         let trimmedId = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedId.isEmpty || !trimmedName.isEmpty else {
-            lastError = "Agent name is required"
-            return nil
+            return .failure(
+                GaryxAvatarGenerationFailure(
+                    category: .unknown,
+                    message: "Agent name is required."
+                )
+            )
         }
         let prompt = GaryxAvatarPromptBuilder.prompt(
             displayName: trimmedName,
@@ -552,181 +556,120 @@ extension GaryxMobileModel {
         )
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
+            try Task.checkCancellation()
             let generated = try await client().generateAvatar(prompt: prompt)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
+            try Task.checkCancellation()
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
             let avatarDataUrl = generated.avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !avatarDataUrl.isEmpty else {
-                lastError = "Image generation did not return an avatar."
-                return nil
+                return .failure(GaryxAvatarGenerationFailure(category: .unusable))
             }
             do {
-                return try GaryxMobileAvatarImageNormalizer.normalizedDataUrl(fromRawValue: avatarDataUrl)
+                let normalized = try GaryxMobileAvatarImageNormalizer.normalizedDataUrl(
+                    fromRawValue: avatarDataUrl
+                )
+                return .success(dataUrl: normalized)
             } catch {
-                lastError = error.localizedDescription
-                return nil
+                return .failure(GaryxAvatarGenerationFailure(category: .unusable))
             }
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-            lastError = displayMessage(for: error)
-            return nil
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            return GaryxAvatarGenerationOutcome.from(error: error)
         }
     }
 
-    func createAgent(
-        agentId: String,
-        displayName: String,
-        providerType: String,
-        modelName: String,
-        modelReasoningEffort: String = "",
-        workspace: String,
-        avatarDataUrl: String,
-        systemPrompt: String,
-        env: [String: String] = [:]
-    ) async -> Bool {
-        let agentId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let provider = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let reasoningEffort = modelReasoningEffort.trimmingCharacters(in: .whitespacesAndNewlines)
-        let workspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
-        let avatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !agentId.isEmpty, !displayName.isEmpty, !provider.isEmpty else { return false }
+    func loadAuthoritativeAgent(agentId: String) async -> GaryxCustomAgentLoadResult {
+        let id = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else {
+            return .failed(message: "Agent ID is required.")
+        }
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
-            let agent = try await client().createAgent(
-                GaryxCustomAgentRequest(
-                    agentId: agentId,
-                    displayName: displayName,
-                    providerType: provider,
-                    model: model,
-                    modelReasoningEffort: reasoningEffort,
-                    providerEnv: env.isEmpty ? nil : env,
-                    defaultWorkspaceDir: workspace.isEmpty ? nil : workspace,
-                    avatarDataUrl: avatarDataUrl.isEmpty ? nil : avatarDataUrl,
-                    systemPrompt: prompt
-                )
+            let agent = try await client().getAgent(agentId: id)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            return .loaded(agent)
+        } catch let error as GaryxGatewayError {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            if case .httpStatus(404, _) = error {
+                return .deleted
+            }
+            return .failed(message: displayMessage(for: error))
+        } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            return .failed(message: displayMessage(for: error))
+        }
+    }
+
+    func createAgent(_ request: GaryxCustomAgentRequest) async -> GaryxCustomAgentMutationResult {
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            let agent = try await client().createAgent(request)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            await storeAvatarIfPresent(
+                id: agent.id,
+                dataUrl: agent.avatarDataUrl.isEmpty ? request.avatarDataUrl ?? "" : agent.avatarDataUrl,
+                sourceUpdatedAt: agent.updatedAt
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
-            await storeAvatarIfPresent(id: agent.id, dataUrl: agent.avatarDataUrl.isEmpty ? avatarDataUrl : agent.avatarDataUrl, sourceUpdatedAt: agent.updatedAt)
             replaceAgent(agent)
             setSelectedAgentTarget(agent.id)
-            return true
+            return .saved(agent)
+        } catch let error as GaryxGatewayError {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            return .failed(
+                GaryxCustomAgentDraftRules.mutationFailure(for: error, mode: .create)
+            )
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
-            lastError = displayMessage(for: error)
-            return false
-        }
-    }
-
-    /// Fetch an agent's authoritative env for seeding the editor. When the
-    /// catalog was restored from a cache snapshot (which strips provider_env),
-    /// re-fetch the live agent; otherwise the in-memory agent is authoritative.
-    func authoritativeProviderEnv(for agent: GaryxAgentSummary) async -> [String: String] {
-        guard catalogSnapshotRestored else { return agent.providerEnv }
-        let runtimeGeneration = gatewayRuntimeGeneration
-        do {
-            let latestAgents = try await client().listAgents()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return agent.providerEnv }
-            return latestAgents.first(where: { $0.id == agent.id })?.providerEnv ?? agent.providerEnv
-        } catch {
-            return agent.providerEnv
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            return .failed(.other(message: displayMessage(for: error)))
         }
     }
 
     func updateAgent(
-        _ agent: GaryxAgentSummary,
         agentId: String,
-        displayName: String,
-        providerType: String,
-        modelName: String,
-        modelReasoningEffort: String? = nil,
-        workspace: String,
-        avatarDataUrl: String,
-        clearsAvatar: Bool = false,
-        systemPrompt: String,
-        envIntent: GaryxAgentEnvIntent = .unchanged
-    ) async -> GaryxAgentSummary? {
-        let nextAgentId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextProviderType = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextModelName = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextWorkspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextAvatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !nextAgentId.isEmpty, !nextDisplayName.isEmpty, !nextProviderType.isEmpty else { return nil }
+        request: GaryxCustomAgentRequest
+    ) async -> GaryxCustomAgentMutationResult {
+        let immutableAgentId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !immutableAgentId.isEmpty else {
+            return .failed(.other(message: "Agent ID is required."))
+        }
+        let mode = GaryxCustomAgentDraftMode.edit(
+            agentId: immutableAgentId,
+            expectedUpdatedAt: request.expectedUpdatedAt ?? ""
+        )
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
-            var baseAgent = agent
-            // Restored rows are display projections; a missing updatedAt also
-            // means the row cannot vouch for the stored state. Both cases must
-            // re-fetch before building a conditional update.
-            if catalogSnapshotRestored || agent.updatedAt == nil {
-                let latestAgents = try await client().listAgents()
-                guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-                guard let latestAgent = latestAgents.first(where: { $0.id == agent.id }) else {
-                    lastError = "Agent details are still loading. Try again after refresh."
-                    return nil
-                }
-                baseAgent = latestAgent
-            }
-            let nextSystemPrompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-            // nil keeps the stored thinking level; an explicit value (or "") replaces it.
-            let nextReasoningEffort = modelReasoningEffort?.trimmingCharacters(in: .whitespacesAndNewlines)
-                ?? baseAgent.modelReasoningEffort
-            let requestAvatarDataUrl: String?
-            if nextAvatarDataUrl.isEmpty {
-                requestAvatarDataUrl = clearsAvatar ? "" : nil
-            } else {
-                requestAvatarDataUrl = nextAvatarDataUrl
-            }
-            // Env is expressed as an explicit intent: `.unchanged` omits
-            // provider_env (gateway preserves the stored value), `.clear` sends
-            // an empty map, `.replace` sends the full desired map. This never
-            // re-sends a possibly-stale baseAgent snapshot for an untouched edit.
-            let providerEnvRequestValue: [String: String]?
-            switch envIntent {
-            case .unchanged:
-                providerEnvRequestValue = nil
-            case .clear:
-                providerEnvRequestValue = [:]
-            case .replace(let map):
-                providerEnvRequestValue = map
-            }
             let updated = try await client().updateAgent(
-                agentId: agent.id,
-                request: GaryxCustomAgentRequest(
-                    agentId: nextAgentId,
-                    displayName: nextDisplayName,
-                    providerType: nextProviderType,
-                    model: nextModelName,
-                    modelReasoningEffort: nextReasoningEffort,
-                    modelServiceTier: baseAgent.modelServiceTier,
-                    providerEnv: providerEnvRequestValue,
-                    defaultWorkspaceDir: nextWorkspace.isEmpty ? nil : nextWorkspace,
-                    avatarDataUrl: requestAvatarDataUrl,
-                    systemPrompt: nextSystemPrompt,
-                    expectedUpdatedAt: baseAgent.updatedAt
-                )
+                agentId: immutableAgentId,
+                request: request
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-            let didClearAvatar = clearsAvatar && nextAvatarDataUrl.isEmpty
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            let requestedAvatar = request.avatarDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let didClearAvatar = requestedAvatar != nil && requestedAvatar?.isEmpty == true
             let didStoreAvatar: Bool
             if didClearAvatar {
                 await removeAvatar(id: updated.id)
                 didStoreAvatar = false
             } else {
-                didStoreAvatar = await storeAvatarIfPresent(id: updated.id, dataUrl: updated.avatarDataUrl.isEmpty ? nextAvatarDataUrl : updated.avatarDataUrl, sourceUpdatedAt: updated.updatedAt)
+                didStoreAvatar = await storeAvatarIfPresent(
+                    id: updated.id,
+                    dataUrl: updated.avatarDataUrl.isEmpty ? requestedAvatar ?? "" : updated.avatarDataUrl,
+                    sourceUpdatedAt: updated.updatedAt
+                )
             }
-            if updated.id != agent.id, didClearAvatar || didStoreAvatar {
-                await removeAvatar(id: agent.id)
+            if updated.id != immutableAgentId, didClearAvatar || didStoreAvatar {
+                await removeAvatar(id: immutableAgentId)
             }
-            replaceAgent(updated, replacing: agent.id)
+            replaceAgent(updated, replacing: immutableAgentId)
             setSelectedAgentTarget(updated.id)
-            return updated
+            return .saved(updated)
+        } catch let error as GaryxGatewayError {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            return .failed(
+                GaryxCustomAgentDraftRules.mutationFailure(for: error, mode: mode)
+            )
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-            lastError = displayMessage(for: error)
-            return nil
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
+            return .failed(.other(message: displayMessage(for: error)))
         }
     }
 

@@ -5009,6 +5009,11 @@ export function AppShell() {
               />
             ) : isAgentsView ? (
               <AgentsHubPanel
+                gatewayScope={desktopState ? [
+                  desktopState.settings.gatewayUrl,
+                  desktopState.settings.gatewayAuthToken,
+                  desktopState.settings.gatewayHeaders,
+                ].join('\u001f') : ''}
                 workspaces={workspacePickerWorkspaces}
                 onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenMemory={(agent) => {

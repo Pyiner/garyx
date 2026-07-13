@@ -1,4 +1,5 @@
 import type {
+  CancelCustomAgentAvatarInput,
   CreateCustomAgentInput,
   DeleteCustomAgentInput,
   DesktopCustomAgent,
@@ -320,6 +321,9 @@ export interface GaryxDesktopApi {
   generateCustomAgentAvatar: (
     input: GenerateCustomAgentAvatarInput,
   ) => Promise<GenerateCustomAgentAvatarResult>;
+  cancelCustomAgentAvatarGeneration: (
+    input: CancelCustomAgentAvatarInput,
+  ) => Promise<boolean>;
   createSkill: (input: CreateSkillInput) => Promise<DesktopSkillInfo>;
   updateSkill: (input: UpdateSkillInput) => Promise<DesktopSkillInfo>;
   toggleSkill: (input: ToggleSkillInput) => Promise<DesktopSkillInfo>;

@@ -2,17 +2,21 @@ import { nativeImage } from "electron";
 
 import type {
   DesktopSettings,
+  GeneratedCustomAgentAvatar,
   GenerateCustomAgentAvatarInput,
   GenerateCustomAgentAvatarResult,
 } from "@shared/contracts";
+import { buildAgentAvatarPrompt } from "@shared/agent-avatar-prompt";
 
-import { requestJson } from "./gary-client";
+import { GatewayRequestError, requestJson } from "./gary-client";
+import { AgentAvatarRequestManager } from "./agent-avatar-request-manager";
 
 const AVATAR_IMAGE_SIZE = 256;
 const AVATAR_PNG_MAX_BYTES = 450 * 1024;
 const AVATAR_JPEG_QUALITY = 88;
 const TOOL_IMAGE_TIMEOUT_SECS = 600;
 const TOOL_IMAGE_REQUEST_TIMEOUT_MS = (TOOL_IMAGE_TIMEOUT_SECS + 30) * 1000;
+const avatarRequests = new AgentAvatarRequestManager();
 
 type ToolImagePayload = {
   ok?: boolean;
@@ -22,26 +26,10 @@ type ToolImagePayload = {
   mediaType?: string | null;
 };
 
-function avatarName(input: GenerateCustomAgentAvatarInput): string {
-  return input.displayName.trim() || input.agentId?.trim() || "Agent";
-}
-
-function buildAgentAvatarPrompt(input: GenerateCustomAgentAvatarInput): string {
-  const name = JSON.stringify(avatarName(input));
-  const stylePrompt = input.stylePrompt?.trim()
-    || "minimal vector glyph, simple geometry, balanced negative space, one confident accent color";
-  return [
-    `Create a square app avatar for an AI agent named ${name}.`,
-    `Visual style: ${stylePrompt}.`,
-    "Composition: one centered abstract agent mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.",
-    "Do not include text, letters, watermarks, screenshots, people, or UI chrome.",
-  ].join("\n");
-}
-
 function avatarDataUrl(
   bytes: Buffer,
   mediaType: string,
-): GenerateCustomAgentAvatarResult {
+): GeneratedCustomAgentAvatar {
   return {
     avatarDataUrl: `data:${mediaType};base64,${bytes.toString("base64")}`,
     mediaType,
@@ -51,13 +39,10 @@ function avatarDataUrl(
 function normalizeAvatarImage(
   bytes: Buffer,
   fallbackMediaType: string,
-): GenerateCustomAgentAvatarResult {
+): GeneratedCustomAgentAvatar {
   const image = nativeImage.createFromBuffer(bytes);
   if (image.isEmpty()) {
-    if (bytes.length > AVATAR_PNG_MAX_BYTES) {
-      throw new Error("Generated avatar image could not be resized.");
-    }
-    return avatarDataUrl(bytes, fallbackMediaType);
+    throw new Error("Generated avatar image could not be decoded.");
   }
 
   const resized = image.resize({
@@ -77,19 +62,72 @@ export async function generateCustomAgentAvatar(
   settings: DesktopSettings,
   input: GenerateCustomAgentAvatarInput,
 ): Promise<GenerateCustomAgentAvatarResult> {
-  const prompt = buildAgentAvatarPrompt(input);
-  const payload = await requestJson<ToolImagePayload>(settings, "/api/tools/image", {
-    method: "POST",
-    signal: AbortSignal.timeout(TOOL_IMAGE_REQUEST_TIMEOUT_MS),
-    body: JSON.stringify({
-      prompt,
-      timeout_secs: TOOL_IMAGE_TIMEOUT_SECS,
-    }),
-  });
-  const encoded = (payload.data_base64 || payload.dataBase64 || "").trim();
-  if (!encoded) {
-    throw new Error("Image generation API did not return image data.");
-  }
-  const mediaType = (payload.media_type || payload.mediaType || "image/png").trim() || "image/png";
-  return normalizeAvatarImage(Buffer.from(encoded, "base64"), mediaType);
+  return avatarRequests.run(
+    input.requestId,
+    TOOL_IMAGE_REQUEST_TIMEOUT_MS,
+    async ({ signal, userSignal, timeoutSignal }) => {
+      try {
+        const prompt = buildAgentAvatarPrompt(input);
+        const payload = await requestJson<ToolImagePayload>(settings, "/api/tools/image", {
+          method: "POST",
+          signal,
+          body: JSON.stringify({
+            prompt,
+            timeout_secs: TOOL_IMAGE_TIMEOUT_SECS,
+          }),
+        });
+        const encoded = (payload.data_base64 || payload.dataBase64 || "").trim();
+        if (!encoded) {
+          return avatarFailure(
+            "unusable",
+            "The generated image couldn’t be used.",
+          );
+        }
+        const mediaType = (payload.media_type || payload.mediaType || "image/png").trim() || "image/png";
+        try {
+          const avatar = normalizeAvatarImage(Buffer.from(encoded, "base64"), mediaType);
+          return { status: "success", ...avatar };
+        } catch {
+          return avatarFailure(
+            "unusable",
+            "The generated image couldn’t be used.",
+          );
+        }
+      } catch (error) {
+        if (userSignal.aborted) {
+          return { status: "cancelled" };
+        }
+        if (timeoutSignal.aborted) {
+          return avatarFailure("timeout", "Avatar generation took too long.");
+        }
+        if (error instanceof GatewayRequestError) {
+          if (error.status === 504) {
+            return avatarFailure("timeout", "Avatar generation took too long.");
+          }
+          return avatarFailure(
+            "provider",
+            "The image provider couldn’t generate an avatar.",
+          );
+        }
+        if (error instanceof TypeError) {
+          return avatarFailure("unreachable", "Couldn’t reach the gateway.");
+        }
+        return avatarFailure(
+          "provider",
+          "The image provider couldn’t generate an avatar.",
+        );
+      }
+    },
+  );
+}
+
+export function cancelCustomAgentAvatarGeneration(requestId: string): boolean {
+  return avatarRequests.cancel(requestId);
+}
+
+function avatarFailure(
+  category: "unreachable" | "timeout" | "provider" | "unusable",
+  message: string,
+): GenerateCustomAgentAvatarResult {
+  return { status: "failure", category, message };
 }

@@ -198,6 +198,53 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertNil(createObject?["expected_updated_at"])
     }
 
+    func testGetAgentUsesAuthoritativeSingleAgentRoute() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(
+                request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.percentEncodedPath,
+                "/api/custom-agents/agent%2Ftest"
+            )
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(
+                    #"{"agent_id":"agent/test","display_name":"Authoritative Agent","provider_type":"codex_app_server","model":"test-model","model_service_tier":"priority","provider_env":{"KEEP":"value"},"updated_at":"2026-07-13T12:00:00Z"}"#.utf8
+                )
+            )
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+
+        let agent = try await client.getAgent(agentId: "agent/test")
+        XCTAssertEqual(agent.id, "agent/test")
+        XCTAssertEqual(agent.displayName, "Authoritative Agent")
+        XCTAssertEqual(agent.modelServiceTier, "priority")
+        XCTAssertEqual(agent.providerEnv, ["KEEP": "value"])
+        XCTAssertEqual(agent.updatedAt, "2026-07-13T12:00:00Z")
+    }
+
     func testCustomAgentRequestEncodesEmptyModelAsPresentValue() throws {
         let request = GaryxCustomAgentRequest(
             agentId: "agent-test",
@@ -2843,6 +2890,86 @@ final class GaryxGatewayClientTests: XCTestCase {
             XCTAssertEqual(attemptCount.value(), 1)
         }
     }
+
+    func testAvatarGenerationDoesNotRetryProviderFailure() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let attemptCount = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            _ = attemptCount.increment()
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 502,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Data(#"{"error":"provider failed"}"#.utf8))
+        }
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(
+                maxAttempts: 3,
+                initialDelay: 0,
+                maxDelay: 0,
+                jitter: 0
+            )
+        )
+
+        do {
+            _ = try await client.generateAvatar(prompt: "avatar")
+            XCTFail("Expected provider failure")
+        } catch GaryxGatewayError.httpStatus(let status, _) {
+            XCTAssertEqual(status, 502)
+            XCTAssertEqual(attemptCount.value(), 1)
+        }
+    }
+
+    func testAvatarGenerationTaskCancellationStopsURLSessionRequest() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxBlockingURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let started = expectation(description: "avatar request started")
+        let stopped = expectation(description: "avatar request stopped")
+        GaryxBlockingURLProtocol.configure(
+            onStart: { started.fulfill() },
+            onStop: { stopped.fulfill() }
+        )
+        defer {
+            GaryxBlockingURLProtocol.reset()
+            session.invalidateAndCancel()
+        }
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+        let task = Task {
+            try await client.generateAvatar(prompt: "cancellable avatar")
+        }
+
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected avatar request cancellation")
+        } catch {
+            XCTAssertTrue(GaryxGatewayRetryClassifier.isCancellation(error))
+        }
+        await fulfillment(of: [stopped], timeout: 2)
+    }
 }
 
 private func garyxRequestBodyData(from request: URLRequest) -> Data? {
@@ -2898,6 +3025,48 @@ private final class GaryxURLProtocolStub: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+private final class GaryxBlockingURLProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var startCallback: (() -> Void)?
+    private static var stopCallback: (() -> Void)?
+
+    static func configure(onStart: @escaping () -> Void, onStop: @escaping () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        startCallback = onStart
+        stopCallback = onStop
+    }
+
+    static func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        startCallback = nil
+        stopCallback = nil
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        Self.lock.lock()
+        let callback = Self.startCallback
+        Self.lock.unlock()
+        callback?()
+    }
+
+    override func stopLoading() {
+        Self.lock.lock()
+        let callback = Self.stopCallback
+        Self.lock.unlock()
+        callback?()
+    }
 }
 
 private final class GaryxAtomicCounter: @unchecked Sendable {

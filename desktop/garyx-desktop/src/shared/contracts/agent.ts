@@ -45,12 +45,38 @@ export interface DeleteCustomAgentInput {
 }
 
 export interface GenerateCustomAgentAvatarInput {
+  requestId: string;
   agentId?: string | null;
   displayName: string;
   stylePrompt?: string | null;
 }
 
-export interface GenerateCustomAgentAvatarResult {
+export interface CancelCustomAgentAvatarInput {
+  requestId: string;
+}
+
+export type AvatarGenerationFailureCategory =
+  | "unreachable"
+  | "timeout"
+  | "provider"
+  | "unusable";
+
+export type GenerateCustomAgentAvatarResult =
+  | {
+      status: "success";
+      avatarDataUrl: string;
+      mediaType: string;
+    }
+  | {
+      status: "failure";
+      category: AvatarGenerationFailureCategory;
+      message: string;
+    }
+  | {
+      status: "cancelled";
+    };
+
+export interface GeneratedCustomAgentAvatar {
   avatarDataUrl: string;
   mediaType: string;
 }

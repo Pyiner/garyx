@@ -7,6 +7,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use garyx_bridge::MultiProviderBridge;
 use garyx_channels::generated_images::{
     GeneratedImageResult, build_image_generation_prompt, extract_image_generation_result,
     provider_message_item_type,
@@ -47,6 +48,38 @@ struct ImageToolRun {
     run_id: String,
     image: GeneratedImageResult,
     extra_images_seen: bool,
+}
+
+struct ImageToolRunAbortGuard {
+    bridge: Arc<MultiProviderBridge>,
+    run_id: Option<String>,
+}
+
+impl ImageToolRunAbortGuard {
+    fn new(bridge: Arc<MultiProviderBridge>, run_id: String) -> Self {
+        Self {
+            bridge,
+            run_id: Some(run_id),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.run_id = None;
+    }
+}
+
+impl Drop for ImageToolRunAbortGuard {
+    fn drop(&mut self) {
+        let Some(run_id) = self.run_id.take() else {
+            return;
+        };
+        let bridge = Arc::clone(&self.bridge);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                let _ = bridge.abort_run(&run_id).await;
+            });
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -168,48 +201,59 @@ async fn run_image_tool(
         .await
         .map_err(|error| ToolImageError::Bridge(error.to_string()))?;
 
-    let deadline = tokio::time::sleep(Duration::from_secs(timeout_secs));
-    tokio::pin!(deadline);
-    let mut first_image: Option<GeneratedImageResult> = None;
-    let mut extra_images_seen = false;
+    let mut abort_guard =
+        ImageToolRunAbortGuard::new(Arc::clone(&state.integration.bridge), run_id.clone());
 
-    loop {
-        tokio::select! {
-            _ = &mut deadline => {
-                let _ = state.integration.bridge.abort_run(&run_id).await;
-                return Err(ToolImageError::Timeout {
-                    timeout_secs,
-                    run_id,
-                });
-            }
-            event = rx.recv() => {
-                let Some(event) = event else {
-                    break;
-                };
-                if let Some(image) = extract_image_from_stream_event(&event)? {
-                    if first_image.is_some() {
-                        extra_images_seen = true;
-                    } else {
-                        first_image = Some(image);
-                    }
+    let result = async {
+        let deadline = tokio::time::sleep(Duration::from_secs(timeout_secs));
+        tokio::pin!(deadline);
+        let mut first_image: Option<GeneratedImageResult> = None;
+        let mut extra_images_seen = false;
+
+        loop {
+            tokio::select! {
+                _ = &mut deadline => {
+                    let _ = state.integration.bridge.abort_run(&run_id).await;
+                    return Err(ToolImageError::Timeout {
+                        timeout_secs,
+                        run_id: run_id.clone(),
+                    });
                 }
-                if matches!(event, StreamEvent::Done) {
-                    break;
+                event = rx.recv() => {
+                    let Some(event) = event else {
+                        break;
+                    };
+                    match extract_image_from_stream_event(&event) {
+                        Ok(Some(_image)) if first_image.is_some() => {
+                            extra_images_seen = true;
+                        }
+                        Ok(Some(image)) => {
+                            first_image = Some(image);
+                        }
+                        Ok(None) => {}
+                        Err(error) => return Err(error),
+                    }
+                    if matches!(event, StreamEvent::Done) {
+                        break;
+                    }
                 }
             }
         }
+
+        let image = first_image.ok_or_else(|| {
+            ToolImageError::Provider("Codex completed without generating an image".to_owned())
+        })?;
+
+        Ok(ImageToolRun {
+            runtime_thread_id,
+            run_id,
+            image,
+            extra_images_seen,
+        })
     }
-
-    let image = first_image.ok_or_else(|| {
-        ToolImageError::Provider("Codex completed without generating an image".to_owned())
-    })?;
-
-    Ok(ImageToolRun {
-        runtime_thread_id,
-        run_id,
-        image,
-        extra_images_seen,
-    })
+    .await;
+    abort_guard.disarm();
+    result
 }
 
 pub async fn generate_image(
@@ -245,11 +289,11 @@ mod tests {
     use super::*;
     use std::ffi::{OsStr, OsString};
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use axum::body::{Body, to_bytes};
     use garyx_bridge::MultiProviderBridge;
-    use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
+    use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{ProviderRunOptions, ProviderRunResult};
     use serde_json::json;
@@ -258,6 +302,8 @@ mod tests {
 
     use crate::route_graph::build_router;
     use crate::server::AppStateBuilder;
+
+    static TOOL_WORKSPACE_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     struct ScopedEnvVar {
         key: &'static str,
@@ -296,6 +342,7 @@ mod tests {
     struct ImageProvider {
         ready: AtomicBool,
         runs: Mutex<Vec<RecordedRun>>,
+        aborts: AtomicUsize,
     }
 
     impl ImageProvider {
@@ -303,11 +350,16 @@ mod tests {
             Self {
                 ready: AtomicBool::new(true),
                 runs: Mutex::new(Vec::new()),
+                aborts: AtomicUsize::new(0),
             }
         }
 
         fn runs(&self) -> Vec<RecordedRun> {
             self.runs.lock().unwrap().clone()
+        }
+
+        fn abort_count(&self) -> usize {
+            self.aborts.load(Ordering::Relaxed)
         }
     }
 
@@ -376,10 +428,16 @@ mod tests {
         async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
             Ok(format!("sdk-{session_key}"))
         }
+
+        async fn abort(&self, _run_id: &str) -> bool {
+            self.aborts.fetch_add(1, Ordering::Relaxed);
+            true
+        }
     }
 
     #[tokio::test]
     async fn generate_image_route_invokes_codex_tool_prompt() {
+        let _env_lock = TOOL_WORKSPACE_ENV_LOCK.lock().await;
         let workspace_root = tempdir().unwrap();
         let _workspace_env =
             ScopedEnvVar::set_path("GARYX_TEST_TOOL_WORKSPACE_ROOT", workspace_root.path());
@@ -427,13 +485,144 @@ mod tests {
         );
         assert!(runs[0].message.contains("make a tidy avatar"));
         assert_eq!(runs[0].metadata["source"], "garyx_tool_image");
-        let canonical_workspace_root = std::fs::canonicalize(workspace_root.path()).unwrap();
-        assert!(
+        let actual_workspace = std::fs::canonicalize(
             runs[0]
                 .workspace_dir
                 .as_deref()
-                .unwrap_or_default()
-                .starts_with(&canonical_workspace_root.to_string_lossy().to_string())
-        );
+                .expect("image runs should have a workspace"),
+        )
+        .unwrap();
+        let expected_workspace =
+            std::fs::canonicalize(workspace_root.path().join("image")).unwrap();
+        assert_eq!(actual_workspace, expected_workspace);
+        assert_eq!(provider.abort_count(), 0);
+    }
+
+    struct BlockingImageProvider {
+        ready: AtomicBool,
+        started: tokio::sync::Notify,
+        aborts: AtomicUsize,
+    }
+
+    impl BlockingImageProvider {
+        fn new() -> Self {
+            Self {
+                ready: AtomicBool::new(true),
+                started: tokio::sync::Notify::new(),
+                aborts: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ProviderRuntime for BlockingImageProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::CodexAppServer
+        }
+
+        fn is_ready(&self) -> bool {
+            self.ready.load(Ordering::Relaxed)
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            self.ready.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            self.ready.store(false, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            _options: &ProviderRunOptions,
+            _on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            self.started.notify_one();
+            std::future::pending().await
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+
+        async fn abort(&self, _run_id: &str) -> bool {
+            self.aborts.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_image_request_future_aborts_started_bridge_run() {
+        let _env_lock = TOOL_WORKSPACE_ENV_LOCK.lock().await;
+        let workspace_root = tempdir().unwrap();
+        let _workspace_env =
+            ScopedEnvVar::set_path("GARYX_TEST_TOOL_WORKSPACE_ROOT", workspace_root.path());
+        let provider = Arc::new(BlockingImageProvider::new());
+        let bridge = Arc::new(MultiProviderBridge::new());
+        bridge
+            .register_provider("blocking-image-provider", provider.clone())
+            .await;
+        bridge
+            .set_default_provider_key("blocking-image-provider")
+            .await;
+        let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
+            GaryxConfig::default(),
+        ))
+        .with_bridge(bridge)
+        .build();
+
+        let request = tokio::spawn(run_image_tool(
+            state,
+            "make a cancellable avatar".to_owned(),
+            60,
+        ));
+        tokio::time::timeout(Duration::from_secs(2), provider.started.notified())
+            .await
+            .expect("provider run should start");
+
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while provider.aborts.load(Ordering::Relaxed) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("request-lifetime guard should abort the provider run");
+        assert_eq!(provider.aborts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn image_timeout_aborts_once_and_disarms_request_guard() {
+        let _env_lock = TOOL_WORKSPACE_ENV_LOCK.lock().await;
+        let workspace_root = tempdir().unwrap();
+        let _workspace_env =
+            ScopedEnvVar::set_path("GARYX_TEST_TOOL_WORKSPACE_ROOT", workspace_root.path());
+        let provider = Arc::new(BlockingImageProvider::new());
+        let bridge = Arc::new(MultiProviderBridge::new());
+        bridge
+            .register_provider("timeout-image-provider", provider.clone())
+            .await;
+        bridge
+            .set_default_provider_key("timeout-image-provider")
+            .await;
+        let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
+            GaryxConfig::default(),
+        ))
+        .with_bridge(bridge)
+        .build();
+
+        let result = run_image_tool(state, "make a slow avatar".to_owned(), 1).await;
+
+        assert!(matches!(
+            result,
+            Err(ToolImageError::Timeout {
+                timeout_secs: 1,
+                ..
+            })
+        ));
+        assert_eq!(provider.aborts.load(Ordering::Relaxed), 1);
     }
 }

@@ -51,7 +51,7 @@ struct GaryxAgentDetailCard: View {
         Group {
             GaryxAgentFormContent(
                 mode: .readOnly,
-                agentId: .constant(displayAgent.id),
+                agentId: displayAgent.id,
                 displayName: .constant(displayAgent.displayName),
                 providerType: .constant(displayAgent.providerType),
                 modelName: .constant(displayAgent.model),
@@ -90,11 +90,23 @@ struct GaryxAgentDetailCard: View {
 
 
 private enum GaryxAgentFormMode {
-    case editable
+    case create
+    case edit
     case readOnly
 
     var isEditable: Bool {
-        self == .editable
+        self != .readOnly
+    }
+
+    var identityFooter: String? {
+        switch self {
+        case .create:
+            return "Agent ID is generated from Name."
+        case .edit:
+            return "Agent ID can’t be changed after creation."
+        case .readOnly:
+            return nil
+        }
     }
 }
 
@@ -152,7 +164,7 @@ private struct GaryxAgentAvatarPreviewSection: View {
 
 private struct GaryxAgentFormContent: View {
     let mode: GaryxAgentFormMode
-    @Binding var agentId: String
+    let agentId: String
     @Binding var displayName: String
     @Binding var providerType: String
     @Binding var modelName: String
@@ -163,8 +175,12 @@ private struct GaryxAgentFormContent: View {
     @Binding var env: GaryxAgentEnvDraft
     var builtIn = false
     let workspacePaths: [String]
-    var onGenerate: ((String) async -> String?)?
+    var nameValidationMessage: String? = nil
+    var environmentValidationMessage: String? = nil
+    var nameFocusToken = 0
+    var onGenerate: ((String) async -> GaryxAvatarGenerationOutcome)?
     var onError: ((String) -> Void)?
+    @FocusState private var nameIsFocused: Bool
 
     var body: some View {
         Group {
@@ -176,7 +192,10 @@ private struct GaryxAgentFormContent: View {
                     builtIn: builtIn,
                     avatarDataUrl: $avatarDataUrl,
                     onGenerate: onGenerate,
-                    onError: onError
+                    onError: onError,
+                    onNameValidationFailed: {
+                        nameIsFocused = true
+                    }
                 )
             } else {
                 GaryxAgentAvatarPreviewSection(
@@ -188,24 +207,50 @@ private struct GaryxAgentFormContent: View {
                 )
             }
 
-            GaryxFormGroupedSection(title: "Identity") {
+            Section {
                 if mode.isEditable {
-                    GaryxFormTextFieldRow(
-                        title: "Agent ID",
-                        text: $agentId,
-                        valuePlacement: .below,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
-                    )
-                    GaryxFormTextFieldRow(
-                        title: "Display name",
-                        text: $displayName,
-                        placeholder: "Optional"
-                    )
+                    LabeledContent {
+                        TextField("", text: $displayName)
+                            .multilineTextAlignment(.trailing)
+                            .textFieldStyle(.plain)
+                            .focused($nameIsFocused)
+                            .accessibilityLabel("Name, required")
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("Name")
+                            Text("*")
+                                .fontWeight(.semibold)
+                                .foregroundStyle(GaryxTheme.danger)
+                        }
+                    }
+                    LabeledContent("Agent ID") {
+                        Text(agentId.isEmpty ? "Not available" : agentId)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(agentId.isEmpty ? .tertiary : .secondary)
+                            .multilineTextAlignment(.trailing)
+                            .textSelection(.enabled)
+                            .accessibilityLabel(agentId.isEmpty ? "Agent ID unavailable" : "Agent ID \(agentId)")
+                    }
                 } else {
                     GaryxAgentReadOnlyTextRow(title: "Agent ID", value: agentId)
-                    GaryxAgentReadOnlyTextRow(title: "Display name", value: displayName)
+                    GaryxAgentReadOnlyTextRow(title: "Name", value: displayName)
                     GaryxAgentReadOnlyTextRow(title: "Type", value: builtIn ? "Built-in" : "Custom")
+                }
+            } header: {
+                Text("Identity")
+                    .textCase(nil)
+            } footer: {
+                if mode.isEditable {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let nameValidationMessage {
+                            Text(nameValidationMessage)
+                                .foregroundStyle(GaryxTheme.danger)
+                                .accessibilityIdentifier("agent-name-error")
+                        }
+                        if let footer = mode.identityFooter {
+                            Text(footer)
+                        }
+                    }
                 }
             }
 
@@ -269,8 +314,14 @@ private struct GaryxAgentFormContent: View {
             }
 
             if mode.isEditable {
-                GaryxAgentEnvEditorSection(draft: $env)
+                GaryxAgentEnvEditorSection(
+                    draft: $env,
+                    validationMessage: environmentValidationMessage
+                )
             }
+        }
+        .onChange(of: nameFocusToken) { _, _ in
+            nameIsFocused = true
         }
     }
 
@@ -282,6 +333,7 @@ private struct GaryxAgentFormContent: View {
 
 private struct GaryxAgentEnvEditorSection: View {
     @Binding var draft: GaryxAgentEnvDraft
+    var validationMessage: String?
     @State private var viewMode: EnvViewMode = .form
     @State private var envText: String = ""
     @FocusState private var isTextEditorFocused: Bool
@@ -330,7 +382,13 @@ private struct GaryxAgentEnvEditorSection: View {
             Text("Environment Variables")
                 .textCase(nil)
         } footer: {
-            Text(envHint)
+            VStack(alignment: .leading, spacing: 4) {
+                if let validationMessage {
+                    Text(validationMessage)
+                        .foregroundStyle(GaryxTheme.danger)
+                }
+                Text(envHint)
+            }
         }
     }
 
@@ -409,67 +467,78 @@ private struct GaryxAgentEnvEditorSection: View {
 struct GaryxCreateAgentCard: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
-    @State private var agentId = ""
-    @State private var displayName = ""
-    @State private var providerType = "codex_app_server"
-    @State private var modelName = ""
-    @State private var modelReasoningEffort = ""
-    @State private var workspace = ""
-    @State private var avatarDataUrl = ""
-    @State private var systemPrompt = ""
-    @State private var envDraft = GaryxAgentEnvDraft.empty
+    @State private var draft = GaryxCustomAgentDraft.create()
+    @State private var isSaving = false
+    @State private var submissionError: String?
+    @State private var nameFocusToken = 0
 
     var body: some View {
         GaryxFormSheet(
             title: "New Agent",
-            canSave: canCreate,
+            canSave: draft.canSubmit && !isSaving,
+            saveTitle: "Create",
+            isSaving: isSaving,
             onSave: { Task { await createAgent() } }
         ) {
             GaryxAgentFormContent(
-                mode: .editable,
-                agentId: $agentId,
-                displayName: $displayName,
-                providerType: $providerType,
-                modelName: $modelName,
-                modelReasoningEffort: $modelReasoningEffort,
-                workspace: $workspace,
-                avatarDataUrl: $avatarDataUrl,
-                systemPrompt: $systemPrompt,
-                env: $envDraft,
-                workspacePaths: model.userWorkspacePaths
+                mode: .create,
+                agentId: draft.agentId,
+                displayName: $draft.displayName,
+                providerType: $draft.providerType,
+                modelName: $draft.model,
+                modelReasoningEffort: $draft.modelReasoningEffort,
+                workspace: $draft.defaultWorkspaceDir,
+                avatarDataUrl: avatarBinding,
+                systemPrompt: $draft.systemPrompt,
+                env: $draft.env,
+                workspacePaths: model.userWorkspacePaths,
+                nameValidationMessage: draft.nameValidationMessage,
+                environmentValidationMessage: draft.environmentValidationMessage,
+                nameFocusToken: nameFocusToken
             ) { stylePrompt in
                 await model.generateAvatar(
-                    identifier: agentId,
-                    displayName: displayName,
+                    identifier: draft.agentId,
+                    displayName: draft.displayName,
                     stylePrompt: stylePrompt
                 )
             } onError: { message in
                 model.lastError = message
             }
+            if let submissionError {
+                Section {
+                    Text(submissionError)
+                        .foregroundStyle(GaryxTheme.danger)
+                        .accessibilityIdentifier("agent-create-error")
+                }
+            }
         }
     }
 
-    private var canCreate: Bool {
-        !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !envDraft.hasInvalidKey
+    private var avatarBinding: Binding<String> {
+        Binding(
+            get: { draft.avatarDataUrl },
+            set: { draft.setAvatarDataUrl($0) }
+        )
     }
 
     private func createAgent() async {
-        guard canCreate else { return }
-        if await model.createAgent(
-            agentId: agentId,
-            displayName: displayName,
-            providerType: providerType,
-            modelName: modelName,
-            modelReasoningEffort: modelReasoningEffort,
-            workspace: workspace,
-            avatarDataUrl: avatarDataUrl,
-            systemPrompt: systemPrompt,
-            env: envDraft.currentEnvMap()
-        ) {
+        guard !isSaving, let request = draft.makeRequest(), draft.createCollision == nil else { return }
+        isSaving = true
+        submissionError = nil
+        defer { isSaving = false }
+
+        switch await model.createAgent(request) {
+        case .saved:
             dismiss()
+        case .failed(.createConflict):
+            draft.recordCreateConflict()
+            nameFocusToken += 1
+        case .failed(.other(let message)):
+            submissionError = message
+        case .failed:
+            submissionError = "Couldn’t create this agent. Try again."
+        case .superseded:
+            break
         }
     }
 }
@@ -480,110 +549,183 @@ private struct GaryxAgentEditSheet: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let agent: GaryxAgentSummary
     var onSaved: ((GaryxAgentSummary) -> Void)?
-    @State private var agentId = ""
-    @State private var displayName = ""
-    @State private var providerType = ""
-    @State private var modelName = ""
-    @State private var modelReasoningEffort = ""
-    @State private var workspace = ""
-    @State private var avatarDataUrl = ""
-    @State private var systemPrompt = ""
-    @State private var envDraft = GaryxAgentEnvDraft.empty
+    @State private var draft: GaryxCustomAgentDraft
+    @State private var status = GaryxCustomAgentEditStatus.loading
+    @State private var isSaving = false
+    @State private var submissionError: String?
+
+    init(
+        agent: GaryxAgentSummary,
+        onSaved: ((GaryxAgentSummary) -> Void)? = nil
+    ) {
+        self.agent = agent
+        self.onSaved = onSaved
+        _draft = State(initialValue: .edit(authoritative: agent))
+    }
 
     var body: some View {
         GaryxFormSheet(
             title: "Edit Agent",
-            canSave: canSaveAgent,
+            canSave: canSaveAgent && !isSaving,
+            isSaving: isSaving,
             onSave: { Task { await saveAgent() } }
         ) {
+            editStatusSection
             GaryxAgentFormContent(
-                mode: .editable,
-                agentId: $agentId,
-                displayName: $displayName,
-                providerType: $providerType,
-                modelName: $modelName,
-                modelReasoningEffort: $modelReasoningEffort,
-                workspace: $workspace,
-                avatarDataUrl: $avatarDataUrl,
-                systemPrompt: $systemPrompt,
-                env: $envDraft,
+                mode: .edit,
+                agentId: draft.agentId,
+                displayName: $draft.displayName,
+                providerType: $draft.providerType,
+                modelName: $draft.model,
+                modelReasoningEffort: $draft.modelReasoningEffort,
+                workspace: $draft.defaultWorkspaceDir,
+                avatarDataUrl: avatarBinding,
+                systemPrompt: $draft.systemPrompt,
+                env: $draft.env,
                 builtIn: agent.builtIn,
-                workspacePaths: model.userWorkspacePaths
+                workspacePaths: model.userWorkspacePaths,
+                nameValidationMessage: draft.nameValidationMessage,
+                environmentValidationMessage: draft.environmentValidationMessage
             ) { stylePrompt in
                 await model.generateAvatar(
-                    identifier: agentId,
-                    displayName: displayName,
+                    identifier: draft.agentId,
+                    displayName: draft.displayName,
                     stylePrompt: stylePrompt
                 )
             } onError: { message in
                 model.lastError = message
             }
+            .disabled(!isReady || isSaving)
+
+            if let submissionError {
+                Section {
+                    Text(submissionError)
+                        .foregroundStyle(GaryxTheme.danger)
+                        .accessibilityIdentifier("agent-edit-error")
+                }
+            }
         }
-        .onAppear {
-            fillDraft()
-            Task { await seedAuthoritativeEnv() }
+        .task(id: agent.id) {
+            await reloadLatest()
         }
     }
 
     private var canSaveAgent: Bool {
-        !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !envDraft.hasInvalidKey
+        isReady && draft.canSubmit
     }
 
-    private func fillDraft() {
-        agentId = agent.id
-        displayName = agent.displayName
-        providerType = agent.providerType
-        modelName = agent.model
-        modelReasoningEffort = agent.modelReasoningEffort
-        workspace = agent.defaultWorkspaceDir
-        avatarDataUrl = agent.avatarDataUrl
-        systemPrompt = agent.systemPrompt
-        envDraft = .seeded(from: agent.providerEnv)
+    private var isReady: Bool {
+        if case .ready = status { return true }
+        return false
     }
 
-    // Re-seed env from the authoritative agent (a restored cache snapshot strips
-    // provider_env). `reseedIfPristine` leaves in-progress user edits untouched.
-    private func seedAuthoritativeEnv() async {
-        let env = await model.authoritativeProviderEnv(for: agent)
-        envDraft.reseedIfPristine(from: env)
+    private var avatarBinding: Binding<String> {
+        Binding(
+            get: { draft.avatarDataUrl },
+            set: { draft.setAvatarDataUrl($0) }
+        )
     }
 
+    @ViewBuilder
+    private var editStatusSection: some View {
+        switch status {
+        case .loading:
+            Section {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Loading latest agent…")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        case .conflict:
+            Section {
+                Text("This agent changed elsewhere. Reload the latest version before saving.")
+                    .foregroundStyle(GaryxTheme.danger)
+                Button("Reload latest") {
+                    Task { await reloadLatest() }
+                }
+            }
+        case .deleted:
+            Section {
+                Text("This agent was deleted and can’t be saved.")
+                    .foregroundStyle(GaryxTheme.danger)
+            }
+        case .loadFailed(let message):
+            Section {
+                Text(message)
+                    .foregroundStyle(GaryxTheme.danger)
+                Button("Retry") {
+                    Task { await reloadLatest() }
+                }
+            }
+        case .ready:
+            EmptyView()
+        }
+    }
+
+    @MainActor
+    private func reloadLatest() async {
+        guard !isSaving else { return }
+        status = .loading
+        submissionError = nil
+        switch await model.loadAuthoritativeAgent(agentId: agent.id) {
+        case .loaded(let authoritative):
+            draft = .edit(authoritative: authoritative)
+            status = .ready
+        case .deleted:
+            status = .deleted
+        case .failed(let message):
+            status = .loadFailed(message: message)
+        case .superseded:
+            status = .loadFailed(message: "The active gateway changed. Reopen this editor and try again.")
+        }
+    }
+
+    @MainActor
     private func saveAgent() async {
-        guard canSaveAgent else { return }
-        guard let updated = await model.updateAgent(
-            agent,
-            agentId: agentId,
-            displayName: displayName,
-            providerType: providerType,
-            modelName: modelName,
-            modelReasoningEffort: modelReasoningEffort,
-            workspace: workspace,
-            avatarDataUrl: avatarDataUrl,
-            systemPrompt: systemPrompt,
-            envIntent: envDraft.resolvedIntent()
-        ) else { return }
-        dismiss()
-        onSaved?(updated)
+        guard canSaveAgent, !isSaving, let request = draft.makeRequest() else { return }
+        isSaving = true
+        submissionError = nil
+        defer { isSaving = false }
+
+        switch await model.updateAgent(agentId: draft.agentId, request: request) {
+        case .saved(let updated):
+            dismiss()
+            onSaved?(updated)
+        case .failed(.editConflict(let currentUpdatedAt)):
+            status = .conflict(currentUpdatedAt: currentUpdatedAt)
+        case .failed(.deleted):
+            status = .deleted
+        case .failed(.other(let message)):
+            submissionError = message
+        case .failed:
+            submissionError = "Couldn’t save this agent. Try again."
+        case .superseded:
+            break
+        }
     }
 }
 
 
 private struct GaryxAvatarEditorSection: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @EnvironmentObject private var model: GaryxMobileModel
     let identifier: String
     let displayName: String
     let providerType: String
     var builtIn = false
     @Binding var avatarDataUrl: String
-    let onGenerate: (String) async -> String?
+    let onGenerate: (String) async -> GaryxAvatarGenerationOutcome
     let onError: (String) -> Void
+    let onNameValidationFailed: () -> Void
 
     @State private var editorState = GaryxMobileAvatarEditorState()
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var showsStyleSheet = false
-    @State private var workTask: Task<Void, Never>?
+    @State private var uploadTask: Task<Void, Never>?
+    @State private var activeUploadId: UUID?
+    @State private var uploadError: String?
 
     var body: some View {
         GaryxFormGroupedSection(title: "Avatar") {
@@ -596,6 +738,12 @@ private struct GaryxAvatarEditorSection: View {
                     builtIn: builtIn,
                     diameter: 76
                 )
+                .id(avatarSignature)
+                .transition(.opacity)
+                .animation(
+                    reduceMotion ? nil : .easeInOut(duration: 0.2),
+                    value: avatarSignature
+                )
                 .accessibilityLabel("Agent avatar preview")
 
                 ViewThatFits(in: .horizontal) {
@@ -606,77 +754,116 @@ private struct GaryxAvatarEditorSection: View {
                         avatarActions
                     }
                 }
+
+                if let uploadError {
+                    Text(uploadError)
+                        .font(.footnote)
+                        .foregroundStyle(GaryxTheme.danger)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("agent-avatar-upload-error")
+                }
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .sheet(isPresented: $showsStyleSheet) {
             GaryxAvatarStyleSheet(
-                isGenerating: editorState.isGenerating,
-                canGenerate: canGenerate
-            ) { stylePrompt in
-                startGeneration(stylePrompt: stylePrompt)
-            }
+                state: $editorState,
+                cancellationToken: model.gatewayRuntimeGeneration,
+                identifier: trimmedIdentifier,
+                displayName: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+                providerType: providerType,
+                builtIn: builtIn,
+                onGenerate: onGenerate,
+                onUse: useGeneratedAvatar,
+                onError: onError
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .interactiveDismissDisabled(editorState.isGenerating)
         }
         .onChange(of: selectedPhotoItem) { _, item in
             guard let item else { return }
             startUpload(item)
         }
         .onDisappear {
-            cancelWork()
+            cancelUpload()
         }
     }
 
     @ViewBuilder
     private var avatarActions: some View {
         PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-            GaryxAvatarEditorActionLabel(
-                title: editorState.isUploading ? "Uploading" : "Upload",
-                systemName: "photo",
-                isLoading: editorState.isUploading
-            )
+            if uploadTask == nil {
+                Label("Upload", systemImage: "photo")
+            } else {
+                HStack(spacing: 7) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Uploading…")
+                }
+            }
         }
-        .tint(Color.primary)
-        .disabled(editorState.isBusy)
+        .buttonStyle(.bordered)
+        .frame(minHeight: 44)
+        .disabled(uploadTask != nil)
         .accessibilityLabel("Upload avatar")
 
         Button {
-            showsStyleSheet = true
+            if canGenerate {
+                editorState.reset(currentAvatarDataUrl: avatarDataUrl)
+                showsStyleSheet = true
+            } else {
+                onNameValidationFailed()
+            }
         } label: {
-            GaryxAvatarEditorActionLabel(
-                title: editorState.isGenerating ? "Generating" : "Generate",
-                systemName: "sparkles",
-                isLoading: editorState.isGenerating
+            Label(
+                avatarDataUrl.isEmpty ? "Generate avatar" : "Generate new",
+                systemImage: "sparkles"
             )
         }
-        .buttonStyle(.plain)
-        .disabled(editorState.isBusy || !canGenerate)
+        .buttonStyle(.bordered)
+        .frame(minHeight: 44)
+        .disabled(uploadTask != nil)
         .accessibilityLabel("Generate avatar")
 
-    }
-
-    private func startGeneration(stylePrompt: String) {
-        guard workTask == nil else { return }
-        workTask = Task {
-            await generateAvatar(stylePrompt: stylePrompt)
+        if !avatarDataUrl.isEmpty {
+            Button(role: .destructive) {
+                uploadError = nil
+                avatarDataUrl = ""
+            } label: {
+                Label("Remove avatar", systemImage: "trash")
+            }
+            .buttonStyle(.bordered)
+            .frame(minHeight: 44)
+            .disabled(uploadTask != nil)
+            .accessibilityLabel("Remove avatar")
         }
     }
 
     private func startUpload(_ item: PhotosPickerItem) {
-        guard workTask == nil else {
+        guard uploadTask == nil else {
             selectedPhotoItem = nil
             return
         }
-        workTask = Task {
-            await uploadAvatar(from: item)
+        uploadError = nil
+        let requestId = UUID()
+        activeUploadId = requestId
+        let fingerprint = uploadFingerprint
+        uploadTask = Task {
+            await uploadAvatar(
+                from: item,
+                requestId: requestId,
+                fingerprint: fingerprint
+            )
         }
     }
 
-    private func cancelWork() {
-        workTask?.cancel()
-        workTask = nil
+    private func cancelUpload() {
+        uploadTask?.cancel()
+        uploadTask = nil
+        activeUploadId = nil
         selectedPhotoItem = nil
-        editorState.reset()
     }
 
     private var trimmedIdentifier: String {
@@ -692,19 +879,8 @@ private struct GaryxAvatarEditorSection: View {
     }
 
     private var canGenerate: Bool {
-        !trimmedIdentifier.isEmpty || !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private var generationFingerprint: String {
-        [
-            "agent",
-            trimmedIdentifier,
-            displayName.trimmingCharacters(in: .whitespacesAndNewlines),
-            providerType.trimmingCharacters(in: .whitespacesAndNewlines),
-            String(avatarDataUrl.count),
-            String(avatarDataUrl.prefix(80)),
-            String(avatarDataUrl.suffix(80)),
-        ].joined(separator: "\u{1F}")
+        !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !trimmedIdentifier.isEmpty
     }
 
     private var uploadFingerprint: String {
@@ -716,264 +892,467 @@ private struct GaryxAvatarEditorSection: View {
         ].joined(separator: "\u{1F}")
     }
 
-    @MainActor
-    private func generateAvatar(stylePrompt: String) async {
-        guard canGenerate, !editorState.isBusy else { return }
-        let fingerprint = generationFingerprint
-        let requestId = editorState.begin(.generate, fingerprint: fingerprint)
-        defer { finishWork(requestId: requestId) }
-
-        guard let generated = await onGenerate(stylePrompt) else { return }
-        guard canApplyCurrentResult(requestId: requestId, fingerprint: generationFingerprint) else { return }
-        await GaryxDataURLImageCache.predecodeAgentAvatar(from: generated)
-        guard canApplyCurrentResult(requestId: requestId, fingerprint: generationFingerprint) else { return }
-        avatarDataUrl = generated
+    private var avatarSignature: String {
+        [
+            String(avatarDataUrl.count),
+            String(avatarDataUrl.prefix(40)),
+            String(avatarDataUrl.suffix(40)),
+        ].joined(separator: ":")
     }
 
     @MainActor
-    private func uploadAvatar(from item: PhotosPickerItem) async {
-        guard !editorState.isBusy else {
-            selectedPhotoItem = nil
-            return
-        }
-        let fingerprint = uploadFingerprint
-        let requestId = editorState.begin(.upload, fingerprint: fingerprint)
+    private func uploadAvatar(
+        from item: PhotosPickerItem,
+        requestId: UUID,
+        fingerprint: String
+    ) async {
         defer {
-            selectedPhotoItem = nil
-            finishWork(requestId: requestId)
+            finishUpload(requestId: requestId)
         }
 
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else {
-                if canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) {
-                    onError("Failed to read avatar image.")
-                }
+                presentUploadError(
+                    "Failed to read avatar image.",
+                    requestId: requestId,
+                    fingerprint: fingerprint
+                )
                 return
             }
             let prepared = try await Task.detached(priority: .utility) {
                 try GaryxMobileAvatarImageNormalizer.normalizedDataUrl(fromImageData: data)
             }.value
-            guard canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) else { return }
+            guard canApplyUpload(requestId: requestId, fingerprint: fingerprint) else { return }
             await GaryxDataURLImageCache.predecodeAgentAvatar(from: prepared)
-            guard canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) else { return }
+            guard canApplyUpload(requestId: requestId, fingerprint: fingerprint) else { return }
             avatarDataUrl = prepared
         } catch is CancellationError {
             return
         } catch let error as GaryxMobileAvatarImageNormalizer.NormalizationError {
-            if canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) {
-                onError(error.localizedDescription)
-            }
+            presentUploadError(
+                error.localizedDescription,
+                requestId: requestId,
+                fingerprint: fingerprint
+            )
         } catch {
-            if canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) {
-                onError(error.localizedDescription)
-            }
+            presentUploadError(
+                error.localizedDescription,
+                requestId: requestId,
+                fingerprint: fingerprint
+            )
         }
     }
 
-    private func canApplyCurrentResult(requestId: UUID, fingerprint: String) -> Bool {
-        !Task.isCancelled && editorState.canApply(requestId: requestId, fingerprint: fingerprint)
+    private func canApplyUpload(requestId: UUID, fingerprint: String) -> Bool {
+        !Task.isCancelled
+            && activeUploadId == requestId
+            && uploadFingerprint == fingerprint
     }
 
-    private func finishWork(requestId: UUID) {
-        let isCurrentRequest = editorState.requestId == requestId
-        editorState.finish(requestId: requestId)
-        if isCurrentRequest {
-            workTask = nil
+    private func presentUploadError(
+        _ message: String,
+        requestId: UUID,
+        fingerprint: String
+    ) {
+        if canApplyUpload(requestId: requestId, fingerprint: fingerprint) {
+            uploadError = message
+            onError(message)
         }
     }
-}
 
-private struct GaryxAvatarEditorActionLabel: View {
-    let title: String
-    let systemName: String
-    var isLoading = false
+    private func finishUpload(requestId: UUID) {
+        if activeUploadId == requestId {
+            activeUploadId = nil
+            uploadTask = nil
+            selectedPhotoItem = nil
+        }
+    }
 
-    var body: some View {
-        HStack(spacing: 7) {
-            if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-            } else {
-                Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
-            }
-            Text(title)
-                .font(Font.footnote.weight(.semibold))
-                .lineLimit(1)
-        }
-        .foregroundStyle(.primary)
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity)
-        .frame(height: 38)
-        .background(Color.primary.opacity(0.055), in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        }
-        .frame(minHeight: 44)
+    private func useGeneratedAvatar(_ dataUrl: String) {
+        uploadError = nil
+        avatarDataUrl = dataUrl
     }
 }
 
 private struct GaryxAvatarStyleSheet: View {
     @Environment(\.dismiss) private var dismiss
-    let isGenerating: Bool
-    let canGenerate: Bool
-    let onGenerate: (String) -> Void
-    @State private var selectedStyleId = GaryxAvatarStyleOption.defaultId
-    @State private var customStyle = ""
+    @Binding var state: GaryxMobileAvatarEditorState
+    let cancellationToken: UUID
+    let identifier: String
+    let displayName: String
+    let providerType: String
+    let builtIn: Bool
+    let onGenerate: (String) async -> GaryxAvatarGenerationOutcome
+    let onUse: (String) -> Void
+    let onError: (String) -> Void
+    @State private var generationTask: Task<Void, Never>?
+    @State private var waitTask: Task<Void, Never>?
+    @State private var generationEpoch = 0
+    @State private var showsLongWaitMessage = false
+    @State private var successFeedback = 0
+    @State private var failureFeedback = 0
+    @AccessibilityFocusState private var failureIsFocused: Bool
+    @AccessibilityFocusState private var useAvatarIsFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 14) {
-                Text("Avatar style")
-                    .font(GaryxFont.callout(weight: .medium))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 0)
-                Button {
-                    dismiss()
-                } label: {
-                    GaryxCompactGlassIcon(systemName: "xmark")
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-            }
-            .padding(.horizontal, 22)
-            .padding(.top, 22)
-            .padding(.bottom, 12)
+        NavigationStack {
+            Form {
+                Section {
+                    previewComparison
 
-            ScrollView {
-                GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-                    VStack(spacing: 0) {
-                        ForEach(Array(GaryxAvatarStyleOption.builtIn.enumerated()), id: \.element.id) { index, style in
-                            GaryxAvatarStyleRow(
-                                title: style.label,
-                                isSelected: selectedStyleId == style.id
-                            ) {
-                                selectedStyleId = style.id
+                    switch state.phase {
+                    case .choosing:
+                        Text("Choose a style, then generate a preview. Your current avatar won’t change until you use the result.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    case .generating:
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Generating avatar…")
+                                .fontWeight(.semibold)
+                            if showsLongWaitMessage {
+                                Text("This can take a little while.")
+                                    .foregroundStyle(.secondary)
                             }
-                            if index < GaryxAvatarStyleOption.builtIn.count - 1 {
-                                Divider().padding(.leading, 18)
+                        }
+                        .accessibilityElement(children: .combine)
+                    case .candidate:
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Avatar ready")
+                                .fontWeight(.semibold)
+                            Text("Use avatar updates this form draft. Save the agent to persist it.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Button("Generate again") {
+                                startGeneration()
+                            }
+                        }
+                    case .failed(let failure):
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(failure.message)
+                                .foregroundStyle(GaryxTheme.danger)
+                                .accessibilityFocused($failureIsFocused)
+                                .accessibilityIdentifier("agent-avatar-generation-error")
+                            Button("Change style") {
+                                state.changeStyle()
                             }
                         }
                     }
                 }
-                .padding(.horizontal, 22)
-                .padding(.top, 4)
 
-                GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-                    VStack(alignment: .leading, spacing: 12) {
+                if state.phase == .choosing || state.phase == .generating {
+                    Section("Style") {
+                        ForEach(GaryxAvatarStyleOption.builtIn) { style in
+                            GaryxAvatarStyleRow(
+                                title: style.label,
+                                isSelected: state.selectedStyleId == style.id
+                            ) {
+                                state.selectedStyleId = style.id
+                            }
+                        }
+
                         Button {
-                            selectedStyleId = customStyleId
+                            state.selectedStyleId = "custom"
                         } label: {
-                            HStack(spacing: 12) {
+                            HStack {
                                 Text("Custom style")
-                                    .font(GaryxFont.body(weight: .medium))
-                                    .foregroundStyle(.primary)
-                                Spacer(minLength: 0)
-                                if selectedStyleId == customStyleId {
+                                Spacer()
+                                if state.selectedStyleId == "custom" {
                                     GaryxSelectionCheckmark(size: 14)
                                 }
                             }
+                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
 
-                        TextEditor(text: $customStyle)
-                            .font(GaryxFont.callout())
-                            .foregroundStyle(.primary)
-                            .frame(minHeight: 104)
-                            .padding(10)
-                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .overlay(alignment: .topLeading) {
-                                if customStyle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    Text("e.g. polished paper-cut icon with emerald accents")
-                                        .font(GaryxFont.callout())
+                        if state.selectedStyleId == "custom" {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Describe the style")
+                                    .font(.subheadline.weight(.semibold))
+                                TextEditor(text: $state.customStyle)
+                                    .frame(minHeight: 100)
+                                    .accessibilityLabel("Custom avatar style")
+                                if state.customStyle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    Text("For example: polished paper-cut icon with emerald accents")
+                                        .font(.footnote)
                                         .foregroundStyle(.tertiary)
-                                        .padding(.horizontal, 16)
-                                        .padding(.vertical, 18)
-                                        .allowsHitTesting(false)
                                 }
                             }
-                            .onTapGesture {
-                                selectedStyleId = customStyleId
-                            }
-                    }
-                    .padding(18)
-                }
-                .padding(.horizontal, 22)
-                .padding(.top, 14)
-                .padding(.bottom, 110)
-            }
-            .scrollIndicators(.hidden)
-        }
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 12) {
-                Button {
-                    dismiss()
-                } label: {
-                    Text("Cancel")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(GaryxSecondaryButtonStyle())
-                .disabled(isGenerating)
-
-                Button {
-                    let prompt = activeStylePrompt
-                    dismiss()
-                    onGenerate(prompt)
-                } label: {
-                    HStack(spacing: 8) {
-                        if isGenerating {
-                            ProgressView()
-                                .controlSize(.small)
                         }
-                        Text(isGenerating ? "Generating" : "Generate")
                     }
-                    .frame(maxWidth: .infinity)
+                    .disabled(state.isGenerating)
                 }
-                .buttonStyle(GaryxPrimaryWideButtonStyle())
-                .disabled(!canSubmit || isGenerating)
             }
-            .padding(.horizontal, 22)
-            .padding(.top, 12)
-            .padding(.bottom, 14)
-            .background(.regularMaterial)
-        }
-        .background {
-            Rectangle()
-                .fill(Color(.systemBackground).opacity(0.98))
-                .overlay {
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.28),
-                            Color.white.opacity(0.10)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+            .formStyle(.grouped)
+            .navigationTitle("Avatar style")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(state.leadingAction == .cancelGeneration ? "Cancel generation" : "Cancel") {
+                        cancelAndDismiss()
+                    }
                 }
-                .ignoresSafeArea()
+                ToolbarItem(placement: .confirmationAction) {
+                    switch state.primaryAction {
+                    case .generate:
+                        Button("Generate") {
+                            startGeneration()
+                        }
+                        .fontWeight(.semibold)
+                        .disabled(!state.canGenerate)
+                    case .disabled:
+                        Button(action: {}) {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Generating…")
+                                    .fontWeight(.semibold)
+                            }
+                        }
+                        .disabled(true)
+                        .accessibilityLabel("Generating avatar")
+                    case .use:
+                        Button("Use") {
+                            acceptCandidate()
+                        }
+                        .fontWeight(.semibold)
+                        .accessibilityFocused($useAvatarIsFocused)
+                    case .retry:
+                        Button("Retry") {
+                            startGeneration()
+                        }
+                        .fontWeight(.semibold)
+                    }
+                }
+            }
         }
-        .presentationBackground(.clear)
-        .presentationBackgroundInteraction(.enabled)
-        .presentationDetents([.fraction(0.93), .large])
-        .presentationDragIndicator(.hidden)
-        .presentationCornerRadius(38)
-    }
-
-    private var activeStylePrompt: String {
-        if selectedStyleId == customStyleId {
-            return customStyle.trimmingCharacters(in: .whitespacesAndNewlines)
+        .tint(GaryxTheme.controlTint)
+        .sensoryFeedback(.success, trigger: successFeedback)
+        .sensoryFeedback(.error, trigger: failureFeedback)
+        .onDisappear {
+            cancelGeneration(announces: false)
         }
-        return GaryxAvatarStyleOption.builtIn.first(where: { $0.id == selectedStyleId })?.prompt
-            ?? GaryxAvatarStyleOption.builtIn.first?.prompt
-            ?? ""
+        .onChange(of: cancellationToken) { _, _ in
+            cancelAndDismiss()
+        }
     }
 
-    private var canSubmit: Bool {
-        canGenerate && !activeStylePrompt.isEmpty
+    @ViewBuilder
+    private var previewComparison: some View {
+        if let candidate = state.candidateAvatarDataUrl, !candidate.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 24) {
+                    avatarPreview(title: "Current", dataUrl: state.currentAvatarDataUrl, loading: false)
+                    avatarPreview(title: "New", dataUrl: candidate, loading: state.isGenerating)
+                }
+                .frame(maxWidth: .infinity)
+
+                VStack(spacing: 18) {
+                    avatarPreview(title: "Current", dataUrl: state.currentAvatarDataUrl, loading: false)
+                    avatarPreview(title: "New", dataUrl: candidate, loading: state.isGenerating)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        } else {
+            avatarPreview(
+                title: "Current",
+                dataUrl: state.currentAvatarDataUrl,
+                loading: state.isGenerating
+            )
+            .frame(maxWidth: .infinity)
+        }
     }
 
-    private var customStyleId: String { "custom" }
+    private func avatarPreview(
+        title: String,
+        dataUrl: String,
+        loading: Bool
+    ) -> some View {
+        GaryxAvatarGenerationPreview(
+            title: title,
+            identifier: identifier,
+            displayName: displayName,
+            providerType: providerType,
+            builtIn: builtIn,
+            dataUrl: dataUrl,
+            isLoading: loading
+        )
+    }
+
+    @MainActor
+    private func startGeneration() {
+        guard state.canGenerate else { return }
+        generationEpoch += 1
+        let epoch = generationEpoch
+        guard let requestId = state.beginGeneration() else { return }
+        let stylePrompt = state.activeStylePrompt
+        showsLongWaitMessage = false
+        announce("Generating avatar")
+
+        waitTask?.cancel()
+        waitTask = Task {
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled,
+                  epoch == generationEpoch,
+                  state.requestId == requestId else { return }
+            showsLongWaitMessage = true
+        }
+
+        generationTask = Task {
+            var outcome = await onGenerate(stylePrompt)
+            guard owns(requestId: requestId, epoch: epoch) else { return }
+            if Task.isCancelled {
+                outcome = .cancelled
+            }
+            if case .success(let dataUrl) = outcome {
+                await GaryxDataURLImageCache.predecodeAgentAvatar(from: dataUrl)
+                guard owns(requestId: requestId, epoch: epoch) else { return }
+            }
+
+            let applied = state.resolve(outcome, requestId: requestId)
+            guard applied else { return }
+            waitTask?.cancel()
+            showsLongWaitMessage = false
+            switch outcome {
+            case .success:
+                successFeedback += 1
+                useAvatarIsFocused = true
+                announce("Avatar ready")
+            case .failure(let failure):
+                failureFeedback += 1
+                failureIsFocused = true
+                onError(failure.message)
+                announce("Couldn’t generate avatar")
+            case .cancelled, .superseded:
+                break
+            }
+            if generationEpoch == epoch {
+                generationTask = nil
+            }
+        }
+    }
+
+    @MainActor
+    private func cancelAndDismiss() {
+        if state.isGenerating {
+            cancelGeneration(announces: true)
+        }
+        dismiss()
+    }
+
+    @MainActor
+    private func cancelGeneration(announces: Bool) {
+        guard state.isGenerating else { return }
+        generationEpoch += 1
+        generationTask?.cancel()
+        waitTask?.cancel()
+        generationTask = nil
+        waitTask = nil
+        showsLongWaitMessage = false
+        _ = state.cancelGeneration()
+        if announces {
+            announce("Generation cancelled")
+        }
+    }
+
+    @MainActor
+    private func acceptCandidate() {
+        guard let candidate = state.acceptCandidate() else { return }
+        onUse(candidate)
+        announce("New avatar selected")
+        dismiss()
+    }
+
+    private func owns(requestId: UUID, epoch: Int) -> Bool {
+        !Task.isCancelled
+            && generationEpoch == epoch
+            && state.requestId == requestId
+            && state.isGenerating
+    }
+
+    private func announce(_ message: String) {
+        UIAccessibility.post(notification: .announcement, argument: message)
+    }
+}
+
+private struct GaryxAvatarGenerationPreview: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    let title: String
+    let identifier: String
+    let displayName: String
+    let providerType: String
+    let builtIn: Bool
+    let dataUrl: String
+    let isLoading: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ZStack {
+                GaryxAgentAvatarView(
+                    agentId: identifier,
+                    avatarDataUrl: dataUrl,
+                    label: displayName.isEmpty ? identifier : displayName,
+                    providerType: providerType,
+                    builtIn: builtIn,
+                    diameter: 104
+                )
+                .id(imageSignature)
+                .transition(.opacity)
+
+                if isLoading {
+                    Circle()
+                        .fill(overlayColor)
+                        .overlay {
+                            VStack(spacing: 5) {
+                                ProgressView()
+                                    .tint(overlayForeground)
+                                Text("Generating…")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(overlayForeground)
+                            }
+                        }
+                        .overlay {
+                            if reduceTransparency {
+                                Circle()
+                                    .stroke(Color.primary.opacity(0.22), lineWidth: 1)
+                            }
+                        }
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(width: 104, height: 104)
+            .animation(
+                reduceMotion ? nil : .easeInOut(duration: 0.18),
+                value: imageSignature
+            )
+            .animation(
+                reduceMotion ? nil : .easeInOut(duration: 0.16),
+                value: isLoading
+            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(isLoading ? "\(title) avatar, generating" : "\(title) avatar")
+        }
+        .frame(minWidth: 120)
+    }
+
+    private var overlayColor: Color {
+        if reduceTransparency {
+            return Color(uiColor: .secondarySystemBackground).opacity(0.98)
+        }
+        return Color.primary.opacity(0.32)
+    }
+
+    private var overlayForeground: Color {
+        reduceTransparency ? Color.primary : Color(uiColor: .systemBackground)
+    }
+
+    private var imageSignature: String {
+        [String(dataUrl.count), String(dataUrl.prefix(32)), String(dataUrl.suffix(32))]
+            .joined(separator: ":")
+    }
 }
 
 private struct GaryxAvatarStyleRow: View {

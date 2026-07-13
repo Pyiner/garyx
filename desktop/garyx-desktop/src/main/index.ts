@@ -42,6 +42,7 @@ import { resolveHorizontalLayoutPolicy } from "@shared/contracts";
 
 import type {
   ArchiveThreadInput,
+  CancelCustomAgentAvatarInput,
   CreateCustomAgentInput,
   CreateSkillEntryInput,
   CreateSkillInput,
@@ -195,7 +196,10 @@ import {
   startFeishuChannelAuth,
   startWeixinChannelAuth,
 } from "./channel-setup";
-import { generateCustomAgentAvatar } from "./agent-avatar";
+import {
+  cancelCustomAgentAvatarGeneration,
+  generateCustomAgentAvatar,
+} from "./agent-avatar";
 import {
   evictCapsuleThumbnails,
   renderCapsuleThumbnail,
@@ -948,6 +952,13 @@ function registerIpcHandlers(): void {
       const settings = await resolveSettings();
       return generateCustomAgentAvatar(settings, input);
     },
+  );
+
+  ipcMain.handle(
+    "garyx:cancel-custom-agent-avatar-generation",
+    (_event, input: CancelCustomAgentAvatarInput) => (
+      cancelCustomAgentAvatarGeneration(input.requestId)
+    ),
   );
 
   ipcMain.handle(

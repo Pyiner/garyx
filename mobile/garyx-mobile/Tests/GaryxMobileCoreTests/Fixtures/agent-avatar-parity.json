@@ -1,0 +1,87 @@
+{
+  "deriveIdCases": [
+    { "name": "  Test Agent  ", "expected": "test-agent" },
+    { "name": "Agent__42", "expected": "agent-42" },
+    { "name": "Foo---Bar", "expected": "foo-bar" },
+    { "name": "Café Déjà", "expected": "caf-d-j" },
+    { "name": "你好 Agent", "expected": "agent" },
+    { "name": "研发助手", "expected": "" },
+    { "name": "---", "expected": "" },
+    { "name": "🧠🤖", "expected": "" },
+    { "name": "A🙂🙂B", "expected": "a-b" },
+    { "name": "İD", "expected": "i-d" },
+    { "name": "K Agent", "expected": "k-agent" },
+    { "name": "\u00a0\u2007Agent\ufeff", "expected": "agent" },
+    { "name": "A\u180eB", "expected": "a-b" },
+    { "name": "Agent !!! 123", "expected": "agent-123" },
+    { "name": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+  ],
+  "styles": [
+    {
+      "id": "clean_glyph",
+      "label": "Clean glyph",
+      "prompt": "minimal vector glyph, simple geometric mark, balanced negative space, charcoal base with one sharp accent color"
+    },
+    {
+      "id": "soft_3d",
+      "label": "Soft 3D",
+      "prompt": "soft 3D clay icon, rounded abstract forms, gentle studio lighting, compact and friendly without looking childish"
+    },
+    {
+      "id": "glass_icon",
+      "label": "Glass icon",
+      "prompt": "translucent glassmorphism icon, crisp inner symbol, subtle refraction, clean depth, restrained blue green accent"
+    },
+    {
+      "id": "pixel_badge",
+      "label": "Pixel badge",
+      "prompt": "premium pixel-art badge, 32-bit style, readable blocky silhouette, limited palette, modern developer-tool feel"
+    },
+    {
+      "id": "ink_line",
+      "label": "Ink line",
+      "prompt": "monoline ink icon, expressive black linework, small accent fill, simple abstract agent signal, high legibility"
+    },
+    {
+      "id": "paper_cut",
+      "label": "Paper cut",
+      "prompt": "layered paper-cut icon, crisp stacked shapes, soft shadow, warm neutral base with a bright teal accent, high contrast silhouette"
+    },
+    {
+      "id": "blueprint",
+      "label": "Blueprint",
+      "prompt": "technical blueprint emblem, precise line grid, subtle cyan ink on deep charcoal, schematic but simple, readable at small sizes"
+    },
+    {
+      "id": "enamel_sticker",
+      "label": "Enamel sticker",
+      "prompt": "polished enamel sticker badge, bold flat shapes, thick clean outline, optimistic coral and mint accents, crisp app-icon finish"
+    }
+  ],
+  "promptCases": [
+    {
+      "displayName": "Planning Agent",
+      "identifier": "planning-agent",
+      "stylePrompt": "layered paper-cut icon",
+      "expected": "Create a square app avatar for an AI agent named \"Planning Agent\".\nVisual style: layered paper-cut icon.\nComposition: one centered abstract agent mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.\nDo not include text, letters, watermarks, screenshots, people, or UI chrome."
+    },
+    {
+      "displayName": "",
+      "identifier": "fallback-agent",
+      "stylePrompt": "minimal vector glyph",
+      "expected": "Create a square app avatar for an AI agent named \"fallback-agent\".\nVisual style: minimal vector glyph.\nComposition: one centered abstract agent mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.\nDo not include text, letters, watermarks, screenshots, people, or UI chrome."
+    },
+    {
+      "displayName": "   ",
+      "identifier": "fallback-agent",
+      "stylePrompt": "   ",
+      "expected": "Create a square app avatar for an AI agent named \"fallback-agent\".\nVisual style: minimal vector glyph, simple geometry, balanced negative space, one confident accent color.\nComposition: one centered abstract agent mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.\nDo not include text, letters, watermarks, screenshots, people, or UI chrome."
+    },
+    {
+      "displayName": "Quote \"Agent\" \\ Lab",
+      "identifier": "quoted-agent",
+      "stylePrompt": "technical emblem",
+      "expected": "Create a square app avatar for an AI agent named \"Quote \\\"Agent\\\" \\\\ Lab\".\nVisual style: technical emblem.\nComposition: one centered abstract agent mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.\nDo not include text, letters, watermarks, screenshots, people, or UI chrome."
+    }
+  ]
+}

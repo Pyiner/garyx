@@ -6,6 +6,8 @@ struct GaryxFormSheet<Content: View>: View {
     @Environment(\.dismiss) private var dismiss
     let title: String
     let canSave: Bool?
+    let saveTitle: String
+    let isSaving: Bool
     let onCancel: (() -> Void)?
     let onSave: (() -> Void)?
     let onDone: (() -> Void)?
@@ -14,6 +16,8 @@ struct GaryxFormSheet<Content: View>: View {
     init(title: String, onDone: (() -> Void)? = nil, @ViewBuilder content: () -> Content) {
         self.title = title
         self.canSave = nil
+        self.saveTitle = "Save"
+        self.isSaving = false
         self.onCancel = nil
         self.onSave = nil
         self.onDone = onDone
@@ -23,12 +27,16 @@ struct GaryxFormSheet<Content: View>: View {
     init(
         title: String,
         canSave: Bool,
+        saveTitle: String = "Save",
+        isSaving: Bool = false,
         onCancel: (() -> Void)? = nil,
         onSave: @escaping () -> Void,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.canSave = canSave
+        self.saveTitle = saveTitle
+        self.isSaving = isSaving
         self.onCancel = onCancel
         self.onSave = onSave
         self.onDone = nil
@@ -54,11 +62,19 @@ struct GaryxFormSheet<Content: View>: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button(action: onSave) {
-                            Text("Save")
-                                .fontWeight(.semibold)
-                                .foregroundStyle(canSave == false ? Color.secondary : Color.primary)
+                            ZStack {
+                                Text(saveTitle)
+                                    .fontWeight(.semibold)
+                                    .opacity(isSaving ? 0 : 1)
+                                if isSaving {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                            }
+                            .foregroundStyle(canSave == false ? Color.secondary : Color.primary)
                         }
                         .disabled(canSave == false)
+                        .accessibilityLabel(isSaving ? "Saving" : saveTitle)
                     }
                 } else {
                     ToolbarItem(placement: .confirmationAction) {

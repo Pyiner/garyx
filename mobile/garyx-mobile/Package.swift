@@ -18,7 +18,8 @@ let package = Package(
         .target(name: "GaryxMobileCore"),
         .testTarget(
             name: "GaryxMobileCoreTests",
-            dependencies: ["GaryxMobileCore"]
+            dependencies: ["GaryxMobileCore"],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

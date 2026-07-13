@@ -2,10 +2,22 @@ import type {
   DesktopCustomAgent,
   DesktopProviderModels,
 } from '@shared/contracts';
+import {
+  AVATAR_STYLE_OPTIONS,
+  CUSTOM_AVATAR_STYLE_ID,
+  DEFAULT_AVATAR_STYLE_ID,
+} from '../../../../shared/agent-avatar-prompt.ts';
+import type { AvatarStyleId } from '../../../../shared/agent-avatar-prompt.ts';
+
+export {
+  AVATAR_STYLE_OPTIONS,
+  CUSTOM_AVATAR_STYLE_ID,
+  DEFAULT_AVATAR_STYLE_ID,
+};
+export type { AvatarStyleId };
 
 export type ProviderType = 'claude_code' | 'codex_app_server' | 'antigravity' | 'traex';
 export type AgentDialogMode = 'create' | 'edit' | 'view' | null;
-export type AvatarStyleId = 'clean_glyph' | 'soft_3d' | 'glass_icon' | 'pixel_badge' | 'ink_line' | 'paper_cut' | 'blueprint' | 'enamel_sticker' | 'custom';
 
 export type AgentDraft = {
   agentId: string;
@@ -27,8 +39,6 @@ export const AGENT_AVATAR_MAX_BYTES = 3 * 1024 * 1024;
 export const AGENT_AVATAR_SIZE = 256;
 export const AGENT_AVATAR_DATA_URL_MAX_LENGTH = 700_000;
 export const AGENT_AVATAR_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml';
-export const CUSTOM_AVATAR_STYLE_ID: AvatarStyleId = 'custom';
-export const DEFAULT_AVATAR_STYLE_ID: AvatarStyleId = 'clean_glyph';
 export const FALLBACK_REASONING_EFFORTS = [
   { id: 'none', label: 'None', description: 'No reasoning', recommended: false },
   { id: 'minimal', label: 'Minimal', description: 'Minimal reasoning', recommended: false },
@@ -36,53 +46,6 @@ export const FALLBACK_REASONING_EFFORTS = [
   { id: 'medium', label: 'Medium', description: 'Balanced speed and reasoning', recommended: true },
   { id: 'high', label: 'High', description: 'Deeper reasoning', recommended: false },
   { id: 'xhigh', label: 'Extra High', description: 'Maximum reasoning', recommended: false },
-];
-
-export const AVATAR_STYLE_OPTIONS: Array<{
-  id: Exclude<AvatarStyleId, 'custom'>;
-  label: string;
-  prompt: string;
-}> = [
-  {
-    id: 'clean_glyph',
-    label: 'Clean glyph',
-    prompt: 'minimal vector glyph, simple geometric mark, balanced negative space, charcoal base with one sharp accent color',
-  },
-  {
-    id: 'soft_3d',
-    label: 'Soft 3D',
-    prompt: 'soft 3D clay icon, rounded abstract forms, gentle studio lighting, compact and friendly without looking childish',
-  },
-  {
-    id: 'glass_icon',
-    label: 'Glass icon',
-    prompt: 'translucent glassmorphism icon, crisp inner symbol, subtle refraction, clean depth, restrained blue green accent',
-  },
-  {
-    id: 'pixel_badge',
-    label: 'Pixel badge',
-    prompt: 'premium pixel-art badge, 32-bit style, readable blocky silhouette, limited palette, modern developer-tool feel',
-  },
-  {
-    id: 'ink_line',
-    label: 'Ink line',
-    prompt: 'monoline ink icon, expressive black linework, small accent fill, simple abstract agent signal, high legibility',
-  },
-  {
-    id: 'paper_cut',
-    label: 'Paper cut',
-    prompt: 'layered paper-cut icon, crisp stacked shapes, soft shadow, warm neutral base with a bright teal accent, high contrast silhouette',
-  },
-  {
-    id: 'blueprint',
-    label: 'Blueprint',
-    prompt: 'technical blueprint emblem, precise line grid, subtle cyan ink on deep charcoal, schematic but simple, readable at small sizes',
-  },
-  {
-    id: 'enamel_sticker',
-    label: 'Enamel sticker',
-    prompt: 'polished enamel sticker badge, bold flat shapes, thick clean outline, optimistic coral and mint accents, crisp app-icon finish',
-  },
 ];
 
 export function emptyAgentDraft(): AgentDraft {

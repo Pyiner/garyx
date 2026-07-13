@@ -457,6 +457,10 @@ public final class GaryxGatewayClient {
         return page.agents
     }
 
+    public func getAgent(agentId: String) async throws -> GaryxAgentSummary {
+        try await get("/api/custom-agents/\(agentId.urlPathEncoded)")
+    }
+
     public func providerModels(providerType: String) async throws -> GaryxProviderModels {
         try await get("/api/provider-models/\(providerType.urlPathEncoded)")
     }
@@ -489,7 +493,8 @@ public final class GaryxGatewayClient {
         try await post(
             "/api/tools/image",
             body: GaryxGenerateAvatarRequest(prompt: prompt, timeoutSecs: timeoutSecs),
-            timeoutInterval: TimeInterval(timeoutSecs + 30)
+            timeoutInterval: TimeInterval(timeoutSecs + 30),
+            allowsRetry: false
         )
     }
 
@@ -930,13 +935,18 @@ public final class GaryxGatewayClient {
         _ path: String,
         body: Body,
         idempotent: Bool = false,
-        timeoutInterval: TimeInterval? = nil
+        timeoutInterval: TimeInterval? = nil,
+        allowsRetry: Bool = true
     ) async throws -> Response {
         var request = try makeRequest(path: path, method: "POST", timeoutInterval: timeoutInterval)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
-        return try await send(request, idempotent: idempotent)
+        return try await send(
+            request,
+            idempotent: idempotent,
+            maxAttempts: allowsRetry ? nil : 1
+        )
     }
 
     private func patch<Response: Decodable, Body: Encodable>(
@@ -988,8 +998,16 @@ public final class GaryxGatewayClient {
         return request
     }
 
-    private func send<Response: Decodable>(_ request: URLRequest, idempotent: Bool) async throws -> Response {
-        let data = try await sendRaw(request, idempotent: idempotent)
+    private func send<Response: Decodable>(
+        _ request: URLRequest,
+        idempotent: Bool,
+        maxAttempts: Int? = nil
+    ) async throws -> Response {
+        let data = try await sendRaw(
+            request,
+            idempotent: idempotent,
+            maxAttempts: maxAttempts
+        )
         if data.isEmpty, Response.self == GaryxEmptyResponse.self {
             return GaryxEmptyResponse() as! Response
         }
@@ -1010,8 +1028,12 @@ public final class GaryxGatewayClient {
     /// body of the first successful (2xx) response. Body decoding stays with
     /// the callers — a 2xx response always terminates the retry loop, so
     /// decode failures never re-enter it.
-    private func sendRaw(_ request: URLRequest, idempotent: Bool) async throws -> Data {
-        let maxAttempts = retryPolicy.maxAttempts
+    private func sendRaw(
+        _ request: URLRequest,
+        idempotent: Bool,
+        maxAttempts requestedMaxAttempts: Int? = nil
+    ) async throws -> Data {
+        let maxAttempts = max(1, requestedMaxAttempts ?? retryPolicy.maxAttempts)
         var attempt = 0
         while true {
             attempt += 1

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
   DesktopCustomAgent,
@@ -37,6 +37,20 @@ import { Input } from '../../components/ui/input';
 import { useI18n } from '../../i18n';
 import { AgentAvatarEditor, AvatarStyleDialog } from './AgentAvatarEditor';
 import {
+  acceptAvatarCandidate,
+  avatarGenerationFailure,
+  beginAvatarGeneration,
+  cancelAvatarGeneration,
+  changeAvatarStyle,
+  createAvatarGenerationFlow,
+  ownsAvatarGenerationOperation,
+  resolveAvatarGeneration,
+} from './agent-avatar-flow';
+import type {
+  AvatarGenerationFlow,
+  AvatarGenerationOperation,
+} from './agent-avatar-flow';
+import {
   customAgentDeleteConfirmationFor,
   runCustomAgentDeleteConfirmation,
   type CustomAgentDeleteConfirmation,
@@ -60,6 +74,7 @@ import type {
 } from './agents-hub-helpers';
 
 type AgentsHubPanelProps = {
+  gatewayScope?: string;
   workspaces?: DesktopWorkspace[];
   onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
   onRefreshAgentTargets?: () => Promise<void>;
@@ -69,6 +84,7 @@ type AgentsHubPanelProps = {
 };
 
 export function AgentsHubPanel({
+  gatewayScope = '',
   workspaces = [],
   onAddWorkspace,
   onRefreshAgentTargets,
@@ -91,10 +107,15 @@ export function AgentsHubPanel({
   const [envViewMode, setEnvViewMode] = useState<'form' | 'text'>('form');
   const [envText, setEnvText] = useState('');
   const [agentIdTouched, setAgentIdTouched] = useState(false);
-  const [avatarGenerating, setAvatarGenerating] = useState(false);
   const [avatarStyleDialogOpen, setAvatarStyleDialogOpen] = useState(false);
   const [avatarStyleId, setAvatarStyleId] = useState<AvatarStyleId>(DEFAULT_AVATAR_STYLE_ID);
   const [customAvatarStyle, setCustomAvatarStyle] = useState('');
+  const [avatarFlow, setAvatarFlow] = useState<AvatarGenerationFlow>(() => (
+    createAvatarGenerationFlow('')
+  ));
+  const avatarFlowRef = useRef(avatarFlow);
+  const avatarGenerationEpochRef = useRef(0);
+  const previousGatewayScopeRef = useRef(gatewayScope);
   const [providerModelsByType, setProviderModelsByType] = useState<
     Partial<Record<ProviderType, DesktopProviderModels>>
   >({});
@@ -157,6 +178,26 @@ export function AgentsHubPanel({
   useEffect(() => {
     void loadData();
   }, []);
+
+  useEffect(() => () => {
+    avatarGenerationEpochRef.current += 1;
+    const requestId = avatarFlowRef.current.requestId;
+    if (requestId) {
+      void window.garyxDesktop
+        .cancelCustomAgentAvatarGeneration({ requestId })
+        .catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    if (previousGatewayScopeRef.current === gatewayScope) {
+      return;
+    }
+    previousGatewayScopeRef.current = gatewayScope;
+    if (avatarStyleDialogOpen) {
+      closeAvatarStyleDialog();
+    }
+  }, [gatewayScope, avatarStyleDialogOpen]);
 
   // Re-fetch when the user returns to the app, so changes made on another
   // surface (e.g. editing an agent's model on mobile) show up without a manual
@@ -227,11 +268,11 @@ export function AgentsHubPanel({
   }, [agents, search]);
 
   function closeAgentDialog() {
+    closeAvatarStyleDialog();
     setAgentDialogMode(null);
     setSelectedAgentId(null);
     setAgentDraft(emptyAgentDraft());
     setAgentIdTouched(false);
-    setAvatarStyleDialogOpen(false);
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
   }
@@ -322,31 +363,118 @@ export function AgentsHubPanel({
     }
   }
 
+  function commitAvatarFlow(
+    next: AvatarGenerationFlow | ((current: AvatarGenerationFlow) => AvatarGenerationFlow),
+  ) {
+    const value = typeof next === 'function' ? next(avatarFlowRef.current) : next;
+    avatarFlowRef.current = value;
+    setAvatarFlow(value);
+  }
+
+  function openAvatarStyleDialog() {
+    commitAvatarFlow(createAvatarGenerationFlow(agentDraft.avatarDataUrl));
+    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
+    setCustomAvatarStyle('');
+    setAvatarStyleDialogOpen(true);
+  }
+
+  function closeAvatarStyleDialog() {
+    const shouldRestoreFocus = avatarStyleDialogOpen;
+    avatarGenerationEpochRef.current += 1;
+    const requestId = avatarFlowRef.current.requestId;
+    if (requestId) {
+      void window.garyxDesktop
+        .cancelCustomAgentAvatarGeneration({ requestId })
+        .catch(() => {});
+      commitAvatarFlow((current) => cancelAvatarGeneration(current, requestId));
+    }
+    setAvatarStyleDialogOpen(false);
+    if (shouldRestoreFocus) {
+      window.requestAnimationFrame(() => {
+        document.getElementById('agent-avatar-generate-trigger')?.focus();
+      });
+    }
+  }
+
   async function handleGenerateAvatar(stylePrompt: string) {
+    if (avatarFlowRef.current.phase === 'generating') {
+      return;
+    }
     const displayName = agentDraft.displayName.trim();
     const agentId = agentDraft.agentId.trim();
-    if (!displayName && !agentId) {
+    if (!displayName) {
       onToast?.(t('Name is required.'), 'error');
       return;
     }
-    setAvatarGenerating(true);
+    avatarGenerationEpochRef.current += 1;
+    const operation: AvatarGenerationOperation = {
+      epoch: avatarGenerationEpochRef.current,
+      requestId: crypto.randomUUID(),
+    };
+    commitAvatarFlow((current) => beginAvatarGeneration(current, operation.requestId));
     try {
       const result = await window.garyxDesktop.generateCustomAgentAvatar({
+        requestId: operation.requestId,
         agentId,
-        displayName: displayName || agentId,
+        displayName,
         stylePrompt,
       });
-      setAgentDraft((current) => ({
-        ...current,
-        avatarDataUrl: result.avatarDataUrl,
-      }));
-      setAvatarStyleDialogOpen(false);
-      onToast?.(t('Avatar generated'), 'success');
+      if (!ownsAvatarGenerationOperation(
+        avatarGenerationEpochRef.current,
+        avatarFlowRef.current.requestId,
+        operation,
+      )) {
+        return;
+      }
+      if (result.status === 'success') {
+        commitAvatarFlow((current) => resolveAvatarGeneration(
+          current,
+          operation.requestId,
+          { status: 'success', avatarDataUrl: result.avatarDataUrl },
+        ));
+      } else if (result.status === 'failure') {
+        commitAvatarFlow((current) => resolveAvatarGeneration(
+          current,
+          operation.requestId,
+          {
+            status: 'failure',
+            failure: avatarGenerationFailure(result.category, result.message),
+          },
+        ));
+      } else {
+        commitAvatarFlow((current) => resolveAvatarGeneration(
+          current,
+          operation.requestId,
+          { status: 'cancelled' },
+        ));
+      }
     } catch {
-      onToast?.(t('Failed to generate avatar'), 'error');
-    } finally {
-      setAvatarGenerating(false);
+      if (ownsAvatarGenerationOperation(
+        avatarGenerationEpochRef.current,
+        avatarFlowRef.current.requestId,
+        operation,
+      )) {
+        commitAvatarFlow((current) => resolveAvatarGeneration(
+          current,
+          operation.requestId,
+          { status: 'failure', failure: avatarGenerationFailure('unknown') },
+        ));
+      }
     }
+  }
+
+  function handleUseGeneratedAvatar() {
+    const accepted = acceptAvatarCandidate(avatarFlowRef.current);
+    if (!accepted.avatarDataUrl) {
+      return;
+    }
+    commitAvatarFlow(accepted.flow);
+    setAgentDraft((current) => ({
+      ...current,
+      avatarDataUrl: accepted.avatarDataUrl || current.avatarDataUrl,
+    }));
+    closeAvatarStyleDialog();
+    onToast?.(t('New avatar selected'), 'success');
   }
 
   function openAgentDeleteConfirmation(agent: DesktopCustomAgent) {
@@ -584,7 +712,6 @@ export function AgentsHubPanel({
       <AgentFormDialog
         agentDialogMode={agentDialogMode}
         agentDraft={agentDraft}
-        avatarGenerating={avatarGenerating}
         closeAgentDialog={closeAgentDialog}
         ensureProviderModels={ensureProviderModels}
         envText={envText}
@@ -601,7 +728,7 @@ export function AgentsHubPanel({
         selectedAgent={selectedAgent}
         setAgentDraft={setAgentDraft}
         setAgentIdTouched={setAgentIdTouched}
-        setAvatarStyleDialogOpen={setAvatarStyleDialogOpen}
+        openAvatarStyleDialog={openAvatarStyleDialog}
         setEnvText={setEnvText}
         setEnvViewMode={setEnvViewMode}
         setSaving={setSaving}
@@ -609,12 +736,18 @@ export function AgentsHubPanel({
       />
 
       <AvatarStyleDialog
-        avatarGenerating={avatarGenerating}
+        agentId={agentDraft.agentId}
         avatarStyleDialogOpen={avatarStyleDialogOpen}
         avatarStyleId={avatarStyleId}
+        builtIn={selectedAgent?.builtIn}
         customAvatarStyle={customAvatarStyle}
+        displayName={agentDraft.displayName}
+        flow={avatarFlow}
         handleGenerateAvatar={handleGenerateAvatar}
-        setAvatarStyleDialogOpen={setAvatarStyleDialogOpen}
+        onCancel={closeAvatarStyleDialog}
+        onChangeStyle={() => commitAvatarFlow(changeAvatarStyle(avatarFlowRef.current))}
+        onUseAvatar={handleUseGeneratedAvatar}
+        providerType={agentDraft.providerType}
         setAvatarStyleId={setAvatarStyleId}
         setCustomAvatarStyle={setCustomAvatarStyle}
       />

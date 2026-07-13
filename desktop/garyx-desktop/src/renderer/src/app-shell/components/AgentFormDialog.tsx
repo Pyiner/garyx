@@ -54,7 +54,6 @@ import type { AgentDialogMode, AgentDraft, ProviderType } from './agents-hub-hel
 type AgentFormDialogProps = {
   agentDialogMode: AgentDialogMode;
   agentDraft: AgentDraft;
-  avatarGenerating: boolean;
   closeAgentDialog: () => void;
   ensureProviderModels: (providerType: ProviderType) => Promise<void>;
   envText: string;
@@ -67,13 +66,13 @@ type AgentFormDialogProps = {
   onOpenMemory?: (agent: DesktopCustomAgent) => void;
   onStartThread?: (agentId: string) => void;
   onToast?: (message: string, tone?: 'success' | 'error' | 'info', durationMs?: number) => void;
+  openAvatarStyleDialog: () => void;
   openEditAgentDialog: (agent: DesktopCustomAgent) => void;
   providerModelsByType: Partial<Record<ProviderType, DesktopProviderModels>>;
   saving: boolean;
   selectedAgent: DesktopCustomAgent | null;
   setAgentDraft: React.Dispatch<React.SetStateAction<AgentDraft>>;
   setAgentIdTouched: React.Dispatch<React.SetStateAction<boolean>>;
-  setAvatarStyleDialogOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setEnvText: React.Dispatch<React.SetStateAction<string>>;
   setEnvViewMode: React.Dispatch<React.SetStateAction<'form' | 'text'>>;
   setSaving: React.Dispatch<React.SetStateAction<boolean>>;
@@ -83,7 +82,6 @@ type AgentFormDialogProps = {
 export function AgentFormDialog({
   agentDialogMode,
   agentDraft,
-  avatarGenerating,
   closeAgentDialog,
   ensureProviderModels,
   envText,
@@ -94,13 +92,13 @@ export function AgentFormDialog({
   onOpenMemory,
   onStartThread,
   onToast,
+  openAvatarStyleDialog,
   openEditAgentDialog,
   providerModelsByType,
   saving,
   selectedAgent,
   setAgentDraft,
   setAgentIdTouched,
-  setAvatarStyleDialogOpen,
   setEnvText,
   setEnvViewMode,
   setSaving,
@@ -108,6 +106,7 @@ export function AgentFormDialog({
 }: AgentFormDialogProps) {
   const { t } = useI18n();
   const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
+  const agentNameInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeAgentProviderModels = providerModelsByType[agentDraft.providerType];
   const agentModelOptions = providerModelsWithCurrent(activeAgentProviderModels, agentDraft.model);
@@ -248,15 +247,20 @@ export function AgentFormDialog({
                   {t('Upload avatar')}
                 </Button>
                 <Button
-                  disabled={avatarGenerating}
+                  id="agent-avatar-generate-trigger"
                   onClick={() => {
-                    setAvatarStyleDialogOpen(true);
+                    if (!agentDraft.displayName.trim()) {
+                      agentNameInputRef.current?.focus();
+                      onToast?.(t('Name is required.'), 'error');
+                      return;
+                    }
+                    openAvatarStyleDialog();
                   }}
                   type="button"
                   variant="outline"
                 >
                   <Sparkles aria-hidden size={15} strokeWidth={1.8} />
-                  {avatarGenerating ? t('Generating...') : t('Generate avatar')}
+                  {agentDraft.avatarDataUrl ? t('Generate new') : t('Generate avatar')}
                 </Button>
                 {agentDraft.avatarDataUrl ? (
                   <Button
@@ -266,7 +270,7 @@ export function AgentFormDialog({
                     type="button"
                     variant="ghost"
                   >
-                    {t('Clear')}
+                    {t('Remove avatar')}
                   </Button>
                 ) : null}
               </div>
@@ -280,6 +284,7 @@ export function AgentFormDialog({
                   onChange={(event) => {
                     setAgentDraft((current) => ({ ...current, displayName: event.target.value }));
                   }}
+                  ref={agentNameInputRef}
                   value={agentDraft.displayName}
                 />
               </div>

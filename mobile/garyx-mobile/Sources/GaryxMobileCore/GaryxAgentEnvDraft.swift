@@ -2,7 +2,7 @@ import Foundation
 
 /// One editable environment-variable row in the agent env editor. The stable
 /// `id` keeps SwiftUI `ForEach` row identity across key/value edits.
-public struct GaryxAgentEnvRow: Identifiable, Equatable {
+public struct GaryxAgentEnvRow: Identifiable, Equatable, Sendable {
     public let id: UUID
     public var key: String
     public var value: String
@@ -17,7 +17,7 @@ public struct GaryxAgentEnvRow: Identifiable, Equatable {
 /// The save intent expressed by an edited env draft, mapped to the wire
 /// contract: `.unchanged` omits `provider_env` (gateway preserves the stored
 /// value), `.replace` sends the full desired map, `.clear` sends an empty map.
-public enum GaryxAgentEnvIntent: Equatable {
+public enum GaryxAgentEnvIntent: Equatable, Sendable {
     case unchanged
     case replace([String: String])
     case clear
@@ -28,7 +28,7 @@ public enum GaryxAgentEnvIntent: Equatable {
 /// Seed it from the agent's *authoritative* env (never a cache projection that
 /// strips `provider_env`); an untouched draft resolves to `.unchanged`, so a
 /// save that did not edit env never clears hidden variables.
-public struct GaryxAgentEnvDraft: Equatable {
+public struct GaryxAgentEnvDraft: Equatable, Sendable {
     public private(set) var rows: [GaryxAgentEnvRow]
     /// Whether the user has edited env in this session. Drives `.unchanged`.
     public private(set) var isDirty: Bool
