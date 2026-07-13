@@ -607,7 +607,9 @@ worktrees when a thread or task is deleted.
 
 Custom agents may include `avatar_data_url`, a small image data URL used by
 desktop surfaces for the agent avatar. Omit it or set it to an empty string to
-use the generated initials fallback.
+use the generated initials fallback. The Gateway API returns the full value to
+app clients, while `garyx agent ... --json` omits `avatar_data_url` so CLI
+metadata output does not embed the encoded image body.
 
 Custom agent model selection is provider-specific. Claude and Codex use their
 provider defaults in the desktop app.

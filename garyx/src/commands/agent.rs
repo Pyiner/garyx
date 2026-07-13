@@ -10,7 +10,7 @@ pub(crate) async fn cmd_agent_list(
     let gateway = gateway_endpoint(config_path)?;
     let payload = fetch_gateway_json(&gateway, "/api/custom-agents").await?;
     if json {
-        return print_pretty_json(&decorate_agent_list_json(payload));
+        return print_agent_json(decorate_agent_list_json(payload));
     }
     let mut agents = payload["agents"].as_array().cloned().unwrap_or_default();
     sort_agents_builtin_first(&mut agents);
@@ -57,6 +57,34 @@ fn decorate_agent_list_json(mut payload: Value) -> Value {
     payload
 }
 
+/// Keep opaque image bodies out of terminal-oriented agent JSON while leaving
+/// the authoritative Gateway response unchanged for app clients.
+fn omit_agent_avatar_data_urls(value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                omit_agent_avatar_data_urls(value);
+            }
+        }
+        Value::Object(object) => {
+            object.remove("avatar_data_url");
+            for value in object.values_mut() {
+                omit_agent_avatar_data_urls(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn project_agent_json(mut payload: Value) -> Value {
+    omit_agent_avatar_data_urls(&mut payload);
+    payload
+}
+
+fn print_agent_json(payload: Value) -> Result<(), Box<dyn std::error::Error>> {
+    print_pretty_json(&project_agent_json(payload))
+}
+
 pub(crate) async fn cmd_agent_get(
     config_path: &str,
     agent_id: &str,
@@ -69,7 +97,7 @@ pub(crate) async fn cmd_agent_get(
     )
     .await?;
     if json {
-        return print_pretty_json(&payload);
+        return print_agent_json(payload);
     }
     print_agent_summary(&payload);
     Ok(())
@@ -303,7 +331,7 @@ pub(crate) async fn cmd_agent_create(
     )?;
     let payload = post_gateway_json(&gateway, "/api/custom-agents", &body).await?;
     if json {
-        return print_pretty_json(&payload);
+        return print_agent_json(payload);
     }
     print_agent_summary(&payload);
     Ok(())
@@ -366,7 +394,7 @@ pub(crate) async fn cmd_agent_update(
     );
     let payload = put_gateway_json(&gateway, &url, &body).await?;
     if json {
-        return print_pretty_json(&payload);
+        return print_agent_json(payload);
     }
     print_agent_summary(&payload);
     Ok(())
@@ -420,7 +448,7 @@ pub(crate) async fn cmd_agent_upsert(
         post_gateway_json(&gateway, "/api/custom-agents", &body).await?
     };
     if json {
-        return print_pretty_json(&payload);
+        return print_agent_json(payload);
     }
     print_agent_summary(&payload);
     Ok(())
@@ -442,7 +470,7 @@ pub(crate) async fn cmd_agent_delete(
     )
     .await?;
     if json {
-        return print_pretty_json(&payload);
+        return print_agent_json(payload);
     }
     println!("Deleted agent: {agent_id}");
     Ok(())
@@ -1405,5 +1433,44 @@ mod tests {
         let payload = json!({ "agents": [] });
         let decorated = decorate_agent_list_json(payload);
         assert_eq!(decorated, json!({ "agents": [] }));
+    }
+
+    #[test]
+    fn project_agent_json_omits_avatar_data_urls_at_every_depth() {
+        assert_eq!(project_agent_json(Value::Null), Value::Null);
+        assert_eq!(
+            project_agent_json(json!({ "agents": [] })),
+            json!({ "agents": [] })
+        );
+
+        let payload = json!({
+            "agent_id": "test-agent",
+            "avatar_data_url": "data:image/png;base64,AAAA",
+            "avatar_url": "https://example.test/avatar.png",
+            "nested": {
+                "avatar_data_url": null,
+                "avatar_data_url_metadata": "preserve-me",
+            },
+            "agents": [
+                {
+                    "agent_id": "nested-agent",
+                    "avatar_data_url": "data:image/jpeg;base64,BBBB",
+                    "system_prompt": "Keep this prompt.",
+                }
+            ],
+        });
+
+        let projected = project_agent_json(payload);
+
+        assert_eq!(projected["agent_id"], "test-agent");
+        assert!(projected.get("avatar_data_url").is_none());
+        assert_eq!(projected["avatar_url"], "https://example.test/avatar.png");
+        assert!(projected["nested"].get("avatar_data_url").is_none());
+        assert_eq!(
+            projected["nested"]["avatar_data_url_metadata"],
+            "preserve-me"
+        );
+        assert!(projected["agents"][0].get("avatar_data_url").is_none());
+        assert_eq!(projected["agents"][0]["system_prompt"], "Keep this prompt.");
     }
 }
