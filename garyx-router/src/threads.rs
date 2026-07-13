@@ -9,6 +9,9 @@ use garyx_models::provider::ProviderType;
 use garyx_models::routing::{
     default_delivery_target_type, infer_delivery_target_id, infer_delivery_target_type,
 };
+pub use garyx_models::thread_logs::{
+    CANONICAL_THREAD_PREFIX as THREAD_KEY_PREFIX, is_canonical_thread_id as is_thread_key,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -17,7 +20,6 @@ use crate::store::ThreadStoreError;
 use crate::{DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, ThreadStore};
 use crate::{WorkspaceMode, prepare_thread_worktree};
 
-pub const THREAD_KEY_PREFIX: &str = "thread::";
 pub const KNOWN_CHANNEL_ENDPOINTS_KEY: &str = "meta::known_channel_endpoints";
 const EXPLICIT_THREAD_TITLE_SOURCE: &str = "explicit";
 
@@ -120,10 +122,6 @@ pub struct ThreadEnsureOptions {
 
 pub fn new_thread_key() -> String {
     format!("{THREAD_KEY_PREFIX}{}", Uuid::new_v4())
-}
-
-pub fn is_thread_key(key: &str) -> bool {
-    key.trim().starts_with(THREAD_KEY_PREFIX)
 }
 
 pub fn endpoint_key(channel: &str, account_id: &str, binding_key: &str) -> String {
