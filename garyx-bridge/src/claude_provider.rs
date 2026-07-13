@@ -1,4 +1,6 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
+#[cfg(test)]
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -25,7 +27,7 @@ use crate::gary_prompt::{
     compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
-use crate::provider_common::{PendingAckQueue, PendingRateLimits};
+use crate::provider_common::{PendingAckQueue, PendingRateLimits, garyx_mcp_server};
 use crate::provider_trait::{
     ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
@@ -1221,51 +1223,23 @@ impl ClaudeCliProvider {
         // Reserve `garyx` for the built-in control-plane MCP server so a
         // stale runtime override cannot shadow the local gateway endpoint.
         let mut mcp_servers = metadata_mcp_servers(&options.metadata, "remote_mcp_servers");
-        if !self.config.mcp_base_url.is_empty() {
+        if let Some(server) = garyx_mcp_server(
+            &self.config.mcp_base_url,
+            &options.thread_id,
+            run_id,
+            &options.metadata,
+        ) {
             tracing::info!(
                 run_id = %run_id,
                 thread_id = %options.thread_id,
                 mcp_base_url = %self.config.mcp_base_url,
                 "MCP headers: building garyx MCP config"
             );
-            let mut mcp_headers = HashMap::new();
-            mcp_headers.insert("X-Run-Id".to_string(), run_id.to_string());
-            mcp_headers.insert("X-Thread-Id".to_string(), options.thread_id.clone());
-            mcp_headers.insert("X-Session-Key".to_string(), options.thread_id.clone());
-            mcp_headers.extend(metadata_string_map(&options.metadata, "garyx_mcp_headers"));
-
-            // Encode thread_id and run_id into the URL path as a workaround
-            // for Claude Code CLI stripping both custom headers and query
-            // params from MCP tool call requests.
-            // Format: /mcp/{thread_id}/{run_id}
-            let encoded_thread = urlencoding::encode(&options.thread_id);
-            let encoded_run = urlencoding::encode(run_id);
-            let mcp_url = options
-                .metadata
-                .get("garyx_mcp_auth_token")
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|token| {
-                    format!(
-                        "{}/mcp/auth/{}/{}/{}",
-                        self.config.mcp_base_url,
-                        urlencoding::encode(token),
-                        encoded_thread,
-                        encoded_run
-                    )
-                })
-                .unwrap_or_else(|| {
-                    format!(
-                        "{}/mcp/{}/{}",
-                        self.config.mcp_base_url, encoded_thread, encoded_run
-                    )
-                });
             mcp_servers.insert(
                 "garyx".to_string(),
                 McpServerConfig::Http {
-                    url: mcp_url,
-                    headers: mcp_headers,
+                    url: server.url,
+                    headers: server.headers,
                 },
             );
         }

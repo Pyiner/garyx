@@ -2388,6 +2388,15 @@ fn test_decode_mcp_path_context_extracts_thread_and_run_ids() {
 }
 
 #[test]
+fn test_decode_mcp_path_context_extracts_ids_after_auth_token() {
+    let (thread_id, run_id) = decode_mcp_path_context(
+        "/mcp/auth/secret%2Ftoken/thread%3A%3Aalpha/run%2F1",
+    );
+    assert_eq!(thread_id.as_deref(), Some("thread::alpha"));
+    assert_eq!(run_id.as_deref(), Some("run/1"));
+}
+
+#[test]
 fn test_decode_mcp_path_context_handles_thread_only_paths() {
     let (thread_id, run_id) = decode_mcp_path_context("/mcp/thread%3A%3Aalpha");
     assert_eq!(thread_id.as_deref(), Some("thread::alpha"));

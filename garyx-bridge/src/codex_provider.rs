@@ -33,7 +33,7 @@ use crate::gary_prompt::{
     compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
-use crate::provider_common::{PendingAckQueue, PendingRateLimits};
+use crate::provider_common::{PendingAckQueue, PendingRateLimits, garyx_mcp_server};
 use crate::provider_trait::{
     ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
 };
@@ -822,57 +822,6 @@ fn resolve_runtime_codex_env(
     env
 }
 
-fn garyx_mcp_server(
-    config: &CodexAppServerConfig,
-    thread_id: &str,
-    run_id: &str,
-    metadata: &HashMap<String, Value>,
-) -> Option<Value> {
-    let base_url = config.mcp_base_url.trim().trim_end_matches('/');
-    if base_url.is_empty() {
-        return None;
-    }
-
-    let mut http_headers = serde_json::Map::from_iter([
-        ("X-Run-Id".to_owned(), Value::String(run_id.to_owned())),
-        (
-            "X-Thread-Id".to_owned(),
-            Value::String(thread_id.to_owned()),
-        ),
-        (
-            "X-Session-Key".to_owned(),
-            Value::String(thread_id.to_owned()),
-        ),
-    ]);
-    for (key, value) in metadata_string_map(metadata, "garyx_mcp_headers") {
-        http_headers.insert(key, Value::String(value));
-    }
-
-    // Encode thread_id and run_id into the URL path so the gateway can
-    // extract context even when the client strips custom headers (matches
-    // the Claude Code workaround in claude_provider.rs).
-    let encoded_thread = urlencoding::encode(thread_id);
-    let encoded_run = urlencoding::encode(run_id);
-    let url = metadata
-        .get("garyx_mcp_auth_token")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|token| {
-            format!(
-                "{base_url}/mcp/auth/{}/{}/{}",
-                urlencoding::encode(token),
-                encoded_thread,
-                encoded_run
-            )
-        })
-        .unwrap_or_else(|| format!("{base_url}/mcp/{encoded_thread}/{encoded_run}"));
-    Some(json!({
-        "url": url,
-        "http_headers": http_headers,
-    }))
-}
-
 fn build_codex_thread_config(
     provider_config: &CodexAppServerConfig,
     metadata: &HashMap<String, Value>,
@@ -901,10 +850,21 @@ fn build_codex_thread_config(
         Some(Value::Object(obj)) => obj,
         _ => serde_json::Map::new(),
     };
-    if let Some(server) = garyx_mcp_server(provider_config, thread_id, run_id, metadata) {
+    if let Some(server) = garyx_mcp_server(
+        &provider_config.mcp_base_url,
+        thread_id,
+        run_id,
+        metadata,
+    ) {
         // Reserve `garyx` for the built-in local gateway endpoint so runtime
         // metadata cannot shadow it with a stale or malformed URL.
-        mcp_servers.insert("garyx".to_owned(), server);
+        mcp_servers.insert(
+            "garyx".to_owned(),
+            json!({
+                "url": server.url,
+                "http_headers": server.headers,
+            }),
+        );
     }
     if !mcp_servers.is_empty() {
         thread_config.insert("mcp_servers".to_owned(), Value::Object(mcp_servers));

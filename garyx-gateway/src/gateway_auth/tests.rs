@@ -57,3 +57,11 @@ fn request_authorized_accepts_remote_with_valid_token() {
     let uri: Uri = "/api/threads".parse().expect("uri");
     assert!(request_authorized(&state, &headers, &uri));
 }
+
+#[test]
+fn token_from_mcp_path_decodes_auth_segment() {
+    assert_eq!(
+        token_from_mcp_path("/mcp/auth/secret%2Ftoken/thread%3A%3Aalpha/run%2F1").as_deref(),
+        Some("secret/token")
+    );
+}
