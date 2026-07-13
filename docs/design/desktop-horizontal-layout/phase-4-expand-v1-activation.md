@@ -41,10 +41,12 @@ their distinct origins.
 ## Renderer adapter
 
 The frame store now accepts either policy. Under `expand-v1`, the effect runner
-executes checkpoint, claim, and bounds commands, dispatches 100 ms open and
-420 ms close watchdog events, and commits the close frame before requesting a
-shrink. Snapshot pushes use the reducer's user/display versus panel-machine
-paths, preserving `responsiveBasisWidth` semantics.
+executes checkpoint, claim, and bounds commands and dispatches the 100 ms open
+fallback. A funded close publishes its closed frame immediately and requests
+the native shrink on the next animation frame; there is no synthetic close
+watchdog without a matching visual transition. Snapshot pushes coalesce by
+origin class once per animation frame while preserving the reducer's
+user/display versus panel-machine `responsiveBasisWidth` semantics.
 
 AppShell consumes the frame's presented/effective occupancy for track
 mounting. Side tools stay mounted with zero bounds while auto-hidden, and the
@@ -62,7 +64,7 @@ the boot gap.
   readback, delayed acknowledgement, epoch takeover, and external rebasing;
 - `horizontal-layout-effect-runner.test.mjs` drives the production main
   executor through a fake host and closes the live open/checkpoint/bounds and
-  close/watchdog/frame/repay loops;
+  close/frame/repay loops, including snapshot burst coalescing;
 - the complete desktop unit suite and production renderer build pass;
 - packaged feature-off matches all eight legacy oracle scenarios.
 

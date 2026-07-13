@@ -10,6 +10,7 @@ import {
   horizontalLayoutColumnSum,
   horizontalLayoutPolicy,
   projectHorizontalLayout,
+  reduceHorizontalLayout,
 } from "./responsive-layout-model.ts";
 
 const legacyOracle = JSON.parse(
@@ -194,12 +195,14 @@ test("expand-v1 intentional differences are isolated in a golden matrix", () => 
     name: "legacy",
     windowMinWidth: LEGACY_WINDOW_MIN_WIDTH,
     windowExpansionEnabled: false,
+    conversationRailAutoHide: false,
     sideToolsAutoHide: false,
   });
   assert.deepEqual(horizontalLayoutPolicy("expand-v1"), {
     name: "expand-v1",
     windowMinWidth: EXPAND_V1_WINDOW_MIN_WIDTH,
     windowExpansionEnabled: true,
+    conversationRailAutoHide: true,
     sideToolsAutoHide: true,
   });
   const legacyAt960 = stableProjection({
@@ -268,10 +271,30 @@ test("both policies satisfy stable geometry invariants across the full matrix", 
   }
 });
 
-test("compact sidebar is temporary presentation and never consumes a track", () => {
+test("explicit compact sidebar presentation stays in flow", () => {
   const state = createHorizontalLayoutState({
     policy: "expand-v1",
     rendererEpoch: "compact-test",
+    snapshot: snapshot({ width: 720 }),
+    desiredOccupancy: {
+      globalSidebar: true,
+      conversationRail: false,
+      sideTools: false,
+      threadLogs: false,
+    },
+  });
+  const compactOpen = { ...state, compactSidebarOpen: true };
+  const frame = projectHorizontalLayout(compactOpen);
+  assert.equal(frame.kind, "stable");
+  assert.equal(frame.presentation.globalSidebar, "expanded");
+  assert.equal(frame.columns.globalSidebar, 245);
+  assert.equal(frame.requestedOccupancy.globalSidebar, true);
+});
+
+test("legacy compact sidebar remains a temporary overlay without changing intent", () => {
+  const state = createHorizontalLayoutState({
+    policy: "legacy",
+    rendererEpoch: "legacy-compact-test",
     snapshot: snapshot({ width: 720 }),
     desiredOccupancy: {
       globalSidebar: false,
@@ -280,8 +303,11 @@ test("compact sidebar is temporary presentation and never consumes a track", () 
       threadLogs: false,
     },
   });
-  const compactOpen = { ...state, compactSidebarOpen: true };
-  const frame = projectHorizontalLayout(compactOpen);
+  const toggled = reduceHorizontalLayout(state, {
+    type: "COMPACT_SIDEBAR_TOGGLED",
+  });
+  const frame = projectHorizontalLayout(toggled.state);
+
   assert.equal(frame.kind, "stable");
   assert.equal(frame.presentation.globalSidebar, "compact-overlay");
   assert.equal(frame.columns.globalSidebar, 0);

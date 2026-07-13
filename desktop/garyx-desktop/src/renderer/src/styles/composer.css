@@ -922,7 +922,10 @@
   color: currentColor;
   font-size: var(--text-sm);
   font-weight: var(--font-weight-normal);
-  line-height: 1;
+  /* Leave room for descenders: line-height 1 + overflow hidden clips the
+     bottom of glyphs like "g" in "Extra High". The pill centers this label
+     in a fixed 32px flex row, so the extra leading does not move layout. */
+  line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

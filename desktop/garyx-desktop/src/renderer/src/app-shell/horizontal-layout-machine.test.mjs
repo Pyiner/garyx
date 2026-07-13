@@ -210,6 +210,32 @@ test("every intent checkpoints desired occupancy before policy-specific work", (
   }
 });
 
+test("ordinary sidebar intents never mint a compact overlay outside expand-v1 compact mode", () => {
+  const legacySession = acknowledgedSession({
+    baseWidth: 700,
+    desiredOccupancy: CLOSED_LAYOUT_OCCUPANCY,
+  });
+  const legacyStarted = beginIntent(
+    stateWithSession({
+      policy: "legacy",
+      desiredOccupancy: CLOSED_LAYOUT_OCCUPANCY,
+      session: legacySession,
+    }),
+    sidebarOpen,
+  );
+  assert.equal(legacyStarted.state.compactSidebarOpen, false);
+  const legacyFrame = stableFrameFromProjection(
+    projectHorizontalLayout(legacyStarted.state),
+  );
+  assert.equal(
+    legacyFrame.presentation.globalSidebar,
+    "collapsed",
+  );
+
+  const wideStarted = beginIntent(stateWithSession(), sidebarOpen);
+  assert.equal(wideStarted.state.compactSidebarOpen, false);
+});
+
 test("expandability uses the exact 2-DIP edge and work-area predicate", () => {
   const targetBounds = { x: 3, y: 80, width: 200, height: 800 };
   const cases = [
@@ -378,14 +404,19 @@ test("funded close removes the frame before a RepayProof shrink", () => {
     cause: "system-cleanup",
     transactionId: "cleanup-close",
   });
+  assert.equal(
+    projectHorizontalLayout(started.state).frame.presentation.sideTools,
+    "closed",
+    "a close frame must not wait for the main-process checkpoint ack",
+  );
   const closing = acknowledgeCheckpoint(started, 9);
   assert.deepEqual(
     closing.effects.map((effect) => effect.type),
-    ["schedule-deadline"],
+    ["request-frame-commit"],
   );
   assert.equal(
     closing.state.transactions["cleanup-close"].phase,
-    "closing-animation",
+    "frame-commit-pending",
   );
   assert.equal(
     closing.state.transactions["cleanup-close"].authority.kind,
@@ -393,22 +424,10 @@ test("funded close removes the frame before a RepayProof shrink", () => {
   );
   assert.equal(
     projectHorizontalLayout(closing.state).frame.presentation.sideTools,
-    "docked",
-  );
-
-  const animationDone = reduceHorizontalLayout(closing.state, {
-    type: "PRESENTATION_ANIMATION_FINISHED",
-    transactionId: "cleanup-close",
-  });
-  assert.deepEqual(animationDone.effects, [
-    { type: "request-frame-commit", transactionId: "cleanup-close" },
-  ]);
-  assert.equal(
-    projectHorizontalLayout(animationDone.state).frame.presentation.sideTools,
     "closed",
   );
 
-  const frameCommitted = reduceHorizontalLayout(animationDone.state, {
+  const frameCommitted = reduceHorizontalLayout(closing.state, {
     type: "FRAME_COMMITTED",
     transactionId: "cleanup-close",
   });
@@ -448,7 +467,7 @@ test("funding-zero close settles without shrink", () => {
   assert.equal(projectHorizontalLayout(closed.state).presentation.sideTools, "closed");
 });
 
-test("reopen supersedes close animation and makes its old timer a no-op", () => {
+test("reopen supersedes a pending close frame and makes its callback a no-op", () => {
   const sideFunding = funding("sideTools", 330, "reopen-side-tools");
   const initialSession = acknowledgedSession({
     desiredOccupancy: sideToolsOpen,
@@ -469,12 +488,12 @@ test("reopen supersedes close animation and makes its old timer a no-op", () => 
     transactionId: "reopen-2",
   });
   assert.equal(reopening.state.transactions["closing-1"].phase, "superseded");
-  const staleTimer = reduceHorizontalLayout(reopening.state, {
-    type: "CLOSE_DEADLINE_EXPIRED",
+  const staleFrame = reduceHorizontalLayout(reopening.state, {
+    type: "FRAME_COMMITTED",
     transactionId: "closing-1",
   });
-  assert.equal(staleTimer.state, reopening.state);
-  assert.deepEqual(staleTimer.effects, []);
+  assert.equal(staleFrame.state, reopening.state);
+  assert.deepEqual(staleFrame.effects, []);
 });
 
 test("funded open then close restores the exact base bounds", () => {
@@ -487,11 +506,7 @@ test("funded open then close restores the exact base bounds", () => {
     transactionId: "close-after-open",
   });
   const closing = acknowledgeCheckpoint(closingStarted);
-  const animationDone = reduceHorizontalLayout(closing.state, {
-    type: "CLOSE_DEADLINE_EXPIRED",
-    transactionId: "close-after-open",
-  });
-  const committed = reduceHorizontalLayout(animationDone.state, {
+  const committed = reduceHorizontalLayout(closing.state, {
     type: "FRAME_COMMITTED",
     transactionId: "close-after-open",
   });
@@ -521,21 +536,30 @@ test("side-tools to logs replacement emits one net +40 funding command", () => {
     sideTools: false,
     threadLogs: true,
   };
-  const closing = acknowledgeCheckpoint(
-    beginIntent(initial, logsOpen, {
-      cause: "user-panel",
-      transactionId: "replace-right-panel",
-    }),
-  );
-  assert.deepEqual(
-    closing.effects.map((effect) => effect.type),
-    ["schedule-deadline"],
-  );
-  const animationDone = reduceHorizontalLayout(closing.state, {
-    type: "PRESENTATION_ANIMATION_FINISHED",
+  const started = beginIntent(initial, logsOpen, {
+    cause: "user-panel",
     transactionId: "replace-right-panel",
   });
-  const committed = reduceHorizontalLayout(animationDone.state, {
+  const pendingFrame = projectHorizontalLayout(started.state).frame;
+  assert.equal(pendingFrame.presentation.sideTools, "closed");
+  assert.equal(
+    pendingFrame.presentation.threadLogs,
+    "closed",
+    "the replacement must not open before its funding checkpoint",
+  );
+  const closing = acknowledgeCheckpoint(started);
+  assert.deepEqual(
+    closing.effects.map((effect) => effect.type),
+    ["request-frame-commit"],
+  );
+  const closeFrame = projectHorizontalLayout(closing.state).frame;
+  assert.equal(closeFrame.presentation.sideTools, "closed");
+  assert.equal(
+    closeFrame.presentation.threadLogs,
+    "closed",
+    "the replacement must stay closed while the close frame commits",
+  );
+  const committed = reduceHorizontalLayout(closing.state, {
     type: "FRAME_COMMITTED",
     transactionId: "replace-right-panel",
   });
@@ -543,11 +567,24 @@ test("side-tools to logs replacement emits one net +40 funding command", () => {
     committed.effects.map((effect) => effect.type),
     ["window-bounds"],
   );
+  const awaitingBoundsFrame = projectHorizontalLayout(committed.state).frame;
+  assert.equal(awaitingBoundsFrame.presentation.sideTools, "closed");
+  assert.equal(
+    awaitingBoundsFrame.presentation.threadLogs,
+    "closed",
+    "the replacement must not reopen until its funding bounds are applied",
+  );
   const command = boundsEffect(committed).command;
   assert.equal(command.targetBounds.width - initial.snapshot.bounds.width, 40);
   assert.equal(command.targetFundingByPanel.sideTools, undefined);
   assert.equal(command.targetFundingByPanel.threadLogs.widthDelta, 370);
   assert.equal(command.authority.kind, "user-cause");
+  const settled = acceptBounds(committed);
+  const settledFrame = stableFrameFromProjection(
+    projectHorizontalLayout(settled.state),
+  );
+  assert.equal(settledFrame.presentation.sideTools, "closed");
+  assert.equal(settledFrame.presentation.threadLogs, "docked");
 });
 
 test("checkpoint stale retries with the same transaction sequence and token", () => {
@@ -696,13 +733,9 @@ test("fixed-mode funded close waits for frame commit and repays on exit", () => 
   );
   assert.equal(
     closing.state.transactions["fixed-close"].phase,
-    "closing-animation",
+    "frame-commit-pending",
   );
-  const animationDone = reduceHorizontalLayout(closing.state, {
-    type: "PRESENTATION_ANIMATION_FINISHED",
-    transactionId: "fixed-close",
-  });
-  const committed = reduceHorizontalLayout(animationDone.state, {
+  const committed = reduceHorizontalLayout(closing.state, {
     type: "FRAME_COMMITTED",
     transactionId: "fixed-close",
   });
@@ -847,7 +880,7 @@ test("rapid reverse folds the superseded physical ack before closing", () => {
   );
   assert.equal(
     closeCheckpoint.state.transactions["close-2"].phase,
-    "closing-animation",
+    "frame-commit-pending",
   );
 });
 
@@ -952,12 +985,8 @@ test("initial claim accepts, retries only a still-fresh CAS, and adopts takeover
       transactionId: "close-initial-sidebar",
     }),
   );
-  const initialCloseAnimation = reduceHorizontalLayout(initialClose.state, {
-    type: "PRESENTATION_ANIMATION_FINISHED",
-    transactionId: "close-initial-sidebar",
-  });
   const initialCloseCommitted = reduceHorizontalLayout(
-    initialCloseAnimation.state,
+    initialClose.state,
     {
       type: "FRAME_COMMITTED",
       transactionId: "close-initial-sidebar",
@@ -1068,6 +1097,93 @@ test("responsive snapshots preserve intent and only user/display update basis", 
   });
   assert.equal(native.state.responsiveBasisWidth, 800);
   assert.deepEqual(native.effects, []);
+});
+
+test("responsive narrowing hides the conversation rail before the global sidebar", () => {
+  const dualRailOpen = {
+    globalSidebar: true,
+    conversationRail: true,
+    sideTools: false,
+    threadLogs: false,
+  };
+  const session = acknowledgedSession({
+    baseWidth: 981,
+    desiredOccupancy: dualRailOpen,
+  });
+  let state = stateWithSession({
+    desiredOccupancy: dualRailOpen,
+    session,
+  });
+  assert.equal(
+    stableFrameFromProjection(projectHorizontalLayout(state)).presentation
+      .conversationRail,
+    "open",
+  );
+
+  state = reduceHorizontalLayout(state, {
+    type: "WINDOW_SNAPSHOT_CHANGED",
+    snapshot: snapshot({ width: 980, revision: 2, origin: "user" }),
+  }).state;
+  let frame = stableFrameFromProjection(projectHorizontalLayout(state));
+  assert.equal(frame.presentation.conversationRail, "hidden");
+  assert.equal(frame.presentation.globalSidebar, "expanded");
+  assert.deepEqual(state.desiredOccupancy, dualRailOpen);
+
+  state = reduceHorizontalLayout(state, {
+    type: "WINDOW_SNAPSHOT_CHANGED",
+    snapshot: snapshot({ width: 981, revision: 3, origin: "user" }),
+  }).state;
+  frame = stableFrameFromProjection(projectHorizontalLayout(state));
+  assert.equal(frame.presentation.conversationRail, "open");
+  assert.equal(frame.presentation.globalSidebar, "expanded");
+});
+
+test("explicit compact sidebar expansion grows native bounds before presenting in flow", () => {
+  const session = acknowledgedSession({
+    baseWidth: 720,
+    desiredOccupancy: sidebarOpen,
+  });
+  const initial = stateWithSession({
+    desiredOccupancy: sidebarOpen,
+    session,
+  });
+  assert.equal(
+    stableFrameFromProjection(projectHorizontalLayout(initial)).presentation
+      .globalSidebar,
+    "collapsed",
+  );
+
+  const started = reduceHorizontalLayout(initial, {
+    type: "COMPACT_SIDEBAR_TOGGLED",
+  });
+  const transaction = started.state.transactions[
+    started.state.headTransactionId
+  ];
+  assert.deepEqual(transaction.openingPanels, ["globalSidebar"]);
+  assert.deepEqual(
+    started.effects.map((effect) => effect.type),
+    ["window-layout-session"],
+  );
+  assert.equal(
+    stableFrameFromProjection(projectHorizontalLayout(started.state))
+      .presentation.globalSidebar,
+    "collapsed",
+  );
+
+  const awaitingBounds = acknowledgeCheckpoint(started);
+  const command = boundsEffect(awaitingBounds).command;
+  assert.equal(command.targetBounds.width, 965);
+  assert.equal(command.targetFundingByPanel.globalSidebar.widthDelta, 245);
+
+  const accepted = acceptBounds(awaitingBounds);
+  const frame = stableFrameFromProjection(
+    projectHorizontalLayout(accepted.state),
+  );
+  assert.equal(accepted.state.responsiveBasisWidth, 720);
+  assert.equal(frame.contentViewportWidth, 965);
+  assert.equal(frame.presentation.globalSidebar, "expanded");
+  assert.equal(frame.columns.globalSidebar, 245);
+  assert.notEqual(frame.presentation.globalSidebar, "compact-overlay");
 });
 
 test("authoritative user resize folds the rebased acknowledged session", () => {

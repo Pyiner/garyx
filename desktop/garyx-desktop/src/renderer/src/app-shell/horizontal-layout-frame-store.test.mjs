@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   HORIZONTAL_LAYOUT_FRAME_ATTRIBUTES,
-  HORIZONTAL_LAYOUT_FRAME_VARIABLES,
+  HORIZONTAL_LAYOUT_PAINT_VARIABLES,
   clearFrame,
   createLegacyHorizontalLayoutFrameStore,
 } from "./horizontal-layout-frame-store.ts";
@@ -72,14 +72,14 @@ function baselineStore() {
   });
 }
 
-test("applyFrame publishes every px variable and presentation attribute under one revision", () => {
+test("applyFrame publishes paint variables and presentation attributes under one revision", () => {
   const store = baselineStore();
   const target = mockRoot();
   store.attachRoot(target.root);
 
   assert.deepEqual(
     [...target.variables.keys()].sort(),
-    [...HORIZONTAL_LAYOUT_FRAME_VARIABLES].sort(),
+    [...HORIZONTAL_LAYOUT_PAINT_VARIABLES].sort(),
   );
   assert.deepEqual(
     [...target.attributes.keys()].sort(),
@@ -172,6 +172,41 @@ test("legacy store reduces normalized occupancy and width events without wiring 
   });
   assert.equal(target.variables.get("--gx-conversation-rail-width"), "333px");
   assert.equal(notifications, 2);
+  unsubscribe();
+});
+
+test("live viewport frames do not rewrite fixed tracks or invalidate React inside one presentation band", () => {
+  const store = baselineStore();
+  const target = mockRoot();
+  store.attachRoot(target.root);
+  target.operations.length = 0;
+  let notifications = 0;
+  const unsubscribe = store.subscribe(() => {
+    notifications += 1;
+  });
+
+  for (let revision = 2; revision <= 121; revision += 1) {
+    store.dispatch({
+      type: "WINDOW_SNAPSHOT_CHANGED",
+      snapshot: {
+        ...snapshot(1480 + revision, revision),
+        origin: "user",
+      },
+    });
+  }
+
+  assert.equal(notifications, 0);
+  assert.deepEqual(
+    target.operations.filter(([kind]) => kind === "variable"),
+    [],
+  );
+  assert.equal(target.operations.length, 120);
+  assert.equal(
+    target.operations.every(
+      ([kind, name]) => kind === "attribute" && name === "data-layout-revision",
+    ),
+    true,
+  );
   unsubscribe();
 });
 

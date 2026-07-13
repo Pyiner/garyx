@@ -228,7 +228,7 @@ export type LayoutMachineEffect =
     }>
   | Readonly<{
       type: "schedule-deadline";
-      deadline: "open" | "close";
+      deadline: "open";
       transactionId: string;
     }>
   | Readonly<{ type: "request-frame-commit"; transactionId: string }>
@@ -248,6 +248,7 @@ export type LayoutPolicy = Readonly<{
   name: LayoutPolicyName;
   windowMinWidth: number;
   windowExpansionEnabled: boolean;
+  conversationRailAutoHide: boolean;
   sideToolsAutoHide: boolean;
 }>;
 
@@ -256,12 +257,14 @@ const LAYOUT_POLICIES: Readonly<Record<LayoutPolicyName, LayoutPolicy>> = {
     name: "legacy",
     windowMinWidth: LEGACY_WINDOW_MIN_WIDTH,
     windowExpansionEnabled: false,
+    conversationRailAutoHide: false,
     sideToolsAutoHide: false,
   },
   "expand-v1": {
     name: "expand-v1",
     windowMinWidth: EXPAND_V1_WINDOW_MIN_WIDTH,
     windowExpansionEnabled: true,
+    conversationRailAutoHide: true,
     sideToolsAutoHide: true,
   },
 };
@@ -427,7 +430,6 @@ export type LayoutTransactionPhase =
   | "preparing-open"
   | "awaiting-bounds"
   | "opening-fallback"
-  | "closing-animation"
   | "frame-commit-pending"
   | "deferred-funding"
   | "deferred-reconcile"
@@ -466,6 +468,7 @@ export type HorizontalLayoutState = Readonly<{
   desiredOccupancy: LayoutPanelOccupancy;
   widths: LayoutWidths;
   compactSidebarOpen: boolean;
+  conversationRailManualOverride: boolean;
   sideToolsManualOverride: boolean;
   snapshot: WindowLayoutSnapshot;
   responsiveBasisWidth: number;
@@ -541,6 +544,7 @@ export function createHorizontalLayoutState({
     desiredOccupancy: cloneOccupancy(desiredOccupancy),
     widths: normalizedWidths,
     compactSidebarOpen: false,
+    conversationRailManualOverride: false,
     sideToolsManualOverride: false,
     snapshot,
     responsiveBasisWidth: snapshot.contentBounds.width,
@@ -557,6 +561,32 @@ export function createHorizontalLayoutState({
 
 function finiteWidthOr(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
+}
+
+function isGlobalSidebarCompact(
+  state: HorizontalLayoutState,
+  occupancy: LayoutPanelOccupancy,
+): boolean {
+  return isCompactSidebarViewport({
+    // expand-v1 gives the secondary rail the first responsive collapse slot.
+    // Once that rail is hidden, the global sidebar keeps its single-rail
+    // breakpoint instead of being collapsed by an invisible neighbor.
+    secondaryRailOpen:
+      state.policy === "legacy" && occupancy.conversationRail,
+    viewportWidth: state.responsiveBasisWidth,
+  });
+}
+
+function isConversationRailAutoHidden(
+  state: HorizontalLayoutState,
+  occupancy: LayoutPanelOccupancy,
+): boolean {
+  return (
+    occupancy.conversationRail &&
+    horizontalLayoutPolicy(state.policy).conversationRailAutoHide &&
+    state.responsiveBasisWidth <= DUAL_RAIL_COMPACT_WIDTH &&
+    !state.conversationRailManualOverride
+  );
 }
 
 export function normalizeLayoutWidths(widths: LayoutWidths): LayoutWidths {
@@ -644,15 +674,23 @@ function solveStableHorizontalLayout(
 
   const policy = horizontalLayoutPolicy(state.policy);
   const widths = normalizeLayoutWidths(state.widths);
-  const compactViewport = isCompactSidebarViewport({
-    secondaryRailOpen: requestedOccupancy.conversationRail,
-    viewportWidth: state.responsiveBasisWidth,
-  });
+  const compactViewport = isGlobalSidebarCompact(
+    state,
+    requestedOccupancy,
+  );
+  const autoHideConversationRail = isConversationRailAutoHidden(
+    state,
+    requestedOccupancy,
+  );
+  const compactSidebarInFlow =
+    state.policy === "expand-v1" && state.compactSidebarOpen;
   let sidebar =
-    requestedOccupancy.globalSidebar && !compactViewport
+    requestedOccupancy.globalSidebar &&
+    (!compactViewport || compactSidebarInFlow)
       ? widths.globalSidebar
       : 0;
-  let rail = requestedOccupancy.conversationRail
+  let rail =
+    requestedOccupancy.conversationRail && !autoHideConversationRail
     ? widths.conversationRail
     : 0;
   let divider = rail > 0 ? 1 : 0;
@@ -764,7 +802,9 @@ function solveStableHorizontalLayout(
   primaryThread = viewportWidth - allocatedNonPrimaryTracks;
 
   const sidebarPresentation: HorizontalLayoutPresentation["globalSidebar"] =
-    compactViewport && state.compactSidebarOpen
+    state.policy === "legacy" &&
+    compactViewport &&
+    state.compactSidebarOpen
       ? "compact-overlay"
       : sidebar > 0
         ? "expanded"
@@ -819,13 +859,15 @@ function solveStableHorizontalLayout(
     reasons: {
       globalSidebar: !requestedOccupancy.globalSidebar
         ? "closed"
-        : compactViewport
+        : compactViewport && sidebar === 0
           ? "compact"
           : sidebar > 0
             ? "requested"
             : "capacity",
       conversationRail: !requestedOccupancy.conversationRail
         ? "closed"
+        : autoHideConversationRail
+          ? "auto-hidden"
         : rail > 0
           ? "requested"
           : "capacity",
@@ -940,13 +982,30 @@ function projectionOccupancy(
   }
   switch (transaction.phase) {
     case "checkpoint-pending":
+    case "frame-commit-pending":
     case "preparing-open":
-    case "awaiting-bounds":
-      return transaction.fallbackVisible
-        ? transaction.nextOccupancy
-        : transaction.previousOccupancy;
-    case "closing-animation":
-      return transaction.previousOccupancy;
+    case "awaiting-bounds": {
+      if (transaction.fallbackVisible) {
+        return transaction.nextOccupancy;
+      }
+      if (transaction.closingPanels.length === 0) {
+        return transaction.previousOccupancy;
+      }
+      return {
+        globalSidebar:
+          transaction.previousOccupancy.globalSidebar &&
+          !transaction.closingPanels.includes("globalSidebar"),
+        conversationRail:
+          transaction.previousOccupancy.conversationRail &&
+          !transaction.closingPanels.includes("conversationRail"),
+        sideTools:
+          transaction.previousOccupancy.sideTools &&
+          !transaction.closingPanels.includes("sideTools"),
+        threadLogs:
+          transaction.previousOccupancy.threadLogs &&
+          !transaction.closingPanels.includes("threadLogs"),
+      };
+    }
     default:
       return transaction.nextOccupancy;
   }
@@ -1097,14 +1156,6 @@ export type HorizontalLayoutEvent =
     }>
   | Readonly<{
       type: "OPEN_DEADLINE_EXPIRED";
-      transactionId: string;
-    }>
-  | Readonly<{
-      type: "CLOSE_DEADLINE_EXPIRED";
-      transactionId: string;
-    }>
-  | Readonly<{
-      type: "PRESENTATION_ANIMATION_FINISHED";
       transactionId: string;
     }>
   | Readonly<{
@@ -1471,15 +1522,15 @@ function requestedPanelContribution(
     return 0;
   }
   if (panel === "globalSidebar") {
-    return isCompactSidebarViewport({
-      secondaryRailOpen: occupancy.conversationRail,
-      viewportWidth: state.responsiveBasisWidth,
-    })
+    return isGlobalSidebarCompact(state, occupancy) &&
+      !(state.policy === "expand-v1" && state.compactSidebarOpen)
       ? 0
       : widths.globalSidebar;
   }
   if (panel === "conversationRail") {
-    return widths.conversationRail;
+    return isConversationRailAutoHidden(state, occupancy)
+      ? 0
+      : widths.conversationRail;
   }
   if (panel === "sideTools") {
     const autoHidden =
@@ -1763,13 +1814,12 @@ function planAfterCheckpoint(
     );
     return {
       state: updateTransaction(state, transaction.transactionId, {
-        phase: "closing-animation",
+        phase: "frame-commit-pending",
         authority: continuationAuthority ?? transaction.authority,
       }),
       effects: [
         {
-          type: "schedule-deadline",
-          deadline: "close",
+          type: "request-frame-commit",
           transactionId: transaction.transactionId,
         },
       ],
@@ -2022,6 +2072,7 @@ function hydrateState(
       nextSequence: 1,
       desiredOccupancy: desired,
       compactSidebarOpen: false,
+      conversationRailManualOverride: false,
       sideToolsManualOverride: false,
       snapshot: { ...event.snapshot },
       responsiveBasisWidth: event.snapshot.contentBounds.width,
@@ -2067,6 +2118,7 @@ function hydrateState(
     nextSequence: 1,
     desiredOccupancy: cloneOccupancy(session.desiredOccupancy),
     compactSidebarOpen: false,
+    conversationRailManualOverride: false,
     sideToolsManualOverride: false,
     snapshot: { ...event.snapshot },
     responsiveBasisWidth: event.snapshot.contentBounds.width,
@@ -2224,14 +2276,35 @@ function startIntentTransaction(
     }
   }
   transactions[event.transactionId] = transaction;
+  const userInitiated =
+    event.cause === "user-panel" || event.cause === "user-route";
+  const userOpenedGlobalSidebar =
+    state.policy === "expand-v1" &&
+    openingPanels.includes("globalSidebar") &&
+    userInitiated &&
+    isGlobalSidebarCompact(state, event.nextOccupancy);
+  const userRequestedConversationRail =
+    event.nextOccupancy.conversationRail &&
+    userInitiated &&
+    (openingPanels.includes("conversationRail") ||
+      (booleanNoop && event.cause === "user-route"));
   const userOpenedSideTools =
-    openingPanels.includes("sideTools") &&
-    (event.cause === "user-panel" || event.cause === "user-route");
+    openingPanels.includes("sideTools") && userInitiated;
   const next: HorizontalLayoutState = {
     ...state,
     revision: state.revision + 1,
     nextSequence: sequence + 1,
     desiredOccupancy: cloneOccupancy(event.nextOccupancy),
+    compactSidebarOpen: userOpenedGlobalSidebar
+      ? true
+      : event.nextOccupancy.globalSidebar
+        ? state.compactSidebarOpen
+        : false,
+    conversationRailManualOverride: userRequestedConversationRail
+      ? true
+      : event.nextOccupancy.conversationRail
+        ? state.conversationRailManualOverride
+        : false,
     sideToolsManualOverride: userOpenedSideTools
       ? true
       : event.nextOccupancy.sideTools
@@ -2499,6 +2572,12 @@ function handleWindowSnapshot(
     responsiveBasisWidth: updatesResponsiveBasis
       ? snapshot.contentBounds.width
       : folded.responsiveBasisWidth,
+    compactSidebarOpen: updatesResponsiveBasis
+      ? false
+      : folded.compactSidebarOpen,
+    conversationRailManualOverride: updatesResponsiveBasis
+      ? false
+      : folded.conversationRailManualOverride,
     sideToolsManualOverride: updatesResponsiveBasis
       ? false
       : folded.sideToolsManualOverride,
@@ -2568,6 +2647,52 @@ function updatePanelWidth(
         ]
       : [],
   };
+}
+
+function handleCompactSidebarExpansion(
+  state: HorizontalLayoutState,
+): HorizontalLayoutReduction {
+  if (state.policy === "legacy") {
+    return {
+      state: withRevision({
+        ...state,
+        compactSidebarOpen: !state.compactSidebarOpen,
+      }),
+      effects: [],
+    };
+  }
+  if (
+    !state.desiredOccupancy.globalSidebar ||
+    state.compactSidebarOpen ||
+    !isGlobalSidebarCompact(state, state.desiredOccupancy)
+  ) {
+    return { state, effects: [] };
+  }
+
+  // The desired preference is already open; only responsive presentation hid
+  // it. Model the explicit click as a virtual false -> true transition so the
+  // normal user-authorized funding path grows the native window before the
+  // in-flow sidebar is presented.
+  const virtualPrevious: LayoutPanelOccupancy = {
+    ...state.desiredOccupancy,
+    globalSidebar: false,
+  };
+  const transactionId =
+    `compact-sidebar:${state.rendererEpoch}:${state.nextSequence}`;
+  return startIntentTransaction(
+    {
+      ...state,
+      desiredOccupancy: virtualPrevious,
+      compactSidebarOpen: true,
+    },
+    {
+      type: "LAYOUT_INTENT_CHANGED",
+      previousOccupancy: virtualPrevious,
+      nextOccupancy: state.desiredOccupancy,
+      cause: "user-panel",
+      transactionId,
+    },
+  );
 }
 
 export function reduceHorizontalLayout(
@@ -2671,28 +2796,6 @@ export function reduceHorizontalLayout(
         effects: [],
       };
     }
-    case "CLOSE_DEADLINE_EXPIRED":
-    case "PRESENTATION_ANIMATION_FINISHED": {
-      const transaction = state.transactions[event.transactionId];
-      if (
-        !transaction ||
-        state.headTransactionId !== event.transactionId ||
-        transaction.phase !== "closing-animation"
-      ) {
-        return { state, effects: [] };
-      }
-      return {
-        state: updateTransaction(state, event.transactionId, {
-          phase: "frame-commit-pending",
-        }),
-        effects: [
-          {
-            type: "request-frame-commit",
-            transactionId: event.transactionId,
-          },
-        ],
-      };
-    }
     case "FRAME_COMMITTED": {
       const transaction = state.transactions[event.transactionId];
       if (
@@ -2719,13 +2822,7 @@ export function reduceHorizontalLayout(
         event.acknowledgedSession,
       );
     case "COMPACT_SIDEBAR_TOGGLED":
-      return {
-        state: withRevision({
-          ...state,
-          compactSidebarOpen: !state.compactSidebarOpen,
-        }),
-        effects: [],
-      };
+      return handleCompactSidebarExpansion(state);
     case "PANEL_WIDTH_CHANGED":
       return updatePanelWidth(state, event);
   }

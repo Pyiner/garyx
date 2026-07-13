@@ -209,6 +209,15 @@ function fundingEntryEqual(
   );
 }
 
+function fundingMapsEqual(
+  left: WindowLayoutFundingByPanel,
+  right: WindowLayoutFundingByPanel,
+): boolean {
+  return WINDOW_LAYOUT_PANEL_ORDER.every((panel) =>
+    fundingEntryEqual(left[panel], right[panel]),
+  );
+}
+
 function fundingIsValid(funding: WindowLayoutFundingByPanel): boolean {
   const ids = new Set<string>();
   for (const panel of WINDOW_LAYOUT_PANEL_ORDER) {
@@ -473,21 +482,38 @@ export class WindowLayoutExecutor {
       this.#snapshot.windowRevision + 1,
       origin,
     );
+    // A physical width drag establishes a new user-owned horizontal base.
+    // Keeping old panel funding after that point makes a later explicit expand
+    // look already paid for, so the renderer can only overlay/reflow instead of
+    // growing the window. Height-only resizes and moves keep the horizontal
+    // funding ledger intact.
+    const userResized =
+      origin === "user" &&
+      snapshot.normalBounds.width !== this.#snapshot.normalBounds.width;
+    const fundingByPanel = userResized
+      ? {}
+      : this.#acknowledgedSession.fundingByPanel;
     const normalBaseBounds = normalBaseForBounds(
       snapshot.normalBounds,
-      this.#acknowledgedSession.fundingByPanel,
+      fundingByPanel,
     );
     const baseChanged = !rectanglesEqual(
       normalBaseBounds,
       this.#acknowledgedSession.normalBaseBounds,
     );
+    const fundingChanged = !fundingMapsEqual(
+      fundingByPanel,
+      this.#acknowledgedSession.fundingByPanel,
+    );
     this.#snapshot = snapshot;
     this.#acknowledgedSession = {
       ...this.#acknowledgedSession,
       normalBaseBounds,
+      fundingByPanel: cloneFunding(fundingByPanel),
       windowRevision: snapshot.windowRevision,
       sessionRevision:
-        this.#acknowledgedSession.sessionRevision + (baseChanged ? 1 : 0),
+        this.#acknowledgedSession.sessionRevision +
+        (baseChanged || fundingChanged ? 1 : 0),
     };
     const update = this.#currentUpdate();
     if (notify) {

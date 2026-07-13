@@ -113,7 +113,7 @@ Common flags on `channels add`:
 
 | Command | Use it for |
 | --- | --- |
-| `garyx agent list / get / create / update / upsert / delete` | CRUD on custom agents. `create/update/upsert` accept `--model`, `--model-reasoning-effort`, `--model-service-tier`, and `--default-workspace-dir <path>` for new bot/task threads. |
+| `garyx agent list / get / create / update / upsert / delete` | CRUD on custom agents. `create/update/upsert` accept `--model`, `--model-reasoning-effort`, `--model-service-tier`, and `--default-workspace-dir <path>` for new bot/task threads. JSON output omits the potentially large `avatar_data_url`; the Gateway API retains it for app clients. |
 
 ## Tools
 

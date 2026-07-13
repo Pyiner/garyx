@@ -54,11 +54,15 @@
 - Keep the desktop app shell horizontal at every supported window width.
   Narrow windows collapse a rail; they must never stack the whole sidebar
   above the conversation or turn the viewport into a document-height page.
-- Match the measured Codex rail behavior: auto-collapse the global rail at
-  720px and below. When Garyx's secondary conversation rail is open, collapse
-  the global rail at 980px and below so the conversation remains usable.
-  Compact-mode toggles are temporary and must not overwrite the user's
+- Auto-hide Garyx's secondary conversation rail at 980px and below before
+  auto-collapsing the global rail at 720px and below. Preserve both desired
+  states so widening restores them. An explicit compact global-rail open must
+  enter the native expansion transaction and remain in flow; do not present it
+  as an overlay. Responsive auto-hide itself must never write the user's
   desktop-width collapse preference.
+- A funded rail close publishes the closed layout frame immediately, waits one
+  animation frame for paint, and only then shrinks the native window. Do not
+  add a fixed close delay unless a real transition reports its completion.
 - The transcript owns a 768px outer scroller with 16px internal gutters, which
   yields a 736px reading edge. The composer uses the same 736px edge directly;
   both become `available width - 32px` when constrained.
