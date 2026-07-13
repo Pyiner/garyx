@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, Pin } from 'lucide-react';
+import { Archive } from 'lucide-react';
 
 import type { DesktopThreadSummary } from '@shared/contracts';
 
 import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
+import { PinIcon } from './app-shell/icons';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './components/ui/tooltip';
 import { useI18n } from './i18n';
 import type { ThreadAvatarIdentity } from './thread-avatar';
@@ -115,7 +116,7 @@ export function PinnedThreadsSidebar({
                     }}
                     type="button"
                   >
-                    <Pin aria-hidden className="pinned-thread-icon" size={15} strokeWidth={1.55} />
+                    <PinIcon size={15} />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent>{t('Unpin thread')}</TooltipContent>

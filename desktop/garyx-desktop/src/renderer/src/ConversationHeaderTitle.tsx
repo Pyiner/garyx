@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent, type RefObject } from 'react';
-import { Archive, MoreHorizontal, Pencil, Pin as PinIcon, X } from 'lucide-react';
+import { Archive, MoreHorizontal, Pencil, X } from 'lucide-react';
 
 import type { DesktopBotConsoleSummary } from '@shared/contracts';
 
+import { PinIcon, PinOffIcon } from './app-shell/icons';
 import { ChannelLogo } from './channel-logo';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import {
@@ -123,12 +124,7 @@ export function ConversationHeaderTitle({
           {canEditThreadTitle ? (
             <div className="conversation-title-group">
               {isThreadPinned ? (
-                <PinIcon
-                  aria-hidden
-                  className="conversation-title-pin"
-                  size={16}
-                  strokeWidth={1.55}
-                />
+                <PinIcon className="conversation-title-pin" />
               ) : null}
               <span className="conversation-title-text" title={fallbackTitle}>
                 {fallbackTitle}
@@ -177,7 +173,7 @@ export function ConversationHeaderTitle({
                   className="thread-title-menu-content"
                 >
                   <DropdownMenuItem onSelect={onTogglePinnedThread}>
-                    <PinIcon aria-hidden />
+                    {isThreadPinned ? <PinOffIcon /> : <PinIcon />}
                     <span>
                       {isThreadPinned ? t('Unpin conversation') : t('Pin conversation')}
                     </span>

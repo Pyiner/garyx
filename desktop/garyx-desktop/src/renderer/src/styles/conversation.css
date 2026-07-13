@@ -55,7 +55,6 @@
   width: 15px;
   height: 15px;
   color: var(--sidebar-text-muted);
-  transform: rotate(-8deg);
 }
 
 .conversation-bot-binding-status {
