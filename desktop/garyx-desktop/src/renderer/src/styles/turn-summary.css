@@ -410,24 +410,6 @@
   line-height: inherit;
 }
 
-.tool-trace-result-summary {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: currentColor;
-  font-size: inherit;
-  font-weight: inherit;
-  line-height: inherit;
-  opacity: 1;
-}
-
-.tool-trace-result-summary::before {
-  content: "→ ";
-  opacity: 0.5;
-}
-
 .tool-trace-badges {
   display: inline-flex;
   align-items: center;

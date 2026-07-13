@@ -82,16 +82,11 @@ function ToolTraceHeader({ merged }: { merged: MergedToolTrace }) {
           <span className="tool-trace-title" title={merged.title}>
             {merged.title}
           </span>
-          {merged.summary || merged.resultSummary || merged.badges.length || merged.diffStats ? (
+          {merged.summary || merged.badges.length || merged.diffStats ? (
             <span className="tool-trace-meta-row">
               {merged.summary ? (
                 <span className="tool-trace-summary" title={merged.summary}>
                   {merged.summary}
-                </span>
-              ) : null}
-              {merged.resultSummary ? (
-                <span className="tool-trace-result-summary" title={merged.resultSummary}>
-                  {merged.resultSummary}
                 </span>
               ) : null}
               {merged.badges.length ? (

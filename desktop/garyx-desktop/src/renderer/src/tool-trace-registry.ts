@@ -82,7 +82,6 @@ type ToolTraceSide = {
 export type MergedToolTrace = {
   title: string;
   summary?: string;
-  resultSummary?: string;
   badges: string[];
   diffStats?: DiffStats;
   status?: ToolTraceStatus;
@@ -1775,10 +1774,6 @@ export function resolveMergedToolTrace(
   const projectedCall = projectionDisplayValue(toolUse, projection?.call);
   const projectedResult = projectionDisplayValue(toolResult, projection?.result);
   const projectedSummary = truncateSingleLine(firstProjectedMeaningfulLine(projectedCall), 132);
-  const projectedResultSummary = truncateSingleLine(
-    firstProjectedMeaningfulLine(projectedResult),
-    132,
-  );
   const projectedPathBadge =
     projection?.call?.format === 'path'
       ? pathTail(projectedCall) || projectedCall
@@ -1789,7 +1784,6 @@ export function resolveMergedToolTrace(
       ? projectionTitle(projection.kind, projection.tool_name)
       : useSide?.title || resultSide?.title || 'Tool',
     summary: projection ? projectedSummary : useSide?.summary,
-    resultSummary: projection ? projectedResultSummary : undefined,
     badges: dedupeBadges([
       ...(useSide?.badges || []),
       ...(resultSide?.badges || []),
