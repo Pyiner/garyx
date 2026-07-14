@@ -262,7 +262,7 @@ extension GaryxMobileModel {
             showRouteNotFound(kind: "Capsule", id: capsuleId)
             return
         }
-        galleryFocusedCapsule = capsule
+        galleryFocusedCapsule = GaryxCapsulePreviewSelection(capsule: capsule)
     }
 
     private func openAgentRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {

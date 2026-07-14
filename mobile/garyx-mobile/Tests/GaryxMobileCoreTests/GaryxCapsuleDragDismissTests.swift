@@ -1,86 +1,203 @@
 import XCTest
 @testable import GaryxMobileCore
 
-/// #TASK-1470 — the iOS capsule full-screen detail gains a Photos-style
-/// pull-to-dismiss that must coexist with the inner web view's scroll. These
-/// guard the pure decision logic: engage only from the top + downward, lock the
-/// decision for the whole drag, and dismiss on threshold or predicted flick.
 final class GaryxCapsuleDragDismissTests: XCTestCase {
-    func testEngagesOnlyWhenAtTopAndDraggingDown() {
+    private let edgeX: CGFloat = 12
+    private let outsideX: CGFloat = 25
+
+    func testWaitsForDecisionDistanceThenLocksHorizontalAtLeadingEdge() {
+        XCTAssertEqual(classify(x: edgeX, dx: 13, dy: 0, atTop: false), .pending)
+        XCTAssertEqual(classify(x: edgeX, dx: 14, dy: 0, atTop: false), .horizontalDismiss)
         XCTAssertEqual(
-            GaryxCapsuleDragDismiss.decideInitialPhase(atTop: true, translationY: 10),
-            .engaged
+            GaryxCapsuleDragDismiss.classify(
+                currentPhase: .horizontalDismiss,
+                startX: edgeX,
+                translation: CGSize(width: 15, height: 100),
+                webAtTop: true,
+                panelPresented: false
+            ),
+            .horizontalDismiss,
+            "an owned drag never changes axis"
         )
     }
 
-    func testIgnoresWhenNotAtTop() {
-        // A drag started while the page is scrolled down belongs to web scroll,
-        // even if it is downward.
+    func testOutsideLeadingEdgeHorizontalDragIsIgnored() {
+        XCTAssertEqual(classify(x: outsideX, dx: 80, dy: 4, atTop: true), .ignored)
+        XCTAssertEqual(classify(x: outsideX, dx: 80, dy: 4, atTop: false), .ignored)
+    }
+
+    func testHorizontalRequiresRightwardAndOnePointFiveDominance() {
+        XCTAssertEqual(classify(x: edgeX, dx: -80, dy: 2, atTop: true), .verticalDismiss)
+        XCTAssertEqual(classify(x: edgeX, dx: 30, dy: 20, atTop: false), .horizontalDismiss)
+        XCTAssertEqual(classify(x: edgeX, dx: 29.9, dy: 20, atTop: false), .ignored)
+    }
+
+    func testVerticalDismissRequiresTopAndDownwardNonHorizontalIntent() {
+        XCTAssertEqual(classify(x: outsideX, dx: 5, dy: 30, atTop: true), .verticalDismiss)
+        XCTAssertEqual(classify(x: outsideX, dx: 5, dy: 30, atTop: false), .ignored)
+        XCTAssertEqual(classify(x: outsideX, dx: 5, dy: -30, atTop: true), .ignored)
+    }
+
+    func testDiagonalCompetitionChoosesExactlyOneAxis() {
+        XCTAssertEqual(classify(x: edgeX, dx: 45, dy: 30, atTop: true), .horizontalDismiss)
+        XCTAssertEqual(classify(x: edgeX, dx: 44, dy: 30, atTop: true), .verticalDismiss)
+    }
+
+    func testPanelPresentationSuppressesBothAxes() {
         XCTAssertEqual(
-            GaryxCapsuleDragDismiss.decideInitialPhase(atTop: false, translationY: 40),
+            GaryxCapsuleDragDismiss.classify(
+                startX: edgeX,
+                translation: CGSize(width: 100, height: 0),
+                webAtTop: true,
+                panelPresented: true
+            ),
+            .ignored
+        )
+        XCTAssertEqual(
+            GaryxCapsuleDragDismiss.classify(
+                startX: outsideX,
+                translation: CGSize(width: 0, height: 100),
+                webAtTop: true,
+                panelPresented: true
+            ),
             .ignored
         )
     }
 
-    func testIgnoresUpwardDragEvenAtTop() {
+    func testResolvedTranslationMovesOnlyOwnedPositiveAxis() {
         XCTAssertEqual(
-            GaryxCapsuleDragDismiss.decideInitialPhase(atTop: true, translationY: -30),
-            .ignored
+            GaryxCapsuleDragDismiss.resolvedTranslation(
+                phase: .horizontalDismiss,
+                translation: CGSize(width: 80, height: 40)
+            ),
+            CGSize(width: 80, height: 0)
         )
         XCTAssertEqual(
-            GaryxCapsuleDragDismiss.decideInitialPhase(atTop: false, translationY: -30),
-            .ignored
+            GaryxCapsuleDragDismiss.resolvedTranslation(
+                phase: .verticalDismiss,
+                translation: CGSize(width: 80, height: 40)
+            ),
+            CGSize(width: 0, height: 40)
+        )
+        XCTAssertEqual(
+            GaryxCapsuleDragDismiss.resolvedTranslation(
+                phase: .horizontalDismiss,
+                translation: CGSize(width: -20, height: 0)
+            ),
+            .zero
         )
     }
 
-    /// The phase is decided once and the caller locks it; an `.ignored` drag must
-    /// never move the content, which is what keeps web scrolling unaffected and
-    /// prevents a mid-drag "snap to dismiss" when the page later reaches the top.
-    func testIgnoredPhaseNeverOffsetsContent() {
-        XCTAssertEqual(GaryxCapsuleDragDismiss.resolvedOffset(phase: .ignored, translationY: 300), 0)
-        XCTAssertEqual(GaryxCapsuleDragDismiss.resolvedOffset(phase: .idle, translationY: 300), 0)
+    func testHorizontalThresholdUsesContainerThirdWith260Clamp() {
+        XCTAssertEqual(GaryxCapsuleDragDismiss.horizontalDismissThreshold(containerWidth: 390), 130)
+        XCTAssertEqual(GaryxCapsuleDragDismiss.horizontalDismissThreshold(containerWidth: 1_200), 260)
+        XCTAssertEqual(GaryxCapsuleDragDismiss.horizontalDismissThreshold(containerWidth: 0), 0)
     }
 
-    func testEngagedOffsetFollowsDownwardTranslationAndClampsUp() {
-        XCTAssertEqual(GaryxCapsuleDragDismiss.resolvedOffset(phase: .engaged, translationY: 80), 80)
-        // Overscroll up while engaged clamps to 0 (no upward content jump).
-        XCTAssertEqual(GaryxCapsuleDragDismiss.resolvedOffset(phase: .engaged, translationY: -25), 0)
+    func testReleaseUsesTranslationAndVelocityProjectionForBothAxes() {
+        XCTAssertTrue(
+            GaryxCapsuleDragDismiss.shouldDismiss(
+                phase: .horizontalDismiss,
+                translation: CGSize(width: 60, height: 0),
+                velocity: CGSize(width: 400, height: 0),
+                containerWidth: 390
+            )
+        )
+        XCTAssertFalse(
+            GaryxCapsuleDragDismiss.shouldDismiss(
+                phase: .horizontalDismiss,
+                translation: CGSize(width: 60, height: 0),
+                velocity: CGSize(width: 100, height: 0),
+                containerWidth: 390
+            )
+        )
+        XCTAssertTrue(
+            GaryxCapsuleDragDismiss.shouldDismiss(
+                phase: .verticalDismiss,
+                translation: CGSize(width: 0, height: 40),
+                velocity: CGSize(width: 0, height: 500),
+                containerWidth: 390
+            )
+        )
     }
 
-    func testDragProgressIsClampedAndMonotonic() {
-        XCTAssertEqual(GaryxCapsuleDragDismiss.dragProgress(offset: 0), 0, accuracy: 0.0001)
+    func testReducerCancelResetsOwnedState() {
+        var state = GaryxCapsuleDragDismissState()
         XCTAssertEqual(
-            GaryxCapsuleDragDismiss.dragProgress(offset: 120, fullPullDistance: 240),
+            GaryxCapsuleDragDismiss.reduce(
+                state: &state,
+                event: .changed(
+                    startX: edgeX,
+                    translation: CGSize(width: 80, height: 2),
+                    webAtTop: false,
+                    panelPresented: false
+                )
+            ),
+            .none
+        )
+        XCTAssertEqual(state.phase, .horizontalDismiss)
+        XCTAssertEqual(state.translation.width, 80)
+        XCTAssertEqual(GaryxCapsuleDragDismiss.reduce(state: &state, event: .cancelled), .none)
+        XCTAssertEqual(state, GaryxCapsuleDragDismissState())
+    }
+
+    func testReducerReleaseDismissesOrSnapsBackAndAlwaysResets() {
+        var state = GaryxCapsuleDragDismissState(
+            phase: .horizontalDismiss,
+            translation: CGSize(width: 130, height: 0)
+        )
+        XCTAssertEqual(
+            GaryxCapsuleDragDismiss.reduce(
+                state: &state,
+                event: .released(velocity: .zero, containerWidth: 390)
+            ),
+            .dismiss
+        )
+        XCTAssertEqual(state, GaryxCapsuleDragDismissState())
+
+        state = GaryxCapsuleDragDismissState(
+            phase: .verticalDismiss,
+            translation: CGSize(width: 0, height: 30)
+        )
+        XCTAssertEqual(
+            GaryxCapsuleDragDismiss.reduce(
+                state: &state,
+                event: .released(velocity: .zero, containerWidth: 390)
+            ),
+            .snapBack
+        )
+        XCTAssertEqual(state, GaryxCapsuleDragDismissState())
+    }
+
+    func testProgressIsClampedForBothAxes() {
+        XCTAssertEqual(
+            GaryxCapsuleDragDismiss.dragProgress(
+                phase: .horizontalDismiss,
+                translation: CGSize(width: 120, height: 0)
+            ),
             0.5,
             accuracy: 0.0001
         )
-        XCTAssertEqual(GaryxCapsuleDragDismiss.dragProgress(offset: 600, fullPullDistance: 240), 1)
-        // Never negative, even for an over-clamped/odd offset.
-        XCTAssertEqual(GaryxCapsuleDragDismiss.dragProgress(offset: -50), 0)
-    }
-
-    func testShouldDismissOnOffsetThreshold() {
-        XCTAssertTrue(
-            GaryxCapsuleDragDismiss.shouldDismiss(phase: .engaged, offset: 130, predictedTranslationY: 130)
-        )
-        XCTAssertFalse(
-            GaryxCapsuleDragDismiss.shouldDismiss(phase: .engaged, offset: 119, predictedTranslationY: 119)
+        XCTAssertEqual(
+            GaryxCapsuleDragDismiss.dragProgress(
+                phase: .verticalDismiss,
+                translation: CGSize(width: 0, height: 600)
+            ),
+            1
         )
     }
 
-    func testShouldDismissOnPredictedFlickEvenWhenOffsetShort() {
-        // A quick flick: small live offset but large predicted end translation.
-        XCTAssertTrue(
-            GaryxCapsuleDragDismiss.shouldDismiss(phase: .engaged, offset: 40, predictedTranslationY: 300)
-        )
-    }
-
-    func testNonEngagedPhaseNeverDismisses() {
-        XCTAssertFalse(
-            GaryxCapsuleDragDismiss.shouldDismiss(phase: .ignored, offset: 999, predictedTranslationY: 999)
-        )
-        XCTAssertFalse(
-            GaryxCapsuleDragDismiss.shouldDismiss(phase: .idle, offset: 999, predictedTranslationY: 999)
+    private func classify(
+        x: CGFloat,
+        dx: CGFloat,
+        dy: CGFloat,
+        atTop: Bool
+    ) -> GaryxCapsuleDragPhase {
+        GaryxCapsuleDragDismiss.classify(
+            startX: x,
+            translation: CGSize(width: dx, height: dy),
+            webAtTop: atTop,
+            panelPresented: false
         )
     }
 }

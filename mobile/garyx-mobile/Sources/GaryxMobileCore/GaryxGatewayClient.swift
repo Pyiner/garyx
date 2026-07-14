@@ -113,7 +113,9 @@ public enum GaryxGatewayHeaders {
 public enum GaryxGatewayError: Error, Equatable, LocalizedError {
     case invalidURL(String)
     case invalidHTTPResponse
-    case httpStatus(Int, String)
+    /// One non-2xx attempt. `retryAfter` is parsed at the network boundary so
+    /// outer retry owners never need to reinterpret HTTP headers.
+    case httpStatus(Int, String, retryAfter: TimeInterval? = nil)
     case encodingFailed(String)
 
     public var errorDescription: String? {
@@ -125,7 +127,7 @@ public enum GaryxGatewayError: Error, Equatable, LocalizedError {
                 : "Invalid Garyx gateway URL: \(trimmed)"
         case .invalidHTTPResponse:
             return "The Garyx gateway returned a non-HTTP response."
-        case .httpStatus(let status, let body):
+        case .httpStatus(let status, let body, _):
             let message = GaryxGatewayError.message(fromHTTPBody: body)
             return message.isEmpty ? "The Garyx gateway returned HTTP \(status)." : message
         case .encodingFailed(let message):
@@ -538,8 +540,12 @@ public final class GaryxGatewayClient {
         try await delete("/api/capsules/\(id.urlPathEncoded)")
     }
 
-    public func capsuleHTML(id: String) async throws -> String {
-        try await getText("/api/capsules/\(id.urlPathEncoded)/serve", accept: "text/html")
+    public func capsuleHTML(id: String, allowsRetry: Bool = true) async throws -> String {
+        try await getText(
+            "/api/capsules/\(id.urlPathEncoded)/serve",
+            accept: "text/html",
+            allowsRetry: allowsRetry
+        )
     }
 
     public func createSkill(_ request: GaryxCreateSkillRequest) async throws -> GaryxSkillSummary {
@@ -935,11 +941,16 @@ public final class GaryxGatewayClient {
     private func getText(
         _ path: String,
         accept: String = "text/plain",
-        queryItems: [URLQueryItem] = []
+        queryItems: [URLQueryItem] = [],
+        allowsRetry: Bool = true
     ) async throws -> String {
         var request = try makeRequest(path: path, method: "GET", queryItems: queryItems)
         request.setValue(accept, forHTTPHeaderField: "Accept")
-        return try await sendText(request, idempotent: true)
+        return try await sendText(
+            request,
+            idempotent: true,
+            maxAttempts: allowsRetry ? nil : 1
+        )
     }
 
     private func post<Response: Decodable, Body: Encodable>(
@@ -1025,8 +1036,16 @@ public final class GaryxGatewayClient {
         return try decoder.decode(Response.self, from: data)
     }
 
-    private func sendText(_ request: URLRequest, idempotent: Bool) async throws -> String {
-        let data = try await sendRaw(request, idempotent: idempotent)
+    private func sendText(
+        _ request: URLRequest,
+        idempotent: Bool,
+        maxAttempts: Int? = nil
+    ) async throws -> String {
+        let data = try await sendRaw(
+            request,
+            idempotent: idempotent,
+            maxAttempts: maxAttempts
+        )
         guard let text = String(data: data, encoding: .utf8) else {
             throw GaryxGatewayError.encodingFailed("The Garyx gateway returned non-UTF-8 text.")
         }
@@ -1057,7 +1076,11 @@ public final class GaryxGatewayClient {
                     return data
                 }
                 let body = String(data: data, encoding: .utf8) ?? ""
-                let error = GaryxGatewayError.httpStatus(http.statusCode, body)
+                let error = GaryxGatewayError.httpStatus(
+                    http.statusCode,
+                    body,
+                    retryAfter: Self.retryAfterDelay(from: http)
+                )
                 if attempt < maxAttempts,
                    GaryxGatewayRetryClassifier.isRetryableStatus(http.statusCode, idempotent: idempotent) {
                     try await sleepForRetry(after: error, attempt: attempt, response: http)

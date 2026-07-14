@@ -237,12 +237,26 @@ final class GaryxMobileModel: ObservableObject {
     var capsuleFavoriteState = GaryxCapsuleFavoriteReducerState()
     /// Focused capsule preview presented over the Capsules gallery (card tap or
     /// `garyx://mobile/capsule` deep link).
-    @Published var galleryFocusedCapsule: GaryxCapsuleSummary?
+    @Published var galleryFocusedCapsule: GaryxCapsulePreviewSelection?
     /// Focused capsule preview presented over the current conversation (chat
     /// capsule-card tap). Kept separate from the gallery cover so each surface
     /// hosts and dismisses its own preview.
-    @Published var conversationCapsulePreview: GaryxCapsuleSummary?
+    @Published var conversationCapsulePreview: GaryxCapsulePreviewSelection?
+    /// Scene notifications are versioned so every focused preview receives
+    /// repeated inactive/background/active transitions, even when the enum case
+    /// itself is unchanged.
+    @Published var capsulePreviewSceneSignal = GaryxCapsulePreviewSceneSignal()
     var capsuleHTMLCache: [GaryxCapsuleHTMLCacheKey: String] = [:]
+    /// All Capsule catalog reads converge here. The worker is single-flight;
+    /// `requestedTicket > finishedTicket` is the trailing-refresh marker, and
+    /// the committed ticket is an additional latest-wins defense.
+    var capsuleCatalogRefreshTask: Task<Result<[GaryxCapsuleSummary], Error>, Never>?
+    var capsuleCatalogRefreshTaskToken: UUID?
+    var capsuleCatalogRequestedTicket: UInt64 = 0
+    var capsuleCatalogFinishedTicket: UInt64 = 0
+    var capsuleCatalogCommittedTicket: UInt64 = 0
+    /// Focused `/serve` commits are accepted only for the latest (key, token).
+    var focusedCapsuleHTMLRequestGate = GaryxFocusedCapsuleHTMLRequestGate()
     /// Bumped whenever cached preview HTML or a rendered thumbnail is evicted
     /// (prune or `/serve` 404), so `GaryxCapsulePreviewThumbnail` can include it
     /// in its `.task` identity and re-validate already-mounted thumbnails.

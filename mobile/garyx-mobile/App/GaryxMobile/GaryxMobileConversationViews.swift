@@ -334,8 +334,8 @@ struct GaryxConversationView: View {
         // Capsule card tapped in the transcript: present the focused preview
         // above this conversation and dismiss back to it (never switch to the
         // Capsules overview).
-        .fullScreenCover(item: $model.conversationCapsulePreview) { capsule in
-            GaryxCapsuleFocusedPreviewView(capsule: capsule)
+        .fullScreenCover(item: $model.conversationCapsulePreview) { selection in
+            GaryxCapsuleFocusedPreviewView(selection: selection)
         }
         // Route-time deletion validation: re-fires when the thread changes and
         // when capsule cards first appear (history can arrive after the thread is

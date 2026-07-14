@@ -216,6 +216,27 @@
   outline-offset: 1px;
 }
 
+.capsule-favorite-star {
+  transform-origin: 50% 55%;
+}
+
+.capsule-favorite-star.is-favorited {
+  filter: drop-shadow(0 0 5px var(--color-capsule-favorite-glow));
+  animation: capsule-favorite-star-bounce 360ms var(--ease-out-quart);
+}
+
+@keyframes capsule-favorite-star-bounce {
+  0% { transform: scale(0.82) rotate(-5deg); }
+  55% { transform: scale(1.22) rotate(3deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .capsule-favorite-star.is-favorited {
+    animation: none;
+  }
+}
+
 .capsule-gallery-card:hover {
   border-color: color-mix(in oklab, var(--color-token-border) 100%, transparent);
   background: color-mix(in oklab, var(--color-token-bg-primary) 88%, var(--color-token-border));

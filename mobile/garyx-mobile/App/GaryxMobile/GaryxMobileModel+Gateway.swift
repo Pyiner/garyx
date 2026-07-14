@@ -90,6 +90,10 @@ extension GaryxMobileModel {
         resetThreadListPagination()
         sceneRefreshTask?.cancel()
         sceneRefreshTask = nil
+        capsuleCatalogRefreshTask?.cancel()
+        capsuleCatalogRefreshTask = nil
+        capsuleCatalogRefreshTaskToken = nil
+        invalidateFocusedCapsuleHTMLRequests()
         cancelSelectedThreadReconcileLoop()
         cancelBackgroundCommittedRunReconcileLoop()
         stopSelectedThreadStream()
@@ -274,6 +278,7 @@ extension GaryxMobileModel {
     func handleScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            capsulePreviewSceneSignal.publish(.active)
             sceneRefreshTask?.cancel()
             let selectedThreadId = selectedThread?.id
             let plan = GaryxForegroundSyncPlan.plan(
@@ -310,7 +315,10 @@ extension GaryxMobileModel {
                 guard !Task.isCancelled else { return }
                 await refreshCodingUsageWidget()
             }
+        case .inactive:
+            capsulePreviewSceneSignal.publish(.inactive)
         case .background:
+            capsulePreviewSceneSignal.publish(.background)
             // Remember where the user left: only an exit from the
             // conversation page restores that thread on the next launch.
             persistLastSessionLocation()
@@ -319,8 +327,8 @@ extension GaryxMobileModel {
             cancelSelectedThreadReconcileLoop()
             cancelBackgroundCommittedRunReconcileLoop()
             stopSelectedThreadStream()
-        default:
-            break
+        @unknown default:
+            capsulePreviewSceneSignal.publish(.inactive)
         }
     }
 
@@ -527,10 +535,9 @@ extension GaryxMobileModel {
         }
         do {
             let gateway = try client()
-            let capsuleFavoritesGeneration = capsuleFavoriteState.favoritesGeneration
             async let agentsResult = garyxCaptureCatalog { try await gateway.listAgents() }
             async let skillsResult = garyxCaptureCatalog { try await gateway.listSkills() }
-            async let capsulesResult = garyxCaptureCatalog { try await gateway.listCapsules() }
+            async let capsulesResult = refreshCapsules(reportFailure: false)
             async let gatewaySettingsResult: [String: GaryxJSONValue]? = try? gateway.gatewaySettings()
             async let automationsResult = garyxCaptureCatalog { try await gateway.listAutomations() }
             async let slashCommandsResult = garyxCaptureCatalog { try await gateway.listSlashCommands() }
@@ -591,12 +598,8 @@ extension GaryxMobileModel {
             if case let .success(value) = nextSkills {
                 skills = value
             }
-            if case let .success(value) = nextCapsules {
-                mergeCapsulesFromRefresh(
-                    value,
-                    capturedFavoritesGeneration: capsuleFavoritesGeneration
-                )
-            }
+            // Capsule catalog state was already committed by its coordinator;
+            // this result participates only in aggregate refresh success.
             if let settings = nextGatewaySettings {
                 gatewaySettingsDocument = settings
             }
