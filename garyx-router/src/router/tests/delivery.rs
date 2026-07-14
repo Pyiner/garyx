@@ -5,6 +5,80 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn test_resolve_delivery_target_from_store_last_prefers_latest_timestamp() {
+    let delivery_record = |account_id: &str, chat_id: &str, updated_at: Option<&str>| {
+        let mut record = json!({
+            "delivery_context": {
+                "channel": "telegram",
+                "account_id": account_id,
+                "chat_id": chat_id,
+                "user_id": chat_id,
+                "delivery_target_type": "chat_id",
+                "delivery_target_id": chat_id,
+                "thread_id": null,
+                "metadata": {},
+            }
+        });
+        if let Some(updated_at) = updated_at {
+            record["updated_at"] = json!(updated_at);
+        }
+        record
+    };
+
+    let store = Arc::new(InMemoryThreadStore::new());
+    for (thread_id, account_id, chat_id, updated_at) in [
+        (
+            "thread::older",
+            "older",
+            "100",
+            Some("2026-07-01T10:00:00Z"),
+        ),
+        (
+            "thread::latest-a",
+            "latest-a",
+            "200",
+            Some("2026-07-01T11:00:00Z"),
+        ),
+        (
+            "thread::latest-z",
+            "latest-z",
+            "300",
+            Some("2026-07-01T11:00:00Z"),
+        ),
+        ("thread::untimed-zzzz", "untimed", "400", None),
+    ] {
+        store
+            .set(thread_id, delivery_record(account_id, chat_id, updated_at))
+            .await
+            .unwrap();
+    }
+
+    let resolved = MessageRouter::resolve_delivery_target_from_store(store, "last")
+        .await
+        .expect("latest persisted delivery target");
+    assert_eq!(resolved.0, "thread::latest-z");
+    assert_eq!(resolved.1.account_id, "latest-z");
+    assert_eq!(resolved.1.chat_id, "300");
+
+    let untimed_store = Arc::new(InMemoryThreadStore::new());
+    for (thread_id, account_id) in [
+        ("thread::untimed-a", "untimed-a"),
+        ("thread::untimed-z", "untimed-z"),
+    ] {
+        untimed_store
+            .set(thread_id, delivery_record(account_id, "500", None))
+            .await
+            .unwrap();
+    }
+
+    let resolved = MessageRouter::resolve_delivery_target_from_store(untimed_store, "last")
+        .await
+        .expect("untimed persisted delivery target");
+    assert_eq!(resolved.0, "thread::untimed-z");
+    assert_eq!(resolved.1.account_id, "untimed-z");
+}
+
+#[tokio::test]
 async fn test_resolve_delivery_target_accepts_canonical_thread_id() {
     let store = Arc::new(InMemoryThreadStore::new());
     let mut router = MessageRouter::new(store, GaryxConfig::default());
