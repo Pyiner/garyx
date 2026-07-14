@@ -6,7 +6,6 @@ import {
   MessageSquare,
   MoreHorizontal,
   RefreshCw,
-  Star,
   Trash2,
 } from 'lucide-react';
 
@@ -45,6 +44,7 @@ import {
 } from '../capsule-thumbnail-store';
 import { useInViewport } from '../use-in-viewport';
 import { CapsuleLivePreviewFrame } from './CapsuleLivePreviewFrame';
+import { CapsuleFavoriteStar } from './CapsuleFavoriteStar';
 
 type CapsulesPanelProps = {
   agents: DesktopCustomAgent[];
@@ -178,7 +178,7 @@ function CapsuleGalleryCard({
         title={favorited ? t('Unfavorite') : t('Favorite')}
         type="button"
       >
-        <Star aria-hidden fill={favorited ? 'currentColor' : 'none'} size={15} />
+        <CapsuleFavoriteStar favorited={favorited} />
       </button>
     </div>
   );
