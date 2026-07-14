@@ -2400,6 +2400,51 @@ fn endpoint_conversation_details_keeps_feishu_private_as_private() {
 }
 
 #[test]
+fn resolved_main_endpoint_value_preserves_feishu_target_semantics() {
+    let private = ResolvedMainEndpoint {
+        endpoint_key: "feishu::main::ou_test".to_owned(),
+        channel: "feishu".to_owned(),
+        account_id: "main".to_owned(),
+        binding_key: "ou_test".to_owned(),
+        chat_id: "oc_private".to_owned(),
+        delivery_target_type: DELIVERY_TARGET_TYPE_OPEN_ID.to_owned(),
+        delivery_target_id: "ou_test".to_owned(),
+        delivery_thread_id: Some("ou_test".to_owned()),
+        display_label: "Test User".to_owned(),
+        thread_id: Some("thread::feishu-private".to_owned()),
+        thread_label: Some("Test User".to_owned()),
+        workspace_dir: None,
+        thread_updated_at: None,
+        last_inbound_at: None,
+        last_delivery_at: None,
+        source: "owner_target".to_owned(),
+    };
+    assert_eq!(private.to_value()["conversation_kind"], "private");
+
+    let group = ResolvedMainEndpoint {
+        endpoint_key: "feishu::main::oc_group".to_owned(),
+        binding_key: "oc_group".to_owned(),
+        chat_id: "oc_group".to_owned(),
+        delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+        delivery_target_id: "oc_group".to_owned(),
+        delivery_thread_id: None,
+        ..private.clone()
+    };
+    assert_eq!(group.to_value()["conversation_kind"], "group");
+
+    let topic = ResolvedMainEndpoint {
+        endpoint_key: "feishu::main::om_topic".to_owned(),
+        binding_key: "om_topic".to_owned(),
+        chat_id: "oc_group".to_owned(),
+        delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+        delivery_target_id: "oc_group".to_owned(),
+        delivery_thread_id: Some("om_topic".to_owned()),
+        ..private
+    };
+    assert_eq!(topic.to_value()["conversation_kind"], "topic");
+}
+
+#[test]
 fn endpoint_conversation_details_marks_discord_dm_as_private() {
     let endpoint = garyx_router::KnownChannelEndpoint {
         endpoint_key: "discord::main::1000000001::2000000001".to_owned(),
@@ -6722,6 +6767,27 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
     let state = AppStateBuilder::new(config)
         .with_thread_log_sink(logger)
         .build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::feishu-owner",
+            serde_json::json!({
+                "thread_id": "thread::feishu-owner",
+                "label": "Feishu Owner",
+                "channel_bindings": [{
+                    "channel": "feishu",
+                    "account_id": "feishu_owner",
+                    "binding_key": "ou_owner_123",
+                    "chat_id": "oc_private_123",
+                    "delivery_target_type": "open_id",
+                    "delivery_target_id": "ou_owner_123",
+                    "display_label": "Feishu Owner"
+                }]
+            }),
+        )
+        .await
+        .unwrap();
     let router = build_router(state);
 
     let request = authed_request()
@@ -6779,6 +6845,8 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
         feishu_bot["main_endpoint"]["workspace_dir"],
         "/tmp/feishu-owner"
     );
+    assert_eq!(feishu_bot["main_endpoint"]["chat_id"], "oc_private_123");
+    assert_eq!(feishu_bot["main_endpoint"]["conversation_kind"], "private");
     assert_eq!(
         feishu_bot["default_open_endpoint"]["delivery_target_id"],
         "ou_owner_123"

@@ -270,48 +270,55 @@ fn endpoint_scope(endpoint: &garyx_router::KnownChannelEndpoint) -> Option<&str>
     }
 }
 
-fn endpoint_is_topic(endpoint: &garyx_router::KnownChannelEndpoint) -> bool {
-    let scope = endpoint_scope(endpoint);
-    let chat_id = endpoint.chat_id.trim();
-    matches!(scope, Some(value) if !chat_id.is_empty() && value != chat_id)
+fn endpoint_conversation_kind(
+    channel: &str,
+    binding_key: &str,
+    chat_id: &str,
+    delivery_target_type: &str,
+    delivery_thread_id: Option<&str>,
+) -> &'static str {
+    let binding_key = binding_key.trim();
+    let chat_id = chat_id.trim();
+    // A legacy scoped binding without its parent chat remains a group; the
+    // original endpoint classifier only treated concrete chat scopes as topics.
+    let is_topic = delivery_thread_id.is_some() && !chat_id.is_empty();
+
+    if channel == "discord" {
+        if !binding_key.is_empty() && !chat_id.is_empty() && binding_key == chat_id {
+            "group"
+        } else {
+            "private"
+        }
+    } else if channel == "feishu" {
+        if delivery_target_type == DELIVERY_TARGET_TYPE_OPEN_ID {
+            "private"
+        } else if is_topic {
+            "topic"
+        } else if delivery_target_type == DELIVERY_TARGET_TYPE_CHAT_ID {
+            "group"
+        } else {
+            "private"
+        }
+    } else if is_topic {
+        "topic"
+    } else if !binding_key.is_empty() && binding_key != chat_id {
+        "group"
+    } else {
+        "private"
+    }
 }
 
 fn endpoint_conversation_details(
     endpoint: &garyx_router::KnownChannelEndpoint,
 ) -> EndpointConversationDetails {
     let fallback_label = default_endpoint_conversation_label(endpoint);
-
-    let kind = if endpoint.channel == "discord" {
-        let binding_key = endpoint.binding_key.trim();
-        let chat_id = endpoint.chat_id.trim();
-        if !binding_key.is_empty() && !chat_id.is_empty() && binding_key == chat_id {
-            "group"
-        } else {
-            "private"
-        }
-    } else if endpoint.channel == "feishu" {
-        if endpoint.delivery_target_type == DELIVERY_TARGET_TYPE_OPEN_ID {
-            "private"
-        } else if endpoint_is_topic(endpoint) {
-            "topic"
-        } else if endpoint.delivery_target_type == DELIVERY_TARGET_TYPE_CHAT_ID {
-            "group"
-        } else {
-            "private"
-        }
-    } else if endpoint_is_topic(endpoint) {
-        "topic"
-    } else if endpoint_scope(endpoint).is_some() {
-        "group"
-    } else {
-        let binding_key = endpoint.binding_key.trim();
-        let chat_id = endpoint.chat_id.trim();
-        if !binding_key.is_empty() && !chat_id.is_empty() && binding_key != chat_id {
-            "group"
-        } else {
-            "private"
-        }
-    };
+    let kind = endpoint_conversation_kind(
+        &endpoint.channel,
+        &endpoint.binding_key,
+        &endpoint.chat_id,
+        &endpoint.delivery_target_type,
+        endpoint_scope(endpoint),
+    );
 
     EndpointConversationDetails {
         kind,
@@ -322,25 +329,13 @@ fn endpoint_conversation_details(
 fn resolved_main_endpoint_conversation_details(
     endpoint: &ResolvedMainEndpoint,
 ) -> EndpointConversationDetails {
-    let kind = if endpoint.channel == "discord" {
-        let binding_key = endpoint.binding_key.trim();
-        let chat_id = endpoint.chat_id.trim();
-        if !binding_key.is_empty() && !chat_id.is_empty() && binding_key == chat_id {
-            "group"
-        } else {
-            "private"
-        }
-    } else if endpoint.delivery_thread_id.is_some() {
-        "topic"
-    } else {
-        let binding_key = endpoint.binding_key.trim();
-        let chat_id = endpoint.chat_id.trim();
-        if !binding_key.is_empty() && !chat_id.is_empty() && binding_key != chat_id {
-            "group"
-        } else {
-            "private"
-        }
-    };
+    let kind = endpoint_conversation_kind(
+        &endpoint.channel,
+        &endpoint.binding_key,
+        &endpoint.chat_id,
+        &endpoint.delivery_target_type,
+        endpoint.delivery_thread_id.as_deref(),
+    );
 
     let label = trimmed_nonempty(Some(&endpoint.display_label))
         .or_else(|| trimmed_nonempty(endpoint.thread_label.as_deref()))
