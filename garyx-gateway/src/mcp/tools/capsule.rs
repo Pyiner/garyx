@@ -297,6 +297,7 @@ fn summary_json(record: CapsuleRecord) -> Value {
         "revision": record.revision,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
+        "favorited": record.favorited_at.is_some(),
         "open_url": format!("garyx://capsules/{}", record.id),
         "serve_path": format!("/api/capsules/{}/serve", record.id),
     })

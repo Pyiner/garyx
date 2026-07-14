@@ -429,6 +429,7 @@ async fn test_capsule_create_uses_thread_context_and_derives_agent_from_thread()
     assert_eq!(result["run_id"], "run::capsule-create");
     assert_eq!(result["agent_id"], "agent::capsule");
     assert_eq!(result["provider_type"], "codex_app_server");
+    assert_eq!(result["favorited"], false);
     let capsule_id = result["capsule_id"].as_str().expect("capsule id");
     assert!(Uuid::parse_str(capsule_id).is_ok());
     assert_eq!(result["open_url"], format!("garyx://capsules/{capsule_id}"));
@@ -615,6 +616,13 @@ async fn test_capsule_update_rewrites_file_and_list_filters_thread() {
     .expect("create second");
     assert_ne!(first["capsule_id"], second["capsule_id"]);
     let capsule_id = first["capsule_id"].as_str().unwrap();
+    server
+        .app_state
+        .ops
+        .garyx_db
+        .set_capsule_favorite(capsule_id, true)
+        .expect("favorite first capsule")
+        .expect("first capsule exists");
 
     let updated = tools::capsule::update_inner(
         &server,
@@ -631,6 +639,7 @@ async fn test_capsule_update_rewrites_file_and_list_filters_thread() {
     .expect("update capsule");
     assert_eq!(updated["tool"], "capsule_update");
     assert_eq!(updated["revision"], 2);
+    assert_eq!(updated["favorited"], true);
     let file = std::fs::read_to_string(crate::capsules::capsule_file_path(capsule_id).unwrap())
         .expect("capsule file");
     assert!(file.contains("updated"));
@@ -647,6 +656,106 @@ async fn test_capsule_update_rewrites_file_and_list_filters_thread() {
     let capsules = listed["capsules"].as_array().unwrap();
     assert_eq!(capsules.len(), 1);
     assert_eq!(capsules[0]["id"], capsule_id);
+    assert_eq!(capsules[0]["favorited"], true);
+}
+
+#[test]
+fn test_capsule_update_schema_has_no_favorite_write_field() {
+    let schema = serde_json::to_value(schemars::schema_for!(CapsuleUpdateParams))
+        .expect("serialize capsule update schema");
+    let properties = schema["properties"]
+        .as_object()
+        .expect("capsule update schema properties");
+    for field in ["favorite", "favorited", "favorited_at", "favoritedAt"] {
+        assert!(
+            !properties.contains_key(field),
+            "capsule_update must not expose favorite write field {field}"
+        );
+    }
+
+    let parsed: CapsuleUpdateParams = serde_json::from_value(json!({
+        "capsule_id": Uuid::new_v4().to_string(),
+        "title": "Synthetic update",
+        "favorited": true,
+    }))
+    .expect("unknown favorite input remains ignored");
+    assert_eq!(parsed.title.as_deref(), Some("Synthetic update"));
+}
+
+#[tokio::test]
+async fn test_capsule_favorite_end_to_end_mcp_create_put_and_list() {
+    use axum::body::{Body, to_bytes};
+    use tower::ServiceExt;
+
+    let state = crate::server::AppStateBuilder::new(crate::test_support::with_gateway_auth(
+        GaryxConfig::default(),
+    ))
+    .build();
+    let server = GaryMcpServer::new(state);
+    let thread_id = "thread::capsule-favorite-e2e";
+    server
+        .app_state
+        .threads
+        .thread_store
+        .set(thread_id, json!({ "thread_id": thread_id }))
+        .await
+        .expect("seed thread");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let _guard = crate::capsules::tests_support::set_test_capsules_dir_for_test(
+        temp.path().join("capsules"),
+    );
+
+    let mut created_ids = Vec::new();
+    for title in ["Synthetic Favorite A", "Synthetic Favorite B"] {
+        let created = tools::capsule::create_inner(
+            &server,
+            RunContext {
+                thread_id: Some(thread_id.to_owned()),
+                ..Default::default()
+            },
+            CapsuleCreateParams {
+                title: title.to_owned(),
+                description: None,
+                html: Some(format!("<html><body>{title}</body></html>")),
+                html_path: None,
+            },
+        )
+        .await
+        .expect("create capsule through MCP implementation");
+        created_ids.push(created["capsule_id"].as_str().unwrap().to_owned());
+    }
+
+    let router = crate::route_graph::build_router(server.app_state.clone());
+    let favorite = crate::test_support::authed_request()
+        .method("PUT")
+        .uri(format!("/api/capsules/{}/favorite", created_ids[0]))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(favorite).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+    let list = crate::test_support::authed_request()
+        .uri("/api/capsules")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(list).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let capsules = payload["capsules"].as_array().expect("capsule list");
+    let first = capsules
+        .iter()
+        .find(|capsule| capsule["id"] == created_ids[0])
+        .expect("favorited capsule listed");
+    let second = capsules
+        .iter()
+        .find(|capsule| capsule["id"] == created_ids[1])
+        .expect("unfavorited capsule listed");
+    assert!(first["favorited_at"].is_string());
+    assert!(second["favorited_at"].is_null());
+    println!(
+        "capsule favorite e2e: created=2 put_status=200 listed=2 favorited_flags=[true,false]"
+    );
 }
 
 #[test]

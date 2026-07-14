@@ -523,6 +523,17 @@ public final class GaryxGatewayClient {
         return page.capsules
     }
 
+    public func setCapsuleFavorite(
+        id: String,
+        favorited: Bool
+    ) async throws -> GaryxCapsuleFavoriteResponse {
+        let path = "/api/capsules/\(id.urlPathEncoded)/favorite"
+        if favorited {
+            return try await put(path, body: GaryxEmptyBody())
+        }
+        return try await delete(path)
+    }
+
     public func deleteCapsule(id: String) async throws -> GaryxDeleteResult {
         try await delete("/api/capsules/\(id.urlPathEncoded)")
     }

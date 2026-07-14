@@ -157,6 +157,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(capsules::get_capsule).delete(capsules::delete_capsule),
         )
         .route(
+            "/api/capsules/{id}/favorite",
+            axum::routing::put(capsules::favorite_capsule).delete(capsules::unfavorite_capsule),
+        )
+        .route(
             "/api/capsules/{id}/serve",
             axum::routing::get(capsules::serve_capsule),
         )

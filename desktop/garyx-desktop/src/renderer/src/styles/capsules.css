@@ -70,6 +70,41 @@
   border-radius: 7px;
 }
 
+.capsules-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 0.5px solid var(--color-token-border);
+  border-radius: 8px;
+  background: var(--color-token-bg-secondary);
+}
+
+.capsules-segmented button {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-token-text-secondary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.capsules-segmented button:hover,
+.capsules-segmented button.active {
+  background: var(--color-token-bg-primary);
+  color: var(--color-token-text-primary);
+  box-shadow: 0 1px 2px rgba(13, 13, 13, 0.04);
+}
+
 /* Focused preview removes the page padding so the Capsule reads near-full. */
 .capsules-page-preview {
   padding: 0;
@@ -101,7 +136,7 @@
 }
 
 .capsule-gallery-card {
-  appearance: none;
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -110,15 +145,75 @@
   border: 0.5px solid color-mix(in oklab, var(--color-token-border) 86%, transparent);
   border-radius: 12px;
   background: color-mix(in oklab, var(--color-token-bg-secondary) 78%, var(--color-token-bg-primary));
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
   overflow: hidden;
   transition:
     border-color var(--duration-fast) var(--ease-standard),
     background var(--duration-fast) var(--ease-standard),
     box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.capsule-gallery-open {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.capsule-gallery-open:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-token-text-primary) 58%, transparent);
+  outline-offset: -2px;
+}
+
+.capsule-card-favorite {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0.5px solid color-mix(in oklab, var(--color-token-border) 82%, transparent);
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--color-token-bg-primary) 88%, transparent);
+  color: var(--color-token-text-secondary);
+  box-shadow: 0 1px 3px color-mix(in oklab, var(--color-token-text-primary) 10%, transparent);
+  opacity: 0;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.capsule-gallery-card:hover .capsule-card-favorite,
+.capsule-gallery-card:focus-within .capsule-card-favorite,
+.capsule-card-favorite.active {
+  opacity: 1;
+}
+
+.capsule-card-favorite:hover,
+.capsule-card-favorite:focus-visible,
+.capsule-card-favorite.active {
+  background: var(--color-token-bg-primary);
+  color: var(--color-token-text-primary);
+}
+
+.capsule-card-favorite:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-token-text-primary) 58%, transparent);
+  outline-offset: 1px;
 }
 
 .capsule-gallery-card:hover {

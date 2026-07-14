@@ -6,6 +6,7 @@ import {
   MessageSquare,
   MoreHorizontal,
   RefreshCw,
+  Star,
   Trash2,
 } from 'lucide-react';
 
@@ -26,6 +27,18 @@ import {
   FloatingActionMenuItem,
 } from '../../components/ui/floating-action-menu';
 import { capsuleHtmlStore } from '../capsule-html-store';
+import {
+  capsuleIsFavorited,
+  createCapsuleFavoritesState,
+  filterCapsulesForGallery,
+  mergeCapsuleFavoriteRefresh,
+  reduceCapsuleFavoriteFailure,
+  reduceCapsuleFavoriteSuccess,
+  reduceCapsuleFavoriteToggle,
+  type CapsuleFavoriteEffect,
+  type CapsuleFavoriteTransition,
+  type CapsuleGalleryTab,
+} from '../capsule-favorites';
 import {
   capsuleThumbnailStore,
   GALLERY_RENDITION,
@@ -115,44 +128,59 @@ function describeCreator(
 function CapsuleGalleryCard({
   capsule,
   agentById,
+  favorited,
   onOpen,
+  onToggleFavorite,
 }: {
   capsule: DesktopCapsuleSummary;
   agentById: Map<string, DesktopCustomAgent>;
+  favorited: boolean;
   onOpen: (capsuleId: string) => void;
+  onToggleFavorite: (capsule: DesktopCapsuleSummary) => void;
 }) {
   const { t } = useI18n();
-  const ref = useRef<HTMLButtonElement | null>(null);
+  const ref = useRef<HTMLDivElement | null>(null);
   const visible = useInViewport(ref);
   const title = capsuleTitle(capsule, t);
   const creator = describeCreator(capsule, agentById, t);
   const subline = `${formatRelativeTime(capsule.updatedAt)} · ${creator}`;
   const metaTooltip = `${t('Revision')} ${capsule.revision} · ${formatBytes(capsule.byteSize)}`;
   return (
-    <button
-      ref={ref}
-      className="capsule-gallery-card"
-      onClick={() => onOpen(capsule.id)}
-      title={title}
-      type="button"
-    >
-      <span className="capsule-card-preview-shell">
-        <CapsuleLivePreviewFrame
-          active={visible}
-          capsuleId={capsule.id}
-          mode="card"
-          rendition={GALLERY_RENDITION}
-          revision={capsule.revision}
-          title={title}
-        />
-      </span>
-      <span className="capsule-card-meta">
-        <span className="capsule-card-title">{title}</span>
-        <span className="capsule-card-subline" title={metaTooltip}>
-          {subline}
+    <div ref={ref} className="capsule-gallery-card">
+      <button
+        className="capsule-gallery-open"
+        onClick={() => onOpen(capsule.id)}
+        title={title}
+        type="button"
+      >
+        <span className="capsule-card-preview-shell">
+          <CapsuleLivePreviewFrame
+            active={visible}
+            capsuleId={capsule.id}
+            mode="card"
+            rendition={GALLERY_RENDITION}
+            revision={capsule.revision}
+            title={title}
+          />
         </span>
-      </span>
-    </button>
+        <span className="capsule-card-meta">
+          <span className="capsule-card-title">{title}</span>
+          <span className="capsule-card-subline" title={metaTooltip}>
+            {subline}
+          </span>
+        </span>
+      </button>
+      <button
+        aria-label={favorited ? t('Unfavorite') : t('Favorite')}
+        aria-pressed={favorited}
+        className={`capsule-card-favorite${favorited ? ' active' : ''}`}
+        onClick={() => onToggleFavorite(capsule)}
+        title={favorited ? t('Unfavorite') : t('Favorite')}
+        type="button"
+      >
+        <Star aria-hidden fill={favorited ? 'currentColor' : 'none'} size={15} />
+      </button>
+    </div>
   );
 }
 
@@ -281,21 +309,84 @@ export function CapsulesPanel({
 }: CapsulesPanelProps) {
   const { t } = useI18n();
   const [page, setPage] = useState<DesktopCapsulesPage | null>(null);
+  const [favoriteState, setFavoriteState] = useState(createCapsuleFavoritesState);
+  const [galleryTab, setGalleryTab] = useState<CapsuleGalleryTab>('all');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [fallbackCapsule, setFallbackCapsule] = useState<DesktopCapsuleSummary | null>(null);
   const [fallbackMissing, setFallbackMissing] = useState(false);
   const listRequestIdRef = useRef(0);
+  const pageRef = useRef<DesktopCapsulesPage | null>(null);
+  const favoriteStateRef = useRef(favoriteState);
 
   const capsules = page?.capsules || [];
+  const visibleCapsules = useMemo(
+    () => filterCapsulesForGallery(capsules, galleryTab, favoriteState),
+    [capsules, favoriteState, galleryTab],
+  );
   const agentById = useMemo(
     () => new Map(agents.map((agent) => [agent.agentId, agent] as const)),
     [agents],
   );
 
+  const applyFavoriteTransition = useCallback((transition: CapsuleFavoriteTransition) => {
+    const nextPage = { capsules: transition.capsules };
+    pageRef.current = nextPage;
+    favoriteStateRef.current = transition.state;
+    setPage(nextPage);
+    setFavoriteState(transition.state);
+  }, []);
+
+  const runFavoriteEffect = useCallback((initialEffect: CapsuleFavoriteEffect) => {
+    void (async () => {
+      let effect: CapsuleFavoriteEffect | null = initialEffect;
+      while (effect) {
+        const activeEffect = effect;
+        try {
+          const result = await window.garyxDesktop.setCapsuleFavorite(activeEffect);
+          const transition = reduceCapsuleFavoriteSuccess(
+            pageRef.current?.capsules || [],
+            favoriteStateRef.current,
+            activeEffect.capsuleId,
+            result,
+          );
+          applyFavoriteTransition(transition);
+          effect = transition.effect;
+        } catch (cause) {
+          const transition = reduceCapsuleFavoriteFailure(
+            pageRef.current?.capsules || [],
+            favoriteStateRef.current,
+            activeEffect.capsuleId,
+          );
+          applyFavoriteTransition(transition);
+          const message = cause instanceof Error
+            ? cause.message
+            : t('Failed to update favorite.');
+          setError(message);
+          onToast?.(message, 'error');
+          effect = null;
+        }
+      }
+    })();
+  }, [applyFavoriteTransition, onToast, t]);
+
+  const handleToggleFavorite = useCallback((capsule: DesktopCapsuleSummary) => {
+    const transition = reduceCapsuleFavoriteToggle(
+      pageRef.current?.capsules || [],
+      favoriteStateRef.current,
+      capsule.id,
+      !capsuleIsFavorited(capsule, favoriteStateRef.current),
+    );
+    applyFavoriteTransition(transition);
+    if (transition.effect) {
+      runFavoriteEffect(transition.effect);
+    }
+  }, [applyFavoriteTransition, runFavoriteEffect]);
+
   const loadCapsules = useCallback(async () => {
     const requestId = listRequestIdRef.current + 1;
+    const capturedFavoritesGeneration = favoriteStateRef.current.favoritesGeneration;
     listRequestIdRef.current = requestId;
     setLoading(true);
     setError(null);
@@ -304,7 +395,12 @@ export function CapsulesPanel({
       if (listRequestIdRef.current !== requestId) {
         return;
       }
-      setPage(result);
+      applyFavoriteTransition(mergeCapsuleFavoriteRefresh(
+        pageRef.current?.capsules || [],
+        result.capsules,
+        favoriteStateRef.current,
+        capturedFavoritesGeneration,
+      ));
     } catch (cause) {
       if (listRequestIdRef.current !== requestId) {
         return;
@@ -315,7 +411,7 @@ export function CapsulesPanel({
         setLoading(false);
       }
     }
-  }, []);
+  }, [applyFavoriteTransition]);
 
   useEffect(() => {
     void loadCapsules();
@@ -465,6 +561,24 @@ export function CapsulesPanel({
           </p>
         </div>
         <div className="capsules-header-actions">
+          <div aria-label={t('Capsule view')} className="capsules-segmented">
+            <button
+              aria-pressed={galleryTab === 'all'}
+              className={galleryTab === 'all' ? 'active' : ''}
+              onClick={() => setGalleryTab('all')}
+              type="button"
+            >
+              {t('All')}
+            </button>
+            <button
+              aria-pressed={galleryTab === 'favorites'}
+              className={galleryTab === 'favorites' ? 'active' : ''}
+              onClick={() => setGalleryTab('favorites')}
+              type="button"
+            >
+              {t('Favorites')}
+            </button>
+          </div>
           <button
             className="tasks-secondary-button capsules-refresh-button"
             disabled={loading}
@@ -483,14 +597,18 @@ export function CapsulesPanel({
 
       {!capsules.length && !loading && !error ? (
         <div className="tasks-empty-state">{t('No Capsules yet.')}</div>
+      ) : capsules.length && !visibleCapsules.length && !loading && !error ? (
+        <div className="tasks-empty-state">{t('No favorite Capsules yet.')}</div>
       ) : (
         <div className="capsules-gallery-grid">
-          {capsules.map((capsule) => (
+          {visibleCapsules.map((capsule) => (
             <CapsuleGalleryCard
               agentById={agentById}
               capsule={capsule}
+              favorited={capsuleIsFavorited(capsule, favoriteState)}
               key={capsule.id}
               onOpen={onOpenCapsulePreview}
+              onToggleFavorite={handleToggleFavorite}
             />
           ))}
         </div>

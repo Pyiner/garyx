@@ -83,6 +83,7 @@ import type {
   SaveMemoryDocumentInput,
   SelectAutomationInput,
   SelectWorkspaceInput,
+  SetCapsuleFavoriteInput,
   RenderState,
   SendMessageInput,
   StartThreadStreamInput,
@@ -143,6 +144,7 @@ import {
   getWorkspaceGitStatus,
   interruptThread,
   listCapsules,
+  setCapsuleFavorite,
   listTaskForest,
   listTasks,
   listProviderRecentSessions,
@@ -805,6 +807,14 @@ function registerIpcHandlers(): void {
     ) => {
       const settings = await resolveSettings();
       return renderCapsuleThumbnail(settings, capsuleId, revision, rendition);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:set-capsule-favorite",
+    async (_event, input: SetCapsuleFavoriteInput) => {
+      const settings = await resolveSettings();
+      return setCapsuleFavorite(settings, input);
     },
   );
 

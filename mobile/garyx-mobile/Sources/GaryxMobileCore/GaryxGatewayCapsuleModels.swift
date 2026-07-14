@@ -17,6 +17,16 @@ public struct GaryxCapsulesPage: Decodable, Equatable, Sendable {
     }
 }
 
+public struct GaryxCapsuleFavoriteResponse: Decodable, Equatable, Sendable {
+    public var favorited: Bool
+    public var capsule: GaryxCapsuleSummary
+
+    public init(favorited: Bool, capsule: GaryxCapsuleSummary) {
+        self.favorited = favorited
+        self.capsule = capsule
+    }
+}
+
 public struct GaryxCapsuleSummary: Decodable, Identifiable, Equatable, Sendable {
     public var id: String
     public var title: String
@@ -30,6 +40,9 @@ public struct GaryxCapsuleSummary: Decodable, Identifiable, Equatable, Sendable 
     public var revision: Int
     public var createdAt: String?
     public var updatedAt: String?
+    public var favoritedAt: String?
+
+    public var isFavorited: Bool { favoritedAt != nil }
 
     public init(
         id: String,
@@ -43,7 +56,8 @@ public struct GaryxCapsuleSummary: Decodable, Identifiable, Equatable, Sendable 
         byteSize: Int = 0,
         revision: Int = 1,
         createdAt: String? = nil,
-        updatedAt: String? = nil
+        updatedAt: String? = nil,
+        favoritedAt: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -57,6 +71,7 @@ public struct GaryxCapsuleSummary: Decodable, Identifiable, Equatable, Sendable 
         self.revision = revision
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.favoritedAt = favoritedAt
     }
 
     enum CodingKeys: String, CodingKey {
@@ -80,6 +95,8 @@ public struct GaryxCapsuleSummary: Decodable, Identifiable, Equatable, Sendable 
         case createdAtCamel = "createdAt"
         case updatedAt = "updated_at"
         case updatedAtCamel = "updatedAt"
+        case favoritedAt = "favorited_at"
+        case favoritedAtCamel = "favoritedAt"
     }
 
     public init(from decoder: Decoder) throws {
@@ -96,6 +113,7 @@ public struct GaryxCapsuleSummary: Decodable, Identifiable, Equatable, Sendable 
         revision = try container.garyxDecodeFirstInt(.revision) ?? 1
         createdAt = try container.garyxDecodeFirstString(.createdAt, .createdAtCamel)
         updatedAt = try container.garyxDecodeFirstString(.updatedAt, .updatedAtCamel)
+        favoritedAt = try container.garyxDecodeFirstString(.favoritedAt, .favoritedAtCamel)
     }
 }
 

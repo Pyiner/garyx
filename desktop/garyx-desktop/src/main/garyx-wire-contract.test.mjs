@@ -109,6 +109,7 @@ function canonicalCapsule(overrides = {}) {
     revision: 1,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-02T00:00:00Z",
+    favorited_at: null,
     ...overrides,
   };
 }
@@ -265,6 +266,17 @@ test("capsules require snake_case nullable keys instead of camel aliases", async
       assert.rejects(
         () => listCapsules(settings),
         /capsule list\.capsules\[0\]\.thread_id is required/,
+      ),
+  );
+  const wrongFavoriteCase = canonicalCapsule();
+  delete wrongFavoriteCase.favorited_at;
+  wrongFavoriteCase.favoritedAt = null;
+  await withGatewayFetch(
+    async () => jsonResponse({ capsules: [wrongFavoriteCase] }),
+    () =>
+      assert.rejects(
+        () => listCapsules(settings),
+        /capsule list\.capsules\[0\]\.favorited_at is required/,
       ),
   );
 });

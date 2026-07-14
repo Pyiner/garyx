@@ -168,7 +168,8 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
             byteSize: 42,
             revision: 3,
             createdAt: "2026-06-28T10:00:00Z",
-            updatedAt: "2026-06-28T11:00:00Z"
+            updatedAt: "2026-06-28T11:00:00Z",
+            favoritedAt: "2026-06-28T11:30:00Z"
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [],
@@ -195,6 +196,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         XCTAssertEqual(decoded.version, GaryxMobileCatalogCacheSnapshot.currentVersion)
         let restored = try XCTUnwrap(decoded.capsules.first?.model)
         XCTAssertEqual(restored, capsule)
+        XCTAssertEqual(restored.favoritedAt, "2026-06-28T11:30:00Z")
     }
 
 }

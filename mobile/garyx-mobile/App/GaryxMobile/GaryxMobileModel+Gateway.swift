@@ -130,6 +130,7 @@ extension GaryxMobileModel {
         skills = []
         galleryFocusedCapsule = nil
         conversationCapsulePreview = nil
+        capsuleFavoriteState = GaryxCapsuleFavoriteReducerState()
         capsules = []
         capsuleHTMLCache = [:]
         automations = []
@@ -526,6 +527,7 @@ extension GaryxMobileModel {
         }
         do {
             let gateway = try client()
+            let capsuleFavoritesGeneration = capsuleFavoriteState.favoritesGeneration
             async let agentsResult = garyxCaptureCatalog { try await gateway.listAgents() }
             async let skillsResult = garyxCaptureCatalog { try await gateway.listSkills() }
             async let capsulesResult = garyxCaptureCatalog { try await gateway.listCapsules() }
@@ -590,7 +592,10 @@ extension GaryxMobileModel {
                 skills = value
             }
             if case let .success(value) = nextCapsules {
-                capsules = value
+                mergeCapsulesFromRefresh(
+                    value,
+                    capturedFavoritesGeneration: capsuleFavoritesGeneration
+                )
             }
             if let settings = nextGatewaySettings {
                 gatewaySettingsDocument = settings

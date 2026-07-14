@@ -234,6 +234,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var capsules: [GaryxCapsuleSummary] = [] {
         didSet { pruneCapsuleHTMLCache(validCapsules: capsules) }
     }
+    var capsuleFavoriteState = GaryxCapsuleFavoriteReducerState()
     /// Focused capsule preview presented over the Capsules gallery (card tap or
     /// `garyx://mobile/capsule` deep link).
     @Published var galleryFocusedCapsule: GaryxCapsuleSummary?

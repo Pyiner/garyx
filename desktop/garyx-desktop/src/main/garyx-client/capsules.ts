@@ -4,6 +4,8 @@ import type {
   DesktopCapsuleSummary,
   DesktopCapsulesPage,
   DesktopSettings,
+  SetCapsuleFavoriteInput,
+  SetCapsuleFavoriteResult,
 } from "@shared/contracts";
 import {
   GatewayContractError,
@@ -11,6 +13,7 @@ import {
   requestJson,
   requestText,
   requireContractArray,
+  requireContractBoolean,
   requireContractField,
   requireContractNonEmptyString,
   requireContractNonNegativeInteger,
@@ -31,11 +34,13 @@ interface CapsulePayload {
   revision?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
+  favorited_at?: string | null;
 }
 
 interface CapsulesPayload {
   capsules?: CapsulePayload[];
   capsule?: CapsulePayload | null;
+  favorited?: boolean;
 }
 
 function requiredNullableString(
@@ -92,6 +97,7 @@ function mapCapsuleSummary(value: unknown, path: string): DesktopCapsuleSummary 
       requireContractField(record, "updated_at", path),
       `${path}.updated_at`,
     ),
+    favoritedAt: requiredNullableString(record, "favorited_at", path),
   };
 }
 
@@ -181,4 +187,33 @@ export async function deleteCapsule(
     method: "DELETE",
     signal: AbortSignal.timeout(8000),
   });
+}
+
+export async function setCapsuleFavorite(
+  settings: DesktopSettings,
+  input: SetCapsuleFavoriteInput,
+): Promise<SetCapsuleFavoriteResult> {
+  const id = input.capsuleId?.trim() || "";
+  if (!id) {
+    throw new Error("capsuleId is required");
+  }
+  const payload = await requestJson<CapsulesPayload>(
+    settings,
+    `/api/capsules/${encodeURIComponent(id)}/favorite`,
+    {
+      method: input.favorited ? "PUT" : "DELETE",
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  const record = requireContractRecord(payload, "set capsule favorite response");
+  return {
+    favorited: requireContractBoolean(
+      requireContractField(record, "favorited", "set capsule favorite response"),
+      "set capsule favorite response.favorited",
+    ),
+    capsule: mapCapsuleSummary(
+      requireContractField(record, "capsule", "set capsule favorite response"),
+      "set capsule favorite response.capsule",
+    ),
+  };
 }
