@@ -1,0 +1,294 @@
+{
+  "source": "Sanitized from a real queued-input transcript and thread_render_frame. Thread/run/intent/input IDs, timestamps, workspace data, and message text were replaced with synthetic values.",
+  "threadId": "thread::queued-input-fixture",
+  "runId": "run::queued-input-fixture",
+  "intentId": "intent:00000000-0000-0000-0000-000000000001",
+  "pendingInputId": "queued_input:00000000-0000-0000-0000-000000000001",
+  "seedTranscript": {
+    "threadId": "thread::queued-input-fixture",
+    "remoteFound": true,
+    "messages": [
+      {
+        "id": "thread::queued-input-fixture:131",
+        "seq": 132,
+        "role": "tool_result",
+        "text": "Sanitized preceding tool result",
+        "content": {
+          "type": "tool_result",
+          "content": "Sanitized preceding tool result"
+        },
+        "toolUseId": "tool-call-before-queued-input",
+        "toolName": "Read",
+        "metadata": {
+          "source": "codex_app_server"
+        },
+        "timestamp": "2026-01-01T00:00:00.000Z",
+        "localState": "remote_final"
+      }
+    ],
+    "pendingInputs": [],
+    "threadInfo": {
+      "activeRun": {
+        "runId": "run::queued-input-fixture"
+      }
+    },
+    "pageInfo": {
+      "totalMessages": 132,
+      "committedMessages": 132,
+      "returnedMessages": 1,
+      "startIndex": 131,
+      "endIndex": 132,
+      "hasMoreBefore": true,
+      "nextBeforeIndex": 131,
+      "hasMoreAfter": false,
+      "nextAfterIndex": null,
+      "limit": 100,
+      "userQueryLimit": 10
+    }
+  },
+  "optimisticUser": {
+    "id": "origin:intent:00000000-0000-0000-0000-000000000001",
+    "role": "user",
+    "text": "Sanitized queued follow-up",
+    "content": "Sanitized queued follow-up",
+    "timestamp": "2026-01-01T00:00:01.000Z",
+    "intentId": "intent:00000000-0000-0000-0000-000000000001",
+    "localState": "optimistic"
+  },
+  "rawLiveFrame": {
+    "type": "thread_render_frame",
+    "thread_id": "thread::queued-input-fixture",
+    "events": [
+      {
+        "type": "committed_message",
+        "thread_id": "thread::queued-input-fixture",
+        "run_id": "run::queued-input-fixture",
+        "seq": 133,
+        "message": {
+          "role": "user",
+          "content": "Sanitized queued follow-up",
+          "text": "Sanitized queued follow-up",
+          "timestamp": "2026-01-01T00:00:02.000Z",
+          "from_id": "mac-desktop",
+          "channel": "api",
+          "account_id": "test-account",
+          "is_group": false,
+          "metadata": {
+            "origin_id": "intent:00000000-0000-0000-0000-000000000001",
+            "queued_at": "2026-01-01T00:00:01.000Z",
+            "queued_input_id": "queued_input:00000000-0000-0000-0000-000000000001"
+          }
+        }
+      },
+      {
+        "type": "committed_message",
+        "thread_id": "thread::queued-input-fixture",
+        "run_id": "run::queued-input-fixture",
+        "seq": 134,
+        "message": {
+          "role": "system",
+          "kind": "control",
+          "internal": true,
+          "internal_kind": "control",
+          "control": {
+            "at": "2026-01-01T00:00:03.000Z",
+            "kind": "user_ack",
+            "pending_input_id": "queued_input:00000000-0000-0000-0000-000000000001",
+            "run_id": "run::queued-input-fixture",
+            "thread_id": "thread::queued-input-fixture"
+          }
+        }
+      },
+      {
+        "type": "committed_message",
+        "thread_id": "thread::queued-input-fixture",
+        "run_id": "run::queued-input-fixture",
+        "seq": 135,
+        "message": {
+          "role": "tool_use",
+          "content": {
+            "type": "tool_use",
+            "name": "Read",
+            "input": {
+              "file_path": "/Users/test/project/example.txt"
+            }
+          },
+          "timestamp": "2026-01-01T00:00:04.000Z",
+          "tool_use_id": "tool-call-after-queued-input",
+          "tool_name": "Read",
+          "metadata": {
+            "source": "codex_app_server"
+          }
+        }
+      }
+    ],
+    "render_state": {
+      "based_on_seq": 135,
+      "rows": [
+        {
+          "kind": "user_turn",
+          "id": "user_turn:preceding",
+          "user": null,
+          "activity": [
+            {
+              "kind": "step",
+              "id": "step:preceding",
+              "steps": [],
+              "final_message": {
+                "id": "thread::queued-input-fixture:131",
+                "seq": 132,
+                "role": "tool_result"
+              },
+              "running": false,
+              "started_at": "2026-01-01T00:00:00.000Z",
+              "finished_at": "2026-01-01T00:00:01.000Z"
+            }
+          ],
+          "started_at": "2026-01-01T00:00:00.000Z",
+          "finished_at": "2026-01-01T00:00:01.000Z"
+        },
+        {
+          "kind": "user_turn",
+          "id": "user_turn:queued",
+          "user": {
+            "id": "origin:intent:00000000-0000-0000-0000-000000000001",
+            "seq": 133,
+            "role": "user"
+          },
+          "activity": [
+            {
+              "kind": "step",
+              "id": "step:queued",
+              "steps": [
+                {
+                  "kind": "tool_group",
+                  "id": "tool_group:queued",
+                  "status": "active",
+                  "entries": [
+                    {
+                      "id": "tool_entry:queued",
+                      "tool_use_id": "tool-call-after-queued-input",
+                      "status": "running",
+                      "tool_use": {
+                        "id": "thread::queued-input-fixture:134",
+                        "seq": 135,
+                        "role": "tool_use"
+                      },
+                      "tool_result": null
+                    }
+                  ],
+                  "started_at": "2026-01-01T00:00:04.000Z",
+                  "finished_at": null
+                }
+              ],
+              "final_message": null,
+              "running": true,
+              "started_at": "2026-01-01T00:00:04.000Z",
+              "finished_at": null
+            }
+          ],
+          "started_at": "2026-01-01T00:00:02.000Z",
+          "finished_at": null
+        }
+      ],
+      "tailActivity": "tool_active",
+      "activeToolGroupId": "tool_group:queued",
+      "progress_locus": "tool_group",
+      "filtered_placeholders": []
+    }
+  },
+  "historyTranscript": {
+    "threadId": "thread::queued-input-fixture",
+    "remoteFound": true,
+    "messages": [
+      {
+        "id": "thread::queued-input-fixture:131",
+        "seq": 132,
+        "role": "tool_result",
+        "text": "Sanitized preceding tool result",
+        "content": {
+          "type": "tool_result",
+          "content": "Sanitized preceding tool result"
+        },
+        "toolUseId": "tool-call-before-queued-input",
+        "toolName": "Read",
+        "metadata": {
+          "source": "codex_app_server"
+        },
+        "timestamp": "2026-01-01T00:00:00.000Z"
+      },
+      {
+        "id": "thread::queued-input-fixture:132",
+        "seq": 133,
+        "role": "user",
+        "text": "Sanitized queued follow-up",
+        "content": "Sanitized queued follow-up",
+        "metadata": {
+          "origin_id": "intent:00000000-0000-0000-0000-000000000001",
+          "queued_at": "2026-01-01T00:00:01.000Z",
+          "queued_input_id": "queued_input:00000000-0000-0000-0000-000000000001"
+        },
+        "timestamp": "2026-01-01T00:00:02.000Z"
+      },
+      {
+        "id": "thread::queued-input-fixture:133",
+        "seq": 134,
+        "role": "system",
+        "text": "",
+        "content": {
+          "role": "system",
+          "kind": "control",
+          "internal": true,
+          "internal_kind": "control",
+          "control": {
+            "kind": "user_ack",
+            "pending_input_id": "queued_input:00000000-0000-0000-0000-000000000001",
+            "run_id": "run::queued-input-fixture",
+            "thread_id": "thread::queued-input-fixture"
+          }
+        },
+        "kind": "control",
+        "internal": true,
+        "internalKind": "control"
+      },
+      {
+        "id": "thread::queued-input-fixture:134",
+        "seq": 135,
+        "role": "tool_use",
+        "text": "",
+        "content": {
+          "type": "tool_use",
+          "name": "Read",
+          "input": {
+            "file_path": "/Users/test/project/example.txt"
+          }
+        },
+        "toolUseId": "tool-call-after-queued-input",
+        "toolName": "Read",
+        "metadata": {
+          "source": "codex_app_server"
+        },
+        "timestamp": "2026-01-01T00:00:04.000Z"
+      }
+    ],
+    "pendingInputs": [],
+    "threadInfo": {
+      "activeRun": {
+        "runId": "run::queued-input-fixture"
+      }
+    },
+    "pageInfo": {
+      "totalMessages": 135,
+      "committedMessages": 135,
+      "returnedMessages": 4,
+      "startIndex": 131,
+      "endIndex": 135,
+      "hasMoreBefore": true,
+      "nextBeforeIndex": 131,
+      "hasMoreAfter": false,
+      "nextAfterIndex": null,
+      "limit": 100,
+      "userQueryLimit": 10
+    }
+  }
+}

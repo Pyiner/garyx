@@ -16,6 +16,7 @@ import type {
 } from "@shared/contracts";
 import {
   isControlTranscriptMessage,
+  transcriptCommittedAfterCursor,
   transcriptMessageIndex,
   transcriptRewriteAction,
   transcriptWithResolvedActiveRun,
@@ -88,7 +89,9 @@ export class ThreadTranscriptCache {
    * identical message arrays to the legacy path (dual-run tested).
    */
   applyAuthoritative(transcript: ThreadTranscript): void {
-    const resolved = transcriptWithResolvedActiveRun(transcript);
+    const resolved = transcriptWithResolvedActiveRun(
+      this.reconcileCachedCommittedTail(transcript),
+    );
     this.snapshotTranscript = resolved;
     this.transcriptLoaded = true;
     this.threadInfo = resolved.threadInfo ?? null;
@@ -158,6 +161,16 @@ export class ThreadTranscriptCache {
    * desktopState session propagation and intent history marking.
    */
   applyRemote(transcript: ThreadTranscript, options: RemoteApplyOptions): void {
+    this.applyRemoteSnapshot(
+      this.reconcileCachedCommittedTail(transcript),
+      options,
+    );
+  }
+
+  private applyRemoteSnapshot(
+    transcript: ThreadTranscript,
+    options: RemoteApplyOptions,
+  ): void {
     const resolved = transcriptWithResolvedActiveRun(transcript);
     this.snapshotTranscript = resolved;
     this.transcriptLoaded = true;
@@ -192,6 +205,70 @@ export class ThreadTranscriptCache {
   }
 
   /**
+   * HTTP history and the committed stream are independent transports. A
+   * history request can therefore finish after newer stream records have
+   * already advanced this cache. Fold that contiguous cached tail onto the
+   * fetched body snapshot before materializing it, so recordsBySeq and the
+   * seq-addressable message bodies advance as one state transition.
+   *
+   * A rewrite cannot be reconstructed from its control record alone, and a
+   * gapped tail is not safe to infer. In either case retain the newer current
+   * snapshot while the lifecycle's authoritative refetch resolves the gap.
+   */
+  private reconcileCachedCommittedTail(
+    transcript: ThreadTranscript,
+  ): ThreadTranscript {
+    const records = this.sortedRecords();
+    if (records.length === 0) {
+      return transcript;
+    }
+
+    const afterCursor = transcriptCommittedAfterCursor(transcript);
+    if (afterCursor === null) {
+      return this.preferCurrentSnapshotIfNewer(transcript, afterCursor);
+    }
+    const transcriptTailSeq = afterCursor + 1;
+    const tail = records.filter((event) => event.seq > transcriptTailSeq);
+    if (tail.length === 0) {
+      return transcript;
+    }
+
+    let expectedSeq = transcriptTailSeq + 1;
+    for (const event of tail) {
+      if (
+        event.threadId !== transcript.threadId ||
+        event.seq !== expectedSeq ||
+        transcriptRewriteAction(event.message) === "refetch_authoritative"
+      ) {
+        return this.preferCurrentSnapshotIfNewer(transcript, afterCursor);
+      }
+      expectedSeq += 1;
+    }
+
+    return tail.reduce(
+      (current, event) => committedMessageForwardPage(current, event),
+      transcript,
+    );
+  }
+
+  private preferCurrentSnapshotIfNewer(
+    transcript: ThreadTranscript,
+    transcriptAfterCursor: number | null,
+  ): ThreadTranscript {
+    const current = this.snapshotTranscript;
+    const currentAfterCursor = transcriptCommittedAfterCursor(current);
+    if (
+      current &&
+      currentAfterCursor !== null &&
+      (transcriptAfterCursor === null ||
+        currentAfterCursor > transcriptAfterCursor)
+    ) {
+      return current;
+    }
+    return transcript;
+  }
+
+  /**
    * Fold one committed stream record into the transcript state: the pure
    * core of the hook's applyCommittedThreadMessage. Returns
    * "refetch_authoritative" when the record is a rewrite/reset control the
@@ -210,7 +287,7 @@ export class ThreadTranscriptCache {
       return "applied";
     }
     this.committedApplyStats.fullFallback += 1;
-    this.applyRemote(
+    this.applyRemoteSnapshot(
       committedMessageForwardPage(this.snapshotTranscript, event),
       options,
     );

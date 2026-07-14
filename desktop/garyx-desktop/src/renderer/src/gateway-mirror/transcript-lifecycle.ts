@@ -681,7 +681,9 @@ export class TranscriptLifecycle {
     options?: { syncRunState?: boolean },
   ): void {
     this.port.applyAuthoritativeTranscript(threadId, transcript);
-    const resolvedTranscript = transcriptWithResolvedActiveRun(transcript);
+    const resolvedTranscript =
+      this.port.getThreadSnapshotTranscript(threadId) ??
+      transcriptWithResolvedActiveRun(transcript);
     this.rememberTranscriptSnapshot(
       threadId,
       resolvedTranscript,
@@ -785,9 +787,9 @@ export class TranscriptLifecycle {
     if (!options?.mirrorAlreadyApplied) {
       this.port.applyRemoteTranscript(threadId, transcript);
     }
-    const resolvedTranscript = options?.mirrorAlreadyApplied
-      ? transcript
-      : transcriptWithResolvedActiveRun(transcript);
+    const resolvedTranscript =
+      this.port.getThreadSnapshotTranscript(threadId) ??
+      transcriptWithResolvedActiveRun(transcript);
     this.rememberTranscriptSnapshot(
       threadId,
       resolvedTranscript,
