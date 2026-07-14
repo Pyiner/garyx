@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { streamThreadEvents } from "../../../main/garyx-client/stream.ts";
-import { buildThreadViewRows } from "../render-view-model.ts";
+import {
+  buildThreadViewRows,
+  buildThreadViewRowsWithLocalUsers,
+} from "../render-view-model.ts";
 import { GatewayMirror } from "./mirror.ts";
 
 const fixture = JSON.parse(
@@ -33,6 +36,34 @@ function queuedUserRow(mirror) {
     (row) =>
       row.kind === "user_turn" && row.userBlock.entry.message.seq === 133,
   );
+}
+
+function queuedUserObservation(mirror, stage) {
+  const snapshot = mirror.getThreadSnapshot(fixture.threadId);
+  const serverRef = snapshot.renderState?.rows
+    .filter((row) => row.kind === "user_turn")
+    .map((row) => row.user)
+    .find((ref) => ref?.seq === 133);
+  const body = snapshot.messages.find((message) => message.seq === 133);
+  const visibleRows = buildThreadViewRowsWithLocalUsers(
+    snapshot.renderState,
+    messagesBySeq(snapshot.messages),
+    snapshot.messages,
+  );
+  return {
+    stage,
+    basedOnSeq: snapshot.renderState?.based_on_seq ?? null,
+    serverRefId: serverRef?.id ?? null,
+    committedRecordPresent: snapshot.records.some((event) => event.seq === 133),
+    bodyId: body?.id ?? null,
+    bodyLocalState: body?.localState ?? null,
+    serverMappedRowVisible: Boolean(queuedUserRow(mirror)),
+    rowVisible: visibleRows.some(
+      (row) =>
+        row.kind === "user_turn" &&
+        row.userBlock.entry.message.id === `origin:${fixture.intentId}`,
+    ),
+  };
 }
 
 function sseResponse(frame) {
@@ -112,5 +143,33 @@ test("history replay keeps the queued-input user body addressable by render seq"
   assert.ok(
     queuedUserRow(mirror),
     "buildThreadViewRows must render the history-loaded queued user bubble",
+  );
+});
+
+test("repro: a queued user row must not disappear between live and refreshed history", async () => {
+  const mirror = new GatewayMirror();
+  mirror.applyRemoteTranscript(fixture.threadId, fixture.seedTranscript);
+  mirror.syncThreadUiMessages(fixture.threadId, [
+    ...mirror.getThreadSnapshot(fixture.threadId).messages,
+    fixture.optimisticUser,
+  ]);
+
+  const frame = await parseCapturedLiveFrame();
+  mirror.ingest(frame);
+  const observations = [queuedUserObservation(mirror, "after_live_frame")];
+
+  // This response started before the live frame but completed after it.
+  mirror.applyRemoteTranscript(fixture.threadId, fixture.seedTranscript);
+  observations.push(queuedUserObservation(mirror, "after_stale_history"));
+
+  // A subsequent fresh history response contains the committed body.
+  mirror.applyRemoteTranscript(fixture.threadId, fixture.historyTranscript);
+  observations.push(queuedUserObservation(mirror, "after_refreshed_history"));
+
+  console.log(`TASK-2285 observations: ${JSON.stringify(observations)}`);
+  assert.deepEqual(
+    observations.map(({ rowVisible }) => rowVisible),
+    [true, true, true],
+    "a server-owned queued user row must remain visible across history races",
   );
 });
