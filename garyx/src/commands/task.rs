@@ -222,7 +222,7 @@ async fn cmd_task_create_inner(
     if notify_current_thread {
         println!();
         println!(
-            "Stop this turn now — do not poll this task or hold this turn open. The loop continues via notification: Garyx will message this thread automatically when this task finishes, waking you to rework on failure or proceed on approval."
+            "This task has been dispatched — Garyx will message this thread automatically when it finishes. No need to poll it or keep watching."
         );
     }
     Ok(())
