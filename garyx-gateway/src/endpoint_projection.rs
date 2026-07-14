@@ -1,16 +1,14 @@
 //! SQL implementation of the router's channel-endpoint projection seam.
 //!
 //! Answers endpoint condition queries from the projection tables
-//! (`thread_channel_endpoints`, `thread_meta`, `thread_message_routes`),
+//! (`thread_channel_endpoints`, `thread_meta`),
 //! which derive in the same transaction as every record write — so the
 //! answers are structurally current and no store scan is ever needed.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use garyx_router::{
-    ChannelEndpointProjection, DeliveryContextRow, KnownChannelEndpoint, OutboundRouteRow,
-};
+use garyx_router::{ChannelEndpointProjection, DeliveryContextRow, KnownChannelEndpoint};
 
 use crate::garyx_db::GaryxDbService;
 
@@ -54,25 +52,6 @@ impl ChannelEndpointProjection for SqlChannelEndpointProjection {
                         thread_id,
                         context_json,
                         updated_at,
-                    })
-                    .collect()
-            })
-            .map_err(|error| error.to_string())
-    }
-
-    async fn outbound_routes(&self) -> Result<Vec<OutboundRouteRow>, String> {
-        self.garyx_db
-            .run_blocking(|db| db.list_thread_message_routes())
-            .await
-            .map(|rows| {
-                rows.into_iter()
-                    .map(|row| OutboundRouteRow {
-                        thread_id: row.thread_id,
-                        channel: Some(row.channel),
-                        account_id: row.account_id,
-                        chat_id: row.chat_id,
-                        thread_binding_key: row.thread_binding_key,
-                        message_id: row.message_id,
                     })
                     .collect()
             })
@@ -122,12 +101,6 @@ mod tests {
                 "binding_key": chat_id,
                 "chat_id": chat_id,
             }],
-            "outbound_message_ids": [{
-                "channel": "telegram",
-                "account_id": "main",
-                "chat_id": chat_id,
-                "message_id": "900",
-            }],
             "delivery_context": {
                 "channel": "telegram",
                 "account_id": "main",
@@ -167,11 +140,6 @@ mod tests {
         assert_eq!(contexts.len(), 1);
         assert_eq!(contexts[0].thread_id, "thread::bound");
         assert!(contexts[0].context_json.contains("\"chat_id\":\"42\""));
-
-        let routes = projection.outbound_routes().await.expect("routes");
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].message_id, "900");
-        assert_eq!(routes[0].channel.as_deref(), Some("telegram"));
 
         // Deleting the record removes the projection rows with it.
         store.delete("thread::bound").await.unwrap();

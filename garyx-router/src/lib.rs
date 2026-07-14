@@ -65,7 +65,7 @@ pub use endpoint_binding::{
     EndpointDetachResult,
 };
 pub use endpoint_projection::{
-    ChannelEndpointProjection, DeliveryContextRow, OutboundRouteRow, ScanChannelEndpointProjection,
+    ChannelEndpointProjection, DeliveryContextRow, ScanChannelEndpointProjection,
     channel_endpoint_projection_for,
 };
 pub use file_store::FileThreadStore;

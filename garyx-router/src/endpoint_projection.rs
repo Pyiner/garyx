@@ -2,7 +2,7 @@
 //!
 //! Thread condition queries must go through SQL projections (repository
 //! contract): `SqliteThreadStore` exposes a SQL-backed implementation over
-//! `thread_channel_endpoints`, `thread_meta`, and `thread_message_routes`
+//! `thread_channel_endpoints` and `thread_meta`
 //! through [`crate::ThreadStore::channel_endpoint_projection`]. Projections
 //! derive in the same transaction as every record write, so readers are
 //! structurally current — there is no staleness gate and no repair path.
@@ -31,20 +31,6 @@ pub struct DeliveryContextRow {
     pub thread_id: String,
     pub context_json: String,
     pub updated_at: Option<String>,
-}
-
-/// One outbound message-id route: the projection row behind
-/// `thread_message_routes`.
-#[derive(Debug, Clone)]
-pub struct OutboundRouteRow {
-    pub thread_id: String,
-    /// `None` when the persisted record carried no channel (legacy rows);
-    /// callers supply their own fallback.
-    pub channel: Option<String>,
-    pub account_id: String,
-    pub chat_id: String,
-    pub thread_binding_key: Option<String>,
-    pub message_id: String,
 }
 
 #[async_trait]
@@ -85,9 +71,6 @@ pub trait ChannelEndpointProjection: Send + Sync {
 
     /// Every thread with a persisted delivery context.
     async fn delivery_contexts(&self) -> Result<Vec<DeliveryContextRow>, String>;
-
-    /// Every persisted outbound message-id route.
-    async fn outbound_routes(&self) -> Result<Vec<OutboundRouteRow>, String>;
 }
 
 /// The projection for this store: the store's own SQL projection when the
@@ -195,60 +178,6 @@ impl ChannelEndpointProjection for ScanChannelEndpointProjection {
                 context_json,
                 updated_at,
             });
-        }
-        Ok(rows)
-    }
-
-    async fn outbound_routes(&self) -> Result<Vec<OutboundRouteRow>, String> {
-        let mut rows = Vec::new();
-        let keys = self
-            .store
-            .list_keys(None)
-            .await
-            .map_err(|error| error.to_string())?;
-        for key in keys {
-            let Some(value) = self
-                .store
-                .get(&key)
-                .await
-                .map_err(|error| error.to_string())?
-            else {
-                continue;
-            };
-            let Some(records) = value.get("outbound_message_ids").and_then(Value::as_array) else {
-                continue;
-            };
-            for record in records {
-                let Some(obj) = record.as_object() else {
-                    continue;
-                };
-                let Some(message_id) = obj.get("message_id").and_then(Value::as_str) else {
-                    continue;
-                };
-                rows.push(OutboundRouteRow {
-                    thread_id: key.clone(),
-                    channel: obj
-                        .get("channel")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned),
-                    account_id: obj
-                        .get("account_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    chat_id: obj
-                        .get("chat_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    thread_binding_key: obj
-                        .get("thread_binding_key")
-                        .or_else(|| obj.get("thread_scope"))
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned),
-                    message_id: message_id.to_owned(),
-                });
-            }
         }
         Ok(rows)
     }
