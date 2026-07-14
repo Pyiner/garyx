@@ -105,8 +105,15 @@ last intent. Both clients therefore run the same **desired-state** rule set,
 implemented once per platform as a pure, unit-testable reducer (no timers, no
 network inside):
 
-Per capsule id, the reducer tracks
-`{ serverFavoritedAt, desiredFavorited, inFlight }`:
+The reducer tracks, per capsule id,
+`{ serverFavoritedAt, desiredFavorited, inFlight }`, plus one global
+`favoritesGeneration` counter that is bumped every time any favorite mutation
+**starts** and every time one **settles** (success or failure). List refreshes
+capture the generation at *request send time*; a mismatch at response time
+marks that response's favorite fields stale (see refresh merge below). This is
+what stops a list GET that was issued before/while a mutation flew from
+resurrecting the pre-mutation value after settle — HTTP idempotency and a
+list-vs-list request id cannot catch that cross-operation reorder.
 
 - **Toggle (user tap)**: set `desiredFavorited` to the new intent; UI renders
   desired state immediately. If no request is in flight for this id, emit a
@@ -119,13 +126,23 @@ Per capsule id, the reducer tracks
   becomes authoritative = server).
 - **Response arrived (failure)**: revert `desiredFavorited` to
   `serverFavoritedAt`, settle, surface a non-blocking error.
-- **List refresh landed**: for capsules with no pending mutation
-  (`inFlight == false` and desired == server), adopt the refreshed
-  `favorited_at` wholesale. For capsules with a pending mutation, adopt the
-  refreshed record's *other* fields but keep rendering `desiredFavorited`
-  (the in-flight/queued write will settle it). This merge happens wherever the
-  refreshed list is written (`loadCapsules` on desktop, `refreshCapsules` /
-  gateway full-refresh on iOS).
+- **List refresh landed**: the response carries the `favoritesGeneration`
+  captured when the request was sent.
+  - If that generation still equals the current one **and** the capsule has no
+    pending mutation (`inFlight == false` and desired == server), adopt the
+    refreshed record wholesale, including `favorited_at`.
+  - Otherwise (stale generation — a mutation started or settled after this
+    request was sent — or a pending mutation on this capsule), adopt the
+    refreshed record's *other* fields but keep the reducer's favorite state
+    (`serverFavoritedAt` / `desiredFavorited`), which is strictly newer than
+    the response.
+  - When no mutation is active the generation is stable, so ordinary refreshes
+    (including favorite changes made by another client) are adopted normally —
+    eventual consistency is preserved.
+  This merge happens wherever the refreshed list is written (`loadCapsules` on
+  desktop, `refreshCapsules` / gateway full-refresh on iOS), **before** any
+  persistence, so a stale response can never be written into the iOS catalog
+  snapshot.
 
 Placement: iOS reducer lives in `GaryxMobileCore` (SwiftPM-tested); desktop
 reducer is a pure TS module under the renderer, unit-tested via
@@ -230,12 +247,18 @@ agent write path).
   gallery filter pure function (all/favorites/empty); D6 reducer — double-tap
   PUT→DELETE emits serialized sends and settles on final intent, failure
   reverts, refresh-merge keeps pending desired state and adopts settled
-  server state.
+  server state. Generation matrix: refresh sent before mutation → mutation
+  settles → late refresh lands (must not clobber); refresh sent during pending
+  mutation, landing after settle (must not clobber); refresh sent after settle
+  (adopted normally).
 - **iOS** (`swift test` in GaryxMobileCore, then `xcodebuild` app compile):
   summary decode with/without `favorited_at`; favorite response DTO decode;
-  tab filter; D6 reducer transitions (same matrix as desktop); cached-capsule
-  round-trip preserves `favoritedAt`; regression: favorite settle leaves
-  `(id, revision)` HTML/thumbnail cache entries intact through the prune path.
+  tab filter; D6 reducer transitions (same matrix as desktop, including the
+  three-case generation matrix); cached-capsule round-trip preserves
+  `favoritedAt`; stale-refresh merge output is what gets persisted — a late
+  pre-mutation list response never pollutes the catalog snapshot; regression:
+  favorite settle leaves `(id, revision)` HTML/thumbnail cache entries intact
+  through the prune path.
 - **End-to-end**: create two capsules via MCP, favorite one via PUT, verify
   `GET /api/capsules` flags it, flip tabs in both clients (desktop packaged
   `dist:dir` pass required — preload/IPC wiring changed).
