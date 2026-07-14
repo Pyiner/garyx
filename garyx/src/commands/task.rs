@@ -222,7 +222,7 @@ async fn cmd_task_create_inner(
     if notify_current_thread {
         println!();
         println!(
-            "You don't need to poll this task or hold this turn open — Garyx will message this thread automatically when it finishes. You can stop now."
+            "Stop this turn now — do not poll this task or hold this turn open. The loop continues via notification: Garyx will message this thread automatically when this task finishes, waking you to rework on failure or proceed on approval."
         );
     }
     Ok(())
