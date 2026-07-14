@@ -230,7 +230,8 @@ async fn cmd_task_create_inner(
 
 /// True when the resolved notification target points at the thread this CLI run
 /// is executing inside (the default "notify the current thread" case). Used to
-/// reassure an agent caller that it can stop instead of polling the new task.
+/// tell an agent caller that this thread is notified automatically when the
+/// task finishes, so polling or watching the new task is unnecessary.
 fn notification_targets_current_thread(target: &Value) -> bool {
     if target.get("kind").and_then(Value::as_str) != Some("thread") {
         return false;
