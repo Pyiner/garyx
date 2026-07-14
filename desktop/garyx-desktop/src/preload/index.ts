@@ -135,6 +135,8 @@ const api: GaryxDesktopApi = {
       rendition,
     ),
   deleteCapsule: (input) => ipcRenderer.invoke("garyx:delete-capsule", input),
+  setCapsuleFavorite: (input) =>
+    ipcRenderer.invoke("garyx:set-capsule-favorite", input),
   getTask: (input) => ipcRenderer.invoke("garyx:get-task", input),
   createTask: (input) => ipcRenderer.invoke("garyx:create-task", input),
   listProviderRecentSessions: (input) =>

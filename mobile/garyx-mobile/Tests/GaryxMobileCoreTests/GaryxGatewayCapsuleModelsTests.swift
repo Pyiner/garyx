@@ -21,7 +21,8 @@ final class GaryxGatewayCapsuleModelsTests: XCTestCase {
                       "byte_size": 42,
                       "revision": 3,
                       "created_at": "2026-06-28T10:00:00Z",
-                      "updated_at": "2026-06-28T11:00:00Z"
+                      "updated_at": "2026-06-28T11:00:00Z",
+                      "favorited_at": "2026-06-28T11:30:00Z"
                     }
                   ]
                 }
@@ -42,6 +43,8 @@ final class GaryxGatewayCapsuleModelsTests: XCTestCase {
         XCTAssertEqual(capsule.revision, 3)
         XCTAssertEqual(capsule.createdAt, "2026-06-28T10:00:00Z")
         XCTAssertEqual(capsule.updatedAt, "2026-06-28T11:00:00Z")
+        XCTAssertEqual(capsule.favoritedAt, "2026-06-28T11:30:00Z")
+        XCTAssertTrue(capsule.isFavorited)
     }
 
     func testCapsuleSummaryDecodesCamelCaseGatewayShape() throws {
@@ -60,7 +63,8 @@ final class GaryxGatewayCapsuleModelsTests: XCTestCase {
                   "byteSize": 100,
                   "revision": 2,
                   "createdAt": "2026-06-28T12:00:00Z",
-                  "updatedAt": "2026-06-28T13:00:00Z"
+                  "updatedAt": "2026-06-28T13:00:00Z",
+                  "favoritedAt": "2026-06-28T13:30:00Z"
                 }
                 """.utf8
             )
@@ -75,6 +79,38 @@ final class GaryxGatewayCapsuleModelsTests: XCTestCase {
         XCTAssertEqual(capsule.htmlSha256, "def456")
         XCTAssertEqual(capsule.byteSize, 100)
         XCTAssertEqual(capsule.revision, 2)
+        XCTAssertEqual(capsule.favoritedAt, "2026-06-28T13:30:00Z")
+        XCTAssertTrue(capsule.isFavorited)
+    }
+
+    func testCapsuleSummaryWithoutFavoriteFieldDefaultsToNotFavorited() throws {
+        let capsule = try JSONDecoder().decode(
+            GaryxCapsuleSummary.self,
+            from: Data(#"{"id":"capsule-legacy","title":"Legacy"}"#.utf8)
+        )
+        XCTAssertNil(capsule.favoritedAt)
+        XCTAssertFalse(capsule.isFavorited)
+    }
+
+    func testCapsuleFavoriteResponseDecodesGatewayShape() throws {
+        let response = try JSONDecoder().decode(
+            GaryxCapsuleFavoriteResponse.self,
+            from: Data(
+                """
+                {
+                  "favorited": true,
+                  "capsule": {
+                    "id": "capsule-favorite",
+                    "title": "Favorite",
+                    "favorited_at": "2026-07-14T01:00:00Z"
+                  }
+                }
+                """.utf8
+            )
+        )
+        XCTAssertTrue(response.favorited)
+        XCTAssertEqual(response.capsule.id, "capsule-favorite")
+        XCTAssertEqual(response.capsule.favoritedAt, "2026-07-14T01:00:00Z")
     }
 
     func testCapsulesPanelPresentationMatchesTopLevelDrawerContract() {

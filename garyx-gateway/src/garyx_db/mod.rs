@@ -300,6 +300,7 @@ pub struct CapsuleRecord {
     pub revision: i64,
     pub created_at: String,
     pub updated_at: String,
+    pub favorited_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -717,6 +718,32 @@ impl GaryxDbService {
         capsule_by_id(&conn, &id)
     }
 
+    pub fn set_capsule_favorite(
+        &self,
+        id: &str,
+        favorited: bool,
+    ) -> GaryxDbResult<Option<CapsuleRecord>> {
+        let id = normalize_capsule_id(id)?;
+        let conn = self.conn()?;
+        let updated = if favorited {
+            conn.execute(
+                "UPDATE capsules
+                 SET favorited_at = COALESCE(favorited_at, ?2)
+                 WHERE id = ?1",
+                params![id, now_string()],
+            )?
+        } else {
+            conn.execute(
+                "UPDATE capsules SET favorited_at = NULL WHERE id = ?1",
+                params![id],
+            )?
+        };
+        if updated == 0 {
+            return Ok(None);
+        }
+        capsule_by_id(&conn, &id)
+    }
+
     pub fn get_capsule(&self, id: &str) -> GaryxDbResult<Option<CapsuleRecord>> {
         let id = normalize_capsule_id(id)?;
         let conn = self.read_conn()?;
@@ -727,7 +754,7 @@ impl GaryxDbService {
         let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, title, description, thread_id, run_id, agent_id, provider_type,
-                    html_sha256, byte_size, revision, created_at, updated_at
+                    html_sha256, byte_size, revision, created_at, updated_at, favorited_at
              FROM capsules
              ORDER BY updated_at DESC, id ASC",
         )?;
@@ -744,7 +771,7 @@ impl GaryxDbService {
         let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, title, description, thread_id, run_id, agent_id, provider_type,
-                    html_sha256, byte_size, revision, created_at, updated_at
+                    html_sha256, byte_size, revision, created_at, updated_at, favorited_at
              FROM capsules
              WHERE thread_id = ?1
              ORDER BY updated_at DESC, id ASC",
@@ -2218,7 +2245,8 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             byte_size     INTEGER NOT NULL DEFAULT 0,
             revision      INTEGER NOT NULL DEFAULT 1,
             created_at    TEXT NOT NULL,
-            updated_at    TEXT NOT NULL
+            updated_at    TEXT NOT NULL,
+            favorited_at  TEXT
         ) STRICT;
 
         CREATE INDEX IF NOT EXISTS idx_capsules_updated
@@ -2228,6 +2256,7 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
 
         "#,
     )?;
+    ensure_capsules_favorited_at_column(conn)?;
     ensure_thread_meta_projection_columns(conn)?;
     ensure_thread_channel_endpoint_columns(conn)?;
     ensure_thread_channel_endpoint_single_holder_schema(conn)?;
@@ -2999,6 +3028,18 @@ fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbResult<()> {
     Ok(())
 }
 
+fn ensure_capsules_favorited_at_column(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(capsules)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == "favorited_at" {
+            return Ok(());
+        }
+    }
+    conn.execute("ALTER TABLE capsules ADD COLUMN favorited_at TEXT", [])?;
+    Ok(())
+}
+
 fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()> {
     let mut stmt = conn.prepare("PRAGMA table_info(thread_meta)")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -3214,6 +3255,7 @@ fn capsule_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CapsuleRecord> 
         revision: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
+        favorited_at: row.get(12)?,
     })
 }
 
@@ -3221,7 +3263,7 @@ fn capsule_by_id(conn: &Connection, id: &str) -> GaryxDbResult<Option<CapsuleRec
     Ok(conn
         .query_row(
             "SELECT id, title, description, thread_id, run_id, agent_id, provider_type,
-                    html_sha256, byte_size, revision, created_at, updated_at
+                    html_sha256, byte_size, revision, created_at, updated_at, favorited_at
              FROM capsules
              WHERE id = ?1",
             params![id],
@@ -4725,6 +4767,66 @@ mod tests {
         }
     }
 
+    fn capsule_table_columns(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(capsules)")
+            .expect("inspect capsules schema");
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .expect("query capsules columns")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("read capsules columns")
+    }
+
+    #[test]
+    fn capsules_schema_has_favorite_column_and_reinitialization_is_idempotent() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let conn = db.conn().expect("db connection");
+        assert!(capsule_table_columns(&conn).contains(&"favorited_at".to_owned()));
+
+        initialize_connection(&conn).expect("schema reinitializes");
+        let columns = capsule_table_columns(&conn);
+        assert_eq!(
+            columns
+                .iter()
+                .filter(|column| column.as_str() == "favorited_at")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn capsules_schema_migrates_existing_table_with_favorite_column() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let legacy = Connection::open(&path).expect("open legacy db");
+        legacy
+            .execute_batch(
+                r#"
+                CREATE TABLE capsules (
+                    id            TEXT PRIMARY KEY,
+                    title         TEXT NOT NULL DEFAULT '',
+                    description   TEXT NOT NULL DEFAULT '',
+                    thread_id     TEXT,
+                    run_id        TEXT,
+                    agent_id      TEXT,
+                    provider_type TEXT,
+                    html_sha256   TEXT NOT NULL,
+                    byte_size     INTEGER NOT NULL DEFAULT 0,
+                    revision      INTEGER NOT NULL DEFAULT 1,
+                    created_at    TEXT NOT NULL,
+                    updated_at    TEXT NOT NULL
+                ) STRICT;
+                "#,
+            )
+            .expect("create legacy capsules table");
+        drop(legacy);
+
+        let db = GaryxDbService::open(&path).expect("open migrated db");
+        let conn = db.conn().expect("db connection");
+        assert!(capsule_table_columns(&conn).contains(&"favorited_at".to_owned()));
+        initialize_connection(&conn).expect("migrated schema reinitializes");
+    }
+
     #[test]
     fn capsules_crud_create_update_get_list_delete() {
         let db = GaryxDbService::memory().expect("db opens");
@@ -4742,6 +4844,7 @@ mod tests {
         assert_eq!(created.byte_size, 42);
         assert_eq!(created.revision, 1);
         assert_eq!(created.created_at, created.updated_at);
+        assert_eq!(created.favorited_at, None);
 
         let fetched = db
             .get_capsule(&id)
@@ -4777,6 +4880,52 @@ mod tests {
         assert!(db.delete_capsule(&id).expect("delete capsule"));
         assert!(!db.delete_capsule(&id).expect("delete missing capsule"));
         assert!(db.get_capsule(&id).expect("get after delete").is_none());
+    }
+
+    #[test]
+    fn set_capsule_favorite_is_idempotent_metadata_only_point_write() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let id = Uuid::new_v4().to_string();
+        let created = db
+            .create_capsule(capsule_draft(&id, "Favorite", "thread::capsules"))
+            .expect("create capsule");
+
+        let favorited = db
+            .set_capsule_favorite(&id, true)
+            .expect("favorite capsule")
+            .expect("capsule exists");
+        let first_favorited_at = favorited
+            .favorited_at
+            .clone()
+            .expect("favorite timestamp is set");
+        assert_eq!(favorited.revision, created.revision);
+        assert_eq!(favorited.updated_at, created.updated_at);
+
+        let repeated = db
+            .set_capsule_favorite(&id, true)
+            .expect("repeat favorite")
+            .expect("capsule exists");
+        assert_eq!(
+            repeated.favorited_at.as_deref(),
+            Some(first_favorited_at.as_str())
+        );
+        assert_eq!(repeated.revision, created.revision);
+        assert_eq!(repeated.updated_at, created.updated_at);
+
+        let unfavorited = db
+            .set_capsule_favorite(&id, false)
+            .expect("unfavorite capsule")
+            .expect("capsule exists");
+        assert_eq!(unfavorited.favorited_at, None);
+        assert_eq!(unfavorited.revision, created.revision);
+        assert_eq!(unfavorited.updated_at, created.updated_at);
+
+        let unknown_id = Uuid::new_v4().to_string();
+        assert_eq!(
+            db.set_capsule_favorite(&unknown_id, true)
+                .expect("favorite unknown capsule"),
+            None
+        );
     }
 
     #[test]

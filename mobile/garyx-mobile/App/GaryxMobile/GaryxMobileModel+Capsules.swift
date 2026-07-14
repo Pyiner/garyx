@@ -40,17 +40,91 @@ extension GaryxMobileModel {
     func refreshCapsules() async {
         guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
+        let favoritesGeneration = capsuleFavoriteState.favoritesGeneration
         do {
             let nextCapsules = try await client().listCapsules()
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            // `capsules` didSet prunes stale preview HTML and bumps the cache
-            // epoch, so deleted capsules drop out of the cache on every refresh.
-            capsules = nextCapsules
+            mergeCapsulesFromRefresh(
+                nextCapsules,
+                capturedFavoritesGeneration: favoritesGeneration
+            )
             persistCatalogCacheSnapshot()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
+    }
+
+    func filteredCapsules(for tab: GaryxCapsuleGalleryTab) -> [GaryxCapsuleSummary] {
+        tab.filter(capsules, favoriteState: capsuleFavoriteState)
+    }
+
+    func isCapsuleFavorited(_ capsule: GaryxCapsuleSummary) -> Bool {
+        GaryxCapsuleFavoriteReducer.isFavorited(capsule, state: capsuleFavoriteState)
+    }
+
+    func toggleCapsuleFavorite(_ capsule: GaryxCapsuleSummary) async {
+        guard hasGatewaySettings else { return }
+        let transition = GaryxCapsuleFavoriteReducer.toggle(
+            capsules: capsules,
+            state: capsuleFavoriteState,
+            capsuleId: capsule.id,
+            favorited: !isCapsuleFavorited(capsule)
+        )
+        applyCapsuleFavoriteTransition(transition)
+        guard var effect = transition.effect else { return }
+
+        let runtimeGeneration = gatewayRuntimeGeneration
+        while true {
+            do {
+                let response = try await client().setCapsuleFavorite(
+                    id: effect.capsuleId,
+                    favorited: effect.favorited
+                )
+                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+                let settled = GaryxCapsuleFavoriteReducer.succeeded(
+                    capsules: capsules,
+                    state: capsuleFavoriteState,
+                    capsuleId: effect.capsuleId,
+                    response: response
+                )
+                applyCapsuleFavoriteTransition(settled)
+                persistCatalogCacheSnapshot()
+                guard let followUp = settled.effect else { return }
+                effect = followUp
+            } catch {
+                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+                let failed = GaryxCapsuleFavoriteReducer.failed(
+                    capsules: capsules,
+                    state: capsuleFavoriteState,
+                    capsuleId: effect.capsuleId
+                )
+                applyCapsuleFavoriteTransition(failed)
+                lastError = displayMessage(for: error)
+                return
+            }
+        }
+    }
+
+    func mergeCapsulesFromRefresh(
+        _ refreshedCapsules: [GaryxCapsuleSummary],
+        capturedFavoritesGeneration: Int
+    ) {
+        applyCapsuleFavoriteTransition(
+            GaryxCapsuleFavoriteReducer.mergingRefresh(
+                currentCapsules: capsules,
+                refreshedCapsules: refreshedCapsules,
+                state: capsuleFavoriteState,
+                capturedGeneration: capturedFavoritesGeneration
+            )
+        )
+    }
+
+    private func applyCapsuleFavoriteTransition(_ transition: GaryxCapsuleFavoriteTransition) {
+        capsuleFavoriteState = transition.state
+        // The existing didSet prune path is revision-keyed. Favorite-only
+        // changes therefore keep both HTML and thumbnail cache entries alive.
+        capsules = transition.capsules
     }
 
     /// Shared preview-HTML loader for gallery thumbnails, chat-card thumbnails,
@@ -132,6 +206,7 @@ extension GaryxMobileModel {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             if galleryFocusedCapsule?.id == capsule.id { galleryFocusedCapsule = nil }
             if conversationCapsulePreview?.id == capsule.id { conversationCapsulePreview = nil }
+            capsuleFavoriteState.mutations.removeValue(forKey: capsule.id)
             // didSet prunes the deleted capsule's preview HTML and bumps the epoch.
             capsules.removeAll { $0.id == capsule.id }
             persistCatalogCacheSnapshot()

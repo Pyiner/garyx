@@ -417,6 +417,47 @@ pub async fn serve_capsule(
     (StatusCode::OK, headers, body).into_response()
 }
 
+async fn set_capsule_favorite(id: String, state: Arc<AppState>, favorited: bool) -> Response {
+    let id = match parse_capsule_uuid(&id) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| db.set_capsule_favorite(&id, favorited))
+        .await
+    {
+        Ok(Some(record)) => {
+            let favorited = record.favorited_at.is_some();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "favorited": favorited,
+                    "capsule": capsule_response(record),
+                })),
+            )
+                .into_response()
+        }
+        Ok(None) => CapsuleError::not_found("capsule not found").into_response(),
+        Err(error) => CapsuleError::from(error).into_response(),
+    }
+}
+
+pub async fn favorite_capsule(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    set_capsule_favorite(id, state, true).await
+}
+
+pub async fn unfavorite_capsule(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    set_capsule_favorite(id, state, false).await
+}
+
 pub async fn delete_capsule(
     AxumPath(id): AxumPath<String>,
     State(state): State<Arc<AppState>>,
@@ -539,6 +580,7 @@ mod tests {
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload["capsules"][0]["id"], id);
+        assert!(payload["capsules"][0]["favorited_at"].is_null());
 
         let get = crate::test_support::authed_request()
             .uri(format!("/api/capsules/{id}"))
@@ -579,6 +621,53 @@ mod tests {
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("http-equiv=\"Content-Security-Policy\""));
         assert!(html.contains("<title>Demo</title>"));
+
+        let unauth_favorite = axum::http::Request::builder()
+            .method("PUT")
+            .uri(format!("/api/capsules/{id}/favorite"))
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(unauth_favorite).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let favorite = crate::test_support::authed_request()
+            .method("PUT")
+            .uri(format!("/api/capsules/{id}/favorite"))
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(favorite).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["favorited"], true);
+        assert_eq!(payload["capsule"]["id"], id);
+        assert!(payload["capsule"]["favorited_at"].is_string());
+
+        let unfavorite = crate::test_support::authed_request()
+            .method("DELETE")
+            .uri(format!("/api/capsules/{id}/favorite"))
+            .body(Body::empty())
+            .unwrap();
+        let response = router.clone().oneshot(unfavorite).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["favorited"], false);
+        assert!(payload["capsule"]["favorited_at"].is_null());
+
+        let unknown_id = Uuid::new_v4();
+        for method in ["PUT", "DELETE"] {
+            let missing = crate::test_support::authed_request()
+                .method(method)
+                .uri(format!("/api/capsules/{unknown_id}/favorite"))
+                .body(Body::empty())
+                .unwrap();
+            let response = router.clone().oneshot(missing).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(payload["error"], "capsule not found");
+        }
 
         fs::remove_file(capsule_file_path(&id).unwrap())
             .await

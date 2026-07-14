@@ -13,6 +13,7 @@ export interface DesktopCapsuleSummary {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  favoritedAt: string | null;
 }
 
 export interface DesktopCapsulesPage {
@@ -39,4 +40,14 @@ export type DesktopCapsuleThumbnailResult =
 
 export interface DeleteCapsuleInput {
   capsuleId: string;
+}
+
+export interface SetCapsuleFavoriteInput {
+  capsuleId: string;
+  favorited: boolean;
+}
+
+export interface SetCapsuleFavoriteResult {
+  favorited: boolean;
+  capsule: DesktopCapsuleSummary;
 }

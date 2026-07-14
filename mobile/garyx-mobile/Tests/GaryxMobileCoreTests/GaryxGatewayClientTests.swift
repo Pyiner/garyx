@@ -2373,6 +2373,70 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(counter.value(), 2)
     }
 
+    func testSetCapsuleFavoriteUsesPutAndDeleteRoutes() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        let counter = GaryxAtomicCounter()
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            let call = counter.increment()
+            let path = URLComponents(
+                url: try XCTUnwrap(request.url),
+                resolvingAgainstBaseURL: false
+            )?.percentEncodedPath
+            XCTAssertEqual(
+                path,
+                "/garyx/api/capsules/01900000-0000-7000-8000-000000000001/favorite"
+            )
+            XCTAssertEqual(request.httpMethod, call == 1 ? "PUT" : "DELETE")
+            let favorited = call == 1
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(
+                    """
+                    {
+                      "favorited": \(favorited),
+                      "capsule": {
+                        "id": "01900000-0000-7000-8000-000000000001",
+                        "title": "Synthetic Capsule",
+                        "favorited_at": \(favorited ? "\"2026-07-14T01:00:00Z\"" : "null")
+                      }
+                    }
+                    """.utf8
+                )
+            )
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+        let id = "01900000-0000-7000-8000-000000000001"
+        let favorited = try await client.setCapsuleFavorite(id: id, favorited: true)
+        let unfavorited = try await client.setCapsuleFavorite(id: id, favorited: false)
+        XCTAssertTrue(favorited.favorited)
+        XCTAssertEqual(favorited.capsule.favoritedAt, "2026-07-14T01:00:00Z")
+        XCTAssertFalse(unfavorited.favorited)
+        XCTAssertNil(unfavorited.capsule.favoritedAt)
+        XCTAssertEqual(counter.value(), 2)
+    }
+
     func testMobileFileLinkParsesAbsoluteAndFileURLs() throws {
         XCTAssertEqual(
             GaryxMobileFileLink.localFilePath(from: "/workspace/project/docs/page.html?tab=preview#top"),

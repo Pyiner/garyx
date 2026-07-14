@@ -10,6 +10,11 @@ struct GaryxCapsulesView: View {
     @Environment(\.garyxOpenSidebar) private var openSidebar
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var deletionCandidate: GaryxCapsuleSummary?
+    @State private var galleryTab = GaryxCapsuleGalleryTab.all
+
+    private var visibleCapsules: [GaryxCapsuleSummary] {
+        model.filteredCapsules(for: galleryTab)
+    }
 
     private var columns: [GridItem] {
         horizontalSizeClass == .regular
@@ -22,11 +27,21 @@ struct GaryxCapsulesView: View {
             .garyxPageBackground()
             .garyxAdaptiveTopBar {
                 GaryxAdaptiveGlassContainer(spacing: 10) {
-                    HStack(spacing: 12) {
-                        leadingButton
-                        GaryxPanelHeaderTitle(title: "Capsules")
-                            .layoutPriority(1)
-                        Spacer(minLength: 0)
+                    VStack(spacing: 8) {
+                        HStack(spacing: 12) {
+                            leadingButton
+                            GaryxPanelHeaderTitle(title: "Capsules")
+                                .layoutPriority(1)
+                            Spacer(minLength: 0)
+                        }
+                        Picker("Capsule gallery", selection: $galleryTab) {
+                            ForEach(GaryxCapsuleGalleryTab.allCases) { tab in
+                                Text(tab.rawValue).tag(tab)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .tint(GaryxTheme.controlTint)
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
@@ -74,13 +89,25 @@ struct GaryxCapsulesView: View {
                 )
                 .frame(maxWidth: .infinity, minHeight: 360)
             }
+        } else if visibleCapsules.isEmpty {
+            ScrollView {
+                GaryxEmptyPanelView(
+                    icon: "star",
+                    title: "No favorite Capsules yet.",
+                    text: "Favorite Capsules will appear here."
+                )
+                .frame(maxWidth: .infinity, minHeight: 360)
+            }
         } else {
             ScrollView {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                    ForEach(model.capsules) { capsule in
+                    ForEach(visibleCapsules) { capsule in
                         GaryxCapsuleGalleryCard(
                             capsule: capsule,
                             onOpen: { model.galleryFocusedCapsule = capsule },
+                            onFavorite: {
+                                Task { await model.toggleCapsuleFavorite(capsule) }
+                            },
                             onDelete: { deletionCandidate = capsule }
                         )
                     }
@@ -121,6 +148,7 @@ private struct GaryxCapsuleGalleryCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let capsule: GaryxCapsuleSummary
     let onOpen: () -> Void
+    let onFavorite: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
@@ -164,10 +192,28 @@ private struct GaryxCapsuleGalleryCard: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(GaryxTheme.hairline, lineWidth: 1)
             }
+            .overlay(alignment: .topTrailing) {
+                if model.isCapsuleFavorited(capsule) {
+                    Image(systemName: "star.fill")
+                        .font(GaryxFont.caption(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .padding(7)
+                        .background(.regularMaterial, in: Circle())
+                        .padding(8)
+                        .accessibilityHidden(true)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button(action: onFavorite) {
+                Label(
+                    model.isCapsuleFavorited(capsule) ? "Unfavorite" : "Favorite",
+                    systemImage: model.isCapsuleFavorited(capsule) ? "star.slash" : "star"
+                )
+            }
+            Divider()
             Button(role: .destructive, action: onDelete) {
                 Label("Delete", systemImage: "trash")
             }
@@ -389,6 +435,15 @@ struct GaryxCapsuleFocusedPreviewView: View {
                             }
                             Button { copyLink() } label: { Label("Copy Link", systemImage: "link") }
                             Button { copyID() } label: { Label("Copy ID", systemImage: "number") }
+                            Button {
+                                Task { await model.toggleCapsuleFavorite(capsule) }
+                            } label: {
+                                Label(
+                                    model.isCapsuleFavorited(capsule) ? "Unfavorite" : "Favorite",
+                                    systemImage: model.isCapsuleFavorited(capsule) ? "star.slash" : "star"
+                                )
+                            }
+                            Divider()
                             Button(role: .destructive) {
                                 showsDeleteConfirmation = true
                             } label: {

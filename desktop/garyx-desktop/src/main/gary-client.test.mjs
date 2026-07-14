@@ -9,11 +9,13 @@ import {
   fetchRecentThreads,
   fetchThreadHistory,
   getTask,
+  listCapsules,
   listTaskForest,
   listProviderModels,
   requestJson,
   setGatewayFetch,
   setGatewayStreamFetch,
+  setCapsuleFavorite,
   streamThreadEvents,
   validateListRecentThreadsInput,
 } from "./gary-client.ts";
@@ -1408,5 +1410,95 @@ test("fetchThreadSummary maps a metadata payload and resolves null on miss", asy
     assert.equal(missing, null);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("listCapsules maps favorited_at from the gateway contract", async () => {
+  setGatewayFetch(async () =>
+    new Response(
+      JSON.stringify({
+        capsules: [
+          {
+            id: "01900000-0000-7000-8000-000000000001",
+            title: "Synthetic Capsule",
+            description: "",
+            thread_id: null,
+            run_id: null,
+            agent_id: null,
+            provider_type: null,
+            html_sha256: "a".repeat(64),
+            byte_size: 42,
+            revision: 1,
+            created_at: "2026-07-14T00:00:00Z",
+            updated_at: "2026-07-14T00:00:00Z",
+            favorited_at: "2026-07-14T01:00:00Z",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ),
+  );
+  try {
+    const page = await listCapsules({
+      gatewayUrl: "https://gateway.example.test",
+      gatewayAuthToken: "",
+    });
+    assert.equal(page.capsules[0].favoritedAt, "2026-07-14T01:00:00Z");
+  } finally {
+    setGatewayFetch(null);
+  }
+});
+
+test("setCapsuleFavorite uses idempotent PUT/DELETE routes and maps the response", async () => {
+  const requests = [];
+  setGatewayFetch(async (url, init) => {
+    requests.push({ url: String(url), method: init?.method });
+    const favorited = init?.method === "PUT";
+    return new Response(
+      JSON.stringify({
+        favorited,
+        capsule: {
+          id: "01900000-0000-7000-8000-000000000001",
+          title: "Synthetic Capsule",
+          description: "",
+          thread_id: null,
+          run_id: null,
+          agent_id: null,
+          provider_type: null,
+          html_sha256: "a".repeat(64),
+          byte_size: 42,
+          revision: 1,
+          created_at: "2026-07-14T00:00:00Z",
+          updated_at: "2026-07-14T00:00:00Z",
+          favorited_at: favorited ? "2026-07-14T01:00:00Z" : null,
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  });
+  try {
+    const settings = {
+      gatewayUrl: "https://gateway.example.test",
+      gatewayAuthToken: "",
+    };
+    const capsuleId = "01900000-0000-7000-8000-000000000001";
+    const favorited = await setCapsuleFavorite(settings, { capsuleId, favorited: true });
+    const unfavorited = await setCapsuleFavorite(settings, { capsuleId, favorited: false });
+    assert.equal(favorited.favorited, true);
+    assert.equal(favorited.capsule.favoritedAt, "2026-07-14T01:00:00Z");
+    assert.equal(unfavorited.favorited, false);
+    assert.equal(unfavorited.capsule.favoritedAt, null);
+    assert.deepEqual(requests, [
+      {
+        url: `https://gateway.example.test/api/capsules/${capsuleId}/favorite`,
+        method: "PUT",
+      },
+      {
+        url: `https://gateway.example.test/api/capsules/${capsuleId}/favorite`,
+        method: "DELETE",
+      },
+    ]);
+  } finally {
+    setGatewayFetch(null);
   }
 });

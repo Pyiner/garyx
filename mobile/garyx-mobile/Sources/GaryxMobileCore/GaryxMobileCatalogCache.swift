@@ -166,6 +166,7 @@ struct GaryxCachedCapsule: Codable, Equatable {
     var revision: Int
     var createdAt: String?
     var updatedAt: String?
+    var favoritedAt: String?
 
     init(_ capsule: GaryxCapsuleSummary) {
         id = capsule.id
@@ -180,6 +181,7 @@ struct GaryxCachedCapsule: Codable, Equatable {
         revision = capsule.revision
         createdAt = capsule.createdAt
         updatedAt = capsule.updatedAt
+        favoritedAt = capsule.favoritedAt
     }
 
     var model: GaryxCapsuleSummary {
@@ -195,7 +197,8 @@ struct GaryxCachedCapsule: Codable, Equatable {
             byteSize: byteSize,
             revision: revision,
             createdAt: createdAt,
-            updatedAt: updatedAt
+            updatedAt: updatedAt,
+            favoritedAt: favoritedAt
         )
     }
 }

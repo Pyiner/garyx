@@ -79,6 +79,8 @@ import type {
   DesktopCapsuleSummary,
   DesktopCapsuleThumbnailResult,
   DesktopCapsulesPage,
+  SetCapsuleFavoriteInput,
+  SetCapsuleFavoriteResult,
 } from "./capsule.ts";
 import type {
   DesktopApiProviderType,
@@ -297,6 +299,9 @@ export interface GaryxDesktopApi {
     rendition: { aspectWidth: number; aspectHeight: number },
   ) => Promise<DesktopCapsuleThumbnailResult>;
   deleteCapsule: (input: DeleteCapsuleInput) => Promise<void>;
+  setCapsuleFavorite: (
+    input: SetCapsuleFavoriteInput,
+  ) => Promise<SetCapsuleFavoriteResult>;
   listSkills: () => Promise<DesktopSkillInfo[]>;
   listCustomAgents: () => Promise<DesktopCustomAgent[]>;
   listProviderModels: (
