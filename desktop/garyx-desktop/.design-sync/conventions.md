@@ -76,5 +76,5 @@ ghost / link / destructive); overlays (`Dialog`, `DropdownMenu`, `Popover`) foll
 trigger+content composition.
 
 App-shell composites are also exported: `AgentAvatar`, `ProviderAgentIcon`, `AgentOptionAvatar`
-(agent/team identity marks), `RateLimitBanner` (quota banner), and `RendererPerformancePanel`
-(renderer health) — these carry app-specific styling and read simple data props.
+(agent/team identity marks) and `RateLimitBanner` (quota banner) — these carry app-specific
+styling and read simple data props.

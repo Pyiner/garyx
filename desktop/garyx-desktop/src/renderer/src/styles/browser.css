@@ -597,11 +597,6 @@
     flex-direction: column;
   }
 
-  .endpoint-card {
-    grid-template-columns: 1fr;
-    align-items: flex-start;
-  }
-
   .settings-page-header {
     flex-direction: column;
   }

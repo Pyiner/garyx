@@ -41,8 +41,6 @@
     "AgentOptionAvatar": "src/renderer/src/app-shell/components/AgentOptionAvatar.tsx",
     "RateLimitBanner": "src/renderer/src/app-shell/components/RateLimitBanner.tsx",
     "UpdatePill": "src/renderer/src/app-shell/components/UpdatePill.tsx",
-    "RendererPerformancePanel": "src/renderer/src/app-shell/components/RendererPerformancePanel.tsx",
-    "ThreadLogPanel": "src/renderer/src/app-shell/components/ThreadLogPanel.tsx",
-    "TaskForestConsole": "src/renderer/src/app-shell/components/TaskForestConsole.tsx"
+    "ThreadLogPanel": "src/renderer/src/app-shell/components/ThreadLogPanel.tsx"
   }
 }

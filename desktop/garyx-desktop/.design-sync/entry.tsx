@@ -31,6 +31,4 @@ export * from '@/app-shell/components/AgentAvatar';
 export * from '@/app-shell/components/AgentOptionAvatar';
 export * from '@/app-shell/components/RateLimitBanner';
 export * from '@/app-shell/components/UpdatePill';
-export * from '@/app-shell/components/RendererPerformancePanel';
 export * from '@/app-shell/components/ThreadLogPanel';
-export * from '@/app-shell/components/TaskForestConsole';

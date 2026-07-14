@@ -1026,8 +1026,7 @@ button.recent-feed-footer.failed:hover {
 }
 
 .thread-binding-badges,
-.bot-endpoint-meta,
-.endpoint-meta {
+.bot-endpoint-meta {
   display: flex;
   align-items: center;
   gap: 6px;

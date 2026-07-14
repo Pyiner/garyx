@@ -48,8 +48,7 @@
   background: var(--color-token-bg-secondary);
 }
 
-.bot-endpoint-copy,
-.endpoint-card-copy {
+.bot-endpoint-copy {
   display: grid;
   gap: 4px;
   min-width: 0;
@@ -62,16 +61,6 @@
   min-width: 0;
 }
 
-.endpoint-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  padding: 12px;
-  background: transparent;
-}
-
-.endpoint-card-heading,
 .bot-endpoint-heading {
   display: flex;
   align-items: baseline;
@@ -79,68 +68,10 @@
   gap: 12px;
 }
 
-.endpoint-card-title {
-  font-size: var(--text-base);
-  font-weight: var(--font-weight-medium);
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.endpoint-card-description,
-.endpoint-card-secondary {
-  margin: 0;
-  color: var(--color-token-text-secondary);
-  font-size: var(--text-sm);
-  line-height: 1.45;
-}
-
-.endpoint-card-channel {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.endpoint-card-secondary strong {
-  color: var(--color-token-text-primary);
-  font-weight: var(--font-weight-medium);
-}
-
-.endpoint-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 2px;
-}
-
-.endpoint-meta-item {
-  color: var(--color-token-description-foreground);
-  font-size: var(--text-sm);
-  line-height: 1.35;
-}
-
 .thread-binding-badge-with-logo {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-}
-
-.endpoint-action-button {
-  height: 28px;
-  padding: 0 10px;
-  border-radius: var(--radius-full);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.endpoint-action-button.endpoint-action-button-strong {
-  background: rgba(26, 28, 31, 0.08);
-  color: var(--color-token-text-primary);
-  border-color: var(--color-border-heavy);
-}
-
-.endpoint-action-button.endpoint-action-button-strong:hover {
-  background: var(--color-token-bg-tertiary);
 }
 
 .messages::-webkit-scrollbar {
