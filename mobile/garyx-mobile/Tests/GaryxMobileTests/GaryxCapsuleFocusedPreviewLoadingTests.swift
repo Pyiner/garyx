@@ -9,6 +9,47 @@ final class GaryxCapsuleFocusedPreviewLoadingTests: XCTestCase {
         super.tearDown()
     }
 
+    func testGestureReleasePreservesRecentNonzeroVelocitySample() {
+        var sampler = GaryxCapsuleDismissVelocitySampler()
+        sampler.begin(location: CGPoint(x: 10, y: 20), timestamp: 1)
+        XCTAssertEqual(
+            sampler.sample(
+                location: CGPoint(x: 70, y: 20),
+                timestamp: 1.05,
+                isRelease: false
+            ).width,
+            1_200,
+            accuracy: 0.001
+        )
+
+        let releaseVelocity = sampler.sample(
+            location: CGPoint(x: 70, y: 20),
+            timestamp: 1.08,
+            isRelease: true
+        )
+        XCTAssertEqual(releaseVelocity.width, 1_200, accuracy: 0.001)
+        XCTAssertEqual(releaseVelocity.height, 0, accuracy: 0.001)
+    }
+
+    func testGestureReleaseExpiresVelocityAfterStationaryHold() {
+        var sampler = GaryxCapsuleDismissVelocitySampler()
+        sampler.begin(location: CGPoint(x: 10, y: 20), timestamp: 1)
+        _ = sampler.sample(
+            location: CGPoint(x: 70, y: 20),
+            timestamp: 1.05,
+            isRelease: false
+        )
+
+        XCTAssertEqual(
+            sampler.sample(
+                location: CGPoint(x: 70, y: 20),
+                timestamp: 1.20,
+                isRelease: true
+            ),
+            .zero
+        )
+    }
+
     func testCatalogSingleFlightPreservesTrailingTriggerAndCommitsNewestResponse() async throws {
         let firstStarted = expectation(description: "first catalog request started")
         let releaseFirst = DispatchSemaphore(value: 0)

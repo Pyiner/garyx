@@ -2,6 +2,56 @@ import SwiftUI
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 
+/// Samples the velocity passed to Core at release. UIKit commonly emits a
+/// stationary `touchesEnded` sample just after the final movement; preserving
+/// a recent movement sample keeps a real flick from being flattened to zero,
+/// while a deliberate hold still expires to zero.
+struct GaryxCapsuleDismissVelocitySampler: Equatable {
+    static let minimumMovement: CGFloat = 0.5
+    static let maximumReleaseSampleAge: TimeInterval = 0.12
+
+    private(set) var previousLocation = CGPoint.zero
+    private(set) var previousTimestamp: TimeInterval = 0
+    private(set) var velocity = CGSize.zero
+
+    mutating func begin(location: CGPoint, timestamp: TimeInterval) {
+        previousLocation = location
+        previousTimestamp = timestamp
+        velocity = .zero
+    }
+
+    @discardableResult
+    mutating func sample(
+        location: CGPoint,
+        timestamp: TimeInterval,
+        isRelease: Bool
+    ) -> CGSize {
+        let elapsed = timestamp - previousTimestamp
+        let delta = CGSize(
+            width: location.x - previousLocation.x,
+            height: location.y - previousLocation.y
+        )
+        let moved = hypot(delta.width, delta.height) >= Self.minimumMovement
+
+        if elapsed > 0, moved {
+            velocity = CGSize(width: delta.width / elapsed, height: delta.height / elapsed)
+            previousLocation = location
+            previousTimestamp = timestamp
+        } else if !isRelease || elapsed > Self.maximumReleaseSampleAge {
+            velocity = .zero
+            previousLocation = location
+            previousTimestamp = timestamp
+        }
+        return velocity
+    }
+
+    mutating func reset() {
+        previousLocation = .zero
+        previousTimestamp = 0
+        velocity = .zero
+    }
+}
+
 /// Mutable bridge shared by the focused SwiftUI surface, its WKWebView, and the
 /// one container-level recognizer. It intentionally owns no gesture decisions;
 /// both recognizer ownership and visible state feed the same Core reducer.
@@ -149,8 +199,7 @@ final class GaryxCapsuleContinuousDismissGestureRecognizer: UIGestureRecognizer 
     private(set) var velocity: CGSize = .zero
 
     private var startLocation: CGPoint = .zero
-    private var previousLocation: CGPoint = .zero
-    private var previousTimestamp: TimeInterval = 0
+    private var velocitySampler = GaryxCapsuleDismissVelocitySampler()
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard touches.count == 1, let touch = touches.first, let view else {
@@ -159,8 +208,7 @@ final class GaryxCapsuleContinuousDismissGestureRecognizer: UIGestureRecognizer 
         }
         let location = touch.location(in: view)
         startLocation = location
-        previousLocation = location
-        previousTimestamp = touch.timestamp
+        velocitySampler.begin(location: location, timestamp: touch.timestamp)
         startX = location.x
         translation = .zero
         velocity = .zero
@@ -193,7 +241,7 @@ final class GaryxCapsuleContinuousDismissGestureRecognizer: UIGestureRecognizer 
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
         if let touch = touches.first, let view {
-            updateMotion(touch: touch, in: view)
+            updateMotion(touch: touch, in: view, isRelease: true)
         }
         switch state {
         case .began, .changed:
@@ -219,24 +267,19 @@ final class GaryxCapsuleContinuousDismissGestureRecognizer: UIGestureRecognizer 
         translation = .zero
         velocity = .zero
         startLocation = .zero
-        previousLocation = .zero
-        previousTimestamp = 0
+        velocitySampler.reset()
     }
 
-    private func updateMotion(touch: UITouch, in view: UIView) {
+    private func updateMotion(touch: UITouch, in view: UIView, isRelease: Bool = false) {
         let location = touch.location(in: view)
         translation = CGSize(
             width: location.x - startLocation.x,
             height: location.y - startLocation.y
         )
-        let elapsed = touch.timestamp - previousTimestamp
-        if elapsed > 0 {
-            velocity = CGSize(
-                width: (location.x - previousLocation.x) / elapsed,
-                height: (location.y - previousLocation.y) / elapsed
-            )
-        }
-        previousLocation = location
-        previousTimestamp = touch.timestamp
+        velocity = velocitySampler.sample(
+            location: location,
+            timestamp: touch.timestamp,
+            isRelease: isRelease
+        )
     }
 }
