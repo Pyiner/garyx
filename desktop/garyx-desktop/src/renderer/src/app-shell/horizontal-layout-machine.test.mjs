@@ -1297,3 +1297,121 @@ test("old renderer epoch results cannot mutate the takeover state", () => {
   assert.equal(result.state, state);
   assert.deepEqual(result.effects, []);
 });
+
+test("constrained explicit open protects the rail and degrades the sidebar", () => {
+  // Work area equals the window: the +650 funded expansion is impossible, so
+  // the user-panel trigger keeps the 640px rail and the capacity chain
+  // sacrifices the global sidebar instead (primary thread never drops
+  // below 350).
+  const openAt = (width) => {
+    const constrained = createHorizontalLayoutState({
+      policy: "expand-v1",
+      rendererEpoch: "constrained-open",
+      snapshot: snapshot({ width, workAreaWidth: width, x: 0 }),
+      desiredOccupancy: sidebarOpen,
+    });
+    const opened = acknowledgeCheckpoint(
+      beginIntent(constrained, {
+        globalSidebar: true,
+        conversationRail: false,
+        sideTools: true,
+      }),
+    );
+    assert.equal(
+      opened.effects.some((effect) => effect.type === "window-bounds"),
+      false,
+      `${width}: constrained open must not emit bounds`,
+    );
+    return projectHorizontalLayout(opened.state);
+  };
+
+  for (const width of [1000, 1180, 1244]) {
+    const frame = openAt(width);
+    assert.equal(frame.kind, "stable", `${width}: stable`);
+    assert.equal(frame.presentation.sideTools, "docked", `${width}: docked`);
+    assert.equal(frame.columns.sideTools, 640, `${width}: rail width`);
+    assert.equal(
+      frame.presentation.globalSidebar,
+      "collapsed",
+      `${width}: sidebar degraded`,
+    );
+    assert.equal(
+      frame.presentation.reasons.globalSidebar,
+      "capacity",
+      `${width}: sidebar capacity reason`,
+    );
+    assert.ok(
+      frame.columns.primaryThread >= 350,
+      `${width}: thread keeps its minimum`,
+    );
+  }
+
+  const fits = openAt(1245);
+  assert.equal(fits.presentation.sideTools, "docked");
+  assert.equal(fits.presentation.globalSidebar, "expanded");
+  assert.deepEqual(
+    [fits.columns.globalSidebar, fits.columns.primaryThread, fits.columns.sideTools],
+    [245, 350, 640],
+  );
+});
+
+test("pre-doubling 330px funding still closes and repays exactly", () => {
+  // Sessions persisted before the 640px default carry sideTools funding of
+  // 330 (320 + resizer). Hydrating them next to the new 640 width must keep
+  // the recorded delta authoritative: close repays 330, orphans repay 330.
+  const legacyFunding = funding("sideTools", 330, "pre-doubling-side-tools");
+  const legacySession = acknowledgedSession({
+    desiredOccupancy: sideToolsOpen,
+    fundingByPanel: { sideTools: legacyFunding },
+    windowRevision: 3,
+    sessionRevision: 5,
+  });
+  const hydrated = stateWithSession({
+    desiredOccupancy: sideToolsOpen,
+    session: legacySession,
+  });
+  assert.equal(hydrated.snapshot.bounds.width, 1810);
+
+  const closing = acknowledgeCheckpoint(
+    beginIntent(hydrated, CLOSED_LAYOUT_OCCUPANCY, {
+      transactionId: "close-pre-doubling",
+    }),
+  );
+  const committed = reduceHorizontalLayout(closing.state, {
+    type: "FRAME_COMMITTED",
+    transactionId: "close-pre-doubling",
+  });
+  const repay = boundsEffect(committed).command;
+  assert.equal(repay.targetBounds.width, 1480);
+  const closed = acceptBounds(committed);
+  assert.equal(closed.state.snapshot.bounds.width, 1480);
+  assert.equal(
+    totalConfirmedFunding(closed.state.acknowledgedSession.fundingByPanel),
+    0,
+  );
+
+  const orphanSession = acknowledgedSession({
+    desiredOccupancy: CLOSED_LAYOUT_OCCUPANCY,
+    fundingByPanel: {
+      sideTools: funding("sideTools", 330, "pre-doubling-orphan"),
+    },
+    windowRevision: 4,
+    sessionRevision: 8,
+  });
+  const unhydrated = createHorizontalLayoutState({
+    policy: "expand-v1",
+    rendererEpoch: "pre-doubling-orphan",
+    snapshot: snapshot({ width: 1810, revision: 4 }),
+    hydrated: false,
+  });
+  const orphan = reduceHorizontalLayout(unhydrated, {
+    type: "HYDRATE",
+    freshSession: false,
+    snapshot: snapshot({ width: 1810, revision: 4 }),
+    acknowledgedSession: orphanSession,
+  });
+  const orphanRepay = boundsEffect(orphan).command;
+  assert.equal(orphanRepay.authority.kind, "repay-proof");
+  assert.deepEqual(orphanRepay.authority.fundingIds, ["pre-doubling-orphan"]);
+  assert.equal(orphanRepay.targetBounds.width, 1480);
+});

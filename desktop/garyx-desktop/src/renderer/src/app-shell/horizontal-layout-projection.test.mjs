@@ -173,8 +173,13 @@ test("expand-v1 intentional differences are isolated in a golden matrix", () => 
       width: scenario.width,
       desiredOccupancy: scenario.desiredOccupancy,
     });
-    const { reasons: _reasons, ...presentation } = frame.presentation;
+    const { reasons, ...presentation } = frame.presentation;
     assert.deepEqual(presentation, scenario.presentation, scenario.name);
+    assert.deepEqual(
+      reasons,
+      scenario.reasons,
+      `${scenario.name}: presentation reasons`,
+    );
     assert.deepEqual(columnVector(frame), scenario.columns, scenario.name);
   }
   assert.deepEqual(horizontalLayoutPolicy("legacy"), {

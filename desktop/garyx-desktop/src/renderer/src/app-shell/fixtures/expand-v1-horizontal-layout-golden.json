@@ -26,7 +26,12 @@
         715,
         0,
         0
-      ]
+      ],
+      "reasons": {
+        "globalSidebar": "requested",
+        "conversationRail": "closed",
+        "sideTools": "auto-hidden"
+      }
     },
     {
       "name": "side-tools-capacity-hidden-at-1244",
@@ -52,7 +57,12 @@
         999,
         0,
         0
-      ]
+      ],
+      "reasons": {
+        "globalSidebar": "requested",
+        "conversationRail": "closed",
+        "sideTools": "capacity"
+      }
     },
     {
       "name": "side-tools-docked-at-1245",
@@ -78,7 +88,12 @@
         350,
         10,
         640
-      ]
+      ],
+      "reasons": {
+        "globalSidebar": "requested",
+        "conversationRail": "closed",
+        "sideTools": "requested"
+      }
     },
     {
       "name": "conversation-rail-auto-hidden-before-sidebar-at-980",
@@ -104,7 +119,12 @@
         735,
         0,
         0
-      ]
+      ],
+      "reasons": {
+        "globalSidebar": "requested",
+        "conversationRail": "auto-hidden",
+        "sideTools": "closed"
+      }
     },
     {
       "name": "dual-rail-sidebar-restored-at-981",
@@ -130,7 +150,12 @@
         477,
         0,
         0
-      ]
+      ],
+      "reasons": {
+        "globalSidebar": "requested",
+        "conversationRail": "requested",
+        "sideTools": "closed"
+      }
     },
     {
       "name": "minimum-width-capacity-chain",
@@ -156,7 +181,12 @@
         480,
         0,
         0
-      ]
+      ],
+      "reasons": {
+        "globalSidebar": "compact",
+        "conversationRail": "auto-hidden",
+        "sideTools": "auto-hidden"
+      }
     }
   ]
 }

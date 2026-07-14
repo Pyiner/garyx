@@ -74,10 +74,17 @@
   least 1088px wide, leaving the full reading column intact. Below that width,
   expose the tree through the 28px conversation-header control and show it as
   a dismissible overlay with Escape, outside-click, and focus-return behavior.
-- Side tools have one presentation: a right-docked rail, approximately 320px
-  by default. The conversation-header control toggles that rail directly; do
-  not add a second inset/overlay form. The rail may still be resized and must
-  keep its contents responsive within the available width.
+- Side tools have one presentation: a right-docked rail. Its default width IS
+  its minimum width — one `LayoutPolicy.sideToolsMinWidth` knob: 640px under
+  the shipped expand-v1 policy (so docked capsules get a usable reading
+  width), 320px only under the legacy escape-hatch policy pinned by the
+  packaged Phase 0 oracle. The conversation-header control toggles that rail
+  directly; do not add a second inset/overlay form. The rail may still be
+  resized wider and must keep its contents responsive within the available
+  width. On a constrained window an explicit user open protects the rail:
+  the capacity chain degrades the other panels (global sidebar last) while
+  the primary thread never drops below its 350px minimum; passive projection
+  without a user trigger hides the rail by capacity instead.
 - Thread logs are a built-in side-tools item and replace the former side-tools
   Tasks item. They inherit the right rail's open, close, resize, and responsive
   behavior; they have no independent occupancy, funding, placement, resizer, or
