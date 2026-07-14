@@ -25,6 +25,24 @@ function imageBlock() {
   };
 }
 
+const claudeReadImageProjection = {
+  tool_name: 'Read',
+  kind: 'file_read',
+  visibility: 'normal',
+  call: {
+    root: 'content',
+    path: ['input', 'file_path'],
+    format: 'path',
+    label: 'file',
+  },
+  result: {
+    root: 'content',
+    path: ['result'],
+    format: 'image',
+    label: 'image',
+  },
+};
+
 // Real captured shape: a Claude Read of an image file commits a tool_result
 // whose content is { result: [imageBlock], text: "" }.
 test('image-only tool result renders thumbnails instead of base64 detail', () => {
@@ -41,6 +59,7 @@ test('image-only tool result renders thumbnails instead of base64 detail', () =>
       toolUseId: 'tool:1',
       toolName: 'Read',
     },
+    claudeReadImageProjection,
   );
 
   assert.equal(merged.resultImages.length, 1);
@@ -52,7 +71,7 @@ test('image-only tool result renders thumbnails instead of base64 detail', () =>
   assert.ok(!detail.includes(FAKE_BASE64), 'detail must not leak base64');
 });
 
-test('mixed text and image result keeps text detail and extracts the image', () => {
+test('projected mixed image result extracts the image without serializing its payload', () => {
   const merged = resolveMergedToolTrace(
     undefined,
     {
@@ -64,16 +83,27 @@ test('mixed text and image result keeps text detail and extracts the image', () 
       toolUseId: 'tool:2',
       toolName: 'browser_screenshot',
     },
+    {
+      tool_name: 'browser_screenshot',
+      kind: 'image',
+      visibility: 'normal',
+      result: {
+        root: 'content',
+        path: ['result'],
+        format: 'image',
+        label: 'image',
+      },
+    },
   );
 
   assert.equal(merged.resultImages.length, 1);
-  assert.ok((merged.resultDetail || '').includes('wrote screenshot'));
+  assert.equal(merged.resultDetail, undefined);
   assert.ok(!(merged.resultDetail || '').includes(FAKE_BASE64));
 });
 
-test('untyped source.data record is extracted AND stripped symmetrically', () => {
+test('projected untyped source.data image is extracted without base64 detail', () => {
   // Review #TASK-1677 blocker shape: no `type` field, image only via
-  // source.data. Extraction and stripping must agree, or base64 leaks.
+  // source.data. Image selectors must never expose that payload as text.
   const merged = resolveMergedToolTrace(
     undefined,
     {
@@ -85,16 +115,27 @@ test('untyped source.data record is extracted AND stripped symmetrically', () =>
       toolUseId: 'tool:4',
       toolName: 'someTool',
     },
+    {
+      tool_name: 'someTool',
+      kind: 'image',
+      visibility: 'normal',
+      result: {
+        root: 'content',
+        path: ['result'],
+        format: 'image',
+        label: 'image',
+      },
+    },
   );
 
   assert.equal(merged.resultImages.length, 1);
   assert.ok(!(merged.resultDetail || '').includes(FAKE_BASE64), 'detail must not leak base64');
 });
 
-test('url-bearing non-image results are neither thumbnailed nor stripped', () => {
+test('url-bearing non-image results are not thumbnailed', () => {
   // WebFetch-style result: has a url field but is not an image block. The
-  // lenient message-bubble collector would treat it as an image; the tool
-  // strip must not.
+  // lenient message-bubble collector would treat it as an image; the generic
+  // projection resolver must not.
   const merged = resolveMergedToolTrace(
     undefined,
     {
@@ -105,6 +146,17 @@ test('url-bearing non-image results are neither thumbnailed nor stripped', () =>
       },
       toolUseId: 'tool:5',
       toolName: 'WebFetch',
+    },
+    {
+      tool_name: 'WebFetch',
+      kind: 'web',
+      visibility: 'normal',
+      result: {
+        root: 'content',
+        path: ['result'],
+        format: 'json',
+        label: 'response',
+      },
     },
   );
 
@@ -125,6 +177,23 @@ test('imageless tool results keep their existing detail behavior', () => {
       content: { result: 'file-a\nfile-b', text: 'file-a\nfile-b' },
       toolUseId: 'tool:3',
       toolName: 'Bash',
+    },
+    {
+      tool_name: 'Bash',
+      kind: 'command',
+      visibility: 'normal',
+      call: {
+        root: 'content',
+        path: ['input', 'command'],
+        format: 'code',
+        label: 'command',
+      },
+      result: {
+        root: 'content',
+        path: ['result'],
+        format: 'code',
+        label: 'output',
+      },
     },
   );
 
@@ -151,11 +220,28 @@ test('Image view exposes one gateway path preview when use and result repeat the
       toolUseId: 'tool:image-view',
       toolName: 'imageView',
     },
+    {
+      tool_name: 'imageView',
+      kind: 'image',
+      visibility: 'normal',
+      call: {
+        root: 'content',
+        path: ['path'],
+        format: 'image',
+        label: 'image',
+      },
+      result: {
+        root: 'content',
+        path: ['path'],
+        format: 'image',
+        label: 'image',
+      },
+    },
   );
 
   assert.deepEqual(merged.pathImages, [
     {
-      key: 'image-view:/tmp/screens/thread-runtime-expanded.png',
+      key: 'projected-image:/tmp/screens/thread-runtime-expanded.png',
       path: '/tmp/screens/thread-runtime-expanded.png',
       alt: 'thread-runtime-expanded.png',
     },
@@ -171,9 +257,175 @@ test('ordinary path-bearing tools do not request gateway image previews', () => 
       toolName: 'Read',
     },
     undefined,
+    {
+      tool_name: 'Read',
+      kind: 'file_read',
+      visibility: 'normal',
+      call: {
+        root: 'content',
+        path: ['input', 'file_path'],
+        format: 'path',
+        label: 'file',
+      },
+    },
   );
 
   assert.deepEqual(merged.pathImages, []);
+});
+
+test('missing projection renders a provider-neutral empty fallback', () => {
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: { tool: 'Bash', input: { command: 'cat private.txt' } },
+      toolUseId: 'tool:unprojectable',
+      toolName: 'Bash',
+      metadata: { source: 'claude_sdk' },
+    },
+    {
+      role: 'tool_result',
+      content: { result: 'private output' },
+      toolUseId: 'tool:unprojectable',
+      toolName: 'Bash',
+      metadata: { source: 'claude_sdk' },
+      isError: true,
+    },
+  );
+
+  assert.deepEqual(merged, {
+    title: 'Tool',
+    badges: [],
+    resultImages: [],
+    pathImages: [],
+    icon: '·',
+    isError: true,
+  });
+});
+
+test('sanitized captured server snapshot maps Claude and Codex rows through selectors only', () => {
+  // Sanitized from current local Claude SDK and Codex app-server transcript
+  // shapes. The entry objects mirror `RenderToolEntry` from a render frame;
+  // message bodies remain in the seq-keyed client cache.
+  const captured = {
+    entries: [
+      {
+        tool_use: { seq: 41 },
+        tool_result: { seq: 42 },
+        projection: {
+          tool_name: 'Read',
+          kind: 'file_read',
+          visibility: 'normal',
+          call: {
+            root: 'content',
+            path: ['input', 'file_path'],
+            format: 'path',
+            label: 'file',
+          },
+          result: {
+            root: 'content',
+            path: ['result'],
+            format: 'text',
+            label: 'result',
+          },
+        },
+      },
+      {
+        tool_use: { seq: 73 },
+        tool_result: { seq: 74 },
+        projection: {
+          tool_name: 'commandExecution',
+          kind: 'command',
+          visibility: 'normal',
+          call: {
+            root: 'content',
+            path: ['command'],
+            format: 'code',
+            label: 'command',
+          },
+          result: {
+            root: 'content',
+            path: ['aggregatedOutput'],
+            format: 'code',
+            label: 'output',
+          },
+          status: 'completed',
+          exit_code: 0,
+          duration_ms: 7,
+        },
+      },
+    ],
+    messagesBySeq: {
+      41: {
+        role: 'tool_use',
+        content: { tool: 'Read', input: { file_path: '/Users/test/repo/README.md' } },
+        toolUseId: 'tool:claude-read',
+        toolName: 'Read',
+        metadata: { source: 'claude_sdk' },
+      },
+      42: {
+        role: 'tool_result',
+        content: { result: 'captured read output', text: 'captured read output' },
+        toolUseId: 'tool:claude-read',
+        metadata: { source: 'claude_sdk' },
+      },
+      73: {
+        role: 'tool_use',
+        content: {
+          type: 'commandExecution',
+          command: '/bin/zsh -lc "git status --short"',
+          status: 'inProgress',
+        },
+        toolUseId: 'tool:codex-command',
+        toolName: 'commandExecution',
+        metadata: { source: 'codex_app_server', item_type: 'commandExecution' },
+      },
+      74: {
+        role: 'tool_result',
+        content: {
+          type: 'commandExecution',
+          aggregatedOutput: ' M README.md\n',
+          status: 'completed',
+          exitCode: 0,
+          durationMs: 7,
+        },
+        toolUseId: 'tool:codex-command',
+        toolName: 'commandExecution',
+        metadata: { source: 'codex_app_server', item_type: 'commandExecution' },
+      },
+    },
+  };
+
+  const rows = captured.entries.map((entry) => resolveMergedToolTrace(
+    captured.messagesBySeq[entry.tool_use.seq],
+    captured.messagesBySeq[entry.tool_result.seq],
+    entry.projection,
+  ));
+
+  assert.deepEqual(
+    rows.map((row) => ({
+      title: row.title,
+      summary: row.summary,
+      input: row.inputDetail,
+      result: row.resultDetail,
+      badges: row.badges,
+    })),
+    [
+      {
+        title: 'Read',
+        summary: '/Users/test/repo/README.md',
+        input: '/Users/test/repo/README.md',
+        result: 'captured read output',
+        badges: ['repo/README.md'],
+      },
+      {
+        title: 'Command',
+        summary: '/bin/zsh -lc "git status --short"',
+        input: '/bin/zsh -lc "git status --short"',
+        result: ' M README.md\n',
+        badges: ['exit 0', '7 ms'],
+      },
+    ],
+  );
 });
 
 test('server projection shows only the selected Codex command fields', () => {
