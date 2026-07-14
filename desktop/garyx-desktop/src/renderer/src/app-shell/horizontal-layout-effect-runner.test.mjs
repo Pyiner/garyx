@@ -149,7 +149,7 @@ test("live effect runner closes open/checkpoint/bounds and close/frame/repay loo
   ]);
   assert.equal(store.getState().transactions["open-side-tools"].phase, "settled");
   assert.equal(store.getSnapshot().presentation.sideTools, "docked");
-  assert.equal(store.getSnapshot().contentViewportWidth, 2130);
+  assert.equal(store.getSnapshot().contentViewportWidth, 2080);
   assert.equal(timers.find((timer) => timer.delay === 100) !== undefined, true);
 
   runner.dispatch({

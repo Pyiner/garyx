@@ -327,8 +327,8 @@ test("expandable open uses one user token and late ack survives the 100ms fallba
     ).valid,
     true,
   );
-  assert.equal(command.targetBounds.width, 2130);
-  assert.equal(totalConfirmedFunding(command.targetFundingByPanel), 650);
+  assert.equal(command.targetBounds.width, 2080);
+  assert.equal(totalConfirmedFunding(command.targetFundingByPanel), 600);
 
   const timedOut = reduceHorizontalLayout(awaiting.state, {
     type: "OPEN_DEADLINE_EXPIRED",
@@ -387,7 +387,7 @@ test("a late rejected open follows the same reason route after fallback", () => 
 });
 
 test("funded close removes the frame before a RepayProof shrink", () => {
-  const sideFunding = funding("sideTools", 650);
+  const sideFunding = funding("sideTools", 600);
   const initialSession = acknowledgedSession({
     desiredOccupancy: sideToolsOpen,
     fundingByPanel: { sideTools: sideFunding },
@@ -466,7 +466,7 @@ test("funding-zero close settles without shrink", () => {
 });
 
 test("reopen supersedes a pending close frame and makes its callback a no-op", () => {
-  const sideFunding = funding("sideTools", 650, "reopen-side-tools");
+  const sideFunding = funding("sideTools", 600, "reopen-side-tools");
   const initialSession = acknowledgedSession({
     desiredOccupancy: sideToolsOpen,
     fundingByPanel: { sideTools: sideFunding },
@@ -498,7 +498,7 @@ test("funded open then close restores the exact base bounds", () => {
   const initial = stateWithSession();
   const opening = acknowledgeCheckpoint(beginIntent(initial, sideToolsOpen));
   const opened = acceptBounds(opening);
-  assert.equal(opened.state.snapshot.bounds.width, 2130);
+  assert.equal(opened.state.snapshot.bounds.width, 2080);
 
   const closingStarted = beginIntent(opened.state, CLOSED_LAYOUT_OCCUPANCY, {
     transactionId: "close-after-open",
@@ -643,7 +643,7 @@ test("fixed-mode open defers funding and resumes with the original token", () =>
 });
 
 test("fixed-mode funded close waits for frame commit and repays on exit", () => {
-  const sideFunding = funding("sideTools", 650, "fixed-side-tools");
+  const sideFunding = funding("sideTools", 600, "fixed-side-tools");
   const initialSession = acknowledgedSession({
     desiredOccupancy: sideToolsOpen,
     fundingByPanel: { sideTools: sideFunding },
@@ -681,7 +681,7 @@ test("fixed-mode funded close waits for frame commit and repays on exit", () => 
   const resumed = reduceHorizontalLayout(committed.state, {
     type: "WINDOW_SNAPSHOT_CHANGED",
     snapshot: snapshot({
-      width: 2130,
+      width: 2080,
       revision: 6,
       mode: "normal",
       origin: "mode",
@@ -796,7 +796,7 @@ test("rapid reverse folds the superseded physical ack before closing", () => {
   assert.deepEqual(oldApplied.state.desiredOccupancy, CLOSED_LAYOUT_OCCUPANCY);
   assert.equal(
     totalConfirmedFunding(oldApplied.state.acknowledgedSession.fundingByPanel),
-    650,
+    600,
   );
   assert.equal(
     oldApplied.state.transactions["close-2"].phase,
@@ -857,7 +857,7 @@ test("fresh claim is ordered, reload restores intent, and orphan funding repays"
   assert.deepEqual(reload.state.desiredOccupancy, sideToolsOpen);
   assert.deepEqual(reload.effects, []);
 
-  const sideFunding = funding("sideTools", 650, "orphaned-side-tools");
+  const sideFunding = funding("sideTools", 600, "orphaned-side-tools");
   const orphanSession = acknowledgedSession({
     desiredOccupancy: CLOSED_LAYOUT_OCCUPANCY,
     fundingByPanel: { sideTools: sideFunding },
@@ -867,7 +867,7 @@ test("fresh claim is ordered, reload restores intent, and orphan funding repays"
   const orphan = reduceHorizontalLayout(unhydrated, {
     type: "HYDRATE",
     freshSession: false,
-    snapshot: snapshot({ width: 2130, revision: 4 }),
+    snapshot: snapshot({ width: 2080, revision: 4 }),
     acknowledgedSession: orphanSession,
   });
   const repay = boundsEffect(orphan).command;
@@ -968,7 +968,7 @@ test("fixed-mode orphaned funding carries RepayProof until normal mode", () => {
   const orphanSession = acknowledgedSession({
     desiredOccupancy: CLOSED_LAYOUT_OCCUPANCY,
     fundingByPanel: {
-      sideTools: funding("sideTools", 650, "fixed-orphan"),
+      sideTools: funding("sideTools", 600, "fixed-orphan"),
     },
     windowRevision: 4,
     sessionRevision: 8,
@@ -976,7 +976,7 @@ test("fixed-mode orphaned funding carries RepayProof until normal mode", () => {
   const hydrated = reduceHorizontalLayout(unhydrated, {
     type: "HYDRATE",
     freshSession: false,
-    snapshot: snapshot({ width: 2130, revision: 4, mode: "maximized" }),
+    snapshot: snapshot({ width: 2080, revision: 4, mode: "maximized" }),
     acknowledgedSession: orphanSession,
   });
   assert.deepEqual(hydrated.effects, []);
@@ -987,7 +987,7 @@ test("fixed-mode orphaned funding carries RepayProof until normal mode", () => {
   const resumed = reduceHorizontalLayout(hydrated.state, {
     type: "WINDOW_SNAPSHOT_CHANGED",
     snapshot: snapshot({
-      width: 2130,
+      width: 2080,
       revision: 5,
       mode: "normal",
       origin: "mode",
@@ -1114,7 +1114,7 @@ test("explicit compact sidebar expansion grows native bounds before presenting i
 });
 
 test("authoritative user resize folds the rebased acknowledged session", () => {
-  const sideFunding = funding("sideTools", 650, "resize-side-tools");
+  const sideFunding = funding("sideTools", 600, "resize-side-tools");
   const initialSession = acknowledgedSession({
     desiredOccupancy: sideToolsOpen,
     fundingByPanel: { sideTools: sideFunding },
@@ -1136,7 +1136,7 @@ test("authoritative user resize folds the rebased acknowledged session", () => {
   };
   const resized = reduceHorizontalLayout(initial, {
     type: "WINDOW_SNAPSHOT_CHANGED",
-    snapshot: snapshot({ width: 2020, revision: 2, origin: "user" }),
+    snapshot: snapshot({ width: 1970, revision: 2, origin: "user" }),
     acknowledgedSession: rebasedSession,
   });
   assert.deepEqual(resized.effects, []);
@@ -1146,15 +1146,15 @@ test("authoritative user resize folds the rebased acknowledged session", () => {
   );
   assert.equal(
     boundsForAcknowledgedSession(resized.state.acknowledgedSession).width,
-    2020,
+    1970,
   );
-  assert.equal(resized.state.responsiveBasisWidth, 2020);
+  assert.equal(resized.state.responsiveBasisWidth, 1970);
   assert.deepEqual(resized.state.desiredOccupancy, sideToolsOpen);
 });
 
 test("accepted physical facts fold by window revision, never by sequence", () => {
   const initial = stateWithSession({ desiredOccupancy: sideToolsOpen });
-  const newerFunding = funding("sideTools", 650, "physical-newer");
+  const newerFunding = funding("sideTools", 600, "physical-newer");
   const newerSession = acknowledgedSession({
     desiredOccupancy: sideToolsOpen,
     fundingByPanel: { sideTools: newerFunding },
@@ -1167,7 +1167,7 @@ test("accepted physical facts fold by window revision, never by sequence", () =>
     transactionId: "old-sequence",
     sequence: 1,
     acknowledgedSession: newerSession,
-    snapshot: snapshot({ width: 2130, revision: 7, origin: "panel-machine" }),
+    snapshot: snapshot({ width: 2080, revision: 7, origin: "panel-machine" }),
   });
   assert.equal(newer.state.snapshot.windowRevision, 7);
   assert.equal(
@@ -1216,7 +1216,7 @@ test("panel width events never mint bounds authority", () => {
 });
 
 test("RepayProof cannot add, expand, cite unknown funding, or cross revisions", () => {
-  const sideFunding = funding("sideTools", 650, "proof-side");
+  const sideFunding = funding("sideTools", 600, "proof-side");
   const session = acknowledgedSession({
     desiredOccupancy: CLOSED_LAYOUT_OCCUPANCY,
     fundingByPanel: { sideTools: sideFunding },
@@ -1254,7 +1254,7 @@ test("RepayProof cannot add, expand, cite unknown funding, or cross revisions", 
   assert.equal(validateBoundsCommandAuthority(unknown, session).valid, false);
   const expands = structuredClone(valid);
   expands.targetFundingByPanel.sideTools = sideFunding;
-  expands.targetBounds.width = 2130;
+  expands.targetBounds.width = 2080;
   assert.equal(validateBoundsCommandAuthority(expands, session).valid, false);
   const rewrites = structuredClone(valid);
   rewrites.targetFundingByPanel.sideTools = {
@@ -1299,7 +1299,7 @@ test("old renderer epoch results cannot mutate the takeover state", () => {
 });
 
 test("constrained explicit open protects the rail and degrades the sidebar", () => {
-  // Work area equals the window: the +650 funded expansion is impossible, so
+  // Work area equals the window: the +600 funded expansion is impossible, so
   // the user-panel trigger keeps the 640px rail and the capacity chain
   // sacrifices the global sidebar instead (primary thread never drops
   // below 350).
@@ -1325,11 +1325,11 @@ test("constrained explicit open protects the rail and degrades the sidebar", () 
     return projectHorizontalLayout(opened.state);
   };
 
-  for (const width of [1000, 1180, 1244]) {
+  for (const width of [950, 1180, 1194]) {
     const frame = openAt(width);
     assert.equal(frame.kind, "stable", `${width}: stable`);
     assert.equal(frame.presentation.sideTools, "docked", `${width}: docked`);
-    assert.equal(frame.columns.sideTools, 640, `${width}: rail width`);
+    assert.equal(frame.columns.sideTools, 590, `${width}: rail width`);
     assert.equal(
       frame.presentation.globalSidebar,
       "collapsed",
@@ -1346,18 +1346,18 @@ test("constrained explicit open protects the rail and degrades the sidebar", () 
     );
   }
 
-  const fits = openAt(1245);
+  const fits = openAt(1195);
   assert.equal(fits.presentation.sideTools, "docked");
   assert.equal(fits.presentation.globalSidebar, "expanded");
   assert.deepEqual(
     [fits.columns.globalSidebar, fits.columns.primaryThread, fits.columns.sideTools],
-    [245, 350, 640],
+    [245, 350, 590],
   );
 });
 
 test("pre-doubling 330px funding still closes and repays exactly", () => {
   // Sessions persisted before the 640px default carry sideTools funding of
-  // 330 (320 + resizer). Hydrating them next to the new 640 width must keep
+  // 330 (320 + resizer). Hydrating them next to the new 590 width must keep
   // the recorded delta authoritative: close repays 330, orphans repay 330.
   const legacyFunding = funding("sideTools", 330, "pre-doubling-side-tools");
   const legacySession = acknowledgedSession({

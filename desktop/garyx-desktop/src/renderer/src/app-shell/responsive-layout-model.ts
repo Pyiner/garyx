@@ -60,10 +60,10 @@ export const EXPAND_V1_WINDOW_MIN_WIDTH = 480;
 export const MIN_PRIMARY_THREAD_WIDTH = 350;
 export const RIGHT_DOCK_AUTO_HIDE_WIDTH = 960;
 // The side-tools default width IS the min width (one knob per policy).
-// Legacy stays pinned at the packaged Phase 0 capture; expand-v1 doubles it
+// Legacy stays pinned at the packaged Phase 0 capture; expand-v1 widens it
 // so capsules docked in the rail get a usable reading width.
 export const LEGACY_SIDE_TOOLS_MIN_WIDTH = 320;
-export const EXPAND_V1_SIDE_TOOLS_MIN_WIDTH = 640;
+export const EXPAND_V1_SIDE_TOOLS_MIN_WIDTH = 590;
 export const SIDE_TOOLS_MAX_WIDTH = 1180;
 export const LAYOUT_EDGE_TOLERANCE = 2;
 

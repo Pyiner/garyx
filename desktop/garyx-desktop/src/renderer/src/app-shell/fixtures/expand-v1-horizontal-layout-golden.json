@@ -34,8 +34,8 @@
       }
     },
     {
-      "name": "side-tools-capacity-hidden-at-1244",
-      "width": 1244,
+      "name": "side-tools-capacity-hidden-at-1194",
+      "width": 1194,
       "desiredOccupancy": {
         "globalSidebar": true,
         "conversationRail": false,
@@ -54,7 +54,7 @@
         245,
         0,
         0,
-        999,
+        949,
         0,
         0
       ],
@@ -65,8 +65,8 @@
       }
     },
     {
-      "name": "side-tools-docked-at-1245",
-      "width": 1245,
+      "name": "side-tools-docked-at-1195",
+      "width": 1195,
       "desiredOccupancy": {
         "globalSidebar": true,
         "conversationRail": false,
@@ -87,7 +87,7 @@
         0,
         350,
         10,
-        640
+        590
       ],
       "reasons": {
         "globalSidebar": "requested",

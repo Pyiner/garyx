@@ -75,7 +75,7 @@
   expose the tree through the 28px conversation-header control and show it as
   a dismissible overlay with Escape, outside-click, and focus-return behavior.
 - Side tools have one presentation: a right-docked rail. Its default width IS
-  its minimum width — one `LayoutPolicy.sideToolsMinWidth` knob: 640px under
+  its minimum width — one `LayoutPolicy.sideToolsMinWidth` knob: 590px under
   the shipped expand-v1 policy (so docked capsules get a usable reading
   width), 320px only under the legacy escape-hatch policy pinned by the
   packaged Phase 0 oracle. The conversation-header control toggles that rail
@@ -87,7 +87,7 @@
   conversation rail, and only then the trigger panel itself — while the
   primary thread never drops below its 350px minimum. Passive projection
   without a user trigger instead hides the rail by capacity between 961 and
-  1244px and by auto-hide at or below 960px.
+  1194px and by auto-hide at or below 960px.
 - Thread logs are a built-in side-tools item and replace the former side-tools
   Tasks item. They inherit the right rail's open, close, resize, and responsive
   behavior; they have no independent occupancy, funding, placement, resizer, or
