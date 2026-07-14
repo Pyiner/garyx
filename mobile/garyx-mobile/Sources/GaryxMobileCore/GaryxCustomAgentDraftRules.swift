@@ -320,12 +320,12 @@ public enum GaryxCustomAgentDraftRules {
         mode: GaryxCustomAgentDraftMode
     ) -> GaryxCustomAgentMutationFailure {
         switch error {
-        case .httpStatus(409, let body):
+        case .httpStatus(409, let body, _):
             if mode.isCreate {
                 return .createConflict
             }
             return .editConflict(currentUpdatedAt: currentUpdatedAt(from: body))
-        case .httpStatus(404, _):
+        case .httpStatus(404, _, _):
             if !mode.isCreate {
                 return .deleted
             }

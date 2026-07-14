@@ -2151,7 +2151,7 @@ final class GaryxGatewayClientTests: XCTestCase {
             )
             XCTFail("Expected stream-input to surface 503 without retry")
         } catch let error as GaryxGatewayError {
-            guard case .httpStatus(let code, _) = error else {
+            guard case .httpStatus(let code, _, _) = error else {
                 XCTFail("Expected httpStatus error, got \(error)")
                 return
             }
@@ -2661,6 +2661,54 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(attemptCount.value(), 3)
     }
 
+    func testGatewayClientTextRouteCanDisableInnerRetryAndCarriesRetryAfter() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let attemptCount = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            _ = attemptCount.increment()
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 429,
+                    httpVersion: nil,
+                    headerFields: ["Retry-After": "9"]
+                )
+            )
+            return (response, Data("rate limited".utf8))
+        }
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(
+                maxAttempts: 4,
+                initialDelay: 0,
+                maxDelay: 0,
+                jitter: 0
+            )
+        )
+
+        do {
+            _ = try await client.capsuleHTML(id: "capsule-1", allowsRetry: false)
+            XCTFail("Expected the single attempt to surface 429")
+        } catch let error as GaryxGatewayError {
+            guard case let .httpStatus(status, _, retryAfter) = error else {
+                return XCTFail("Expected structured HTTP failure, got \(error)")
+            }
+            XCTAssertEqual(status, 429)
+            XCTAssertEqual(retryAfter, 9)
+            XCTAssertEqual(attemptCount.value(), 1)
+        }
+    }
+
     func testGatewayClientTextRouteDoesNotRetryClientErrors() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GaryxURLProtocolStub.self]
@@ -2702,7 +2750,7 @@ final class GaryxGatewayClientTests: XCTestCase {
             _ = try await client.capsuleHTML(id: "cap-1")
             XCTFail("Expected 404 to surface without retry")
         } catch let error as GaryxGatewayError {
-            guard case .httpStatus(let code, _) = error else {
+            guard case .httpStatus(let code, _, _) = error else {
                 XCTFail("Expected httpStatus error, got \(error)")
                 return
             }
@@ -2993,7 +3041,7 @@ final class GaryxGatewayClientTests: XCTestCase {
         do {
             _ = try await client.generateAvatar(prompt: "avatar")
             XCTFail("Expected provider failure")
-        } catch GaryxGatewayError.httpStatus(let status, _) {
+        } catch GaryxGatewayError.httpStatus(let status, _, _) {
             XCTAssertEqual(status, 502)
             XCTAssertEqual(attemptCount.value(), 1)
         }

@@ -1,81 +1,216 @@
 import CoreGraphics
 
-/// Pure decision logic for the iOS capsule full-screen detail's interactive
-/// pull-to-dismiss gesture (#TASK-1470).
-///
-/// The capsule detail stays a `.fullScreenCover` (full-bleed, never a sheet) and
-/// gains a Photos-style drag-down dismiss. The hard part is coexisting with the
-/// inner `WKWebView` vertical scroll: a downward drag must dismiss only when the
-/// page is scrolled to the top, and must never fight content scrolling.
-///
-/// This mirrors the sidebar gesture's "decide the axis once, then lock"
-/// discipline (`GaryxMobileViews.openingSidebarGesture` decides
-/// `sidebarDragAxis` on the first change and keeps returning for the off-axis):
-/// the dismiss phase is decided exactly once at the start of a drag from
-/// `decideInitialPhase` and never re-evaluated mid-drag. That guarantees a drag
-/// started off-top is `.ignored` for its whole life even if the web view later
-/// reaches the top, and a drag started at-top stays `.engaged` so a quick scroll
-/// up can't cancel an in-progress dismiss.
-///
-/// Flick detection uses `DragGesture.Value.predictedEndTranslation` (the same
-/// signal the sidebar gestures use), so it does not depend on the iOS 17-only
-/// `velocity` accessor.
+/// One axis-locked state machine shared by SwiftUI presentation and the UIKit
+/// ownership adapter. `pending` is held until the 14pt decision boundary;
+/// afterward the drag is permanently vertical, horizontal, or ignored.
 public enum GaryxCapsuleDragPhase: Equatable, Sendable {
-    /// No active drag; the next change event decides the phase.
-    case idle
-    /// This drag owns dismissal: content follows the finger, release decides.
-    case engaged
-    /// This drag belongs to web-view scrolling (or an upward pull); the dismiss
-    /// container stays inert for the rest of the drag.
+    case pending
+    case verticalDismiss
+    case horizontalDismiss
     case ignored
+
+    public var ownsGesture: Bool {
+        self == .verticalDismiss || self == .horizontalDismiss
+    }
+}
+
+public struct GaryxCapsuleDragDismissMetrics: Equatable, Sendable {
+    public let leadingEdgeWidth: CGFloat
+    public let decisionDistance: CGFloat
+    public let horizontalDominanceRatio: CGFloat
+    public let horizontalThresholdRatio: CGFloat
+    public let horizontalThresholdMaximum: CGFloat
+    public let verticalThreshold: CGFloat
+    public let velocityProjectionSeconds: CGFloat
+    public let fullPullDistance: CGFloat
+
+    public init(
+        leadingEdgeWidth: CGFloat = 24,
+        decisionDistance: CGFloat = 14,
+        horizontalDominanceRatio: CGFloat = 1.5,
+        horizontalThresholdRatio: CGFloat = 1.0 / 3.0,
+        horizontalThresholdMaximum: CGFloat = 260,
+        verticalThreshold: CGFloat = 120,
+        velocityProjectionSeconds: CGFloat = 0.20,
+        fullPullDistance: CGFloat = 240
+    ) {
+        self.leadingEdgeWidth = max(0, leadingEdgeWidth)
+        self.decisionDistance = max(0, decisionDistance)
+        self.horizontalDominanceRatio = max(1, horizontalDominanceRatio)
+        self.horizontalThresholdRatio = max(0, horizontalThresholdRatio)
+        self.horizontalThresholdMaximum = max(0, horizontalThresholdMaximum)
+        self.verticalThreshold = max(0, verticalThreshold)
+        self.velocityProjectionSeconds = max(0, velocityProjectionSeconds)
+        self.fullPullDistance = max(1, fullPullDistance)
+    }
+
+    public static let `default` = GaryxCapsuleDragDismissMetrics()
+}
+
+public struct GaryxCapsuleDragDismissState: Equatable, Sendable {
+    public var phase: GaryxCapsuleDragPhase
+    public var translation: CGSize
+
+    public init(phase: GaryxCapsuleDragPhase = .pending, translation: CGSize = .zero) {
+        self.phase = phase
+        self.translation = translation
+    }
+}
+
+public enum GaryxCapsuleDragDismissEvent: Equatable, Sendable {
+    case changed(
+        startX: CGFloat,
+        translation: CGSize,
+        webAtTop: Bool,
+        panelPresented: Bool
+    )
+    case released(velocity: CGSize, containerWidth: CGFloat)
+    case cancelled
+}
+
+public enum GaryxCapsuleDragDismissEffect: Equatable, Sendable {
+    case none
+    case dismiss
+    case snapBack
 }
 
 public enum GaryxCapsuleDragDismiss {
-    /// Release past this downward offset (points) dismisses.
-    public static let dismissThreshold: CGFloat = 120
-    /// A flick whose predicted end translation reaches this dismisses even when
-    /// the live offset is short.
-    public static let flickThreshold: CGFloat = 220
-    /// Offset over which the drag is considered "fully pulled" for derived
-    /// visuals (scrim/scale). Tuned in the view; kept here so progress is tested.
-    public static let fullPullDistance: CGFloat = 240
+    public static let metrics = GaryxCapsuleDragDismissMetrics.default
 
-    /// Decide the phase once, at the first change of a drag.
-    ///
-    /// Engages only when the web view is at the top **and** the drag is downward.
-    /// Anything else (off-top start, upward pull) is `.ignored` and — because the
-    /// caller locks the phase for the rest of the drag — stays ignored even if the
-    /// web view later scrolls to the top.
-    public static func decideInitialPhase(atTop: Bool, translationY: CGFloat) -> GaryxCapsuleDragPhase {
-        guard atTop, translationY > 0 else { return .ignored }
-        return .engaged
+    public static func classify(
+        currentPhase: GaryxCapsuleDragPhase = .pending,
+        startX: CGFloat,
+        translation: CGSize,
+        webAtTop: Bool,
+        panelPresented: Bool,
+        metrics: GaryxCapsuleDragDismissMetrics = metrics
+    ) -> GaryxCapsuleDragPhase {
+        guard currentPhase == .pending else { return currentPhase }
+        guard !panelPresented else { return .ignored }
+
+        let dx = translation.width
+        let dy = translation.height
+        let horizontalMagnitude = abs(dx)
+        let verticalMagnitude = abs(dy)
+        guard max(horizontalMagnitude, verticalMagnitude) >= metrics.decisionDistance else {
+            return .pending
+        }
+
+        let rightwardHorizontal = dx > 0
+            && horizontalMagnitude >= metrics.horizontalDominanceRatio * verticalMagnitude
+        if rightwardHorizontal {
+            return startX <= metrics.leadingEdgeWidth ? .horizontalDismiss : .ignored
+        }
+        if webAtTop, dy > 0 {
+            return .verticalDismiss
+        }
+        return .ignored
     }
 
-    /// Live downward offset to apply to the content. Only an engaged drag moves
-    /// it; an ignored drag never displaces the content (web scrolling stays
-    /// untouched). Negative translations (overscroll up) clamp to 0.
-    public static func resolvedOffset(phase: GaryxCapsuleDragPhase, translationY: CGFloat) -> CGFloat {
-        guard phase == .engaged else { return 0 }
-        return max(0, translationY)
+    public static func resolvedTranslation(
+        phase: GaryxCapsuleDragPhase,
+        translation: CGSize
+    ) -> CGSize {
+        switch phase {
+        case .horizontalDismiss:
+            return CGSize(width: max(0, translation.width), height: 0)
+        case .verticalDismiss:
+            return CGSize(width: 0, height: max(0, translation.height))
+        case .pending, .ignored:
+            return .zero
+        }
     }
 
-    /// Normalized pull progress in `0...1` for derived visuals (backdrop dim,
-    /// content scale). `0` at rest, `1` once pulled `fullPullDistance`.
-    public static func dragProgress(offset: CGFloat, fullPullDistance: CGFloat = fullPullDistance) -> Double {
-        guard fullPullDistance > 0 else { return 0 }
-        let ratio = Double(offset / fullPullDistance)
-        return min(1, max(0, ratio))
+    public static func horizontalDismissThreshold(
+        containerWidth: CGFloat,
+        metrics: GaryxCapsuleDragDismissMetrics = metrics
+    ) -> CGFloat {
+        min(max(0, containerWidth) * metrics.horizontalThresholdRatio, metrics.horizontalThresholdMaximum)
     }
 
-    /// Whether releasing the drag should dismiss. Only an engaged drag can
-    /// dismiss; it does so when the live offset crosses `dismissThreshold` or the
-    /// predicted (flicked) end translation crosses `flickThreshold`.
+    public static func projectedEndTranslation(
+        translation: CGSize,
+        velocity: CGSize,
+        metrics: GaryxCapsuleDragDismissMetrics = metrics
+    ) -> CGSize {
+        CGSize(
+            width: translation.width + velocity.width * metrics.velocityProjectionSeconds,
+            height: translation.height + velocity.height * metrics.velocityProjectionSeconds
+        )
+    }
+
     public static func shouldDismiss(
         phase: GaryxCapsuleDragPhase,
-        offset: CGFloat,
-        predictedTranslationY: CGFloat
+        translation: CGSize,
+        velocity: CGSize,
+        containerWidth: CGFloat,
+        metrics: GaryxCapsuleDragDismissMetrics = metrics
     ) -> Bool {
-        guard phase == .engaged else { return false }
-        return offset >= dismissThreshold || predictedTranslationY >= flickThreshold
+        let resolved = resolvedTranslation(phase: phase, translation: translation)
+        let projected = resolvedTranslation(
+            phase: phase,
+            translation: projectedEndTranslation(
+                translation: translation,
+                velocity: velocity,
+                metrics: metrics
+            )
+        )
+        switch phase {
+        case .horizontalDismiss:
+            let threshold = horizontalDismissThreshold(containerWidth: containerWidth, metrics: metrics)
+            guard threshold > 0 else { return false }
+            return resolved.width >= threshold || projected.width >= threshold
+        case .verticalDismiss:
+            return resolved.height >= metrics.verticalThreshold
+                || projected.height >= metrics.verticalThreshold
+        case .pending, .ignored:
+            return false
+        }
+    }
+
+    public static func dragProgress(
+        phase: GaryxCapsuleDragPhase,
+        translation: CGSize,
+        metrics: GaryxCapsuleDragDismissMetrics = metrics
+    ) -> Double {
+        let resolved = resolvedTranslation(phase: phase, translation: translation)
+        let distance = phase == .horizontalDismiss ? resolved.width : resolved.height
+        return min(1, max(0, Double(distance / metrics.fullPullDistance)))
+    }
+
+    @discardableResult
+    public static func reduce(
+        state: inout GaryxCapsuleDragDismissState,
+        event: GaryxCapsuleDragDismissEvent,
+        metrics: GaryxCapsuleDragDismissMetrics = metrics
+    ) -> GaryxCapsuleDragDismissEffect {
+        switch event {
+        case let .changed(startX, translation, webAtTop, panelPresented):
+            state.phase = classify(
+                currentPhase: state.phase,
+                startX: startX,
+                translation: translation,
+                webAtTop: webAtTop,
+                panelPresented: panelPresented,
+                metrics: metrics
+            )
+            state.translation = resolvedTranslation(phase: state.phase, translation: translation)
+            return .none
+        case let .released(velocity, containerWidth):
+            let owned = state.phase.ownsGesture
+            let dismiss = shouldDismiss(
+                phase: state.phase,
+                translation: state.translation,
+                velocity: velocity,
+                containerWidth: containerWidth,
+                metrics: metrics
+            )
+            state = GaryxCapsuleDragDismissState()
+            if dismiss { return .dismiss }
+            return owned ? .snapBack : .none
+        case .cancelled:
+            state = GaryxCapsuleDragDismissState()
+            return .none
+        }
     }
 }

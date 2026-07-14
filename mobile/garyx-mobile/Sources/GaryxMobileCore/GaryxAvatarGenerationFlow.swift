@@ -33,7 +33,7 @@ public extension GaryxAvatarGenerationOutcome {
         if GaryxGatewayRetryClassifier.isCancellation(error) {
             return .cancelled
         }
-        if case GaryxGatewayError.httpStatus(let status, _) = error {
+        if case GaryxGatewayError.httpStatus(let status, _, _) = error {
             switch status {
             case 504:
                 return .failure(GaryxAvatarGenerationFailure(category: .timeout))
