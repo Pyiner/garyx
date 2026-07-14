@@ -494,9 +494,7 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
     public var toolUseResult: Bool
     public var isError: Bool?
     public var likelyUserVisible: Bool
-    /// Envelope tool identity the nested `content` omits, so committed tool rows
-    /// carry the same id/parent as live events. `metadata.parent_tool_use_id`
-    /// marks a sub-agent's nested tool call.
+    /// Envelope tool identity carried independently of the nested content.
     public var toolUseId: String?
     public var metadata: GaryxJSONValue?
 
@@ -527,20 +525,6 @@ public struct GaryxTranscriptMessage: Codable, Identifiable, Equatable, Sendable
         case toolUseId = "tool_use_id"
         case toolUseIdCamel = "toolUseId"
         case metadata
-    }
-
-    /// The parent tool call id when this is a sub-agent's nested tool call (the
-    /// gateway stamps it into `metadata.parent_tool_use_id`); `nil` for top-level
-    /// calls such as the `Agent` spawn itself.
-    public var garyxParentToolUseId: String? {
-        guard case let .object(meta)? = metadata else { return nil }
-        for key in ["parent_tool_use_id", "parentToolUseId"] {
-            if case let .string(value)? = meta[key] {
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { return trimmed }
-            }
-        }
-        return nil
     }
 
     public var originId: String? {

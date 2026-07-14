@@ -1217,58 +1217,35 @@ private extension GaryxRenderToolEntry {
     func mobileEntry(lookup: MessageLookup) -> GaryxMobileToolTraceEntry {
         let useMessage = lookup.transcriptMessage(for: toolUse)
         let resultMessage = lookup.transcriptMessage(for: toolResult)
-        let usePayload = useMessage.map(GaryxMobileToolTracePayload.fromTranscript)
-        let resultPayload = resultMessage.map(GaryxMobileToolTracePayload.fromTranscript)
         let resolvedProjection = GaryxToolFieldProjectionResolver.resolve(
             projection,
             toolUse: useMessage,
             toolResult: resultMessage
         )
-        let resolvedToolUseId = toolUseId.garyxRenderTrimmedNilIfEmpty
-            ?? usePayload?.toolUseId
-            ?? resultPayload?.toolUseId
         let toolName = resolvedProjection?.toolName.garyxRenderTrimmedNilIfEmpty
-            ?? usePayload?.normalizedToolName.garyxRenderTrimmedNilIfEmpty
-            ?? resultPayload?.normalizedToolName.garyxRenderTrimmedNilIfEmpty
             ?? "tool"
-        let title = resolvedProjection?.title ?? GaryxMobileToolTraceEntry.title(for: toolName)
-        let projectedPath = resolvedProjection?.call?.format == .path
-            ? resolvedProjection?.call?.text
-            : nil
-        let inputText: String?
-        let resultText: String?
-        let summaryText: String?
-        if let resolvedProjection {
-            inputText = resolvedProjection.call?.text
-            resultText = resolvedProjection.result?.text
-            summaryText = resolvedProjection.call?.previewText
-                ?? resolvedProjection.result?.previewText
-        } else {
-            inputText = usePayload?.contentText
-            resultText = resultPayload?.contentText
-            summaryText = usePayload?.summaryText ?? resultPayload?.summaryText
-        }
+        let projectedPath = [resolvedProjection?.call, resolvedProjection?.result]
+            .compactMap { $0 }
+            .first(where: { $0.format == .path || $0.format == .image })?.text
         return GaryxMobileToolTraceEntry(
             id: id,
-            toolUseId: resolvedToolUseId,
-            parentToolUseId: usePayload?.parentToolUseId ?? resultPayload?.parentToolUseId,
+            toolUseId: toolUseId.garyxRenderTrimmedNilIfEmpty,
+            parentToolUseId: nil,
             toolName: toolName,
-            title: title,
-            inputText: inputText,
-            resultText: resultText,
-            summaryText: summaryText,
+            title: resolvedProjection?.title ?? "Tool",
+            inputText: resolvedProjection?.call?.text,
+            resultText: resolvedProjection?.result?.text,
+            summaryText: resolvedProjection?.call?.previewText,
             inputLabel: resolvedProjection?.call?.label ?? "Call",
             resultLabel: resolvedProjection?.result?.label ?? "Result",
             status: mobileStatus,
             isError: status == .failed
                 || resolvedProjection?.isError == true
-                || resultPayload?.isError == true
-                || usePayload?.isError == true,
-            timestamp: usePayload?.timestamp ?? resultPayload?.timestamp,
-            primaryPathBadge: projectedPath.map(GaryxMobileToolSummaryFormatter.pathTail)
-                ?? usePayload?.primaryPathBadge
-                ?? resultPayload?.primaryPathBadge,
-            primaryPath: projectedPath ?? usePayload?.primaryPath ?? resultPayload?.primaryPath,
+                || useMessage?.isError == true
+                || resultMessage?.isError == true,
+            timestamp: nil,
+            primaryPathBadge: projectedPath.map(GaryxMobileToolSummaryFormatter.pathTail),
+            primaryPath: projectedPath,
             fieldProjection: resolvedProjection
         )
     }

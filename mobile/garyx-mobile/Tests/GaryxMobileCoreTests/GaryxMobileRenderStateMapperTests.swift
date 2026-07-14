@@ -436,7 +436,23 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
                                             toolUseId: "call-1",
                                             status: .completed,
                                             toolUse: ref(seq: 2, role: "tool_use"),
-                                            toolResult: ref(seq: 3, role: "tool_result")
+                                            toolResult: ref(seq: 3, role: "tool_result"),
+                                            projection: GaryxRenderToolFieldProjection(
+                                                toolName: "Bash",
+                                                kind: .command,
+                                                call: .init(
+                                                    root: .content,
+                                                    path: ["input", "command"],
+                                                    format: .code,
+                                                    label: .command
+                                                ),
+                                                result: .init(
+                                                    root: .content,
+                                                    path: ["result", "stdout"],
+                                                    format: .code,
+                                                    label: .output
+                                                )
+                                            )
                                         ),
                                     ]
                                 )),
@@ -698,6 +714,549 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(entry.status, .running)
     }
 
+    func testMissingToolProjectionRendersProviderNeutralFallbackFromCapturedFrame() throws {
+        let entries = try mappedToolEntries(fromFrame: #"""
+        {
+          "type": "thread_render_frame",
+          "thread_id": "thread::missing-tool-projection",
+          "events": [
+            {
+              "type": "committed_message",
+              "thread_id": "thread::missing-tool-projection",
+              "seq": 2,
+              "message": {
+                "index": 1,
+                "role": "tool_use",
+                "tool_name": "Bash",
+                "tool_use_id": "call-unprojected",
+                "timestamp": "2026-07-14T04:00:00Z",
+                "content": {
+                  "tool": "Bash",
+                  "input": {
+                    "command": "cat private.txt",
+                    "path": "/Users/test/private.png"
+                  }
+                },
+                "metadata": {
+                  "source": "claude_sdk",
+                  "parent_tool_use_id": "call-parent"
+                }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::missing-tool-projection",
+              "seq": 3,
+              "message": {
+                "index": 2,
+                "role": "tool_result",
+                "tool_name": "Bash",
+                "tool_use_id": "call-unprojected",
+                "is_error": true,
+                "content": { "result": "private output" },
+                "metadata": { "source": "claude_sdk" }
+              }
+            }
+          ],
+          "render_state": {
+            "based_on_seq": 3,
+            "rows": [
+              {
+                "kind": "user_turn",
+                "id": "turn:missing-tool-projection",
+                "user": null,
+                "activity": [
+                  {
+                    "kind": "step",
+                    "id": "step:missing-tool-projection",
+                    "steps": [
+                      {
+                        "kind": "tool_group",
+                        "id": "group:missing-tool-projection",
+                        "status": "completed",
+                        "entries": [
+                          {
+                            "id": "entry:missing-tool-projection",
+                            "tool_use_id": "call-unprojected",
+                            "status": "failed",
+                            "tool_use": { "id": "seq:2", "seq": 2, "role": "tool_use" },
+                            "tool_result": { "id": "seq:3", "seq": 3, "role": "tool_result" }
+                          }
+                        ]
+                      }
+                    ],
+                    "final_message": null,
+                    "running": false
+                  }
+                ]
+              }
+            ],
+            "tailActivity": "none",
+            "activeToolGroupId": null,
+            "progress_locus": "none",
+            "filtered_placeholders": []
+          }
+        }
+        """#)
+
+        let entry = try XCTUnwrap(entries.only)
+        XCTAssertEqual(entry.toolUseId, "call-unprojected")
+        XCTAssertNil(entry.parentToolUseId)
+        XCTAssertEqual(entry.toolName, "tool")
+        XCTAssertEqual(entry.title, "Tool")
+        XCTAssertNil(entry.inputText)
+        XCTAssertNil(entry.resultText)
+        XCTAssertNil(entry.summaryText)
+        XCTAssertEqual(entry.inputLabel, "Call")
+        XCTAssertEqual(entry.resultLabel, "Result")
+        XCTAssertEqual(entry.status, .failed)
+        XCTAssertTrue(entry.isError)
+        XCTAssertNil(entry.timestamp)
+        XCTAssertNil(entry.primaryPathBadge)
+        XCTAssertNil(entry.primaryPath)
+        XCTAssertNil(entry.fieldProjection)
+        XCTAssertTrue(GaryxToolCallPresentation.imageRefs(from: entries).isEmpty)
+        let listRow = try XCTUnwrap(GaryxToolCallPresentation.listRows(from: entries).only)
+        XCTAssertEqual(listRow.verb, "Tool")
+        XCTAssertNil(listRow.detail)
+        XCTAssertTrue(GaryxToolCallPresentation.detail(for: entry).sections.isEmpty)
+    }
+
+    func testProjectedToolEntryDoesNotMixUnselectedRawPayloadFields() throws {
+        let entries = try mappedToolEntries(fromFrame: #"""
+        {
+          "type": "thread_render_frame",
+          "thread_id": "thread::selector-only",
+          "events": [
+            {
+              "type": "committed_message",
+              "thread_id": "thread::selector-only",
+              "seq": 2,
+              "message": {
+                "index": 1,
+                "role": "tool_use",
+                "tool_name": "Bash",
+                "tool_use_id": "call-selector-only",
+                "timestamp": "2026-07-14T04:00:00Z",
+                "content": {
+                  "tool": "Bash",
+                  "selected": "server-selected call",
+                  "input": {
+                    "command": "raw command",
+                    "path": "/Users/test/raw-private.png"
+                  },
+                  "is_error": true
+                },
+                "metadata": {
+                  "source": "claude_sdk",
+                  "parent_tool_use_id": "call-parent"
+                }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::selector-only",
+              "seq": 3,
+              "message": {
+                "index": 2,
+                "role": "tool_result",
+                "tool_name": "Bash",
+                "tool_use_id": "call-selector-only",
+                "content": {
+                  "result": "raw private result",
+                  "is_error": true
+                },
+                "metadata": { "source": "claude_sdk" }
+              }
+            }
+          ],
+          "render_state": {
+            "based_on_seq": 3,
+            "rows": [
+              {
+                "kind": "user_turn",
+                "id": "turn:selector-only",
+                "user": null,
+                "activity": [
+                  {
+                    "kind": "step",
+                    "id": "step:selector-only",
+                    "steps": [
+                      {
+                        "kind": "tool_group",
+                        "id": "group:selector-only",
+                        "status": "completed",
+                        "entries": [
+                          {
+                            "id": "entry:selector-only",
+                            "tool_use_id": "call-selector-only",
+                            "status": "completed",
+                            "tool_use": { "id": "seq:2", "seq": 2, "role": "tool_use" },
+                            "tool_result": { "id": "seq:3", "seq": 3, "role": "tool_result" },
+                            "projection": {
+                              "kind": "generic",
+                              "visibility": "normal",
+                              "call": {
+                                "root": "content",
+                                "path": ["selected"],
+                                "format": "text",
+                                "label": "call"
+                              },
+                              "status": "completed"
+                            }
+                          }
+                        ]
+                      }
+                    ],
+                    "final_message": null,
+                    "running": false
+                  }
+                ]
+              }
+            ],
+            "tailActivity": "none",
+            "activeToolGroupId": null,
+            "progress_locus": "none",
+            "filtered_placeholders": []
+          }
+        }
+        """#)
+
+        let entry = try XCTUnwrap(entries.only)
+        XCTAssertEqual(entry.toolUseId, "call-selector-only")
+        XCTAssertNil(entry.parentToolUseId)
+        XCTAssertEqual(entry.toolName, "tool")
+        XCTAssertEqual(entry.title, "Tool")
+        XCTAssertEqual(entry.inputText, "server-selected call")
+        XCTAssertEqual(entry.summaryText, "server-selected call")
+        XCTAssertNil(entry.resultText)
+        XCTAssertFalse(entry.isError)
+        XCTAssertNil(entry.timestamp)
+        XCTAssertNil(entry.primaryPathBadge)
+        XCTAssertNil(entry.primaryPath)
+        XCTAssertNotNil(entry.fieldProjection)
+        XCTAssertTrue(GaryxToolCallPresentation.imageRefs(from: entries).isEmpty)
+    }
+
+    func testCapturedToolFrameResolvesCommandPathAndImageSelectors() throws {
+        let entries = try mappedToolEntries(fromFrame: #"""
+        {
+          "type": "thread_render_frame",
+          "thread_id": "thread::tool-selector-matrix",
+          "events": [
+            {
+              "type": "committed_message",
+              "thread_id": "thread::tool-selector-matrix",
+              "seq": 2,
+              "message": {
+                "index": 1,
+                "role": "tool_use",
+                "tool_name": "Read",
+                "tool_use_id": "call-read",
+                "content": {
+                  "tool": "Read",
+                  "input": {
+                    "file_path": "/Users/test/repo/README.md",
+                    "ignored": "raw call noise"
+                  }
+                },
+                "metadata": { "source": "claude_sdk" }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::tool-selector-matrix",
+              "seq": 3,
+              "message": {
+                "index": 2,
+                "role": "tool_result",
+                "tool_name": "Read",
+                "tool_use_id": "call-read",
+                "content": {
+                  "result": "captured read output",
+                  "text": "captured read output",
+                  "ignored": "raw result noise"
+                },
+                "metadata": { "source": "claude_sdk" }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::tool-selector-matrix",
+              "seq": 4,
+              "message": {
+                "index": 3,
+                "role": "tool_use",
+                "tool_name": "commandExecution",
+                "tool_use_id": "call-command",
+                "content": {
+                  "type": "commandExecution",
+                  "command": "/bin/zsh -lc \"git status --short\"",
+                  "cwd": "/Users/test/repo",
+                  "id": "exec-test"
+                },
+                "metadata": {
+                  "source": "codex_app_server",
+                  "item_type": "commandExecution"
+                }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::tool-selector-matrix",
+              "seq": 5,
+              "message": {
+                "index": 4,
+                "role": "tool_result",
+                "tool_name": "commandExecution",
+                "tool_use_id": "call-command",
+                "content": {
+                  "type": "commandExecution",
+                  "aggregatedOutput": "fatal: test failure\n",
+                  "cwd": "/Users/test/repo",
+                  "id": "exec-test",
+                  "status": "failed",
+                  "exitCode": 17,
+                  "durationMs": 12
+                },
+                "metadata": {
+                  "source": "codex_app_server",
+                  "item_type": "commandExecution"
+                }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::tool-selector-matrix",
+              "seq": 6,
+              "message": {
+                "index": 5,
+                "role": "tool_use",
+                "tool_name": "imageView",
+                "tool_use_id": "call-image",
+                "content": {
+                  "id": "exec-image",
+                  "path": "/tmp/screens/thread-runtime-expanded.png",
+                  "type": "ImageView"
+                },
+                "metadata": { "source": "codex_app_server" }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::tool-selector-matrix",
+              "seq": 7,
+              "message": {
+                "index": 6,
+                "role": "tool_result",
+                "tool_name": "imageView",
+                "tool_use_id": "call-image",
+                "content": {
+                  "id": "exec-image",
+                  "path": "/tmp/screens/thread-runtime-expanded.png",
+                  "type": "ImageView"
+                },
+                "metadata": { "source": "codex_app_server" }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::tool-selector-matrix",
+              "seq": 8,
+              "message": {
+                "index": 7,
+                "role": "tool_use",
+                "tool_name": "commandExecution",
+                "tool_use_id": "call-no-result-selector",
+                "content": {
+                  "type": "commandExecution",
+                  "command": "true"
+                },
+                "metadata": { "source": "codex_app_server" }
+              }
+            },
+            {
+              "type": "committed_message",
+              "thread_id": "thread::tool-selector-matrix",
+              "seq": 9,
+              "message": {
+                "index": 8,
+                "role": "tool_result",
+                "tool_name": "commandExecution",
+                "tool_use_id": "call-no-result-selector",
+                "content": {
+                  "type": "commandExecution",
+                  "aggregatedOutput": null,
+                  "cwd": "/Users/test/repo",
+                  "id": "exec-private",
+                  "status": "completed",
+                  "exitCode": 0
+                },
+                "metadata": { "source": "codex_app_server" }
+              }
+            }
+          ],
+          "render_state": {
+            "based_on_seq": 9,
+            "rows": [
+              {
+                "kind": "user_turn",
+                "id": "turn:tool-selector-matrix",
+                "user": null,
+                "activity": [
+                  {
+                    "kind": "step",
+                    "id": "step:tool-selector-matrix",
+                    "steps": [
+                      {
+                        "kind": "tool_group",
+                        "id": "group:tool-selector-matrix",
+                        "status": "completed",
+                        "entries": [
+                          {
+                            "id": "entry:read",
+                            "tool_use_id": "call-read",
+                            "status": "completed",
+                            "tool_use": { "id": "seq:2", "seq": 2, "role": "tool_use" },
+                            "tool_result": { "id": "seq:3", "seq": 3, "role": "tool_result" },
+                            "projection": {
+                              "tool_name": "Read",
+                              "kind": "file_read",
+                              "visibility": "normal",
+                              "call": {
+                                "root": "content",
+                                "path": ["input", "file_path"],
+                                "format": "path",
+                                "label": "file"
+                              },
+                              "result": {
+                                "root": "content",
+                                "path": ["result"],
+                                "format": "text",
+                                "label": "result"
+                              }
+                            }
+                          },
+                          {
+                            "id": "entry:command",
+                            "tool_use_id": "call-command",
+                            "status": "completed",
+                            "tool_use": { "id": "seq:4", "seq": 4, "role": "tool_use" },
+                            "tool_result": { "id": "seq:5", "seq": 5, "role": "tool_result" },
+                            "projection": {
+                              "tool_name": "commandExecution",
+                              "kind": "command",
+                              "visibility": "normal",
+                              "call": {
+                                "root": "content",
+                                "path": ["command"],
+                                "format": "code",
+                                "label": "command"
+                              },
+                              "result": {
+                                "root": "content",
+                                "path": ["aggregatedOutput"],
+                                "format": "code",
+                                "label": "output"
+                              },
+                              "status": "failed",
+                              "exit_code": 17,
+                              "duration_ms": 12
+                            }
+                          },
+                          {
+                            "id": "entry:image",
+                            "tool_use_id": "call-image",
+                            "status": "completed",
+                            "tool_use": { "id": "seq:6", "seq": 6, "role": "tool_use" },
+                            "tool_result": { "id": "seq:7", "seq": 7, "role": "tool_result" },
+                            "projection": {
+                              "tool_name": "imageView",
+                              "kind": "image",
+                              "visibility": "normal",
+                              "call": {
+                                "root": "content",
+                                "path": ["path"],
+                                "format": "image",
+                                "label": "image"
+                              }
+                            }
+                          },
+                          {
+                            "id": "entry:no-result-selector",
+                            "tool_use_id": "call-no-result-selector",
+                            "status": "completed",
+                            "tool_use": { "id": "seq:8", "seq": 8, "role": "tool_use" },
+                            "tool_result": { "id": "seq:9", "seq": 9, "role": "tool_result" },
+                            "projection": {
+                              "tool_name": "commandExecution",
+                              "kind": "command",
+                              "visibility": "normal",
+                              "call": {
+                                "root": "content",
+                                "path": ["command"],
+                                "format": "code",
+                                "label": "command"
+                              },
+                              "status": "completed",
+                              "exit_code": 0
+                            }
+                          }
+                        ]
+                      }
+                    ],
+                    "final_message": null,
+                    "running": false
+                  }
+                ]
+              }
+            ],
+            "tailActivity": "none",
+            "activeToolGroupId": null,
+            "progress_locus": "none",
+            "filtered_placeholders": []
+          }
+        }
+        """#)
+
+        XCTAssertEqual(entries.count, 4)
+        let entriesById = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+
+        let read = try XCTUnwrap(entriesById["entry:read"])
+        XCTAssertEqual(read.title, "Read")
+        XCTAssertEqual(read.inputText, "/Users/test/repo/README.md")
+        XCTAssertEqual(read.resultText, "captured read output")
+        XCTAssertEqual(read.primaryPath, "/Users/test/repo/README.md")
+        XCTAssertEqual(read.primaryPathBadge, "repo/README.md")
+
+        let command = try XCTUnwrap(entriesById["entry:command"])
+        XCTAssertEqual(command.title, "Command")
+        XCTAssertEqual(command.inputText, #"/bin/zsh -lc "git status --short""#)
+        XCTAssertEqual(command.resultText, "fatal: test failure\n")
+        XCTAssertEqual(command.fieldProjection?.metadataText, "exit 17 · 12 ms")
+        XCTAssertTrue(command.isError)
+        XCTAssertFalse(command.resultText?.contains("/Users/test/repo") == true)
+        XCTAssertFalse(command.resultText?.contains("exec-test") == true)
+
+        let image = try XCTUnwrap(entriesById["entry:image"])
+        let imagePath = "/tmp/screens/thread-runtime-expanded.png"
+        XCTAssertEqual(image.title, "Image")
+        XCTAssertEqual(image.inputText, imagePath)
+        XCTAssertNil(image.resultText)
+        XCTAssertEqual(image.primaryPath, imagePath)
+        XCTAssertEqual(GaryxToolCallPresentation.imageRefs(from: [image]).map(\.path), [imagePath])
+        XCTAssertEqual(
+            GaryxToolCallPresentation.detail(for: image).sections.map(\.content),
+            [.imagePreview(imagePath)]
+        )
+
+        let noResult = try XCTUnwrap(entriesById["entry:no-result-selector"])
+        XCTAssertEqual(noResult.inputText, "true")
+        XCTAssertNil(noResult.resultText)
+        XCTAssertNil(noResult.fieldProjection?.result)
+        XCTAssertEqual(GaryxToolCallPresentation.detail(for: noResult).sections.map(\.label), ["Command"])
+    }
+
     func testOptimisticUserRowsAppendUntilOriginMaterializes() {
         let materializedOrigin = "00000000-0000-0000-0000-000000000001"
         let pendingOrigin = "00000000-0000-0000-0000-000000000002"
@@ -920,21 +1479,6 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(mobileMessages.only?.clientIntentId, originId)
     }
 
-    func testToolPayloadEnvelopeStillParsesButDoesNotDecideVisibility() {
-        let child = GaryxTranscriptMessage(
-            index: 1,
-            role: .toolUse,
-            content: json(#"{"input":{"command":"ls"},"tool":"Bash"}"#),
-            metadata: json(#"{"parent_tool_use_id":"toolu_PARENT","source":"claude_sdk"}"#)
-        )
-        let payload = GaryxMobileToolTracePayload.fromTranscript(child)
-
-        XCTAssertEqual(child.garyxParentToolUseId, "toolu_PARENT")
-        XCTAssertEqual(payload.parentToolUseId, "toolu_PARENT")
-        XCTAssertEqual(payload.normalizedToolName, "Bash")
-        XCTAssertEqual(payload.summaryText, "ls")
-    }
-
     /// Timeline invariant for the "message flashes away when thinking appears"
     /// symptom family: drive the real frame processor with the first render
     /// frame of a new run (committed user body + thinking tail) and assert the
@@ -1151,6 +1695,28 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
 
     private func decodeRenderUserTurnRow(_ raw: String) throws -> GaryxRenderUserTurnRow {
         try JSONDecoder().decode(GaryxRenderUserTurnRow.self, from: Data(raw.utf8))
+    }
+
+    private func mappedToolEntries(fromFrame raw: String) throws -> [GaryxMobileToolTraceEntry] {
+        let frame = try JSONDecoder().decode(GaryxThreadRenderFrame.self, from: Data(raw.utf8))
+        let transcriptMessages = frame.events.compactMap(\.message)
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: frame.renderState,
+            messages: GaryxMobileTranscriptMapper.mobileMessages(from: transcriptMessages),
+            transcriptMessages: transcriptMessages
+        )
+        var entries: [GaryxMobileToolTraceEntry] = []
+        for row in rows {
+            for activity in row.activityRows {
+                guard case let .turn(turn) = activity else { continue }
+                for step in turn.steps {
+                    guard case let .toolGroup(message) = step,
+                          let group = message.toolTraceGroup else { continue }
+                    entries.append(contentsOf: group.entries)
+                }
+            }
+        }
+        return entries
     }
 
     private func toolUse(index: Int, toolUseId: String, command: String) -> GaryxTranscriptMessage {

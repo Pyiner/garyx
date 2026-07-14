@@ -131,7 +131,7 @@ final class GaryxMobileToolTraceBuilderTests: XCTestCase {
         }
     }
 
-    func testDerivedToolTitlesPreserveCamelCaseToolNames() throws {
+    func testServerProjectedToolTitlesPreserveCamelCaseToolNames() throws {
         XCTAssertEqual(GaryxMobileToolTraceEntry.title(for: "TaskCreate"), "TaskCreate")
 
         let transcriptMessages = [
@@ -163,12 +163,20 @@ final class GaryxMobileToolTraceBuilderTests: XCTestCase {
                                         GaryxRenderToolEntry(
                                             id: "entry:1",
                                             status: .completed,
-                                            toolUse: GaryxRenderMessageRef(id: "seq:2", seq: 2, role: "tool_use")
+                                            toolUse: GaryxRenderMessageRef(id: "seq:2", seq: 2, role: "tool_use"),
+                                            projection: GaryxRenderToolFieldProjection(
+                                                toolName: "TaskCreate",
+                                                kind: .generic
+                                            )
                                         ),
                                         GaryxRenderToolEntry(
                                             id: "entry:2",
                                             status: .completed,
-                                            toolUse: GaryxRenderMessageRef(id: "seq:3", seq: 3, role: "tool_use")
+                                            toolUse: GaryxRenderMessageRef(id: "seq:3", seq: 3, role: "tool_use"),
+                                            projection: GaryxRenderToolFieldProjection(
+                                                toolName: "ToolSearch",
+                                                kind: .generic
+                                            )
                                         ),
                                     ]
                                 )),

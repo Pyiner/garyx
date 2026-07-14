@@ -133,6 +133,14 @@ enum GaryxToolCallPresentation {
     }
 
     static func detail(for entry: GaryxMobileToolTraceEntry) -> GaryxToolCallDetail {
+        if isProviderNeutralFallback(entry) {
+            return GaryxToolCallDetail(
+                title: entry.title,
+                isRunning: entry.status == .running,
+                isError: entry.isError,
+                sections: []
+            )
+        }
         if let sections = projectedSections(for: entry) {
             return GaryxToolCallDetail(
                 title: entry.title,
@@ -410,6 +418,9 @@ enum GaryxToolCallPresentation {
     /// tools (matching how reads are listed), then the model-provided
     /// description/summary, then the short title.
     private static func detail(for entry: GaryxMobileToolTraceEntry) -> String? {
+        if isProviderNeutralFallback(entry) {
+            return nil
+        }
         if entry.isFileRead || entry.isFileWrite || entry.isFileEdit,
            let path = entry.primaryPath?.trimmingCharacters(in: .whitespacesAndNewlines),
            !path.isEmpty {
@@ -431,6 +442,15 @@ enum GaryxToolCallPresentation {
         }
         if entry.isCommand { return nil }
         return entry.title
+    }
+
+    private static func isProviderNeutralFallback(_ entry: GaryxMobileToolTraceEntry) -> Bool {
+        entry.fieldProjection == nil
+            && entry.inputText == nil
+            && entry.resultText == nil
+            && entry.summaryText == nil
+            && entry.primaryPath == nil
+            && entry.primaryPathBadge == nil
     }
 
     private static func inputPreviewDetail(for entry: GaryxMobileToolTraceEntry) -> String? {
