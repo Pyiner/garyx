@@ -35,6 +35,67 @@ enum GaryxTheme {
     static let warning = Color.orange
     static let danger = Color.red
     static let hairline = Color.primary.opacity(0.08)
+    /// Capsule-favorite semantic colors. Gold is intentionally reserved for
+    /// this state and must not be reused as a general accent.
+    static let capsuleFavoriteGoldTop = Color(
+        red: 255.0 / 255.0,
+        green: 224.0 / 255.0,
+        blue: 130.0 / 255.0
+    )
+    static let capsuleFavoriteGoldBottom = Color(
+        red: 245.0 / 255.0,
+        green: 166.0 / 255.0,
+        blue: 35.0 / 255.0
+    )
+    static let capsuleFavoriteGlow = Color(
+        red: 245.0 / 255.0,
+        green: 166.0 / 255.0,
+        blue: 35.0 / 255.0
+    )
+}
+
+/// Shared Capsule favorite glyph for gallery badges and focused chrome.
+struct GaryxFavoriteStar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+
+    let isFavorited: Bool
+    var size: CGFloat = 18
+
+    var body: some View {
+        Group {
+            if reduceMotion {
+                star
+            } else {
+                star.symbolEffect(.bounce, value: isFavorited)
+            }
+        }
+        .shadow(
+            color: GaryxTheme.capsuleFavoriteGlow.opacity(
+                isFavorited ? (colorScheme == .dark ? 0.30 : 0.45) : 0
+            ),
+            radius: 4
+        )
+    }
+
+    private var star: some View {
+        Image(systemName: isFavorited ? "star.fill" : "star")
+            .font(GaryxFont.system(size: size, weight: .semibold))
+            .foregroundStyle(
+                isFavorited
+                    ? AnyShapeStyle(
+                        LinearGradient(
+                            colors: [
+                                GaryxTheme.capsuleFavoriteGoldTop,
+                                GaryxTheme.capsuleFavoriteGoldBottom,
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    : AnyShapeStyle(Color.secondary)
+            )
+    }
 }
 
 enum GaryxSafeAreaChrome {

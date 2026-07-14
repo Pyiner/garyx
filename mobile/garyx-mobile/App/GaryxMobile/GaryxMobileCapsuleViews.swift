@@ -56,8 +56,8 @@ struct GaryxCapsulesView: View {
             .refreshable {
                 await model.refreshCapsules()
             }
-            .fullScreenCover(item: $model.galleryFocusedCapsule) { capsule in
-                GaryxCapsuleFocusedPreviewView(capsule: capsule)
+            .fullScreenCover(item: $model.galleryFocusedCapsule) { selection in
+                GaryxCapsuleFocusedPreviewView(selection: selection)
             }
             .confirmationDialog(
                 "Delete capsule?",
@@ -104,7 +104,9 @@ struct GaryxCapsulesView: View {
                     ForEach(visibleCapsules) { capsule in
                         GaryxCapsuleGalleryCard(
                             capsule: capsule,
-                            onOpen: { model.galleryFocusedCapsule = capsule },
+                            onOpen: {
+                                model.galleryFocusedCapsule = GaryxCapsulePreviewSelection(capsule: capsule)
+                            },
                             onFavorite: {
                                 Task { await model.toggleCapsuleFavorite(capsule) }
                             },
@@ -194,9 +196,7 @@ private struct GaryxCapsuleGalleryCard: View {
             }
             .overlay(alignment: .topTrailing) {
                 if model.isCapsuleFavorited(capsule) {
-                    Image(systemName: "star.fill")
-                        .font(GaryxFont.caption(weight: .semibold))
-                        .foregroundStyle(.primary)
+                    GaryxFavoriteStar(isFavorited: true, size: 13)
                         .padding(7)
                         .background(.regularMaterial, in: Circle())
                         .padding(8)
@@ -342,43 +342,109 @@ struct GaryxCapsulePreviewThumbnail: View {
 
 struct GaryxCapsuleFocusedPreviewView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var model: GaryxMobileModel
-    let capsule: GaryxCapsuleSummary
-    @State private var phase: Phase = .loading
+    let selection: GaryxCapsulePreviewSelection
+    @StateObject private var loader = GaryxCapsuleFocusedPreviewLoader()
+    @StateObject private var gestureBridge = GaryxCapsuleDismissGestureBridge()
+    @State private var retryGeneration = 0
     @State private var showsDeleteConfirmation = false
-    // Photos-style pull-to-dismiss state (#TASK-1470). The phase is decided once
-    // per drag (idle -> engaged/ignored) and locked, so a drag started off-top
-    // never hijacks content scrolling and a mid-drag scroll-to-top can't snap it
-    // into a dismiss. `webAtTop` is reported by the web view's scroll position.
-    @State private var dragPhase: GaryxCapsuleDragPhase = .idle
-    @State private var dragOffset: CGFloat = 0
+    @State private var dragState = GaryxCapsuleDragDismissState()
     @State private var webAtTop = true
+    @State private var morphState = GaryxChromeMorphPresentationState.hidden
+    @State private var pendingChromeAction: GaryxCapsuleChromeAction?
+    @State private var fetchedSourceThread: GaryxThreadSummary?
 
-    enum Phase: Equatable {
-        case loading
-        case html(String)
-        case deleted
-        case failed
+    private var projectedCapsule: GaryxCapsuleSummary? {
+        GaryxCapsulePreviewProjection.currentSummary(selection: selection, catalog: model.capsules)
+    }
+
+    private var displayCapsule: GaryxCapsuleSummary {
+        GaryxCapsulePreviewProjection.displaySummary(selection: selection, catalog: model.capsules)
+    }
+
+    private var loadKey: GaryxCapsulePreviewLoadKey {
+        GaryxCapsulePreviewProjection.loadKey(
+            selection: selection,
+            catalog: model.capsules,
+            retryGeneration: retryGeneration
+        )
+    }
+
+    private var isFavorited: Bool {
+        projectedCapsule.map(model.isCapsuleFavorited) ?? false
+    }
+
+    private var sourceThreadId: String? {
+        guard let id = displayCapsule.threadId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty else { return nil }
+        return id
+    }
+
+    private var sourceThread: GaryxThreadSummary? {
+        guard let sourceThreadId else { return nil }
+        return model.sidebarThreadSummary(for: sourceThreadId) ?? fetchedSourceThread
     }
 
     var body: some View {
-        ZStack {
-            // Backdrop revealed as the card is pulled down; darkens with the pull
-            // so the dismiss reads like a Photos-style interactive drop.
-            Color.black
-                .opacity(GaryxCapsuleDragDismiss.dragProgress(offset: dragOffset) * 0.5)
-                .ignoresSafeArea()
+        GeometryReader { geometry in
+            let progress = GaryxCapsuleDragDismiss.dragProgress(
+                phase: dragState.phase,
+                translation: dragState.translation
+            )
+            ZStack {
+                Color.black
+                    .opacity(0.35 * (1 - progress))
+                    .ignoresSafeArea()
 
-            previewSurface
-                .offset(y: dragOffset)
-                .scaleEffect(
-                    1 - GaryxCapsuleDragDismiss.dragProgress(offset: dragOffset) * 0.06
+                previewSurface
+                    .offset(
+                        x: dragState.translation.width,
+                        y: dragState.translation.height
+                    )
+                    .scaleEffect(1 - progress * 0.06)
+
+                GaryxCapsuleDismissGestureInstaller(
+                    bridge: gestureBridge,
+                    webAtTop: webAtTop,
+                    panelPresented: morphState.isPresented || showsDeleteConfirmation,
+                    containerWidth: geometry.size.width,
+                    onChanged: handleGestureChanged,
+                    onReleased: { velocity in
+                        handleGestureReleased(velocity: velocity, containerWidth: geometry.size.width)
+                    },
+                    onCancelled: handleGestureCancelled
                 )
-                .simultaneousGesture(dismissDragGesture)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+            }
         }
-        // Focused open is the authoritative surface: always force-refresh so
-        // a since-deleted capsule resolves to 404 -> deleted immediately.
-        .task(id: "\(capsule.id):\(capsule.revision)") { await load(forceRefresh: true) }
+        .overlayPreferenceValue(GaryxCapsuleChromeAnchorKey.self) { anchor in
+            capsuleChromeOverlay(anchor: anchor)
+        }
+        .task(id: loadKey) {
+            await loader.reconcile(key: loadKey, model: model)
+        }
+        .task {
+            // Opening a focused preview always schedules a lightweight catalog
+            // refresh through the single-flight/trailing coordinator.
+            await model.refreshCapsules(reportFailure: false)
+        }
+        .task(id: sourceThreadId) {
+            fetchedSourceThread = nil
+            guard let sourceThreadId,
+                  model.sidebarThreadSummary(for: sourceThreadId) == nil else { return }
+            let fetched = await model.capsuleSourceThreadSummary(threadId: sourceThreadId)
+            guard !Task.isCancelled, self.sourceThreadId == sourceThreadId else { return }
+            fetchedSourceThread = fetched
+        }
+        .onChange(of: model.capsulePreviewSceneSignal) { _, signal in
+            handleSceneSignal(signal)
+        }
+        .onDisappear {
+            loader.cancelForDismiss(model: model)
+            handleGestureCancelled()
+        }
         .confirmationDialog(
             "Delete capsule?",
             isPresented: $showsDeleteConfirmation,
@@ -386,8 +452,9 @@ struct GaryxCapsuleFocusedPreviewView: View {
         ) {
             Button("Delete", role: .destructive) {
                 Task {
-                    await model.deleteCapsule(capsule)
-                    dismiss()
+                    // The model clears the owning cover binding only on success;
+                    // failure keeps this detail visible.
+                    await model.deleteCapsule(displayCapsule)
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -403,57 +470,41 @@ struct GaryxCapsuleFocusedPreviewView: View {
             .garyxAdaptiveTopBar {
                 GaryxAdaptiveGlassContainer(spacing: 10) {
                     HStack(spacing: 12) {
-                        Button { dismiss() } label: {
+                        Button {
+                            loader.cancelForDismiss(model: model)
+                            dismiss()
+                        } label: {
                             GaryxToolbarIcon(systemName: "chevron.down")
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Close Capsule")
 
-                        GaryxPanelHeaderTitle(title: capsule.displayTitle)
-                            .layoutPriority(1)
+                        GaryxCapsuleChromeHeaderControl(
+                            title: displayCapsule.displayTitle,
+                            isHidden: morphState.isPresented,
+                            onToggle: toggleCapsuleChromePanel
+                        )
 
                         Spacer(minLength: 0)
 
-                        Button { Task { await load(forceRefresh: true) } } label: {
-                            GaryxToolbarIcon(systemName: "arrow.clockwise")
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Reload Capsule")
-
-                        Menu {
-                            if let sourceThreadId = capsule.threadId?
-                                .trimmingCharacters(in: .whitespacesAndNewlines),
-                               !sourceThreadId.isEmpty {
-                                Button {
-                                    Task { await model.openMobileRoute(.thread(sourceThreadId)) }
-                                } label: {
-                                    Label(
-                                        "Open source conversation",
-                                        systemImage: "bubble.left.and.bubble.right"
-                                    )
-                                }
-                            }
-                            Button { copyLink() } label: { Label("Copy Link", systemImage: "link") }
-                            Button { copyID() } label: { Label("Copy ID", systemImage: "number") }
-                            Button {
-                                Task { await model.toggleCapsuleFavorite(capsule) }
-                            } label: {
-                                Label(
-                                    model.isCapsuleFavorited(capsule) ? "Unfavorite" : "Favorite",
-                                    systemImage: model.isCapsuleFavorited(capsule) ? "star.slash" : "star"
-                                )
-                            }
-                            Divider()
-                            Button(role: .destructive) {
-                                showsDeleteConfirmation = true
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                        Button {
+                            if let projectedCapsule {
+                                Task { await model.toggleCapsuleFavorite(projectedCapsule) }
                             }
                         } label: {
-                            GaryxToolbarIcon(systemName: "ellipsis")
+                            GaryxToolbarIcon {
+                                GaryxFavoriteStar(
+                                    isFavorited: isFavorited,
+                                    size: 18
+                                )
+                            }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Capsule actions")
+                        .disabled(projectedCapsule == nil)
+                        .accessibilityLabel(isFavorited ? "Unfavorite Capsule" : "Favorite Capsule")
+                        .accessibilityHint(
+                            projectedCapsule == nil ? "This Capsule is no longer in the catalog." : ""
+                        )
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
@@ -462,89 +513,213 @@ struct GaryxCapsuleFocusedPreviewView: View {
             }
     }
 
-    /// Photos-style interactive pull-to-dismiss. Runs simultaneously with the web
-    /// view's scroll; only an engaged drag (started at the top, pulling down)
-    /// moves the card, so content scrolling is never disturbed (#TASK-1470).
-    private var dismissDragGesture: some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .local)
-            .onChanged { value in
-                if dragPhase == .idle {
-                    dragPhase = GaryxCapsuleDragDismiss.decideInitialPhase(
-                        atTop: webAtTop,
-                        translationY: value.translation.height
-                    )
-                }
-                dragOffset = GaryxCapsuleDragDismiss.resolvedOffset(
-                    phase: dragPhase,
-                    translationY: value.translation.height
-                )
-            }
-            .onEnded { value in
-                let willDismiss = GaryxCapsuleDragDismiss.shouldDismiss(
-                    phase: dragPhase,
-                    offset: dragOffset,
-                    predictedTranslationY: value.predictedEndTranslation.height
-                )
-                dragPhase = .idle
-                if willDismiss {
-                    dismiss()
-                } else {
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                        dragOffset = 0
-                    }
-                }
-            }
-    }
-
     @ViewBuilder
     private var content: some View {
-        switch phase {
-        case .loading:
-            GaryxLoadingPanelView(title: "Loading capsule...")
-        case let .html(html):
-            GaryxCapsuleWebView(html: html, onScrollAtTopChange: { webAtTop = $0 })
-        case .deleted:
+        if let renderedContent = loader.renderedContent {
+            GaryxCapsuleWebView(
+                html: renderedContent.html,
+                gestureBridge: gestureBridge,
+                onScrollAtTopChange: { webAtTop = $0 }
+            )
+        } else if loader.loadStatus.phase == .deleted {
             GaryxEmptyPanelView(
                 icon: "trash",
                 title: "Capsule deleted.",
                 text: "This capsule is no longer available."
             )
-        case .failed:
+        } else if loader.loadStatus.phase == .failed {
             GaryxEmptyPanelView(
                 icon: "exclamationmark.triangle",
                 title: "Unable to load capsule.",
-                text: "Check your connection and try again."
+                text: loader.loadStatus.retryExhausted
+                    ? "Return to the foreground to retry."
+                    : "The Capsule will retry automatically."
             )
+        } else {
+            GaryxLoadingPanelView(title: "Loading capsule...")
         }
     }
 
-    private func load(forceRefresh: Bool) async {
-        let result = await model.loadCapsulePreviewHTML(
-            capsuleId: capsule.id,
-            revision: capsule.revision,
-            forceRefresh: forceRefresh
+    @ViewBuilder
+    private func capsuleChromeOverlay(anchor: Anchor<CGRect>?) -> some View {
+        if morphState.isPresented, let anchor {
+            GeometryReader { geometry in
+                ZStack(alignment: .topLeading) {
+                    Color.black.opacity(morphState.isExpanded ? 0.10 : 0)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { requestCapsuleChromeDismiss() }
+                        .accessibilityLabel("Close Capsule actions")
+                        .accessibilityAddTraits(.isButton)
+
+                    GaryxChromeMorphSurface(
+                        isExpanded: morphState.isExpanded,
+                        anchorRect: geometry[anchor],
+                        containerSize: geometry.size,
+                        metrics: GaryxCapsuleChromeMorph.metrics,
+                        onClose: requestCapsuleChromeDismiss
+                    ) {
+                        GaryxCapsuleChromePanel(
+                            capsule: displayCapsule,
+                            sourceThread: sourceThread,
+                            compactRowWidth: geometry[anchor].width,
+                            isExpanded: morphState.isExpanded,
+                            onToggle: requestCapsuleChromeDismiss,
+                            onAction: requestChromeAction
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+    }
+
+    private func toggleCapsuleChromePanel() {
+        if morphState.isPresented {
+            requestCapsuleChromeDismiss()
+        } else {
+            applyMorphEvent(.requestPresent)
+        }
+    }
+
+    private func requestCapsuleChromeDismiss() {
+        applyMorphEvent(.requestDismiss)
+    }
+
+    private func requestChromeAction(_ action: GaryxCapsuleChromeAction) {
+        pendingChromeAction = action
+        applyMorphEvent(.requestDismiss)
+    }
+
+    private func applyMorphEvent(_ event: GaryxChromeMorphPresentationEvent) {
+        let transition = GaryxChromeMorphPresentationReducer.reduce(
+            state: morphState,
+            event: event,
+            reduceMotion: reduceMotion
         )
-        switch result {
-        case let .html(html):
-            phase = .html(html)
-        case .deleted:
-            phase = .deleted
-        case .failed:
-            // Keep any already-rendered page on a transient refresh failure;
-            // only show the failure state when nothing is rendered yet.
-            if case .html = phase { return }
-            phase = .failed
+        switch transition.animation {
+        case .none:
+            morphState = transition.state
+        case .open:
+            withAnimation(GaryxCapsuleChromeMorph.openAnimation) {
+                morphState = transition.state
+            }
+        case .close:
+            withAnimation(
+                GaryxCapsuleChromeMorph.closeAnimation,
+                completionCriteria: .logicallyComplete
+            ) {
+                morphState = transition.state
+            } completion: {
+                applyMorphEvent(.dismissAnimationCompleted)
+            }
+        }
+
+        switch transition.schedule {
+        case .none:
+            if transition.state == .hidden { performPendingChromeAction() }
+        case .expandOnNextTick:
+            Task { @MainActor in applyMorphEvent(.expandTick) }
+        case .completeDismissAfterAnimation:
+            break
+        }
+    }
+
+    private func performPendingChromeAction() {
+        guard let action = pendingChromeAction else { return }
+        pendingChromeAction = nil
+        switch action {
+        case .openSourceConversation:
+            guard let sourceThreadId = displayCapsule.threadId?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                !sourceThreadId.isEmpty else { return }
+            Task { await model.openMobileRoute(.thread(sourceThreadId)) }
+        case .copyLink:
+            copyLink()
+        case .copyID:
+            copyID()
+        case .delete:
+            showsDeleteConfirmation = true
+        }
+    }
+
+    private func handleSceneSignal(_ signal: GaryxCapsulePreviewSceneSignal) {
+        switch signal.phase {
+        case .inactive:
+            loader.cancelForScene(model: model, event: .sceneInactive)
+        case .background:
+            loader.cancelForScene(model: model, event: .sceneBackground)
+        case .active:
+            Task { await handleSceneActive() }
+        }
+    }
+
+    private func handleSceneActive() async {
+        let keyBeforeRefresh = loadKey
+        let refreshResult = await model.refreshCapsules(reportFailure: false)
+        let keyAfterRefresh = loadKey
+        // A revision change (including present -> missing) is owned solely by
+        // `.task(id:)`; never revive the stale key's retry cycle.
+        guard keyAfterRefresh.projectedRevision == keyBeforeRefresh.projectedRevision else { return }
+        switch refreshResult {
+        case .success, .failure:
+            if loader.needsForegroundResume(for: keyBeforeRefresh) {
+                loader.prepareForegroundResume()
+                retryGeneration &+= 1
+            }
+        }
+    }
+
+    private func handleGestureChanged(startX: CGFloat, translation: CGSize) {
+        var next = dragState
+        GaryxCapsuleDragDismiss.reduce(
+            state: &next,
+            event: .changed(
+                startX: startX,
+                translation: translation,
+                webAtTop: webAtTop,
+                panelPresented: morphState.isPresented || showsDeleteConfirmation
+            )
+        )
+        dragState = next
+    }
+
+    private func handleGestureReleased(velocity: CGSize, containerWidth: CGFloat) {
+        var next = dragState
+        let effect = GaryxCapsuleDragDismiss.reduce(
+            state: &next,
+            event: .released(velocity: velocity, containerWidth: containerWidth)
+        )
+        switch effect {
+        case .dismiss:
+            dragState = next
+            loader.cancelForDismiss(model: model)
+            dismiss()
+        case .snapBack:
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                dragState = next
+            }
+        case .none:
+            dragState = next
+        }
+    }
+
+    private func handleGestureCancelled() {
+        var next = dragState
+        GaryxCapsuleDragDismiss.reduce(state: &next, event: .cancelled)
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+            dragState = next
         }
     }
 
     private func copyLink() {
-        if let url = GaryxMobileRouteLink.make(.capsule(capsule.id)) {
+        if let url = GaryxMobileRouteLink.make(.capsule(selection.id)) {
             UIPasteboard.general.string = url.absoluteString
         }
     }
 
     private func copyID() {
-        UIPasteboard.general.string = capsule.id
+        UIPasteboard.general.string = selection.id
     }
 }
 
@@ -553,6 +728,7 @@ struct GaryxCapsuleFocusedPreviewView: View {
 /// bridge, `baseURL: nil` so the injected meta CSP governs.
 struct GaryxCapsuleWebView: UIViewRepresentable {
     let html: String
+    var gestureBridge: GaryxCapsuleDismissGestureBridge? = nil
     /// Reports whether the web content is scrolled to the very top. Drives the
     /// full-screen pull-to-dismiss so a downward drag only dismisses from the top
     /// and never fights content scrolling (#TASK-1470).
@@ -584,11 +760,21 @@ struct GaryxCapsuleWebView: UIViewRepresentable {
         webView.scrollView.bounces = false
         webView.scrollView.delegate = context.coordinator
         context.coordinator.onScrollAtTopChange = onScrollAtTopChange
+        context.coordinator.gestureBridge = gestureBridge
+        gestureBridge?.webViewPanGestureRecognizer = webView.scrollView.panGestureRecognizer
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         context.coordinator.onScrollAtTopChange = onScrollAtTopChange
+        if context.coordinator.gestureBridge !== gestureBridge {
+            if context.coordinator.gestureBridge?.webViewPanGestureRecognizer
+                === webView.scrollView.panGestureRecognizer {
+                context.coordinator.gestureBridge?.webViewPanGestureRecognizer = nil
+            }
+            context.coordinator.gestureBridge = gestureBridge
+        }
+        gestureBridge?.webViewPanGestureRecognizer = webView.scrollView.panGestureRecognizer
         let token = "\(html.count):\(html.hashValue)"
         guard context.coordinator.loadedToken != token else { return }
         context.coordinator.loadedToken = token
@@ -598,9 +784,19 @@ struct GaryxCapsuleWebView: UIViewRepresentable {
         webView.loadHTMLString(GaryxCapsuleViewport.ensuringMobileViewport(in: html), baseURL: nil)
     }
 
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        if coordinator.gestureBridge?.webViewPanGestureRecognizer
+            === webView.scrollView.panGestureRecognizer {
+            coordinator.gestureBridge?.webViewPanGestureRecognizer = nil
+        }
+        webView.scrollView.delegate = nil
+        webView.navigationDelegate = nil
+    }
+
     final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate {
         var loadedToken: String?
         var onScrollAtTopChange: ((Bool) -> Void)?
+        weak var gestureBridge: GaryxCapsuleDismissGestureBridge?
         private var lastAtTop = true
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -706,7 +902,7 @@ private struct GaryxMobileCapsuleChatCard: View {
     }
 }
 
-private extension GaryxCapsuleSummary {
+extension GaryxCapsuleSummary {
     var displayTitle: String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Untitled Capsule" : trimmed

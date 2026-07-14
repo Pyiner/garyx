@@ -89,60 +89,23 @@ struct GaryxThreadRuntimeMorphSurface: View {
     let onClose: () -> Void
 
     var body: some View {
-        let expandedWidth = min(
-            containerSize.width - GaryxThreadRuntimeMorph.horizontalMargin * 2,
-            GaryxThreadRuntimeMorph.maxExpandedWidth
-        )
-        let expandedX = (containerSize.width - expandedWidth) / 2
-        let cornerRadius = isExpanded
-            ? GaryxThreadRuntimeMorph.expandedCornerRadius
-            : GaryxThreadRuntimeMorph.collapsedCornerRadius
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-
-        GaryxThreadRuntimeSettingsPanel(
-            compactRowWidth: anchorRect.width,
-            isExpanded: isExpanded
-        )
-        // Inner frame keeps the panel laid out at its final width the whole
-        // time, so text never reflows while the surface window grows.
-        .frame(width: expandedWidth, alignment: .topLeading)
-        .frame(
-            width: isExpanded ? expandedWidth : anchorRect.width,
-            height: isExpanded ? nil : anchorRect.height,
-            alignment: .topLeading
-        )
-        // Readability backing fades in with the expansion; the collapsed
-        // capsule stays pure glass like the top-bar original.
-        .background {
-            shape.fill(Color(.systemBackground).opacity(isExpanded ? 0.72 : 0))
+        GaryxChromeMorphSurface(
+            isExpanded: isExpanded,
+            anchorRect: anchorRect,
+            containerSize: containerSize,
+            metrics: GaryxChromeMorphSurfaceMetrics(
+                horizontalMargin: GaryxThreadRuntimeMorph.horizontalMargin,
+                maximumExpandedWidth: GaryxThreadRuntimeMorph.maxExpandedWidth,
+                collapsedCornerRadius: GaryxThreadRuntimeMorph.collapsedCornerRadius,
+                expandedCornerRadius: GaryxThreadRuntimeMorph.expandedCornerRadius
+            ),
+            onClose: onClose
+        ) {
+            GaryxThreadRuntimeSettingsPanel(
+                compactRowWidth: anchorRect.width,
+                isExpanded: isExpanded
+            )
         }
-        .garyxAdaptiveGlass(
-            .regular,
-            isInteractive: false,
-            fallbackMaterial: .ultraThinMaterial,
-            in: shape
-        )
-        .clipShape(shape)
-        .overlay {
-            shape
-                .stroke(Color.white.opacity(0.30), lineWidth: 0.7)
-                .opacity(isExpanded ? 1 : 0)
-        }
-        .overlay {
-            shape
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
-                .opacity(isExpanded ? 1 : 0)
-        }
-        .shadow(
-            color: Color.black.opacity(isExpanded ? 0.10 : 0),
-            radius: 24, x: 0, y: 10
-        )
-        .offset(
-            x: isExpanded ? expandedX : anchorRect.minX,
-            y: anchorRect.minY
-        )
-        .accessibilityAddTraits(.isModal)
-        .accessibilityAction(.escape, onClose)
     }
 }
 

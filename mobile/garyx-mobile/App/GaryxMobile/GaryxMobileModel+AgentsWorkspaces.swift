@@ -590,7 +590,7 @@ extension GaryxMobileModel {
             return .loaded(agent)
         } catch let error as GaryxGatewayError {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
-            if case .httpStatus(404, _) = error {
+            if case .httpStatus(404, _, _) = error {
                 return .deleted
             }
             return .failed(message: displayMessage(for: error))

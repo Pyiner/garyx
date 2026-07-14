@@ -198,7 +198,7 @@ extension GaryxMobileModel {
     }
 
     private func isClaudeCodeAuthSessionMissing(_ error: Error) -> Bool {
-        guard case GaryxGatewayError.httpStatus(let status, _) = error else {
+        guard case GaryxGatewayError.httpStatus(let status, _, _) = error else {
             return false
         }
         return status == 404

@@ -37,21 +37,94 @@ extension GaryxMobileModel {
         }
     }
 
-    func refreshCapsules() async {
-        guard hasGatewaySettings else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
-        let favoritesGeneration = capsuleFavoriteState.favoritesGeneration
-        do {
-            let nextCapsules = try await client().listCapsules()
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            mergeCapsulesFromRefresh(
-                nextCapsules,
-                capturedFavoritesGeneration: favoritesGeneration
+    /// Single entry point for every Capsule catalog read. Concurrent callers
+    /// share one GET, while a trigger arriving during that GET advances
+    /// `requestedTicket`; the worker must then issue one immediate trailing GET
+    /// before it can finish. Only this worker commits catalog state.
+    @discardableResult
+    func refreshCapsules(
+        reportFailure: Bool = true
+    ) async -> Result<[GaryxCapsuleSummary], Error> {
+        guard hasGatewaySettings else {
+            let result: Result<[GaryxCapsuleSummary], Error> = .failure(
+                GaryxGatewayError.invalidURL(gatewayURL)
             )
-            persistCatalogCacheSnapshot()
-        } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            if reportFailure, case let .failure(error) = result {
+                lastError = displayMessage(for: error)
+            }
+            return result
+        }
+
+        capsuleCatalogRequestedTicket &+= 1
+        let callerTicket = capsuleCatalogRequestedTicket
+        var latestResult: Result<[GaryxCapsuleSummary], Error> = .success(capsules)
+
+        // A worker can finish its final check just before another caller marks a
+        // trailing ticket. Looping through the caller's own ticket closes that
+        // narrow completion race without ever allowing two workers.
+        while capsuleCatalogFinishedTicket < callerTicket {
+            let (token, task) = capsuleCatalogWorker()
+            latestResult = await task.value
+            if capsuleCatalogRefreshTaskToken == token {
+                capsuleCatalogRefreshTask = nil
+                capsuleCatalogRefreshTaskToken = nil
+            }
+        }
+
+        if reportFailure, case let .failure(error) = latestResult,
+           !GaryxGatewayRetryClassifier.isCancellation(error) {
             lastError = displayMessage(for: error)
+        }
+        return latestResult
+    }
+
+    private func capsuleCatalogWorker(
+    ) -> (UUID, Task<Result<[GaryxCapsuleSummary], Error>, Never>) {
+        if let task = capsuleCatalogRefreshTask,
+           let token = capsuleCatalogRefreshTaskToken {
+            return (token, task)
+        }
+        let token = UUID()
+        let task = Task { @MainActor [weak self] () -> Result<[GaryxCapsuleSummary], Error> in
+            guard let self else { return .failure(CancellationError()) }
+            return await self.runCapsuleCatalogWorker()
+        }
+        capsuleCatalogRefreshTaskToken = token
+        capsuleCatalogRefreshTask = task
+        return (token, task)
+    }
+
+    private func runCapsuleCatalogWorker() async -> Result<[GaryxCapsuleSummary], Error> {
+        var latestResult: Result<[GaryxCapsuleSummary], Error> = .success(capsules)
+        while true {
+            let attemptTicket = capsuleCatalogRequestedTicket
+            let runtimeGeneration = gatewayRuntimeGeneration
+            let favoritesGeneration = capsuleFavoriteState.favoritesGeneration
+            do {
+                let nextCapsules = try await client().listCapsules()
+                guard runtimeGeneration == gatewayRuntimeGeneration else {
+                    latestResult = .failure(CancellationError())
+                    capsuleCatalogFinishedTicket = max(capsuleCatalogFinishedTicket, attemptTicket)
+                    return latestResult
+                }
+                // The coordinator is the unique writer. The ticket guard remains
+                // as a defensive latest-wins barrier against any future bypass.
+                if attemptTicket >= capsuleCatalogCommittedTicket {
+                    mergeCapsulesFromRefresh(
+                        nextCapsules,
+                        capturedFavoritesGeneration: favoritesGeneration
+                    )
+                    capsuleCatalogCommittedTicket = attemptTicket
+                    persistCatalogCacheSnapshot()
+                }
+                latestResult = .success(nextCapsules)
+            } catch {
+                latestResult = .failure(error)
+            }
+            capsuleCatalogFinishedTicket = max(capsuleCatalogFinishedTicket, attemptTicket)
+            guard capsuleCatalogRequestedTicket > attemptTicket else { return latestResult }
+            // A trigger arrived while the request was in flight: immediately
+            // consume the newest ticket in a second, trailing GET.
         }
     }
 
@@ -61,6 +134,25 @@ extension GaryxMobileModel {
 
     func isCapsuleFavorited(_ capsule: GaryxCapsuleSummary) -> Bool {
         GaryxCapsuleFavoriteReducer.isFavorited(capsule, state: capsuleFavoriteState)
+    }
+
+    /// Resolve the source-thread metadata used by the Capsule action panel.
+    /// Prefer the existing thread-list projection so its title/avatar stay in
+    /// lockstep with the list; only issue a focused read when pagination has not
+    /// brought that source thread into memory.
+    func capsuleSourceThreadSummary(threadId: String) async -> GaryxThreadSummary? {
+        let id = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return nil }
+        if let cached = sidebarThreadSummary(for: id) { return cached }
+        guard hasGatewaySettings else { return nil }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            let thread = try await client().getThread(threadId: id)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
+            return thread
+        } catch {
+            return nil
+        }
     }
 
     func toggleCapsuleFavorite(_ capsule: GaryxCapsuleSummary) async {
@@ -150,7 +242,7 @@ extension GaryxMobileModel {
             return .html(html)
         } catch let error as GaryxGatewayError {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return .failed }
-            if case .httpStatus(404, _) = error {
+            if case .httpStatus(404, _, _) = error {
                 // The whole capsule is gone. Centralized eviction so *every*
                 // surface re-validates: HTML cache, rendered-thumbnail memory +
                 // disk (all renditions/revisions), and the cache epoch — even
@@ -162,6 +254,54 @@ extension GaryxMobileModel {
             return .failed
         } catch {
             return .failed
+        }
+    }
+
+    func beginFocusedCapsuleHTMLRequest(for key: GaryxCapsulePreviewLoadKey) -> UUID {
+        focusedCapsuleHTMLRequestGate.begin(key)
+    }
+
+    func invalidateFocusedCapsuleHTMLRequests() {
+        focusedCapsuleHTMLRequestGate.invalidate()
+    }
+
+    func acceptsFocusedCapsuleHTMLRequest(
+        key: GaryxCapsulePreviewLoadKey,
+        token: UUID
+    ) -> Bool {
+        focusedCapsuleHTMLRequestGate.accepts(key: key, token: token)
+    }
+
+    /// One focused-preview network attempt. Inner Gateway retries are disabled;
+    /// `GaryxCapsuleFocusedPreviewLoader` is the sole bounded retry owner. A
+    /// stale key/token returns `.stale` and can never mutate cache or UI state.
+    func loadFocusedCapsulePreviewHTMLAttempt(
+        key: GaryxCapsulePreviewLoadKey,
+        token: UUID
+    ) async throws -> GaryxFocusedCapsuleHTMLAttempt {
+        try Task.checkCancellation()
+        guard hasGatewaySettings else { throw GaryxGatewayError.invalidURL(gatewayURL) }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            let html = try await client().capsuleHTML(id: key.id, allowsRetry: false)
+            try Task.checkCancellation()
+            guard runtimeGeneration == gatewayRuntimeGeneration else { throw CancellationError() }
+            guard acceptsFocusedCapsuleHTMLRequest(key: key, token: token) else { return .stale }
+            if let revision = key.projectedRevision {
+                capsuleHTMLCache[GaryxCapsuleHTMLCacheKey(id: key.id, revision: revision)] = html
+            }
+            return .html(html)
+        } catch {
+            if GaryxGatewayRetryClassifier.isCancellation(error) {
+                throw CancellationError()
+            }
+            guard runtimeGeneration == gatewayRuntimeGeneration else { throw CancellationError() }
+            guard acceptsFocusedCapsuleHTMLRequest(key: key, token: token) else { return .stale }
+            if case GaryxGatewayError.httpStatus(404, _, _) = error {
+                await evictDeletedCapsuleCaches(capsuleId: key.id)
+                return .deleted
+            }
+            throw error
         }
     }
 
@@ -195,8 +335,9 @@ extension GaryxMobileModel {
         if !capsules.contains(where: { $0.id == id }) {
             await refreshCapsules()
         }
-        conversationCapsulePreview = capsules.first { $0.id == id }
+        let fallback = capsules.first { $0.id == id }
             ?? GaryxCapsuleSummary(id: id, title: "Capsule")
+        conversationCapsulePreview = GaryxCapsulePreviewSelection(capsule: fallback)
     }
 
     func deleteCapsule(_ capsule: GaryxCapsuleSummary) async {
