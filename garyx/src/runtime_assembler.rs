@@ -39,15 +39,22 @@ impl RuntimeAssembler {
             .data_dir
             .clone()
             .unwrap_or_else(|| default_session_data_dir().to_string_lossy().to_string());
-        let file_store: Arc<dyn ThreadStore> = match FileThreadStore::new(&session_data_dir).await {
+        let legacy_import_source: Arc<dyn ThreadStore> = match FileThreadStore::new(
+            &session_data_dir,
+        )
+        .await
+        {
             Ok(store) => {
-                tracing::info!(data_dir = %session_data_dir, "FileThreadStore initialized");
+                tracing::info!(
+                    data_dir = %session_data_dir,
+                    "legacy thread archive import source initialized"
+                );
                 Arc::new(store)
             }
             Err(error) => {
                 tracing::warn!(
                     error = %error,
-                    "Failed to create FileThreadStore, falling back to in-memory"
+                    "failed to open legacy thread archive import source; boot import will use an empty source"
                 );
                 Arc::new(InMemoryThreadStore::new())
             }
@@ -82,7 +89,7 @@ impl RuntimeAssembler {
             garyx_db,
             transcript_store.clone(),
             &bridge,
-            file_store.clone(),
+            legacy_import_source,
         )
         .await?;
         let thread_history = Arc::new(ThreadHistoryRepository::new(
@@ -137,9 +144,8 @@ impl RuntimeAssembler {
             .with_thread_log_sink(thread_logs.clone())
             .build();
 
-        // AppStateBuilder wraps the raw file store in the recent-thread
-        // projecting store. Bind the bridge to that final store so provider
-        // persistence updates the projection instead of bypassing it.
+        // Bind the bridge to AppState's final SQLite store handle so provider
+        // persistence, routing, and history all share the same truth source.
         bridge
             .set_thread_store(state.threads.thread_store.clone())
             .await;

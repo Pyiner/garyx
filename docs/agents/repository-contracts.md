@@ -17,9 +17,9 @@ reinterpreted in feature code.
   lives in the transcript jsonl files. Known endpoint state and the
   `ThreadStore` trait: `garyx-router`; the production store is
   `SqliteThreadStore` (garyx-gateway). The former JSON archive under
-  `~/.garyx/data/threads` survives only as the boot-import source and the
-  optional dual-write mirror (`sessions.thread_store=sqlite`, the
-  emergency mode).
+  `<data_dir>/threads` survives only as the one-shot boot-import source for
+  pre-SQLite upgrades. There is no runtime JSON backend or dual-write mirror;
+  recovery uses the archived backup plus an explicitly forced fresh import.
 - MCP schema and tool behavior: `garyx-gateway/src/mcp.rs`.
 - Provider session behavior: `garyx-bridge`.
 - Channel/plugin stream presentation policy, buffering, and tool-call display
