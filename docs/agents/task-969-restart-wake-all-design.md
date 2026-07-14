@@ -24,7 +24,7 @@ Supported restart choices:
 `--wake all` is a separate wake mode, not a target kind with an extra target.
 It conflicts with `--no-wake` the same way single-target wake does. Unlike
 single-target wake, it does not require `--wake-message`; omitted message means
-`continue`.
+the structured restart-notice message.
 
 The clap definition accepts `num_args = 1..=2`, with manual validation in
 `resolve_gateway_restart_wake_destination`:
