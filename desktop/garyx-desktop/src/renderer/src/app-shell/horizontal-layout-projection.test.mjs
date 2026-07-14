@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  EXPAND_V1_SIDE_TOOLS_MIN_WIDTH,
   EXPAND_V1_WINDOW_MIN_WIDTH,
+  LEGACY_SIDE_TOOLS_MIN_WIDTH,
   LEGACY_WINDOW_MIN_WIDTH,
   MIN_PRIMARY_THREAD_WIDTH,
   createHorizontalLayoutState,
@@ -181,6 +183,7 @@ test("expand-v1 intentional differences are isolated in a golden matrix", () => 
     windowExpansionEnabled: false,
     conversationRailAutoHide: false,
     sideToolsAutoHide: false,
+    sideToolsMinWidth: LEGACY_SIDE_TOOLS_MIN_WIDTH,
   });
   assert.deepEqual(horizontalLayoutPolicy("expand-v1"), {
     name: "expand-v1",
@@ -188,6 +191,7 @@ test("expand-v1 intentional differences are isolated in a golden matrix", () => 
     windowExpansionEnabled: true,
     conversationRailAutoHide: true,
     sideToolsAutoHide: true,
+    sideToolsMinWidth: EXPAND_V1_SIDE_TOOLS_MIN_WIDTH,
   });
   const legacyAt960 = stableProjection({
     policy: "legacy",

@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 
 import {
   SIDE_TOOLS_PANEL_MAX_WIDTH,
-  SIDE_TOOLS_PANEL_MIN_WIDTH,
   buildThreadLogLines,
   clampSideToolsPanelWidth,
   defaultSideToolsPanelWidth,
+  sideToolsPanelMinWidth,
 } from './diagnostics-helpers.ts';
 
 test('parses the unified space-separated local thread-log stamp', () => {
@@ -21,30 +21,47 @@ test('still parses legacy RFC3339 thread-log stamps without a timezone suffix', 
   assert.equal(line.text, 'WARN [run] legacy');
 });
 
-test('defaults side tools to the single measured Codex-style right rail', () => {
-  assert.equal(defaultSideToolsPanelWidth(1800), 320);
-  assert.equal(defaultSideToolsPanelWidth(1235), 320);
-  assert.equal(defaultSideToolsPanelWidth(900), 320);
+test('side-tools min width is the policy knob: legacy pinned, expand-v1 doubled', () => {
+  assert.equal(sideToolsPanelMinWidth('legacy'), 320);
+  assert.equal(sideToolsPanelMinWidth('expand-v1'), 640);
+  assert.equal(SIDE_TOOLS_PANEL_MAX_WIDTH, 1180);
+});
+
+test('defaults side tools to the policy min width regardless of canvas', () => {
+  assert.equal(defaultSideToolsPanelWidth('expand-v1', 1800), 640);
+  assert.equal(defaultSideToolsPanelWidth('expand-v1', 1235), 640);
+  assert.equal(defaultSideToolsPanelWidth('expand-v1', 900), 640);
+  assert.equal(defaultSideToolsPanelWidth('legacy', 1800), 320);
+  assert.equal(defaultSideToolsPanelWidth('legacy', 900), 320);
 });
 
 test('clamps a customized side-tools rail to the measured canvas', () => {
-  assert.equal(clampSideToolsPanelWidth(520, 736), 320);
-  assert.equal(clampSideToolsPanelWidth(685, 1235), 685);
+  assert.equal(clampSideToolsPanelWidth('expand-v1', 840, 736), 640);
+  assert.equal(clampSideToolsPanelWidth('expand-v1', 685, 1235), 685);
+  assert.equal(clampSideToolsPanelWidth('legacy', 520, 736), 320);
+  assert.equal(clampSideToolsPanelWidth('legacy', 685, 1235), 685);
 });
 
 test('side-tools width helpers match their complete boundary table', () => {
-  assert.equal(SIDE_TOOLS_PANEL_MIN_WIDTH, 320);
-  assert.equal(SIDE_TOOLS_PANEL_MAX_WIDTH, 1180);
-
   const cases = [
-    ['tools invalid uses default', clampSideToolsPanelWidth, Number.NaN, null, 320],
-    ['tools below min', clampSideToolsPanelWidth, 319, null, 320],
-    ['tools rounds', clampSideToolsPanelWidth, 400.5, null, 401],
-    ['tools above max', clampSideToolsPanelWidth, 1181, null, 1180],
-    ['tools narrow canvas', clampSideToolsPanelWidth, 520, 736, 320],
-    ['tools exact canvas budget', clampSideToolsPanelWidth, 700, 1235, 685],
+    ['expand tools invalid uses default', 'expand-v1', Number.NaN, null, 640],
+    ['expand tools below min', 'expand-v1', 639, null, 640],
+    ['expand tools rounds', 'expand-v1', 700.5, null, 701],
+    ['expand tools above max', 'expand-v1', 1181, null, 1180],
+    ['expand tools narrow canvas', 'expand-v1', 840, 736, 640],
+    ['expand tools exact canvas budget', 'expand-v1', 700, 1235, 685],
+    ['legacy tools invalid uses default', 'legacy', Number.NaN, null, 320],
+    ['legacy tools below min', 'legacy', 319, null, 320],
+    ['legacy tools rounds', 'legacy', 400.5, null, 401],
+    ['legacy tools above max', 'legacy', 1181, null, 1180],
+    ['legacy tools narrow canvas', 'legacy', 520, 736, 320],
+    ['legacy tools exact canvas budget', 'legacy', 700, 1235, 685],
   ];
-  for (const [label, clamp, width, layoutWidth, expected] of cases) {
-    assert.equal(clamp(width, layoutWidth), expected, label);
+  for (const [label, policy, width, layoutWidth, expected] of cases) {
+    assert.equal(
+      clampSideToolsPanelWidth(policy, width, layoutWidth),
+      expected,
+      label,
+    );
   }
 });

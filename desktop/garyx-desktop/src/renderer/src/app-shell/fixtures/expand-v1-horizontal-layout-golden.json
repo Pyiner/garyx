@@ -29,8 +29,34 @@
       ]
     },
     {
-      "name": "side-tools-docked-at-961",
-      "width": 961,
+      "name": "side-tools-capacity-hidden-at-1244",
+      "width": 1244,
+      "desiredOccupancy": {
+        "globalSidebar": true,
+        "conversationRail": false,
+        "sideTools": true
+      },
+      "presentation": {
+        "globalSidebar": "expanded",
+        "conversationRail": "closed",
+        "sideTools": "hidden",
+        "taskTree": "overlay-closed",
+        "taskTreeDocked": false,
+        "compactViewport": false,
+        "headerDensity": "regular"
+      },
+      "columns": [
+        245,
+        0,
+        0,
+        999,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "side-tools-docked-at-1245",
+      "width": 1245,
       "desiredOccupancy": {
         "globalSidebar": true,
         "conversationRail": false,
@@ -49,9 +75,9 @@
         245,
         0,
         0,
-        386,
+        350,
         10,
-        320
+        640
       ]
     },
     {

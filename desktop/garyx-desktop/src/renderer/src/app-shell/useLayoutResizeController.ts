@@ -14,9 +14,9 @@ import {
 import type { SideCapsuleTab } from "./components/SideToolsPanel";
 import {
   SIDE_TOOLS_PANEL_MAX_WIDTH,
-  SIDE_TOOLS_PANEL_MIN_WIDTH,
   clampSideToolsPanelWidth,
   defaultSideToolsPanelWidth,
+  sideToolsPanelMinWidth,
 } from "./diagnostics-helpers";
 import {
   createHorizontalLayoutFrameStore,
@@ -111,7 +111,7 @@ export function useLayoutResizeController({
     const widths = {
       globalSidebar: SIDEBAR_DEFAULT_WIDTH,
       conversationRail: CONVERSATION_RAIL_DEFAULT_WIDTH,
-      sideTools: defaultSideToolsPanelWidth(null),
+      sideTools: defaultSideToolsPanelWidth(layoutPolicy, null),
     };
     if (layoutPolicy === "legacy") {
       storeRef.current = createLegacyHorizontalLayoutFrameStore({
@@ -293,10 +293,14 @@ export function useLayoutResizeController({
       const widths = store.getState().widths;
       const nextWidth = widths.sideToolsCustomized
         ? clampSideToolsPanelWidth(
+            layoutPolicy,
             widths.sideTools,
             currentConversationWidth(),
           )
-        : defaultSideToolsPanelWidth(currentConversationWidth());
+        : defaultSideToolsPanelWidth(
+            layoutPolicy,
+            currentConversationWidth(),
+          );
       if (nextWidth !== widths.sideTools) {
         dispatchPanelWidth("sideTools", nextWidth);
       }
@@ -309,6 +313,7 @@ export function useLayoutResizeController({
     currentConversationWidth,
     dispatchPanelWidth,
     inspectorOpen,
+    layoutPolicy,
     openCapsuleTabs.length,
     store,
   ]);
@@ -378,18 +383,21 @@ export function useLayoutResizeController({
     const step = event.shiftKey ? 56 : 28;
     const nextWidth =
       event.key === "Home"
-        ? SIDE_TOOLS_PANEL_MIN_WIDTH
+        ? sideToolsPanelMinWidth(layoutPolicy)
         : event.key === "End"
           ? clampSideToolsPanelWidth(
+              layoutPolicy,
               SIDE_TOOLS_PANEL_MAX_WIDTH,
               currentConversationWidth(),
             )
           : event.key === "ArrowLeft"
             ? clampSideToolsPanelWidth(
+                layoutPolicy,
                 currentWidth + step,
                 currentConversationWidth(),
               )
             : clampSideToolsPanelWidth(
+                layoutPolicy,
                 currentWidth - step,
                 currentConversationWidth(),
               );
@@ -489,6 +497,7 @@ export function useLayoutResizeController({
       dispatchPanelWidth(
         "sideTools",
         clampSideToolsPanelWidth(
+          layoutPolicy,
           resizeState.startWidth + (resizeState.startX - event.clientX),
           currentConversationWidth(),
         ),
@@ -513,6 +522,7 @@ export function useLayoutResizeController({
   }, [
     currentConversationWidth,
     dispatchPanelWidth,
+    layoutPolicy,
     sideToolsResizing,
   ]);
 

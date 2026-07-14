@@ -116,10 +116,10 @@ test("pure executor closes checkpoint -> dual-CAS bounds -> full ack loop", () =
   assert.equal(applied.result.accepted, true);
   assert.equal(applied.result.setBoundsApplied, true);
   assert.equal(applied.state.setBoundsCount, 1);
-  assert.equal(applied.result.snapshot.bounds.width, 1810);
+  assert.equal(applied.result.snapshot.bounds.width, 2130);
   assert.equal(
     applied.result.acknowledgedSession.fundingByPanel.sideTools.widthDelta,
-    330,
+    650,
   );
   assert.equal(applied.result.acknowledgedSession.windowRevision, 2);
   assert.equal(applied.result.acknowledgedSession.sessionRevision, 3);
@@ -145,14 +145,14 @@ test("pure executor closes checkpoint -> dual-CAS bounds -> full ack loop", () =
 
 test("accepted result folds actual bounds readback into the normal base", () => {
   const { checkpointed, bounds } = startOpen();
-  const actualBounds = { ...bounds.targetBounds, width: 1808 };
+  const actualBounds = { ...bounds.targetBounds, width: 2128 };
   const applied = executeLayoutProtocolCommand(
     checkpointed.state,
     bounds,
     { actualBounds },
   );
   assert.equal(applied.result.accepted, true);
-  assert.equal(applied.result.snapshot.bounds.width, 1808);
+  assert.equal(applied.result.snapshot.bounds.width, 2128);
   assert.equal(
     applied.result.acknowledgedSession.normalBaseBounds.width,
     1478,
@@ -161,7 +161,7 @@ test("accepted result folds actual bounds readback into the normal base", () => 
     boundsForAcknowledgedSession(
       applied.result.acknowledgedSession,
     ).width,
-    1808,
+    2128,
   );
 });
 
@@ -274,7 +274,7 @@ test("fresh CLAIM_INITIAL_LAYOUT changes only the opaque session", () => {
 
 test("hydrate orphan RepayProof is the only bounds path without a new checkpoint", () => {
   const epoch = "orphan-protocol";
-  const sideFunding = funding("sideTools", 330, "orphan-funding");
+  const sideFunding = funding("sideTools", 650, "orphan-funding");
   const orphanSession = session({
     desiredOccupancy: CLOSED_LAYOUT_OCCUPANCY,
     fundingByPanel: { sideTools: sideFunding },

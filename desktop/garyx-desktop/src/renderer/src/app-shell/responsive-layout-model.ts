@@ -59,8 +59,11 @@ export const LEGACY_WINDOW_MIN_WIDTH = 1180;
 export const EXPAND_V1_WINDOW_MIN_WIDTH = 480;
 export const MIN_PRIMARY_THREAD_WIDTH = 350;
 export const RIGHT_DOCK_AUTO_HIDE_WIDTH = 960;
-export const SIDE_TOOLS_DEFAULT_WIDTH = 320;
-export const SIDE_TOOLS_MIN_WIDTH = 320;
+// The side-tools default width IS the min width (one knob per policy).
+// Legacy stays pinned at the packaged Phase 0 capture; expand-v1 doubles it
+// so capsules docked in the rail get a usable reading width.
+export const LEGACY_SIDE_TOOLS_MIN_WIDTH = 320;
+export const EXPAND_V1_SIDE_TOOLS_MIN_WIDTH = 640;
 export const SIDE_TOOLS_MAX_WIDTH = 1180;
 export const LAYOUT_EDGE_TOLERANCE = 2;
 
@@ -215,6 +218,7 @@ export type LayoutPolicy = Readonly<{
   windowExpansionEnabled: boolean;
   conversationRailAutoHide: boolean;
   sideToolsAutoHide: boolean;
+  sideToolsMinWidth: number;
 }>;
 
 const LAYOUT_POLICIES: Readonly<Record<LayoutPolicyName, LayoutPolicy>> = {
@@ -224,6 +228,7 @@ const LAYOUT_POLICIES: Readonly<Record<LayoutPolicyName, LayoutPolicy>> = {
     windowExpansionEnabled: false,
     conversationRailAutoHide: false,
     sideToolsAutoHide: false,
+    sideToolsMinWidth: LEGACY_SIDE_TOOLS_MIN_WIDTH,
   },
   "expand-v1": {
     name: "expand-v1",
@@ -231,6 +236,7 @@ const LAYOUT_POLICIES: Readonly<Record<LayoutPolicyName, LayoutPolicy>> = {
     windowExpansionEnabled: true,
     conversationRailAutoHide: true,
     sideToolsAutoHide: true,
+    sideToolsMinWidth: EXPAND_V1_SIDE_TOOLS_MIN_WIDTH,
   },
 };
 
@@ -244,10 +250,12 @@ export const CLOSED_LAYOUT_OCCUPANCY: LayoutPanelOccupancy = Object.freeze({
   sideTools: false,
 });
 
+// The side-tools seed is the smallest policy min; normalizeLayoutWidths lifts
+// it to the active policy's min (default width == min width per policy).
 export const DEFAULT_LAYOUT_WIDTHS: LayoutWidths = Object.freeze({
   globalSidebar: SIDEBAR_DEFAULT_WIDTH,
   conversationRail: CONVERSATION_RAIL_DEFAULT_WIDTH,
-  sideTools: SIDE_TOOLS_DEFAULT_WIDTH,
+  sideTools: LEGACY_SIDE_TOOLS_MIN_WIDTH,
   sideToolsCustomized: false,
 });
 
@@ -539,7 +547,11 @@ function isConversationRailAutoHidden(
   );
 }
 
-export function normalizeLayoutWidths(widths: LayoutWidths): LayoutWidths {
+export function normalizeLayoutWidths(
+  widths: LayoutWidths,
+  policyName: LayoutPolicyName,
+): LayoutWidths {
+  const sideToolsMinWidth = horizontalLayoutPolicy(policyName).sideToolsMinWidth;
   return {
     globalSidebar: clampSidebarWidth(
       finiteWidthOr(widths.globalSidebar, SIDEBAR_DEFAULT_WIDTH),
@@ -551,10 +563,10 @@ export function normalizeLayoutWidths(widths: LayoutWidths): LayoutWidths {
       ),
     ),
     sideTools: Math.max(
-      SIDE_TOOLS_MIN_WIDTH,
+      sideToolsMinWidth,
       Math.min(
         SIDE_TOOLS_MAX_WIDTH,
-        Math.round(finiteWidthOr(widths.sideTools, SIDE_TOOLS_DEFAULT_WIDTH)),
+        Math.round(finiteWidthOr(widths.sideTools, sideToolsMinWidth)),
       ),
     ),
     sideToolsCustomized: widths.sideToolsCustomized,
@@ -604,7 +616,7 @@ function solveStableHorizontalLayout(
     };
   }
   const policy = horizontalLayoutPolicy(state.policy);
-  const widths = normalizeLayoutWidths(state.widths);
+  const widths = normalizeLayoutWidths(state.widths, state.policy);
   const compactViewport = isGlobalSidebarCompact(
     state,
     requestedOccupancy,
@@ -1399,7 +1411,7 @@ function requestedPanelContribution(
   occupancy: LayoutPanelOccupancy,
   panel: LayoutPanelId,
 ): number {
-  const widths = normalizeLayoutWidths(state.widths);
+  const widths = normalizeLayoutWidths(state.widths, state.policy);
   if (!occupancy[panel]) {
     return 0;
   }
@@ -2475,7 +2487,7 @@ function updatePanelWidth(
         ? true
         : state.widths.sideToolsCustomized,
   };
-  const widths = normalizeLayoutWidths(candidate);
+  const widths = normalizeLayoutWidths(candidate, state.policy);
   const next = withRevision({ ...state, widths });
   return { state: next, effects: [] };
 }

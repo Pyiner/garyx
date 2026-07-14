@@ -4,16 +4,24 @@ import type { GatewayIndicatorTone, ThreadLogLine } from './types';
 import {
   SIDE_PANEL_MIN_MAIN_WIDTH,
   SIDE_PANEL_RESIZER_WIDTH,
+  horizontalLayoutPolicy,
+  type LayoutPolicyName,
 } from './responsive-layout-model.ts';
 
 // Matches both the current gateway stamp (`2026-07-07 17:06:37.123`, local
 // wall clock, space-separated) and older RFC3339 lines (`...T...+08:00`/`Z`).
 const THREAD_LOG_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}\S*\s+/;
 export const MAX_GATEWAY_THREAD_LOG_LINES = 100;
-export const SIDE_TOOLS_PANEL_MIN_WIDTH = 320;
 export const SIDE_TOOLS_PANEL_MAX_WIDTH = 1180;
-const DEFAULT_SIDE_TOOLS_PANEL_WIDTH = 320;
 const GATEWAY_OFFLINE_THRESHOLD = 3;
+
+/**
+ * The side-tools default width IS the policy min width (one knob); the layout
+ * model normalizes with the same value, so keep every UI clamp on this getter.
+ */
+export function sideToolsPanelMinWidth(policy: LayoutPolicyName): number {
+  return horizontalLayoutPolicy(policy).sideToolsMinWidth;
+}
 
 export function keepRecentThreadLogLines(
   rawText: string,
@@ -66,22 +74,22 @@ function formatThreadLogTimestamp(value: string): string | undefined {
 }
 
 export function clampSideToolsPanelWidth(
+  policy: LayoutPolicyName,
   width: number,
   layoutWidth?: number | null,
 ): number {
-  const baseWidth = Number.isFinite(width)
-    ? width
-    : DEFAULT_SIDE_TOOLS_PANEL_WIDTH;
+  const minWidth = sideToolsPanelMinWidth(policy);
+  const baseWidth = Number.isFinite(width) ? width : minWidth;
   const layoutMax = layoutWidth && layoutWidth > 0
     ? Math.max(
-        SIDE_TOOLS_PANEL_MIN_WIDTH,
+        minWidth,
         layoutWidth -
           SIDE_PANEL_MIN_MAIN_WIDTH -
           SIDE_PANEL_RESIZER_WIDTH,
       )
     : SIDE_TOOLS_PANEL_MAX_WIDTH;
   return Math.max(
-    SIDE_TOOLS_PANEL_MIN_WIDTH,
+    minWidth,
     Math.min(
       SIDE_TOOLS_PANEL_MAX_WIDTH,
       Math.min(layoutMax, Math.round(baseWidth)),
@@ -89,8 +97,15 @@ export function clampSideToolsPanelWidth(
   );
 }
 
-export function defaultSideToolsPanelWidth(layoutWidth?: number | null): number {
-  return clampSideToolsPanelWidth(DEFAULT_SIDE_TOOLS_PANEL_WIDTH, layoutWidth);
+export function defaultSideToolsPanelWidth(
+  policy: LayoutPolicyName,
+  layoutWidth?: number | null,
+): number {
+  return clampSideToolsPanelWidth(
+    policy,
+    sideToolsPanelMinWidth(policy),
+    layoutWidth,
+  );
 }
 
 export function computeGatewayIndicator(input: {

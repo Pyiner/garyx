@@ -173,9 +173,9 @@ import { ThreadPage } from "./components/ThreadPage";
 import { useAutomationController } from "./useAutomationController";
 import {
   SIDE_TOOLS_PANEL_MAX_WIDTH,
-  SIDE_TOOLS_PANEL_MIN_WIDTH,
   clampSideToolsPanelWidth,
   computeGatewayIndicator,
+  sideToolsPanelMinWidth,
 } from "./diagnostics-helpers";
 import {
   isKnownThreadId,
@@ -4979,10 +4979,13 @@ export function AppShell() {
                 aria-label={t("Resize side tools")}
                 aria-orientation="vertical"
                 aria-valuemax={clampSideToolsPanelWidth(
+                  window.garyxDesktop.horizontalLayoutPolicy,
                   SIDE_TOOLS_PANEL_MAX_WIDTH,
                   currentConversationWidth(),
                 )}
-                aria-valuemin={SIDE_TOOLS_PANEL_MIN_WIDTH}
+                aria-valuemin={sideToolsPanelMinWidth(
+                  window.garyxDesktop.horizontalLayoutPolicy,
+                )}
                 aria-valuenow={sideToolsPanelWidth}
                 className="side-tools-resizer"
                 onKeyDown={handleSideToolsResizeKeyDown}
