@@ -22,7 +22,7 @@ command with `--help` for the full flag list and arg descriptions.
 | --- | --- |
 | `garyx gateway run` | Run the gateway in the foreground (blocks). |
 | `garyx gateway install` | Register the managed service (launchd/systemd) and start it. Safe to re-run. |
-| `garyx gateway start` / `stop` / `restart` | Control the managed service. `restart` requires `--wake ...` or `--no-wake`. |
+| `garyx gateway start` / `stop` / `restart` | Control the managed service. Bare `restart` wakes all running threads; `--wake ...` narrows it and `--no-wake` opts out. |
 | `garyx gateway uninstall` | Remove the managed unit / plist file. |
 | `garyx gateway reload-config` | Reload config without restart. |
 | `garyx gateway token` | Ensure a gateway auth token exists; print it. |
@@ -38,12 +38,14 @@ The wake target is the only routing input; workspace is resolved from the target
 thread/task/bot binding inside the gateway.
 
 `garyx gateway restart --wake all` captures the threads that are running in
-`recent_threads` before restart and sends each one `continue` after the new
-gateway starts. Use `--wake-message "..."` to override the message.
+`recent_threads` before restart and sends each one a structured continuation
+notice after the new gateway starts. Use `--wake-message "..."` to override the
+message.
 
-Bare `garyx gateway restart` is blocked because it can interrupt an active
-streaming thread without waking it again. Use `--wake` for normal restarts, or
-`garyx gateway restart --no-wake` when you intentionally want only a restart.
+Bare `garyx gateway restart` uses the same wake-all behavior so interrupted
+threads continue automatically. Use a scoped `--wake` target when only one
+thread should resume, or `garyx gateway restart --no-wake` when you
+intentionally want only a restart.
 
 See [Service manager](/reference/service-manager) for what `install` actually
 writes to disk.

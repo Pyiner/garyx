@@ -7,7 +7,8 @@ use tower_http::limit::RequestBodyLimitLayer;
 use crate::server::AppState;
 use crate::{
     api, app_db, automation, capsules, chat, coding_usage, commands, dashboard, gateway_auth, mcp,
-    mcp_config, provider_auth, routes, tasks, tool_image, workspace_files, workspaces,
+    mcp_config, provider_auth, restart_wake, routes, tasks, tool_image, workspace_files,
+    workspaces,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -61,6 +62,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/recent-threads",
             axum::routing::get(routes::list_recent_threads),
+        )
+        .route(
+            restart_wake::RESTART_WAKE_ALL_SNAPSHOT_PATH,
+            axum::routing::get(restart_wake::restart_wake_all_snapshot_endpoint),
         )
         .route(
             "/api/provider-sessions/recent",

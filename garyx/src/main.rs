@@ -44,11 +44,12 @@ use commands::{
     cmd_endpoint_detach, cmd_endpoint_list, cmd_gateway_install, cmd_gateway_reload_config,
     cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token,
     cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail, cmd_onboard,
-    cmd_provider_list, cmd_provider_set, cmd_provider_show, cmd_send_message, cmd_status,
-    cmd_task_create, cmd_task_delete, cmd_task_get, cmd_task_history, cmd_task_list,
-    cmd_task_reopen, cmd_task_set_title, cmd_task_stop, cmd_task_update, cmd_thread_create,
-    cmd_thread_get, cmd_thread_history, cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot,
-    cmd_thread_send_to_task, cmd_tool_image, cmd_update, cmd_usage, run_gateway,
+    cmd_provider_list, cmd_provider_set, cmd_provider_show, cmd_queue_gateway_restart_wake_all,
+    cmd_send_message, cmd_status, cmd_task_create, cmd_task_delete, cmd_task_get, cmd_task_history,
+    cmd_task_list, cmd_task_reopen, cmd_task_set_title, cmd_task_stop, cmd_task_update,
+    cmd_thread_create, cmd_thread_get, cmd_thread_history, cmd_thread_list, cmd_thread_send,
+    cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_tool_image, cmd_update, cmd_usage,
+    run_gateway,
 };
 
 #[derive(Debug)]
@@ -390,9 +391,7 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         GatewayRestartWakeDecision::All { message } => {
                             let report =
-                                garyx_gateway::restart_wake::queue_pending_restart_wake_all(
-                                    message,
-                                )?;
+                                cmd_queue_gateway_restart_wake_all(config_path, message).await?;
                             if wake_json {
                                 println!(
                                     "{}",

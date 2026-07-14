@@ -552,6 +552,71 @@ pub(crate) async fn cmd_gateway_restart(
     Ok(())
 }
 
+#[derive(Debug)]
+struct RestartWakeAllSnapshotSelection {
+    snapshot: garyx_gateway::restart_wake::RestartWakeAllSnapshot,
+    gateway_fallback_reason: Option<String>,
+}
+
+fn configured_session_data_dir(config: &GaryxConfig) -> PathBuf {
+    config
+        .sessions
+        .data_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(default_session_data_dir)
+}
+
+async fn restart_wake_all_snapshot_for_config(
+    config_path: &str,
+) -> Result<RestartWakeAllSnapshotSelection, Box<dyn std::error::Error>> {
+    let loaded = load_config_or_default(config_path, ConfigRuntimeOverrides::default())?;
+    let data_dir = configured_session_data_dir(&loaded.config);
+    let gateway = gateway_endpoint(config_path)?;
+    let gateway_snapshot = fetch_gateway_json(
+        &gateway,
+        garyx_gateway::restart_wake::RESTART_WAKE_ALL_SNAPSHOT_PATH,
+    )
+    .await
+    .and_then(|payload| {
+        serde_json::from_value(payload).map_err(|error| Box::<dyn std::error::Error>::from(error))
+    });
+
+    match gateway_snapshot {
+        Ok(snapshot) => Ok(RestartWakeAllSnapshotSelection {
+            snapshot,
+            gateway_fallback_reason: None,
+        }),
+        Err(gateway_error) => {
+            let snapshot =
+                garyx_gateway::restart_wake::restart_wake_all_snapshot_from_data_dir(&data_dir)
+                    .map_err(|local_error| {
+                        format!(
+                            "failed to capture restart wake-all snapshot from gateway ({gateway_error}) or read-only local database {} ({local_error})",
+                            data_dir.display()
+                        )
+                    })?;
+            Ok(RestartWakeAllSnapshotSelection {
+                snapshot,
+                gateway_fallback_reason: Some(gateway_error.to_string()),
+            })
+        }
+    }
+}
+
+pub(crate) async fn cmd_queue_gateway_restart_wake_all(
+    config_path: &str,
+    message: &str,
+) -> Result<garyx_gateway::restart_wake::QueuedRestartWakeAll, Box<dyn std::error::Error>> {
+    let selection = restart_wake_all_snapshot_for_config(config_path).await?;
+    if let Some(reason) = selection.gateway_fallback_reason.as_deref() {
+        eprintln!(
+            "warning: gateway restart-wake snapshot unavailable ({reason}); using configured data_dir through a read-only SQLite connection"
+        );
+    }
+    garyx_gateway::restart_wake::queue_pending_restart_wake_all(message, selection.snapshot)
+}
+
 pub(crate) async fn cmd_gateway_stop() -> Result<(), Box<dyn std::error::Error>> {
     let manager = crate::service_manager::active_manager()?;
     manager.stop()?;
@@ -583,5 +648,129 @@ fn detect_workspace_root() -> Option<PathBuf> {
         Some(cwd)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::get;
+    use axum::{Json, Router, http::StatusCode};
+    use garyx_gateway::garyx_db::{GaryxDbService, RecentThreadDraft};
+    use garyx_models::local_paths::garyx_database_path_for_data_dir;
+    use tempfile::tempdir;
+    use tokio::net::TcpListener;
+
+    fn seed_running_thread(data_dir: &Path, thread_id: &str) {
+        let database = GaryxDbService::open(garyx_database_path_for_data_dir(data_dir))
+            .expect("open test database");
+        database
+            .upsert_recent_thread(RecentThreadDraft {
+                thread_id: thread_id.to_owned(),
+                title: thread_id.to_owned(),
+                workspace_dir: None,
+                thread_type: "chat".to_owned(),
+                provider_type: None,
+                agent_id: None,
+                message_count: 0,
+                last_message_preview: String::new(),
+                recent_run_id: None,
+                active_run_id: None,
+                run_state: "running".to_owned(),
+                updated_at: None,
+                last_active_at: "2026-07-14T00:00:00Z".to_owned(),
+            })
+            .expect("seed running thread");
+    }
+
+    async fn spawn_restart_snapshot_server(
+        status: StatusCode,
+        payload: Value,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let app = Router::new().route(
+            garyx_gateway::restart_wake::RESTART_WAKE_ALL_SNAPSHOT_PATH,
+            get(move || {
+                let payload = payload.clone();
+                async move { (status, Json(payload)) }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind snapshot server");
+        let address = listener.local_addr().expect("snapshot server address");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve snapshot API");
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn write_restart_test_config(
+        temp: &tempfile::TempDir,
+        public_url: &str,
+        data_dir: &Path,
+    ) -> PathBuf {
+        let config_path = temp.path().join("garyx.json");
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&json!({
+                "gateway": {"public_url": public_url},
+                "sessions": {"data_dir": data_dir},
+            }))
+            .expect("serialize config"),
+        )
+        .expect("write config");
+        config_path
+    }
+
+    #[tokio::test]
+    async fn restart_wake_all_prefers_the_running_gateway_snapshot() {
+        let temp = tempdir().expect("temp dir");
+        let data_dir = temp.path().join("custom-data");
+        seed_running_thread(&data_dir, "thread::local-fallback");
+        let (base_url, server) = spawn_restart_snapshot_server(
+            StatusCode::OK,
+            json!({
+                "targets": ["thread::gateway-snapshot"],
+                "truncated_count": 0,
+            }),
+        )
+        .await;
+        let config_path = write_restart_test_config(&temp, &base_url, &data_dir);
+
+        let selection =
+            restart_wake_all_snapshot_for_config(config_path.to_str().expect("config path"))
+                .await
+                .expect("snapshot selection");
+
+        server.abort();
+        assert_eq!(selection.snapshot.targets, vec!["thread::gateway-snapshot"]);
+        assert!(selection.gateway_fallback_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn restart_wake_all_falls_back_to_the_configured_data_dir() {
+        let temp = tempdir().expect("temp dir");
+        let data_dir = temp.path().join("custom-data");
+        seed_running_thread(&data_dir, "thread::custom-data-running");
+        let (base_url, server) = spawn_restart_snapshot_server(
+            StatusCode::NOT_FOUND,
+            json!({"error": "snapshot endpoint unavailable"}),
+        )
+        .await;
+        let config_path = write_restart_test_config(&temp, &base_url, &data_dir);
+
+        let selection =
+            restart_wake_all_snapshot_for_config(config_path.to_str().expect("config path"))
+                .await
+                .expect("read-only fallback snapshot");
+
+        server.abort();
+        assert_eq!(
+            selection.snapshot.targets,
+            vec!["thread::custom-data-running"]
+        );
+        assert!(selection.gateway_fallback_reason.is_some());
     }
 }

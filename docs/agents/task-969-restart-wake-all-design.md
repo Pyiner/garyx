@@ -5,7 +5,7 @@
 `garyx gateway restart --wake all` captures every user-visible thread that was
 running before the restart and queues a continuation for each one. After the new
 gateway is healthy, startup wake draining sends the configured wake message
-(`continue` by default) to each captured thread.
+(a structured restart notice by default) to each captured thread.
 
 This keeps the existing single-target wake behavior while covering the common
 agent-restart case where several runs are interrupted by the same gateway
@@ -26,9 +26,8 @@ It conflicts with `--no-wake` the same way single-target wake does. Unlike
 single-target wake, it does not require `--wake-message`; omitted message means
 `continue`.
 
-Implementation detail: the current clap definition uses `num_args = 2` plus
-`requires = "wake_message"`. This must become `num_args = 1..=2`, with manual
-validation in `resolve_gateway_restart_wake_destination`:
+The clap definition accepts `num_args = 1..=2`, with manual validation in
+`resolve_gateway_restart_wake_destination`:
 
 - one token exactly equal to `all` is wake-all;
 - two tokens remain the existing single-target form;
@@ -41,13 +40,19 @@ not whatever the new gateway sees after startup reconciliation.
 
 ## Inclusion Rules
 
-The source of truth is the gateway SQLite `recent_threads` projection. The CLI
-opens `garyx_models::local_paths::default_garyx_database_path()` directly and
-reads the same local database that the gateway writes. This matches the existing
-pending-wake directory, which also uses the default Garyx data directory. It
-does not call the running gateway over HTTP, because wake-all must capture the
-pre-restart snapshot even when the gateway is unhealthy but the DB projection is
-readable.
+The source of truth is the gateway SQLite `recent_threads` projection. Before
+restarting, the CLI first requests the bounded snapshot from the running
+gateway at `GET /api/restart-wake/snapshot`; this keeps the gateway's existing
+database service as the only writable owner. The endpoint performs the active
+thread predicate and recency ordering in SQL rather than loading and filtering
+every recent-thread row.
+
+If the gateway is unavailable or an older gateway does not expose the endpoint,
+the CLI resolves `sessions.data_dir` from the selected config and opens
+`<data_dir>/garyx-db.sqlite3` with `SQLITE_OPEN_READONLY` plus `query_only=ON`.
+The fallback never creates or initializes a database and therefore cannot
+become a second writer. This preserves pre-restart recovery when the gateway is
+already unhealthy while respecting custom data directories.
 
 A thread is included when:
 
@@ -174,6 +179,11 @@ there is no active run; wake-all handles the intentional restart-recovery path.
   - excludes idle/completed rows without active run;
   - de-duplicates thread ids;
   - preserves the restarting agent's own running thread when present.
+  - prefers the running gateway HTTP snapshot;
+  - falls back to a read-only SQLite connection in configured custom
+    `sessions.data_dir` when HTTP is unavailable;
+  - proves the read-only connection can query while another connection holds a
+    write transaction and rejects mutation attempts with SQLite `ReadOnly`.
 - Drain tests with a recording provider:
   - dispatches one continuation per captured thread;
   - uses distinct run ids;

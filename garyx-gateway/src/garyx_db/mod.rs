@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use chrono::{SecondsFormat, Utc};
 use garyx_router::{KnownChannelEndpoint, is_thread_key};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
@@ -42,6 +42,12 @@ pub enum GaryxDbError {
 }
 
 pub type GaryxDbResult<T> = Result<T, GaryxDbError>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActiveRecentThreadPage {
+    pub thread_ids: Vec<String>,
+    pub total: usize,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct OneShotMigrationSummary {
@@ -326,6 +332,14 @@ pub struct GaryxDbService {
     next_reader: std::sync::atomic::AtomicUsize,
 }
 
+/// Narrow read-only handle for offline control-plane reads while the gateway
+/// process may still own the writable database connection. Unlike
+/// `GaryxDbService::open`, this never creates a database, changes WAL mode,
+/// initializes schema, or exposes mutation methods.
+pub(crate) struct ReadOnlyGaryxDb {
+    conn: Connection,
+}
+
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5_000);
 /// Read-pool size: enough to keep the common concurrent readers (desktop,
 /// mobile, a handful of agents) off each other's locks without holding a
@@ -383,6 +397,14 @@ impl GaryxDbService {
             readers: Vec::new(),
             next_reader: std::sync::atomic::AtomicUsize::new(0),
         })
+    }
+
+    pub(crate) fn list_active_recent_thread_ids(
+        &self,
+        limit: usize,
+    ) -> GaryxDbResult<ActiveRecentThreadPage> {
+        let mut conn = self.read_conn()?;
+        list_active_recent_thread_ids(&mut conn, limit)
     }
 
     fn conn(&self) -> GaryxDbResult<MutexGuard<'_, Connection>> {
@@ -1886,6 +1908,61 @@ impl GaryxDbService {
     }
 }
 
+impl ReadOnlyGaryxDb {
+    pub(crate) fn open(path: impl AsRef<Path>) -> GaryxDbResult<Self> {
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        conn.pragma_update(None, "query_only", "ON")?;
+        Ok(Self { conn })
+    }
+
+    pub(crate) fn list_active_recent_thread_ids(
+        &mut self,
+        limit: usize,
+    ) -> GaryxDbResult<ActiveRecentThreadPage> {
+        list_active_recent_thread_ids(&mut self.conn, limit)
+    }
+}
+
+fn list_active_recent_thread_ids(
+    conn: &mut Connection,
+    limit: usize,
+) -> GaryxDbResult<ActiveRecentThreadPage> {
+    const ACTIVE_RECENT_THREAD_PREDICATE: &str = "thread_id GLOB 'thread::*' AND (run_state = 'running' OR COALESCE(TRIM(active_run_id), '') <> '')";
+
+    // Count and page share one WAL snapshot, matching the recent-thread page
+    // contract. The predicate stays in SQL: restart wake-all is a conditional
+    // thread query and must not enumerate record bodies or filter a full table
+    // in application code.
+    let tx = conn.transaction()?;
+    let total_sql =
+        format!("SELECT COUNT(*) FROM recent_threads WHERE {ACTIVE_RECENT_THREAD_PREDICATE}");
+    let total: i64 = tx.query_row(&total_sql, [], |row| row.get(0))?;
+    let total = usize::try_from(total).unwrap_or(usize::MAX);
+
+    let page_sql = format!(
+        "SELECT thread_id
+           FROM recent_threads
+          WHERE {ACTIVE_RECENT_THREAD_PREDICATE}
+          ORDER BY last_active_at DESC, thread_id ASC
+          LIMIT ?1"
+    );
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    let mut stmt = tx.prepare(&page_sql)?;
+    let rows = stmt.query_map([limit], |row| row.get(0))?;
+    let mut thread_ids = Vec::new();
+    for row in rows {
+        thread_ids.push(row?);
+    }
+    drop(stmt);
+    tx.commit()?;
+
+    Ok(ActiveRecentThreadPage { thread_ids, total })
+}
+
 fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(
@@ -3303,6 +3380,57 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .expect("journal_mode");
         assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+    }
+
+    #[test]
+    fn read_only_handle_queries_during_a_writer_lock_and_rejects_writes() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let service = GaryxDbService::open(&path).expect("create database");
+        service
+            .upsert_recent_thread(RecentThreadDraft {
+                thread_id: "thread::read-only-snapshot".to_owned(),
+                title: "Read only snapshot".to_owned(),
+                workspace_dir: None,
+                thread_type: "chat".to_owned(),
+                provider_type: None,
+                agent_id: None,
+                message_count: 0,
+                last_message_preview: String::new(),
+                recent_run_id: None,
+                active_run_id: Some("run::active".to_owned()),
+                run_state: "running".to_owned(),
+                updated_at: None,
+                last_active_at: "2026-07-14T00:00:00Z".to_owned(),
+            })
+            .expect("seed recent projection");
+
+        let writer = Connection::open(&path).expect("writer connection");
+        writer
+            .execute_batch("BEGIN IMMEDIATE;")
+            .expect("hold the database write lock");
+
+        let mut read_only = ReadOnlyGaryxDb::open(&path).expect("open read-only handle");
+        let query_only: i64 = read_only
+            .conn
+            .query_row("PRAGMA query_only", [], |row| row.get(0))
+            .expect("query_only pragma");
+        assert_eq!(query_only, 1);
+        let page = read_only
+            .list_active_recent_thread_ids(16)
+            .expect("WAL reader remains available during a write transaction");
+        assert_eq!(page.thread_ids, vec!["thread::read-only-snapshot"]);
+
+        writer.execute_batch("COMMIT;").expect("release write lock");
+        let error = read_only
+            .conn
+            .execute("DELETE FROM recent_threads", [])
+            .expect_err("read-only handle must reject writes");
+        assert_eq!(
+            error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::ReadOnly),
+            "unexpected write error: {error}"
+        );
     }
 
     fn sample_recent_draft(thread_id: &str) -> RecentThreadDraft {

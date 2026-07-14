@@ -4,19 +4,24 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use axum::Json;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use chrono::Utc;
-use garyx_models::local_paths::{default_garyx_database_path, default_session_data_dir};
+use garyx_models::local_paths::{default_session_data_dir, garyx_database_path_for_data_dir};
 use garyx_router::is_thread_key;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::garyx_db::{GaryxDbService, RecentThreadRecord};
+use crate::garyx_db::{GaryxDbError, GaryxDbService, ReadOnlyGaryxDb};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
 
 const WAKE_ALL_KIND: &str = "all";
 const WAKE_ALL_TARGET: &str = "all";
+pub const RESTART_WAKE_ALL_SNAPSHOT_PATH: &str = "/api/restart-wake/snapshot";
 /// Default message injected when a restart wakes a thread and the caller did not
 /// pass an explicit `--wake-message`. Wrapped in the `garyx_restarted` tag so
 /// clients render it as a restart-notice card (mirrors the task-notification
@@ -58,10 +63,10 @@ pub struct QueuedRestartWakeAll {
     pub truncated_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RestartWakeAllSnapshot {
-    targets: Vec<String>,
-    truncated_count: usize,
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RestartWakeAllSnapshot {
+    pub targets: Vec<String>,
+    pub truncated_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,10 +101,38 @@ pub fn queue_pending_restart_wake(
 
 pub fn queue_pending_restart_wake_all(
     message: &str,
+    snapshot: RestartWakeAllSnapshot,
 ) -> Result<QueuedRestartWakeAll, Box<dyn std::error::Error>> {
-    let garyx_db = GaryxDbService::open(default_garyx_database_path())?;
-    let snapshot = restart_wake_all_snapshot_from_db(&garyx_db)?;
+    validate_restart_wake_all_snapshot(&snapshot)?;
     queue_pending_restart_wake_all_targets(message, snapshot)
+}
+
+fn validate_restart_wake_all_snapshot(
+    snapshot: &RestartWakeAllSnapshot,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if snapshot.targets.len() > MAX_RESTART_WAKE_ALL_THREADS {
+        return Err(format!(
+            "restart wake-all snapshot exceeds target cap: {} > {MAX_RESTART_WAKE_ALL_THREADS}",
+            snapshot.targets.len()
+        )
+        .into());
+    }
+    let mut seen = HashSet::new();
+    for target in &snapshot.targets {
+        if !is_thread_key(target) {
+            return Err(format!(
+                "restart wake-all snapshot contains non-canonical thread id: {target}"
+            )
+            .into());
+        }
+        if !seen.insert(target) {
+            return Err(format!(
+                "restart wake-all snapshot contains duplicate thread id: {target}"
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn queue_pending_restart_wake_all_targets(
@@ -339,42 +372,51 @@ async fn drain_pending_restart_wake_all_file(
 
 fn restart_wake_all_snapshot_from_db(
     garyx_db: &GaryxDbService,
-) -> Result<RestartWakeAllSnapshot, crate::garyx_db::GaryxDbError> {
-    let records = garyx_db.list_recent_threads(usize::MAX, 0)?;
-    Ok(restart_wake_all_snapshot_from_records(&records))
+) -> Result<RestartWakeAllSnapshot, GaryxDbError> {
+    let page = garyx_db.list_active_recent_thread_ids(MAX_RESTART_WAKE_ALL_THREADS)?;
+    Ok(RestartWakeAllSnapshot {
+        truncated_count: page.total.saturating_sub(page.thread_ids.len()),
+        targets: page.thread_ids,
+    })
 }
 
-fn restart_wake_all_snapshot_from_records(
-    records: &[RecentThreadRecord],
-) -> RestartWakeAllSnapshot {
-    let mut seen = HashSet::new();
-    let mut targets = Vec::new();
-    for record in records {
-        if !is_restart_wake_all_candidate(record) {
-            continue;
-        }
-        if seen.insert(record.thread_id.clone()) {
-            targets.push(record.thread_id.clone());
-        }
+pub fn restart_wake_all_snapshot_from_data_dir(
+    data_dir: impl AsRef<Path>,
+) -> Result<RestartWakeAllSnapshot, GaryxDbError> {
+    let database_path = garyx_database_path_for_data_dir(data_dir.as_ref());
+    if !database_path.exists() {
+        return Ok(RestartWakeAllSnapshot::default());
     }
-    let truncated_count = targets.len().saturating_sub(MAX_RESTART_WAKE_ALL_THREADS);
-    targets.truncate(MAX_RESTART_WAKE_ALL_THREADS);
-    RestartWakeAllSnapshot {
-        targets,
-        truncated_count,
-    }
+    let mut garyx_db = ReadOnlyGaryxDb::open(database_path)?;
+    let page = garyx_db.list_active_recent_thread_ids(MAX_RESTART_WAKE_ALL_THREADS)?;
+    Ok(RestartWakeAllSnapshot {
+        truncated_count: page.total.saturating_sub(page.thread_ids.len()),
+        targets: page.thread_ids,
+    })
 }
 
-fn is_restart_wake_all_candidate(record: &RecentThreadRecord) -> bool {
-    if !is_thread_key(&record.thread_id) {
-        return false;
+pub(crate) async fn capture_restart_wake_all_snapshot(
+    state: &Arc<AppState>,
+) -> Result<RestartWakeAllSnapshot, GaryxDbError> {
+    state
+        .ops
+        .garyx_db
+        .run_blocking(restart_wake_all_snapshot_from_db)
+        .await
+}
+
+pub async fn restart_wake_all_snapshot_endpoint(State(state): State<Arc<AppState>>) -> Response {
+    match capture_restart_wake_all_snapshot(&state).await {
+        Ok(snapshot) => (StatusCode::OK, Json(snapshot)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "InternalError",
+                "message": error.to_string(),
+            })),
+        )
+            .into_response(),
     }
-    record.run_state == "running"
-        || record
-            .active_run_id
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
 }
 
 fn restart_wake_metadata(wake: &PendingRestartWake, target: &str) -> HashMap<String, Value> {
@@ -705,17 +747,23 @@ fn pending_restart_wake_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::extract::ConnectInfo;
+    use axum::http::Request;
     use std::sync::Mutex as StdMutex;
 
     use async_trait::async_trait;
     use garyx_bridge::MultiProviderBridge;
-    use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
+    use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
     };
     use serde_json::json;
     use tokio::sync::Notify;
+    use tower::ServiceExt;
+
+    use crate::garyx_db::RecentThreadDraft;
 
     type ProviderCall = (String, String, HashMap<String, Value>);
 
@@ -840,27 +888,30 @@ mod tests {
         .expect("provider calls should arrive")
     }
 
-    fn recent_record(
+    fn seed_recent_record(
+        garyx_db: &GaryxDbService,
         thread_id: &str,
         run_state: &str,
         active_run_id: Option<&str>,
-    ) -> RecentThreadRecord {
-        RecentThreadRecord {
-            thread_id: thread_id.to_owned(),
-            title: thread_id.to_owned(),
-            workspace_dir: None,
-            thread_type: "chat".to_owned(),
-            provider_type: None,
-            agent_id: None,
-            message_count: 1,
-            last_message_preview: String::new(),
-            recent_run_id: None,
-            active_run_id: active_run_id.map(ToOwned::to_owned),
-            run_state: run_state.to_owned(),
-            updated_at: Some("2026-01-01T00:00:00Z".to_owned()),
-            last_active_at: "2026-01-01T00:00:00Z".to_owned(),
-            recorded_at: "2026-01-01T00:00:00Z".to_owned(),
-        }
+        last_active_at: &str,
+    ) {
+        garyx_db
+            .upsert_recent_thread(RecentThreadDraft {
+                thread_id: thread_id.to_owned(),
+                title: thread_id.to_owned(),
+                workspace_dir: None,
+                thread_type: "chat".to_owned(),
+                provider_type: None,
+                agent_id: None,
+                message_count: 1,
+                last_message_preview: String::new(),
+                recent_run_id: None,
+                active_run_id: active_run_id.map(ToOwned::to_owned),
+                run_state: run_state.to_owned(),
+                updated_at: Some("2026-01-01T00:00:00Z".to_owned()),
+                last_active_at: last_active_at.to_owned(),
+            })
+            .expect("seed recent thread");
     }
 
     #[test]
@@ -884,21 +935,46 @@ mod tests {
 
     #[test]
     fn wake_all_snapshot_includes_running_and_active_threads_with_cap() {
-        let mut records = vec![
-            recent_record("thread::self", "running", None),
-            recent_record("thread::active-only", "completed", Some("run::active")),
-            recent_record("thread::idle", "idle", None),
-            recent_record("not-a-thread", "running", Some("run::ignored")),
-        ];
+        let garyx_db = GaryxDbService::memory().expect("database");
+        seed_recent_record(
+            &garyx_db,
+            "thread::self",
+            "running",
+            None,
+            "2026-01-01T23:59:00Z",
+        );
+        seed_recent_record(
+            &garyx_db,
+            "thread::active-only",
+            "completed",
+            Some("run::active"),
+            "2026-01-01T23:58:00Z",
+        );
+        seed_recent_record(
+            &garyx_db,
+            "thread::idle",
+            "idle",
+            None,
+            "2026-01-01T23:57:00Z",
+        );
+        seed_recent_record(
+            &garyx_db,
+            "not-a-thread",
+            "running",
+            Some("run::ignored"),
+            "2026-01-01T23:56:00Z",
+        );
         for index in 0..20 {
-            records.push(recent_record(
+            seed_recent_record(
+                &garyx_db,
                 &format!("thread::extra-{index:02}"),
                 "running",
                 None,
-            ));
+                &format!("2026-01-01T10:{index:02}:00Z"),
+            );
         }
 
-        let snapshot = restart_wake_all_snapshot_from_records(&records);
+        let snapshot = restart_wake_all_snapshot_from_db(&garyx_db).expect("snapshot");
 
         assert_eq!(snapshot.targets.len(), MAX_RESTART_WAKE_ALL_THREADS);
         assert_eq!(snapshot.targets[0], "thread::self");
@@ -910,6 +986,65 @@ mod tests {
                 .any(|target| target == "thread::idle")
         );
         assert_eq!(snapshot.truncated_count, 6);
+    }
+
+    #[test]
+    fn wake_all_snapshot_reads_the_configured_data_dir() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let configured_data_dir = temp.path().join("custom-session-data");
+        let garyx_db = GaryxDbService::open(garyx_database_path_for_data_dir(&configured_data_dir))
+            .expect("custom database");
+        seed_recent_record(
+            &garyx_db,
+            "thread::custom-data-running",
+            "running",
+            None,
+            "2026-07-14T00:00:00Z",
+        );
+
+        let snapshot = restart_wake_all_snapshot_from_data_dir(&configured_data_dir)
+            .expect("read custom database");
+
+        assert_eq!(snapshot.targets, vec!["thread::custom-data-running"]);
+        assert_eq!(snapshot.truncated_count, 0);
+    }
+
+    #[tokio::test]
+    async fn wake_all_snapshot_http_endpoint_reads_the_sql_projection() {
+        let (state, _provider) = test_state(1, false).await;
+        seed_recent_record(
+            &state.ops.garyx_db,
+            "thread::http-running",
+            "running",
+            None,
+            "2026-07-14T00:00:00Z",
+        );
+        seed_recent_record(
+            &state.ops.garyx_db,
+            "thread::http-idle",
+            "idle",
+            None,
+            "2026-07-13T00:00:00Z",
+        );
+        let router = crate::build_router(state);
+        let request = Request::builder()
+            .uri(RESTART_WAKE_ALL_SNAPSHOT_PATH)
+            .extension(ConnectInfo(
+                "127.0.0.1:31337".parse::<std::net::SocketAddr>().unwrap(),
+            ))
+            .body(Body::empty())
+            .unwrap();
+
+        let response = router.oneshot(request).await.expect("snapshot response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("response body");
+        let snapshot: RestartWakeAllSnapshot =
+            serde_json::from_slice(&bytes).expect("snapshot json");
+        assert_eq!(snapshot.targets, vec!["thread::http-running"]);
+        assert_eq!(snapshot.truncated_count, 0);
     }
 
     #[test]
