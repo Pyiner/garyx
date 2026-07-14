@@ -82,9 +82,12 @@
   directly; do not add a second inset/overlay form. The rail may still be
   resized wider and must keep its contents responsive within the available
   width. On a constrained window an explicit user open protects the rail:
-  the capacity chain degrades the other panels (global sidebar last) while
-  the primary thread never drops below its 350px minimum; passive projection
-  without a user trigger hides the rail by capacity instead.
+  the capacity chain degrades non-trigger panels in a contractual order —
+  non-trigger side tools, then the global sidebar, then the non-trigger
+  conversation rail, and only then the trigger panel itself — while the
+  primary thread never drops below its 350px minimum. Passive projection
+  without a user trigger instead hides the rail by capacity between 961 and
+  1244px and by auto-hide at or below 960px.
 - Thread logs are a built-in side-tools item and replace the former side-tools
   Tasks item. They inherit the right rail's open, close, resize, and responsive
   behavior; they have no independent occupancy, funding, placement, resizer, or
