@@ -154,6 +154,10 @@ pub struct RecentThreadDraft {
     pub last_active_at: String,
 }
 
+/// Test-only observation shape for the `thread_message_routes` projection.
+/// Production maintains the table (same-transaction derivation, per-thread
+/// delete, aggregate diagnostics count) but has no row-level reader today.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadMessageRouteRecord {
     pub thread_id: String,
@@ -1426,6 +1430,10 @@ impl GaryxDbService {
             .optional()?)
     }
 
+    /// Test-only observation port over `thread_message_routes` (#TASK-2269
+    /// finding 2). Do not adopt in production reads; condition queries must go
+    /// through purpose-built projections instead of full-table listings.
+    #[cfg(test)]
     pub fn list_thread_message_routes(&self) -> GaryxDbResult<Vec<ThreadMessageRouteRecord>> {
         let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
@@ -2459,6 +2467,9 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Sole remaining caller is the test-only `list_thread_message_routes`
+/// observation port, so this helper is gated with it.
+#[cfg(test)]
 fn optional_from_stored_string(value: &str) -> Option<String> {
     normalize_optional(Some(value))
 }

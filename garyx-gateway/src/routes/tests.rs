@@ -2445,6 +2445,62 @@ fn resolved_main_endpoint_value_preserves_feishu_target_semantics() {
 }
 
 #[test]
+fn endpoint_conversation_kind_classifies_generic_channels() {
+    // Private: binding key matches its chat, no delivery thread scope.
+    assert_eq!(
+        endpoint_conversation_kind(
+            "telegram",
+            "12345",
+            "12345",
+            DELIVERY_TARGET_TYPE_CHAT_ID,
+            None,
+        ),
+        "private"
+    );
+    // Group: scoped binding distinct from its parent chat.
+    assert_eq!(
+        endpoint_conversation_kind(
+            "telegram",
+            "12345:777",
+            "12345",
+            DELIVERY_TARGET_TYPE_CHAT_ID,
+            None,
+        ),
+        "group"
+    );
+    // Topic: concrete parent chat plus a delivery thread scope.
+    assert_eq!(
+        endpoint_conversation_kind(
+            "telegram",
+            "12345:777",
+            "12345",
+            DELIVERY_TARGET_TYPE_CHAT_ID,
+            Some("777"),
+        ),
+        "topic"
+    );
+    // Legacy scoped binding without its parent chat stays a group, not a
+    // topic: the original Known-endpoint classifier only treated concrete
+    // chat scopes as topics, and the unified classifier keeps that rule for
+    // resolved endpoints (#TASK-2269 finding 1).
+    assert_eq!(
+        endpoint_conversation_kind(
+            "telegram",
+            "12345:777",
+            "",
+            DELIVERY_TARGET_TYPE_CHAT_ID,
+            Some("777"),
+        ),
+        "group"
+    );
+    // Nothing identifiable falls back to private.
+    assert_eq!(
+        endpoint_conversation_kind("telegram", "", "", DELIVERY_TARGET_TYPE_CHAT_ID, None),
+        "private"
+    );
+}
+
+#[test]
 fn endpoint_conversation_details_marks_discord_dm_as_private() {
     let endpoint = garyx_router::KnownChannelEndpoint {
         endpoint_key: "discord::main::1000000001::2000000001".to_owned(),
