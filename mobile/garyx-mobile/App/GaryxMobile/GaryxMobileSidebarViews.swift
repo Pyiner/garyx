@@ -144,6 +144,20 @@ private enum GaryxSidebarMetrics {
 struct GaryxHomeThreadListView: View, Equatable {
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if DEBUG
+    @ObservedObject private var performanceProbe = GaryxHomeScrollPerformanceProbe.shared
+    @StateObject private var pinnedDragLifecycle = GaryxPinnedDragLifecycleController()
+    @State private var dragBaselineOrder: [String] = []
+    @State private var dragPreviewOrder: [String]?
+    @State private var spikeCommittedOrder: [String]?
+    @State private var debugInjectedServerOrder: [String]?
+    @State private var threadMenuDismissToken = 0
+    @State private var completedDropHapticTrigger = 0
+    @State private var spikeCommitCount = 0
+    @State private var spikeRemoteMutationCount = 0
+    @State private var midLiftSnapshotStayedFrozen = false
+    @State private var debugPinMoveCount = 0
+    #endif
     let isSidebarDragActive: Bool
     let onOpenDrawer: () -> Void
     let onRefreshAll: () async -> Void
@@ -186,6 +200,21 @@ struct GaryxHomeThreadListView: View, Equatable {
             .task(id: homeListStore.snapshot.isHomeVisible) {
                 await runSilentSidebarRefreshLoop()
             }
+            #if DEBUG
+            .overlay(alignment: .bottomLeading) {
+                debugPerformanceProbeControls
+            }
+            .overlay {
+                debugPinnedDragLifecycleAdapter
+            }
+            .overlay(alignment: .topTrailing) {
+                debugPinnedReorderControls
+            }
+            .sensoryFeedback(.selection, trigger: completedDropHapticTrigger)
+            .onAppear {
+                configurePinnedDragLifecycle()
+            }
+            #endif
             .garyxThreadActionMenuHost(bottomInset: 88)
     }
 
@@ -236,50 +265,58 @@ struct GaryxHomeThreadListView: View, Equatable {
     @ViewBuilder
     private var sidebarThreadSections: some View {
         let snapshot = homeListStore.presentationSnapshot
-        let items = GaryxHomeThreadListLayout.primaryItems(for: snapshot)
+        let items = pinnedReorderItems(
+            GaryxHomeThreadListLayout.primaryItems(for: snapshot)
+        )
         let prefetchTriggerRowId = GaryxThreadListPageMerge.prefetchTriggerRowId(
             recentIds: snapshot.sections.recent.map(\.id)
         )
 
         ForEach(items) { item in
-            switch item {
-            case .pinnedHeader:
-                GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
-                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                    .padding(.bottom, 4)
+            Group {
+                switch item {
+                case .pinnedHeader:
+                    GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
+                        .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                        .padding(.bottom, 4)
 
-            case let .thread(row, region):
-                GaryxHomeThreadButton(
-                    row: row,
-                    motion: homeListStore.rowMotion(threadId: row.id),
-                    onOpenThread: onOpenThread,
-                    onTogglePinnedThread: onTogglePinnedThread,
-                    onUnpinThread: onUnpinThread,
-                    onArchiveThread: onArchiveThread
-                )
-                .equatable()
-                .onAppear {
-                    if region == .recent, row.id == prefetchTriggerRowId {
-                        Task { await onLoadMoreThreads(.nearTail) }
+                case let .thread(row, region):
+                    GaryxHomeThreadButton(
+                        row: row,
+                        motion: homeListStore.rowMotion(threadId: row.id),
+                        menuDismissToken: pinnedMenuDismissToken(for: region),
+                        menuMovementSuppression: pinnedMenuMovementSuppression(for: region),
+                        onOpenThread: onOpenThread,
+                        onTogglePinnedThread: onTogglePinnedThread,
+                        onUnpinThread: onUnpinThread,
+                        onArchiveThread: onArchiveThread
+                    )
+                    .equatable()
+                    .onAppear {
+                        if region == .recent, row.id == prefetchTriggerRowId {
+                            Task { await onLoadMoreThreads(.nearTail) }
+                        }
                     }
+
+                case .pinnedSpacer:
+                    spacerRow(height: 10)
+
+                case .recentHeader:
+                    GaryxSidebarSectionHeader(
+                        title: "Recent",
+                        systemImage: "clock.fill",
+                        statusLabel: snapshot.selectedRecentFilter.activeStatusLabel
+                    )
+                        .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                        .padding(.bottom, 4)
+
+                case let .recentPlaceholder(placeholder):
+                    recentPlaceholder(placeholder, selectedFilter: snapshot.selectedRecentFilter)
                 }
-
-            case .pinnedSpacer:
-                spacerRow(height: 10)
-
-            case .recentHeader:
-                GaryxSidebarSectionHeader(
-                    title: "Recent",
-                    systemImage: "clock.fill",
-                    statusLabel: snapshot.selectedRecentFilter.activeStatusLabel
-                )
-                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                    .padding(.bottom, 4)
-
-            case let .recentPlaceholder(placeholder):
-                recentPlaceholder(placeholder, selectedFilter: snapshot.selectedRecentFilter)
             }
+            .moveDisabled(pinnedMoveIsDisabled(for: item))
         }
+        .onMove(perform: pinnedMoveAction)
         .animation(threadListAnimation, value: items.map(\.id))
 
         spacerRow(height: 10)
@@ -355,11 +392,271 @@ struct GaryxHomeThreadListView: View, Equatable {
         homeListStore.presentationSnapshot.isHomeVisible
     }
 
+    private func pinnedReorderItems(
+        _ items: [GaryxHomeThreadListItem]
+    ) -> [GaryxHomeThreadListItem] {
+        #if DEBUG
+        guard GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled else { return items }
+        let serverItems = applyingPinnedOrder(debugInjectedServerOrder, to: items)
+        return applyingPinnedOrder(dragPreviewOrder ?? spikeCommittedOrder, to: serverItems)
+        #else
+        return items
+        #endif
+    }
+
+    private func applyingPinnedOrder(
+        _ order: [String]?,
+        to items: [GaryxHomeThreadListItem]
+    ) -> [GaryxHomeThreadListItem] {
+        guard let order else { return items }
+        let pinned = items.compactMap { item -> GaryxHomeThreadListItem? in
+            guard case let .thread(_, region) = item, region == .pinned else { return nil }
+            return item
+        }
+        let byId = Dictionary(uniqueKeysWithValues: pinned.map { ($0.id, $0) })
+        var seen = Set<String>()
+        var reordered = order.compactMap { id -> GaryxHomeThreadListItem? in
+            let itemId = "thread:\(id)"
+            guard seen.insert(itemId).inserted else { return nil }
+            return byId[itemId]
+        }
+        reordered += pinned.filter { seen.insert($0.id).inserted }
+        var iterator = reordered.makeIterator()
+        return items.map { item in
+            guard case let .thread(_, region) = item, region == .pinned else { return item }
+            return iterator.next() ?? item
+        }
+    }
+
+    private func pinnedMoveIsDisabled(for item: GaryxHomeThreadListItem) -> Bool {
+        #if DEBUG
+        guard GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled else { return true }
+        if case let .thread(_, region) = item, region == .pinned { return false }
+        #endif
+        return true
+    }
+
+    private var pinnedMoveAction: ((IndexSet, Int) -> Void)? {
+        #if DEBUG
+        guard GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled else { return nil }
+        return handlePinnedMove
+        #else
+        return nil
+        #endif
+    }
+
+    private func pinnedMenuDismissToken(for region: GaryxHomeThreadListRegion) -> Int {
+        #if DEBUG
+        if region == .pinned, GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
+            return threadMenuDismissToken
+        }
+        #endif
+        return 0
+    }
+
+    private func pinnedMenuMovementSuppression(for region: GaryxHomeThreadListRegion) -> Bool {
+        #if DEBUG
+        return region == .pinned
+            && GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled
+        #else
+        return false
+        #endif
+    }
+
+    #if DEBUG
+    private func configurePinnedDragLifecycle() {
+        guard GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled else { return }
+        pinnedDragLifecycle.configure(
+            callbacks: .init(
+                began: beginPinnedDragSession,
+                moved: pinnedDragSessionDidMove,
+                accepted: acceptPinnedDragSession,
+                cancelled: cancelPinnedDragSession
+            )
+        )
+    }
+
+    private func beginPinnedDragSession() {
+        let order = renderedPinnedOrder
+        dragBaselineOrder = order
+        dragPreviewOrder = order
+        midLiftSnapshotStayedFrozen = false
+
+        guard ProcessInfo.processInfo.environment["GARYX_MOBILE_PIN_REORDER_INJECT_MIDLIFT"] == "1"
+        else { return }
+        debugInjectedServerOrder = Array(order.reversed())
+        DispatchQueue.main.async {
+            midLiftSnapshotStayedFrozen = renderedPinnedOrder == order
+        }
+    }
+
+    private func pinnedDragSessionDidMove() {
+        threadMenuDismissToken &+= 1
+    }
+
+    private func handlePinnedMove(sourceOffsets: IndexSet, destination: Int) {
+        let items = pinnedReorderItems(
+            GaryxHomeThreadListLayout.primaryItems(for: homeListStore.presentationSnapshot)
+        )
+        guard let move = GaryxPinnedListMoveTranslator.translate(
+            items: items,
+            sourceOffsets: sourceOffsets,
+            destination: destination
+        ) else { return }
+        pinnedDragLifecycle.notePreviewMove(move.order)
+        dragPreviewOrder = move.order
+    }
+
+    private func acceptPinnedDragSession(previewOrder: [String]) {
+        spikeCommittedOrder = previewOrder
+        dragPreviewOrder = nil
+        dragBaselineOrder = []
+        spikeCommitCount += 1
+        completedDropHapticTrigger &+= 1
+    }
+
+    private func cancelPinnedDragSession() {
+        dragPreviewOrder = nil
+        dragBaselineOrder = []
+    }
+
+    private var renderedPinnedOrder: [String] {
+        pinnedReorderItems(
+            GaryxHomeThreadListLayout.primaryItems(for: homeListStore.presentationSnapshot)
+        ).compactMap { item in
+            guard case let .thread(row, region) = item, region == .pinned else { return nil }
+            return row.id
+        }
+    }
+
+    @ViewBuilder
+    private var debugPinnedDragLifecycleAdapter: some View {
+        if GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
+            GaryxPinnedDragLifecycleAdapter(controller: pinnedDragLifecycle)
+                .allowsHitTesting(false)
+        }
+    }
+
+    @ViewBuilder
+    private var debugPinnedReorderControls: some View {
+        if GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
+            VStack(spacing: 0) {
+                Button {
+                    dragBaselineOrder = []
+                    dragPreviewOrder = nil
+                    spikeCommittedOrder = nil
+                    debugInjectedServerOrder = nil
+                    spikeCommitCount = 0
+                    spikeRemoteMutationCount = 0
+                    midLiftSnapshotStayedFrozen = false
+                } label: {
+                    Color.primary.opacity(0.02)
+                        .frame(width: 44, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Reset pinned reorder spike")
+                .accessibilityIdentifier("pinned-reorder-debug-reset")
+
+                Button {
+                    guard let first = homeListStore.presentationSnapshot.sections.pinned.first else { return }
+                    _ = homeListStore.beginPinTransition(
+                        threadId: first.id,
+                        pinned: false,
+                        originalPinned: true,
+                        recentIndex: 0
+                    )
+                    debugPinMoveCount += 1
+                } label: {
+                    Color.primary.opacity(0.02)
+                        .frame(width: 44, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Inject pin move")
+                .accessibilityIdentifier("pinned-reorder-debug-pin-move")
+
+                Text("Pinned reorder lifecycle")
+                    .accessibilityIdentifier("pinned-reorder-lifecycle")
+                    .accessibilityValue(pinnedDragLifecycle.debugReport)
+                    .frame(width: 1, height: 1)
+                    .clipped()
+
+                Text("Pinned reorder result")
+                    .accessibilityIdentifier("pinned-reorder-result")
+                    .accessibilityValue(
+                        "commits=\(spikeCommitCount) remote_mutations=\(spikeRemoteMutationCount) midlift_frozen=\(midLiftSnapshotStayedFrozen ? 1 : 0) pin_moves=\(debugPinMoveCount) order=\(renderedPinnedOrder.joined(separator: ","))"
+                    )
+                    .frame(width: 1, height: 1)
+                    .clipped()
+
+                Text("Pinned reorder recognizers")
+                    .accessibilityIdentifier("pinned-reorder-recognizers")
+                    .accessibilityValue(pinnedDragLifecycle.observedRecognizerNames)
+                    .frame(width: 1, height: 1)
+                    .clipped()
+            }
+            .font(.system(size: 1))
+            .padding(.top, 88)
+            .padding(.trailing, 2)
+        }
+    }
+    #endif
+
+    #if DEBUG
+    @ViewBuilder
+    private var debugPerformanceProbeControls: some View {
+        if ProcessInfo.processInfo.environment["GARYX_MOBILE_HOME_SCROLL_PROBE_MANUAL"] == "1" {
+            VStack(spacing: 0) {
+                Button {
+                    performanceProbe.beginWindow(label: "home_scroll_ui_test")
+                } label: {
+                    Color.primary.opacity(0.02)
+                        .frame(width: 44, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Begin home scroll probe")
+                .accessibilityIdentifier("home-scroll-probe-begin")
+
+                Button {
+                    _ = performanceProbe.endWindow()
+                } label: {
+                    Color.primary.opacity(0.02)
+                        .frame(width: 44, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("End home scroll probe")
+                .accessibilityIdentifier("home-scroll-probe-end")
+
+                Text("Home scroll probe state")
+                    .accessibilityIdentifier("home-scroll-probe-state")
+                    .accessibilityValue(performanceProbe.isRecording ? "recording" : "idle")
+                    .frame(width: 1, height: 1)
+                    .clipped()
+
+                if let report = performanceProbe.latestReport {
+                    Text("Home scroll probe report")
+                        .accessibilityIdentifier("home-scroll-probe-report")
+                        .accessibilityValue(report.machineReadableLine)
+                        .frame(width: 1, height: 1)
+                        .clipped()
+                }
+            }
+            .padding(.leading, 2)
+            .padding(.bottom, 92)
+        }
+    }
+    #endif
+
 }
 
 private struct GaryxHomeThreadButton: View, Equatable {
     let row: GaryxHomeThreadRow
     let motion: GaryxHomeThreadRowMotion
+    let menuDismissToken: Int
+    let menuMovementSuppression: Bool
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onUnpinThread: (String) -> Void
@@ -368,7 +665,10 @@ private struct GaryxHomeThreadButton: View, Equatable {
     @State private var suppressNextPrimaryTap = false
 
     static func == (lhs: GaryxHomeThreadButton, rhs: GaryxHomeThreadButton) -> Bool {
-        lhs.row == rhs.row && lhs.motion == rhs.motion
+        lhs.row == rhs.row
+            && lhs.motion == rhs.motion
+            && lhs.menuDismissToken == rhs.menuDismissToken
+            && lhs.menuMovementSuppression == rhs.menuMovementSuppression
     }
 
     var body: some View {
@@ -405,7 +705,10 @@ private struct GaryxHomeThreadButton: View, Equatable {
                     }
                 }
             )
-            .garyxThreadActionMenu(primaryAction: {
+            .garyxThreadActionMenu(
+                dismissToken: menuDismissToken,
+                movementSuppressesMenu: menuMovementSuppression,
+                primaryAction: {
                 // Defer one run-loop turn so a nested direct Unpin button can
                 // mark the same touch as consumed before the row opens.
                 DispatchQueue.main.async {
@@ -415,7 +718,8 @@ private struct GaryxHomeThreadButton: View, Equatable {
                     }
                     onOpenThread(row.thread)
                 }
-            }) {
+                }
+            ) {
                 var items = [
                     GaryxThreadActionMenuItem(
                         title: row.presentation.isPinned ? "Unpin thread" : "Pin thread",

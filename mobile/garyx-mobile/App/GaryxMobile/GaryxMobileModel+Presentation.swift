@@ -364,6 +364,9 @@ extension GaryxMobileModel {
         else { return }
         debugSnapshotActive = true
         loadHomeScrollPressureFixture()
+        guard environment["GARYX_MOBILE_HOME_SCROLL_PROBE_MANUAL"] != "1" else {
+            return
+        }
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard let self else { return }
