@@ -20,8 +20,8 @@ use garyx_models::provider::{
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink};
 use garyx_models::{RenderDelta, apply_render_delta, render_rows_digest};
 use garyx_router::{
-    InMemoryThreadStore, MessageRouter, RunTranscriptRecordDraft, ThreadHistoryRepository,
-    ThreadStore, ThreadStoreError, ThreadTranscriptStore,
+    ChannelBinding, InMemoryThreadStore, MessageRouter, RunTranscriptRecordDraft,
+    ThreadHistoryRepository, ThreadStore, ThreadStoreError, ThreadTranscriptStore,
 };
 use std::path::Path;
 use std::process::Command;
@@ -6855,67 +6855,6 @@ async fn delete_thread_drops_local_state_even_when_provider_clear_fails() {
 }
 
 #[tokio::test]
-async fn delete_thread_clears_in_memory_reply_routing() {
-    let (state, _logger, _dir) = test_state().await;
-    let thread_id = "thread::reply-delete";
-    state
-        .threads
-        .thread_store
-        .set(
-            thread_id,
-            serde_json::json!({
-                "thread_id": thread_id,
-                "thread_id": thread_id,
-                "label": "Reply Delete",
-                "outbound_message_ids": [{
-                    "channel": "telegram",
-                    "account_id": "main",
-                    "chat_id": "42",
-                    "message_id": "msg-delete-1"
-                }]
-            }),
-        )
-        .await
-        .unwrap();
-    {
-        let mut router = state.threads.router.lock().await;
-        router.record_outbound_message_for_chat(
-            thread_id,
-            "telegram",
-            "main",
-            "42",
-            None,
-            "msg-delete-1",
-        );
-        assert_eq!(
-            router.resolve_reply_thread_for_chat(
-                "telegram",
-                "main",
-                Some("42"),
-                None,
-                "msg-delete-1",
-            ),
-            Some(thread_id)
-        );
-    }
-
-    let router = build_router(state.clone());
-    let request = authed_request()
-        .method("DELETE")
-        .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
-        .unwrap();
-    let response = router.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let router = state.threads.router.lock().await;
-    assert_eq!(
-        router.resolve_reply_thread_for_chat("telegram", "main", Some("42"), None, "msg-delete-1",),
-        None
-    );
-}
-
-#[tokio::test]
 async fn delete_thread_clears_in_memory_last_delivery() {
     let (state, _logger, _dir) = test_state().await;
     let thread_id = "thread::delivery-delete";
@@ -6966,6 +6905,68 @@ async fn delete_thread_clears_in_memory_last_delivery() {
             .resolve_delivery_target(&format!("thread:{thread_id}"))
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn detach_scoped_endpoint_clears_topic_last_delivery() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::detach-topic-delivery";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Topic Delivery"
+            }),
+        )
+        .await
+        .unwrap();
+
+    {
+        let mut router = state.threads.router.lock().await;
+        router
+            .bind_endpoint_runtime(
+                thread_id,
+                ChannelBinding {
+                    channel: "telegram".to_owned(),
+                    account_id: "main".to_owned(),
+                    binding_key: "42_t100".to_owned(),
+                    chat_id: "42".to_owned(),
+                    delivery_target_type: "chat_id".to_owned(),
+                    delivery_target_id: "42".to_owned(),
+                    display_label: "Test Topic".to_owned(),
+                    last_inbound_at: None,
+                    last_delivery_at: None,
+                },
+            )
+            .await
+            .expect("bind topic endpoint");
+        let delivery = router
+            .get_last_delivery(thread_id)
+            .expect("topic delivery context");
+        assert_eq!(delivery.chat_id, "42");
+        assert_eq!(delivery.thread_id.as_deref(), Some("42_t100"));
+    }
+
+    let detached = detach_channel_endpoint_key(&state, "telegram::main::42_t100")
+        .await
+        .expect("detach topic endpoint");
+    assert_eq!(detached.previous_thread_id.as_deref(), Some(thread_id));
+
+    let router = state.threads.router.lock().await;
+    assert!(router.get_last_delivery(thread_id).is_none());
+    drop(router);
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .unwrap()
+        .expect("thread remains after detach");
+    assert!(stored.get("delivery_context").is_none());
+    assert!(stored.get("last_thread_id").is_none());
 }
 
 #[tokio::test]

@@ -250,9 +250,10 @@ pub struct InboundRequestPayload {
     /// `issue_id`, `chat_id`, or any plugin-chosen stable string.
     pub thread_binding_key: String,
     pub message: String,
-    /// Plugin-scoped id used in logs and for `abandon_inbound` /
-    /// record_outbound bookkeeping on the plugin side.
+    /// Plugin-scoped id used in logs and for `abandon_inbound` correlation.
     pub run_id: String,
+    /// Deprecated compatibility field. The host accepts but ignores it;
+    /// inbound messages always use the plugin's current thread binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to_message_id: Option<String>,
     #[serde(default)]

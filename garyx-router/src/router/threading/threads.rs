@@ -116,17 +116,6 @@ impl MessageRouter {
         Some(existing)
     }
 
-    pub async fn resolve_canonical_thread_id(&mut self, thread_id: &str) -> Option<String> {
-        let trimmed = thread_id.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if self.threads.exists_logged(trimmed).await {
-            return Some(trimmed.to_owned());
-        }
-        None
-    }
-
     pub(in crate::router) async fn endpoint_binding_from_inbound(
         &self,
         channel: &str,
@@ -342,52 +331,26 @@ impl MessageRouter {
     pub(in crate::router) async fn resolve_thread_for_request(
         &mut self,
         route: RouteContext<'_>,
-    ) -> (String, bool) {
-        if let Some(reply_id) = route.reply_to_message_id {
-            let chat_id = Self::reply_chat_id(route.extra_metadata);
-            if let Some(reply_thread) = self.resolve_reply_thread_for_chat(
-                route.channel,
-                route.account_id,
-                chat_id.as_deref(),
-                Some(route.thread_binding_key),
-                reply_id,
-            ) {
-                let reply_thread = reply_thread.to_owned();
-                if Self::is_scheduled_thread(&reply_thread) {
-                    return (reply_thread, true);
-                }
-                if let Some(canonical) = self.resolve_canonical_thread_id(&reply_thread).await {
-                    return (canonical, true);
-                }
-            }
-        }
-
-        (
-            self.resolve_or_create_inbound_thread(
-                route.channel,
-                route.account_id,
-                route.thread_binding_key,
-                route.extra_metadata,
-            )
-            .await,
-            false,
+    ) -> String {
+        self.resolve_or_create_inbound_thread(
+            route.channel,
+            route.account_id,
+            route.thread_binding_key,
+            route.extra_metadata,
         )
+        .await
     }
 
     pub(in crate::router) async fn apply_auto_recovery_if_needed(
         &mut self,
         route: RouteContext<'_>,
         mut thread_id: String,
-        reply_routed: bool,
     ) -> String {
         let binding_context_key = Self::build_binding_context_key(
             route.channel,
             route.account_id,
             route.thread_binding_key,
         );
-        if reply_routed && Self::is_scheduled_thread(&thread_id) {
-            self.switch_to_thread(&binding_context_key, &thread_id);
-        }
         if Self::is_scheduled_thread(&thread_id) {
             return thread_id;
         }

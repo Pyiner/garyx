@@ -1193,7 +1193,6 @@ async fn clear_deleted_thread_runtime_state(
     {
         let mut router = state.threads.router.lock().await;
         router.clear_last_delivery(thread_id);
-        router.message_routing_index_mut().clear_thread(thread_id);
     }
     let _ = state.threads.history.delete_thread_history(thread_id).await;
     let _ = state.ops.thread_logs.delete_thread(thread_id).await;
@@ -1330,15 +1329,6 @@ pub(crate) async fn detach_channel_endpoint_key(
                 let delivery_thread_id =
                     binding_delivery_thread_id(&binding.binding_key, &binding.chat_id);
                 let mut router = state.threads.router.lock().await;
-                router
-                    .clear_reply_routing_for_chat_with_persistence(
-                        thread_id,
-                        &binding.channel,
-                        &binding.account_id,
-                        &binding.chat_id,
-                        delivery_thread_id.as_deref(),
-                    )
-                    .await;
                 router
                     .clear_last_delivery_for_chat_with_known_thread_persistence(
                         thread_id,

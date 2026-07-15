@@ -3,7 +3,6 @@ use garyx_models::ChannelOutboundContent;
 use garyx_models::config::{DiscordAccount, discord_account_to_plugin_entry};
 use garyx_models::provider::{ProviderMessage, StreamBoundaryKind};
 use garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID;
-use garyx_router::{InMemoryThreadStore, MessageRouter};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -71,7 +70,6 @@ impl ChannelDispatcher for RecordingNativeStreamDispatcher {
     fn build_stream_event_callback(
         &self,
         _target: StreamingDispatchTarget,
-        _router: Arc<Mutex<MessageRouter>>,
     ) -> Option<StreamDispatchCallback> {
         let envelopes = self.envelopes.clone();
         Some(Arc::new(move |envelope| {
@@ -95,14 +93,6 @@ fn test_stream_target() -> StreamingDispatchTarget {
         delivery_target_id: "chat1".to_owned(),
         thread_id: Some("topic1".to_owned()),
     }
-}
-
-fn test_message_router() -> Arc<Mutex<MessageRouter>> {
-    let store = Arc::new(InMemoryThreadStore::new());
-    Arc::new(Mutex::new(MessageRouter::new(
-        store,
-        garyx_models::config::GaryxConfig::default(),
-    )))
 }
 
 #[test]
@@ -155,7 +145,6 @@ async fn outbound_stream_callback_flushes_assistant_segments() {
     let callback = build_outbound_stream_callback(
         dispatcher.clone(),
         test_stream_target(),
-        test_message_router(),
         StreamDispatchRole::Origin,
     );
 
@@ -185,7 +174,6 @@ async fn outbound_stream_callback_flushes_text_before_structured_events() {
     let callback = build_outbound_stream_callback(
         dispatcher.clone(),
         test_stream_target(),
-        test_message_router(),
         StreamDispatchRole::Origin,
     );
     let message = ProviderMessage::tool_use(
@@ -217,7 +205,6 @@ async fn outbound_stream_callback_ignores_user_ack_for_bound_targets() {
     let callback = build_outbound_stream_callback(
         dispatcher.clone(),
         test_stream_target(),
-        test_message_router(),
         StreamDispatchRole::BoundTarget,
     );
 
@@ -242,7 +229,6 @@ fn stream_dispatch_callback_ignores_user_ack_for_bound_native_targets() {
     let callback = build_stream_dispatch_callback(
         dispatcher.clone(),
         test_stream_target(),
-        test_message_router(),
         StreamDispatchRole::BoundTarget,
     )
     .expect("native stream callback");
@@ -261,7 +247,6 @@ fn stream_dispatch_callback_sends_user_ack_for_origin_native_targets() {
     let callback = build_stream_dispatch_callback(
         dispatcher.clone(),
         test_stream_target(),
-        test_message_router(),
         StreamDispatchRole::Origin,
     )
     .expect("native stream callback");
@@ -420,10 +405,8 @@ async fn builtin_channels_have_native_stream_event_callbacks() {
         ("discord", "discord-main"),
         ("weixin", "weixin-main"),
     ] {
-        let callback = dispatcher.build_stream_event_callback(
-            builtin_stream_target(channel, account_id),
-            test_message_router(),
-        );
+        let callback =
+            dispatcher.build_stream_event_callback(builtin_stream_target(channel, account_id));
         assert!(
             callback.is_some(),
             "{channel} must expose a native StreamEvent callback"
@@ -1637,7 +1620,6 @@ mod plugin_routing {
                 delivery_target_id: "chat-1".to_owned(),
                 thread_id: None,
             },
-            test_message_router(),
             StreamDispatchRole::Origin,
         )
         .expect("native stream callback");

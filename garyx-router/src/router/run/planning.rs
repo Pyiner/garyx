@@ -20,7 +20,6 @@ pub(super) struct DispatchContext {
     pub(super) thread_binding_key: String,
     pub(super) message: String,
     pub(super) run_id: String,
-    pub(super) reply_to_message_id: Option<String>,
     pub(super) extra_metadata: HashMap<String, Value>,
     pub(super) images: Vec<ImagePayload>,
     pub(super) file_paths: Vec<String>,
@@ -32,7 +31,6 @@ impl DispatchContext {
             channel: &self.channel,
             account_id: &self.account_id,
             thread_binding_key: &self.thread_binding_key,
-            reply_to_message_id: self.reply_to_message_id.as_deref(),
             extra_metadata: &self.extra_metadata,
         }
     }
@@ -48,7 +46,6 @@ impl From<InboundRequest> for DispatchContext {
             thread_binding_key: request.thread_binding_key,
             message: request.message,
             run_id: request.run_id,
-            reply_to_message_id: request.reply_to_message_id,
             extra_metadata: request.extra_metadata,
             images: request.images,
             file_paths: request.file_paths,
@@ -190,7 +187,6 @@ impl MessageRouter {
             thread_binding_key,
             message: request.message,
             run_id: request.run_id,
-            reply_to_message_id: None,
             extra_metadata,
             images: request.images,
             file_paths: request.file_paths,
@@ -223,7 +219,6 @@ impl MessageRouter {
     fn build_dispatch_metadata(
         mut metadata: HashMap<String, Value>,
         dispatch: DispatchMetadataContext<'_>,
-        reply_routed: bool,
     ) -> HashMap<String, Value> {
         metadata.insert(
             "channel".to_owned(),
@@ -242,15 +237,6 @@ impl MessageRouter {
             "thread_binding_key".to_owned(),
             Value::String(dispatch.navigation.thread_binding_key.to_owned()),
         );
-        if reply_routed {
-            if let Some(reply_to_message_id) = dispatch.reply_to_message_id {
-                metadata.insert(
-                    "reply_to_message_id".to_owned(),
-                    Value::String(reply_to_message_id.to_owned()),
-                );
-            }
-            metadata.insert("is_reply_routed".to_owned(), Value::Bool(true));
-        }
         metadata
     }
 
@@ -299,28 +285,11 @@ impl MessageRouter {
         &mut self,
         mut context: DispatchContext,
         thread_id: String,
-        reply_routed: bool,
     ) -> DispatchPlan {
         let thread_binding_key = context.thread_binding_key.clone();
         let thread_binding_key_ref = thread_binding_key.as_str();
-        let reply_to_message_id = context.reply_to_message_id.clone();
-        let reply_to_message_id_ref = reply_to_message_id.as_deref();
 
         if is_canonical_thread_id(&thread_id) {
-            if let Some(reply_to_message_id) = reply_to_message_id_ref {
-                let message = if reply_routed {
-                    "reply route matched existing thread"
-                } else {
-                    "reply route missed; falling back to thread resolution"
-                };
-                self.record_thread_log(
-                    ThreadLogEvent::info(thread_id.clone(), "routing", message)
-                        .with_run_id(context.run_id.clone())
-                        .with_field("reply_to_message_id", json!(reply_to_message_id)),
-                )
-                .await;
-            }
-
             self.record_thread_log(
                 ThreadLogEvent::info(thread_id.clone(), "routing", "resolved inbound thread")
                     .with_run_id(context.run_id.clone())
@@ -328,8 +297,7 @@ impl MessageRouter {
                     .with_field("account_id", json!(context.account_id))
                     .with_field("from_id", json!(context.from_id))
                     .with_field("is_group", json!(context.is_group))
-                    .with_field("thread_binding_key", json!(thread_binding_key_ref))
-                    .with_field("reply_routed", json!(reply_routed)),
+                    .with_field("thread_binding_key", json!(thread_binding_key_ref)),
             )
             .await;
         }
@@ -355,7 +323,6 @@ impl MessageRouter {
             reply_message_id: None,
             metadata: json!({
                 "source": "router_thread_resolution",
-                "reply_routed": reply_routed,
                 "thread_binding_key": thread_binding_key_ref,
             }),
         })
@@ -389,7 +356,6 @@ impl MessageRouter {
             },
             from_id: &context.from_id,
             is_group: context.is_group,
-            reply_to_message_id: reply_to_message_id_ref,
         };
 
         let delivery_thread_id = match Self::explicit_delivery_thread_id(&context.extra_metadata) {
@@ -409,7 +375,6 @@ impl MessageRouter {
         let dispatch_metadata = Self::build_dispatch_metadata(
             std::mem::take(&mut context.extra_metadata),
             dispatch_context,
-            reply_routed,
         );
         let delivery_context = Self::build_delivery_context(
             &context.channel,
@@ -434,12 +399,10 @@ impl MessageRouter {
 
     pub(super) async fn build_dispatch_plan(&mut self, context: DispatchContext) -> DispatchPlan {
         let route = context.route_context();
-        let (thread_id, reply_routed) = self.resolve_thread_for_request(route).await;
-        let thread_id = self
-            .apply_auto_recovery_if_needed(route, thread_id, reply_routed)
-            .await;
+        let thread_id = self.resolve_thread_for_request(route).await;
+        let thread_id = self.apply_auto_recovery_if_needed(route, thread_id).await;
 
-        self.build_dispatch_plan_for_thread(context, thread_id, reply_routed)
+        self.build_dispatch_plan_for_thread(context, thread_id)
             .await
     }
 }

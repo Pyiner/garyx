@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
+use crate::EndpointBindingMutator;
 use crate::message_ledger::MessageLedgerStore;
-pub(crate) use crate::message_routing::MessageRoutingIndex;
 use crate::recent_threads::{RecentThreadBrowserState, RecentThreadPageReader};
 use crate::store::ThreadStore;
 use crate::thread_history::ThreadHistoryRepository;
-use crate::EndpointBindingMutator;
 use garyx_models::config::GaryxConfig;
 pub(crate) use garyx_models::provider::ImagePayload;
 use garyx_models::provider::StreamEvent;
@@ -23,17 +22,13 @@ mod threading;
 
 pub use command_catalog::{command_catalog_for_config, reserved_command_names};
 pub use contracts::ThreadCreator;
-pub use contracts::{
-    AgentDispatcher, InboundRequest, InboundResult, ThreadMessageRequest,
-};
+pub use contracts::{AgentDispatcher, InboundRequest, InboundResult, ThreadMessageRequest};
 pub(crate) use contracts::{DispatchMetadataContext, NavigationContext, RouteContext};
 pub use inbound::is_native_command_text;
 
 #[cfg(test)]
 mod tests;
 
-/// Maximum number of outbound message records persisted per thread.
-const MAX_OUTBOUND_MESSAGE_IDS: usize = 100;
 pub const NATIVE_COMMAND_TEXT_METADATA_KEY: &str = "native_command_text";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +45,7 @@ struct NativeThreadResult {
 ///
 /// This is the Rust port of `garyx.sessions.routing.MessageRouter`.
 /// It handles thread resolution, user-thread mapping, navigation,
-/// reply-based routing, metadata enrichment, and optional dispatch
+/// metadata enrichment, and optional dispatch
 /// to a provider bridge.
 pub struct MessageRouter {
     threads: Arc<dyn ThreadStore>,
@@ -62,7 +57,6 @@ pub struct MessageRouter {
     recent_thread_browser: RecentThreadBrowserState,
     endpoint_binding_mutator: Option<Arc<dyn EndpointBindingMutator>>,
     thread_nav: threading::ThreadNavigationState,
-    reply_routing: message::ReplyRoutingState,
     delivery_ctx: message::DeliveryContextState,
     thread_logs: Option<Arc<dyn ThreadLogSink>>,
     message_ledger: Option<Arc<MessageLedgerStore>>,
@@ -87,7 +81,6 @@ impl MessageRouter {
             recent_thread_browser: RecentThreadBrowserState::default(),
             endpoint_binding_mutator: None,
             thread_nav: threading::ThreadNavigationState::default(),
-            reply_routing: message::ReplyRoutingState::default(),
             delivery_ctx: message::DeliveryContextState::default(),
             thread_logs: None,
             message_ledger: None,

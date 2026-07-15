@@ -10,12 +10,11 @@ impl MessageRouter {
     ///
     /// This is the primary API for channel handlers (AC-1). It:
     ///
-    /// 1. Resolves the thread id (via reply routing or inbound routing)
+    /// 1. Resolves the thread id from the current inbound binding
     /// 2. Checks for auto-recovery redirect
     /// 3. Enriches metadata with channel context
     /// 4. Updates last-delivery context for scheduled sends
-    /// 5. Wraps the response callback to record outbound messages
-    /// 6. Dispatches to the bridge
+    /// 5. Dispatches to the bridge
     ///
     /// Returns the resolved thread id and enriched metadata.
     pub async fn route_and_dispatch(
@@ -55,7 +54,7 @@ impl MessageRouter {
         self.apply_custom_thread_message_transform(&mut context, Some(thread_id));
 
         let plan = self
-            .build_dispatch_plan_for_thread(context, thread_id.to_owned(), false)
+            .build_dispatch_plan_for_thread(context, thread_id.to_owned())
             .await;
         self.execute_dispatch_plan(
             plan,

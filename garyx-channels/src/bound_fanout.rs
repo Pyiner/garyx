@@ -156,7 +156,6 @@ impl DeferredBoundStreamFanout {
                 let callback = build_stream_dispatch_callback(
                     self.inner.dispatcher.clone(),
                     target.clone(),
-                    self.inner.router.clone(),
                     StreamDispatchRole::BoundTarget,
                 );
                 if callback.is_none() {
@@ -270,7 +269,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingDispatcher {
-        events: Arc<StdMutex<Vec<(String, StreamEvent)>>>,
+        events: Arc<StdMutex<Vec<(String, Option<String>, StreamEvent)>>>,
     }
 
     #[async_trait]
@@ -290,14 +289,17 @@ mod tests {
         fn build_stream_event_callback(
             &self,
             _target: StreamingDispatchTarget,
-            _router: Arc<Mutex<MessageRouter>>,
         ) -> Option<crate::dispatcher::StreamDispatchCallback> {
             let events = self.events.clone();
             Some(Arc::new(move |envelope| {
                 events
                     .lock()
                     .expect("events lock")
-                    .push((envelope.endpoint_identity.clone(), envelope.event));
+                    .push((
+                        envelope.endpoint_identity.clone(),
+                        envelope.delivery_thread_id.clone(),
+                        envelope.event,
+                    ));
             }))
         }
     }
@@ -373,7 +375,7 @@ mod tests {
                             "delivery_target_id": "chat-a"
                         },
                         {
-                            "channel": "discord",
+                            "channel": "test-plugin",
                             "account_id": "bot2",
                             "binding_key": "other",
                             "chat_id": "chat-b",
@@ -413,14 +415,16 @@ mod tests {
 
         let delivered = dispatcher.events.lock().expect("events lock").clone();
         assert_eq!(delivered.len(), 1);
-        assert_eq!(delivered[0].0, "discord::bot2::other");
-        assert!(matches!(delivered[0].1, StreamEvent::Delta { ref text } if text == "hi"));
+        assert_eq!(delivered[0].0, "test-plugin::bot2::other");
+        assert_eq!(delivered[0].1.as_deref(), Some("other"));
+        assert!(matches!(delivered[0].2, StreamEvent::Delta { ref text } if text == "hi"));
 
         consumer(StreamEvent::Done);
         let delivered = dispatcher.events.lock().expect("events lock").clone();
         assert_eq!(delivered.len(), 2);
-        assert_eq!(delivered[1].0, "discord::bot2::other");
-        assert!(matches!(delivered[1].1, StreamEvent::Done));
+        assert_eq!(delivered[1].0, "test-plugin::bot2::other");
+        assert_eq!(delivered[1].1.as_deref(), Some("other"));
+        assert!(matches!(delivered[1].2, StreamEvent::Done));
     }
 
     #[tokio::test]
@@ -489,8 +493,9 @@ mod tests {
         let delivered = dispatcher.events.lock().expect("events lock").clone();
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].0, "discord::bot2::first");
+        assert_eq!(delivered[0].1.as_deref(), Some("first"));
         assert!(
-            matches!(delivered[0].1, StreamEvent::Delta { ref text } if text == "after attach")
+            matches!(delivered[0].2, StreamEvent::Delta { ref text } if text == "after attach")
         );
     }
 }

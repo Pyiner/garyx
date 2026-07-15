@@ -6,7 +6,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
 use garyx_channels::{
     ChannelDispatcher, ChannelInfo, OutboundMessage, SendMessageResult, StreamDispatchCallback,
     StreamingDispatchTarget,
@@ -82,7 +82,6 @@ impl ChannelDispatcher for RecordingDispatcher {
     fn build_stream_event_callback(
         &self,
         target: StreamingDispatchTarget,
-        _router: Arc<tokio::sync::Mutex<garyx_router::MessageRouter>>,
     ) -> Option<StreamDispatchCallback> {
         let calls = self.calls.clone();
         Some(Arc::new(move |envelope| {

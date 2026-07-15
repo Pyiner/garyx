@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use garyx_bridge::provider_trait::StreamCallback;
-use garyx_bridge::{ProviderRuntime, BridgeError, MultiProviderBridge};
+use garyx_bridge::{BridgeError, MultiProviderBridge, ProviderRuntime};
 use garyx_models::config::GaryxConfig;
 use garyx_models::provider::{
     PromptAttachment, PromptAttachmentKind, ProviderRunOptions, ProviderRunResult, ProviderType,
@@ -292,16 +292,11 @@ pub async fn wait_for_thread_delivery_persistence(store: &Arc<dyn ThreadStore>, 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let persisted = store.get(thread_id).await.unwrap().is_some_and(|value| {
-                let has_outbound = value
-                    .get("outbound_message_ids")
-                    .and_then(Value::as_array)
-                    .is_some_and(|items| !items.is_empty());
-                let has_delivery = value
+                value
                     .get("delivery_context")
                     .or_else(|| value.get("last_delivery"))
                     .and_then(Value::as_object)
-                    .is_some_and(|delivery| delivery.get("chat_id").is_some());
-                has_outbound && has_delivery
+                    .is_some_and(|delivery| delivery.get("chat_id").is_some())
             });
             if persisted {
                 break;
@@ -587,7 +582,7 @@ impl TgUpdateBuilder {
         self
     }
 
-    /// Set the reply_to_message (for reply routing tests).
+    /// Set the native replied-to message for quote and trigger tests.
     pub fn with_reply_to(mut self, reply_msg: TgMessage) -> Self {
         self.reply_to_message = Some(Box::new(reply_msg));
         self

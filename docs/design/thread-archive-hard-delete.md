@@ -62,7 +62,7 @@ body: { "endpointKeys": ["telegram::main::1000000001"] }
    - 线程记录里所有 `channel_bindings[]` 的 endpoint key；
    - `cached_channel_endpoints()` / `list_known_channel_endpoints()` 中 `thread_id == archived_thread_id` 的 endpoint key，用于覆盖 registry 或 in-memory endpoint map 残留；
    - 客户端传入的可选 endpoint key。
-4. 对每个 endpoint key 复用 `/api/channel-bindings/detach` 的 server-side detach 逻辑，统一更新持久化 binding、known endpoint registry、reply routing、last delivery、router endpoint map 和 endpoint cache。
+4. 对每个 endpoint key 复用 `/api/channel-bindings/detach` 的 server-side detach 逻辑，统一更新持久化 binding、known endpoint registry、last delivery、router endpoint map 和 endpoint cache。
 5. 在 Garyx DB 记录归档 tombstone。tombstone 只保存 `thread_id` 和 `archived_at`，一行对应一个 canonical thread id。tombstone 必须在 detach 后、硬删除前写入：detach 本身复用 thread-store 写路径；如果先打开 tombstone，投影 store 会把 detach 写入当成旧 id 复活并拒绝。
 6. 复用现有 delete 清理路径硬删除线程：drop provider state、清 router references、删除 transcript history 和 logs、移除 `recent_threads`、`thread_meta`、pin。由于 active run 已在步骤 2 被拒绝，archive 不走“先 abort 再删除”的普通 delete 行为。
 7. rebuild router indexes，并 invalidate gateway sync caches。

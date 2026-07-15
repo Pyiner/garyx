@@ -7,19 +7,6 @@ use serde_json::Value;
 use super::super::*;
 
 impl MessageRouter {
-    pub(in crate::router) fn reply_chat_id(
-        extra_metadata: &HashMap<String, Value>,
-    ) -> Option<String> {
-        extra_metadata
-            .get("chat_id")
-            .and_then(|value| match value {
-                Value::String(value) => Some(value.trim().to_owned()),
-                Value::Number(value) => Some(value.to_string()),
-                _ => None,
-            })
-            .filter(|value| !value.is_empty())
-    }
-
     pub(super) async fn backfill_thread_context_if_missing(
         &self,
         thread_id: &str,

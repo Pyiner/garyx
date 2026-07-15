@@ -764,7 +764,6 @@ pub(crate) async fn thread_history_for_key(
             "thread_runtime": Value::Null,
             "messages": [],
             "pending_user_inputs": [],
-            "outbound_deliveries": [],
             "message_stats": { "returned_messages": 0 },
         });
     }
@@ -831,7 +830,6 @@ pub(crate) async fn thread_history_for_key(
                 "thread_runtime": Value::Null,
                 "messages": [],
                 "pending_user_inputs": [],
-                "outbound_deliveries": [],
                 "message_stats": { "returned_messages": 0 },
             });
         }
@@ -845,7 +843,6 @@ pub(crate) async fn thread_history_for_key(
                 "thread_runtime": Value::Null,
                 "messages": [],
                 "pending_user_inputs": [],
-                "outbound_deliveries": [],
                 "message_stats": { "returned_messages": 0 },
             });
         }
@@ -859,7 +856,6 @@ pub(crate) async fn thread_history_for_key(
                 "thread_runtime": Value::Null,
                 "messages": [],
                 "pending_user_inputs": [],
-                "outbound_deliveries": [],
                 "message_stats": { "returned_messages": 0 },
             });
         }
@@ -984,30 +980,6 @@ pub(crate) async fn thread_history_for_key(
     };
     let mut data_raw = snapshot.thread_data;
 
-    let outbound_raw = data_raw
-        .get("outbound_message_ids")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut outbound_deliveries = Vec::new();
-    for (idx, record) in outbound_raw.iter().enumerate() {
-        let Some(obj) = record.as_object() else {
-            continue;
-        };
-        outbound_deliveries.push(json!({
-            "index": idx,
-            "channel": obj.get("channel").cloned().unwrap_or(Value::Null),
-            "account_id": obj.get("account_id").cloned().unwrap_or(Value::Null),
-            "chat_id": obj.get("chat_id").cloned().unwrap_or(Value::Null),
-            "message_id": stringify_optional(obj.get("message_id")),
-            "timestamp": obj.get("timestamp").cloned().unwrap_or(Value::Null),
-        }));
-    }
-    if outbound_deliveries.len() > 100 {
-        let drop_count = outbound_deliveries.len() - 100;
-        outbound_deliveries.drain(0..drop_count);
-    }
-    let outbound_total = outbound_deliveries.len();
     let pending_raw = data_raw
         .get("pending_user_inputs")
         .and_then(Value::as_array)
@@ -1105,8 +1077,6 @@ pub(crate) async fn thread_history_for_key(
             "kind_counts": Value::Object(kind_counts),
             "role_counts": Value::Object(role_counts),
         },
-        "outbound_deliveries": outbound_deliveries,
-        "outbound_total": outbound_total,
         "include_tool_messages": include_tool_messages,
     })
 }
@@ -1373,16 +1343,6 @@ fn truncate_preview_text(text: String, max_len: usize) -> String {
         return text;
     }
     text.chars().take(max_len).collect()
-}
-
-fn stringify_optional(value: Option<&Value>) -> Option<String> {
-    value.and_then(|v| match v {
-        Value::Null => None,
-        Value::String(text) => Some(text.clone()),
-        Value::Number(num) => Some(num.to_string()),
-        Value::Bool(flag) => Some(flag.to_string()),
-        other => Some(other.to_string()),
-    })
 }
 
 fn increment_counter(map: &mut serde_json::Map<String, Value>, key: &str) {

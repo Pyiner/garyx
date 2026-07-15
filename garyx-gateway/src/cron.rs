@@ -2116,7 +2116,7 @@ impl CronService {
                 let thread_log_id = scheduled_thread_log_id(&thread_key, thread_id.as_deref());
                 build_scheduled_response_callback(
                     runtime.channel_dispatcher.clone(),
-                    runtime.router.clone(),
+                    runtime.thread_logs.clone(),
                     ScheduledResponseContext {
                         thread_id: thread_key.clone(),
                         channel: channel.clone(),
@@ -2291,7 +2291,7 @@ struct ScheduledResponseContext {
 
 fn build_scheduled_response_callback(
     dispatcher: Arc<dyn ChannelDispatcher>,
-    router: Arc<tokio::sync::Mutex<MessageRouter>>,
+    thread_logs: Arc<dyn ThreadLogSink>,
     context: ScheduledResponseContext,
 ) -> Arc<dyn Fn(StreamEvent) + Send + Sync> {
     let pending = Arc::new(std::sync::Mutex::new(ScheduledStreamState::default()));
@@ -2359,7 +2359,7 @@ fn build_scheduled_response_callback(
 
         let outbound_text = format_scheduled_message(&merged, &thread_id);
         let dispatcher = dispatcher.clone();
-        let router = router.clone();
+        let thread_logs = thread_logs.clone();
         let request = OutboundMessage {
             channel: channel.clone(),
             account_id: account_id.clone(),
@@ -2373,8 +2373,6 @@ fn build_scheduled_response_callback(
         let channel_name = channel.clone();
         let account_name = account_id.clone();
         let chat_id_value = chat_id.clone();
-        let thread_key_value = thread_id.clone();
-        let delivery_thread_id_value = delivery_thread_id.clone();
         let thread_log_id_value = thread_log_id.clone();
 
         tokio::spawn(async move {
@@ -2383,19 +2381,23 @@ fn build_scheduled_response_callback(
                     if message_ids.is_empty() {
                         return;
                     }
-                    let mut router_guard = router.lock().await;
-                    for message_id in message_ids {
-                        router_guard
-                            .record_outbound_message_with_thread_log(
-                                &thread_key_value,
-                                &channel_name,
-                                &account_name,
-                                &chat_id_value,
-                                delivery_thread_id_value.as_deref(),
-                                &message_id,
-                                thread_log_id_value.as_deref(),
-                            )
-                            .await;
+                    if let Some(thread_log_id) = thread_log_id_value.as_deref() {
+                        for message_id in message_ids {
+                            thread_logs
+                                .record_event(
+                                    ThreadLogEvent::info(
+                                        thread_log_id,
+                                        "delivery",
+                                        "outbound message delivered",
+                                    )
+                                    .with_field("channel", serde_json::json!(channel_name))
+                                    .with_field("account_id", serde_json::json!(account_name))
+                                    .with_field("chat_id", serde_json::json!(chat_id_value))
+                                    .with_field("message_id", serde_json::json!(message_id))
+                                    .with_field("thread_id", serde_json::json!(thread_log_id)),
+                                )
+                                .await;
+                        }
                     }
                 }
                 Err(e) => {

@@ -1058,11 +1058,21 @@ async fn test_thread_history_detail_with_thread_id_and_tool_messages() {
     assert_eq!(json["message_stats"]["total_messages_in_session"], 2);
     assert_eq!(json["message_stats"]["returned_messages"], 2);
     assert_eq!(json["messages"].as_array().unwrap().len(), 2);
-    assert_eq!(json["outbound_total"], 1);
+    assert!(json.get("outbound_deliveries").is_none());
+    assert!(json.get("outbound_total").is_none());
     assert_eq!(json["messages"][0]["text"], "hello");
     assert_eq!(json["messages"][0]["message"]["role"], "user");
     assert_eq!(json["messages"][1]["text"], "world");
     assert_eq!(json["messages"][1]["message"]["content"], "world");
+}
+
+#[tokio::test]
+async fn test_thread_history_error_omits_retired_delivery_fields() {
+    let json = thread_history_for_key(&test_state(), "", 10, true, None, None, None).await;
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["reason"], "missing-thread-id");
+    assert!(json.get("outbound_deliveries").is_none());
+    assert!(json.get("outbound_total").is_none());
 }
 
 #[tokio::test]

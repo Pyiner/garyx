@@ -34,7 +34,6 @@ pub struct InboundRequest {
     pub thread_binding_key: String,
     pub message: String,
     pub run_id: String,
-    pub reply_to_message_id: Option<String>,
     pub images: Vec<ImagePayload>,
     pub extra_metadata: HashMap<String, Value>,
     /// Local file paths for non-image attachments (documents, voice, video, etc.)
@@ -67,7 +66,6 @@ pub(crate) struct RouteContext<'a> {
     pub(crate) channel: &'a str,
     pub(crate) account_id: &'a str,
     pub(crate) thread_binding_key: &'a str,
-    pub(crate) reply_to_message_id: Option<&'a str>,
     pub(crate) extra_metadata: &'a HashMap<String, Value>,
 }
 
@@ -83,5 +81,4 @@ pub(crate) struct DispatchMetadataContext<'a> {
     pub(crate) navigation: NavigationContext<'a>,
     pub(crate) from_id: &'a str,
     pub(crate) is_group: bool,
-    pub(crate) reply_to_message_id: Option<&'a str>,
 }

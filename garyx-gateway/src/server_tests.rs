@@ -792,7 +792,7 @@ async fn test_detach_channel_endpoint_removes_binding() {
 }
 
 #[tokio::test]
-async fn test_detach_channel_endpoint_clears_endpoint_runtime_routing() {
+async fn test_detach_channel_endpoint_clears_endpoint_last_delivery() {
     let state = test_state();
     state
         .threads
@@ -809,12 +809,6 @@ async fn test_detach_channel_endpoint_clears_endpoint_runtime_routing() {
                     "peer_id": "alice",
                     "chat_id": "alice",
                     "display_label": "Alice"
-                }],
-                "outbound_message_ids": [{
-                    "channel": "telegram",
-                    "account_id": "main",
-                    "chat_id": "alice",
-                    "message_id": "msg-alice-1"
                 }]
             }),
         )
@@ -823,14 +817,6 @@ async fn test_detach_channel_endpoint_clears_endpoint_runtime_routing() {
 
     {
         let mut router = state.threads.router.lock().await;
-        router.record_outbound_message_for_chat(
-            "thread::bound",
-            "telegram",
-            "main",
-            "alice",
-            None,
-            "msg-alice-1",
-        );
         router.set_last_delivery(
             "thread::bound",
             garyx_models::routing::DeliveryContext {
@@ -843,16 +829,6 @@ async fn test_detach_channel_endpoint_clears_endpoint_runtime_routing() {
                 thread_id: None,
                 metadata: Default::default(),
             },
-        );
-        assert_eq!(
-            router.resolve_reply_thread_for_chat(
-                "telegram",
-                "main",
-                Some("alice"),
-                None,
-                "msg-alice-1",
-            ),
-            Some("thread::bound")
         );
         assert!(router.get_last_delivery("thread::bound").is_some());
     }
@@ -869,16 +845,6 @@ async fn test_detach_channel_endpoint_clears_endpoint_runtime_routing() {
     assert_eq!(resp.status(), 200);
 
     let router = state.threads.router.lock().await;
-    assert_eq!(
-        router.resolve_reply_thread_for_chat(
-            "telegram",
-            "main",
-            Some("alice"),
-            None,
-            "msg-alice-1",
-        ),
-        None
-    );
     assert!(router.get_last_delivery("thread::bound").is_none());
     drop(router);
 
@@ -893,7 +859,7 @@ async fn test_detach_channel_endpoint_clears_endpoint_runtime_routing() {
 }
 
 #[tokio::test]
-async fn test_detach_channel_endpoint_preserves_other_topic_routing_in_same_chat() {
+async fn test_detach_channel_endpoint_preserves_other_topic_last_delivery_in_same_chat() {
     let state = test_state();
     state
         .threads
@@ -911,22 +877,6 @@ async fn test_detach_channel_endpoint_preserves_other_topic_routing_in_same_chat
                     "chat_id": "42",
                     "display_label": "Alice topic 100"
                 }],
-                "outbound_message_ids": [
-                    {
-                        "channel": "telegram",
-                        "account_id": "main",
-                        "chat_id": "42",
-                        "thread_binding_key": "42_t100",
-                        "message_id": "msg-topic-100"
-                    },
-                    {
-                        "channel": "telegram",
-                        "account_id": "main",
-                        "chat_id": "42",
-                        "thread_binding_key": "42_t200",
-                        "message_id": "msg-topic-200"
-                    }
-                ],
                 "delivery_context": {
                     "channel": "telegram",
                     "account_id": "main",
@@ -942,22 +892,6 @@ async fn test_detach_channel_endpoint_preserves_other_topic_routing_in_same_chat
 
     {
         let mut router = state.threads.router.lock().await;
-        router.record_outbound_message_for_chat(
-            "thread::bound",
-            "telegram",
-            "main",
-            "42",
-            Some("42_t100"),
-            "msg-topic-100",
-        );
-        router.record_outbound_message_for_chat(
-            "thread::bound",
-            "telegram",
-            "main",
-            "42",
-            Some("42_t200"),
-            "msg-topic-200",
-        );
         router.set_last_delivery(
             "thread::bound",
             garyx_models::routing::DeliveryContext {
@@ -970,26 +904,6 @@ async fn test_detach_channel_endpoint_preserves_other_topic_routing_in_same_chat
                 thread_id: Some("42_t200".to_owned()),
                 metadata: Default::default(),
             },
-        );
-        assert_eq!(
-            router.resolve_reply_thread_for_chat(
-                "telegram",
-                "main",
-                Some("42"),
-                Some("42_t100"),
-                "msg-topic-100",
-            ),
-            Some("thread::bound")
-        );
-        assert_eq!(
-            router.resolve_reply_thread_for_chat(
-                "telegram",
-                "main",
-                Some("42"),
-                Some("42_t200"),
-                "msg-topic-200",
-            ),
-            Some("thread::bound")
         );
         assert_eq!(
             router
@@ -1012,26 +926,6 @@ async fn test_detach_channel_endpoint_preserves_other_topic_routing_in_same_chat
 
     let router = state.threads.router.lock().await;
     assert_eq!(
-        router.resolve_reply_thread_for_chat(
-            "telegram",
-            "main",
-            Some("42"),
-            Some("42_t100"),
-            "msg-topic-100",
-        ),
-        None
-    );
-    assert_eq!(
-        router.resolve_reply_thread_for_chat(
-            "telegram",
-            "main",
-            Some("42"),
-            Some("42_t200"),
-            "msg-topic-200",
-        ),
-        Some("thread::bound")
-    );
-    assert_eq!(
         router
             .get_last_delivery("thread::bound")
             .and_then(|ctx| ctx.thread_id.as_deref()),
@@ -1046,14 +940,11 @@ async fn test_detach_channel_endpoint_preserves_other_topic_routing_in_same_chat
         .await
         .unwrap()
         .unwrap();
-    let outbound = stored["outbound_message_ids"].as_array().unwrap();
-    assert_eq!(outbound.len(), 1);
-    assert_eq!(outbound[0]["message_id"], "msg-topic-200");
-    assert_eq!(outbound[0]["thread_binding_key"], "42_t200");
+    assert_eq!(stored["delivery_context"]["thread_id"], "42_t200");
 }
 
 #[tokio::test]
-async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat() {
+async fn test_detach_topic_endpoint_preserves_primary_last_delivery_in_same_chat() {
     let state = test_state();
     state
         .threads
@@ -1080,22 +971,6 @@ async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat
                         "display_label": "Alice topic 100"
                     }
                 ],
-                "outbound_message_ids": [
-                    {
-                        "channel": "telegram",
-                        "account_id": "main",
-                        "chat_id": "42",
-                        "thread_binding_key": null,
-                        "message_id": "msg-primary"
-                    },
-                    {
-                        "channel": "telegram",
-                        "account_id": "main",
-                        "chat_id": "42",
-                        "thread_binding_key": "42_t100",
-                        "message_id": "msg-topic-100"
-                    }
-                ],
                 "delivery_context": {
                     "channel": "telegram",
                     "account_id": "main",
@@ -1111,22 +986,6 @@ async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat
 
     {
         let mut router = state.threads.router.lock().await;
-        router.record_outbound_message_for_chat(
-            "thread::bound",
-            "telegram",
-            "main",
-            "42",
-            None,
-            "msg-primary",
-        );
-        router.record_outbound_message_for_chat(
-            "thread::bound",
-            "telegram",
-            "main",
-            "42",
-            Some("42_t100"),
-            "msg-topic-100",
-        );
         router.set_last_delivery(
             "thread::bound",
             garyx_models::routing::DeliveryContext {
@@ -1139,26 +998,6 @@ async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat
                 thread_id: None,
                 metadata: Default::default(),
             },
-        );
-        assert_eq!(
-            router.resolve_reply_thread_for_chat(
-                "telegram",
-                "main",
-                Some("42"),
-                None,
-                "msg-primary",
-            ),
-            Some("thread::bound")
-        );
-        assert_eq!(
-            router.resolve_reply_thread_for_chat(
-                "telegram",
-                "main",
-                Some("42"),
-                Some("42_t100"),
-                "msg-topic-100",
-            ),
-            Some("thread::bound")
         );
         assert_eq!(
             router
@@ -1181,20 +1020,6 @@ async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat
 
     let router = state.threads.router.lock().await;
     assert_eq!(
-        router.resolve_reply_thread_for_chat("telegram", "main", Some("42"), None, "msg-primary",),
-        Some("thread::bound")
-    );
-    assert_eq!(
-        router.resolve_reply_thread_for_chat(
-            "telegram",
-            "main",
-            Some("42"),
-            Some("42_t100"),
-            "msg-topic-100",
-        ),
-        None
-    );
-    assert_eq!(
         router
             .get_last_delivery("thread::bound")
             .and_then(|ctx| ctx.thread_id.as_deref()),
@@ -1209,10 +1034,8 @@ async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat
         .await
         .unwrap()
         .unwrap();
-    let outbound = stored["outbound_message_ids"].as_array().unwrap();
-    assert_eq!(outbound.len(), 1);
-    assert_eq!(outbound[0]["message_id"], "msg-primary");
-    assert!(outbound[0]["thread_scope"].is_null());
+    assert!(stored.get("delivery_context").is_some());
+    assert!(stored["delivery_context"]["thread_id"].is_null());
 }
 
 async fn assert_gateway_not_found(path: &str) {

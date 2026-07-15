@@ -3,7 +3,6 @@ pub mod endpoint_projection;
 pub mod file_store;
 pub mod memory_store;
 pub mod message_ledger;
-pub mod message_routing;
 pub mod recent_threads;
 pub mod router;
 pub mod runtime_context;
@@ -31,9 +30,6 @@ pub mod storage {
     pub use crate::memory_store::InMemoryThreadStore;
     pub use crate::message_ledger::{
         MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore,
-    };
-    pub use crate::message_routing::{
-        MessageRoutingIndex, MessageRoutingStats, OutboundMessageRecord,
     };
     pub use crate::store::{ThreadStore, ThreadStoreError};
     pub use crate::thread_history::{
@@ -71,7 +67,6 @@ pub use endpoint_projection::{
 pub use file_store::FileThreadStore;
 pub use memory_store::InMemoryThreadStore;
 pub use message_ledger::{MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore};
-pub use message_routing::{MessageRoutingIndex, MessageRoutingStats, OutboundMessageRecord};
 pub use router::{
     AgentDispatcher, InboundRequest, InboundResult, MessageRouter,
     NATIVE_COMMAND_TEXT_METADATA_KEY, ThreadCreator, ThreadMessageRequest,

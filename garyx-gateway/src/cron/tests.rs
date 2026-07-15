@@ -1,12 +1,12 @@
 use super::*;
 use async_trait::async_trait;
-use garyx_bridge::{ProviderRuntime, BridgeError};
+use garyx_bridge::{BridgeError, ProviderRuntime};
 use garyx_channels::{ChannelDispatcher, ChannelDispatcherImpl, ChannelInfo, OutboundMessage};
 use garyx_models::config::{CronAction, CronConfig, CronJobConfig, CronSchedule};
 use garyx_models::provider::{
     ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent,
 };
-use garyx_models::thread_logs::NoopThreadLogSink;
+use garyx_models::thread_logs::{NoopThreadLogSink, ThreadLogChunk, ThreadLogEvent, ThreadLogSink};
 use garyx_router::ThreadStore;
 use tempfile::TempDir;
 
@@ -14,6 +14,48 @@ use tempfile::TempDir;
 struct RecordingDispatcher {
     calls: std::sync::Mutex<Vec<OutboundMessage>>,
     message_ids: std::sync::Mutex<Vec<String>>,
+}
+
+#[derive(Default)]
+struct RecordingThreadLogSink {
+    events: std::sync::Mutex<Vec<ThreadLogEvent>>,
+}
+
+impl RecordingThreadLogSink {
+    fn events(&self) -> Vec<ThreadLogEvent> {
+        self.events
+            .lock()
+            .expect("recording thread log lock poisoned")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl ThreadLogSink for RecordingThreadLogSink {
+    async fn record_event(&self, event: ThreadLogEvent) {
+        self.events
+            .lock()
+            .expect("recording thread log lock poisoned")
+            .push(event);
+    }
+
+    async fn read_chunk(
+        &self,
+        thread_id: &str,
+        cursor: Option<u64>,
+    ) -> Result<ThreadLogChunk, String> {
+        Ok(ThreadLogChunk {
+            thread_id: thread_id.to_owned(),
+            path: String::new(),
+            text: String::new(),
+            cursor: cursor.unwrap_or_default(),
+            reset: cursor.is_none(),
+        })
+    }
+
+    async fn delete_thread(&self, _thread_id: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl RecordingDispatcher {
@@ -925,13 +967,9 @@ async fn test_run_now_delete_after_run_removes_job_and_file() {
 #[tokio::test]
 async fn test_build_scheduled_response_callback_sends_final_message() {
     let dispatcher = Arc::new(RecordingDispatcher::default());
-    let router = Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-        Arc::new(garyx_router::InMemoryThreadStore::new()),
-        garyx_models::config::GaryxConfig::default(),
-    )));
     let callback = build_scheduled_response_callback(
         dispatcher.clone(),
-        router,
+        Arc::new(NoopThreadLogSink),
         ScheduledResponseContext {
             thread_id: "cron::daily".to_owned(),
             channel: "telegram".to_owned(),
@@ -964,27 +1002,15 @@ async fn test_build_scheduled_response_callback_sends_final_message() {
 }
 
 #[tokio::test]
-async fn test_build_scheduled_response_callback_records_reply_routing() {
+async fn test_build_scheduled_response_callback_records_delivery_log_per_message_id() {
     let dispatcher = Arc::new(RecordingDispatcher::with_message_ids(vec![
         "cron_msg_1".to_owned(),
+        "cron_msg_2".to_owned(),
     ]));
-    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
-    store
-        .set(
-            "cron::daily",
-            serde_json::json!({
-                "thread_id": "cron::daily",
-            }),
-        )
-        .await
-        .unwrap();
-    let router = Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-        store.clone(),
-        garyx_models::config::GaryxConfig::default(),
-    )));
+    let thread_logs = Arc::new(RecordingThreadLogSink::default());
     let callback = build_scheduled_response_callback(
         dispatcher,
-        router.clone(),
+        thread_logs.clone(),
         ScheduledResponseContext {
             thread_id: "cron::daily".to_owned(),
             channel: "telegram".to_owned(),
@@ -993,7 +1019,7 @@ async fn test_build_scheduled_response_callback_records_reply_routing() {
             delivery_target_type: "chat_id".to_owned(),
             delivery_target_id: "42".to_owned(),
             delivery_thread_id: Some("42_t100".to_owned()),
-            thread_log_id: None,
+            thread_log_id: Some("thread::cron-log".to_owned()),
         },
     );
 
@@ -1003,29 +1029,30 @@ async fn test_build_scheduled_response_callback_records_reply_routing() {
     callback(StreamEvent::Done);
     tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
 
-    {
-        let router_guard = router.lock().await;
+    let events = thread_logs.events();
+    assert_eq!(events.len(), 2);
+    for (event, message_id) in events.iter().zip(["cron_msg_1", "cron_msg_2"]) {
+        assert_eq!(event.thread_id, "thread::cron-log");
+        assert_eq!(event.stage, "delivery");
+        assert_eq!(event.message, "outbound message delivered");
         assert_eq!(
-            router_guard.resolve_reply_thread_for_chat(
-                "telegram",
-                "main",
-                Some("42"),
-                Some("42_t100"),
-                "cron_msg_1",
-            ),
-            Some("cron::daily")
+            event.fields.get("channel"),
+            Some(&serde_json::json!("telegram"))
+        );
+        assert_eq!(
+            event.fields.get("account_id"),
+            Some(&serde_json::json!("main"))
+        );
+        assert_eq!(event.fields.get("chat_id"), Some(&serde_json::json!("42")));
+        assert_eq!(
+            event.fields.get("message_id"),
+            Some(&serde_json::json!(message_id))
+        );
+        assert_eq!(
+            event.fields.get("thread_id"),
+            Some(&serde_json::json!("thread::cron-log"))
         );
     }
-
-    let thread_state = store.get("cron::daily").await.unwrap().unwrap();
-    assert_eq!(
-        thread_state["outbound_message_ids"][0]["thread_binding_key"],
-        serde_json::json!("42_t100")
-    );
-    assert_eq!(
-        thread_state["outbound_message_ids"][0]["message_id"],
-        serde_json::json!("cron_msg_1")
-    );
 }
 
 #[tokio::test]
@@ -1033,14 +1060,9 @@ async fn test_build_scheduled_response_callback_preserves_assistant_segments() {
     let dispatcher = Arc::new(RecordingDispatcher::with_message_ids(vec![
         "cron_msg_1".to_owned(),
     ]));
-    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
-    let router = Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-        store,
-        garyx_models::config::GaryxConfig::default(),
-    )));
     let callback = build_scheduled_response_callback(
         dispatcher.clone(),
-        router,
+        Arc::new(NoopThreadLogSink),
         ScheduledResponseContext {
             thread_id: "cron::daily".to_owned(),
             channel: "telegram".to_owned(),
@@ -1079,14 +1101,9 @@ async fn test_build_scheduled_response_callback_stops_after_user_ack_boundary() 
     let dispatcher = Arc::new(RecordingDispatcher::with_message_ids(vec![
         "cron_msg_1".to_owned(),
     ]));
-    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
-    let router = Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-        store,
-        garyx_models::config::GaryxConfig::default(),
-    )));
     let callback = build_scheduled_response_callback(
         dispatcher.clone(),
-        router,
+        Arc::new(NoopThreadLogSink),
         ScheduledResponseContext {
             thread_id: "cron::daily".to_owned(),
             channel: "telegram".to_owned(),
@@ -2274,7 +2291,7 @@ async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn()
     // criterion that closes the schedule→tick→dispatch loop.
     use crate::composition::app_bootstrap::AppStateBuilder;
     use crate::mcp::tools::schedule_followup::followup_job_id;
-    use garyx_bridge::{ProviderRuntime, BridgeError};
+    use garyx_bridge::{BridgeError, ProviderRuntime};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
