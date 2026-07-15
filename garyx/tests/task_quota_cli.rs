@@ -77,7 +77,7 @@ async fn spawn_exhausted_gateway() -> (String, Arc<AtomicUsize>, JoinHandle<()>)
 }
 
 #[tokio::test]
-async fn json_exhaustion_is_typed_exit_one_and_never_posts_task() {
+async fn quota_exhaustion_exits_one_and_never_posts_task() {
     let (base_url, task_posts, handle) = spawn_exhausted_gateway().await;
     let dir = tempdir().expect("tempdir");
     let home = dir.path().join("home");
@@ -104,7 +104,6 @@ async fn json_exhaustion_is_typed_exit_one_and_never_posts_task() {
             "test-agent",
             "--notify",
             "none",
-            "--json",
         ])
         .env("HOME", &home)
         .env_remove("GARYX_THREAD_ID")
@@ -121,14 +120,23 @@ async fn json_exhaustion_is_typed_exit_one_and_never_posts_task() {
     assert_eq!(task_posts.load(Ordering::SeqCst), 0);
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    let envelope: Value = serde_json::from_str(&stdout).expect("one JSON failure envelope");
-    assert_eq!(envelope["ok"], false);
-    assert_eq!(envelope["error"]["kind"], "provider_quota_exhausted");
+    // `task create` is an action command without `--json` (#TASK-2304): a
+    // quota failure is one human-readable stderr line, nothing on stdout.
     assert!(
-        envelope["error"]["message"]
-            .as_str()
-            .expect("message")
-            .contains("task was not created")
+        stdout.is_empty(),
+        "create failure prints nothing on stdout: {stdout}"
+    );
+    assert!(
+        stderr.contains("Error:"),
+        "one human-readable error line on stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("quota"),
+        "error names the quota failure: {stderr}"
+    );
+    assert!(
+        stderr.contains("task was not created"),
+        "error states the task was not created: {stderr}"
     );
     assert!(stdout.find("Warning:").is_none());
     assert!(stderr.find("Warning:").is_none());
