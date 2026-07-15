@@ -5,7 +5,7 @@ import {
   requestDesktopStateResult,
 } from '../pinned-order-ingress';
 
-const stateMethods = new Set<keyof GaryxDesktopApi>([
+const stateMethodNames = [
   'getState',
   'getStateFast',
   'saveSettings',
@@ -27,44 +27,97 @@ const stateMethods = new Set<keyof GaryxDesktopApi>([
   'deleteThread',
   'setThreadPinned',
   'setThreadPinOrder',
-]);
+] as const satisfies readonly (keyof GaryxDesktopApi)[];
+const stateMethods: ReadonlySet<PropertyKey> = new Set(stateMethodNames);
 
-const stateResultMethods = new Set<keyof GaryxDesktopApi>([
+const stateResultMethodNames = [
   'addWorkspaceByPath',
   'createAutomation',
   'updateAutomation',
   'runAutomationNow',
   'createThread',
-]);
+] as const satisfies readonly (keyof GaryxDesktopApi)[];
+const stateResultMethods: ReadonlySet<PropertyKey> = new Set(
+  stateResultMethodNames,
+);
+
+type DesktopApiMethod = (...args: unknown[]) => unknown;
+
+type DesktopApiStateIngress = Readonly<{
+  requestState: (
+    request: () => Promise<DesktopState>,
+  ) => Promise<DesktopState>;
+  requestStateResult: <Result>(
+    request: () => Promise<Result>,
+    selectState: (result: Result) => DesktopState,
+  ) => Promise<Result>;
+}>;
+
+function createFacadeMethod(
+  rawApi: GaryxDesktopApi,
+  property: PropertyKey,
+  method: DesktopApiMethod,
+  ingress: DesktopApiStateIngress,
+): (...args: unknown[]) => unknown {
+  const invoke = (args: unknown[]) => Reflect.apply(method, rawApi, args);
+  if (stateMethods.has(property)) {
+    return (...args) => ingress.requestState(
+      () => invoke(args) as Promise<DesktopState>,
+    );
+  }
+  if (stateResultMethods.has(property)) {
+    return (...args) => ingress.requestStateResult(
+      () => invoke(args) as Promise<{ state: DesktopState }>,
+      (result) => result.state,
+    );
+  }
+  return (...args) => invoke(args);
+}
+
+/**
+ * Materializes an immutable renderer-side facade over Electron's bridge API.
+ *
+ * contextBridge exposes a frozen cross-context object. A Proxy cannot replace
+ * values for that object's non-configurable, non-writable method properties,
+ * so interception has to live on a separate ordinary object. Materializing
+ * once also gives every delegated method a stable identity.
+ */
+export function createDesktopApiFacade(
+  rawApi: GaryxDesktopApi,
+  ingress: DesktopApiStateIngress,
+): GaryxDesktopApi {
+  const facade = {};
+  for (const property of Reflect.ownKeys(rawApi)) {
+    const value = Reflect.get(rawApi, property, rawApi) as unknown;
+    Object.defineProperty(facade, property, {
+      enumerable: Object.prototype.propertyIsEnumerable.call(rawApi, property),
+      value: typeof value === 'function'
+        ? createFacadeMethod(
+          rawApi,
+          property,
+          value as DesktopApiMethod,
+          ingress,
+        )
+        : value,
+    });
+  }
+  return Object.freeze(facade) as GaryxDesktopApi;
+}
+
+const desktopApiStateIngress: DesktopApiStateIngress = {
+  requestState: requestDesktopState,
+  requestStateResult: requestDesktopStateResult,
+};
 
 let cachedRawApi: GaryxDesktopApi | null = null;
-let cachedGuardedApi: GaryxDesktopApi | null = null;
+let cachedFacadeApi: GaryxDesktopApi | null = null;
 
 export function getDesktopApi(): GaryxDesktopApi {
   const rawApi = window.garyxDesktop;
-  if (cachedRawApi === rawApi && cachedGuardedApi) {
-    return cachedGuardedApi;
+  if (cachedRawApi === rawApi && cachedFacadeApi) {
+    return cachedFacadeApi;
   }
   cachedRawApi = rawApi;
-  cachedGuardedApi = new Proxy(rawApi, {
-    get(target, property, receiver) {
-      const value = Reflect.get(target, property, receiver) as unknown;
-      if (typeof value !== 'function') {
-        return value;
-      }
-      if (stateMethods.has(property as keyof GaryxDesktopApi)) {
-        return (...args: unknown[]) => requestDesktopState(
-          () => Reflect.apply(value, target, args) as Promise<DesktopState>,
-        );
-      }
-      if (stateResultMethods.has(property as keyof GaryxDesktopApi)) {
-        return (...args: unknown[]) => requestDesktopStateResult(
-          () => Reflect.apply(value, target, args) as Promise<{ state: DesktopState }>,
-          (result) => result.state,
-        );
-      }
-      return value.bind(target);
-    },
-  });
-  return cachedGuardedApi;
+  cachedFacadeApi = createDesktopApiFacade(rawApi, desktopApiStateIngress);
+  return cachedFacadeApi;
 }

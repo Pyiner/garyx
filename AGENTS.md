@@ -93,6 +93,9 @@ Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
   top-level concepts.
 - Use native platform patterns: Electron/shadcn-style desktop surfaces where
   appropriate, and native grouped iOS management surfaces on mobile.
+- Electron `contextBridge` exposes `window.garyxDesktop` as a frozen
+  cross-context object. Never target it directly with a Proxy that substitutes
+  property values; materialize intercepting methods on a separate facade.
 - Desktop app-shell chrome must keep its complete geometry and state recipe in
   an always-loaded owner stylesheet. Never place global shell component rules
   in a removable feature stylesheet; pin the owner import with a contract test.
