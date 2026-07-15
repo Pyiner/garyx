@@ -1,10 +1,20 @@
 # Pinned Thread Drag Reorder (Mobile-First)
 
-Status: v4 draft for design review (revised after review rounds 1-3, #TASK-2287)
+Status: v5 draft for design review (revised after review rounds 1-4, #TASK-2287)
 Scope: gateway + iOS (phase 1), Mac desktop (phase 2)
 
 Revision notes:
 
+- v4 → v5 (review round 4): V4-1 desktop stamp ownership corrected — persisted
+  `DesktopState` carries server-domain fields only; `capturedEpoch` +
+  `rendererSessionId` + gateway identity live in a renderer-only delivery
+  envelope stamped *before* the request awaits; V4-2 round-3 F1/F4
+  regressions duplicated at the App-target URLProtocol orchestration layer;
+  V4-3 performance gate rewritten against the real probe (extend it to record
+  worst-frame data; frozen baselines + explicit threshold assertions;
+  separate iOS 17 vs adapter-OS measurement paths); V4-4 explicit response
+  pipeline order (identity → completion → acceptance → publication) and the
+  freeze buffer holds accepted projections, never raw pages.
 - v3 → v4 (review round 3): F1 explicit page-acceptance outcomes, transport
   completion decoupled from page acceptance, immediate floor-token resend of
   an unsettled outbox, revision-bounded per-id intent lifecycle; F2 desktop
@@ -294,13 +304,21 @@ demonstrate:
 4. a poll/ack snapshot injected mid-lift moves no rows;
 5. out-of-segment destinations clamp with sane live gap/settle behavior;
 6. the existing pin/unpin single-identity *move* animation is not regressed;
-7. **quantified performance**: the existing hitch probe harness
-   (`HomeListScrollPerformanceTests.swift:35-59`) extended over drag-session
-   enter/exit and reorder settle, measured on one fixed simulator/device
-   configuration with recorded before/after baselines and a **decidable
-   threshold** (hitch-time ratio and worst-frame delta within the harness's
-   existing tolerance of the recorded baseline) — "no dropped frames" is a
-   measured pass/fail gate, not a subjective "no regression".
+7. **quantified performance** (corrected against the real harness, round-4
+   V4-3): today `GaryxHomeScrollPerformanceReport` records only
+   `hitchTimeRatio` (`GaryxHomeScrollPerformanceProbe.swift:48-78,139-146`)
+   and `HomeListScrollPerformanceTests.swift:35-60` only emits XCTest
+   `measure` output with no baseline or assertion, and `XCTHitchMetric` is
+   only available on the current OS, not iOS 17. The spike must therefore:
+   (a) **extend the probe** to also record worst-frame data
+   (`maxFrameInterval` / worst-frame delta); (b) **freeze, before any feature
+   wiring starts**, one fixed simulator/device configuration, recorded
+   baselines, and absolute/relative thresholds for `hitchTimeRatio` and the
+   new worst-frame metric; (c) make the tests **assert those thresholds
+   explicitly** (mechanical pass/fail, not `measure` output to eyeball);
+   (d) define the two measurement paths separately — the verified-adapter OS
+   path may use `XCTHitchMetric`, the iOS 17 fallback path measures via the
+   probe's own frame-interval instrumentation.
 
 Candidate mechanisms, in order of preference: (a) plain `List` + `onMove` +
 a scoped, observation-only UIKit adapter for lifecycle (keeps fully native
@@ -382,6 +400,24 @@ Completion semantics on a `discardedBelowFloor` page, per request kind:
   never permanently hidden behind a stale overlay. No automatic re-issue of
   pin/unpin.
 
+**Response pipeline order (review round-4 V4-4).** Every response is
+processed in this fixed order, on both platforms:
+
+1. **identity check** — wrong gateway identity / renderer session ⇒ dropped;
+2. **transport completion** — flight slot freed, per-id intent transport
+   resolved, retry classifier fed;
+3. **revision acceptance** — the reducer runs (floor update, outcome
+   `discardedBelowFloor | merged | authoritative`), producing an *accepted
+   projection* (or nothing);
+4. **publication** — the accepted projection publishes to the UI, or, while a
+   drag freeze is active, lands in the freeze buffer.
+
+The freeze buffer therefore holds only **accepted projections** — the
+highest-revision accepted state — never raw pages latest-wins by arrival
+time. A delayed rev-11 page arriving after a rev-12 page during a drag is
+discarded at step 3 and can never overwrite the buffered rev-12 projection,
+so neither drop nor cancel replays it.
+
 **Gateway-scoped state domain (review round-3 F4).** The entire pinned-order
 state — revision floor, `desiredOrder`/baseline, drag preview and freeze
 buffer, per-id intents, in-flight token, pending-sync state, and outbox — is
@@ -398,8 +434,11 @@ construction.
 Rules:
 
 - **R1 — freeze during drag.** While a drag session is active (lifecycle from
-  §5.1), the store buffers (latest-wins) incoming snapshots; the buffered
-  snapshot is applied after drop/cancel under the order overlay. Rows never
+  §5.1), publication is deferred: incoming responses still run the full
+  pipeline (identity → completion → acceptance), and only the resulting
+  **accepted projection** lands in the freeze buffer (which thus always holds
+  the highest accepted revision, not the latest arrival — V4-4). The buffered
+  projection is applied after drop/cancel under the order overlay. Rows never
   shift under the finger; cancel unfreezes with no order change.
 - **R2 — commit on accepted drop.** The preview folds into `desiredOrder`,
   `epoch` advances, `recentThreadFeeds.noteLocalMutation()` fires, the outbox
@@ -455,7 +494,11 @@ response write-back captures epoch/revision like any other response.
   - move/clamp: flat→pinned-relative translation, edge clamps, top/bottom
     moves; preview-only `onMove` folding; cancel after multiple `onMove`s ⇒
     baseline restore, zero mutation (V2-5);
-  - R1: buffering, latest-wins, replay after drop/cancel;
+  - R1: buffering of accepted projections, replay after drop/cancel;
+    **round-4 V4-4 regression** — during drag, rev-12 page arrives then a
+    delayed rev-11 page ⇒ rev-11 discarded at acceptance, buffer keeps
+    rev-12; both drop and cancel variants end with no visible movement and no
+    later rev-12-poll re-flip;
   - **V2-1 exact regressions**: GET issued *after* drop (same epoch) reading
     the old page, arriving *after* ack ⇒ discarded by revision floor, no
     reversion; two pin write-backs arriving revision-descending ⇒ old page
@@ -482,9 +525,20 @@ response write-back captures epoch/revision like any other response.
     gateway-switch clear;
   - regression: existing pin/unpin transition tests stay green.
 - App-target no-UI integration tests at the existing URLProtocol seam
-  (`Tests/GaryxMobileTests/GaryxHomeThreadListRefreshCommitTests.swift:639`):
-  real network wiring for single-flight, 409 resend, stale-GET-after-ack,
-  and permanent-error pause — run via `xcodebuild test` (not compile-only).
+  (`Tests/GaryxMobileTests/GaryxHomeThreadListRefreshCommitTests.swift:639`),
+  run via `xcodebuild test` (not compile-only). Beyond single-flight, plain
+  409 resend, stale-GET-after-ack, and permanent-error pause, the round-3
+  F1/F4 behaviors are **orchestration-level** and must be proven here against
+  real transport, not only in the pure reducer (round-4 V4-2):
+  - high-revision GET → low-revision 200 ack ⇒ assert a second PUT is
+    *actually issued immediately* and its body carries
+    `expected_revision = floor`;
+  - the same for a below-floor 409;
+  - gateway switch ⇒ a late old-identity response triggers no retry; the new
+    gateway's revision-0 page is accepted;
+  - high-revision opposite pin/unpin page, then the local low-revision ack ⇒
+    the real presentation immediately shows the saved high-revision baseline
+    (intent retired, nothing hidden).
 - Spike carries the quantified hitch gate (§5.1 point 7). Manual simulator
   pass only for gesture *feel*, never as ordering-logic acceptance.
 
@@ -499,33 +553,50 @@ response write-back captures epoch/revision like any other response.
   single-flight, and outbox (persisted in the main store's existing
   persistence), applied where the poll overwrite happens
   (`mergeRemoteDesktopState`, `store.ts:752,850`).
-- **Stamped pins envelope + commit-time rejection at the React ingress
-  (reviews V2-3 + round-3 F2).** The main-store guard alone is insufficient:
-  already-computed snapshots reach React through the gateway mirror
-  (`mirror.ts:350-355`) and a deferred `startTransition(setDesktopState)`
+- **Stamped delivery envelope with corrected ownership + commit-time
+  rejection at the React ingress (reviews V2-3, round-3 F2, round-4 V4-1).**
+  The main-store guard alone is insufficient: already-computed snapshots
+  reach React through the gateway mirror (`mirror.ts:350-355`) and a deferred
+  `startTransition(setDesktopState)`
   (`useGatewayConnectionController.ts:368-376`), and a one-time projection at
-  queue time still loses the race where the overlay has *already retired*
-  (stale transition queued → drop → fast ack settles and clears the overlay →
-  queued transition commits the pre-drop order). Therefore:
-  - The `DesktopState` pins slice becomes a **stamped envelope**
-    `{ pinnedThreadIds, pinsRevision, capturedEpoch }` (contract change in
-    `shared/contracts/state.ts`).
+  queue time still loses the race where the overlay has *already retired*.
+  Ownership boundaries (V4-1: `DesktopState` is produced and persisted by the
+  main process — `main/store.ts:442-535` — which cannot know renderer
+  epochs):
+  - **Persisted/main-owned `DesktopState` carries server-domain fields
+    only**: `{ pinnedThreadIds, pinsRevision }` (contract change in
+    `shared/contracts/state.ts`; renderer counters are never persisted, so
+    reload never compares incomparable epochs). If the persisted shape
+    changes, legacy-state normalization is covered by tests.
+  - **`capturedEpoch` lives in a renderer-only delivery envelope**
+    `{ state, capturedEpoch, rendererSessionId, gatewayIdentity }`, wrapped
+    around every async state request by **one unified request entry point
+    that captures the stamp *before* the `await`** (a response landing late
+    carries the epoch at issue time — it cannot be re-stamped with the
+    current epoch at landing). Centralizing only `setDesktopState` is not
+    enough; the capture point is the request issue site.
   - The renderer holds the authority counters (current epoch, revision
     floor, unsettled desired order). A drop advances the renderer epoch
-    *synchronously*; **settle also advances the renderer epoch**, exactly as
-    on iOS.
-  - All `setDesktopState` ingress is centralized in one wrapper whose
-    functional setter **rebases at commit time**: a pins slice carrying a
-    stale epoch or below-floor revision is rejected/rebased against the
-    current authoritative order — even after the overlay has retired. Stale
-    snapshots can queue, but they cannot commit stale pins.
+    *synchronously*; **settle also advances it**, exactly as on iOS. On
+    renderer startup, the floor/order initialize from the main process's
+    pins/outbox snapshot **before** state ingress opens; a new
+    `rendererSessionId` invalidates any envelope from a previous session.
+  - All `setDesktopState` ingress funnels through one wrapper whose
+    functional setter **rebases at commit time**: an envelope carrying a
+    stale epoch, below-floor revision, wrong session, or wrong gateway
+    identity is rejected/rebased against the current authoritative order —
+    even after the overlay has retired.
 - Tests (`npm run test:unit`): main-store guard at the real overwrite site;
   the V2-3 race — refresh resolved and `nextState` captured, drop happens,
   deferred transition commits ⇒ committed state carries the local order;
-  **the round-3 F2 race** — stale transition queued → drop → ack settle
-  clears the overlay → stale transition commits ⇒ final state still the
-  local order; revision-floor rejection at the ingress; contract tests for
-  the new preload/main API and the stamped envelope.
+  the round-3 F2 race — stale transition queued → drop → ack settle clears
+  the overlay → stale transition commits ⇒ final state still the local
+  order; **the round-4 V4-1 races** — request issued at epoch 7 → drop (8) →
+  settle (9) → response lands last ⇒ envelope carries 7 and is rejected (not
+  re-stamped at landing); renderer reload ⇒ previous-session envelope dropped
+  by `rendererSessionId`; legacy persisted-state normalization if the shape
+  changed; revision-floor rejection at the ingress; contract tests for the
+  new preload/main API and the envelope.
 
 ## 7. Failure / Race Matrix (summary)
 
@@ -547,8 +618,11 @@ response write-back captures epoch/revision like any other response.
 | Permanent failure (400/401/403/404/405, old gateway) | Local order kept; requests paused; non-blocking pending-sync state; resume on env change (R5) |
 | App restart with unsettled reorder | Durable outbox restored; local order overlays fetch; retry resumes (R5) |
 | Gateway switch | Whole pinned-order domain swapped atomically (fresh floor 0); old-identity responses dropped; new gateway's pages adopted fresh (round-3 F4) |
+| Out-of-order pages during a drag (rev12 then delayed rev11) | Acceptance runs before buffering; rev11 discarded; no re-flip on drop/cancel (round-4 V4-4) |
 | Desktop: snapshot computed pre-drop, committed post-drop via startTransition | Commit-time rebase in the centralized ingress keeps local order (V2-3) |
-| Desktop: stale transition commits *after* ack settle cleared the overlay | Stamped envelope epoch/revision check rejects it at commit time (round-3 F2) |
+| Desktop: stale transition commits *after* ack settle cleared the overlay | Envelope epoch/revision check rejects it at commit time (round-3 F2) |
+| Desktop: request issued pre-drop, response lands after drop+settle | Stamp captured before the await (epoch 7 < current 9) ⇒ rejected (round-4 V4-1) |
+| Desktop: renderer reload with a previous session's response in flight | `rendererSessionId` mismatch ⇒ dropped (round-4 V4-1) |
 | Drop outside pinned segment | Clamped to segment edge; never unpins |
 
 ## 8. Delivery Batches
@@ -580,8 +654,10 @@ response write-back captures epoch/revision like any other response.
    page acceptance**: a below-floor completion frees the flight, never
    settles, and triggers an immediate floor-token resend of the unsettled
    outbox; per-id intents retire at completion with revision-bounded
-   overlays (LWW). This is the corrected form of the in-repo
-   `GaryxCapsuleFavorites` pattern.
+   overlays (LWW). Responses run a fixed pipeline — identity → transport
+   completion → revision acceptance → publication — and drag-freeze buffers
+   hold accepted projections only, never raw arrivals. This is the corrected
+   form of the in-repo `GaryxCapsuleFavorites` pattern.
 4. Reorder failure does **not** roll back the UI; the unsettled order is a
    durable, gateway-scoped outbox. Retries are **classified**: CAS loop for
    409, capped jittered backoff for transient errors, and a paused,
