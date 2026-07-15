@@ -826,6 +826,7 @@ final class GaryxHomeThreadListStore: ObservableObject {
     private var previousInput: GaryxHomeThreadListInput?
     private let sectionsCache = GaryxHomeThreadSectionsCache()
     private var transitionState = GaryxHomeThreadTransitionState()
+    private(set) var pinnedOrderState: GaryxPinnedOrderState
     private(set) var latestActorAppliedSeq = 0
     private(set) var acceptedInputCount = 0
     private(set) var acceptedActorSnapshotCount = 0
@@ -833,6 +834,10 @@ final class GaryxHomeThreadListStore: ObservableObject {
 
     init(snapshot: GaryxHomeThreadListSnapshot = .empty) {
         self.snapshot = snapshot
+        pinnedOrderState = GaryxPinnedOrderState(
+            gatewayIdentity: "",
+            initialOrder: snapshot.sections.pinned.map(\.id)
+        )
     }
 
     var presentationSnapshot: GaryxHomeThreadListSnapshot {
@@ -855,6 +860,30 @@ final class GaryxHomeThreadListStore: ObservableObject {
 
     func presentedPinnedThreadIds(from baseIds: [String]) -> [String] {
         transitionState.presentedPinnedThreadIds(from: baseIds)
+    }
+
+    var pinnedOrderSyncStatusLabel: String? {
+        switch pinnedOrderState.pendingSync {
+        case .retryScheduled, .pausedPermanent:
+            return "Sync pending"
+        case .settled, .ready, .inFlight, .waitingForMembership, .coalescedBehindFlight:
+            return nil
+        }
+    }
+
+    /// Runs one pure pinned-order reduction while keeping the authority state
+    /// owned by the home-list store. App-layer transport code executes the
+    /// returned effects, but cannot replace the reducer domain piecemeal.
+    @discardableResult
+    func updatePinnedOrderState(
+        _ update: (inout GaryxPinnedOrderState) -> GaryxPinnedOrderUpdate
+    ) -> GaryxPinnedOrderUpdate {
+        var next = pinnedOrderState
+        let result = update(&next)
+        guard next != pinnedOrderState else { return result }
+        objectWillChange.send()
+        pinnedOrderState = next
+        return result
     }
 
     @discardableResult

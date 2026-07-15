@@ -463,11 +463,11 @@ fn pinned_task_forest_returns_pinned_roots_and_descendants() {
     db.conn()
         .expect("db connection")
         .execute_batch(
-            "INSERT INTO thread_pins (thread_id, pinned_at)
+            "INSERT INTO thread_pins (thread_id, pinned_at, sort_order)
              VALUES
-               ('thread::chat-a', '2026-01-01T00:00:01.000Z'),
-               ('thread::chat', '2026-01-01T00:00:02.000Z'),
-               ('thread::chat-b', '2026-01-01T00:00:03.000Z')",
+               ('thread::chat-a', '2026-01-01T00:00:03.000Z', 2),
+               ('thread::chat', '2026-01-01T00:00:02.000Z', 1),
+               ('thread::chat-b', '2026-01-01T00:00:01.000Z', 0)",
         )
         .expect("insert pins");
 
@@ -585,10 +585,10 @@ fn pinned_task_forest_filters_inactive_tasks_and_reparents_active_descendants() 
     db.conn()
         .expect("db connection")
         .execute_batch(
-            "INSERT INTO thread_pins (thread_id, pinned_at)
+            "INSERT INTO thread_pins (thread_id, pinned_at, sort_order)
              VALUES
-               ('thread::chat-active', '2026-01-01T00:00:01.000Z'),
-               ('thread::chat-inactive', '2026-01-01T00:00:02.000Z')",
+               ('thread::chat-active', '2026-01-01T00:00:02.000Z', 1),
+               ('thread::chat-inactive', '2026-01-01T00:00:01.000Z', 0)",
         )
         .expect("insert pins");
 

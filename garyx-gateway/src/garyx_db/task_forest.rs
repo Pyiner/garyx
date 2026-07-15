@@ -590,11 +590,13 @@ impl GaryxDbService {
     ) -> GaryxDbResult<TaskForestPage> {
         let (where_sql, bind_values) = task_projection_filter_sql(filter)?;
         let pinned_cte = "SELECT thread_id,
-                       ROW_NUMBER() OVER (ORDER BY pinned_at DESC, thread_id ASC) AS root_rank
+                       ROW_NUMBER() OVER (
+                           ORDER BY sort_order ASC, pinned_at DESC, thread_id ASC
+                       ) AS root_rank
                 FROM thread_pins"
             .to_owned();
         let skipped_sql = "WITH pinned AS (
-                SELECT thread_id, pinned_at
+                SELECT thread_id, pinned_at, sort_order
                 FROM thread_pins
              ),
              related AS (
@@ -611,7 +613,7 @@ impl GaryxDbService {
              FROM pinned
              LEFT JOIN related ON related.thread_id = pinned.thread_id
              WHERE related.thread_id IS NULL
-             ORDER BY pinned.pinned_at DESC, pinned.thread_id ASC";
+             ORDER BY pinned.sort_order ASC, pinned.pinned_at DESC, pinned.thread_id ASC";
         let list_sql = format!(
             "WITH RECURSIVE pinned AS (
                 {pinned_cte}

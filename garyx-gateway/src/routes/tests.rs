@@ -3150,6 +3150,13 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
         .unwrap();
     let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let pin_payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(pin_payload["revision"], 1);
+    assert_eq!(pin_payload["thread_ids"], json!([thread_id]));
+    assert_eq!(pin_payload["pins"][0]["sort_order"], -1);
 
     let request = authed_request()
         .uri("/api/thread-pins")
@@ -3162,6 +3169,8 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["thread_ids"], json!([thread_id]));
+    assert_eq!(payload["revision"], pin_payload["revision"]);
+    assert_eq!(payload["pins"], pin_payload["pins"]);
 
     let request = authed_request()
         .method("DELETE")
@@ -3170,6 +3179,12 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
         .unwrap();
     let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let unpin_payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(unpin_payload["revision"], 2);
+    assert_eq!(unpin_payload["thread_ids"], json!([]));
 
     let request = authed_request()
         .uri("/api/thread-pins")
@@ -3181,6 +3196,124 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["thread_ids"], json!([]));
+    assert_eq!(payload["revision"], unpin_payload["revision"]);
+    assert_eq!(payload["pins"], unpin_payload["pins"]);
+}
+
+#[tokio::test]
+async fn reorder_thread_pins_route_enforces_cas_and_returns_canonical_pages() {
+    let state = AppStateBuilder::new(test_config()).build();
+    state.ops.garyx_db.pin_thread("thread::a").expect("pin a");
+    state.ops.garyx_db.pin_thread("thread::b").expect("pin b");
+    state.ops.garyx_db.pin_thread("thread::c").expect("pin c");
+    let router = build_router(state);
+
+    let request = authed_request()
+        .method("PUT")
+        .uri("/api/thread-pins")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "thread_ids": ["thread::a", "thread::c", "thread::b"],
+                "expected_revision": 3,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let full: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(full["revision"], 4);
+    assert_eq!(
+        full["thread_ids"],
+        json!(["thread::a", "thread::c", "thread::b"])
+    );
+    assert_eq!(
+        full["pins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|pin| pin["sort_order"].as_i64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+
+    let request = authed_request()
+        .method("PUT")
+        .uri("/api/thread-pins")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "thread_ids": ["thread::b", "thread::not-pinned"],
+                "expected_revision": 4,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let subset: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(subset["revision"], 5);
+    assert_eq!(
+        subset["thread_ids"],
+        json!(["thread::b", "thread::a", "thread::c"])
+    );
+
+    let request = authed_request()
+        .method("PUT")
+        .uri("/api/thread-pins")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "thread_ids": ["thread::c"],
+                "expected_revision": 4,
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let conflict: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(conflict, subset);
+
+    let request = authed_request()
+        .uri("/api/thread-pins")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let current: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(current, subset);
+
+    for invalid in [
+        json!({"thread_ids": ["thread::a"]}),
+        json!({"thread_ids": [], "expected_revision": 5}),
+        json!({"thread_ids": ["thread::a", "thread::a"], "expected_revision": 5}),
+        json!({"thread_ids": ["   "], "expected_revision": 5}),
+        json!({"thread_ids": "thread::a", "expected_revision": 5}),
+        json!({"thread_ids": ["thread::a"], "expected_revision": -1}),
+    ] {
+        let request = authed_request()
+            .method("PUT")
+            .uri("/api/thread-pins")
+            .header("content-type", "application/json")
+            .body(Body::from(invalid.to_string()))
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "body={invalid}");
+    }
 }
 
 #[tokio::test]
@@ -3221,6 +3354,7 @@ async fn delete_thread_removes_garyx_db_pin() {
             .garyx_db
             .list_pinned_threads()
             .expect("list pins")
+            .pins
             .is_empty()
     );
 }
@@ -5809,6 +5943,7 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
             .garyx_db
             .list_pinned_threads()
             .expect("pins after archive")
+            .pins
             .is_empty()
     );
 

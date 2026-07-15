@@ -77,7 +77,7 @@ fn thread_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/thread-pins",
-            axum::routing::get(routes::list_thread_pins),
+            axum::routing::get(routes::list_thread_pins).put(routes::reorder_thread_pins),
         )
         .route(
             "/api/thread-pins/{key}",

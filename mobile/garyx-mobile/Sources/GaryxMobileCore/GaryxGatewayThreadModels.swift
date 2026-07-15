@@ -40,11 +40,18 @@ public struct GaryxRecentThreadsPage: Decodable, Equatable, Sendable {
 
 public struct GaryxThreadPinsPage: Decodable, Equatable, Sendable {
     public var threadIds: [String]
+    public var revision: Int64
 
     enum CodingKeys: String, CodingKey {
         case threadIds
         case threadIdsSnake = "thread_ids"
         case pins
+        case revision
+    }
+
+    public init(threadIds: [String], revision: Int64) {
+        self.threadIds = Self.normalizedThreadIds(threadIds)
+        self.revision = max(0, revision)
     }
 
     public init(from decoder: Decoder) throws {
@@ -54,6 +61,7 @@ public struct GaryxThreadPinsPage: Decodable, Equatable, Sendable {
             ?? container.decodeIfPresent([GaryxThreadPinRecord].self, forKey: .pins)?.map(\.threadId)
             ?? []
         threadIds = Self.normalizedThreadIds(rawIds)
+        revision = max(0, try container.decodeIfPresent(Int64.self, forKey: .revision) ?? 0)
     }
 
     private static func normalizedThreadIds(_ values: [String]) -> [String] {
@@ -65,6 +73,19 @@ public struct GaryxThreadPinsPage: Decodable, Equatable, Sendable {
             ids.append(id)
         }
         return ids
+    }
+}
+
+
+public enum GaryxThreadPinsReorderResult: Equatable, Sendable {
+    case accepted(GaryxThreadPinsPage)
+    case conflict(GaryxThreadPinsPage)
+
+    public var page: GaryxThreadPinsPage {
+        switch self {
+        case .accepted(let page), .conflict(let page):
+            return page
+        }
     }
 }
 

@@ -19,6 +19,7 @@ extension GaryxMobileModel {
 
     func refreshThreads(source: GaryxThreadListRefreshSource) async {
         guard hasGatewaySettings else { return }
+        servicePinnedOrderRetry(source: source)
         // Concurrent refresh entry points (pull-to-refresh, the 10s loop,
         // the reconcile loop, action refreshes) coalesce into the ticket
         // holder; refreshes never truncate loaded pages (TASK-1802 R2/R9).
@@ -33,6 +34,7 @@ extension GaryxMobileModel {
         defer { homeProjectionGateway.endTransaction(transactionId) }
         do {
             let gatewayClient = try client()
+            let pinsRequestStamp = capturePinnedOrderRequestStamp()
             async let threadsPage = gatewayClient.listRecentThreads(
                 filter: ticket.filter,
                 limit: Self.threadListPageLimit
@@ -93,7 +95,9 @@ extension GaryxMobileModel {
                     previousThreadSummaries: previousThreadSummaries,
                     previouslyRemoteBusyThreadIds: previouslyRemoteBusyThreadIds,
                     selectionIdForThisRefresh: selectionIdForThisRefresh,
-                    runtimeGeneration: runtimeGeneration
+                    runtimeGeneration: runtimeGeneration,
+                    pinsRevision: pinsPage.revision,
+                    pinsRequestStamp: pinsRequestStamp
                 )
             }
         } catch {
@@ -192,9 +196,15 @@ extension GaryxMobileModel {
         previousThreadSummaries: [GaryxThreadSummary],
         previouslyRemoteBusyThreadIds: Set<String>,
         selectionIdForThisRefresh: String?,
-        runtimeGeneration: UUID
+        runtimeGeneration: UUID,
+        pinsRevision: Int64 = 0,
+        pinsRequestStamp: GaryxPinnedOrderRequestStamp? = nil
     ) {
-        applyPinnedThreadIds(pendingThreadArchives.visibleThreadIds(pinsPageThreadIds))
+        applyPinnedThreadIds(
+            pendingThreadArchives.visibleThreadIds(pinsPageThreadIds),
+            revision: pinsRevision,
+            stamp: pinsRequestStamp
+        )
         let visibleFetchedThreads = pendingThreadArchives.visibleThreads(fetchedThreads)
         // Loaded tail summaries always survive a head refresh; which
         // rows are visible is the selected Recent feed's concern.

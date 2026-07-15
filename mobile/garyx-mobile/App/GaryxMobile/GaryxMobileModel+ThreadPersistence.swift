@@ -78,17 +78,23 @@ extension GaryxMobileModel {
         ) else {
             return
         }
-
-        let transactionId = homeProjectionGateway.beginTransaction(label: "pin-optimistic")
-        pinnedThreadIds = Self.pinnedThreadIdsWith(previousIds, threadId: normalizedId, pinned: pinned)
-        recentThreadFeeds.noteLocalMutation()
-        homeProjectionGateway.endTransaction(transactionId)
+        guard let membershipRequest = beginPinnedOrderMembershipChange(
+            threadId: normalizedId,
+            pinned: pinned
+        ) else {
+            _ = homeThreadListStore.rollbackPinTransition(
+                threadId: normalizedId,
+                basePinnedIds: previousIds
+            )
+            return
+        }
 
         let runtimeGeneration = gatewayRuntimeGeneration
         Task { [weak self] in
             await self?.finishThreadPinRequest(
                 normalizedId,
                 pinned: pinned,
+                membershipRequest: membershipRequest,
                 runtimeGeneration: runtimeGeneration
             )
         }
@@ -127,43 +133,25 @@ extension GaryxMobileModel {
     private func finishThreadPinRequest(
         _ normalizedId: String,
         pinned: Bool,
+        membershipRequest: GaryxPinnedOrderMembershipRequest,
         runtimeGeneration: UUID
     ) async {
         do {
             let page = try await client().setThreadPinned(threadId: normalizedId, pinned: pinned)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            let confirmedIds = Self.normalizedPinnedThreadIds(page.threadIds)
+            _ = completePinnedOrderMembershipChange(membershipRequest, page: page)
             homeThreadListStore.resolvePinTransition(
                 threadId: normalizedId,
-                pinned: confirmedIds.contains(normalizedId)
+                pinned: homeThreadListStore.pinnedOrderState.presentedOrder.contains(normalizedId)
             )
-            let presentedIds = homeThreadListStore.presentedPinnedThreadIds(from: confirmedIds)
-            let transactionId = homeProjectionGateway.beginTransaction(label: "pin-confirm")
-            applyPinnedThreadIds(presentedIds)
-            recentThreadFeeds.noteLocalMutation()
-            homeProjectionGateway.endTransaction(transactionId)
-            persistRecentThreadsWidgetSnapshot()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            let rollbackIds = homeThreadListStore.rollbackPinTransition(
+            failPinnedOrderMembershipChange(membershipRequest)
+            _ = homeThreadListStore.rollbackPinTransition(
                 threadId: normalizedId,
                 basePinnedIds: pinnedThreadIds
-            ) ?? pinnedThreadIds
-            let transactionId = homeProjectionGateway.beginTransaction(label: "pin-rollback")
-            applyPinnedThreadIds(rollbackIds)
-            recentThreadFeeds.noteLocalMutation()
-            homeProjectionGateway.endTransaction(transactionId)
-            persistRecentThreadsWidgetSnapshot()
+            )
             lastError = displayMessage(for: error)
-        }
-    }
-
-    func applyPinnedThreadIds(_ ids: [String]) {
-        let normalized = Self.normalizedPinnedThreadIds(ids)
-        // The silent sidebar refresh loop calls this every few seconds; skip
-        // the publish when nothing changed so observers do not re-render.
-        if pinnedThreadIds != normalized {
-            pinnedThreadIds = normalized
         }
     }
 

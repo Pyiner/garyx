@@ -464,6 +464,7 @@ final class GaryxMobileModel: ObservableObject {
     let routeNotFoundStore = GaryxRouteNotFoundStore()
     let homeObservationStore = GaryxHomeObservationStore()
     let homeThreadListStore = GaryxHomeThreadListStore()
+    let pinnedOrderOutboxStore: GaryxPinnedOrderUserDefaultsStore
     let homeProjectionGateway = HomeProjectionGateway()
     let shellChromeStore = GaryxShellChromeStore()
     let navigationDrawerStore = GaryxNavigationDrawerStore()
@@ -474,6 +475,8 @@ final class GaryxMobileModel: ObservableObject {
         minimumRefreshInterval: GaryxMobileModel.backgroundCommittedRunThreadRefreshInterval
     )
     var recentThreadsWidgetPersistenceGeneration: UInt64 = 0
+    var pinnedOrderReorderTask: Task<Void, Never>?
+    var pinnedOrderReorderTaskToken: UInt64?
     var hasAttemptedLastOpenedThreadRestore = false
     var selectedThreadNextHistoryBeforeIndex: Int?
     var selectedThreadRenderFloorByThread: [String: Int] = [:]
@@ -505,6 +508,7 @@ final class GaryxMobileModel: ObservableObject {
         self.defaults = defaults
         self.keychain = keychain
         self.gatewayClientFactory = gatewayClientFactory
+        self.pinnedOrderOutboxStore = GaryxPinnedOrderUserDefaultsStore(defaults: defaults)
         self.recentThreadFeeds = GaryxRecentThreadFeeds(
             pageLimit: Self.threadListPageLimit,
             overlap: Self.threadListPageOverlap,

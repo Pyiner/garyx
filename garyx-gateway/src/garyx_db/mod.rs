@@ -22,6 +22,8 @@ pub(crate) const RECENT_TASK_THREAD_KIND_MIGRATION_NAME: &str = "recent_task_thr
 const RECENT_TASK_THREAD_KIND_MIGRATION_VERSION: i64 = 1;
 pub(crate) const ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME: &str = "endpoint_holder_dedup_v1";
 const ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION: i64 = 1;
+pub(crate) const THREAD_PIN_SORT_ORDER_MIGRATION_NAME: &str = "thread_pin_sort_order_v1";
+const THREAD_PIN_SORT_ORDER_MIGRATION_VERSION: i64 = 1;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GaryxDbError {
@@ -60,6 +62,19 @@ pub(crate) struct OneShotMigrationSummary {
 pub struct PinnedThreadRecord {
     pub thread_id: String,
     pub pinned_at: String,
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ThreadPinsPage {
+    pub pins: Vec<PinnedThreadRecord>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReorderThreadPinsResult {
+    Updated(ThreadPinsPage),
+    Conflict(ThreadPinsPage),
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -460,48 +475,114 @@ impl GaryxDbService {
             .map_err(|err| GaryxDbError::Join(err.to_string()))?
     }
 
-    pub fn list_pinned_threads(&self) -> GaryxDbResult<Vec<PinnedThreadRecord>> {
-        let conn = self.read_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT thread_id, pinned_at FROM thread_pins ORDER BY pinned_at DESC, thread_id ASC",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(PinnedThreadRecord {
-                thread_id: row.get(0)?,
-                pinned_at: row.get(1)?,
-            })
-        })?;
-        let mut records = Vec::new();
-        for row in rows {
-            records.push(row?);
-        }
-        Ok(records)
+    pub fn list_pinned_threads(&self) -> GaryxDbResult<ThreadPinsPage> {
+        self.list_pinned_threads_inner(|| Ok(()))
     }
 
-    pub fn pin_thread(&self, thread_id: &str) -> GaryxDbResult<PinnedThreadRecord> {
+    fn list_pinned_threads_inner<F>(&self, after_pins: F) -> GaryxDbResult<ThreadPinsPage>
+    where
+        F: FnOnce() -> GaryxDbResult<()>,
+    {
+        let mut conn = self.read_conn()?;
+        let tx = conn.transaction()?;
+        let pins = read_thread_pins_tx(&tx)?;
+
+        // Deterministic test seam: a concurrent writer may commit here, but
+        // the revision read below remains on this WAL snapshot.
+        after_pins()?;
+
+        let revision = read_thread_pins_revision_tx(&tx)?;
+        tx.commit()?;
+        Ok(ThreadPinsPage { pins, revision })
+    }
+
+    pub fn pin_thread(&self, thread_id: &str) -> GaryxDbResult<ThreadPinsPage> {
         let thread_id = normalize_thread_id(thread_id)?;
         let pinned_at = now_string();
-        let conn = self.conn()?;
-        conn.execute(
-            "INSERT INTO thread_pins (thread_id, pinned_at)
-             VALUES (?1, ?2)
-             ON CONFLICT(thread_id) DO UPDATE SET pinned_at = excluded.pinned_at",
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let changed = tx.execute(
+            "INSERT INTO thread_pins (thread_id, pinned_at, sort_order)
+             VALUES (
+                 ?1,
+                 ?2,
+                 COALESCE((SELECT MIN(sort_order) FROM thread_pins), 0) - 1
+             )
+             ON CONFLICT(thread_id) DO NOTHING",
             params![thread_id, pinned_at],
-        )?;
-        Ok(PinnedThreadRecord {
-            thread_id,
-            pinned_at,
-        })
+        )? > 0;
+        bump_thread_pins_revision_if_changed_tx(&tx, changed)?;
+        let page = read_thread_pins_page_tx(&tx)?;
+        tx.commit()?;
+        Ok(page)
     }
 
-    pub fn unpin_thread(&self, thread_id: &str) -> GaryxDbResult<bool> {
+    pub fn unpin_thread(&self, thread_id: &str) -> GaryxDbResult<(bool, ThreadPinsPage)> {
         let thread_id = normalize_thread_id(thread_id)?;
-        let conn = self.conn()?;
-        let removed = conn.execute(
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let removed = tx.execute(
             "DELETE FROM thread_pins WHERE thread_id = ?1",
             params![thread_id],
-        )?;
-        Ok(removed > 0)
+        )? > 0;
+        bump_thread_pins_revision_if_changed_tx(&tx, removed)?;
+        let page = read_thread_pins_page_tx(&tx)?;
+        tx.commit()?;
+        Ok((removed, page))
+    }
+
+    pub fn reorder_thread_pins(
+        &self,
+        ordered_ids: Vec<String>,
+        expected_revision: i64,
+    ) -> GaryxDbResult<ReorderThreadPinsResult> {
+        let ordered_ids = normalize_thread_pin_order(ordered_ids)?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let current = read_thread_pins_page_tx(&tx)?;
+        if current.revision != expected_revision {
+            tx.commit()?;
+            return Ok(ReorderThreadPinsResult::Conflict(current));
+        }
+
+        let current_ids = current
+            .pins
+            .iter()
+            .map(|pin| pin.thread_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let requested_ids = ordered_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let mut next_order = Vec::with_capacity(current.pins.len());
+        for thread_id in &ordered_ids {
+            if current_ids.contains(thread_id.as_str()) {
+                next_order.push(thread_id.clone());
+            }
+        }
+        for pin in &current.pins {
+            if !requested_ids.contains(pin.thread_id.as_str()) {
+                next_order.push(pin.thread_id.clone());
+            }
+        }
+
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE thread_pins
+                    SET sort_order = ?1
+                  WHERE thread_id = ?2",
+            )?;
+            for (index, thread_id) in next_order.iter().enumerate() {
+                let sort_order = i64::try_from(index).map_err(|_| {
+                    GaryxDbError::BadRequest("too many thread_ids to reorder".to_owned())
+                })?;
+                stmt.execute(params![sort_order, thread_id])?;
+            }
+        }
+        bump_thread_pins_revision_if_changed_tx(&tx, true)?;
+        let page = read_thread_pins_page_tx(&tx)?;
+        tx.commit()?;
+        Ok(ReorderThreadPinsResult::Updated(page))
     }
 
     /// Product archive semantics in one transaction: write the tombstone
@@ -528,10 +609,11 @@ impl GaryxDbService {
         remove_thread_meta_projection_tx(&tx, &thread_id)?;
         remove_task_projection_tx(&tx, &thread_id)?;
         remove_recent_thread_tx(&tx, &thread_id)?;
-        tx.execute(
+        let removed_pin = tx.execute(
             "DELETE FROM thread_pins WHERE thread_id = ?1",
             params![thread_id],
-        )?;
+        )? > 0;
+        bump_thread_pins_revision_if_changed_tx(&tx, removed_pin)?;
         tx.commit()?;
         Ok(removed)
     }
@@ -901,9 +983,91 @@ impl GaryxDbService {
     /// Run every versioned thread-data migration that must complete after
     /// the one-shot archive import and before the gateway starts serving.
     pub(crate) fn run_thread_data_startup_migrations(&self) -> GaryxDbResult<()> {
+        self.migrate_thread_pin_sort_order_v1()?;
         self.migrate_recent_task_thread_kind_v1()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         Ok(())
+    }
+
+    pub(crate) fn migrate_thread_pin_sort_order_v1(
+        &self,
+    ) -> GaryxDbResult<OneShotMigrationSummary> {
+        self.migrate_thread_pin_sort_order_v1_inner(|_| Ok(()))
+    }
+
+    fn migrate_thread_pin_sort_order_v1_inner<F>(
+        &self,
+        after_backfill: F,
+    ) -> GaryxDbResult<OneShotMigrationSummary>
+    where
+        F: FnOnce(&Transaction<'_>) -> GaryxDbResult<()>,
+    {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let completed_source_count = tx
+            .query_row(
+                "SELECT source_row_count
+                   FROM projection_states
+                  WHERE projection_name = ?1 AND projection_version = ?2",
+                params![
+                    THREAD_PIN_SORT_ORDER_MIGRATION_NAME,
+                    THREAD_PIN_SORT_ORDER_MIGRATION_VERSION
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        let source_row_count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM thread_pins", [], |row| row.get(0))?;
+        let updated_row_count = tx.execute(
+            "WITH ranked AS (
+                 SELECT thread_id,
+                        ROW_NUMBER() OVER (
+                            ORDER BY pinned_at DESC, thread_id ASC
+                        ) - 1 AS next_sort_order
+                   FROM thread_pins
+             )
+             UPDATE thread_pins
+                SET sort_order = (
+                    SELECT next_sort_order
+                      FROM ranked
+                     WHERE ranked.thread_id = thread_pins.thread_id
+                )",
+            [],
+        )?;
+
+        after_backfill(&tx)?;
+
+        tx.execute(
+            "INSERT INTO projection_states (
+                projection_name, projection_version, source_row_count, projected_at
+             ) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(projection_name) DO UPDATE SET
+                projection_version = excluded.projection_version,
+                source_row_count = excluded.source_row_count,
+                projected_at = excluded.projected_at",
+            params![
+                THREAD_PIN_SORT_ORDER_MIGRATION_NAME,
+                THREAD_PIN_SORT_ORDER_MIGRATION_VERSION,
+                source_row_count,
+                now_string(),
+            ],
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count,
+            already_completed: false,
+        })
     }
 
     /// Establish the canonical invariant that one endpoint appears on at
@@ -1706,7 +1870,9 @@ impl GaryxDbService {
         remove_thread_meta_projection_tx(&tx, &key)?;
         remove_task_projection_tx(&tx, &key)?;
         remove_recent_thread_tx(&tx, &key)?;
-        tx.execute("DELETE FROM thread_pins WHERE thread_id = ?1", params![key])?;
+        let removed_pin =
+            tx.execute("DELETE FROM thread_pins WHERE thread_id = ?1", params![key])? > 0;
+        bump_thread_pins_revision_if_changed_tx(&tx, removed_pin)?;
         tx.commit()?;
         Ok(removed)
     }
@@ -2004,7 +2170,13 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         r#"
         CREATE TABLE IF NOT EXISTS thread_pins (
             thread_id TEXT PRIMARY KEY,
-            pinned_at TEXT NOT NULL
+            pinned_at TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS thread_pins_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            pins_revision INTEGER NOT NULL DEFAULT 0 CHECK (pins_revision >= 0)
         ) STRICT;
 
         -- Thread-record truth source (#TASK-1864 batch 2): canonical record
@@ -2256,6 +2428,12 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
 
         "#,
     )?;
+    ensure_thread_pins_sort_order_column(conn)?;
+    ensure_thread_pins_meta_row(conn)?;
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_thread_pins_sort_order
+             ON thread_pins(sort_order ASC, pinned_at DESC, thread_id ASC);",
+    )?;
     ensure_capsules_favorited_at_column(conn)?;
     ensure_thread_meta_projection_columns(conn)?;
     ensure_thread_channel_endpoint_columns(conn)?;
@@ -2289,6 +2467,7 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
 fn purge_retired_workflow_state(conn: &Connection) -> GaryxDbResult<()> {
     let tx = conn.unchecked_transaction()?;
     let mut retired_thread_ids = BTreeSet::new();
+    let mut removed_any_pin = false;
 
     if sqlite_table_exists(&tx, "workflow_runs")? {
         // `task_thread_id` was added after the first Workflow schema. Read
@@ -2364,10 +2543,10 @@ fn purge_retired_workflow_state(conn: &Connection) -> GaryxDbResult<()> {
         remove_thread_meta_projection_tx(&tx, thread_id)?;
         remove_task_projection_tx(&tx, thread_id)?;
         remove_recent_thread_tx(&tx, thread_id)?;
-        tx.execute(
+        removed_any_pin |= tx.execute(
             "DELETE FROM thread_pins WHERE thread_id = ?1",
             params![thread_id],
-        )?;
+        )? > 0;
         tx.execute(
             "DELETE FROM archived_threads WHERE thread_id = ?1",
             params![thread_id],
@@ -2389,6 +2568,7 @@ fn purge_retired_workflow_state(conn: &Connection) -> GaryxDbResult<()> {
         DROP TABLE IF EXISTS workflow_runs;
         "#,
     )?;
+    bump_thread_pins_revision_if_changed_tx(&tx, removed_any_pin)?;
     tx.commit()?;
     Ok(())
 }
@@ -2465,6 +2645,62 @@ fn object_marks_retired_workflow(object: &serde_json::Map<String, Value>) -> boo
         .any(|value| !value.trim().is_empty())
 }
 
+fn read_thread_pins_tx(conn: &Connection) -> GaryxDbResult<Vec<PinnedThreadRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT thread_id, pinned_at, sort_order
+           FROM thread_pins
+          ORDER BY sort_order ASC, pinned_at DESC, thread_id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(PinnedThreadRecord {
+            thread_id: row.get(0)?,
+            pinned_at: row.get(1)?,
+            sort_order: row.get(2)?,
+        })
+    })?;
+    let mut pins = Vec::new();
+    for row in rows {
+        pins.push(row?);
+    }
+    Ok(pins)
+}
+
+fn read_thread_pins_revision_tx(conn: &Connection) -> GaryxDbResult<i64> {
+    Ok(conn.query_row(
+        "SELECT pins_revision FROM thread_pins_meta WHERE id = 1",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+fn read_thread_pins_page_tx(conn: &Connection) -> GaryxDbResult<ThreadPinsPage> {
+    Ok(ThreadPinsPage {
+        pins: read_thread_pins_tx(conn)?,
+        revision: read_thread_pins_revision_tx(conn)?,
+    })
+}
+
+/// Shared revision boundary for every runtime mutation of `thread_pins`.
+/// Callers pass the mutation's affected-row result while still inside the
+/// same transaction; no-op idempotent operations deliberately do not bump.
+fn bump_thread_pins_revision_if_changed_tx(conn: &Connection, changed: bool) -> GaryxDbResult<()> {
+    if !changed {
+        return Ok(());
+    }
+    let updated = conn.execute(
+        "UPDATE thread_pins_meta
+            SET pins_revision = pins_revision + 1
+          WHERE id = 1",
+        [],
+    )?;
+    if updated != 1 {
+        return Err(GaryxDbError::Configuration(
+            "thread_pins_meta singleton is missing".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn normalize_thread_id(thread_id: &str) -> GaryxDbResult<String> {
     let trimmed = thread_id.trim();
     if trimmed.is_empty() {
@@ -2473,6 +2709,26 @@ fn normalize_thread_id(thread_id: &str) -> GaryxDbResult<String> {
         ));
     }
     Ok(trimmed.to_owned())
+}
+
+fn normalize_thread_pin_order(ordered_ids: Vec<String>) -> GaryxDbResult<Vec<String>> {
+    if ordered_ids.is_empty() {
+        return Err(GaryxDbError::BadRequest(
+            "thread_ids must be a non-empty array".to_owned(),
+        ));
+    }
+    let mut normalized = Vec::with_capacity(ordered_ids.len());
+    let mut seen = BTreeSet::new();
+    for thread_id in ordered_ids {
+        let thread_id = normalize_thread_id(&thread_id)?;
+        if !seen.insert(thread_id.clone()) {
+            return Err(GaryxDbError::BadRequest(format!(
+                "duplicate thread_id: {thread_id}"
+            )));
+        }
+        normalized.push(thread_id);
+    }
+    Ok(normalized)
 }
 
 fn now_string() -> String {
@@ -3014,6 +3270,40 @@ fn is_absolute_workspace_path(path: &str) -> bool {
     }
     let bytes = path.as_bytes();
     bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
+}
+
+fn ensure_thread_pins_sort_order_column(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(thread_pins)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if columns.contains("sort_order") {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE thread_pins
+             ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+        [],
+    )?;
+    Ok(())
+}
+
+fn ensure_thread_pins_meta_row(conn: &Connection) -> GaryxDbResult<()> {
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM thread_pins_meta WHERE id = 1",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        conn.execute(
+            "INSERT INTO thread_pins_meta (id, pins_revision) VALUES (1, 0)",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbResult<()> {
@@ -4142,6 +4432,7 @@ mod tests {
             !service
                 .list_pinned_threads()
                 .expect("list pins")
+                .pins
                 .iter()
                 .any(|pin| pin.thread_id == thread_id),
             "the pin must be removed in the delete transaction"
@@ -4251,9 +4542,9 @@ mod tests {
     fn memory_db_still_works_without_wal() {
         let service = GaryxDbService::memory().expect("memory db");
         service.pin_thread("thread::mem-check").expect("pin");
-        let pins = service.list_pinned_threads().expect("list");
-        assert_eq!(pins.len(), 1);
-        assert_eq!(pins[0].thread_id, "thread::mem-check");
+        let page = service.list_pinned_threads().expect("list");
+        assert_eq!(page.pins.len(), 1);
+        assert_eq!(page.pins[0].thread_id, "thread::mem-check");
     }
 
     #[test]
@@ -4359,6 +4650,13 @@ mod tests {
         }
 
         let db = GaryxDbService::open(&path).expect("open migrated db");
+        assert_eq!(
+            db.list_pinned_threads()
+                .expect("pins after cleanup")
+                .revision,
+            1,
+            "startup cleanup must bump the collection exactly once"
+        );
         for table in ["workflow_runs", "workflow_child_runs", "workflow_events"] {
             assert!(!sqlite_table_exists(&db.conn().expect("conn"), table).expect("table check"));
         }
@@ -4410,6 +4708,14 @@ mod tests {
         drop(db);
 
         let reopened = GaryxDbService::open(&path).expect("cleanup is idempotent");
+        assert_eq!(
+            reopened
+                .list_pinned_threads()
+                .expect("pins after idempotent cleanup")
+                .revision,
+            1,
+            "a second startup cleanup must not bump an unchanged collection"
+        );
         assert!(
             reopened
                 .get_thread_record_body("thread::ordinary")
@@ -4422,18 +4728,18 @@ mod tests {
     async fn run_blocking_round_trips_reads_and_writes() {
         let service = std::sync::Arc::new(GaryxDbService::memory().expect("memory db"));
 
-        let pinned = service
+        let page = service
             .run_blocking(|db| db.pin_thread("thread::async-entry"))
             .await
             .expect("async pin");
-        assert_eq!(pinned.thread_id, "thread::async-entry");
+        assert_eq!(page.pins[0].thread_id, "thread::async-entry");
 
-        let pins = service
+        let page = service
             .run_blocking(|db| db.list_pinned_threads())
             .await
             .expect("async list");
-        assert_eq!(pins.len(), 1);
-        assert_eq!(pins[0].thread_id, "thread::async-entry");
+        assert_eq!(page.pins.len(), 1);
+        assert_eq!(page.pins[0].thread_id, "thread::async-entry");
     }
 
     #[test]
@@ -4597,34 +4903,385 @@ mod tests {
     }
 
     #[test]
-    fn thread_pins_round_trip_in_recency_order() {
+    fn fresh_thread_pins_schema_has_sort_order_revision_and_zero_row_marker() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let column = db
+            .conn()
+            .expect("connection")
+            .query_row(
+                "SELECT \"notnull\", dflt_value
+                   FROM pragma_table_info('thread_pins')
+                  WHERE name = 'sort_order'",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .expect("sort_order column");
+        assert_eq!(column, (1, Some("0".to_owned())));
+        assert_eq!(db.list_pinned_threads().expect("fresh page").revision, 0);
+
+        let summary = db
+            .migrate_thread_pin_sort_order_v1()
+            .expect("zero-row migration");
+        assert_eq!(summary.source_row_count, 0);
+        assert_eq!(summary.updated_row_count, 0);
+        assert!(!summary.already_completed);
+        assert!(
+            db.projection_state_exists(
+                THREAD_PIN_SORT_ORDER_MIGRATION_NAME,
+                THREAD_PIN_SORT_ORDER_MIGRATION_VERSION,
+            )
+            .expect("migration marker")
+        );
+    }
+
+    #[test]
+    fn legacy_thread_pin_backfill_preserves_display_order_and_runs_once() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            let conn = Connection::open(&path).expect("legacy db");
+            conn.execute_batch(
+                "CREATE TABLE thread_pins (
+                     thread_id TEXT PRIMARY KEY,
+                     pinned_at TEXT NOT NULL
+                 ) STRICT;
+                 INSERT INTO thread_pins (thread_id, pinned_at) VALUES
+                   ('thread::oldest', '2026-01-01T00:00:01.000Z'),
+                   ('thread::same-b', '2026-01-01T00:00:03.000Z'),
+                   ('thread::same-a', '2026-01-01T00:00:03.000Z'),
+                   ('thread::middle', '2026-01-01T00:00:02.000Z');",
+            )
+            .expect("legacy pins");
+        }
+
+        let db = GaryxDbService::open(&path).expect("open legacy db");
+        let summary = db
+            .migrate_thread_pin_sort_order_v1()
+            .expect("backfill legacy pins");
+        assert_eq!(summary.source_row_count, 4);
+        assert_eq!(summary.updated_row_count, 4);
+        assert!(!summary.already_completed);
+        let page = db.list_pinned_threads().expect("backfilled page");
+        assert_eq!(page.revision, 0);
+        assert_eq!(
+            page.pins
+                .iter()
+                .map(|pin| (pin.thread_id.as_str(), pin.sort_order))
+                .collect::<Vec<_>>(),
+            vec![
+                ("thread::same-a", 0),
+                ("thread::same-b", 1),
+                ("thread::middle", 2),
+                ("thread::oldest", 3),
+            ]
+        );
+
+        db.conn()
+            .expect("connection")
+            .execute(
+                "UPDATE thread_pins SET sort_order = 99 WHERE thread_id = 'thread::same-a'",
+                [],
+            )
+            .expect("tamper after marker");
+        drop(db);
+
+        let reopened = GaryxDbService::open(&path).expect("second boot");
+        let second = reopened
+            .migrate_thread_pin_sort_order_v1()
+            .expect("migration stays one-shot");
+        assert!(second.already_completed);
+        assert_eq!(second.updated_row_count, 0);
+        let retained: i64 = reopened
+            .conn()
+            .expect("connection")
+            .query_row(
+                "SELECT sort_order FROM thread_pins WHERE thread_id = 'thread::same-a'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("retained sort order");
+        assert_eq!(retained, 99, "the marker must prevent a second backfill");
+    }
+
+    #[test]
+    fn failed_thread_pin_backfill_rolls_back_and_retries_cleanly() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.conn()
+            .expect("connection")
+            .execute_batch(
+                "INSERT INTO thread_pins (thread_id, pinned_at) VALUES
+                   ('thread::older', '2026-01-01T00:00:01.000Z'),
+                   ('thread::newer', '2026-01-01T00:00:02.000Z');",
+            )
+            .expect("seed pins");
+
+        let result = db.migrate_thread_pin_sort_order_v1_inner(|_| {
+            Err(GaryxDbError::Configuration(
+                "injected migration failure".to_owned(),
+            ))
+        });
+        assert!(matches!(result, Err(GaryxDbError::Configuration(_))));
+        assert!(
+            !db.projection_state_exists(
+                THREAD_PIN_SORT_ORDER_MIGRATION_NAME,
+                THREAD_PIN_SORT_ORDER_MIGRATION_VERSION,
+            )
+            .expect("marker lookup")
+        );
+        let rolled_back = db.list_pinned_threads().expect("rolled-back page");
+        assert!(rolled_back.pins.iter().all(|pin| pin.sort_order == 0));
+
+        db.migrate_thread_pin_sort_order_v1()
+            .expect("retry migration");
+        assert_eq!(
+            db.list_pinned_threads()
+                .expect("retried page")
+                .pins
+                .iter()
+                .map(|pin| (pin.thread_id.as_str(), pin.sort_order))
+                .collect::<Vec<_>>(),
+            vec![("thread::newer", 0), ("thread::older", 1)]
+        );
+    }
+
+    #[test]
+    fn thread_pins_page_is_one_wal_snapshot_across_pins_and_revision() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let reader = GaryxDbService::open(&path).expect("reader opens");
+        reader.pin_thread("thread::first").expect("first pin");
+        let writer = GaryxDbService::open(&path).expect("writer opens");
+
+        let snapshot = reader
+            .list_pinned_threads_inner(|| {
+                writer.pin_thread("thread::second")?;
+                Ok(())
+            })
+            .expect("snapshot page");
+        assert_eq!(snapshot.revision, 1);
+        assert_eq!(
+            snapshot
+                .pins
+                .iter()
+                .map(|pin| pin.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::first"]
+        );
+
+        let current = reader.list_pinned_threads().expect("current page");
+        assert_eq!(current.revision, 2);
+        assert_eq!(
+            current
+                .pins
+                .iter()
+                .map(|pin| pin.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::second", "thread::first"]
+        );
+    }
+
+    #[test]
+    fn pin_unpin_and_idempotent_repin_use_atomic_pages_and_exact_revisions() {
         use std::time::Duration;
 
         let db = GaryxDbService::memory().expect("db opens");
-        db.pin_thread("thread::older").expect("pin older");
+        let first = db.pin_thread("thread::older").expect("pin older");
+        assert_eq!(first.revision, 1);
+        let first_pin = first.pins[0].clone();
         std::thread::sleep(Duration::from_millis(2));
-        db.pin_thread("thread::newer").expect("pin newer");
-        std::thread::sleep(Duration::from_millis(2));
-        db.pin_thread("thread::older").expect("repin older");
-
-        let records = db.list_pinned_threads().expect("list pins");
+        let second = db.pin_thread("thread::newer").expect("pin newer");
+        assert_eq!(second.revision, 2);
         assert_eq!(
-            records
+            second
+                .pins
                 .iter()
-                .map(|record| record.thread_id.as_str())
+                .map(|pin| pin.thread_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["thread::older", "thread::newer"],
+            vec!["thread::newer", "thread::older"]
+        );
+        std::thread::sleep(Duration::from_millis(2));
+        let repinned = db.pin_thread("thread::older").expect("repin older");
+        assert_eq!(repinned.revision, 2);
+        let preserved = repinned
+            .pins
+            .iter()
+            .find(|pin| pin.thread_id == "thread::older")
+            .expect("repinned record");
+        assert_eq!(preserved.pinned_at, first_pin.pinned_at);
+        assert_eq!(preserved.sort_order, first_pin.sort_order);
+
+        let (removed, unpinned) = db.unpin_thread("thread::older").expect("unpin older");
+        assert!(removed);
+        assert_eq!(unpinned.revision, 3);
+        assert_eq!(
+            unpinned
+                .pins
+                .iter()
+                .map(|pin| pin.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::newer"]
+        );
+        assert!(
+            !db.unpin_thread("thread::older")
+                .expect("unpin older again")
+                .0
+        );
+        assert_eq!(db.list_pinned_threads().expect("final page").revision, 3);
+    }
+
+    #[test]
+    fn reorder_thread_pins_handles_full_subset_unknown_and_stale_requests() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.pin_thread("thread::a").expect("pin a");
+        db.pin_thread("thread::b").expect("pin b");
+        let initial = db.pin_thread("thread::c").expect("pin c");
+        assert_eq!(initial.revision, 3);
+        let original_metadata = initial
+            .pins
+            .iter()
+            .map(|pin| (pin.thread_id.clone(), pin.pinned_at.clone()))
+            .collect::<BTreeSet<_>>();
+
+        let full = match db
+            .reorder_thread_pins(
+                vec![
+                    "thread::a".to_owned(),
+                    "thread::c".to_owned(),
+                    "thread::b".to_owned(),
+                ],
+                3,
+            )
+            .expect("full reorder")
+        {
+            ReorderThreadPinsResult::Updated(page) => page,
+            ReorderThreadPinsResult::Conflict(_) => panic!("fresh CAS conflicted"),
+        };
+        assert_eq!(full.revision, 4);
+        assert_eq!(
+            full.pins
+                .iter()
+                .map(|pin| (pin.thread_id.as_str(), pin.sort_order))
+                .collect::<Vec<_>>(),
+            vec![("thread::a", 0), ("thread::c", 1), ("thread::b", 2)]
         );
 
-        assert!(db.unpin_thread("thread::older").expect("unpin older"));
-        assert!(!db.unpin_thread("thread::older").expect("unpin older again"));
+        let subset = match db
+            .reorder_thread_pins(vec!["thread::b".to_owned()], 4)
+            .expect("subset reorder")
+        {
+            ReorderThreadPinsResult::Updated(page) => page,
+            ReorderThreadPinsResult::Conflict(_) => panic!("fresh CAS conflicted"),
+        };
+        assert_eq!(subset.revision, 5);
         assert_eq!(
-            db.list_pinned_threads()
-                .expect("list remaining")
-                .into_iter()
-                .map(|record| record.thread_id)
+            subset
+                .pins
+                .iter()
+                .map(|pin| pin.thread_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["thread::newer"],
+            vec!["thread::b", "thread::a", "thread::c"]
+        );
+
+        let unknown = match db
+            .reorder_thread_pins(
+                vec!["thread::unknown".to_owned(), "thread::c".to_owned()],
+                5,
+            )
+            .expect("unknown-id reorder")
+        {
+            ReorderThreadPinsResult::Updated(page) => page,
+            ReorderThreadPinsResult::Conflict(_) => panic!("fresh CAS conflicted"),
+        };
+        assert_eq!(unknown.revision, 6);
+        assert_eq!(
+            unknown
+                .pins
+                .iter()
+                .map(|pin| pin.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::c", "thread::b", "thread::a"]
+        );
+        assert_eq!(
+            unknown
+                .pins
+                .iter()
+                .map(|pin| (pin.thread_id.clone(), pin.pinned_at.clone()))
+                .collect::<BTreeSet<_>>(),
+            original_metadata,
+            "reorder must preserve membership and pin metadata"
+        );
+
+        let conflict = match db
+            .reorder_thread_pins(vec!["thread::a".to_owned()], 5)
+            .expect("stale reorder")
+        {
+            ReorderThreadPinsResult::Conflict(page) => page,
+            ReorderThreadPinsResult::Updated(_) => panic!("stale CAS unexpectedly succeeded"),
+        };
+        assert_eq!(conflict, unknown);
+        assert_eq!(db.list_pinned_threads().expect("GET page"), unknown);
+
+        assert!(matches!(
+            db.reorder_thread_pins(Vec::new(), 6),
+            Err(GaryxDbError::BadRequest(_))
+        ));
+        assert!(matches!(
+            db.reorder_thread_pins(vec!["thread::a".to_owned(), " thread::a ".to_owned()], 6,),
+            Err(GaryxDbError::BadRequest(_))
+        ));
+        assert_eq!(
+            db.list_pinned_threads().expect("unchanged page").revision,
+            6
+        );
+    }
+
+    #[test]
+    fn archive_and_runtime_delete_each_bump_pin_revision_once() {
+        let archived = GaryxDbService::memory().expect("archive db");
+        archived
+            .pin_thread("thread::archived")
+            .expect("archive candidate pin");
+        archived
+            .archive_thread_record("thread::archived")
+            .expect("archive");
+        assert_eq!(
+            archived
+                .list_pinned_threads()
+                .expect("archive page")
+                .revision,
+            2
+        );
+        archived
+            .archive_thread_record("thread::archived")
+            .expect("repeat archive");
+        assert_eq!(
+            archived
+                .list_pinned_threads()
+                .expect("repeat archive page")
+                .revision,
+            2
+        );
+
+        let deleted = GaryxDbService::memory().expect("delete db");
+        deleted
+            .pin_thread("thread::deleted")
+            .expect("delete candidate pin");
+        deleted
+            .delete_thread_record_with_projections("thread::deleted")
+            .expect("runtime delete");
+        assert_eq!(
+            deleted.list_pinned_threads().expect("delete page").revision,
+            2
+        );
+        deleted
+            .delete_thread_record_with_projections("thread::deleted")
+            .expect("repeat delete");
+        assert_eq!(
+            deleted
+                .list_pinned_threads()
+                .expect("repeat delete page")
+                .revision,
+            2
         );
     }
 

@@ -267,11 +267,15 @@ private struct GaryxThreadActionMenuPreferenceKey: PreferenceKey {
 
 extension View {
     func garyxThreadActionMenu(
+        dismissToken: Int = 0,
+        movementSuppressesMenu: Bool = false,
         primaryAction: @escaping () -> Void,
         items: @escaping () -> [GaryxThreadActionMenuItem]
     ) -> some View {
         modifier(
             GaryxThreadActionMenuModifier(
+                dismissToken: dismissToken,
+                movementSuppressesMenu: movementSuppressesMenu,
                 primaryAction: primaryAction,
                 itemsProvider: items
             )
@@ -284,6 +288,8 @@ extension View {
 }
 
 private struct GaryxThreadActionMenuModifier: ViewModifier {
+    let dismissToken: Int
+    let movementSuppressesMenu: Bool
     let primaryAction: () -> Void
     let itemsProvider: () -> [GaryxThreadActionMenuItem]
 
@@ -297,7 +303,7 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        content
+        interactionSurface(content)
             .background {
                 if presented != nil {
                     focusedSourceBackground
@@ -305,11 +311,9 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
                 }
             }
             .animation(focusAnimation, value: presented?.token)
-            // Keep this gesture simultaneous with the List's pan recognizer so
-            // scrolling still wins after movement. Inside the row, however,
-            // long press and tap are exclusive: once the menu gesture succeeds,
-            // releasing the same touch can never also open the thread.
-            .simultaneousGesture(primaryInteractionGesture)
+            .onChange(of: dismissToken) { _, _ in
+                presented = nil
+            }
             .anchorPreference(key: GaryxThreadActionMenuPreferenceKey.self, value: .bounds) { anchor in
                 guard let presented else { return nil }
                 return GaryxThreadActionMenuRequest(
@@ -326,6 +330,46 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
             }
     }
 
+    @ViewBuilder
+    private func interactionSurface(_ content: Content) -> some View {
+        if movementSuppressesMenu {
+            // iOS 26's native List reorder recognizer can win an exclusive
+            // long-press before the row gesture fires. Arm a stationary-only
+            // recognizer alongside it instead: crossing the movement allowance
+            // fails this menu gesture and leaves the native lift in control.
+            if #available(iOS 18.0, *) {
+                content
+                    .gesture(
+                        GaryxStationaryThreadMenuGesture(onRecognized: presentMenu)
+                    )
+                    .simultaneousGesture(TapGesture().onEnded(primaryAction))
+            } else {
+                content
+                    .simultaneousGesture(stationaryMenuGesture)
+                    .simultaneousGesture(TapGesture().onEnded(primaryAction))
+            }
+        } else {
+            // Keep this gesture simultaneous with the List's pan recognizer so
+            // scrolling still wins after movement. Inside the row, however,
+            // long press and tap are exclusive: once the menu gesture succeeds,
+            // releasing the same touch can never also open the thread.
+            content.simultaneousGesture(primaryInteractionGesture)
+        }
+    }
+
+    private var stationaryMenuGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.36, maximumDistance: 16)
+            .onEnded { _ in presentMenu() }
+    }
+
+    private func presentMenu() {
+        guard isEnabled else { return }
+        let items = itemsProvider()
+        guard items.contains(where: \.isEnabled) else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        presented = PresentedMenu(token: UUID(), items: items)
+    }
+
     private var primaryInteractionGesture: some Gesture {
         LongPressGesture(minimumDuration: 0.36, maximumDistance: 16)
             .exclusively(before: TapGesture())
@@ -333,10 +377,7 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
                 guard isEnabled else { return }
                 switch result {
                 case .first:
-                    let items = itemsProvider()
-                    guard items.contains(where: \.isEnabled) else { return }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    presented = PresentedMenu(token: UUID(), items: items)
+                    presentMenu()
                 case .second:
                     primaryAction()
                 }
@@ -364,6 +405,54 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
 
     private var focusAnimation: Animation? {
         reduceMotion ? nil : .timingCurve(0.22, 1, 0.36, 1, duration: 0.16)
+    }
+}
+
+@available(iOS 18.0, *)
+private struct GaryxStationaryThreadMenuGesture: UIGestureRecognizerRepresentable {
+    var onRecognized: () -> Void
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onRecognized: () -> Void
+
+        init(onRecognized: @escaping () -> Void) {
+            self.onRecognized = onRecognized
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+    }
+
+    func makeCoordinator(converter _: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator(onRecognized: onRecognized)
+    }
+
+    func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
+        let recognizer = UILongPressGestureRecognizer()
+        recognizer.minimumPressDuration = 0.36
+        recognizer.allowableMovement = 16
+        recognizer.cancelsTouchesInView = false
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(
+        _ recognizer: UILongPressGestureRecognizer,
+        context: Context
+    ) {
+        context.coordinator.onRecognized = onRecognized
+    }
+
+    func handleUIGestureRecognizerAction(
+        _ recognizer: UILongPressGestureRecognizer,
+        context: Context
+    ) {
+        guard recognizer.state == .began else { return }
+        context.coordinator.onRecognized()
     }
 }
 

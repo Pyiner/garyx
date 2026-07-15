@@ -5,7 +5,7 @@ import UIKit
 
 #if DEBUG
 @MainActor
-final class GaryxHomeScrollPerformanceProbe: NSObject {
+final class GaryxHomeScrollPerformanceProbe: NSObject, ObservableObject {
     static let shared = GaryxHomeScrollPerformanceProbe()
 
     private let log = OSLog(subsystem: "com.garyx.mobile", category: "HomeScroll")
@@ -13,9 +13,13 @@ final class GaryxHomeScrollPerformanceProbe: NSObject {
     private var displayLink: CADisplayLink?
     private var objectWillChangeCancellable: AnyCancellable?
     private var windowStartTimestamp: CFTimeInterval?
+    private var previousDisplayTimestamp: CFTimeInterval?
     private var elapsedFrameTime: CFTimeInterval = 0
     private var hitchTime: CFTimeInterval = 0
+    private var maxFrameInterval: CFTimeInterval = 0
     private var frameBudget: CFTimeInterval = 1.0 / 60.0
+    @Published private(set) var isRecording = false
+    @Published private(set) var latestReport: GaryxHomeScrollPerformanceReport?
     private(set) var rootBodyCount = 0
     private(set) var homeBodyCount = 0
     private(set) var rowBodyCount = 0
@@ -33,6 +37,8 @@ final class GaryxHomeScrollPerformanceProbe: NSObject {
 
     func beginWindow(label: StaticString = "home_scroll_probe") {
         resetCounters()
+        latestReport = nil
+        isRecording = true
         os_signpost(.begin, log: log, name: "GaryxHomeScrollProbe", "%{public}s", "\(label)")
         displayLink?.invalidate()
         let link = CADisplayLink(target: self, selector: #selector(stepDisplayLink(_:)))
@@ -55,24 +61,30 @@ final class GaryxHomeScrollPerformanceProbe: NSObject {
             rowBodyCount: rowBodyCount,
             modelPublishCount: modelPublishCount,
             homeListStoreApplyCount: homeListStoreApplyCount,
-            hitchTimeRatio: elapsedFrameTime > 0 ? hitchTime / elapsedFrameTime : 0
+            hitchTimeRatio: elapsedFrameTime > 0 ? hitchTime / elapsedFrameTime : 0,
+            maxFrameInterval: maxFrameInterval,
+            worstFrameDelta: max(0, maxFrameInterval - frameBudget)
         )
+        isRecording = false
+        latestReport = report
         os_signpost(
             .end,
             log: log,
             name: "GaryxHomeScrollProbe",
-            "root=%{public}d home=%{public}d row=%{public}d model=%{public}d store_apply=%{public}d hitch_ratio=%{public}.4f",
+            "root=%{public}d home=%{public}d row=%{public}d model=%{public}d store_apply=%{public}d hitch_ratio=%{public}.4f max_frame_interval=%{public}.6f worst_frame_delta=%{public}.6f",
             report.rootBodyCount,
             report.homeBodyCount,
             report.rowBodyCount,
             report.modelPublishCount,
             report.homeListStoreApplyCount,
-            report.hitchTimeRatio
+            report.hitchTimeRatio,
+            report.maxFrameInterval,
+            report.worstFrameDelta
         )
         logger.info(
-            "GARYX_HOME_SCROLL_PROBE root_body=\(report.rootBodyCount, privacy: .public) home_body=\(report.homeBodyCount, privacy: .public) row_body=\(report.rowBodyCount, privacy: .public) model_publish=\(report.modelPublishCount, privacy: .public) home_store_apply=\(report.homeListStoreApplyCount, privacy: .public) hitch_time_ratio=\(report.hitchTimeRatio, privacy: .public)"
+            "GARYX_HOME_SCROLL_PROBE root_body=\(report.rootBodyCount, privacy: .public) home_body=\(report.homeBodyCount, privacy: .public) row_body=\(report.rowBodyCount, privacy: .public) model_publish=\(report.modelPublishCount, privacy: .public) home_store_apply=\(report.homeListStoreApplyCount, privacy: .public) hitch_time_ratio=\(report.hitchTimeRatio, privacy: .public) max_frame_interval=\(report.maxFrameInterval, privacy: .public) worst_frame_delta=\(report.worstFrameDelta, privacy: .public)"
         )
-        let line = "GARYX_HOME_SCROLL_PROBE root_body=\(report.rootBodyCount) home_body=\(report.homeBodyCount) row_body=\(report.rowBodyCount) model_publish=\(report.modelPublishCount) home_store_apply=\(report.homeListStoreApplyCount) hitch_time_ratio=\(report.hitchTimeRatio)"
+        let line = report.machineReadableLine
         print(line)
         writeReport(line)
         return report
@@ -107,11 +119,18 @@ final class GaryxHomeScrollPerformanceProbe: NSObject {
         if windowStartTimestamp == nil {
             windowStartTimestamp = link.timestamp
         }
-        let interval = max(0, link.targetTimestamp - link.timestamp)
-        if interval > 0 {
-            frameBudget = min(max(interval, 1.0 / 120.0), 1.0 / 30.0)
+        let scheduledInterval = max(0, link.targetTimestamp - link.timestamp)
+        if scheduledInterval > 0 {
+            frameBudget = min(max(scheduledInterval, 1.0 / 120.0), 1.0 / 30.0)
         }
+        guard let previousDisplayTimestamp else {
+            self.previousDisplayTimestamp = link.timestamp
+            return
+        }
+        let interval = max(0, link.timestamp - previousDisplayTimestamp)
+        self.previousDisplayTimestamp = link.timestamp
         elapsedFrameTime += interval
+        maxFrameInterval = max(maxFrameInterval, interval)
         let hitchThreshold = frameBudget * 1.5
         if interval > hitchThreshold {
             hitchTime += interval - frameBudget
@@ -120,8 +139,10 @@ final class GaryxHomeScrollPerformanceProbe: NSObject {
 
     private func resetCounters() {
         windowStartTimestamp = nil
+        previousDisplayTimestamp = nil
         elapsedFrameTime = 0
         hitchTime = 0
+        maxFrameInterval = 0
         rootBodyCount = 0
         homeBodyCount = 0
         rowBodyCount = 0
@@ -143,5 +164,11 @@ struct GaryxHomeScrollPerformanceReport: Equatable {
     var modelPublishCount: Int
     var homeListStoreApplyCount: Int
     var hitchTimeRatio: Double
+    var maxFrameInterval: Double
+    var worstFrameDelta: Double
+
+    var machineReadableLine: String {
+        "GARYX_HOME_SCROLL_PROBE root_body=\(rootBodyCount) home_body=\(homeBodyCount) row_body=\(rowBodyCount) model_publish=\(modelPublishCount) home_store_apply=\(homeListStoreApplyCount) hitch_time_ratio=\(hitchTimeRatio) max_frame_interval=\(maxFrameInterval) worst_frame_delta=\(worstFrameDelta)"
+    }
 }
 #endif
