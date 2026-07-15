@@ -24,8 +24,6 @@ import {
 
 import type {
   BrowserAnnotationCommentRequest,
-  DesktopTerminalEvent,
-  DesktopTerminalState,
   DesktopWorkspaceFilePreview,
   DesktopWorkspaceMode,
 } from "@shared/contracts";

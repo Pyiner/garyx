@@ -38,7 +38,7 @@ function avatarDataUrl(
 
 function normalizeAvatarImage(
   bytes: Buffer,
-  fallbackMediaType: string,
+  _fallbackMediaType: string,
 ): GeneratedCustomAgentAvatar {
   const image = nativeImage.createFromBuffer(bytes);
   if (image.isEmpty()) {

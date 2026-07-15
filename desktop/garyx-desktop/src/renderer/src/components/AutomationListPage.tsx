@@ -1,4 +1,3 @@
-import React from 'react';
 import { Plus, Settings2, Trash } from 'lucide-react';
 import {
   DropdownMenu,

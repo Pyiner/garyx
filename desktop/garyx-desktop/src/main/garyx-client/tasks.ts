@@ -334,29 +334,6 @@ function mapCreatedTaskEnvelope(value: unknown, path: string): DesktopTaskSummar
   };
 }
 
-function mapTaskDetailEnvelope(value: unknown, path: string): DesktopTaskSummary {
-  const record = requireContractRecord(value, path);
-  const threadPath = `${path}.thread`;
-  const thread = requireContractRecord(
-    requireContractField(record, "thread", path),
-    threadPath,
-  );
-  const agentId = hasContractField(thread, "agent_id")
-    ? thread.agent_id
-    : null;
-  return {
-    ...mapTaskEnvelopeIdentity(record, path),
-    ...mapTaskEnvelopeFields(record, path),
-    runtimeAgentId: agentId === null
-      ? ""
-      : requireContractString(agentId, `${threadPath}.agent_id`),
-    replyCount: requireContractNonNegativeInteger(
-      requireContractField(thread, "message_count", threadPath),
-      `${threadPath}.message_count`,
-    ),
-  };
-}
-
 function requiredNullableString(
   record: Record<string, unknown>,
   field: string,

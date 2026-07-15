@@ -783,7 +783,7 @@ export class TranscriptLifecycle {
       deferPersist?: boolean;
     },
   ): void {
-    const { setDesktopState } = this.requireDeps();
+    this.requireDeps();
     if (!options?.mirrorAlreadyApplied) {
       this.port.applyRemoteTranscript(threadId, transcript);
     }

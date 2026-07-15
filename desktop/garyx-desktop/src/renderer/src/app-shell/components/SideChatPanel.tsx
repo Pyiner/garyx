@@ -27,7 +27,6 @@ import {
 } from "react";
 
 import type {
-  BrowserAnnotationCommentRequest,
   DesktopApiProviderType,
   DesktopChannelEndpoint,
   DesktopCustomAgent,

@@ -13,48 +13,26 @@ import { startTransition } from "react";
 import { PanelLeft } from "lucide-react";
 
 import {
-  type CreateAutomationInput,
   type DesktopApiProviderType,
-  type DesktopAutomationActivityEntry,
-  type DesktopAutomationActivityFeed,
-  type DesktopMcpServer,
-  type DesktopAutomationSchedule,
   type DesktopBotConsoleSummary,
   type DesktopCustomAgent,
-  type GatewaySettingsPayload,
-  type GatewaySettingsSource,
-  type ConfiguredBot,
   type ConnectionStatus,
   type DesktopChatStreamEvent,
   type DesktopChannelEndpoint,
   type DesktopProviderModels,
-  type DesktopSettings,
   type DesktopSessionProviderHint,
   type DesktopState,
   type DesktopThreadSummary,
   type DesktopWorkspace,
-  type DesktopWorkspaceFileEntry,
-  type DesktopWorkspaceFileListing,
-  type DesktopWorkspaceFilePreview,
   type DesktopWorkspaceMode,
-  type SlashCommand,
   type ThreadRuntimeInfo,
   type ThreadTranscript,
-  type TranscriptMessage,
-  type UpdateMcpServerInput,
-  type UpdateSlashCommandInput,
-  type UpsertMcpServerInput,
-  type UpsertSlashCommandInput,
   type WindowLayoutBootstrap,
 } from "@shared/contracts";
 import { desktopStateWithoutThread } from "@shared/desktop-state";
-import {
-  extractToolUseId,
-  isToolRole,
-} from "@shared/transcript-sync";
+import { isToolRole } from "@shared/transcript-sync";
 
 import {
-  initialMessageMachineState,
   isRuntimeBusy,
   selectGlobalActiveThreadId,
   selectQueueIntentIds,
@@ -87,18 +65,12 @@ import {
 import { BotConversationSidebar } from "../BotConversationSidebar";
 import { WorkspaceConversationSidebar } from "../WorkspaceConversationSidebar";
 import { RecentConversationSidebar } from "../RecentConversationSidebar";
-import { ComposerQueue } from "../ComposerQueue";
 import { ConversationHeaderActions } from "../ConversationHeaderActions";
 import {
   ConversationTitleRoot,
   type ConversationTitleHandle,
 } from "./components/ConversationTitleRoot";
-import { NewThreadEmptyState } from "../NewThreadEmptyState";
 import { ToastViewportHost, useToastActions } from "../toast-provider";
-import { ToolTraceGroup } from "../tool-trace";
-import {
-  RichMessageContent,
-} from "../message-rich-content";
 import {
   deriveThreadComposerControlModel,
   deriveThreadActivityModel,
@@ -116,17 +88,13 @@ import {
   botGroupIdForEndpoint,
   buildBotGroups,
   channelDisplayName,
-  latestEndpointActivity,
-  primaryBotEndpoint,
 } from "../bot-console-model";
 import {
   automationForLatestThread,
   buildWorkspaceThreadGroups,
-  endpointThreadTitle,
   isSelectableNewThreadWorkspace,
   newThreadWorkspaceOptions,
   pickPreferredWorkspace,
-  selectedAutomation,
   selectedThread,
   selectedWorkspace,
   visibleWorkspaceList,
@@ -138,8 +106,6 @@ import {
   resolveThreadAvatarIdentity,
 } from "../thread-avatar";
 import {
-  bindEndpointToThread,
-  detachEndpointFromThread,
   ensureThread,
   scheduleThreadHistoryRefresh,
   selectWorkspaceForThread,
@@ -147,26 +113,14 @@ import {
   updateThreadBotBinding,
 } from "../thread-controller";
 import {
-  AutomationIcon,
-  BackIcon,
-  NewThreadIcon,
   RecentIcon,
-  SettingsIcon,
-  SkillsIcon,
-  isLocalSettingsTab,
 } from "./icons";
 import type {
-  AutomationDraft,
-  AutomationDialogState,
   BoundBot,
-  ContentView,
-  GatewayIndicatorTone,
   LiveStreamState,
-  LiveStreamStatus,
   MessageMap,
   PendingAutomationRun,
   UiTranscriptMessage,
-  WorkspaceDirectoryState,
 } from "./types";
 import { AppLeftRail } from "./components/AppLeftRail";
 import { ThreadPage } from "./components/ThreadPage";
@@ -197,8 +151,6 @@ import {
 } from "./components/MemoryDialogRoot";
 import {
   NEW_THREAD_DRAFT_THREAD_ID,
-  browserAnnotationScreenshotImages,
-  composePromptWithBrowserAnnotations,
   prepareAttachmentUploads,
   useMessageDispatchController,
   type SeededTurn,
@@ -211,7 +163,6 @@ import {
 } from "../gateway-mirror/react";
 import { useSettingsController } from "./useSettingsController";
 import {
-  messageTailSignature,
   scrollMessagesToLatest,
   type TranscriptScrollIntent,
 } from "./components/thread-transcript-scroll";
@@ -222,11 +173,7 @@ import {
 } from "./side-chat-ops";
 import { SideChatPanel } from "./components/SideChatPanel";
 import { loadThreadHistory } from "../thread-controller";
-import { SELECTED_THREAD_STREAM_CONSUMER_ID } from "../gateway-mirror/transcript-lifecycle";
 import {
-  isMissingThreadTranscript,
-  messagesNearEarlierUserTurnBoundary,
-  normalizeMessageText,
   transcriptHasAutomationResponse,
 } from "../gateway-mirror/transcript-materialize";
 import {
@@ -235,11 +182,6 @@ import {
 } from "./pending-ack-intents";
 import { useWorkspaceController } from "./useWorkspaceController";
 import {
-  compactPathLabel,
-  expandWorkspaceDirectoryState,
-  findWorkspaceFileEntry,
-  parentDirectoryPath,
-  resolveLocalFilePreviewTarget,
   workspaceDirectoryKey,
   workspaceFileAbsolutePath,
 } from "./workspace-helpers";
@@ -455,31 +397,6 @@ function pendingInputOriginRefsForThread(
         ]
       : [];
   });
-}
-
-function toRemoteTranscript(
-  messages: TranscriptMessage[],
-): UiTranscriptMessage[] {
-  return messages.map((message) => ({
-    ...message,
-    localState: "remote_final",
-  }));
-}
-
-function isLoopContinuationMessage(message: TranscriptMessage): boolean {
-  return (
-    Boolean(message.internal) && message.internalKind === "loop_continuation"
-  );
-}
-
-function displayTranscriptMessageText(message: UiTranscriptMessage): string {
-  if (isLoopContinuationMessage(message) && message.role === "system") {
-    return (
-      normalizeMessageText(message.text) ||
-      "System triggered an automatic continuation."
-    );
-  }
-  return message.text;
 }
 
 const STARTUP_HYDRATION_RETRY_DELAYS_MS = [0, 300, 650, 1_100, 1_700];
@@ -790,7 +707,7 @@ export function AppShell() {
   const [workspaceMutation, setWorkspaceMutation] = useState<
     "add" | "assign" | "relink" | "remove" | null
   >(null);
-  const [pinnedThreadsVersion, setPinnedThreadsVersion] = useState(0);
+  const [, setPinnedThreadsVersion] = useState(0);
   const [addWorkspaceDialog, setAddWorkspaceDialog] = useState<{
     source: "new-thread" | "task";
     initialPath?: string;
@@ -911,8 +828,6 @@ export function AppShell() {
     mcpServersLoading,
     mcpServersSaving,
     mutateGatewaySettingsDraft,
-    persistLocalSettings,
-    refreshSettingsTabResources,
     savingSettings,
     setGatewaySettingsStatus,
     setLocalSettingsStatus,
@@ -1403,9 +1318,6 @@ export function AppShell() {
   function clearLiveStreamState(threadId: string) {
     updateLiveStreamState(threadId, () => null);
   }
-  function getLiveStreamState(threadId: string): LiveStreamState | null {
-    return liveStreamStateRef.current[threadId] || null;
-  }
   function updateMessagesByThread(
     updater: (current: MessageMap) => MessageMap,
   ): MessageMap {
@@ -1428,9 +1340,6 @@ export function AppShell() {
     },
   ) {
     gatewayMirror.acceptRemoteTranscript(threadId, transcript, options);
-  }
-  async function loadOlderThreadHistoryPage(threadId: string) {
-    await gatewayMirror.loadOlderThreadHistoryPage(threadId);
   }
   function forceReleaseThreadRuntime(threadId: string) {
     gatewayMirror.forceReleaseThreadRuntime(threadId);
@@ -1713,24 +1622,19 @@ export function AppShell() {
     activeWorkspaceDirectoryState,
     expandedWorkspaceDirectories,
     handleLocalWorkspaceFileLinkClick,
-    handleRefreshWorkspaceFiles,
     handleWorkspaceFileEntryActivate,
     loadWorkspaceDirectory,
-    loadWorkspaceFilePreview,
     selectedWorkspaceFile,
     selectedWorkspaceFileEntry,
     closeWorkspacePreview,
     setExpandedWorkspaceDirectories,
-    setWorkspacePreviewModalOpen,
     uploadWorkspaceFilesToActiveWorkspace,
     workspaceDirectories,
     workspaceFilePreview,
     workspaceFilePreviewError,
     workspaceFilePreviewLoading,
-    workspaceFileUploadPending,
     workspacePreviewModalOpen,
     workspacePreviewTitle,
-    workspaceUploadDirectoryPath,
     workspaceUploadInputRef,
   } = useWorkspaceController({
     activeWorkspacePath,
@@ -1836,9 +1740,6 @@ export function AppShell() {
     [activeThreadBotId, botGroups],
   );
 
-  const activeThreadHasMessages = Boolean(
-    (activeThread?.messageCount ?? 0) > 0 || activeMessages.length > 0,
-  );
   const isSettingsView = contentView === "settings";
   const isBrowserView = contentView === "browser";
   const isBotsView = contentView === "bots";
@@ -2480,12 +2381,6 @@ export function AppShell() {
     updateLiveStreamState,
     updateMessagesByThread,
   });
-  const providerSelectorLocked = Boolean(
-    composerLocked ||
-    isActiveSendingThread ||
-    activeThreadHasMessages ||
-    (historyLoading && Boolean(activeThread?.messageCount)),
-  );
   const conversationContextText = isAutomationView
     ? `${desktopState?.automations.length || 0} scheduled runs`
     : isCapsulesView
@@ -3714,27 +3609,6 @@ export function AppShell() {
       },
     });
     return false;
-  }
-
-  async function handleTakeOverEndpoint(endpointKey: string) {
-    await bindEndpointToThread({
-      api: getDesktopApi(),
-      endpointKey,
-      threadId: activeThread?.id,
-      setBindingMutation,
-      setError,
-      setDesktopState,
-    });
-  }
-
-  async function handleDetachEndpoint(endpointKey: string) {
-    await detachEndpointFromThread({
-      api: getDesktopApi(),
-      endpointKey,
-      setBindingMutation,
-      setError,
-      setDesktopState,
-    });
   }
 
   async function handleSetBotBinding(botId: string | null) {

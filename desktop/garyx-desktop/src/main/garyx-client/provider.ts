@@ -28,16 +28,6 @@ interface ProviderRecentSessionsPayload {
   sessions?: unknown[];
 }
 
-interface ProviderModelOptionPayload {
-  id?: unknown;
-  label?: unknown;
-  description?: unknown;
-  recommended?: unknown;
-  default_reasoning_effort?: unknown;
-  supported_reasoning_efforts?: unknown;
-  service_tiers?: unknown;
-}
-
 interface ProviderModelsPayload {
   provider_type?: unknown;
   supports_model_selection?: unknown;
@@ -49,36 +39,6 @@ interface ProviderModelsPayload {
   default_model?: unknown;
   default_reasoning_effort?: unknown;
   source?: unknown;
-  error?: unknown;
-}
-
-interface UsageWindowPayload {
-  used_percent?: unknown;
-  remaining_percent?: unknown;
-  resets_at?: unknown;
-  reset_after_seconds?: unknown;
-}
-
-interface ModelUsagePayload {
-  id?: unknown;
-  name?: unknown;
-  remaining_fraction?: unknown;
-  remaining_percent?: unknown;
-  used_percent?: unknown;
-  resets_at?: unknown;
-  reset_after_seconds?: unknown;
-  description?: unknown;
-}
-
-interface ProviderUsagePayload {
-  id?: unknown;
-  name?: unknown;
-  available?: unknown;
-  stale?: unknown;
-  plan?: unknown;
-  weekly?: unknown;
-  session?: unknown;
-  models?: unknown;
   error?: unknown;
 }
 

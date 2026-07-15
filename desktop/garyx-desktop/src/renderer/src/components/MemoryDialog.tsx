@@ -1,5 +1,3 @@
-import React from 'react';
-
 import type { DesktopMemoryDocumentScope } from '@shared/contracts';
 
 import { Badge } from '@/components/ui/badge';

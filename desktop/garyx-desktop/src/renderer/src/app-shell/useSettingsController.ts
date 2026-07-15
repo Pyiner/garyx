@@ -15,7 +15,7 @@ import {
   type UpsertSlashCommandInput,
 } from '@shared/contracts';
 
-import { SETTINGS_TABS, type SettingsTabId } from '../settings-tabs';
+import type { SettingsTabId } from '../settings-tabs';
 import {
   cloneJson,
   ensureGatewayConfig,

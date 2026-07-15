@@ -88,10 +88,6 @@ import { resolveThreadFilePreviewTarget } from "../workspace-helpers";
 import { recordTranscriptRender } from "../transcript-render-probe";
 import { transcriptRenderRowPropsEqual } from "./thread-render-row-equality";
 
-function normalizeMessageText(value: string | undefined): string {
-  return value?.trim() || "";
-}
-
 const LOOP_CONTINUATION_SUMMARY = "In loop, continue.";
 
 function isLoopContinuationMessage(message: TranscriptMessage): boolean {
@@ -579,9 +575,6 @@ export function ThreadPage({
   activeQueue,
   renderState,
   activeThreadSummary,
-  activeThreadTitle,
-  activeThreadRunId,
-  availableWorkspaceCount,
   composer,
   composerAttachmentInputRef,
   composerBrowserAnnotations,
@@ -662,7 +655,6 @@ export function ThreadPage({
   onSteerQueuedPrompt,
   onOpenThreadById,
   onOpenCapsule,
-  preferredWorkspaceForNewThread,
   selectableNewThreadWorkspaces,
   selectedThreadId,
   showAutomationRunInitialPlaceholder,
@@ -673,7 +665,6 @@ export function ThreadPage({
   taskTreeDocked,
   threadLayoutStyle,
   threadAvatarCatalog,
-  visibleRemoteAwaitingAckInputs,
   visibleRemotePendingInputs,
   workspaceMutation,
 }: ThreadPageProps) {
