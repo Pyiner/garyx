@@ -70,6 +70,23 @@ pub enum LegacyBootImportError {
     ImportFailed(ThreadRecordImportSummary),
 }
 
+#[async_trait]
+pub(crate) trait LegacyArchiveReader: Send + Sync {
+    async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError>;
+    async fn get(&self, key: &str) -> Result<Option<Value>, ThreadStoreError>;
+}
+
+#[async_trait]
+impl LegacyArchiveReader for FileThreadStore {
+    async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
+        ThreadStore::list_keys(self, prefix).await
+    }
+
+    async fn get(&self, key: &str) -> Result<Option<Value>, ThreadStoreError> {
+        ThreadStore::get(self, key).await
+    }
+}
+
 trait ArchiveLockHandle: Send + Sync {
     fn try_lock_exclusive(&self) -> std::io::Result<()>;
 }
@@ -126,7 +143,7 @@ impl ArchiveFs for RealArchiveFs {
 
 #[async_trait]
 trait ArchiveSourceFactory: std::fmt::Debug + Send + Sync {
-    async fn open(&self, data_dir: &Path) -> std::io::Result<Arc<dyn ThreadStore>>;
+    async fn open(&self, data_dir: &Path) -> std::io::Result<Arc<dyn LegacyArchiveReader>>;
 }
 
 #[derive(Debug, Default)]
@@ -134,7 +151,7 @@ struct FileArchiveSourceFactory;
 
 #[async_trait]
 impl ArchiveSourceFactory for FileArchiveSourceFactory {
-    async fn open(&self, data_dir: &Path) -> std::io::Result<Arc<dyn ThreadStore>> {
+    async fn open(&self, data_dir: &Path) -> std::io::Result<Arc<dyn LegacyArchiveReader>> {
         Ok(Arc::new(FileThreadStore::new(data_dir).await?))
     }
 }
@@ -233,7 +250,8 @@ async fn run_legacy_boot_import_with(
             source,
         }
     })?;
-    let summary = import_thread_records(garyx_db, &source, sqlite_store, transcript_store).await?;
+    let summary =
+        import_thread_records(garyx_db, source.as_ref(), sqlite_store, transcript_store).await?;
     garyx_db.commit_legacy_import(summary.source_keys, recovery)?;
 
     let pending = retire_archive(garyx_db, data_dir, archive_fs).await;
@@ -300,7 +318,7 @@ async fn archive_exists(
 
 async fn import_thread_records(
     garyx_db: &Arc<GaryxDbService>,
-    source: &Arc<dyn ThreadStore>,
+    source: &dyn LegacyArchiveReader,
     sqlite_store: &Arc<dyn ThreadStore>,
     transcript_store: &Arc<ThreadTranscriptStore>,
 ) -> Result<ThreadRecordImportSummary, LegacyBootImportError> {
@@ -503,13 +521,12 @@ async fn retire_archive(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::fmt;
     use std::io::ErrorKind;
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use garyx_router::{AtomicRecordMerge, InMemoryThreadStore};
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -650,7 +667,7 @@ mod tests {
     }
 
     struct StaticSourceFactory {
-        source: Arc<dyn ThreadStore>,
+        source: Arc<dyn LegacyArchiveReader>,
         fail_once: AtomicBool,
         calls: AtomicUsize,
     }
@@ -665,7 +682,7 @@ mod tests {
     }
 
     impl StaticSourceFactory {
-        fn new(source: Arc<dyn ThreadStore>) -> Self {
+        fn new(source: Arc<dyn LegacyArchiveReader>) -> Self {
             Self {
                 source,
                 fail_once: AtomicBool::new(false),
@@ -680,7 +697,7 @@ mod tests {
 
     #[async_trait]
     impl ArchiveSourceFactory for StaticSourceFactory {
-        async fn open(&self, _data_dir: &Path) -> std::io::Result<Arc<dyn ThreadStore>> {
+        async fn open(&self, _data_dir: &Path) -> std::io::Result<Arc<dyn LegacyArchiveReader>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if self.fail_once.swap(false, Ordering::SeqCst) {
                 return Err(std::io::Error::other("injected source-open failure"));
@@ -690,22 +707,29 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FaultSourceStore {
-        inner: InMemoryThreadStore,
+    struct TestLegacyArchiveReader {
+        records: StdMutex<HashMap<String, Value>>,
         fail_list_once: AtomicBool,
         fail_get_once: StdMutex<HashSet<String>>,
         miss_get_once: StdMutex<HashSet<String>>,
     }
 
-    impl fmt::Debug for FaultSourceStore {
+    impl fmt::Debug for TestLegacyArchiveReader {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
-                .debug_struct("FaultSourceStore")
+                .debug_struct("TestLegacyArchiveReader")
                 .finish_non_exhaustive()
         }
     }
 
-    impl FaultSourceStore {
+    impl TestLegacyArchiveReader {
+        fn seed(&self, key: impl Into<String>, data: Value) {
+            self.records
+                .lock()
+                .expect("legacy archive records")
+                .insert(key.into(), data);
+        }
+
         fn fail_list_once(&self) {
             self.fail_list_once.store(true, Ordering::SeqCst);
         }
@@ -726,57 +750,34 @@ mod tests {
     }
 
     #[async_trait]
-    impl ThreadStore for FaultSourceStore {
-        async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
-            if self
-                .fail_get_once
-                .lock()
-                .expect("get faults")
-                .remove(thread_id)
-            {
-                return Err(ThreadStoreError::Backend("injected get failure".to_owned()));
-            }
-            if self
-                .miss_get_once
-                .lock()
-                .expect("get misses")
-                .remove(thread_id)
-            {
-                return Ok(None);
-            }
-            self.inner.get(thread_id).await
-        }
-
-        async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
-            self.inner.set(thread_id, data).await
-        }
-
-        async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
-            self.inner.delete(thread_id).await
-        }
-
+    impl LegacyArchiveReader for TestLegacyArchiveReader {
         async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
             if self.fail_list_once.swap(false, Ordering::SeqCst) {
                 return Err(ThreadStoreError::Backend(
                     "injected list failure".to_owned(),
                 ));
             }
-            self.inner.list_keys(prefix).await
+            let records = self.records.lock().expect("legacy archive records");
+            Ok(records
+                .keys()
+                .filter(|key| prefix.is_none_or(|prefix| key.starts_with(prefix)))
+                .cloned()
+                .collect())
         }
 
-        async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
-            self.inner.exists(thread_id).await
-        }
-
-        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-            self.inner.update(thread_id, updates).await
-        }
-
-        async fn update_many_atomic(
-            &self,
-            entries: Vec<AtomicRecordMerge>,
-        ) -> Result<(), ThreadStoreError> {
-            self.inner.update_many_atomic(entries).await
+        async fn get(&self, key: &str) -> Result<Option<Value>, ThreadStoreError> {
+            if self.fail_get_once.lock().expect("get faults").remove(key) {
+                return Err(ThreadStoreError::Backend("injected get failure".to_owned()));
+            }
+            if self.miss_get_once.lock().expect("get misses").remove(key) {
+                return Ok(None);
+            }
+            Ok(self
+                .records
+                .lock()
+                .expect("legacy archive records")
+                .get(key)
+                .cloned())
         }
     }
 
@@ -863,7 +864,7 @@ mod tests {
     }
 
     struct BlockingListStore {
-        inner: InMemoryThreadStore,
+        inner: TestLegacyArchiveReader,
         entered: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
         blocked: AtomicBool,
@@ -878,19 +879,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl ThreadStore for BlockingListStore {
-        async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
-            self.inner.get(thread_id).await
-        }
-
-        async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
-            self.inner.set(thread_id, data).await
-        }
-
-        async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
-            self.inner.delete(thread_id).await
-        }
-
+    impl LegacyArchiveReader for BlockingListStore {
         async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
             if !self.blocked.swap(true, Ordering::SeqCst) {
                 self.entered.notify_one();
@@ -899,12 +888,8 @@ mod tests {
             self.inner.list_keys(prefix).await
         }
 
-        async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
-            self.inner.exists(thread_id).await
-        }
-
-        async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-            self.inner.update(thread_id, updates).await
+        async fn get(&self, key: &str) -> Result<Option<Value>, ThreadStoreError> {
+            self.inner.get(key).await
         }
     }
 
@@ -1019,7 +1004,7 @@ mod tests {
             .expect("retirement marker");
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        let source_factory = StaticSourceFactory::new(Arc::new(InMemoryThreadStore::new()));
+        let source_factory = StaticSourceFactory::new(Arc::new(TestLegacyArchiveReader::default()));
         let archive_fs = RecordingArchiveFs::default();
 
         let outcome = run_with_fakes(
@@ -1044,7 +1029,7 @@ mod tests {
         let db = test_db();
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        let source_factory = StaticSourceFactory::new(Arc::new(InMemoryThreadStore::new()));
+        let source_factory = StaticSourceFactory::new(Arc::new(TestLegacyArchiveReader::default()));
         let archive_fs = RecordingArchiveFs::default();
 
         let first = run_with_fakes(
@@ -1086,7 +1071,8 @@ mod tests {
             db.fail_test_db_call(TestDbFaultPoint::LegacyMarkerPairRead, occurrence);
             let transcripts = Arc::new(ThreadTranscriptStore::memory());
             let target = sqlite_target(&db, &transcripts);
-            let source_factory = StaticSourceFactory::new(Arc::new(InMemoryThreadStore::new()));
+            let source_factory =
+                StaticSourceFactory::new(Arc::new(TestLegacyArchiveReader::default()));
             let archive_fs = RecordingArchiveFs::default();
 
             assert!(
@@ -1126,13 +1112,11 @@ mod tests {
         db.fail_test_db_call(TestDbFaultPoint::LegacyImportCommit, 1);
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
-        put(
-            source.as_ref(),
+        let source = Arc::new(TestLegacyArchiveReader::default());
+        source.seed(
             "thread::commit-retry",
             json!({"thread_id": "thread::commit-retry", "label": "legacy"}),
-        )
-        .await;
+        );
         let factory = StaticSourceFactory::new(source);
         let archive_fs = RecordingArchiveFs::default();
 
@@ -1176,7 +1160,7 @@ mod tests {
         db.fail_test_db_call(TestDbFaultPoint::LegacyImportCommit, 1);
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        let factory = StaticSourceFactory::new(Arc::new(InMemoryThreadStore::new()));
+        let factory = StaticSourceFactory::new(Arc::new(TestLegacyArchiveReader::default()));
         let archive_fs = RecordingArchiveFs::default();
 
         assert!(
@@ -1217,7 +1201,7 @@ mod tests {
         db.fail_test_db_call(TestDbFaultPoint::LegacyRetirementMarkerWrite, 1);
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        let factory = StaticSourceFactory::new(Arc::new(InMemoryThreadStore::new()));
+        let factory = StaticSourceFactory::new(Arc::new(TestLegacyArchiveReader::default()));
         let archive_fs = RecordingArchiveFs::default();
 
         assert_eq!(
@@ -1258,7 +1242,7 @@ mod tests {
             let db = test_db();
             let transcripts = Arc::new(ThreadTranscriptStore::memory());
             let target = sqlite_target(&db, &transcripts);
-            let factory = StaticSourceFactory::new(Arc::new(InMemoryThreadStore::new()));
+            let factory = StaticSourceFactory::new(Arc::new(TestLegacyArchiveReader::default()));
             let archive_fs = RecordingArchiveFs::default();
             if open_failure {
                 archive_fs.fail_open_once();
@@ -1297,7 +1281,7 @@ mod tests {
         let db = test_db();
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        let factory = StaticSourceFactory::new(Arc::new(InMemoryThreadStore::new()));
+        let factory = StaticSourceFactory::new(Arc::new(TestLegacyArchiveReader::default()));
         let archive_fs = RecordingArchiveFs::default();
         archive_fs.fail_exists_once(data_dir.path().join("threads"));
 
@@ -1371,7 +1355,7 @@ mod tests {
         let db = test_db();
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        let source = Arc::new(FaultSourceStore::default());
+        let source = Arc::new(TestLegacyArchiveReader::default());
         source.fail_list_once();
         let factory = StaticSourceFactory::new(source);
         let archive_fs = RecordingArchiveFs::default();
@@ -1413,14 +1397,9 @@ mod tests {
         let db = test_db();
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        let source = Arc::new(FaultSourceStore::default());
+        let source = Arc::new(TestLegacyArchiveReader::default());
         for key in ["thread::get-error", "thread::get-missing"] {
-            put(
-                source.as_ref(),
-                key,
-                json!({"thread_id": key, "label": key}),
-            )
-            .await;
+            source.seed(key, json!({"thread_id": key, "label": key}));
         }
         source.fail_get_once("thread::get-error");
         source.miss_get_once("thread::get-missing");
@@ -1468,14 +1447,12 @@ mod tests {
         let db = test_db();
         let transcripts = file_transcripts(data_dir.path()).await;
         let target = sqlite_target(&db, &transcripts);
-        let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let source = Arc::new(TestLegacyArchiveReader::default());
         let key = "thread::retired-workflow";
-        put(
-            source.as_ref(),
+        source.seed(
             key,
             json!({"thread_id": key, "thread_kind": "workflow_run"}),
-        )
-        .await;
+        );
         let transcript_path = transcripts.transcript_path(key).expect("transcript path");
         tokio::fs::create_dir(&transcript_path)
             .await
@@ -1527,17 +1504,15 @@ mod tests {
         let db = test_db();
         let transcripts = file_transcripts(data_dir.path()).await;
         let target = sqlite_target(&db, &transcripts);
-        let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let source = Arc::new(TestLegacyArchiveReader::default());
         let key = "thread::backfill-retry";
-        put(
-            source.as_ref(),
+        source.seed(
             key,
             json!({
                 "thread_id": key,
                 "messages": [{"role": "user", "content": "archive remains authoritative"}],
             }),
-        )
-        .await;
+        );
         let path = transcripts.transcript_path(key).expect("transcript path");
         tokio::fs::write(&path, b"structurally invalid transcript\n")
             .await
@@ -1612,19 +1587,17 @@ mod tests {
                 }),
                 None => Arc::clone(&base_target),
             };
-            let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+            let source = Arc::new(TestLegacyArchiveReader::default());
             for index in 0..3 {
                 let key = format!("thread::batch-{index}");
-                put(
-                    source.as_ref(),
+                source.seed(
                     &key,
                     json!({
                         "thread_id": key,
                         "updated_at": "2026-07-01T00:00:00Z",
                         "messages": [{"role": "user", "content": format!("message-{index}")}],
                     }),
-                )
-                .await;
+                );
             }
             let factory = StaticSourceFactory::new(source);
             let archive_fs = RecordingArchiveFs::default();
@@ -1691,19 +1664,17 @@ mod tests {
         let db = test_db();
         let transcripts = file_transcripts(data_dir.path()).await;
         let target = sqlite_target(&db, &transcripts);
-        let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let source = Arc::new(TestLegacyArchiveReader::default());
         let orphan = "thread::archived-orphan";
         let no_transcript = "thread::archived-without-transcript";
         for key in [orphan, no_transcript] {
-            put(
-                source.as_ref(),
+            source.seed(
                 key,
                 json!({
                     "thread_id": key,
                     "messages": [{"role": "user", "content": "must not resurrect"}],
                 }),
-            )
-            .await;
+            );
             assert!(!db.archive_thread_record(key).expect("seed tombstone"));
         }
         transcripts
@@ -1760,18 +1731,16 @@ mod tests {
             let db = test_db();
             let transcripts = file_transcripts(data_dir.path()).await;
             let target = sqlite_target(&db, &transcripts);
-            let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+            let source = Arc::new(TestLegacyArchiveReader::default());
             let key = if fail_read {
                 "thread::tombstone-read-error"
             } else {
                 "thread::tombstone-delete-error"
             };
-            put(
-                source.as_ref(),
+            source.seed(
                 key,
                 json!({"thread_id": key, "messages": [{"role": "user", "content": "dead"}]}),
-            )
-            .await;
+            );
             db.archive_thread_record(key).expect("seed tombstone");
             let path = transcripts.transcript_path(key).expect("transcript path");
             if fail_read {
@@ -1848,17 +1817,15 @@ mod tests {
             transcripts: Arc::clone(&transcripts),
             fired: AtomicBool::new(false),
         });
-        let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let source = Arc::new(TestLegacyArchiveReader::default());
         let key = "thread::residual-archive-race";
-        put(
-            source.as_ref(),
+        source.seed(
             key,
             json!({
                 "thread_id": key,
                 "messages": [{"role": "user", "content": "backfilled before tombstone race"}],
             }),
-        )
-        .await;
+        );
         let factory = StaticSourceFactory::new(source);
         let archive_fs = RecordingArchiveFs::default();
 
@@ -2158,7 +2125,7 @@ mod tests {
             json!({"thread_id": "thread::sqlite-sentinel", "label": "untouched"}),
         )
         .await;
-        let factory = StaticSourceFactory::new(Arc::new(InMemoryThreadStore::new()));
+        let factory = StaticSourceFactory::new(Arc::new(TestLegacyArchiveReader::default()));
         let archive_fs = RecordingArchiveFs::default();
 
         assert!(matches!(
@@ -2244,7 +2211,7 @@ mod tests {
                 json!({"thread_id": "thread::sentinel", "label": "untouched"}),
             )
             .await;
-            let factory = StaticSourceFactory::new(Arc::new(InMemoryThreadStore::new()));
+            let factory = StaticSourceFactory::new(Arc::new(TestLegacyArchiveReader::default()));
             let archive_fs = RecordingArchiveFs::default();
 
             assert!(matches!(
@@ -2292,13 +2259,11 @@ mod tests {
         db.fail_test_db_call(TestDbFaultPoint::LegacyImportCommit, 2);
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
-        put(
-            source.as_ref(),
+        let source = Arc::new(TestLegacyArchiveReader::default());
+        source.seed(
             "thread::recovery-crash",
             json!({"thread_id": "thread::recovery-crash", "label": "restored"}),
-        )
-        .await;
+        );
         let factory = StaticSourceFactory::new(source);
         let archive_fs = RecordingArchiveFs::default();
 
@@ -2635,17 +2600,15 @@ mod tests {
         let entered = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let source = Arc::new(BlockingListStore {
-            inner: InMemoryThreadStore::new(),
+            inner: TestLegacyArchiveReader::default(),
             entered: Arc::clone(&entered),
             release: Arc::clone(&release),
             blocked: AtomicBool::new(false),
         });
-        put(
-            source.as_ref(),
+        source.inner.seed(
             "thread::concurrent",
             json!({"thread_id": "thread::concurrent", "label": "legacy"}),
-        )
-        .await;
+        );
         let factory = Arc::new(StaticSourceFactory::new(source));
         let archive_fs = Arc::new(RecordingArchiveFs::default());
         let data_path = data_dir.path().to_path_buf();
@@ -2712,9 +2675,8 @@ mod tests {
             crate::assemble_sqlite_thread_store(Arc::clone(&db), Arc::clone(&transcripts), &bridge)
                 .expect("pure sqlite constructor");
         let key = "thread::legacy-task-order";
-        let source: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
-        put(
-            source.as_ref(),
+        let source = Arc::new(TestLegacyArchiveReader::default());
+        source.seed(
             key,
             json!({
                 "thread_id": key,
@@ -2722,8 +2684,7 @@ mod tests {
                 "task": {"number": 42, "title": "Imported legacy task", "status": "done"},
                 "updated_at": "2026-07-01T00:00:00Z",
             }),
-        )
-        .await;
+        );
         let factory = StaticSourceFactory::new(source);
         let archive_fs = RecordingArchiveFs::default();
 
