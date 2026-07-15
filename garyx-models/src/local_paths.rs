@@ -41,14 +41,6 @@ pub fn default_custom_agents_state_path() -> PathBuf {
     custom_agents_state_path_for_data_dir(&default_session_data_dir())
 }
 
-pub fn app_database_path_for_data_dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("app-database.sqlite3")
-}
-
-pub fn default_app_database_path() -> PathBuf {
-    app_database_path_for_data_dir(&default_session_data_dir())
-}
-
 pub fn garyx_database_path_for_data_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("garyx-db.sqlite3")
 }

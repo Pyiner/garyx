@@ -864,7 +864,7 @@ async fn ensure_thread_workspace_from_assignee_default(
     Ok(())
 }
 
-pub(crate) async fn ensure_created_task_thread_provider_from_bound_agent(
+async fn ensure_created_task_thread_provider_from_bound_agent(
     state: &Arc<AppState>,
     thread_id: &str,
 ) -> Result<(), TaskServiceError> {
@@ -922,7 +922,7 @@ pub(crate) async fn ensure_created_task_thread_provider_from_bound_agent(
     Ok(())
 }
 
-pub(crate) fn spawn_task_auto_dispatch(
+fn spawn_task_auto_dispatch(
     state: Arc<AppState>,
     thread_id: String,
     task_value: Value,

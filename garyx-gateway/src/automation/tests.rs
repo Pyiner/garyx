@@ -1,10 +1,7 @@
 use super::{
     AutomationThreadsParams, UpdateAutomationBody, automation_agent_id, automation_threads,
     build_automation_job, compile_schedule, infer_schedule_view, is_automation_job, parse_time_hm,
-    render_data_trigger_template, run_data_triggers_for_db_event, to_summary, update_automation,
-};
-use crate::app_db::{
-    AppDbEvent, AppDbFieldSpec, AppDbService, CreateDataTriggerBody, CreateTableBody,
+    to_summary, update_automation,
 };
 use crate::cron::{CronJob, CronService, JobRunStatus};
 use crate::garyx_db::AutomationThreadRunDraft;
@@ -18,7 +15,6 @@ use axum::{
 use chrono::Utc;
 use garyx_models::config::AutomationScheduleView;
 use garyx_models::config::{CronAction, CronJobConfig, CronJobKind, CronSchedule, GaryxConfig};
-use garyx_models::{Principal, TaskStatus, ThreadTask};
 use std::sync::Arc;
 
 #[test]
@@ -498,113 +494,4 @@ async fn automation_threads_endpoint_returns_generated_run_associations() {
         "generated_thread"
     );
     assert_eq!(payload["items"][0]["thread"]["excludeFromRecent"], true);
-}
-
-#[test]
-fn data_trigger_template_renders_db_event_fields() {
-    let event = AppDbEvent {
-        id: "evt_test".to_owned(),
-        event_type: "record.created".to_owned(),
-        table_name: "contacts".to_owned(),
-        record_id: Some("rec_test".to_owned()),
-        actor_type: None,
-        actor_id: None,
-        thread_id: None,
-        task_id: None,
-        schema_version: None,
-        before: None,
-        after: None,
-        created_at: "2030-05-01T08:30:00Z".to_owned(),
-    };
-
-    assert_eq!(
-        render_data_trigger_template(
-            "Handle {event_type} on {table_name}/{record_id} ({event_id})",
-            &event
-        ),
-        "Handle record.created on contacts/rec_test (evt_test)"
-    );
-}
-
-#[tokio::test]
-async fn data_trigger_with_agent_id_creates_and_dispatches_agent_task() {
-    let temp = tempfile::tempdir().unwrap();
-    let app_db = Arc::new(
-        AppDbService::open(temp.path().join("app.sqlite3")).expect("app db opens for test"),
-    );
-    app_db
-        .create_table(
-            CreateTableBody {
-                table_name: "contacts".to_owned(),
-                display_name: None,
-                fields: vec![AppDbFieldSpec {
-                    name: "name".to_owned(),
-                    field_type: "TEXT".to_owned(),
-                    not_null: false,
-                    unique: false,
-                    indexed: false,
-                    display_name: None,
-                    default_value: None,
-                }],
-            },
-            None,
-        )
-        .expect("table created");
-    let trigger = app_db
-        .create_data_trigger(CreateDataTriggerBody {
-            label: "Contact review".to_owned(),
-            table_name: "contacts".to_owned(),
-            event_type: "record.created".to_owned(),
-            title_template: "Review {record_id}".to_owned(),
-            body_template: "Handle {table_name}/{record_id}".to_owned(),
-            agent_id: Some("codex".to_owned()),
-            workspace_dir: Some(temp.path().join("workspace").to_string_lossy().to_string()),
-            enabled: true,
-        })
-        .expect("trigger created");
-    let mut config = GaryxConfig::default();
-    config.sessions.data_dir = Some(temp.path().join("data").to_string_lossy().to_string());
-    let state = AppStateBuilder::new(config).with_app_db(app_db).build();
-    let event = AppDbEvent {
-        id: "evt_test".to_owned(),
-        event_type: "record.created".to_owned(),
-        table_name: "contacts".to_owned(),
-        record_id: Some("rec_test".to_owned()),
-        actor_type: None,
-        actor_id: None,
-        thread_id: None,
-        task_id: None,
-        schema_version: None,
-        before: None,
-        after: None,
-        created_at: "2030-05-01T08:30:00Z".to_owned(),
-    };
-
-    let results = run_data_triggers_for_db_event(state.clone(), &event).await;
-
-    assert_eq!(results.len(), 1);
-    let result = &results[0];
-    assert_eq!(result["triggerId"], trigger.id);
-    assert_eq!(result["status"], "created");
-    assert_eq!(result["dispatch"]["queued"], true);
-    assert_eq!(result["dispatch"]["agent_id"], "codex");
-    let thread_id = result["threadId"].as_str().expect("thread id");
-    let record = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .unwrap()
-        .expect("task thread exists");
-    assert_eq!(record["agent_id"], "codex");
-    assert_eq!(record["provider_type"], "codex_app_server");
-    let task: ThreadTask = serde_json::from_value(record["task"].clone()).expect("task record");
-    assert_eq!(task.status, TaskStatus::InProgress);
-    assert_eq!(
-        task.assignee,
-        Some(Principal::Agent {
-            agent_id: "codex".to_owned()
-        })
-    );
-    assert_eq!(task.title, "Review rec_test");
 }

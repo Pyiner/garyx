@@ -8,7 +8,6 @@ use futures_util::{SinkExt, StreamExt};
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
 use garyx_gateway::api::thread_history;
-use garyx_gateway::app_db::AppDbService;
 use garyx_gateway::automation::{
     automation_activity, create_automation, delete_automation, get_automation, list_automations,
     run_automation_now, update_automation,
@@ -338,16 +337,12 @@ async fn make_state_with_recording_provider(provider: Arc<RecordingProvider>) ->
     tokio::fs::create_dir_all(cron_data_dir.join("cron").join("jobs"))
         .await
         .expect("create cron jobs dir");
-    let app_db = Arc::new(
-        AppDbService::open(cron_data_dir.join("app.sqlite3")).expect("create isolated app db"),
-    );
     let cron_service = Arc::new(garyx_gateway::CronService::new(cron_data_dir));
     let garyx_db = Arc::new(GaryxDbService::memory().expect("create in-memory garyx db"));
 
     let state = AppStateBuilder::new(config)
         .with_bridge(bridge)
         .with_cron_service(cron_service)
-        .with_app_db(app_db)
         .with_garyx_db(garyx_db)
         .build();
     state

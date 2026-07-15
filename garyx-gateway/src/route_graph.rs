@@ -6,7 +6,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::server::AppState;
 use crate::{
-    api, app_db, automation, capsules, chat, coding_usage, commands, dashboard, gateway_auth, mcp,
+    api, automation, capsules, chat, coding_usage, commands, dashboard, gateway_auth, mcp,
     mcp_config, provider_auth, restart_wake, routes, tasks, tool_image, workspace_files,
     workspaces,
 };
@@ -202,44 +202,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
             "/api/automations/{id}/activity",
             axum::routing::get(automation::automation_activity),
         )
-        .route(
-            "/api/automations/triggers/data",
-            axum::routing::get(automation::list_data_triggers)
-                .post(automation::create_data_trigger),
-        )
-        .route(
-            "/api/automations/triggers/data/{id}",
-            axum::routing::patch(automation::patch_data_trigger)
-                .delete(automation::delete_data_trigger),
-        )
-        .route(
-            "/api/db/tables",
-            axum::routing::get(app_db::list_tables).post(app_db::create_table),
-        )
-        .route(
-            "/api/db/tables/{table}",
-            axum::routing::get(app_db::get_schema).delete(app_db::drop_table),
-        )
-        .route(
-            "/api/db/tables/{table}/fields",
-            axum::routing::post(app_db::add_field),
-        )
-        .route(
-            "/api/db/tables/{table}/fields/{field}",
-            axum::routing::delete(app_db::drop_field),
-        )
-        .route(
-            "/api/db/tables/{table}/records",
-            axum::routing::post(app_db::insert_record),
-        )
-        .route(
-            "/api/db/tables/{table}/records/{id}",
-            axum::routing::get(app_db::get_record)
-                .patch(app_db::update_record)
-                .delete(app_db::delete_record),
-        )
-        .route("/api/db/sql", axum::routing::post(app_db::sql_query))
-        .route("/api/db/events", axum::routing::get(app_db::list_events))
         .route(
             "/api/custom-agents",
             axum::routing::get(api::list_custom_agents).post(api::create_custom_agent),

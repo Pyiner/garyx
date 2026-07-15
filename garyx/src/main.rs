@@ -22,34 +22,28 @@ const EMBEDDED_CCTTY_MCP_PROXY_ARG: &str = "__cctty-mcp-proxy";
 mod main_tests;
 
 use cli::{
-    AgentAction, AutoUpdateAction, AutomationAction, AutomationDataTriggerAction,
-    AutomationTriggerAction, BotAction, BotEndpointAction, ChannelsAction, Cli, CommandAction,
-    Commands, ConfigAction, DbAction, DbFieldAction, DbRecordAction, DbTableAction, GatewayAction,
-    LogsAction, PluginsAction, ProviderAction, TaskAction, ThreadAction, ToolAction,
+    AgentAction, AutoUpdateAction, AutomationAction, BotAction, BotEndpointAction, ChannelsAction,
+    Cli, CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, PluginsAction,
+    ProviderAction, TaskAction, ThreadAction, ToolAction,
 };
 use commands::{
     ProviderSetOptions, cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list,
     cmd_agent_update, cmd_agent_upsert, cmd_automation_activity, cmd_automation_create,
-    cmd_automation_data_trigger_create, cmd_automation_data_trigger_delete,
-    cmd_automation_data_trigger_list, cmd_automation_data_trigger_set_enabled,
     cmd_automation_delete, cmd_automation_get, cmd_automation_list, cmd_automation_pause,
     cmd_automation_resume, cmd_automation_run, cmd_automation_update, cmd_bot_status,
     cmd_channels_add, cmd_channels_enable, cmd_channels_list, cmd_channels_login,
     cmd_channels_remove, cmd_command_delete, cmd_command_get, cmd_command_list, cmd_command_set,
     cmd_config_claude_cli, cmd_config_get, cmd_config_init, cmd_config_path,
     cmd_config_provider_model, cmd_config_set, cmd_config_show, cmd_config_unset,
-    cmd_config_validate, cmd_db_events, cmd_db_field_add, cmd_db_field_drop, cmd_db_record_delete,
-    cmd_db_record_get, cmd_db_record_insert, cmd_db_record_update, cmd_db_sql, cmd_db_table_create,
-    cmd_db_table_drop, cmd_db_table_list, cmd_db_table_schema, cmd_doctor, cmd_endpoint_bind,
-    cmd_endpoint_detach, cmd_endpoint_list, cmd_gateway_install, cmd_gateway_reload_config,
-    cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token,
-    cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail, cmd_onboard,
-    cmd_provider_list, cmd_provider_set, cmd_provider_show, cmd_queue_gateway_restart_wake_all,
-    cmd_send_message, cmd_status, cmd_task_create, cmd_task_delete, cmd_task_get, cmd_task_history,
-    cmd_task_list, cmd_task_reopen, cmd_task_set_title, cmd_task_stop, cmd_task_update,
-    cmd_thread_create, cmd_thread_get, cmd_thread_history, cmd_thread_list, cmd_thread_send,
-    cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_tool_image, cmd_update, cmd_usage,
-    run_gateway,
+    cmd_config_validate, cmd_doctor, cmd_endpoint_bind, cmd_endpoint_detach, cmd_endpoint_list,
+    cmd_gateway_install, cmd_gateway_reload_config, cmd_gateway_restart, cmd_gateway_start,
+    cmd_gateway_stop, cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path,
+    cmd_logs_tail, cmd_onboard, cmd_provider_list, cmd_provider_set, cmd_provider_show,
+    cmd_queue_gateway_restart_wake_all, cmd_send_message, cmd_status, cmd_task_create,
+    cmd_task_delete, cmd_task_get, cmd_task_history, cmd_task_list, cmd_task_reopen,
+    cmd_task_set_title, cmd_task_stop, cmd_task_update, cmd_thread_create, cmd_thread_get,
+    cmd_thread_history, cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot,
+    cmd_thread_send_to_task, cmd_tool_image, cmd_update, cmd_usage, run_gateway,
 };
 
 #[derive(Debug)]
@@ -773,135 +767,6 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 offset,
                 json,
             } => cmd_automation_activity(config_path, &automation_id, limit, offset, json).await,
-            AutomationAction::Trigger { action } => match action {
-                AutomationTriggerAction::Data { action } => match action {
-                    AutomationDataTriggerAction::List {
-                        table,
-                        event_type,
-                        json,
-                    } => {
-                        cmd_automation_data_trigger_list(config_path, table, event_type, json).await
-                    }
-                    AutomationDataTriggerAction::Create {
-                        table,
-                        event_type,
-                        label,
-                        title,
-                        body,
-                        agent_id,
-                        workspace_dir,
-                        disabled,
-                        json,
-                    } => {
-                        cmd_automation_data_trigger_create(
-                            config_path,
-                            &table,
-                            &event_type,
-                            &label,
-                            &title,
-                            &body,
-                            agent_id,
-                            workspace_dir,
-                            disabled,
-                            json,
-                        )
-                        .await
-                    }
-                    AutomationDataTriggerAction::Enable { trigger_id, json } => {
-                        cmd_automation_data_trigger_set_enabled(
-                            config_path,
-                            &trigger_id,
-                            true,
-                            json,
-                        )
-                        .await
-                    }
-                    AutomationDataTriggerAction::Disable { trigger_id, json } => {
-                        cmd_automation_data_trigger_set_enabled(
-                            config_path,
-                            &trigger_id,
-                            false,
-                            json,
-                        )
-                        .await
-                    }
-                    AutomationDataTriggerAction::Delete { trigger_id, json } => {
-                        cmd_automation_data_trigger_delete(config_path, &trigger_id, json).await
-                    }
-                },
-            },
-        },
-        Some(Commands::Db { action }) => match action {
-            DbAction::Table { action } => match action {
-                DbTableAction::List { json } => cmd_db_table_list(config_path, json).await,
-                DbTableAction::Create {
-                    table,
-                    display_name,
-                    fields,
-                    json,
-                } => cmd_db_table_create(config_path, &table, display_name, fields, json).await,
-                DbTableAction::Schema { table, json } => {
-                    cmd_db_table_schema(config_path, &table, json).await
-                }
-                DbTableAction::Drop { table, json } => {
-                    cmd_db_table_drop(config_path, &table, json).await
-                }
-            },
-            DbAction::Field { action } => match action {
-                DbFieldAction::Add {
-                    table,
-                    field,
-                    field_type,
-                    not_null,
-                    unique,
-                    index,
-                    display_name,
-                    default_value,
-                    json,
-                } => {
-                    cmd_db_field_add(
-                        config_path,
-                        &table,
-                        &field,
-                        &field_type,
-                        not_null,
-                        unique,
-                        index,
-                        display_name,
-                        default_value,
-                        json,
-                    )
-                    .await
-                }
-                DbFieldAction::Drop { table, field, json } => {
-                    cmd_db_field_drop(config_path, &table, &field, json).await
-                }
-            },
-            DbAction::Record { action } => match action {
-                DbRecordAction::Insert { table, data, json } => {
-                    cmd_db_record_insert(config_path, &table, &data, json).await
-                }
-                DbRecordAction::Get { table, id, json } => {
-                    cmd_db_record_get(config_path, &table, &id, json).await
-                }
-                DbRecordAction::Update {
-                    table,
-                    id,
-                    data,
-                    json,
-                } => cmd_db_record_update(config_path, &table, &id, &data, json).await,
-                DbRecordAction::Delete { table, id, json } => {
-                    cmd_db_record_delete(config_path, &table, &id, json).await
-                }
-            },
-            DbAction::Sql { sql, limit, json } => cmd_db_sql(config_path, sql, limit, json).await,
-            DbAction::Events {
-                table,
-                event_type,
-                limit,
-                offset,
-                json,
-            } => cmd_db_events(config_path, table, event_type, limit, offset, json).await,
         },
         Some(Commands::Agent { action }) => match action {
             AgentAction::List { json } => cmd_agent_list(config_path, json).await,

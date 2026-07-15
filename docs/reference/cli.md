@@ -134,30 +134,12 @@ Common flags on `channels add`:
 | `garyx automation run <automation_id>` | Run an automation immediately. |
 | `garyx automation pause / resume <automation_id>` | Disable or enable an automation. |
 | `garyx automation activity <automation_id>` | Show recent automation runs. |
-| `garyx automation trigger data list / create / enable / disable / delete` | Manage data-change triggers that create Garyx tasks. |
 | `garyx automation delete <automation_id>` | Delete an automation. |
 
 Schedule flags include `--every-hours <N>`, `--daily-time HH:MM`,
 `--weekday mon`, `--timezone <tz>`, `--once-at <time>`, and
 `--schedule-json <json>`. `--schedule-json` also accepts monthly schedules such
 as `{"kind":"monthly","day":24,"time":"08:00","timezone":"Asia/Shanghai"}`.
-
-## App Database
-
-| Command | Use it for |
-| --- | --- |
-| `garyx db table list / schema <table>` | List dynamic SQLite tables or inspect one schema. |
-| `garyx db table create <table> --field name:TEXT` | Create a STRICT SQLite table. Names are real SQL identifiers and must be snake_case. |
-| `garyx db table drop <table>` | Drop a dynamic table. |
-| `garyx db field add <table> <field> <TYPE>` | Add a column. Types are `TEXT`, `INTEGER`, `REAL`, `BLOB`, and `ANY`. |
-| `garyx db field drop <table> <field>` | Drop a column. |
-| `garyx db record insert <table> --data '<json>'` | Insert one record through the write API. |
-| `garyx db record get / update / delete` | Read, mutate, or delete one record by `id`. |
-| `garyx db sql "select ..."` | Run read-only SQL. Write SQL is rejected by the gateway. |
-| `garyx db events` | Inspect schema and record mutation events. |
-
-The database is global for the Garyx installation and is stored at
-`~/.garyx/data/app-database.sqlite3` by default.
 
 ## Diagnostics
 
