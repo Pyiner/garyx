@@ -117,7 +117,6 @@ pub(crate) async fn cmd_task_create(
     worktree: bool,
     agent: Option<String>,
     notify: Vec<String>,
-    json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     cmd_task_create_inner(
         config_path,
@@ -127,7 +126,6 @@ pub(crate) async fn cmd_task_create(
         worktree,
         agent,
         notify,
-        json_output,
         None,
     )
     .await
@@ -142,7 +140,6 @@ pub(super) async fn cmd_task_create_with_quota_timeout(
     worktree: bool,
     agent: Option<String>,
     notify: Vec<String>,
-    json_output: bool,
     quota_timeout: Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
     cmd_task_create_inner(
@@ -153,7 +150,6 @@ pub(super) async fn cmd_task_create_with_quota_timeout(
         worktree,
         agent,
         notify,
-        json_output,
         Some(quota_timeout),
     )
     .await
@@ -168,7 +164,6 @@ async fn cmd_task_create_inner(
     worktree: bool,
     agent: Option<String>,
     notify: Vec<String>,
-    json_output: bool,
     quota_timeout_override: Option<Duration>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let agent_id = required_task_agent_id(agent)?;
@@ -215,9 +210,6 @@ async fn cmd_task_create_inner(
         }
     }
     let payload = post_gateway_json_as_cli_actor(&gateway, "/api/tasks", &request).await?;
-    if json_output {
-        return print_pretty_json(&payload);
-    }
     print_task_summary(&payload);
     if notify_current_thread {
         println!();
@@ -1068,7 +1060,6 @@ mod tests {
             true,
             Some("claude".to_owned()),
             vec!["none".to_owned()],
-            true,
         )
         .await
         .expect("task create should succeed");
@@ -1102,7 +1093,6 @@ mod tests {
             false,
             Some("claude".to_owned()),
             vec!["none".to_owned()],
-            true,
         )
         .await
         .expect("task create should succeed");

@@ -404,20 +404,16 @@ mod tests {
             false,
             Some("test-agent".to_owned()),
             vec!["none".to_owned()],
-            true,
         );
         let result = match timeout_override {
             Some(timeout) => {
                 cmd_task_create_with_quota_timeout(
-                    args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, timeout,
+                    args.0, args.1, args.2, args.3, args.4, args.5, args.6, timeout,
                 )
                 .await
             }
             None => {
-                cmd_task_create(
-                    args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7,
-                )
-                .await
+                cmd_task_create(args.0, args.1, args.2, args.3, args.4, args.5, args.6).await
             }
         };
         handle.abort();

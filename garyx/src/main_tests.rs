@@ -1166,7 +1166,6 @@ fn parse_task_create_runtime_options() {
         "--notify",
         "bot",
         "telegram:owner",
-        "--json",
     ]);
     match cli.command {
         Some(Commands::Task {
@@ -1178,7 +1177,6 @@ fn parse_task_create_runtime_options() {
                     worktree,
                     agent,
                     notify,
-                    json,
                 },
         }) => {
             assert_eq!(title.as_deref(), Some("Investigate"));
@@ -1187,7 +1185,6 @@ fn parse_task_create_runtime_options() {
             assert!(worktree);
             assert!(agent.is_none());
             assert_eq!(notify, vec!["bot", "telegram:owner"]);
-            assert!(json);
         }
         _ => panic!("expected Task::Create"),
     }

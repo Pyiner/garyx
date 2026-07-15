@@ -977,7 +977,6 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 worktree,
                 agent,
                 notify,
-                json,
             } => {
                 cmd_task_create(
                     config_path,
@@ -987,7 +986,6 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                     worktree,
                     agent,
                     notify,
-                    json,
                 )
                 .await
             }

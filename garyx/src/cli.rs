@@ -1159,9 +1159,6 @@ pub(crate) enum TaskAction {
         /// Notification target when the task enters review. Defaults to the current thread (or `none` outside a thread). Override with `none`, `current-thread`, `thread <thread_id>`, or `bot <channel:account_id>`.
         #[arg(long, value_name = "TARGET", num_args = 1..=2)]
         notify: Vec<String>,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
     },
     /// Stop a running task run and release the task
     Stop {
