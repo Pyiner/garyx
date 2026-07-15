@@ -1,18 +1,20 @@
 # Render Window Expansion: History Below the Windowed-Resume Floor
 
-Status: v2 (revised after design review #TASK-2299 FAIL; re-review pending)
+Status: v3 (revised after design review #TASK-2299 v2 FAIL; re-review pending)
 Related: `thread-render-frame-incremental.md` (knife 2: over-budget degrade),
 `thread-open-replay-trim-design.md` (floor-windowed rows),
 `perf-thread-stream-replay-degrade.md`.
 
-v2 changes after review: identity model rebuilt around legitimate same-seq
-overwrites (ordering gate + full-snapshot change detection, matching the iOS
-precedent); connection generations in the hub; explicit
-desired/effective/pending floor state; trigger centralized into one reconcile
-with full coverage; loaded-body store disambiguated; bounded anti-loop with a
-convergence argument; performance section rewritten around the store's tail
-cache (no more "zero Rust change" or "cost ∝ loaded range" claims); iOS
-section inverted from "phase 2 fix" to "prior art to align with".
+v3 changes after v2 review: logical `streamRequestId` correlates renderer
+state with hub attempts across the IPC boundary (physical connection
+generations stay hub-internal); the anti-loop budget (`demandEpoch`,
+`retryCount`) is formal state with an explicitly weakened convergence
+semantics (no timers); speculative widening is capped in records, grows only
+on success, and the perf contract asserts snapshot bytes/rows/duration — the
+unbounded exponential jump to floor 0 is gone; reconcile returns a single
+start plan (no double starts); pending lifecycle transitions (restartAll,
+consumer join, last-owner stop, errors, cache clear) are enumerated;
+change-detection comparison ignores `rows_hash`; test placement fixed.
 
 ## Problem
 
@@ -33,12 +35,10 @@ permanently invisible on desktop for the rest of the app session:
    floor.
 4. The UI renders strictly from `render_state.rows`
    (`buildThreadViewRowsWithLocalUsers`). Bodies below the floor have no row
-   to hang on, so they never render. The pagination spinner works, the fetch
-   succeeds, nothing appears.
+   to hang on, so they never render.
 5. Even if a wider snapshot arrived at the same `based_on_seq`, the frontier
-   returns `changed: false` for an equal cursor (`frontier.ts`) and
-   `mirror.applyFrame` gates on `accepted && changed`, so it would be silently
-   dropped.
+   returns `changed: false` for an equal cursor and `mirror.applyFrame` gates
+   on `accepted && changed`, so it would be silently dropped.
 
 The only escape today is an app relaunch or mirror LRU eviction.
 
@@ -55,9 +55,10 @@ desktop component owns the obligation that structure must cover whatever
 bodies are loaded, and the desktop's snapshot-change gate (`based_on_seq`
 comparison alone) cannot even accept a structure-coverage change.
 
-iOS does own that obligation (see Prior Art below); desktop never adopted it.
-This design closes the gap with the same model, hardened where the desktop's
-multi-consumer streams and reconnect machinery need more than iOS does.
+iOS does own that obligation (see Prior Art); desktop never adopted it. This
+design closes the gap with the same model, hardened where the desktop's
+multi-consumer streams and main/renderer process split need more than iOS
+does.
 
 ## Prior Art: iOS Already Does This
 
@@ -71,38 +72,41 @@ The iOS app already implements the core loop
   a reconnect with the lower floor.
 - Snapshot acceptance compares the **full snapshot**
   (`setRenderSnapshot: guard renderSnapshotsByThread[threadId] != snapshot`),
-  not just the cursor, so same-`based_on_seq` overwrites and wider windows
-  both apply naturally.
+  not just the cursor.
 - Every full `render_state` frame reseeds downstream state unconditionally
   (`GatewayStreamActor`).
 
 Desktop aligns with this model. Where this design goes beyond what iOS
-currently has (connection generations, desired/effective/pending floor state,
-bounded expansion widening), a follow-up audit of iOS against those aspects is
-listed at the end — gated on a reproduced iOS failure, per review policy.
+currently has (request correlation, retry budget, bounded widening), a
+follow-up iOS audit is listed at the end — gated on a reproduced iOS failure,
+per review policy.
 
-## Design Invariant (explicit, convergent)
+## Design Invariant (explicit, demand-convergent)
 
-> **Convergence property**: once body loading and the stream quiesce, the
-> render window covers every loaded committed body:
-> `effective floor_seq <= min(seq of loaded committed bodies)` (or the window
-> is full, `floor_seq = 0`).
+> **Demand-convergence property**: every qualifying external demand trigger
+> (§5) either restores `effective floor_seq <= min(seq of loaded committed
+> bodies)` (or reaches the full window, `floor_seq = 0`) within one expansion
+> round trip, or — when >1 MiB gaps race in repeatedly — leaves the system
+> held with an intact retry budget for the *next* demand trigger.
 
-The inequality is *transiently* violated between an older-page apply and the
-arrival of the expansion frame — the design makes that window short and
-guarantees convergence (see Anti-Loop). Full-structure threads
-(`floor_seq = 0`) are the trivial case. The display layer keeps its existing
-contract untouched: dumb-render `render_state.rows`, bodies gate visibility.
+This is deliberately **weaker than unconditional quiescent convergence**:
+with no timers in the design, a thread that degrades twice in a row and then
+goes quiet stays at the degraded window until the user next interacts with it
+(scrolls, reopens, pages). That is an explicit product trade-off: the stuck
+state is only reachable through repeated >1 MiB bursts *during* an expansion,
+and the very next user interaction repairs it. The inequality is also
+transiently violated between an older-page apply and the expansion frame's
+arrival; that window is one round trip.
 
 **"Loaded committed bodies" is defined against the store the UI actually
 renders from**: the transcript cache's `uiMessages` — the same store
 `ThreadPage`'s `messagesBySeq` is built from — restricted to entries carrying
-a finite positive record `seq` (i.e. remote-final committed bodies; local
+a finite positive record `seq` (remote-final committed bodies; local
 optimistic rows without a seq are excluded). It is explicitly NOT
 `recordsBySeq`: pagination writes `uiMessages` only, and the windowed-degrade
-`dropCommittedBelow` clears `recordsBySeq` only, so the two stores legitimately
-diverge. The accessor (`earliestLoadedCommittedBodySeq()`) lives on
-`ThreadTranscriptCache` next to `getHistoryPagination()`.
+`dropCommittedBelow` clears `recordsBySeq` only, so the two stores
+legitimately diverge. The accessor (`earliestLoadedCommittedBodySeq()`) lives
+on `ThreadTranscriptCache` next to `getHistoryPagination()`.
 
 ## Protocol Design
 
@@ -111,264 +115,315 @@ diverge. The accessor (`earliestLoadedCommittedBodySeq()`) lives on
 Two orthogonal concerns, currently conflated in the frontier, get separated:
 
 - **Ordering (frontier)**: a full `render_state` frame is *stale* iff
-  `based_on_seq < current`. Stale frames are rejected. Everything at
-  `based_on_seq >= current` is accepted — including same-seq frames. This is
-  required independently of expansion: the server legitimately emits
-  **same-seq overwrite frames** (the stream doc comment: "same-seq overwrite
-  events still reach clients", with existing gateway tests), so "equal cursor
-  means equal snapshot" was never a valid protocol assumption. A tuple
-  identity `(based_on_seq, floor_seq)` would repeat the same mistake one
-  dimension later; rejected.
+  `based_on_seq < current`. Everything at `based_on_seq >= current` is
+  accepted — including same-seq frames. This is required independently of
+  expansion: the server legitimately emits **same-seq overwrite frames** (the
+  stream doc comment: "same-seq overwrite events still reach clients", with
+  existing gateway tests), so "equal cursor means equal snapshot" was never a
+  valid protocol assumption. A tuple identity `(based_on_seq, floor_seq)`
+  would repeat the mistake one dimension later; rejected.
 - **Change detection (mirror)**: whether an accepted snapshot *replaces* the
-  held one is decided by structural equality on the **full** `render_state`
-  (rows, scalars, window) — the iOS `setRenderSnapshot` precedent. Unchanged
+  held one is decided by structural equality on the full `render_state` —
+  rows, scalars, window — **ignoring `rows_hash`**, which is a delta-chain
+  transport token, not render content (it is absent on plain connections and
+  must not make otherwise-identical snapshots compare unequal). Unchanged
   snapshots skip `setRenderState`, preserving downstream memo/reference
-  stability exactly as the current `changed: false` path does. Equality is a
-  plain deep compare of the decoded snapshot; `rows_hash` stays what it is
-  today — the delta-chain integrity token — and is not promoted to identity
-  (it covers rows only and is not guaranteed on non-delta full frames).
+  stability exactly as today's `changed: false` path does.
 
 `ThreadFrontier.acceptRender(basedOnSeq)` keeps only the ordering rule.
-`ThreadFrontier.setRenderFloor` has **no production callers today** (dead
-code) and is removed; the effective floor is tracked where it is owned (§3).
+`ThreadFrontier.setRenderFloor` has no production callers today (dead code)
+and is removed; floor state is tracked where it is owned (§4).
 
-### 2. Floor ownership: renderer requests, server decides, hub carries
+### 2. Request correlation across the IPC boundary: `streamRequestId`
 
-- **Renderer (transcript lifecycle)** is the floor *requester*: every stream
-  start for a thread — selected consumer, side-chat consumer, refetch restart
-  — passes the thread's single `desiredFloor` (§3). Consumers never compute
-  their own floor, so a later consumer start cannot raise an unmet request.
-- **Server** is the floor *decider*: a within-budget resume honors the
-  requested floor (`finalize_thread_stream_replay` derives the snapshot at
-  `options.render_floor` on both the caught-up and sub-budget paths); an
-  over-budget gap still degrades to the cold-open floor regardless of the
-  request (server authority, unchanged).
-- **Hub** is a dumb carrier with **connection generations**: each `start()`
-  attempt gets a generation; `sendEvent` forwarding, `onCommittedSeq`, and
-  `onWindowFloor` are all guarded by "this controller is still the thread's
-  current forwarder". Today an aborted attempt's in-flight callbacks only
-  check sink liveness, so an old floor-3 frame can land *after* the new
-  floor-1 connection's frame and corrupt cursor/floor state; `restartAll` has
-  the same window. The upward-only `Math.max` pin is removed; the hub's
-  `lastFloor` is simply "what the current generation last requested /
-  was answered with", used for its own reconnect loop.
+Two distinct identities, one per layer, correlated by a token that rides the
+**local** event envelope (the gateway wire is untouched):
 
-### 3. Floor state machine (lifecycle-owned, per thread)
+- **Physical `connectionGeneration` (hub-internal)**: each SSE attempt inside
+  the hub's retry loop gets a generation; `sendEvent` forwarding,
+  `onCommittedSeq`, and `onWindowFloor` are guarded by "this controller is
+  still the thread's current forwarder". This kills post-abort callbacks.
+  `restartAll` and hub-internal reconnects create new physical attempts under
+  the *same* logical request (below).
+- **Logical `streamRequestId` (renderer-assigned)**: every lifecycle-issued
+  start carries a fresh opaque request id in `StartThreadStreamInput`; the
+  hub stores it on the forwarder and stamps it on every
+  `DesktopChatStreamEvent` it forwards for that thread. Hub-internal physical
+  reconnects and `restartAll` preserve the forwarder's current
+  `streamRequestId` — the renderer's logical request survives transport
+  churn.
 
-Three explicit values replace the single overloaded `lastFloor` meaning:
+Renderer-side rules built on the token:
 
-- `effectiveFloor`: `window.floor_seq ?? 0` from the latest full
-  `render_state` frame of the **current generation** (0 = full window; a
-  full-window announcement clears it — the "only fires when positive"
-  behavior of today's `onWindowFloor` is normalized to fire on every full
-  frame with the 0/absent case included).
-- `neededFloor`: `min(earliestLoadedCommittedBodySeq, effectiveFloor)` —
-  what the invariant requires right now.
-- `pendingExpansion { generation, targetFloor } | null`: at most one in
-  flight. It ends at the **first authoritative full `render_state` frame of
-  that generation** (whatever floor it carries) — not at IPC return, since
-  the SSE attempt is long-lived.
+- The mirror ingests stream frames **only when the frame's
+  `streamRequestId` equals the thread's current logical request**. This
+  closes the race the hub guard alone cannot: a frame that passed the old
+  connection's guard and sat in the IPC queue while a new start superseded it
+  would otherwise apply after the new request's wider frame — and, being a
+  same-`based_on_seq` different-value snapshot, would *pass* the §1 value
+  gate and re-narrow the window. Stale-request frames are dropped whole
+  (events and snapshot; the committed events they carry are redelivered by
+  the new connection's replay, which resumes from the hub's committed
+  cursor).
+- `pendingExpansion` (§4) settles **only** on an authoritative stream frame
+  that carries the pending request's id, holds a full `render_state`, and
+  passes the ordering gate. Cache-restored or locally synthesized snapshots
+  never settle a pending.
 
-One reconcile function owns the loop:
+IPC surface changes: `StartThreadStreamInput.requestId` (opaque string) and a
+`requestId` field on the locally-forwarded stream event envelope. `start`
+IPC stays `Promise<void>`; no attempt information needs to flow back because
+the correlation is carried by the events themselves.
+
+### 3. Single start gate: reconcile returns a plan
+
+All stream starts for a thread — selected consumer, side-chat consumer,
+post-refetch restart — go through **one lifecycle gate** per thread. The gate
+runs `reconcile` (§5), which returns a single start plan
+`{ afterSeq, renderFloor, requestId }`; the gate executes exactly one
+`start()` with it. Consumers therefore never compute their own floor, never
+race reconcile with their own start (the v2 double-start ambiguity is
+structurally gone), and a second consumer joining a thread **rebinds** any
+in-flight `pendingExpansion` to the new request id atomically inside the gate
+(the plan adopts `pendingExpansion.targetFloor` as its floor, so the joined
+start cannot raise an unmet request).
+
+`pendingExpansion` lifecycle transitions (exhaustive):
+
+| event | pending transition |
+|---|---|
+| authoritative full frame, matching request id, passes ordering | settle (§5) |
+| lifecycle-issued start via the gate (consumer join/restart, refetch restart) | rebind to the new request id; plan floor = pending target |
+| hub-internal reconnect / `restartAll` | untouched (same logical request id) |
+| last owner stops the thread stream | cancel pending, reset `retryCount` |
+| stream terminal error surfaced to renderer (gap error → authoritative refetch) | cancel pending; the refetch path re-enters the gate, which reconciles fresh |
+| `clearThreadTranscript` / mirror LRU eviction of the thread entry | cancel pending, drop all per-thread window state |
+
+### 4. Floor state machine (lifecycle-owned, per thread, formal)
 
 ```
-reconcile(thread):
-  if pendingExpansion != null: return            # settle first
-  if effectiveFloor == 0: return                 # full window, nothing to do
-  if neededFloor >= effectiveFloor: return       # invariant holds
-  target = expansionTarget(thread)               # §4
-  pendingExpansion = { generation: nextGen, targetFloor: target }
-  restart stream with renderFloor = target       # afterSeq continuity via hub
+effectiveFloor : number        # window.floor_seq ?? 0 of the latest accepted
+                               # full frame of the current logical request
+                               # (0 = full window; normalized on EVERY full
+                               # frame, clearing included — today's
+                               # "only fires when positive" onWindowFloor is
+                               # replaced by this)
+neededFloor    : derived       # min(earliestLoadedCommittedBodySeq ?? +inf,
+                               #     effectiveFloor)
+pendingExpansion : { requestId, targetFloor } | null   # at most one
+demandEpoch    : counter       # bumped by external demand triggers only
+retryCount     : number        # per-epoch expansion attempts after a failed
+                               # settle; reset on demandEpoch bump
+prepayMargin   : number        # speculative widening span in records; grows
+                               # only on successful settles; capped (§6)
 ```
 
-`reconcile` is invoked from **every path that can move either side of the
-inequality** — not just the two points v1 named:
+`desiredFloor` — the floor any start plan carries — is now a *defined*
+projection of this state, not a free-floating term:
 
-- older-history page apply (`applyOlderPage`);
-- every full `render_state` frame apply (covers degrades raising the floor,
-  and settles `pendingExpansion`);
-- authoritative-refetch transcript apply;
-- cache-restored transcript ingest (restored snapshots can carry pre-floor
-  bodies and a windowed floor together);
-- immediately before any consumer stream start (selected, side-chat,
-  post-refetch restart), which also guarantees those starts read the
-  reconciled `desiredFloor`.
+```
+desiredFloor = pendingExpansion ? pendingExpansion.targetFloor
+             : expansionWarranted() ? expansionTarget()      # §6
+             : effectiveFloor
+```
 
-### 4. Expansion = a reconnect with a lower `render_floor`, exponentially widened
+### 5. Reconcile, demand triggers, and the retry budget
 
-`render_floor` is a connection parameter; changing the window means a new
-connection. This reuses the existing machinery — no new channel, no new
-server-side state:
+**Demand triggers** (bump `demandEpoch`, reset `retryCount`, then run
+reconcile): older-history page apply; cache-restored transcript ingest;
+authoritative-refetch transcript apply; a consumer start entering the gate
+(thread open/reopen, side-chat join).
 
-- The hub's `start()` aborts the existing connection and resumes with
-  `afterSeq = max(input.afterSeq, existing.lastSeq)`, so committed-event
-  continuity is preserved across the swap; generation guards (§2) make the
-  swap race-free.
-- A caught-up expansion resume costs one snapshot-only frame (`events: []`)
-  whose rows are derived by the existing `render_snapshot_in_window`.
-- Sub-budget and caught-up expansion frames carry no `replay: "windowed"`
-  marker, so `dropCommittedBelow` does not fire. **If a new over-budget gap
-  has accumulated by the time the expansion connects, the resume degrades
-  again** — marker present, drop fires, floor rises. That is correct server
-  authority, and the anti-loop below handles it.
-- Delta-mode connections reseed their delta base from every full
-  `render_state` frame (existing gateway rule), so the rows-hash chain stays
-  honest across expansion.
+**Settle triggers** (run reconcile *without* bumping the epoch): every
+accepted full `render_state` frame. A frame updates `effectiveFloor`, settles
+a matching pending, but never refills the retry budget — the v2 flaw where
+"degrade frame → reconcile → re-issue" looped forever is structurally
+impossible because re-issuing consumes `retryCount`, which only a demand
+trigger resets.
 
-**Expansion target.** Naively expanding to exactly the loaded-body range
-would issue one expensive derivation per scrolled page (§6). Instead the
-target widens exponentially:
+```
+reconcile(thread) -> plan | null:
+  if pendingExpansion != null: return null          # settle first
+  if effectiveFloor == 0:      return null          # full window
+  if neededFloor >= effectiveFloor: return null     # invariant holds
+  if retryCount >= 1 + RETRY_BUDGET: return null    # held until next epoch
+  retryCount += 1
+  target = expansionTarget(thread)                  # §6
+  pendingExpansion = { requestId: fresh(), targetFloor: target }
+  return { afterSeq: committedCursor, renderFloor: target,
+           requestId: pendingExpansion.requestId }
+```
+
+with `RETRY_BUDGET = 1`: the first attempt per epoch plus one retry. On
+settle, if `effectiveFloor <= targetFloor` the expansion succeeded
+(`prepayMargin` may grow, §6); if the resume re-degraded
+(`effectiveFloor > targetFloor`), reconcile runs again as a settle trigger
+and either spends the retry (which is caught-up by construction — the degrade
+just replayed the window to the tail — so it fails only if *another* >1 MiB
+burst lands mid-flight) or holds. Held threads repair on the next demand
+trigger; see the invariant section for why this weakened semantics is the
+accepted trade-off. No timers exist anywhere in the design.
+
+### 6. Expansion target: demand plus capped, success-gated prepay
+
+Expansion = a reconnect with a lower `render_floor`. `render_floor` is a
+connection parameter; changing the window means a new connection, reusing the
+existing machinery (hub abort + `afterSeq = max(input, lastSeq)` continuity,
+snapshot-only caught-up frames, `render_snapshot_in_window` derivation, delta
+base reseeding on every full frame). Sub-budget and caught-up expansion
+frames carry no `replay: "windowed"` marker, so `dropCommittedBelow` does not
+fire; a resume that hits a fresh over-budget gap degrades again with the
+marker — correct server authority, handled by §5.
+
+**Target formula** — demand first, speculation strictly bounded:
 
 ```
 expansionTarget(thread):
-  span = max(effectiveFloor - neededFloor, 2 × lastWidenSpan)
-  lastWidenSpan = span
-  return max(0, effectiveFloor - span)
+  return max(0, neededFloor - prepayMargin)
 ```
 
-The first expansion jumps at least to the global minimum loaded body seq
-(which may already be several pages below the floor — cache-restored bodies,
-earlier pagination); each subsequent expansion at least doubles the widened
-span. Over-widening is harmless by construction: rows whose bodies are not
-loaded are skipped by the renderer — that is the normal full-structure state
-— and it prepays future pages, bounding the number of server derivations per
-thread session to O(log(scrolled depth)) instead of O(pages).
-
-### 5. Anti-loop: settle, one bounded retry, convergence
-
-- At most one `pendingExpansion` per thread; it settles at the first
-  authoritative full frame of its generation.
-- If it settles with `effectiveFloor > targetFloor` (the resume re-degraded
-  because a fresh over-budget gap raced in), reconcile may issue **one**
-  immediate follow-up expansion — which is caught-up by construction (the
-  degrade just replayed the window to the tail) and therefore succeeds unless
-  yet another >1 MiB burst landed mid-flight. After that one retry, the
-  lifecycle holds until the next external trigger (another page apply, frame
-  apply, or consumer start). No timers anywhere.
-- **Convergence argument**: on a quiescent ledger, an expansion resume is
-  caught-up, cannot degrade (degrade requires an over-budget *gap*), and
-  honors the requested floor — so the invariant is restored in exactly one
-  round trip. Sustained non-convergence requires an unbounded stream of
-  >1 MiB gaps between consecutive attempts, in which case holding at the
-  degraded window until the next user-driven trigger is the correct behavior
-  anyway.
-
-### 6. Performance: the store's tail cache bounds what expansion may assume
-
-The router transcript store keeps only a parsed **tail** per thread
-(8 MiB / 4096 records; 64 MiB store-wide LRU). A floor below the cached tail
-falls back to reading and reducing the full prefix from disk
-(`store.rs`) — so, contrary to v1, expansion cost is **not** proportional to
-the loaded range: each below-tail derivation is a full-prefix pass, and the
-v1 per-page trigger would have been O(pages × ledger) in the worst case.
-
-Mitigations in this design:
-
-- **Exponential widening (§4)** bounds derivations per thread session to
-  O(log(scrolled depth)); a deliberate scroll through hundreds of pages costs
-  ~10 full-prefix derivations, not hundreds.
-- **Contract tests with instrumentation**: the store's existing read counters
-  (`full_file_reads`-style stats) gate the bound — a rolled-file thread
-  driven through N pagination steps must show O(log N) full-file reads, and a
-  single expansion must show at most one.
-- No production Rust change is *assumed*; the gateway already honors
-  requested floors on within-budget resumes. If the contract tests expose a
-  gap (e.g. derivation counters missing for assertions, or a pathological
-  re-read), the fix lands server-side behind the same tests — never as a
-  client workaround. A reusable backward-derivation cache is explicitly out
-  of scope unless the measured bound fails.
+- `prepayMargin` starts at one history-page span (in records), **doubles only
+  after a pending settles successfully at its requested floor**, and is
+  **capped at MAX_PREPAY_RECORDS** (implementation constant on the order of
+  half the store's tail-cache record budget, e.g. 2048). Failed settles never
+  grow it — the v2 formula grew the span *before* the request, so consecutive
+  re-degrades inflated the next window as a side effect of failure; that is
+  reversed.
+- Consequences: the target reaches 0 only when the user's loaded bodies are
+  within `MAX_PREPAY_RECORDS` of the ledger head — never as an unbounded
+  speculative jump (the v2 counterexample `neededFloor=4999, span=8192 →
+  target=0` is impossible). Each expansion's window growth is bounded by
+  (new demand + capped prepay), so snapshot payload, row count, and
+  derivation input grow by a bounded increment per step.
+- Cost model, stated honestly: the router store keeps only a parsed tail
+  (8 MiB / 4096 records; 64 MiB store-wide LRU); a floor below the cached
+  tail is a full-prefix read+reduce. With capped prepay, a deliberate deep
+  scroll costs O(depth / prepayCap) full-prefix derivations — linear with a
+  large divisor, each step user-paid and interaction-spread, not the v2
+  O(log) claim (which was only achievable with the unbounded jump). The
+  **snapshot-only caught-up path bypasses the 1 MiB replay budget entirely**
+  (the budget guards replay events, not snapshot derivation), which is
+  exactly why the client-side cap is load-bearing and why the perf contract
+  below gates the design.
+- **Perf contract (gating)**: per-expansion assertions on snapshot serialized
+  bytes and row count (bounded by demand + prepay cap) and derivation
+  duration; `full_file_reads` (a router-store test counter) as an auxiliary
+  bound on read amplification. If measurement shows the bounded-target cost
+  is still unacceptable on huge rolled-file threads, a server-side
+  backward-derivation reuse (cache or floor-clamping budget on the snapshot
+  path) **enters scope as a contingency** — a production Rust change is not
+  assumed but is explicitly not ruled out.
 
 ### 7. UI layer: zero changes
 
 `buildThreadViewRows` / `buildThreadViewRowsWithLocalUsers` and the scroll /
 prepend-anchor machinery stay exactly as they are. Restoring the
 structure-⊇-bodies invariant upstream makes paged bodies light up through the
-existing "skip rows with missing bodies" behavior. The litmus test of the
-design: the display contract never changes, only the coverage guarantee
-feeding it.
+existing "skip rows with missing bodies" behavior. Over-widened windows
+(prepay) render exactly like today's normal full-structure threads with
+unloaded bodies. The litmus test of the design: the display contract never
+changes, only the coverage guarantee feeding it.
 
 ## Contract Documentation
 
 `docs/agents/repository-contracts.md` (Transcript Rendering) gains: the
 server may emit same-seq overwrite frames, so clients gate render-state
-acceptance on cursor ordering and detect change by full-snapshot value, never
-by cursor equality alone; clients that narrow structure via `render_floor`
-own the convergent invariant that the window covers their loaded committed
-bodies, and widen it by resuming with a lower `render_floor`.
-`AGENTS.md`/`CLAUDE.md` mirror-sync applies.
+acceptance on cursor ordering and detect change by full-snapshot value
+(excluding `rows_hash`), never by cursor equality alone; clients that narrow
+structure via `render_floor` own the demand-convergent invariant that the
+window covers their loaded committed bodies, and widen it by resuming with a
+lower `render_floor`. `AGENTS.md`/`CLAUDE.md` mirror-sync applies.
 
 ## Alternatives Rejected
 
 - **History pages return row fragments; client stitches structure.** Client
-  would re-derive transcript structure (turn grouping across page
-  boundaries), violating the server-render-state contract.
+  re-derives transcript structure; violates the server-render-state contract.
 - **In-connection floor control (HTTP side channel + connection id).** A new
-  stateful channel for a low-frequency, scroll-driven operation; reconnect
-  already exists, is cheap when caught up, and keeps floor a plain connection
-  parameter.
+  stateful channel for a low-frequency operation; reconnect already exists.
 - **Stop pinning the floor (resume full every reconnect).** Resurrects the
-  full-transcript stall on huge threads that windowed resume exists to
-  prevent.
+  full-transcript stall windowed resume exists to prevent.
 - **Client-synthesized rows for pre-floor bodies.** Reimplements user-turn
-  grouping locally; forbidden by the transcript-rendering contract.
+  grouping locally; forbidden by contract.
 - **Tuple identity `(based_on_seq, floor_seq)` (v1).** Refuted by same-seq
-  overwrite frames: equal tuple does not imply equal snapshot. Replaced by
-  ordering gate + full-value change detection.
-- **`rows_hash` as snapshot identity.** Covers rows only, not guaranteed on
-  non-delta full frames; remains the delta-chain integrity token.
+  overwrite frames.
+- **`rows_hash` as snapshot identity.** Transport integrity token only; also
+  excluded from value comparison (§1).
+- **Unbounded exponential widening (v2).** Could speculatively request
+  floor 0 and regenerate a full-thread snapshot through the budget-exempt
+  snapshot-only path; replaced by capped, success-gated prepay.
+- **Timer-based retry/backoff for held threads.** Would buy unconditional
+  quiescent convergence at the cost of background reconnect churn on threads
+  the user is not looking at; the demand-convergent semantics keeps repair
+  aligned with actual user attention.
 
 ## Test Plan
 
-- **Gateway (`routes/tests.rs`)**:
-  - caught-up resume with a lower `render_floor` than the previous
-    connection → snapshot-only frame, same `based_on_seq`,
-    `window.floor_seq == requested`, rows cover the wider window, no
-    `replay` marker;
+- **Gateway (`garyx-gateway` `routes/tests.rs`)**:
+  - caught-up resume with a lower `render_floor` → snapshot-only frame, same
+    `based_on_seq`, `window.floor_seq == requested`, wider rows, no `replay`
+    marker;
   - within-budget gap resume with a lower requested floor → verbatim events
     plus snapshot at the requested floor;
-  - over-budget gap resume with a lower requested floor → still degrades
-    (request does not override the budget), `replay: "windowed"` present;
-  - delta-mode connection: expansion full frame reseeds the base; the next
-    live delta chains from the wide snapshot (a true downward-expansion
-    delta test, beyond the existing floor-advance coverage);
-  - store instrumentation: rolled-file thread, repeated floor lowering →
-    `full_file_reads` grows O(log steps), one per expansion at most.
+  - over-budget gap resume with a lower requested floor → still degrades,
+    `replay: "windowed"` present;
+  - delta-mode: expansion full frame reseeds the base; next live delta chains
+    from the wide snapshot (true downward-expansion chain test).
+- **Router store (`garyx-router` store tests — `full_file_reads` is a
+  store-internal test counter, so these live here, not in gateway tests)**:
+  rolled-file thread, repeated floor lowering via the window derivation →
+  bounded `full_file_reads` per derivation; derivation duration and window
+  record counts consistent with the §6 cost model.
 - **Frontier unit tests**: ordering matrix — stale rejected; same-seq
-  accepted; same-seq same-floor different-rows (overwrite) accepted; scalar-
-  only change accepted; forward cursor accepted.
-- **Mirror change-detection tests**: unchanged full snapshot → no
-  `setRenderState`, reference stability preserved; same-seq overwrite with
-  different rows → applied; same-seq wider window → applied.
-- **Hub unit tests**: generation guard — events/cursor/floor callbacks from
-  an aborted attempt are discarded after a newer `start()`; `restartAll`
-  generation safety; floor follows the renderer's declaration downward;
-  reconnect carries the current generation's floor.
-- **Lifecycle + mirror integration (headless, no UI)** — the reviewer's
-  counterexample as the anchor regression:
+  accepted; forward cursor accepted.
+- **Mirror change-detection tests** (value gate lives here, not in the
+  frontier): same-seq overwrite with different rows → applied; same-seq
+  scalar-only change → applied; identical snapshot re-delivery → not applied,
+  reference stability preserved; identical snapshot differing only in
+  `rows_hash` presence → not applied; same-seq wider window → applied.
+- **Hub unit tests**: physical-generation guard (post-abort callbacks
+  discarded); `restartAll` and hub-internal reconnects preserve the logical
+  `streamRequestId`; events stamped with the forwarder's request id.
+- **Lifecycle + mirror integration (headless, no UI)** — anchor regression
+  plus the state machine:
   1. `uiMessages` holds bodies seq 1–4; windowed state at floor 3; initial
-     rows contain only seq ≥ 3.
-  2. Older-page apply (or cache-restore ingest) triggers reconcile; an
-     expansion start is issued requesting floor ≤ 1.
-  3. A full wide frame at the same `based_on_seq`, no `replay` marker,
-     applies; `buildThreadViewRows` now yields the turns owning seq 1–2.
-  4. Loop-free: a degrade response to the expansion (floor rises) triggers
-     at most one follow-up; a second degrade holds until a new trigger.
-  5. Multi-consumer: selected + side-chat on the same thread — the second
-     consumer's start does not raise the unmet floor; expansion serves both.
-  6. Cache-restore and authoritative-refetch paths trigger reconcile (bodies
-     below floor present at ingest time).
-  7. `uiMessages` vs `recordsBySeq` divergence: bodies only in `uiMessages`
-     still drive `neededFloor`; successful expansion does not drop cached
-     records; a genuine re-degrade with marker does.
+     rows contain only seq ≥ 3. Older-page apply → gate issues one expansion
+     start requesting floor ≤ 1 → full wide frame (same `based_on_seq`, no
+     marker, matching request id) applies → `buildThreadViewRows` yields the
+     turns owning seq 1–2.
+  2. **Stale queued frame**: a floor-3 frame with the *old* request id
+     arrives after the new request's floor-1 frame → dropped whole; window
+     stays wide.
+  3. **Retry budget**: expansion answered by a degrade → exactly one retry;
+     a second degrade → held (no further starts on settle triggers); next
+     demand trigger (page apply) issues a fresh attempt. Quiescence during
+     hold produces no starts (weakened-invariant semantics pinned by test).
+  4. **Consumer join during pending**: side-chat start rebinds pending to the
+     new request id; plan floor = pending target; exactly one physical start;
+     the joined start cannot raise the floor.
+  5. **Last-owner stop before first frame** → pending cancelled; thread
+     reopen reconciles fresh (no permanently-stuck `pending != null`).
+  6. **Gap error during pending** → pending cancelled; authoritative refetch
+     re-enters the gate and reconciles.
+  7. Cache-restore and authoritative-refetch ingests with pre-floor bodies
+     trigger reconcile (demand epoch bumps); cache-synthesized snapshots
+     never settle a pending.
+  8. `uiMessages` vs `recordsBySeq` divergence drives `neededFloor`;
+     successful expansion does not drop cached records; a genuine re-degrade
+     with marker does.
+  9. **Prepay cap**: `neededFloor` just below a huge `effectiveFloor` with a
+     large grown `prepayMargin` → target never overshoots
+     `neededFloor - MAX_PREPAY_RECORDS`; near the ledger head, target reaches
+     0 only when loaded bodies are within the cap; `prepayMargin` unchanged
+     after failed settles.
 - **iOS**: no changes in this task. Follow-up audit (separate task, gated on
-  a reproduced failure): generation-style stale-callback guarding around the
-  stop/start pair, anti-loop bounds, and expansion-cost behavior of the iOS
-  floor planner.
+  a reproduced failure): stale-callback guarding around the stop/start pair,
+  retry bounds, and expansion-cost behavior of the iOS floor planner.
 
 ## Open Questions
 
-None blocking. Deliberate scope cuts: window *re-shrinking* under memory
-pressure (mirror LRU already bounds retained state; shrinking would need its
-own identity story and has no driving defect); iOS hardening (prior art works
-today; audit gated on a repro); backward-derivation server cache (only if the
-measured O(log) bound fails).
+None blocking. Deliberate scope cuts: window re-shrinking under memory
+pressure (mirror LRU already bounds retained state); iOS hardening (prior art
+works today; audit gated on a repro); server-side backward-derivation reuse
+(contingency, entered only if the §6 perf contract fails on measurement);
+timer-based convergence (rejected above as a product trade-off, revisitable
+if the demand-convergent semantics proves insufficient in practice).
