@@ -9,14 +9,12 @@ use tracing::{debug, info, warn};
 
 impl MessageRouter {
     // ------------------------------------------------------------------
-    // Agent / route resolution (simplified until garyx-core is ready)
+    // Agent / route resolution
     // ------------------------------------------------------------------
 
     /// Resolve which agent should handle messages for a given channel context.
     ///
-    /// This is a simplified version that returns the default agent.
-    /// Full binding-based resolution will be available once `garyx_core::route_resolver`
-    /// is implemented.
+    /// Channel messages currently resolve to the configured default agent.
     pub fn resolve_agent_for_channel(
         &self,
         _channel: &str,
