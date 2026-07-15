@@ -1,9 +1,9 @@
 # Legacy Boot Import Isolation
 
-Status: v4 for re-review (v1–v3 FAILed review in #TASK-2298; v4 fixes the
-four v3 blockers: crash-safe generation ownership, archived-tombstone
-transcript resurrection, identity-based transcript comparison, and the
-recovery-with-missing-archive hole)
+Status: v5 for re-review (v1–v4 FAILed review in #TASK-2298; v5 fixes the
+three v4 residuals: tombstone pre-check now deletes leftover transcripts,
+recovery probe validates backup destinations against partial restores, and
+the atomic-replace failure semantics are stated per stage)
 Scope: `garyx/src/runtime_assembler.rs`, `garyx-gateway/src/sqlite_thread_store.rs`,
 `garyx-gateway/src/garyx_db/mod.rs` (cutover gate + generation),
 `garyx-gateway/src/composition/app_bootstrap.rs` (ordering only), new module
@@ -169,15 +169,21 @@ the pair — there is no early return that consults only one of them:
 | 1 | 1 | lifecycle complete | `Complete`; return; zero FS access |
 | 1 | 0 | migrated, archive not yet retired (every existing machine today) | retirement-only: never re-import; move dirs; write retirement marker |
 | 0 | 0 | first boot / fresh install | full import, then retirement |
-| 0 | 1 | **recovery intent**: operator cleared the import row per the documented flow | full import from the restored archive; **archive missing = abort** (see below). The retirement marker is NOT touched up front: a successful import clears it in the same transaction that writes the import marker, so `(0,1) → (1,0)` is atomic and every failure or crash preserves the recovery-intent state |
+| 0 | 1 | **recovery intent**: operator cleared the import row per the documented flow | full import from the restored archive; **incomplete restore = abort** (see below). The retirement marker is NOT touched up front: a successful import clears it in the same transaction that writes the import marker, so `(0,1) → (1,0)` is atomic and every failure or crash preserves the recovery-intent state |
 
 The `(0,1)` state is sticky by construction: nothing is deleted on entry,
 so a crash at any point before the import commits leaves `(0,1)` intact
 and the next boot retries recovery. And because recovery *requires* a
-restored archive, an operator who cleared the row but forgot (or failed)
-to restore the backup gets an abort with an explicit message — never a
-`NothingToImport` false success. This is the true replacement for the old
-empty-source interlock's recovery scenario.
+fully restored archive, the probe validates **both sides**: at least one
+source directory must exist AND no backup destination may still exist. An
+operator who cleared the row but forgot the restore, restored only one of
+the two directories, or copied instead of moved (leaving the destination
+in place) gets an abort with an explicit message — never a
+`NothingToImport` or partial-import false success. Partial restores are
+real states, not operator exotica: a crash between the two retirement
+renames followed by a one-directory restore produces exactly this shape.
+This is the true replacement for the old empty-source interlock's
+recovery scenario.
 
 ```
 run_legacy_boot_import(db, store, transcripts, data_dir):
@@ -195,17 +201,28 @@ run_legacy_boot_import(db, store, transcripts, data_dir):
        (1,0)               -> skip to step 7 (retirement-only)
        (0,1)               -> recovery=true, continue
        (0,0)               -> recovery=false, continue
-  4. archive probe (metadata on data_dir/threads, data_dir/sessions,
-     via ArchiveFs; no directory creation)
+  4. archive probe (metadata on data_dir/threads, data_dir/sessions —
+     and, when recovery=true, on both backup destinations under
+     <data_dir>/backups/legacy-archive-v1/ — via ArchiveFs; no directory
+     creation)
        probe IO error      -> Err (abort startup)
-       neither dir exists:
-         recovery=true     -> Err (abort startup: "recovery intent but no
-                              archive restored" — clearing the import row
-                              without restoring the backup must not be
-                              recorded as success)
-         recovery=false    -> commit import marker + generation++ in one
+       recovery=true:
+         any backup destination still exists
+                           -> Err (abort startup: restore is incomplete —
+                              only one directory moved back, or the
+                              operator copied instead of moving. Importing
+                              now would commit a partial archive as a
+                              successful recovery and serve on it, while
+                              retirement-only could never import the
+                              missed directory later.)
+         no source exists  -> Err (abort startup: "recovery intent but no
+                              archive restored")
+         else              -> continue (>=1 source present, all backup
+                              destinations moved away)
+       recovery=false:
+         neither dir exists-> commit import marker + generation++ in one
                               transaction; go to step 8 (fresh install)
-       else                -> continue
+         else              -> continue
   5. open FileThreadStore::new(data_dir)
        Err(e) -> Err (abort startup; never substitute an empty source)
   6. full import using FALLIBLE store methods:
@@ -213,12 +230,21 @@ run_legacy_boot_import(db, store, transcripts, data_dir):
        per key:
          tombstone pre-check (SQL point read: is this id archived?)
               Err               -> Err (abort startup)
-              archived          -> discarded += 1; SKIP backfill and
-                                   write_record entirely (the product
-                                   archive flow deleted this thread's
-                                   transcript; backfilling would resurrect
-                                   deleted content — repo contract forbids
-                                   resurrecting archived ids)
+              archived          -> idempotent transcript_store.delete(key)
+                                   (the product archive flow's transcript
+                                   delete is best-effort with errors
+                                   ignored — routes.rs:1175 — so an
+                                   archived thread may still have a live
+                                   transcript on disk, and a failed
+                                   residual-branch cleanup from a previous
+                                   pass leaves the same shape);
+                                   delete Ok / not-found -> discarded += 1
+                                   delete Err            -> failed += 1
+                                   Either way SKIP backfill and
+                                   write_record (repo contract forbids
+                                   resurrecting archived ids; a leftover
+                                   transcript must not survive behind a
+                                   completion marker)
          get() Err              -> failed += 1
          get() Ok(None)         -> failed += 1
          retired workflow       -> transcript delete Err -> failed += 1
@@ -230,9 +256,11 @@ run_legacy_boot_import(db, store, transcripts, data_dir):
                                 -> delete the transcript this pass just
                                    backfilled for the key;
                                    delete Ok  -> discarded += 1
-                                   delete Err -> failed += 1 (a
-                                   resurrected transcript must not
-                                   survive behind a completion marker)
+                                   delete Err -> failed += 1 (abort; the
+                                   next pass's tombstone pre-check hits
+                                   the same key and retries the delete,
+                                   so the leftover cannot be sealed by a
+                                   later completion marker)
          write_record other Err -> failed += 1
        failed > 0  -> Err (abort startup; no marker; log full summary)
        failed == 0 -> ONE transaction: write import marker AND
@@ -344,8 +372,20 @@ records, write to a temp file in the same directory, fsync the file,
 rename over the target, fsync the parent directory, then report success.
 It does **not** parse the existing target file — the current
 `rewrite_from_messages_file` re-reads the target first
-(`store.rs:1407`) and therefore cannot repair a torn file. Each fsync/
-rename stage failure is a typed error.
+(`store.rs:1407`) and therefore cannot repair a torn file. Each stage
+failure is a typed error with stage-specific postconditions:
+
+- temp write / file fsync / rename failure → the old target is untouched;
+- parent-fsync failure → `Err`, but the rename has already happened: in
+  the current process the target IS the complete new file (only its
+  directory-entry durability across power loss is unproven). No marker is
+  written this pass; the retry validates the target and no-ops or
+  continues — it must not treat this shape as an error.
+- Observable on-disk states at any crash/failure point: old target,
+  complete new target, or a stray temp file — never a partial target.
+- On any stage failure the store's in-memory cache for the thread is
+  invalidated; on success the same store instance immediately serves the
+  new content.
 
 **2. Shared rewrite path.** `rewrite_from_messages_file` keeps its
 read-reconcile-write semantics for well-formed files but delegates its
@@ -499,12 +539,17 @@ end to end):
     clean single-pass result.
 
 Tombstones:
-15. Tombstone pre-check hit → `discarded`; **no transcript file created**,
-    record, projection, and transcript all absent after commit.
-16. Tombstone pre-check `Err` → abort.
-17. Residual `write_record(Archived)` race branch → transcript written
-    this pass is deleted; delete `Err` → `failed` (abort), delete Ok →
-    `discarded`; end state has no resurrected transcript.
+15. Tombstone pre-check hit with a pre-existing orphan transcript on disk
+    (the best-effort product-archive delete failed) → orphan is deleted,
+    `discarded`; record, projection, and transcript all absent after
+    commit. Pre-check hit with no transcript → not-found, `discarded`.
+16. Tombstone pre-check `Err` → abort; pre-check transcript delete `Err`
+    → `failed`, abort.
+17. Residual `write_record(Archived)` branch, chained across passes:
+    pass 1 residual cleanup delete `Err` → `failed`, abort; pass 2
+    tombstone pre-check hits the key and retries the delete → success →
+    `discarded`, commit; end state has no resurrected transcript
+    anywhere in the chain.
 
 Transcript validation (import-specific gate; all legacy fixtures WITHOUT
 timestamps, all idempotency assertions across two passes):
@@ -521,9 +566,12 @@ timestamps, all idempotency assertions across two passes):
     (timestamp instability must not re-classify as diverged).
 24. Diverged identities → existing transcript preserved byte-identical;
     backfill skipped; key succeeds.
-25. Atomic-replace stage failures — temp write, file fsync, rename,
-    parent fsync — each: typed error, target file untouched (or absent),
-    retry succeeds.
+25. Atomic-replace stage failures with stage-specific postconditions:
+    temp write / file fsync / rename `Err` → old target byte-identical;
+    parent-fsync `Err` → target is the complete new file, no marker,
+    retry validates and no-ops; every failure path → cache invalidated
+    (next read re-reads disk); success → same store instance immediately
+    serves the new content; no observable state is ever a partial target.
 26. Local provider session import route regression on the atomic path.
 
 Retirement:
@@ -549,20 +597,26 @@ Recovery (end to end):
     re-retired.
 32. Recovery with missing archive (operator forgot to restore) → abort
     with the explicit recovery message; marker pair still `(0,1)`;
-    generation unchanged.
-33. Crash after recovery entry but before import commit → state still
+    generation unchanged; SQLite untouched.
+33. Partial-restore aborts, three shapes, each asserting `(0,1)`
+    preserved, generation unchanged, SQLite untouched, and no directory
+    creation: only `threads/` restored (its backup destination gone,
+    `sessions/` destination still present); only `sessions/` restored;
+    copy-instead-of-move (source AND destination both present).
+34. Crash after recovery entry but before import commit → state still
     `(0,1)`; retry works (nothing was deleted up front).
+35. Lazy generation-seed write `Err` → abort; no marker movement.
 
 Concurrency & ordering:
-34. Concurrent second boot on one data dir → lock busy → abort; after the
+36. Concurrent second boot on one data dir → lock busy → abort; after the
     first completes, a retry sees `Complete`.
-35. Import-before-cutover ordering test preserved
+37. Import-before-cutover ordering test preserved
     (`assembly_migrates_task_kind_only_after_boot_import`, re-pointed).
-36. Builder-only construction (in-memory DB, no import run) → current
+38. Builder-only construction (in-memory DB, no import run) → current
     generation 0; cutovers run once and gate correctly.
 
-Validation: `cargo test -p garyx-gateway --lib`,
-`cargo test -p garyx-router --lib`, `cargo test -p garyx`, then
+Validation: `cargo test -p garyx-gateway --all-targets`,
+`cargo test -p garyx-router --all-targets`, `cargo test -p garyx`, then
 `scripts/test/rust_tier1_fast.sh --changed`.
 
 ## Decisions
@@ -580,11 +634,14 @@ Validation: `cargo test -p garyx-gateway --lib`,
    false-success markers.
 4. **Recovery contract stays one-row** (clear the import row); the state
    machine completes `(0,1) → (1,0)` atomically at import commit and
-   aborts if the archive was not restored.
+   aborts on any incomplete restore: no source present, any backup
+   destination still present (partial move-back or copy-instead-of-move).
 5. **Lock policy: non-blocking.** Busy → abort startup.
 6. **Archived tombstones win totally** — record, projection, AND
-   transcript; tombstone pre-check before backfill, defensive cleanup on
-   the residual race branch.
+   transcript; the tombstone pre-check deletes any leftover transcript
+   (product-archive delete is best-effort, so leftovers are real) and
+   fails closed if that delete fails; the residual race branch cleans up
+   its own write and chains into the next pass's pre-check on failure.
 7. **Diverged transcripts win** over archive `messages`; divergence is
    judged on `message_identity` sequences, never on timestamp-bearing
    record equality; structural corruption is a failure, not divergence.
