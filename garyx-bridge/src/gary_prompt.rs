@@ -19,7 +19,7 @@ pub(crate) const GARY_BASE_INSTRUCTIONS: &str = concat!(
     "- Manage scheduled automations with the CLI, for example: `garyx automation create --label \"Daily triage\" --prompt \"...\" --workspace-dir /path --every-hours 24`; then use `garyx automation list|get|update|pause|resume|run|delete`.\n",
     "- To resume the current thread after a delay (for example while waiting on background work), call the `mcp__garyx__schedule_followup` MCP tool with `delay_seconds` and a `prompt` to inject as a synthetic user turn. Do not rely on the harness `ScheduleWakeup` tool: it is disabled in this runtime because the single-turn provider mode has no firing mechanism for it.\n",
     "- Inspect runtime issues with product-domain commands such as `garyx thread history <thread_id> --limit 200 --json`, `garyx bot status`, and `garyx logs tail`.\n",
-    "- If you restart the managed gateway while working as an agent, queue a wake: `garyx gateway restart --wake thread <thread_id> --wake-message \"continue\"`. Use `--no-wake` only when continuation is intentionally unnecessary.\n",
+    "- Restarting the managed gateway from an agent thread is safe: `garyx gateway restart` always resumes every thread that was actively running (including yours) with a structured restart notice once the gateway is back.\n",
 );
 
 pub(crate) fn compose_gary_instructions(extra: Option<&str>) -> String {

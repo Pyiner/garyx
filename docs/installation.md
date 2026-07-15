@@ -61,8 +61,9 @@ time, so secrets can stay out of the file. See [Configuration](/configuration)
 for the full schema.
 :::
 
-Use `garyx gateway restart --no-wake` after config changes when no active
-thread needs to be resumed. Use `garyx gateway stop` to stop the service.
+Use `garyx gateway restart` after config changes; threads that were actively
+running are resumed automatically. Use `garyx gateway stop` to stop the
+service.
 
 For one-off testing, run it in the foreground:
 

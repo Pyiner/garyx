@@ -22,7 +22,7 @@ command with `--help` for the full flag list and arg descriptions.
 | --- | --- |
 | `garyx gateway run` | Run the gateway in the foreground (blocks). |
 | `garyx gateway install` | Register the managed service (launchd/systemd) and start it. Safe to re-run. |
-| `garyx gateway start` / `stop` / `restart` | Control the managed service. Bare `restart` wakes all running threads; `--wake ...` narrows it and `--no-wake` opts out. |
+| `garyx gateway start` / `stop` / `restart` | Control the managed service. `restart` resumes every thread that was running (wake-all). |
 | `garyx gateway uninstall` | Remove the managed unit / plist file. |
 | `garyx gateway reload-config` | Reload config without restart. |
 | `garyx gateway token` | Ensure a gateway auth token exists; print it. |
@@ -31,21 +31,11 @@ command with `--help` for the full flag list and arg descriptions.
 build from source; install or copy a new binary first when you need code changes
 to take effect.
 
-`garyx gateway restart --wake <thread|task|bot> <target> --wake-message "..."`
-restarts the managed gateway and, after the service is healthy again, sends the
-wake message through the same target resolution used by `garyx thread send`.
-The wake target is the only routing input; workspace is resolved from the target
-thread/task/bot binding inside the gateway.
-
-`garyx gateway restart --wake all` captures the threads that are running in
-`recent_threads` before restart and sends each one a structured continuation
-notice after the new gateway starts. Use `--wake-message "..."` to override the
-message.
-
-Bare `garyx gateway restart` uses the same wake-all behavior so interrupted
-threads continue automatically. Use a scoped `--wake` target when only one
-thread should resume, or `garyx gateway restart --no-wake` when you
-intentionally want only a restart.
+`garyx gateway restart` captures the threads that are running in
+`recent_threads` before the restart and, after the new gateway starts, sends
+each one a structured continuation notice so interrupted threads continue
+automatically. Wake-all is the only restart behavior; there are no restart
+wake flags.
 
 See [Service manager](/reference/service-manager) for what `install` actually
 writes to disk.

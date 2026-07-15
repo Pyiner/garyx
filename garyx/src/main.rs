@@ -1,7 +1,6 @@
 use clap::CommandFactory;
 use garyx_models::local_paths::migrate_legacy_homes;
 use garyx_router::is_thread_key;
-use serde_json::json;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod auto_update_common;
@@ -59,12 +58,6 @@ enum ThreadSendTarget {
     Bot(String),
 }
 
-#[derive(Debug)]
-enum GatewayRestartWakeDecision {
-    Single(ThreadSendDestination),
-    All { message: String },
-}
-
 fn resolve_thread_send_destination(
     kind: Option<String>,
     target: Option<String>,
@@ -117,40 +110,6 @@ fn resolve_thread_send_destination(
                 .into(),
         ),
     }
-}
-
-fn default_restart_wake_message() -> String {
-    garyx_gateway::restart_wake::RESTART_WAKE_DEFAULT_MESSAGE.to_owned()
-}
-
-/// Decide what (if anything) a `gateway restart` should resume after the service
-/// comes back. The default — a bare restart with no flags — resumes every thread
-/// that was actively running (wake-all), so an agent restarting the gateway is
-/// continued automatically. `--no-wake` opts out; `--wake thread|task|bot
-/// <target>` narrows to a single target. When no `--wake-message` is given the
-/// structured restart-notice message is used so clients can render it as a card.
-fn resolve_gateway_restart_wake_destination(
-    wake: Vec<String>,
-    wake_message: Option<String>,
-    no_wake: bool,
-) -> Result<Option<GatewayRestartWakeDecision>, Box<dyn std::error::Error>> {
-    if no_wake {
-        return Ok(None);
-    }
-    let message = trim_optional(wake_message).unwrap_or_else(default_restart_wake_message);
-    // No `--wake`, or `--wake all`: resume every running thread.
-    if wake.is_empty() || (wake.len() == 1 && wake[0].trim() == "all") {
-        return Ok(Some(GatewayRestartWakeDecision::All { message }));
-    }
-    if wake.len() == 1 {
-        return Err("single-token wake target must be `all`".into());
-    }
-    if wake.len() != 2 {
-        return Err("wake target must be `all` or `thread|task|bot <target>`".into());
-    }
-    resolve_thread_send_destination(Some(wake[0].clone()), Some(wake[1].clone()), vec![message])
-        .map(GatewayRestartWakeDecision::Single)
-        .map(Some)
 }
 
 fn trim_optional(value: Option<String>) -> Option<String> {
@@ -347,71 +306,22 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             GatewayAction::Install => cmd_gateway_install(config_path).await,
             GatewayAction::Uninstall => cmd_gateway_uninstall().await,
             GatewayAction::Start => cmd_gateway_start(config_path).await,
-            GatewayAction::Restart {
-                wake,
-                wake_message,
-                no_wake,
-                wake_json,
-            } => {
-                let wake_destination =
-                    resolve_gateway_restart_wake_destination(wake, wake_message, no_wake)?;
-                if let Some(destination) = wake_destination.as_ref() {
-                    match destination {
-                        GatewayRestartWakeDecision::Single(destination) => {
-                            let (kind, target) = match &destination.target {
-                                ThreadSendTarget::Thread(thread_id) => {
-                                    ("thread", thread_id.as_str())
-                                }
-                                ThreadSendTarget::Task(task_id) => ("task", task_id.as_str()),
-                                ThreadSendTarget::Bot(bot) => ("bot", bot.as_str()),
-                            };
-                            let message = destination.message_parts.join(" ");
-                            let path = garyx_gateway::restart_wake::queue_pending_restart_wake(
-                                kind, target, &message,
-                            )?;
-                            if wake_json {
-                                println!(
-                                    "{}",
-                                    serde_json::to_string(&json!({
-                                        "type": "restart_wake_queued",
-                                        "kind": kind,
-                                        "target": target,
-                                        "path": path.display().to_string(),
-                                    }))?
-                                );
-                            } else {
-                                println!("Queued restart wake: {}", path.display());
-                            }
-                        }
-                        GatewayRestartWakeDecision::All { message } => {
-                            let report =
-                                cmd_queue_gateway_restart_wake_all(config_path, message).await?;
-                            if wake_json {
-                                println!(
-                                    "{}",
-                                    serde_json::to_string(&json!({
-                                        "type": "restart_wake_queued",
-                                        "kind": "all",
-                                        "target_count": report.targets.len(),
-                                        "truncated_count": report.truncated_count,
-                                        "path": report.path.display().to_string(),
-                                    }))?
-                                );
-                            } else {
-                                println!(
-                                    "Queued restart wake-all: {} target(s) at {}",
-                                    report.targets.len(),
-                                    report.path.display()
-                                );
-                                if report.truncated_count > 0 {
-                                    println!(
-                                        "  warning: {} additional running thread(s) omitted by wake-all cap",
-                                        report.truncated_count
-                                    );
-                                }
-                            }
-                        }
-                    }
+            GatewayAction::Restart => {
+                let report = cmd_queue_gateway_restart_wake_all(
+                    config_path,
+                    garyx_gateway::restart_wake::RESTART_WAKE_DEFAULT_MESSAGE,
+                )
+                .await?;
+                println!(
+                    "Queued restart wake-all: {} target(s) at {}",
+                    report.targets.len(),
+                    report.path.display()
+                );
+                if report.truncated_count > 0 {
+                    println!(
+                        "  warning: {} additional running thread(s) omitted by wake-all cap",
+                        report.truncated_count
+                    );
                 }
                 cmd_gateway_restart(config_path).await?;
                 Ok(())

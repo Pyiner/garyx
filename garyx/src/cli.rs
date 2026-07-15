@@ -257,27 +257,9 @@ pub(crate) enum GatewayAction {
     Start,
     /// Restart the managed gateway service (refreshes the unit / plist file first)
     #[command(
-        long_about = "Restart the managed gateway service and refresh its unit/plist first.\n\nBy default this resumes every thread that was actively running when the gateway went down (wake-all), so an agent that restarts the gateway is continued automatically — a bare `garyx gateway restart` is safe.\n\nUse --no-wake to restart without resuming anything, or --wake thread|task|bot <target> to resume just one target. With no --wake-message, a structured restart notice is sent."
+        long_about = "Restart the managed gateway service and refresh its unit/plist first.\n\nEvery thread that was actively running when the gateway went down is resumed with a structured restart notice (wake-all), so an agent that restarts the gateway is continued automatically."
     )]
-    Restart {
-        /// Narrow the resume to one target instead of the default wake-all: `all`, `thread <thread_id>`, `task <task_id>`, or `bot <channel:account_id>`
-        #[arg(
-            long,
-            value_names = ["KIND", "TARGET"],
-            num_args = 1..=2,
-            conflicts_with = "no_wake"
-        )]
-        wake: Vec<String>,
-        /// Message to send to the wake target; defaults to a structured restart notice when omitted
-        #[arg(long, value_name = "MESSAGE")]
-        wake_message: Option<String>,
-        /// Restart without resuming any thread (opt out of the default wake-all)
-        #[arg(long = "no-wake")]
-        no_wake: bool,
-        /// Output the queued wake as JSON (works with the default wake-all too)
-        #[arg(long)]
-        wake_json: bool,
-    },
+    Restart,
     /// Stop the managed gateway service
     Stop,
     /// Reload the running gateway config from disk without restart

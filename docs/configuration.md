@@ -264,7 +264,7 @@ Build or obtain a plugin binary, then install it:
 
 ```bash
 garyx plugins install ./path/to/garyx-plugin-acmechat
-garyx gateway restart --no-wake
+garyx gateway restart
 ```
 
 After installation, configure it like any built-in channel:
@@ -799,7 +799,7 @@ garyx channels list
 garyx channels add telegram main --token "$TELEGRAM_BOT_TOKEN"
 garyx channels login feishu --account main
 garyx plugins list
-garyx gateway restart --no-wake
+garyx gateway restart
 garyx logs tail
 ```
 

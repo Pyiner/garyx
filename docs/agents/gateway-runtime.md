@@ -31,17 +31,7 @@ bash scripts/codesign-macos-cli.sh <path-to-garyx>
 - `install.sh` installs the signed release binary as-is and must not re-sign it
   after download.
 - Restart through the Garyx CLI.
-- When continuation is needed in an active agent thread, queue a wake:
-
-```bash
-garyx gateway restart --wake thread <thread_id> --wake-message "continue"
-```
-
-- When a restart should recover every thread that was already running before the
-  restart, queue wake-all:
-
-```bash
-garyx gateway restart --wake all
-```
-
-- Use `--no-wake` only when no continuation is intended.
+- `garyx gateway restart` always queues wake-all: every thread that was
+  actively running before the restart — including the agent thread that issued
+  the restart — resumes with a structured restart notice once the new gateway
+  is up. There are no restart wake flags.

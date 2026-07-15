@@ -22,10 +22,10 @@ use crate::server::AppState;
 const WAKE_ALL_KIND: &str = "all";
 const WAKE_ALL_TARGET: &str = "all";
 pub const RESTART_WAKE_ALL_SNAPSHOT_PATH: &str = "/api/restart-wake/snapshot";
-/// Default message injected when a restart wakes a thread and the caller did not
-/// pass an explicit `--wake-message`. Wrapped in the `garyx_restarted` tag so
-/// clients render it as a restart-notice card (mirrors the task-notification
-/// card); an agent receiving it should simply continue its interrupted work.
+/// Message injected when a restart wakes a thread. Wrapped in the
+/// `garyx_restarted` tag so clients render it as a restart-notice card
+/// (mirrors the task-notification card); an agent receiving it should simply
+/// continue its interrupted work.
 pub const RESTART_WAKE_DEFAULT_MESSAGE: &str =
     "<garyx_restarted>Garyx has restarted. Continue your task.</garyx_restarted>";
 const MAX_RESTART_WAKE_ALL_THREADS: usize = 16;
@@ -77,26 +77,6 @@ enum RestartWakeDispatchError {
 
 fn is_zero(value: &u32) -> bool {
     *value == 0
-}
-
-pub fn queue_pending_restart_wake(
-    kind: &str,
-    target: &str,
-    message: &str,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let wake = PendingRestartWake {
-        id: Uuid::new_v4().to_string(),
-        kind: kind.trim().to_owned(),
-        target: target.trim().to_owned(),
-        message: message.to_owned(),
-        created_at: Utc::now().to_rfc3339(),
-        targets: Vec::new(),
-        target_ordinals: Vec::new(),
-        attempt: 0,
-        errors: Vec::new(),
-    };
-    let dir = pending_restart_wake_dir();
-    write_pending_restart_wake(&dir, &wake)
 }
 
 pub fn queue_pending_restart_wake_all(
@@ -227,29 +207,12 @@ async fn drain_pending_restart_wake_file(
     let bytes = fs::read(&processing_path).map_err(|error| error.to_string())?;
     let wake: PendingRestartWake =
         serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-    if wake.kind == WAKE_ALL_KIND {
-        return drain_pending_restart_wake_all_file(state, dir, path, processing_path, wake).await;
+    if wake.kind != WAKE_ALL_KIND {
+        // Single-target restart wakes are retired; a stray legacy file moves
+        // to `.failed.json` via the caller's error path.
+        return Err(format!("unknown restart wake kind: {}", wake.kind));
     }
-    let thread_id = resolve_wake_thread_id(&state, &wake).await?;
-
-    dispatch_restart_wake_to_thread(
-        &state,
-        &thread_id,
-        &format!("restart-wake-{}", wake.id),
-        &wake.message,
-        restart_wake_metadata(&wake, &wake.target),
-    )
-    .await
-    .map_err(|error| error.into_message())?;
-    fs::remove_file(&processing_path).map_err(|error| error.to_string())?;
-    tracing::info!(
-        wake_id = %wake.id,
-        kind = %wake.kind,
-        target = %wake.target,
-        thread_id = %thread_id,
-        "pending restart wake dispatched"
-    );
-    Ok(())
+    drain_pending_restart_wake_all_file(state, dir, path, processing_path, wake).await
 }
 
 async fn drain_pending_restart_wake_all_file(
@@ -431,13 +394,11 @@ fn restart_wake_metadata(wake: &PendingRestartWake, target: &str) -> HashMap<Str
         "restart_wake_target".to_owned(),
         Value::String(target.to_owned()),
     );
-    if wake.kind == WAKE_ALL_KIND {
-        extra_metadata.insert("restart_wake_all".to_owned(), Value::Bool(true));
-        extra_metadata.insert(
-            "restart_wake_attempt".to_owned(),
-            Value::Number(serde_json::Number::from(wake.attempt)),
-        );
-    }
+    extra_metadata.insert("restart_wake_all".to_owned(), Value::Bool(true));
+    extra_metadata.insert(
+        "restart_wake_attempt".to_owned(),
+        Value::Number(serde_json::Number::from(wake.attempt)),
+    );
     extra_metadata
 }
 
@@ -469,13 +430,6 @@ impl RestartWakeDispatchError {
             RestartWakeDispatchError::RetryableOverload(error)
         } else {
             RestartWakeDispatchError::Other(error)
-        }
-    }
-
-    fn into_message(self) -> String {
-        match self {
-            RestartWakeDispatchError::RetryableOverload(error)
-            | RestartWakeDispatchError::Other(error) => error,
         }
     }
 }
@@ -636,108 +590,6 @@ fn fresh_path_for_processing_wake(path: &Path) -> Option<PathBuf> {
     let stem = path.file_stem()?.to_str()?;
     let fresh_stem = stem.strip_suffix(".processing")?;
     Some(path.with_file_name(format!("{fresh_stem}.json")))
-}
-
-async fn resolve_wake_thread_id(
-    state: &Arc<AppState>,
-    wake: &PendingRestartWake,
-) -> Result<String, String> {
-    match wake.kind.as_str() {
-        "thread" => {
-            let target = wake.target.trim();
-            if is_thread_key(target) {
-                Ok(target.to_owned())
-            } else {
-                Err(format!(
-                    "restart wake thread target must be canonical thread id: {}",
-                    wake.target
-                ))
-            }
-        }
-        "task" => resolve_task_thread_id(state, &wake.target).await,
-        "bot" => resolve_bot_thread_id(state, &wake.target).await,
-        other => Err(format!("unknown restart wake kind: {other}")),
-    }
-}
-
-async fn resolve_task_thread_id(state: &Arc<AppState>, task_id: &str) -> Result<String, String> {
-    // Resolve through the task projection (indexed by task number) instead
-    // of enumerating every thread record: the old full scan read multi-MB
-    // thread files for the whole store right on the restart path.
-    let service = crate::tasks::task_service(state);
-    match service.get_task(task_id).await {
-        Ok((thread_id, _record, _task)) => Ok(thread_id),
-        Err(garyx_router::tasks::TaskServiceError::NotFound(_)) => {
-            // Projections derive in the same transaction as every record
-            // write (#TASK-1864): a missing row means the task genuinely
-            // does not exist — the former forced repair walk is retired.
-            Err(format!("restart wake task target not found: {task_id}"))
-        }
-        Err(error) => Err(format!(
-            "restart wake task target not found: {task_id} ({error})"
-        )),
-    }
-}
-
-async fn resolve_bot_thread_id(state: &Arc<AppState>, bot: &str) -> Result<String, String> {
-    let Some((channel, account_id)) = bot.split_once(':') else {
-        return Err(format!(
-            "restart wake bot target must be channel:account_id: {bot}"
-        ));
-    };
-    let endpoint = crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id)
-        .await
-        .map_err(|error| {
-            format!("thread store error resolving restart wake bot target {bot}: {error}")
-        })?
-        .ok_or_else(|| format!("restart wake bot target has no main endpoint: {bot}"))?;
-    if let Some(thread_id) = endpoint
-        .thread_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(thread_id.to_owned());
-    }
-
-    let mut metadata = HashMap::new();
-    metadata.insert(
-        "chat_id".to_owned(),
-        Value::String(endpoint.chat_id.clone()),
-    );
-    metadata.insert(
-        "display_label".to_owned(),
-        Value::String(endpoint.display_label.clone()),
-    );
-    metadata.insert(
-        "thread_binding_key".to_owned(),
-        Value::String(endpoint.binding_key.clone()),
-    );
-    metadata.insert(
-        "delivery_target_type".to_owned(),
-        Value::String(endpoint.delivery_target_type.clone()),
-    );
-    metadata.insert(
-        "delivery_target_id".to_owned(),
-        Value::String(endpoint.delivery_target_id.clone()),
-    );
-    metadata.insert(
-        "delivery_thread_id".to_owned(),
-        endpoint
-            .delivery_thread_id
-            .as_ref()
-            .map(|value| Value::String(value.clone()))
-            .unwrap_or(Value::Null),
-    );
-    let mut router = state.threads.router.lock().await;
-    Ok(router
-        .resolve_or_create_inbound_thread(
-            &endpoint.channel,
-            &endpoint.account_id,
-            &endpoint.binding_key,
-            &metadata,
-        )
-        .await)
 }
 
 fn pending_restart_wake_dir() -> PathBuf {
@@ -912,25 +764,6 @@ mod tests {
                 last_active_at: last_active_at.to_owned(),
             })
             .expect("seed recent thread");
-    }
-
-    #[test]
-    fn pending_restart_wake_serializes_target() {
-        let wake = PendingRestartWake {
-            id: "wake-1".to_owned(),
-            kind: "thread".to_owned(),
-            target: "thread::abc".to_owned(),
-            message: "continue".to_owned(),
-            created_at: "2026-05-02T00:00:00Z".to_owned(),
-            targets: Vec::new(),
-            target_ordinals: Vec::new(),
-            attempt: 0,
-            errors: Vec::new(),
-        };
-        let value = serde_json::to_value(&wake).unwrap();
-        assert_eq!(value["kind"], "thread");
-        assert_eq!(value["target"], "thread::abc");
-        assert!(value.get("targets").is_none());
     }
 
     #[test]
@@ -1174,73 +1007,30 @@ mod tests {
         assert!(!temp.path().join("wake-race.failed.json").exists());
     }
 
-    /// Seed a task thread record directly on disk. Deliberately NOT via
-    /// TaskService::create_task: creating a task also populates the
-    /// process-wide in-memory task index, which would mask the cold-restart
-    /// shape these tests need (task on disk, nothing warm in memory).
-    async fn seed_cold_task_thread(state: &Arc<AppState>, number: u64, title: &str) -> String {
-        let thread_id = format!("thread::wake-task-{number}");
-        state
-            .threads
-            .thread_store
-            .set(
-                &thread_id,
-                json!({
-                    "thread_id": thread_id,
-                    "channel": "api",
-                    "account_id": "main",
-                    "from_id": "loop",
-                    "messages": [],
-                    "task": {
-                        "number": number,
-                        "title": title,
-                        "status": "todo",
-                        "creator": {"kind": "agent", "agent_id": "test-agent"},
-                        "created_at": "2026-01-01T00:00:00Z",
-                        "updated_at": "2026-01-01T00:00:00Z",
-                        "updated_by": {"kind": "agent", "agent_id": "test-agent"}
-                    }
-                }),
-            )
-            .await
-            .unwrap();
-        thread_id
-    }
-
     #[tokio::test]
-    async fn wake_task_target_resolves_through_projection() {
-        let (state, _provider) = test_state(1, false).await;
-        let number = 61u64;
-        // Writing the record derives the task projection in the same
-        // transaction (#TASK-1864): no backfill step exists any more.
-        let thread_id = seed_cold_task_thread(&state, number, "Wake target").await;
+    async fn drain_moves_unknown_wake_kind_to_failed() {
+        // Single-target restart wakes are retired: a stray legacy file must
+        // not dispatch and must land in `.failed.json`.
+        let temp = tempfile::tempdir().unwrap();
+        let (state, provider) = test_state(1, false).await;
+        let wake = PendingRestartWake {
+            id: "wake-legacy".to_owned(),
+            kind: "thread".to_owned(),
+            target: "thread::abc".to_owned(),
+            message: "continue".to_owned(),
+            created_at: "2026-05-02T00:00:00Z".to_owned(),
+            targets: Vec::new(),
+            target_ordinals: Vec::new(),
+            attempt: 0,
+            errors: Vec::new(),
+        };
+        write_pending_restart_wake_path(&temp.path().join("wake-legacy.json"), &wake).unwrap();
 
-        let resolved = resolve_task_thread_id(&state, &format!("#TASK-{number}"))
-            .await
-            .expect("task target resolves");
-        assert_eq!(resolved, thread_id);
-    }
+        drain_pending_restart_wakes_from_dir(state, temp.path().to_path_buf()).await;
 
-    #[tokio::test]
-    async fn wake_task_target_missing_projection_row_is_a_hard_not_found() {
-        // Projections derive in the same transaction as every record write
-        // (#TASK-1864): a missing row means the task genuinely does not
-        // exist, and the former wake-side forced repair walk is retired.
-        let (state, _provider) = test_state(1, false).await;
-        let number = 72u64;
-        let thread_id = seed_cold_task_thread(&state, number, "Lost row").await;
-        assert!(
-            state
-                .ops
-                .garyx_db
-                .remove_task_projection(&thread_id)
-                .expect("row removes"),
-            "projection row should exist before the simulated loss"
-        );
-
-        let error = resolve_task_thread_id(&state, &format!("#TASK-{number}"))
-            .await
-            .expect_err("a missing projection row resolves to not-found");
-        assert!(error.contains("not found"), "unexpected error: {error}");
+        assert!(provider.calls.lock().unwrap().is_empty());
+        assert!(!temp.path().join("wake-legacy.json").exists());
+        assert!(!temp.path().join("wake-legacy.processing.json").exists());
+        assert!(temp.path().join("wake-legacy.failed.json").exists());
     }
 }

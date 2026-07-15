@@ -24,7 +24,7 @@ The fastest path. You only need a bot token from [@BotFather](https://t.me/BotFa
    garyx channels add telegram main \
      --token "$TELEGRAM_BOT_TOKEN" \
      --agent claude
-   garyx gateway restart --no-wake
+   garyx gateway restart
    ```
 
 3. DM your bot. Garyx pulls updates with long-polling and routes them through
@@ -43,7 +43,7 @@ Use the device-flow login if you do not have an app yet:
 
 ```bash
 garyx channels login feishu --domain feishu   # use --domain lark for 海外
-garyx gateway restart --no-wake
+garyx gateway restart
 ```
 
 The login flow walks you through creating an app and writes the resulting
@@ -66,7 +66,7 @@ been added to.
 
 ```bash
 garyx channels login weixin
-garyx gateway restart --no-wake
+garyx gateway restart
 ```
 
 The login flow scans a QR code in your terminal and writes the resulting

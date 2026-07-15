@@ -72,7 +72,7 @@ garyx status
 ```bash [Telegram bot]
 export TELEGRAM_BOT_TOKEN="TOKEN_FROM_BOTFATHER"
 garyx channels add telegram main --token "$TELEGRAM_BOT_TOKEN" --agent claude
-garyx gateway restart --no-wake
+garyx gateway restart
 ```
 
 :::

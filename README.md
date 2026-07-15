@@ -72,7 +72,7 @@ export TELEGRAM_BOT_TOKEN="TOKEN_FROM_BOTFATHER"
 garyx channels add telegram main \
   --token "$TELEGRAM_BOT_TOKEN" \
   --agent-id claude
-garyx gateway restart --no-wake
+garyx gateway restart
 ```
 
 DM the bot. Garyx will create or resume a thread for that Telegram chat and

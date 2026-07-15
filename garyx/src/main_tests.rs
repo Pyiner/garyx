@@ -89,41 +89,27 @@ fn parse_gateway_restart() {
     let cli = Cli::parse_from(["garyx", "gateway", "restart"]);
     match cli.command {
         Some(Commands::Gateway {
-            action:
-                GatewayAction::Restart {
-                    wake,
-                    wake_message,
-                    no_wake,
-                    wake_json,
-                },
-        }) => {
-            assert!(wake.is_empty());
-            assert_eq!(wake_message, None);
-            assert!(!no_wake);
-            assert!(!wake_json);
-        }
+            action: GatewayAction::Restart,
+        }) => {}
         _ => panic!("expected Gateway restart"),
     }
 }
 
 #[test]
-fn parse_gateway_restart_no_wake() {
-    let cli = Cli::parse_from(["garyx", "gateway", "restart", "--no-wake"]);
-    match cli.command {
-        Some(Commands::Gateway {
-            action:
-                GatewayAction::Restart {
-                    wake,
-                    no_wake,
-                    wake_json,
-                    ..
-                },
-        }) => {
-            assert!(wake.is_empty());
-            assert!(no_wake);
-            assert!(!wake_json);
-        }
-        _ => panic!("expected Gateway restart"),
+fn parse_gateway_restart_rejects_retired_wake_flags() {
+    for flags in [
+        vec!["--no-wake"],
+        vec!["--wake", "all"],
+        vec!["--wake", "thread", "thread::abc"],
+        vec!["--wake-message", "continue"],
+        vec!["--wake-json"],
+    ] {
+        let mut args = vec!["garyx", "gateway", "restart"];
+        args.extend(flags.iter());
+        assert!(
+            Cli::try_parse_from(&args).is_err(),
+            "retired restart flag should be rejected: {flags:?}"
+        );
     }
 }
 
@@ -171,194 +157,6 @@ fn thread_send_destination_resolves_canonical_and_legacy_positional_forms() {
     let error = resolve_thread_send_destination(Some("bogus".to_owned()), None, Vec::new())
         .expect_err("unknown kind");
     assert!(error.to_string().contains("thread"));
-}
-
-#[test]
-fn parse_gateway_restart_wake_thread() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "gateway",
-        "restart",
-        "--wake",
-        "thread",
-        "thread::abc",
-        "--wake-message",
-        "continue",
-        "--wake-json",
-    ]);
-    match cli.command {
-        Some(Commands::Gateway {
-            action:
-                GatewayAction::Restart {
-                    wake,
-                    wake_message,
-                    no_wake,
-                    wake_json,
-                },
-        }) => {
-            assert_eq!(wake, vec!["thread".to_owned(), "thread::abc".to_owned()]);
-            assert_eq!(wake_message.as_deref(), Some("continue"));
-            assert!(!no_wake);
-            assert!(wake_json);
-        }
-        _ => panic!("expected Gateway restart"),
-    }
-}
-
-#[test]
-fn parse_gateway_restart_wake_all() {
-    let cli = Cli::parse_from(["garyx", "gateway", "restart", "--wake", "all"]);
-    match cli.command {
-        Some(Commands::Gateway {
-            action:
-                GatewayAction::Restart {
-                    wake,
-                    wake_message,
-                    no_wake,
-                    wake_json,
-                },
-        }) => {
-            assert_eq!(wake, vec!["all".to_owned()]);
-            assert_eq!(wake_message, None);
-            assert!(!no_wake);
-            assert!(!wake_json);
-        }
-        _ => panic!("expected Gateway restart"),
-    }
-}
-
-#[test]
-fn resolve_gateway_restart_wake_defaults_to_all_with_structured_message() {
-    // A bare restart (no --wake, no --no-wake) resumes every running thread.
-    let decision = super::resolve_gateway_restart_wake_destination(vec![], None, false)
-        .unwrap()
-        .expect("wake decision");
-    match decision {
-        super::GatewayRestartWakeDecision::All { message } => {
-            assert_eq!(
-                message,
-                garyx_gateway::restart_wake::RESTART_WAKE_DEFAULT_MESSAGE
-            );
-            assert!(message.contains("garyx_restarted"));
-        }
-        _ => panic!("expected wake all"),
-    }
-}
-
-#[test]
-fn resolve_gateway_restart_wake_all_token_defaults_message() {
-    let decision =
-        super::resolve_gateway_restart_wake_destination(vec!["all".to_owned()], None, false)
-            .unwrap()
-            .expect("wake decision");
-    match decision {
-        super::GatewayRestartWakeDecision::All { message } => {
-            assert_eq!(
-                message,
-                garyx_gateway::restart_wake::RESTART_WAKE_DEFAULT_MESSAGE
-            );
-        }
-        _ => panic!("expected wake all"),
-    }
-}
-
-#[test]
-fn resolve_gateway_restart_wake_all_accepts_custom_message() {
-    let decision = super::resolve_gateway_restart_wake_destination(
-        vec!["all".to_owned()],
-        Some("resume all".to_owned()),
-        false,
-    )
-    .unwrap()
-    .expect("wake decision");
-    match decision {
-        super::GatewayRestartWakeDecision::All { message } => {
-            assert_eq!(message, "resume all");
-        }
-        _ => panic!("expected wake all"),
-    }
-}
-
-#[test]
-fn resolve_gateway_restart_wake_single_target_defaults_message() {
-    // A single target no longer requires --wake-message; it falls back to the
-    // structured restart notice.
-    let decision = super::resolve_gateway_restart_wake_destination(
-        vec!["thread".to_owned(), "thread::abc".to_owned()],
-        None,
-        false,
-    )
-    .unwrap()
-    .expect("wake decision");
-    match decision {
-        super::GatewayRestartWakeDecision::Single(destination) => {
-            assert_eq!(
-                destination.message_parts.join(" "),
-                garyx_gateway::restart_wake::RESTART_WAKE_DEFAULT_MESSAGE
-            );
-        }
-        _ => panic!("expected single wake target"),
-    }
-}
-
-#[test]
-fn resolve_gateway_restart_no_wake_returns_none() {
-    // --no-wake opts out of the default wake-all.
-    let decision = super::resolve_gateway_restart_wake_destination(vec![], None, true).unwrap();
-    assert!(decision.is_none());
-}
-
-#[test]
-fn parse_gateway_restart_wake_task() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "gateway",
-        "restart",
-        "--wake",
-        "task",
-        "#TASK-1",
-        "--wake-message",
-        "status?",
-    ]);
-    match cli.command {
-        Some(Commands::Gateway {
-            action: GatewayAction::Restart {
-                wake, wake_message, ..
-            },
-        }) => {
-            assert_eq!(wake, vec!["task".to_owned(), "#TASK-1".to_owned()]);
-            assert_eq!(wake_message.as_deref(), Some("status?"));
-        }
-        _ => panic!("expected Gateway restart"),
-    }
-}
-
-#[test]
-fn parse_gateway_restart_wake_bot() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "gateway",
-        "restart",
-        "--wake",
-        "bot",
-        "telegram:codex_bot",
-        "--wake-message",
-        "continue",
-    ]);
-    match cli.command {
-        Some(Commands::Gateway {
-            action: GatewayAction::Restart {
-                wake, wake_message, ..
-            },
-        }) => {
-            assert_eq!(
-                wake,
-                vec!["bot".to_owned(), "telegram:codex_bot".to_owned()]
-            );
-            assert_eq!(wake_message.as_deref(), Some("continue"));
-        }
-        _ => panic!("expected Gateway restart"),
-    }
 }
 
 #[test]
