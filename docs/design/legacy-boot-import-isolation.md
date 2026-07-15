@@ -458,10 +458,10 @@ concurrent-boot races → the lock; the recovery scenario → the sticky
 - `ArchiveFs` covers probe, lock open/acquire, and rename; its recording
   fake logs call order so tests can assert e.g. "lock open happened, then
   nothing" rather than just "no FS access".
-- The archive source is a `dyn ThreadStore` test double for `list_keys` /
-  `get` faults; transcript faults are injected through a store wrapper
-  that can fail each atomic-replace stage (temp write, file fsync, rename,
-  parent fsync) independently.
+- The archive source is an injectable `dyn LegacyArchiveReader` test double
+  exposing only fallible `list_keys` / `get`; transcript faults are injected
+  through a store wrapper that can fail each atomic-replace stage (temp write,
+  file fsync, rename, parent fsync) independently.
 
 ### Contract text
 
@@ -508,7 +508,7 @@ Update `docs/agents/repository-contracts.md`:
   validation (fast Rust tiers do not cover it).
 
 ## Test plan (deterministic, no UI; faults injected via the GaryxDbService
-seam, ArchiveFs seam, ThreadStore double, transcript wrapper)
+seam, ArchiveFs seam, LegacyArchiveReader double, transcript wrapper)
 
 Lifecycle & gating:
 1. Both markers present → `Complete`; ArchiveFs call log empty (no lock
