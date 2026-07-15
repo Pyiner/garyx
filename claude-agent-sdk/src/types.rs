@@ -13,6 +13,23 @@ pub type CanUseToolFuture = Pin<Box<dyn Future<Output = Result<Value>> + Send + 
 pub type CanUseToolCallback =
     Arc<dyn Fn(CanUseToolRequest) -> CanUseToolFuture + Send + Sync + 'static>;
 
+/// Provenance attached to user-role messages and their result frames.
+///
+/// Claude Code adds origin variants over time, so only the stable `kind`
+/// discriminator is typed and all variant-specific fields are preserved.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MessageOrigin {
+    pub kind: String,
+    #[serde(flatten)]
+    pub metadata: HashMap<String, Value>,
+}
+
+impl MessageOrigin {
+    pub fn is_task_notification(&self) -> bool {
+        self.kind == "task-notification"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Permission modes
 // ---------------------------------------------------------------------------
@@ -181,6 +198,8 @@ pub struct UserMessage {
     pub parent_tool_use_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_result: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MessageOrigin>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -215,6 +234,8 @@ pub struct ResultMessage {
     pub is_error: bool,
     pub num_turns: i64,
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MessageOrigin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

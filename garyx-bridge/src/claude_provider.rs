@@ -42,7 +42,7 @@ const MAX_SESSION_FAILURES: u32 = 3;
 const MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 const ABORT_TIMEOUT_SECS: u64 = 10;
 const STREAM_IDLE_TIMEOUT_SECS: u64 = 3600; // 1 hour
-const POST_RESULT_DRAIN_TIMEOUT_SECS: u64 = 2;
+const POST_RESULT_INPUT_DRAIN_TIMEOUT_SECS: u64 = 2;
 const CLAUDE_MISSING_RESULT_ERROR: &str = "claude SDK stream ended without a result message";
 const GARYX_CCTTY_PATH_ENV: &str = "GARYX_CCTTY_PATH";
 const GARYX_CLAUDE_CLI_PATH_ENV: &str = "GARYX_CLAUDE_CLI_PATH";
@@ -147,8 +147,9 @@ fn update_claude_background_tasks(
 ) {
     // `background_tasks_changed` carries the FULL set of live background tasks
     // with REPLACE semantics: swap the tracked set for the payload. This keeps
-    // the post-result drain gate structurally current even when an individual
-    // terminal `task_updated`/`task_notification` signal was missed.
+    // the post-result input-drain gate current even when an individual
+    // terminal `task_updated`/`task_notification` signal was missed. This
+    // level only controls when stdin may close; it never closes stdout.
     if sys_msg.subtype == "background_tasks_changed" {
         if let Some(tasks) = sys_msg.data.get("tasks").and_then(Value::as_array) {
             active_background_tasks.clear();
@@ -1422,13 +1423,14 @@ impl ClaudeCliProvider {
     }
 
     /// Atomically check whether the pending-input queue is empty after the
-    /// post-result drain window and, if so, **remove** the queue entry so that
-    /// subsequent [`enqueue_pending_input`] calls for this `run_id` will fail.
+    /// post-result input-drain window and, if so, **remove** the queue entry so
+    /// that subsequent [`enqueue_pending_input`] calls for this `run_id` will
+    /// fail.
     /// This closes the race window where a new input is enqueued between the
-    /// emptiness check and the loop break in [`process_messages_streaming`].
+    /// emptiness check and stdin shutdown in [`process_messages_streaming`].
     ///
-    /// Returns `true` when the queue was empty (or already absent) and the run
-    /// should exit its message loop.
+    /// Returns `true` when the queue was empty (or already absent) and the
+    /// provider may close stdin. Claude stdout must still be consumed to EOF.
     async fn try_close_pending_inputs(&self, run_id: &str) -> bool {
         let mut pending = self.run_pending_inputs.lock().await;
         match pending.get(run_id) {
@@ -1559,12 +1561,24 @@ impl ClaudeCliProvider {
             )));
         }
 
-        let (response_text, result_data, signals) = self
+        let processing_result = self
             .process_messages_streaming(run_id, &options.thread_id, &mut run, on_chunk)
-            .await?;
+            .await;
 
-        let _ = run.finish().await;
+        let (response_text, result_data, signals) = match processing_result {
+            Ok(result) => result,
+            Err(error) => {
+                let _ = run.close().await;
+                self.unregister_run(run_id).await;
+                return Err(error);
+            }
+        };
+
+        let finish_result = run.finish().await;
         self.unregister_run(run_id).await;
+        finish_result.map_err(|error| {
+            BridgeError::RunFailed(format!("failed to finish claude run: {error}"))
+        })?;
 
         if let Some(result) = result_data {
             let transcript_thread_title = if result.thread_title.is_none() {
@@ -1651,22 +1665,31 @@ impl ClaudeCliProvider {
         // answer invisible for seconds).
         let mut assistant_text_in_flight = false;
         let mut active_background_tasks = HashSet::new();
+        let mut input_ended = false;
 
         let idle_timeout = Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS);
-        let post_result_drain_timeout = Duration::from_secs(POST_RESULT_DRAIN_TIMEOUT_SECS);
+        let post_result_input_drain_timeout =
+            Duration::from_secs(POST_RESULT_INPUT_DRAIN_TIMEOUT_SECS);
 
         loop {
-            let waiting_for_post_result_idle = result_seen && active_background_tasks.is_empty();
-            let read_timeout = if waiting_for_post_result_idle {
-                post_result_drain_timeout
+            let waiting_to_end_input =
+                !input_ended && result_seen && active_background_tasks.is_empty();
+            let read_timeout = if waiting_to_end_input {
+                post_result_input_drain_timeout
             } else {
                 idle_timeout
             };
             let msg = tokio::time::timeout(read_timeout, source.next_message()).await;
             match msg {
-                Err(_elapsed) if waiting_for_post_result_idle => {
+                Err(_elapsed) if waiting_to_end_input => {
                     if self.try_close_pending_inputs(run_id).await {
-                        break;
+                        source.end_input().await.map_err(|error| {
+                            BridgeError::RunFailed(format!(
+                                "failed to end claude input after result: {error}"
+                            ))
+                        })?;
+                        input_ended = true;
+                        continue;
                     }
                     result_seen = false;
                 }
@@ -1676,7 +1699,9 @@ impl ClaudeCliProvider {
                         "stream idle for {}s, treating run as dead",
                         STREAM_IDLE_TIMEOUT_SECS,
                     );
-                    break;
+                    return Err(BridgeError::RunFailed(format!(
+                        "claude stream idle for {STREAM_IDLE_TIMEOUT_SECS}s"
+                    )));
                 }
                 Ok(None) => break, // stream closed normally
                 Ok(Some(msg_result)) => match msg_result {
@@ -2133,12 +2158,20 @@ struct SdkRunOutcome {
 #[async_trait]
 trait MessageSource {
     async fn next_message(&mut self) -> Option<claude_agent_sdk::Result<Message>>;
+
+    async fn end_input(&mut self) -> claude_agent_sdk::Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl MessageSource for ClaudeRun {
     async fn next_message(&mut self) -> Option<claude_agent_sdk::Result<Message>> {
         self.next_message().await
+    }
+
+    async fn end_input(&mut self) -> claude_agent_sdk::Result<()> {
+        ClaudeRun::end_input(self).await
     }
 }
 

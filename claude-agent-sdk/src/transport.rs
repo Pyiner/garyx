@@ -360,48 +360,20 @@ impl SubprocessTransport {
         Ok(())
     }
 
-    pub async fn terminate(&self) -> Result<()> {
-        self.ready.store(false, Ordering::SeqCst);
-
-        {
-            let mut writer_guard = self.writer.lock().await;
-            *writer_guard = None;
-        }
-        {
-            let mut proc_guard = self.process.lock().await;
-            if let Some(mut proc) = proc_guard.take() {
-                let _ = proc.kill().await;
-                let _ = proc.wait().await;
-            }
-        }
-        {
-            let mut reader_guard = self.reader.lock().await;
-            *reader_guard = None;
-        }
-
-        Ok(())
-    }
-
-    pub async fn wait_for_exit_timeout(&self, timeout: Duration) -> Result<bool> {
+    /// Wait for a normally finishing Claude CLI process to exit on its own.
+    /// Forced termination belongs to [`Self::close`], not the successful
+    /// streaming completion path.
+    pub async fn wait_for_exit(&self) -> Result<()> {
         self.ready.store(false, Ordering::SeqCst);
 
         let mut proc_guard = self.process.lock().await;
-        let Some(proc) = proc_guard.as_mut() else {
-            return Ok(true);
+        let Some(mut proc) = proc_guard.take() else {
+            return Ok(());
         };
-
-        match tokio::time::timeout(timeout, proc.wait()).await {
-            Ok(result) => {
-                let _ = result.map_err(|e| {
-                    ClaudeSDKError::Connection(format!(
-                        "Failed waiting for Claude CLI to exit: {e}"
-                    ))
-                })?;
-                proc_guard.take();
-                Ok(true)
-            }
-            Err(_) => Ok(false),
-        }
+        proc.wait().await.map_err(|error| {
+            ClaudeSDKError::Connection(format!("Failed waiting for Claude CLI to exit: {error}"))
+        })?;
+        Ok(())
     }
 
     #[cfg(test)]

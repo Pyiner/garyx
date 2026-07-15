@@ -3,8 +3,8 @@ use serde_json::Value;
 use crate::error::{ClaudeSDKError, Result};
 use crate::types::{
     AssistantMessage, ContentBlock, DocumentBlock, DocumentSource, ImageBlock, ImageSource,
-    Message, ResultMessage, StreamEvent, SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock,
-    ToolUseBlock, UnknownContentBlock, UserContent, UserMessage,
+    Message, MessageOrigin, ResultMessage, StreamEvent, SystemMessage, TextBlock, ThinkingBlock,
+    ToolResultBlock, ToolUseBlock, UnknownContentBlock, UserContent, UserMessage,
 };
 
 /// Parse a raw JSON value (from CLI JSONL output) into a typed [`Message`].
@@ -188,6 +188,9 @@ fn parse_user_message(data: &Value) -> Result<Message> {
         .get("tool_use_result")
         .cloned()
         .filter(|v| !v.is_null());
+    let origin = data
+        .get("origin")
+        .and_then(|value| serde_json::from_value::<MessageOrigin>(value.clone()).ok());
 
     let message = data
         .get("message")
@@ -216,6 +219,7 @@ fn parse_user_message(data: &Value) -> Result<Message> {
         uuid,
         parent_tool_use_id,
         tool_use_result,
+        origin,
     }))
 }
 
@@ -297,6 +301,9 @@ fn parse_result_message(data: &Value) -> Result<Message> {
             .unwrap_or(false),
         num_turns: data.get("num_turns").and_then(|v| v.as_i64()).unwrap_or(0),
         session_id,
+        origin: data
+            .get("origin")
+            .and_then(|value| serde_json::from_value::<MessageOrigin>(value.clone()).ok()),
         total_cost_usd: data.get("total_cost_usd").and_then(|v| v.as_f64()),
         usage: data
             .get("usage")

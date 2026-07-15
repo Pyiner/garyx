@@ -44,7 +44,6 @@ impl From<mpsc::Receiver<Value>> for Prompt {
 }
 
 type PendingMap = HashMap<String, oneshot::Sender<std::result::Result<Value, String>>>;
-const FINISH_PROCESS_GRACE_TIMEOUT: Duration = Duration::from_secs(2);
 const FINISH_READER_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Internal client for bidirectional conversations with Claude Code.
@@ -326,39 +325,41 @@ impl ClaudeSDKClient {
         Ok(())
     }
 
-    /// Finish a normal streaming run after the provider has stopped accepting
-    /// more input.
-    ///
-    /// Claude Code may emit a turn `result` before the process has flushed
-    /// trailing protocol frames or transcript writes. Closing stdin gives it a
-    /// short graceful shutdown window, matching the TypeScript SDK's EOF +
-    /// grace path. If it does not exit promptly after EOF, terminate it as
-    /// cleanup rather than keeping a no-longer-writable active run around.
-    pub async fn finish(&mut self) -> Result<()> {
-        let Some(transport) = self.transport.take() else {
-            self.abort_background_tasks().await;
-            self.pending.lock().await.clear();
-            self.reset_message_channel();
-            return Ok(());
-        };
-
+    /// Close the CLI stdin stream while keeping stdout consumption and the
+    /// subprocess alive. Claude may emit internally queued follow-up turns
+    /// after input EOF, so callers must continue reading until stream EOF.
+    pub async fn end_input(&mut self) -> Result<()> {
         if let Some(handle) = self.stream_handle.take() {
             handle.abort();
             let _ = handle.await;
         }
 
-        transport.end_input().await?;
-
-        if !transport
-            .wait_for_exit_timeout(FINISH_PROCESS_GRACE_TIMEOUT)
-            .await?
-        {
-            tracing::warn!(
-                "Claude CLI did not exit within {}s after stdin closed; terminating",
-                FINISH_PROCESS_GRACE_TIMEOUT.as_secs()
-            );
-            transport.terminate().await?;
+        if let Some(transport) = self.transport.as_ref() {
+            transport.end_input().await?;
         }
+        Ok(())
+    }
+
+    /// Finish a normal streaming run after all stdout messages were consumed.
+    ///
+    /// A turn `result` is not a process terminal signal: background task
+    /// notifications can inject later turns. The normal path closes stdin and
+    /// waits for natural process exit; explicit [`Self::disconnect`] remains
+    /// the forceful cancellation path.
+    pub async fn finish(&mut self) -> Result<()> {
+        if self.transport.is_none() {
+            self.abort_background_tasks().await;
+            self.pending.lock().await.clear();
+            self.reset_message_channel();
+            return Ok(());
+        }
+
+        self.end_input().await?;
+        let transport = self
+            .transport
+            .take()
+            .expect("transport checked before ending input");
+        let finish_result = transport.wait_for_exit().await;
 
         self.wait_for_reader_shutdown().await;
 
@@ -366,7 +367,7 @@ impl ClaudeSDKClient {
         self.reset_message_channel();
         self.closed.store(false, Ordering::SeqCst);
 
-        Ok(())
+        finish_result
     }
 
     // -----------------------------------------------------------------------

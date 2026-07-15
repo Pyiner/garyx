@@ -6,6 +6,12 @@
 - Normal streaming completion should close stdin and wait for the Claude CLI
   process to exit; force-closing the transport can race Claude's local
   transcript flush and break later `--resume` behavior.
+- A Claude `result` ends one turn, not necessarily the process. After stdin is
+  closed, keep consuming stdout until EOF because completed background tasks
+  can inject later `task-notification` turns.
+- `background_tasks_changed` is a replace-style level signal whose ordering
+  relative to task edge messages is unspecified. It may control input
+  availability, but must never authorize output teardown.
 - Claude SDK approval tests need a `can_use_tool` callback, which adds
   `--permission-prompt-tool stdio`; changing only `permission_mode` may not
   make Claude send `can_use_tool` requests to the SDK.

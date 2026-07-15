@@ -45,6 +45,7 @@ impl OutboundUserMessage {
 struct RunState {
     client: Mutex<ClaudeSDKClient>,
     closed: AtomicBool,
+    input_ended: AtomicBool,
 }
 
 /// Cloneable control handle for a live Claude streaming task.
@@ -79,6 +80,12 @@ impl ClaudeRunControl {
         let session_id = (!session_id.is_empty()).then_some(session_id.as_str());
 
         let guard = self.state.client.lock().await;
+        self.ensure_open()?;
+        if self.state.input_ended.load(Ordering::SeqCst) {
+            return Err(ClaudeSDKError::Control(
+                "streaming run input is already closed".to_owned(),
+            ));
+        }
         guard
             .send_user_content(content, session_id, parent_tool_use_id.as_deref())
             .await
@@ -163,6 +170,7 @@ impl ClaudeRunControl {
         if self.state.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
+        self.state.input_ended.store(true, Ordering::SeqCst);
 
         let mut guard = self.state.client.lock().await;
         guard.disconnect().await
@@ -172,9 +180,26 @@ impl ClaudeRunControl {
         if self.state.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
+        self.state.input_ended.store(true, Ordering::SeqCst);
 
         let mut guard = self.state.client.lock().await;
         guard.finish().await
+    }
+
+    /// End user input without closing the output stream. The consumer must
+    /// keep calling `next_message` until it receives EOF.
+    pub async fn end_input(&self) -> Result<()> {
+        self.ensure_open()?;
+        let mut guard = self.state.client.lock().await;
+        self.ensure_open()?;
+        if self.state.input_ended.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        if let Err(error) = guard.end_input().await {
+            self.state.input_ended.store(false, Ordering::SeqCst);
+            return Err(error);
+        }
+        Ok(())
     }
 }
 
@@ -214,6 +239,10 @@ impl ClaudeRun {
     pub async fn finish(&self) -> Result<()> {
         self.control.finish().await
     }
+
+    pub async fn end_input(&self) -> Result<()> {
+        self.control.end_input().await
+    }
 }
 
 /// Start a Claude task in streaming mode and return a run handle.
@@ -228,6 +257,7 @@ pub async fn run_streaming(options: ClaudeAgentOptions) -> Result<ClaudeRun> {
     let state = Arc::new(RunState {
         client: Mutex::new(client),
         closed: AtomicBool::new(false),
+        input_ended: AtomicBool::new(false),
     });
 
     Ok(ClaudeRun {

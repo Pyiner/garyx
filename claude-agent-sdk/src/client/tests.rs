@@ -1,9 +1,9 @@
 use super::{
-    ClaudeSDKClient, FINISH_PROCESS_GRACE_TIMEOUT, Prompt, build_user_message_payload,
-    incoming_control_response, unsupported_incoming_control_request_response,
+    ClaudeSDKClient, Prompt, build_user_message_payload, incoming_control_response,
+    unsupported_incoming_control_request_response,
 };
 use crate::control::IncomingControlRequest;
-use crate::types::ClaudeAgentOptions;
+use crate::types::{ClaudeAgentOptions, Message};
 use serde_json::Value;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -28,14 +28,6 @@ fn write_mock_claude_script(name: &str, body: &str) -> PathBuf {
     perms.set_mode(0o755);
     fs::set_permissions(&path, perms).expect("failed to chmod mock claude script");
     path
-}
-
-#[test]
-fn test_finish_process_grace_timeout_matches_official_shutdown_window() {
-    assert_eq!(
-        FINISH_PROCESS_GRACE_TIMEOUT,
-        std::time::Duration::from_secs(2)
-    );
 }
 
 #[test]
@@ -355,7 +347,71 @@ printf done > '{}'\n",
 }
 
 #[tokio::test]
-async fn test_finish_terminates_process_after_grace_when_it_ignores_stdin_eof() {
+async fn test_end_input_keeps_reading_internally_queued_followup_turn() {
+    let script = write_mock_claude_script(
+        "end-input-followup",
+        "#!/bin/sh\n\
+IFS= read -r line || exit 1\n\
+request_id=$(printf '%s\\n' \"$line\" | sed -E 's/.*\"request_id\":\"([^\"]+)\".*/\\1/')\n\
+printf '%s\\n' \"{\\\"type\\\":\\\"control_response\\\",\\\"response\\\":{\\\"subtype\\\":\\\"success\\\",\\\"request_id\\\":\\\"$request_id\\\",\\\"response\\\":{}}}\"\n\
+IFS= read -r line || exit 2\n\
+printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"session-1\"}'\n\
+while IFS= read -r line; do :; done\n\
+printf '%s\\n' '{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"completed\"},\"origin\":{\"kind\":\"task-notification\"}}'\n\
+printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"model\":\"claude-test\",\"content\":[{\"type\":\"text\",\"text\":\"follow-up\"}]}}'\n\
+printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"session-2\",\"origin\":{\"kind\":\"task-notification\"}}'\n",
+    );
+    let options = ClaudeAgentOptions {
+        cli_path: Some(script.clone()),
+        ..ClaudeAgentOptions::default()
+    };
+
+    let mut client = ClaudeSDKClient::new(options);
+    client
+        .connect(None)
+        .await
+        .expect("streaming connect should succeed");
+    let mut messages = client
+        .take_message_receiver()
+        .expect("message receiver should exist");
+    client
+        .send_user_content(Value::String("start".to_owned()), None, None)
+        .await
+        .expect("initial user input should send");
+
+    let first = messages.recv().await.expect("first result should arrive");
+    assert!(matches!(first, Ok(Message::Result(_))));
+    client
+        .end_input()
+        .await
+        .expect("stdin should close cleanly");
+
+    let mut saw_followup_user = false;
+    let mut final_session_id = None;
+    while let Some(message) = messages.recv().await {
+        match message.expect("follow-up frame should parse") {
+            Message::User(user) => {
+                saw_followup_user = user
+                    .origin
+                    .as_ref()
+                    .is_some_and(|origin| origin.is_task_notification());
+            }
+            Message::Result(result) => final_session_id = Some(result.session_id.clone()),
+            _ => {}
+        }
+    }
+
+    assert!(saw_followup_user);
+    assert_eq!(final_session_id.as_deref(), Some("session-2"));
+    client
+        .finish()
+        .await
+        .expect("natural finish should succeed");
+    let _ = fs::remove_file(script);
+}
+
+#[tokio::test]
+async fn test_finish_does_not_terminate_normal_process_after_two_seconds() {
     let script = write_mock_claude_script(
         "finish-ignores-eof",
         "#!/bin/sh\n\
@@ -375,23 +431,18 @@ exec sleep 600\n",
         .await
         .expect("streaming connect should succeed");
 
-    let started = std::time::Instant::now();
-    client
-        .finish()
-        .await
-        .expect("finish should terminate cleanup");
+    tokio::time::pause();
+    let finish_task = tokio::spawn(async move { client.finish().await });
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(3)).await;
+    tokio::task::yield_now().await;
 
     assert!(
-        started.elapsed() < FINISH_PROCESS_GRACE_TIMEOUT + std::time::Duration::from_secs(3),
-        "finish should not keep a completed run alive for a long process timeout"
+        !finish_task.is_finished(),
+        "normal finish must wait for natural exit instead of killing at two seconds"
     );
-    assert!(client.transport.is_none());
-    assert!(client.reader_handle.is_none());
-    assert!(client.stream_handle.is_none());
-    assert!(client.pending.lock().await.is_empty());
-    assert!(client.msg_tx.is_some());
-    assert!(client.msg_rx.is_some());
-    assert!(!client.closed.load(Ordering::SeqCst));
+    finish_task.abort();
+    let _ = finish_task.await;
 
     let _ = fs::remove_file(script);
 }

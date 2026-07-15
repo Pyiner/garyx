@@ -22,6 +22,26 @@ fn test_parse_user_message_string() {
 }
 
 #[test]
+fn test_parse_user_message_preserves_task_notification_origin() {
+    let data = json!({
+        "type": "user",
+        "message": { "role": "user", "content": "task completed" },
+        "origin": {
+            "kind": "task-notification",
+            "overageInUse": true
+        }
+    });
+
+    let msg = parse_message(&data).unwrap();
+    let Message::User(user) = msg else {
+        panic!("expected user message");
+    };
+    let origin = user.origin.expect("origin should be preserved");
+    assert!(origin.is_task_notification());
+    assert_eq!(origin.metadata.get("overageInUse"), Some(&json!(true)));
+}
+
+#[test]
 fn test_parse_user_message_blocks() {
     let data = json!({
         "type": "user",
@@ -224,7 +244,8 @@ fn test_parse_result_message() {
         "num_turns": 3,
         "session_id": "sess-1",
         "total_cost_usd": 0.05,
-        "result": "Done!"
+        "result": "Done!",
+        "origin": { "kind": "human" }
     });
 
     let msg = parse_message(&data).unwrap();
@@ -238,6 +259,10 @@ fn test_parse_result_message() {
             assert_eq!(r.session_id, "sess-1");
             assert_eq!(r.total_cost_usd, Some(0.05));
             assert_eq!(r.result.as_deref(), Some("Done!"));
+            assert_eq!(
+                r.origin.as_ref().map(|origin| origin.kind.as_str()),
+                Some("human")
+            );
         }
         other => panic!("Expected Result, got {other:?}"),
     }

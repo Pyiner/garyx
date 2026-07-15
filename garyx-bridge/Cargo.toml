@@ -30,3 +30,4 @@ reqwest = { workspace = true }
 [dev-dependencies]
 chrono-tz = "0.10"
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

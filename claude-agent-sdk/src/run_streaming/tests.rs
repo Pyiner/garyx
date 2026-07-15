@@ -21,6 +21,7 @@ async fn test_control_close_idempotent_on_unconnected_client() {
     let state = Arc::new(RunState {
         client: Mutex::new(ClaudeSDKClient::new(ClaudeAgentOptions::default())),
         closed: AtomicBool::new(false),
+        input_ended: AtomicBool::new(false),
     });
     let control = ClaudeRunControl { state };
     assert!(control.close().await.is_ok());

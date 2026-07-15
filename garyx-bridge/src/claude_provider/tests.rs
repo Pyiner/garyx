@@ -2,8 +2,8 @@ use super::*;
 use crate::gary_prompt::GARY_BASE_INSTRUCTIONS;
 use crate::native_slash::build_native_skill_prompt;
 use claude_agent_sdk::{
-    AssistantMessage, ResultMessage, SystemMessage, ToolResultBlock, ToolUseBlock, UserContent,
-    UserInput, UserMessage,
+    AssistantMessage, MessageOrigin, ResultMessage, SystemMessage, ToolResultBlock, ToolUseBlock,
+    UserContent, UserInput, UserMessage,
 };
 use garyx_models::provider::{ClaudeCodeConfig, QueuedUserInput};
 use serde_json::{Value, json};
@@ -1286,6 +1286,7 @@ async fn test_process_messages_streaming_emits_user_ack_boundaries() {
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -1306,6 +1307,7 @@ async fn test_process_messages_streaming_emits_user_ack_boundaries() {
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -1444,6 +1446,7 @@ async fn test_process_messages_streaming_keeps_input_queue_open_during_post_resu
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -1495,6 +1498,7 @@ async fn test_process_messages_streaming_keeps_input_queue_open_during_post_resu
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -1556,6 +1560,7 @@ async fn test_process_messages_streaming_waits_for_background_task_notification_
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -1672,6 +1677,262 @@ async fn test_process_messages_streaming_waits_for_background_task_notification_
     );
 }
 
+/// Deadline-scripted source for deterministic post-result lifecycle tests.
+/// A cancelled read leaves the pending frame in place, matching CLI stdout.
+struct ScriptedMessageSource {
+    items: VecDeque<(tokio::time::Instant, claude_agent_sdk::Result<Message>)>,
+    end_input_calls: usize,
+}
+
+impl ScriptedMessageSource {
+    fn new(items: Vec<(u64, claude_agent_sdk::Result<Message>)>) -> Self {
+        let start = tokio::time::Instant::now();
+        Self {
+            items: items
+                .into_iter()
+                .map(|(offset_ms, message)| (start + Duration::from_millis(offset_ms), message))
+                .collect(),
+            end_input_calls: 0,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl MessageSource for ScriptedMessageSource {
+    async fn next_message(&mut self) -> Option<claude_agent_sdk::Result<Message>> {
+        let deadline = self.items.front()?.0;
+        tokio::time::sleep_until(deadline).await;
+        self.items.pop_front().map(|(_, message)| message)
+    }
+
+    async fn end_input(&mut self) -> claude_agent_sdk::Result<()> {
+        self.end_input_calls += 1;
+        Ok(())
+    }
+}
+
+fn scripted_user_text(text: &str) -> claude_agent_sdk::Result<Message> {
+    Ok(Message::User(UserMessage {
+        content: UserContent::Text(text.to_owned()),
+        uuid: None,
+        parent_tool_use_id: None,
+        tool_use_result: None,
+        origin: None,
+    }))
+}
+
+fn scripted_task_notification_user(text: &str) -> claude_agent_sdk::Result<Message> {
+    Ok(Message::User(UserMessage {
+        content: UserContent::Text(text.to_owned()),
+        uuid: None,
+        parent_tool_use_id: None,
+        tool_use_result: None,
+        origin: Some(MessageOrigin {
+            kind: "task-notification".to_owned(),
+            metadata: HashMap::new(),
+        }),
+    }))
+}
+
+fn scripted_assistant_text(text: &str) -> claude_agent_sdk::Result<Message> {
+    Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: text.to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    }))
+}
+
+fn scripted_success_result(session_id: &str) -> claude_agent_sdk::Result<Message> {
+    Ok(Message::Result(Box::new(ResultMessage {
+        subtype: "success".to_owned(),
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        session_id: session_id.to_owned(),
+        total_cost_usd: Some(0.0),
+        ..Default::default()
+    })))
+}
+
+fn scripted_system(subtype: &str, data: Value) -> claude_agent_sdk::Result<Message> {
+    Ok(Message::System(SystemMessage {
+        subtype: subtype.to_owned(),
+        data,
+    }))
+}
+
+/// A level update may empty the live-task set before the completion edge and
+/// its injected follow-up turn. Model latency can exceed the input drain
+/// window, but the future turn must still be consumed.
+#[tokio::test(start_paused = true)]
+async fn test_process_messages_streaming_survives_followup_gap_after_empty_background_set() {
+    let provider = make_provider();
+    provider.set_pending_inputs("run-followup-gap", 1).await;
+
+    let mut source = ScriptedMessageSource::new(vec![
+        (0, scripted_user_text("start background task")),
+        (
+            0,
+            scripted_system(
+                "task_started",
+                json!({
+                    "type": "system",
+                    "subtype": "task_started",
+                    "task_id": "task-3",
+                    "tool_use_id": "toolu_3",
+                    "task_type": "local_agent",
+                }),
+            ),
+        ),
+        (0, scripted_assistant_text("interim summary")),
+        (0, scripted_success_result("sdk-session-1")),
+        (
+            50,
+            scripted_system(
+                "background_tasks_changed",
+                json!({
+                    "type": "system",
+                    "subtype": "background_tasks_changed",
+                    "tasks": [],
+                }),
+            ),
+        ),
+        (
+            4_000,
+            scripted_system(
+                "task_notification",
+                json!({
+                    "type": "system",
+                    "subtype": "task_notification",
+                    "task_id": "task-3",
+                    "tool_use_id": "toolu_3",
+                    "status": "completed",
+                }),
+            ),
+        ),
+        (
+            4_010,
+            scripted_task_notification_user("<task-notification>completed</task-notification>"),
+        ),
+        (4_020, scripted_assistant_text("follow-up summary")),
+        (4_030, scripted_success_result("sdk-session-2")),
+    ]);
+
+    let cb: StreamCallback = Box::new(|_| {});
+    let (response_text, result_data, _signals) = provider
+        .process_messages_streaming("run-followup-gap", "thread::test", &mut source, &cb)
+        .await
+        .expect("stream should process");
+
+    assert_eq!(response_text, "interim summary\n\nfollow-up summary");
+    assert_eq!(
+        result_data.expect("expected final result").session_id,
+        "sdk-session-2"
+    );
+    assert_eq!(source.end_input_calls, 1, "stdin should close exactly once");
+}
+
+/// The completion edge is not ordered relative to the interim result. If it
+/// arrives first, a later result must not re-arm an output-closing timer that
+/// can discard the injected follow-up turn.
+#[tokio::test(start_paused = true)]
+async fn test_process_messages_streaming_survives_gap_when_task_edge_precedes_result() {
+    let provider = make_provider();
+    provider.set_pending_inputs("run-edge-first", 1).await;
+
+    let mut source = ScriptedMessageSource::new(vec![
+        (0, scripted_user_text("start background task")),
+        (
+            0,
+            scripted_system(
+                "task_started",
+                json!({
+                    "type": "system",
+                    "subtype": "task_started",
+                    "task_id": "task-3",
+                    "tool_use_id": "toolu_3",
+                    "task_type": "local_agent",
+                }),
+            ),
+        ),
+        (0, scripted_assistant_text("interim summary")),
+        (
+            0,
+            scripted_system(
+                "background_tasks_changed",
+                json!({
+                    "type": "system",
+                    "subtype": "background_tasks_changed",
+                    "tasks": [],
+                }),
+            ),
+        ),
+        (
+            0,
+            scripted_system(
+                "task_notification",
+                json!({
+                    "type": "system",
+                    "subtype": "task_notification",
+                    "task_id": "task-3",
+                    "tool_use_id": "toolu_3",
+                    "status": "completed",
+                }),
+            ),
+        ),
+        (50, scripted_success_result("sdk-session-1")),
+        (
+            4_000,
+            scripted_task_notification_user("<task-notification>completed</task-notification>"),
+        ),
+        (4_010, scripted_assistant_text("follow-up summary")),
+        (4_020, scripted_success_result("sdk-session-2")),
+    ]);
+
+    let cb: StreamCallback = Box::new(|_| {});
+    let (response_text, result_data, _signals) = provider
+        .process_messages_streaming("run-edge-first", "thread::test", &mut source, &cb)
+        .await
+        .expect("stream should process");
+
+    assert_eq!(response_text, "interim summary\n\nfollow-up summary");
+    assert_eq!(
+        result_data.expect("expected final result").session_id,
+        "sdk-session-2"
+    );
+    assert_eq!(source.end_input_calls, 1, "stdin should close exactly once");
+}
+
+struct NeverEndingMessageSource;
+
+#[async_trait::async_trait]
+impl MessageSource for NeverEndingMessageSource {
+    async fn next_message(&mut self) -> Option<claude_agent_sdk::Result<Message>> {
+        std::future::pending().await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn test_process_messages_streaming_reports_idle_stream_as_failure() {
+    let provider = make_provider();
+    let mut source = NeverEndingMessageSource;
+    let cb: StreamCallback = Box::new(|_| {});
+
+    let error = provider
+        .process_messages_streaming("run-idle", "thread::test", &mut source, &cb)
+        .await
+        .expect_err("an idle stream must use the forceful error cleanup path");
+
+    assert!(
+        matches!(&error, BridgeError::RunFailed(message) if message.contains("stream idle")),
+        "unexpected idle-stream error: {error}"
+    );
+}
+
 #[tokio::test]
 async fn test_process_messages_streaming_emits_queued_input_ack_id_after_root_ack() {
     let provider = make_provider();
@@ -1682,6 +1943,7 @@ async fn test_process_messages_streaming_emits_queued_input_ack_id_after_root_ac
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -1702,6 +1964,7 @@ async fn test_process_messages_streaming_emits_queued_input_ack_id_after_root_ac
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -1774,6 +2037,7 @@ async fn test_process_messages_streaming_suppresses_claude_synthetic_no_response
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -1794,6 +2058,7 @@ async fn test_process_messages_streaming_suppresses_claude_synthetic_no_response
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -1960,6 +2225,7 @@ async fn test_process_messages_streaming_emits_assistant_segment_boundaries() {
         uuid: None,
         parent_tool_use_id: Some("tu-1".to_owned()),
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -2049,6 +2315,7 @@ async fn test_process_messages_streaming_emits_tool_result_user_echo_without_bou
         uuid: None,
         parent_tool_use_id: Some("tu-1".to_owned()),
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -2136,6 +2403,7 @@ async fn test_process_messages_streaming_emits_live_tool_events() {
         uuid: None,
         parent_tool_use_id: Some("toolu_1".to_owned()),
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -2212,6 +2480,7 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
         uuid: None,
         parent_tool_use_id: Some("toolu_parent".to_owned()),
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -2509,6 +2778,7 @@ async fn test_process_messages_streaming_preserves_assistant_block_order() {
         uuid: None,
         parent_tool_use_id: Some("toolu_order".to_owned()),
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -2593,6 +2863,7 @@ async fn test_process_messages_streaming_waits_for_all_pending_results() {
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -2629,6 +2900,7 @@ async fn test_process_messages_streaming_waits_for_all_pending_results() {
         uuid: None,
         parent_tool_use_id: None,
         tool_use_result: None,
+        origin: None,
     })))
     .await
     .unwrap();
@@ -3607,8 +3879,9 @@ fn test_background_tasks_changed_replaces_task_set() {
         HashSet::from(["live-1".to_owned(), "live-2".to_owned()])
     );
 
-    // Empty payload clears everything, releasing the post-result drain gate
-    // even when an individual terminal task signal was missed.
+    // Empty payload clears everything, allowing stdin to close after the
+    // input-drain window even when an individual terminal edge was missed.
+    // Output consumption remains open until stream EOF.
     update_claude_background_tasks(
         &SystemMessage {
             subtype: "background_tasks_changed".to_owned(),

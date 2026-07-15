@@ -74,6 +74,10 @@ for personal data and remove it.
   secrets out of committed fixtures.
 - Provider, agent, bot, and channel identity presentation should resolve
   through shared presentation helpers instead of local view switch tables.
+- A Claude Code `result` is a turn boundary, not a process boundary. Normal
+  completion may close stdin, but must consume stdout through EOF and wait for
+  natural process exit; background-task level signals never authorize output
+  teardown.
 
 Detailed data and runtime contracts: @docs/agents/repository-contracts.md and
 @docs/agents/workspace-paths.md.

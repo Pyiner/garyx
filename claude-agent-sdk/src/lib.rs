@@ -15,6 +15,7 @@ pub use run_streaming::{
 pub use types::{
     AssistantMessage, AssistantMessageError, CanUseToolCallback, CanUseToolFuture,
     ClaudeAgentDefinition, ClaudeAgentOptions, ContentBlock, DocumentBlock, DocumentSource,
-    McpServerConfig, Message, PermissionMode, ResultMessage, StreamEvent, SystemMessage, TextBlock,
-    ThinkingBlock, ToolResultBlock, ToolUseBlock, UnknownContentBlock, UserContent, UserMessage,
+    McpServerConfig, Message, MessageOrigin, PermissionMode, ResultMessage, StreamEvent,
+    SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock, UnknownContentBlock,
+    UserContent, UserMessage,
 };
