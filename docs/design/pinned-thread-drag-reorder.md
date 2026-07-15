@@ -306,21 +306,17 @@ lifecycle; `dragSessionDidEnd` alone cannot distinguish an accepted drop from
 a terminated session; thread rows already own a 0.36s long-press menu that
 competes with the lift.
 
-The first commit of the batch is therefore an **architecture-gate spike**
-that must demonstrate, on the app's **minimum deployment target (iOS 17, per
-`project.yml` / `Package.swift`) and the current OS**. iOS 17 verification is
-**non-waivable** for the adapter path (review round-3 F3): the OS behaviors
-under test — `onMove`'s callback-only surface, drag-session end semantics,
-delegate ownership on the backing collection view — are exactly the unknowns,
-so API availability alone proves nothing. Obligations 1-6 must run on an
-iOS 17 simulator, device, or CI runner (install the runtime via `xcodebuild
--downloadPlatform iOS` if absent). If an iOS 17 runtime genuinely cannot be
-obtained anywhere, the adapter path must not ship to iOS 17 at all:
-**version-gate** it — iOS 17 gets the officially documented `EditMode`-based
-explicit reorder mode (fallback (b)), and the adapter path enables only on OS
-versions it was actually verified on. Raising the deployment target is a
-product decision for the owner, never an implementer fallback. The spike must
-demonstrate:
+The first commit of the batch is therefore an **architecture-gate spike**.
+**Owner decision (2026-07-15, superseding the round-3 F3 obligation): no
+old-OS compatibility.** The feature targets the latest iOS only: the drag
+path is availability-gated to the OS versions actually verified in the spike
+(currently iOS 26.x — all installed runtimes must be verified); **older OS
+versions keep today's behavior (no drag reorder) — the `EditMode` fallback
+mode is dropped entirely**, and the deployment target stays unchanged. The
+OS behaviors under test — `onMove`'s callback-only surface, drag-session end
+semantics, delegate ownership on the backing collection view — remain the
+unknowns, so the spike obligations still gate the wiring; they simply run on
+the current runtimes only. The spike must demonstrate:
 
 1. drag *began*, *accepted drop*, and *cancel* are reliably distinguished and
    each drives freeze/unfreeze (accepted drop ⇒ single commit; cancel ⇒
@@ -355,15 +351,17 @@ demonstrate:
    baselines, and absolute/relative thresholds for `hitchTimeRatio` and the
    new worst-frame metric; (c) make the tests **assert those thresholds
    explicitly** (mechanical pass/fail, not `measure` output to eyeball);
-   (d) define the two measurement paths separately — the verified-adapter OS
-   path may use `XCTHitchMetric`, the iOS 17 fallback path measures via the
-   probe's own frame-interval instrumentation.
+   measurement runs on the current-OS runtimes only (`XCTHitchMetric`
+   available there; no old-OS measurement path exists per the owner
+   decision).
 
 Candidate mechanisms, in order of preference: (a) plain `List` + `onMove` +
 a scoped, observation-only UIKit adapter for lifecycle (keeps fully native
 animation); (b) transient reorder mode with explicit drag handles
 (`editMode`-bound lifecycle, officially supported; removes menu arbitration
-entirely). Hand-rolled offset-animation reordering is rejected; splitting
+entirely) — retained only as the in-place fallback *on the latest OS* should
+the adapter fail its gate, not as an old-OS compatibility mode. Hand-rolled
+offset-animation reordering is rejected; splitting
 pinned rows into their own `ForEach` is a last resort that would re-open the
 single-identity-space proof (point 6). State-machine wiring (§5.2) does not
 start until the spike demonstrates points 1-7.
@@ -834,8 +832,9 @@ response write-back captures epoch/revision like any other response.
    observation-only UIKit adaptation, menu arbitration, mid-drag injection
    stability, and a quantified hitch gate with recorded baselines; drag
    ordering is preview-only until an accepted drop; explicit drag-handle
-   reorder mode is the sanctioned fallback. **iOS 17 verification is
-   non-waivable**: the adapter path ships only to OS versions it was verified
-   on; if no iOS 17 runtime is obtainable, iOS 17 gets the documented
-   `EditMode` reorder mode via a version gate (raising the deployment target
-   is an owner decision).
+   reorder mode is the sanctioned same-OS fallback. **No old-OS
+   compatibility (owner decision, 2026-07-15)**: the feature is
+   availability-gated to the latest, spike-verified OS versions (currently
+   iOS 26.x); older OS versions keep today's behavior with no drag reorder
+   and no `EditMode` compatibility mode; the deployment target stays
+   unchanged.
