@@ -52,7 +52,10 @@ import {
   updateRemoteAutomation,
   updateRemoteThread,
 } from './gary-client';
-import { PinnedOrderController } from './pinned-order-controller.ts';
+import {
+  applyRemotePinsMergeStep,
+  PinnedOrderController,
+} from './pinned-order-controller.ts';
 import {
   PinnedOrderState,
   type PinnedOrderOutbox,
@@ -1061,18 +1064,17 @@ async function mergeRemoteDesktopState(
   const remoteBotConsoles = botConsolesResult.value;
   const remoteAutomations = automationsResult.value;
 
-  if (pinsResult.ok) {
-    await pinOrder.receivePage(
-      {
+  const effectivePinnedThreadIds = await applyRemotePinsMergeStep(
+    pinOrder,
+    {
+      ok: pinsResult.ok,
+      value: {
         threadIds: remotePinsPage.threadIds,
         revision: remotePinsPage.revision,
       },
-      pinsRequestStamp,
-    );
-  } else {
-    await pinOrder.retryTick();
-  }
-  const effectivePinnedThreadIds = pinOrder.state.presentedOrder;
+    },
+    pinsRequestStamp,
+  );
 
   const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaces);
 

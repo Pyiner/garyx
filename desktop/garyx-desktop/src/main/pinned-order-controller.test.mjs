@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { PinnedOrderController } from "./pinned-order-controller.ts";
+import {
+  applyRemotePinsMergeStep,
+  PinnedOrderController,
+} from "./pinned-order-controller.ts";
 import { PinnedOrderState } from "./pinned-order-state.ts";
 
 function deferred() {
@@ -229,4 +232,44 @@ test("controller exposes non-blocking permanent pause and resumes explicitly", a
   assert.equal(h.requests.length, 2);
   await settleFlight(h, 1, ["b", "a"], 11);
   assert.equal(h.controller.snapshot().unsettled, false);
+});
+
+test("merge step feeds ok pages through acceptance and returns presented order", async () => {
+  const h = harness(["a", "b"], 10);
+
+  // Stamp captured before the "fetch", drop lands while it is in flight —
+  // the stale page must not clobber the local order (behavior-level version
+  // of the store's mergeRemoteDesktopState pins step).
+  const preAwaitStamp = h.controller.requestStamp();
+  await h.controller.commitOrder(["b", "a"]);
+  const presented = await applyRemotePinsMergeStep(
+    h.controller,
+    { ok: true, value: { threadIds: ["a", "b"], revision: 10 } },
+    preAwaitStamp,
+  );
+  assert.deepEqual(presented, ["b", "a"], "stale page must not override the drop");
+
+  // Settle the outstanding reorder, then a fresh authoritative page adopts.
+  h.flights[0].resolve({ threadIds: ["b", "a"], revision: 11 });
+  await h.controller.waitForTransportIdle();
+  const settledStamp = h.controller.requestStamp();
+  const adopted = await applyRemotePinsMergeStep(
+    h.controller,
+    { ok: true, value: { threadIds: ["x", "b", "a"], revision: 12 } },
+    settledStamp,
+  );
+  assert.deepEqual(adopted, ["x", "b", "a"], "settled + current page adopts server order");
+});
+
+test("merge step failure path keeps local order and only ticks retry", async () => {
+  const h = harness(["a", "b"], 10);
+  await h.controller.commitOrder(["b", "a"]);
+  const stamp = h.controller.requestStamp();
+  const presented = await applyRemotePinsMergeStep(
+    h.controller,
+    { ok: false, value: { threadIds: [], revision: 0 } },
+    stamp,
+  );
+  assert.deepEqual(presented, ["b", "a"], "failed fetch must not move the presented order");
+  assert.equal(h.requests.length, 1, "retryTick must not spawn a second concurrent PUT");
 });

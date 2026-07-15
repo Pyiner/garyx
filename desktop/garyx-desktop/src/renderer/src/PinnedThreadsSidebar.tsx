@@ -201,6 +201,21 @@ export function PinnedThreadsSidebar({
   const [confirmThreadId, setConfirmThreadId] = useState<string | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rowIds = useMemo(() => rows.map(({ thread }) => thread.id), [rows]);
+  // DndContext does not fire onDragCancel when it unmounts mid-drag (e.g.
+  // the 720px responsive collapse removes the sidebar, or a remote unpin
+  // empties the rows). Track the active drag and cancel it on unmount so the
+  // ingress drag baseline never dangles until the next drag.
+  const dragActiveRef = useRef(false);
+  const onDragCancelRef = useRef(onDragCancel);
+  onDragCancelRef.current = onDragCancel;
+  useEffect(() => {
+    return () => {
+      if (dragActiveRef.current) {
+        dragActiveRef.current = false;
+        onDragCancelRef.current();
+      }
+    };
+  }, []);
   const sensors = useSensors(
     useSensor(MouseSensor, {
       activationConstraint: { distance: 3 },
@@ -231,7 +246,18 @@ export function PinnedThreadsSidebar({
     return null;
   }
 
+  function handleDragStart() {
+    dragActiveRef.current = true;
+    onDragStart();
+  }
+
+  function handleDragCancel() {
+    dragActiveRef.current = false;
+    onDragCancel();
+  }
+
   function handleDragEnd(event: DragEndEvent) {
+    dragActiveRef.current = false;
     const nextOrder = reorderPinnedThreadIds(
       rowIds,
       String(event.active.id),
@@ -262,9 +288,9 @@ export function PinnedThreadsSidebar({
       <DndContext
         collisionDetection={closestCenter}
         modifiers={pinnedDragModifiers}
-        onDragCancel={onDragCancel}
+        onDragCancel={handleDragCancel}
         onDragEnd={handleDragEnd}
-        onDragStart={onDragStart}
+        onDragStart={handleDragStart}
         sensors={sensors}
       >
         <SortableContext items={rowIds} strategy={verticalListSortingStrategy}>

@@ -29,9 +29,11 @@ Result: **PASS — native List + observation-only adapter**
    include `_UIDragLiftGestureRecognizer`.
 3. Menu arbitration lands on the owner's preferred tier. A scoped
    `UIGestureRecognizerRepresentable` arms the stationary row-menu long press
-   simultaneously with native reorder. A stationary 0.55-second hold presents
-   the existing menu; detected movement dismisses that floating panel and the
-   same touch stream completes native reorder. The movement-suppresses-menu
+   simultaneously with native reorder. A stationary hold past the
+   0.36-second recognition threshold presents the existing menu (the UI
+   tests hold for 0.55s to clear that threshold comfortably); detected
+   movement dismisses that floating panel and the same touch stream
+   completes native reorder. The movement-suppresses-menu
    fallback and menu relocation were not needed.
 4. The debug harness injects a reversed canonical snapshot as soon as lift
    begins. The rendered pinned order remains equal to the pre-lift order until

@@ -110,7 +110,6 @@ struct GaryxPinnedOrderState: Equatable, Sendable {
         var baseline: [String]
         var preview: [String]
         var previewChanged: Bool
-        var acceptedBuffer: [String]?
     }
 
     private(set) var gatewayIdentity: String
@@ -183,8 +182,7 @@ struct GaryxPinnedOrderState: Equatable, Sendable {
         dragSession = DragSession(
             baseline: presentedOrder,
             preview: presentedOrder,
-            previewChanged: false,
-            acceptedBuffer: nil
+            previewChanged: false
         )
         return GaryxPinnedOrderUpdate()
     }
@@ -532,10 +530,10 @@ struct GaryxPinnedOrderState: Equatable, Sendable {
             outcome = .authoritative
         }
 
-        if var session = dragSession {
-            session.acceptedBuffer = resolvedOrder
-            dragSession = session
-        } else {
+        // During a drag the freeze defers publication; the post-drag
+        // publication reads `resolvedOrder` directly, so nothing is buffered
+        // on the session itself.
+        if dragSession == nil {
             appendPublicationIfChanged(effects: &effects)
         }
         return outcome

@@ -20,18 +20,21 @@ test("main-store pin merge captures before await and projects through the reduce
   const mergeStart = source.indexOf("async function mergeRemoteDesktopState");
   const stamp = source.indexOf("const pinsRequestStamp = pinOrder.requestStamp()", mergeStart);
   const requests = source.indexOf("await Promise.all", mergeStart);
-  const acceptance = source.indexOf("await pinOrder.receivePage", requests);
-  const projection = source.indexOf(
-    "const effectivePinnedThreadIds = pinOrder.state.presentedOrder",
-    acceptance,
+  const mergeStep = source.indexOf(
+    "const effectivePinnedThreadIds = await applyRemotePinsMergeStep(",
+    requests,
   );
-  const commit = source.indexOf("pinnedThreadIds,", projection);
+  const commit = source.indexOf("pinnedThreadIds,", mergeStep);
 
   assert.ok(mergeStart >= 0);
   assert.ok(stamp > mergeStart && stamp < requests, "stamp must be captured before requests await");
-  assert.ok(acceptance > requests, "raw page must pass revision acceptance");
-  assert.ok(projection > acceptance, "accepted reducer projection owns visible order");
-  assert.ok(commit > projection, "remote overwrite commits the projected order");
+  assert.ok(mergeStep > requests, "merge step (acceptance + projection) must run after the fetch");
+  assert.match(
+    source.slice(mergeStep, mergeStep + 400),
+    /pinsRequestStamp/,
+    "merge step must consume the pre-await stamp",
+  );
+  assert.ok(commit > mergeStep, "remote overwrite commits the projected order");
   assert.match(source.slice(commit, commit + 180), /pinsRevision: pinOrder\.state\.highestObservedRevision/);
 });
 

@@ -332,22 +332,20 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
 
     @ViewBuilder
     private func interactionSurface(_ content: Content) -> some View {
-        if movementSuppressesMenu {
+        if movementSuppressesMenu, #available(iOS 18.0, *) {
             // iOS 26's native List reorder recognizer can win an exclusive
             // long-press before the row gesture fires. Arm a stationary-only
             // recognizer alongside it instead: crossing the movement allowance
             // fails this menu gesture and leaves the native lift in control.
-            if #available(iOS 18.0, *) {
-                content
-                    .gesture(
-                        GaryxStationaryThreadMenuGesture(onRecognized: presentMenu)
-                    )
-                    .simultaneousGesture(TapGesture().onEnded(primaryAction))
-            } else {
-                content
-                    .simultaneousGesture(stationaryMenuGesture)
-                    .simultaneousGesture(TapGesture().onEnded(primaryAction))
-            }
+            // `movementSuppressesMenu` only turns on with the reorder feature,
+            // which is availability-gated to iOS 26+, so the #available guard
+            // exists purely to satisfy the iOS 17 deployment target — the
+            // fall-through below is the standard menu gesture.
+            content
+                .gesture(
+                    GaryxStationaryThreadMenuGesture(onRecognized: presentMenu)
+                )
+                .simultaneousGesture(TapGesture().onEnded(primaryAction))
         } else {
             // Keep this gesture simultaneous with the List's pan recognizer so
             // scrolling still wins after movement. Inside the row, however,
@@ -355,11 +353,6 @@ private struct GaryxThreadActionMenuModifier: ViewModifier {
             // releasing the same touch can never also open the thread.
             content.simultaneousGesture(primaryInteractionGesture)
         }
-    }
-
-    private var stationaryMenuGesture: some Gesture {
-        LongPressGesture(minimumDuration: 0.36, maximumDistance: 16)
-            .onEnded { _ in presentMenu() }
     }
 
     private func presentMenu() {

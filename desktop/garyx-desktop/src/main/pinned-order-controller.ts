@@ -229,3 +229,32 @@ export class PinnedOrderController {
     }
   }
 }
+
+export type RemotePinsSliceResult = {
+  ok: boolean;
+  value: { threadIds: string[]; revision: number };
+};
+
+/**
+ * The pins step of a remote-state merge (behavior seam for
+ * `mergeRemoteDesktopState`): a successful fetch feeds the raw page — with
+ * the stamp captured before the request was issued — through the reducer's
+ * acceptance pipeline; a failed fetch only advances the retry policy. Either
+ * way the reducer's presented order, never the raw remote page, is what the
+ * merged DesktopState carries.
+ */
+export async function applyRemotePinsMergeStep(
+  controller: PinnedOrderController,
+  pins: RemotePinsSliceResult,
+  stamp: PinnedOrderRequestStamp,
+): Promise<string[]> {
+  if (pins.ok) {
+    await controller.receivePage(
+      { threadIds: pins.value.threadIds, revision: pins.value.revision },
+      stamp,
+    );
+  } else {
+    await controller.retryTick();
+  }
+  return controller.state.presentedOrder;
+}

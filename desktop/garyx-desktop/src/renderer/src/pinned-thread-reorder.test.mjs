@@ -33,7 +33,14 @@ test("pinned sidebar owns the vertical sortable lifecycle contract", async () =>
   assert.match(source, /<SortableContext/);
   assert.match(source, /strategy=\{verticalListSortingStrategy\}/);
   assert.match(source, /restrictToVerticalAxis/);
-  assert.match(source, /onDragCancel=\{onDragCancel\}/);
-  assert.match(source, /onDragStart=\{onDragStart\}/);
+  assert.match(source, /onDragCancel=\{handleDragCancel\}/);
+  assert.match(source, /onDragStart=\{handleDragStart\}/);
   assert.match(source, /onReorderThreads\(nextOrder\)/);
+  // Mid-drag unmount (responsive collapse / rows emptied) must cancel the
+  // drag so the ingress baseline never dangles.
+  assert.match(source, /dragActiveRef\.current\s*=\s*true/);
+  assert.match(
+    source,
+    /return \(\) => \{[\s\S]*?onDragCancelRef\.current\(\)/,
+  );
 });

@@ -45,7 +45,9 @@ function normalizeRevision(value: unknown): number {
     : 0;
 }
 
-function normalizeGatewayIdentity(value: string | null | undefined): string {
+export function normalizeGatewayIdentity(
+  value: string | null | undefined,
+): string {
   return (value || "").trim().replace(/\/+$/, "").toLowerCase();
 }
 
@@ -131,6 +133,12 @@ export class PinnedOrderIngress {
   beginGatewaySwitch(gatewayIdentity: string): PinnedOrderGatewayDomainSnapshot {
     const previous = this.gatewayDomainSnapshot();
     const normalized = normalizeGatewayIdentity(gatewayIdentity);
+    if (!normalized) {
+      // Hardening: an empty target identity is treated as no-switch instead
+      // of adopting "" as the domain key (which would freeze identity checks
+      // against main-side DEFAULT fallback URLs).
+      return previous;
+    }
     if (this.initialized && normalized === this.gatewayIdentity) {
       return previous;
     }
@@ -336,11 +344,20 @@ export class PinnedOrderIngress {
   }
 
   private rebasePinnedFields(candidate: DesktopState): DesktopState {
+    const targetOrder =
+      this.dragBaselineOrder ?? this.unsettledDesiredOrder ?? this.committedOrder;
+    if (
+      candidate.pinsRevision === this.revisionFloor &&
+      ordersEqual(candidate.pinnedThreadIds ?? [], targetOrder)
+    ) {
+      // Preserve the reference when nothing would change so upstream
+      // `current === nextState` short-circuits keep working (no extra React
+      // commit per refresh).
+      return candidate;
+    }
     return {
       ...candidate,
-      pinnedThreadIds: this.dragBaselineOrder
-        ? [...this.dragBaselineOrder]
-        : this.presentedOrder,
+      pinnedThreadIds: [...targetOrder],
       pinsRevision: this.revisionFloor,
     };
   }

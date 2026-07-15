@@ -221,6 +221,7 @@ import {
   beginPinnedOrderGatewaySwitch,
   PinnedOrderIngress,
   installPinnedOrderIngress,
+  normalizeGatewayIdentity,
   requestDesktopState,
   requestDesktopStateResult,
   restorePinnedOrderGatewayDomain,
@@ -4693,11 +4694,14 @@ export function AppShell() {
           Boolean(pinnedOrderIngress.desiredOrder) ||
           Boolean(
             pinnedOrderMainSnapshot?.unsettled &&
-              pinnedOrderMainSnapshot.gatewayIdentity ===
-                (desktopState?.entitiesGatewayUrl || desktopState?.settings.gatewayUrl || "")
-                  .trim()
-                  .replace(/\/+$/, "")
-                  .toLowerCase(),
+              // Normalize BOTH sides: the main snapshot identity preserves
+              // case while the state URL was lowercased, which hid the badge
+              // for uppercase gateway URLs.
+              normalizeGatewayIdentity(pinnedOrderMainSnapshot.gatewayIdentity) ===
+                normalizeGatewayIdentity(
+                  desktopState?.entitiesGatewayUrl ||
+                    desktopState?.settings.gatewayUrl,
+                ),
           )
         }
         selectedAutomationId={selectedAutomationId}
