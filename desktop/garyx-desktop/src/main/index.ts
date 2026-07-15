@@ -60,7 +60,6 @@ import type {
   DeleteThreadInput,
   DesktopSettings,
   GenerateCustomAgentAvatarInput,
-  GetTaskInput,
   GetThreadHistoryInput,
   GetSkillEditorInput,
   GatewayConfigDocument,
@@ -99,16 +98,13 @@ import type {
   UpdateCustomAgentInput,
   UpdateThreadRuntimeSettingsInput,
   UpdateMcpServerInput,
-  UpdateSkillInput,
   UpdateSlashCommandInput,
   UpdateTaskStatusInput,
-  UpdateTaskTitleInput,
   UpsertMcpServerInput,
   UpsertSlashCommandInput,
   ShowBrowserConnectionMenuInput,
   AssignTaskInput,
   CopyTextToClipboardInput,
-  UnassignTaskInput,
 } from "@shared/contracts";
 
 import {
@@ -140,7 +136,6 @@ import {
   getCodingUsage,
   getCapsule,
   getCapsuleHtml,
-  getTask,
   getWorkspaceGitStatus,
   interruptThread,
   listCapsules,
@@ -158,7 +153,6 @@ import {
   getSkillEditor,
   openChatStream,
   previewWorkspaceFile,
-  probeGateway,
   readSkillFile,
   saveGatewaySettings,
   saveSkillFile,
@@ -170,13 +164,10 @@ import {
   uploadChatAttachments,
   updateCustomAgent,
   updateMcpServer,
-  updateSkill,
   updateSlashCommand,
   updateTaskStatus,
   assignTask,
   assertRecentThreadGatewayScope,
-  unassignTask,
-  updateTaskTitle,
   updateRemoteThread,
   validateListRecentThreadsInput,
 } from "./gary-client";
@@ -235,7 +226,6 @@ import {
   browserOpenExternal,
   browserReload,
   closeBrowserTab,
-  copyImageToClipboard,
   createBrowserTab,
   listBrowserState,
   navigateBrowserTab,
@@ -251,7 +241,6 @@ import {
   setBrowserOverlayPaused,
 } from "./browser-runtime";
 import {
-  activateTerminalSession,
   closeTerminalSession,
   createTerminalSession,
   listTerminalState,
@@ -260,11 +249,6 @@ import {
   unsubscribeTerminalState,
   writeTerminalInput,
 } from "./terminal-runtime";
-import {
-  commitWorkspaceChanges,
-  getWorkspaceGitDetails,
-  pushWorkspaceBranch,
-} from "./workspace-git-runtime";
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -777,11 +761,6 @@ function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle("garyx:get-task", async (_event, input: GetTaskInput) => {
-    const settings = await resolveSettings();
-    return getTask(settings, input);
-  });
-
   ipcMain.handle("garyx:list-capsules", async () => {
     const settings = await resolveSettings();
     return listCapsules(settings);
@@ -858,14 +837,6 @@ function registerIpcHandlers(): void {
     return assignTask(settings, input);
   });
 
-  ipcMain.handle(
-    "garyx:unassign-task",
-    async (_event, input: UnassignTaskInput) => {
-      const settings = await resolveSettings();
-      return unassignTask(settings, input);
-    },
-  );
-
   ipcMain.handle("garyx:stop-task", async (_event, input: StopTaskInput) => {
     const settings = await resolveSettings();
     return stopTask(settings, input);
@@ -875,14 +846,6 @@ function registerIpcHandlers(): void {
     const settings = await resolveSettings();
     return deleteTask(settings, input);
   });
-
-  ipcMain.handle(
-    "garyx:update-task-title",
-    async (_event, input: UpdateTaskTitleInput) => {
-      const settings = await resolveSettings();
-      return updateTaskTitle(settings, input);
-    },
-  );
 
   ipcMain.handle("garyx:list-skills", async () => {
     const settings = await resolveSettings();
@@ -951,14 +914,6 @@ function registerIpcHandlers(): void {
     async (_event, input: CreateSkillInput) => {
       const settings = await resolveSettings();
       return createSkill(settings, input);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:update-skill",
-    async (_event, input: UpdateSkillInput) => {
-      const settings = await resolveSettings();
-      return updateSkill(settings, input);
     },
   );
 
@@ -1158,11 +1113,6 @@ function registerIpcHandlers(): void {
       return setDesktopBotBinding(input.threadId, input.botId);
     },
   );
-
-  ipcMain.handle("garyx:list-channel-endpoints", async () => {
-    const state = await getDesktopState();
-    return state.endpoints;
-  });
 
   ipcMain.handle(
     "garyx:bind-channel-endpoint",
@@ -1407,22 +1357,9 @@ function registerIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle(
-    "garyx:probe-gateway",
-    async (
-      _event,
-      input: { gatewayUrl: string; gatewayAuthToken: string; gatewayHeaders?: string },
-    ) => {
-      return probeGateway(input);
-    },
-  );
-
   ipcMain.handle("garyx:list-browser-state", async () => {
     return listBrowserState();
   });
-  ipcMain.handle("garyx:get-workspace-git-details", getWorkspaceGitDetails);
-  ipcMain.handle("garyx:commit-workspace-changes", commitWorkspaceChanges);
-  ipcMain.handle("garyx:push-workspace-branch", pushWorkspaceBranch);
   ipcMain.handle("garyx:create-browser-tab", createBrowserTab);
   ipcMain.handle("garyx:activate-browser-tab", activateBrowserTab);
   ipcMain.handle("garyx:close-browser-tab", closeBrowserTab);
@@ -1433,7 +1370,6 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:browser-open-external", browserOpenExternal);
   ipcMain.handle("garyx:capture-browser-tab", captureBrowserTab);
   ipcMain.handle("garyx:set-browser-annotation-mode", setBrowserAnnotationMode);
-  ipcMain.handle("garyx:copy-image-to-clipboard", copyImageToClipboard);
   ipcMain.handle("garyx:copy-text-to-clipboard", (_event, input: CopyTextToClipboardInput) => {
     clipboard.writeText(typeof input.text === "string" ? input.text : "");
   });
@@ -1465,7 +1401,6 @@ function registerIpcHandlers(): void {
     return listTerminalState();
   });
   ipcMain.handle("garyx:create-terminal-session", createTerminalSession);
-  ipcMain.handle("garyx:activate-terminal-session", activateTerminalSession);
   ipcMain.handle("garyx:close-terminal-session", closeTerminalSession);
   ipcMain.handle("garyx:write-terminal-input", writeTerminalInput);
   ipcMain.handle("garyx:resize-terminal-session", resizeTerminalSession);

@@ -137,18 +137,14 @@ const api: GaryxDesktopApi = {
   deleteCapsule: (input) => ipcRenderer.invoke("garyx:delete-capsule", input),
   setCapsuleFavorite: (input) =>
     ipcRenderer.invoke("garyx:set-capsule-favorite", input),
-  getTask: (input) => ipcRenderer.invoke("garyx:get-task", input),
   createTask: (input) => ipcRenderer.invoke("garyx:create-task", input),
   listProviderRecentSessions: (input) =>
     ipcRenderer.invoke("garyx:list-provider-recent-sessions", input),
   updateTaskStatus: (input) =>
     ipcRenderer.invoke("garyx:update-task-status", input),
   assignTask: (input) => ipcRenderer.invoke("garyx:assign-task", input),
-  unassignTask: (input) => ipcRenderer.invoke("garyx:unassign-task", input),
   stopTask: (input) => ipcRenderer.invoke("garyx:stop-task", input),
   deleteTask: (input) => ipcRenderer.invoke("garyx:delete-task", input),
-  updateTaskTitle: (input) =>
-    ipcRenderer.invoke("garyx:update-task-title", input),
   listSkills: () => ipcRenderer.invoke("garyx:list-skills"),
   listCustomAgents: () => ipcRenderer.invoke("garyx:list-custom-agents"),
   listProviderModels: (providerType) =>
@@ -165,7 +161,6 @@ const api: GaryxDesktopApi = {
   cancelCustomAgentAvatarGeneration: (input) =>
     ipcRenderer.invoke("garyx:cancel-custom-agent-avatar-generation", input),
   createSkill: (input) => ipcRenderer.invoke("garyx:create-skill", input),
-  updateSkill: (input) => ipcRenderer.invoke("garyx:update-skill", input),
   toggleSkill: (input) => ipcRenderer.invoke("garyx:toggle-skill", input),
   deleteSkill: (input) => ipcRenderer.invoke("garyx:delete-skill", input),
   getSkillEditor: (input) => ipcRenderer.invoke("garyx:get-skill-editor", input),
@@ -212,7 +207,6 @@ const api: GaryxDesktopApi = {
   addChannelAccount: (input) =>
     ipcRenderer.invoke("garyx:add-channel-account", input),
   setBotBinding: (input) => ipcRenderer.invoke("garyx:set-bot-binding", input),
-  listChannelEndpoints: () => ipcRenderer.invoke("garyx:list-channel-endpoints"),
   bindChannelEndpoint: (input) =>
     ipcRenderer.invoke("garyx:bind-channel-endpoint", input),
   detachChannelEndpoint: (input) =>
@@ -220,12 +214,6 @@ const api: GaryxDesktopApi = {
   createThread: (input) => ipcRenderer.invoke("garyx:create-thread", input),
   getWorkspaceGitStatus: (input) =>
     ipcRenderer.invoke("garyx:get-workspace-git-status", input),
-  getWorkspaceGitDetails: (input) =>
-    ipcRenderer.invoke("garyx:get-workspace-git-details", input),
-  commitWorkspaceChanges: (input) =>
-    ipcRenderer.invoke("garyx:commit-workspace-changes", input),
-  pushWorkspaceBranch: (input) =>
-    ipcRenderer.invoke("garyx:push-workspace-branch", input),
   renameThread: (input) => ipcRenderer.invoke("garyx:rename-thread", input),
   updateThreadRuntimeSettings: (input) =>
     ipcRenderer.invoke("garyx:update-thread-runtime-settings", input),
@@ -296,7 +284,6 @@ const api: GaryxDesktopApi = {
   interruptThread: (threadId) =>
     ipcRenderer.invoke("garyx:interrupt-thread", threadId),
   checkConnection: (input) => ipcRenderer.invoke("garyx:check-connection", input),
-  probeGateway: (input) => ipcRenderer.invoke("garyx:probe-gateway", input),
   listBrowserState: () => ipcRenderer.invoke("garyx:list-browser-state"),
   createBrowserTab: (input) =>
     ipcRenderer.invoke("garyx:create-browser-tab", input),
@@ -316,8 +303,6 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:capture-browser-tab", input),
   setBrowserAnnotationMode: (input) =>
     ipcRenderer.invoke("garyx:set-browser-annotation-mode", input),
-  copyImageToClipboard: (input) =>
-    ipcRenderer.invoke("garyx:copy-image-to-clipboard", input),
   copyTextToClipboard: (input) =>
     ipcRenderer.invoke("garyx:copy-text-to-clipboard", input),
   updateBrowserBounds: (input) =>
@@ -389,8 +374,6 @@ const api: GaryxDesktopApi = {
   listTerminalState: () => ipcRenderer.invoke("garyx:list-terminal-state"),
   createTerminalSession: (input) =>
     ipcRenderer.invoke("garyx:create-terminal-session", input),
-  activateTerminalSession: (input) =>
-    ipcRenderer.invoke("garyx:activate-terminal-session", input),
   closeTerminalSession: (input) =>
     ipcRenderer.invoke("garyx:close-terminal-session", input),
   writeTerminalInput: (input) =>

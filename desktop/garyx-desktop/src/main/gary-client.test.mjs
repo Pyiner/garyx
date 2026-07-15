@@ -8,7 +8,6 @@ import {
   updateCustomAgent,
   fetchRecentThreads,
   fetchThreadHistory,
-  getTask,
   listCapsules,
   listTaskForest,
   listProviderModels,
@@ -320,60 +319,6 @@ test("listProviderModels maps provider default reasoning effort", async () => {
     );
     assert.equal(providerModels.defaultModel, "claude-opus-4-8");
     assert.equal(providerModels.defaultReasoningEffort, "max");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("getTask fetches task detail and preserves backing thread id", async () => {
-  const originalFetch = globalThis.fetch;
-  const urls = [];
-  globalThis.fetch = async (url) => {
-    urls.push(String(url));
-    return new Response(
-      JSON.stringify({
-        task_id: "#TASK-42",
-        thread_id: "thread::task-42",
-        task: {
-          schema_version: 1,
-          number: 42,
-          title: "Synthetic agent task",
-          status: "in_progress",
-          creator: { kind: "agent", agent_id: "claude" },
-          executor: {
-            type: "agent",
-            agent_id: "claude",
-          },
-          created_at: "2026-06-22T00:00:00Z",
-          updated_at: "2026-06-22T00:00:00Z",
-          updated_by: { kind: "agent", agent_id: "claude" },
-          events: [],
-        },
-        thread: { message_count: 3 },
-      }),
-      { status: 200, statusText: "OK" },
-    );
-  };
-
-  try {
-    const task = await getTask(
-      {
-        gatewayUrl: "http://127.0.0.1:31337",
-        gatewayAuthToken: "",
-      },
-      { taskId: "#TASK-42" },
-    );
-
-    assert.equal(urls.length, 1);
-    assert.equal(urls[0], "http://127.0.0.1:31337/api/tasks/%23TASK-42");
-    assert.equal(task.taskId, "#TASK-42");
-    assert.equal(task.threadId, "thread::task-42");
-    assert.deepEqual(task.executor, {
-      type: "agent",
-      agentId: "claude",
-    });
-    assert.equal(task.runtimeAgentId, "");
-    assert.equal(task.replyCount, 3);
   } finally {
     globalThis.fetch = originalFetch;
   }

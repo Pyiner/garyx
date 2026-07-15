@@ -139,15 +139,6 @@ class TerminalRuntime {
     return this.snapshot();
   }
 
-  activateSession(input: TerminalSessionInput): DesktopTerminalState {
-    if (!this.sessions.has(input.sessionId)) {
-      throw new Error(`terminal session not found: ${input.sessionId}`);
-    }
-    this.activeSessionId = input.sessionId;
-    this.emit({ type: "state", state: this.snapshot() });
-    return this.snapshot();
-  }
-
   closeSession(input: TerminalSessionInput): DesktopTerminalState {
     const record = this.sessions.get(input.sessionId);
     if (!record) {
@@ -230,13 +221,6 @@ export function createTerminalSession(
   input?: CreateTerminalSessionInput,
 ): DesktopTerminalState {
   return terminalRuntime.createSession(input);
-}
-
-export function activateTerminalSession(
-  _event: IpcMainInvokeEvent,
-  input: TerminalSessionInput,
-): DesktopTerminalState {
-  return terminalRuntime.activateSession(input);
 }
 
 export function closeTerminalSession(

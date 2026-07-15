@@ -11,7 +11,6 @@ import type {
   SlashCommand,
   ToggleMcpServerInput,
   UpdateMcpServerInput,
-  UpdateSkillInput,
   UpdateSlashCommandInput,
   UpsertMcpServerInput,
   UpsertSlashCommandInput,
@@ -330,26 +329,6 @@ export async function createSkill(
     signal: AbortSignal.timeout(8000),
     body: JSON.stringify(input),
   });
-
-  return mapSkill(payload);
-}
-
-export async function updateSkill(
-  settings: DesktopSettings,
-  input: UpdateSkillInput,
-): Promise<DesktopSkillInfo> {
-  const payload = await requestJson<SkillPayload>(
-    settings,
-    `/api/skills/${encodeURIComponent(input.skillId)}`,
-    {
-      method: "PATCH",
-      signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({
-        name: input.name,
-        description: input.description,
-      }),
-    },
-  );
 
   return mapSkill(payload);
 }

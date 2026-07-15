@@ -2,13 +2,12 @@ import type {
   ConnectionStatus,
   DesktopSettings,
   GatewayConfigDocument,
-  GatewayProbeResult,
   GatewaySettingsPayload,
   GatewaySettingsSaveRequestOptions,
   GatewaySettingsSaveResult,
   GatewaySettingsSource,
 } from "@shared/contracts";
-import { normalizeGatewayUrl, requestJson, requestJsonFromGatewayUrl } from "./http.ts";
+import { requestJson } from "./http.ts";
 
 interface StatusPayload {
   sessions?: {
@@ -164,68 +163,6 @@ export async function checkConnection(
       gatewayUrl: settings.gatewayUrl,
       error:
         error instanceof Error ? error.message : "Unable to reach Garyx gateway",
-    };
-  }
-}
-
-export async function probeGateway(
-  input: { gatewayUrl: string; gatewayAuthToken: string; gatewayHeaders?: string },
-): Promise<GatewayProbeResult> {
-  const normalizedGatewayUrl = normalizeGatewayUrl(input.gatewayUrl);
-  const path = "/runtime";
-
-  if (!normalizedGatewayUrl) {
-    return {
-      ok: false,
-      isGaryGateway: false,
-      gatewayUrl: normalizedGatewayUrl,
-      path,
-      error: "Gateway URL is required.",
-    };
-  }
-
-  try {
-    const runtime = await requestJsonFromGatewayUrl<RuntimePayload>(
-      normalizedGatewayUrl,
-      input.gatewayAuthToken,
-      input.gatewayHeaders,
-      path,
-      {
-        signal: AbortSignal.timeout(5000),
-      },
-    );
-
-    const version = runtime.runtime?.version;
-    const host = runtime.gateway?.host;
-    const port = runtime.gateway?.port;
-    const isGaryGateway =
-      typeof version === "string" &&
-      version.trim().length > 0 &&
-      typeof host === "string" &&
-      host.trim().length > 0 &&
-      typeof port === "number" &&
-      Number.isFinite(port);
-
-    return {
-      ok: isGaryGateway,
-      isGaryGateway,
-      gatewayUrl: normalizedGatewayUrl,
-      path,
-      version,
-      host,
-      port,
-      error: isGaryGateway
-        ? undefined
-        : "Reached the URL, but the response does not look like a Garyx gateway.",
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      isGaryGateway: false,
-      gatewayUrl: normalizedGatewayUrl,
-      path,
-      error:
-        error instanceof Error ? error.message : "Unable to probe gateway URL",
     };
   }
 }

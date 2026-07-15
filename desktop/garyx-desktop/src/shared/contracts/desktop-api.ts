@@ -24,7 +24,6 @@ import type {
   BrowserBoundsInput,
   CaptureBrowserTabInput,
   CaptureBrowserTabResult,
-  CopyImageToClipboardInput,
   CopyTextToClipboardInput,
   CreateBrowserTabInput,
   CreateTerminalSessionInput,
@@ -61,7 +60,6 @@ import type {
   ToggleMcpServerInput,
   ToggleSkillInput,
   UpdateMcpServerInput,
-  UpdateSkillInput,
   UpdateSlashCommandInput,
   UpsertMcpServerInput,
   UpsertSlashCommandInput,
@@ -70,7 +68,6 @@ import type {
   AddChannelAccountInput,
   BindChannelEndpointInput,
   ChannelPluginCatalogEntry,
-  DesktopChannelEndpoint,
   DetachChannelEndpointInput,
 } from "./channel.ts";
 import type {
@@ -93,7 +90,6 @@ import type {
   ConnectionStatus,
   DesktopSettings,
   GatewayConfigDocument,
-  GatewayProbeResult,
   GatewaySettingsPayload,
   GatewaySettingsSaveRequestOptions,
   GatewaySettingsSaveResult,
@@ -106,13 +102,10 @@ import type {
   DesktopTaskForestPage,
   DesktopTaskSummary,
   DesktopTasksPage,
-  GetTaskInput,
   ListTaskForestInput,
   ListTasksInput,
   StopTaskInput,
-  UnassignTaskInput,
   UpdateTaskStatusInput,
-  UpdateTaskTitleInput,
 } from "./task.ts";
 import type {
   ArchiveThreadInput,
@@ -150,21 +143,17 @@ import type {
 } from "./update.ts";
 import type {
   AddWorkspaceByPathInput,
-  CommitWorkspaceChangesInput,
   DesktopLocalDirectoryListing,
   DesktopWorkspaceFileListing,
   DesktopWorkspaceFilePreview,
-  DesktopWorkspaceGitDetails,
   DesktopWorkspaceGitStatus,
   ListWorkspaceFilesInput,
   PreviewWorkspaceFileInput,
-  PushWorkspaceBranchInput,
   RemoveWorkspaceInput,
   RevealWorkspaceFileInput,
   SelectWorkspaceInput,
   UploadWorkspaceFilesInput,
   UploadWorkspaceFilesResult,
-  WorkspaceGitMutationResult,
 } from "./workspace.ts";
 import type {
   HorizontalLayoutPolicyName,
@@ -270,26 +259,14 @@ export interface GaryxDesktopApi {
   listTaskForest: (
     input?: ListTaskForestInput,
   ) => Promise<DesktopTaskForestPage>;
-  getTask: (input: GetTaskInput) => Promise<DesktopTaskSummary>;
   createTask: (input: CreateTaskInput) => Promise<DesktopTaskSummary>;
   getWorkspaceGitStatus: (input: {
     workspacePath: string;
   }) => Promise<DesktopWorkspaceGitStatus>;
-  getWorkspaceGitDetails: (input: {
-    workspacePath: string;
-  }) => Promise<DesktopWorkspaceGitDetails>;
-  commitWorkspaceChanges: (
-    input: CommitWorkspaceChangesInput,
-  ) => Promise<WorkspaceGitMutationResult>;
-  pushWorkspaceBranch: (
-    input: PushWorkspaceBranchInput,
-  ) => Promise<WorkspaceGitMutationResult>;
   updateTaskStatus: (input: UpdateTaskStatusInput) => Promise<void>;
   assignTask: (input: AssignTaskInput) => Promise<void>;
-  unassignTask: (input: UnassignTaskInput) => Promise<void>;
   stopTask: (input: StopTaskInput) => Promise<void>;
   deleteTask: (input: DeleteTaskInput) => Promise<void>;
-  updateTaskTitle: (input: UpdateTaskTitleInput) => Promise<void>;
   listCapsules: () => Promise<DesktopCapsulesPage>;
   getCapsule: (capsuleId: string) => Promise<DesktopCapsuleSummary | null>;
   getCapsuleHtml: (capsuleId: string) => Promise<DesktopCapsuleHtmlResult>;
@@ -322,7 +299,6 @@ export interface GaryxDesktopApi {
     input: CancelCustomAgentAvatarInput,
   ) => Promise<boolean>;
   createSkill: (input: CreateSkillInput) => Promise<DesktopSkillInfo>;
-  updateSkill: (input: UpdateSkillInput) => Promise<DesktopSkillInfo>;
   toggleSkill: (input: ToggleSkillInput) => Promise<DesktopSkillInfo>;
   deleteSkill: (input: DeleteSkillInput) => Promise<void>;
   getSkillEditor: (
@@ -379,7 +355,6 @@ export interface GaryxDesktopApi {
   }>;
   addChannelAccount: (input: AddChannelAccountInput) => Promise<DesktopState>;
   setBotBinding: (input: SetBotBindingInput) => Promise<DesktopState>;
-  listChannelEndpoints: () => Promise<DesktopChannelEndpoint[]>;
   bindChannelEndpoint: (
     input: BindChannelEndpointInput,
   ) => Promise<DesktopState>;
@@ -432,11 +407,6 @@ export interface GaryxDesktopApi {
     gatewayAuthToken?: string;
     gatewayHeaders?: string;
   }) => Promise<ConnectionStatus>;
-  probeGateway: (input: {
-    gatewayUrl: string;
-    gatewayAuthToken: string;
-    gatewayHeaders?: string;
-  }) => Promise<GatewayProbeResult>;
   listBrowserState: () => Promise<DesktopBrowserState>;
   createBrowserTab: (
     input?: CreateBrowserTabInput,
@@ -456,7 +426,6 @@ export interface GaryxDesktopApi {
   setBrowserAnnotationMode: (
     input: BrowserAnnotationModeInput,
   ) => Promise<void>;
-  copyImageToClipboard: (input: CopyImageToClipboardInput) => Promise<void>;
   copyTextToClipboard: (input: CopyTextToClipboardInput) => Promise<void>;
   updateBrowserBounds: (input: BrowserBoundsInput) => Promise<void>;
   setBrowserOverlayPaused: (paused: boolean) => Promise<void>;
@@ -480,9 +449,6 @@ export interface GaryxDesktopApi {
   listTerminalState: () => Promise<DesktopTerminalState>;
   createTerminalSession: (
     input?: CreateTerminalSessionInput,
-  ) => Promise<DesktopTerminalState>;
-  activateTerminalSession: (
-    input: TerminalSessionInput,
   ) => Promise<DesktopTerminalState>;
   closeTerminalSession: (
     input: TerminalSessionInput,

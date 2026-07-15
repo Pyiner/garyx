@@ -10,13 +10,10 @@ import type {
   DesktopTaskStatus,
   DesktopTaskSummary,
   DesktopTasksPage,
-  GetTaskInput,
   ListTaskForestInput,
   ListTasksInput,
   StopTaskInput,
-  UnassignTaskInput,
   UpdateTaskStatusInput,
-  UpdateTaskTitleInput,
 } from "@shared/contracts";
 import {
   GatewayContractError,
@@ -606,24 +603,6 @@ export async function listTaskForest(
   };
 }
 
-export async function getTask(
-  settings: DesktopSettings,
-  input: GetTaskInput,
-): Promise<DesktopTaskSummary> {
-  const taskId = input.taskId?.trim() || "";
-  if (!taskId) {
-    throw new Error("taskId is required");
-  }
-  const payload = await requestJson<TaskSummaryPayload>(
-    settings,
-    `/api/tasks/${encodeURIComponent(taskId)}`,
-    {
-      signal: AbortSignal.timeout(8000),
-    },
-  );
-  return mapTaskDetailEnvelope(payload, "get task response");
-}
-
 export async function createTask(
   settings: DesktopSettings,
   input: CreateTaskInput,
@@ -739,20 +718,6 @@ export async function assignTask(
   );
 }
 
-export async function unassignTask(
-  settings: DesktopSettings,
-  input: UnassignTaskInput,
-): Promise<void> {
-  await requestJson<unknown>(
-    settings,
-    `/api/tasks/${encodeURIComponent(input.taskId)}/assign`,
-    {
-      method: "DELETE",
-      signal: AbortSignal.timeout(8000),
-    },
-  );
-}
-
 export async function stopTask(
   settings: DesktopSettings,
   input: StopTaskInput,
@@ -777,23 +742,6 @@ export async function deleteTask(
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
-    },
-  );
-}
-
-export async function updateTaskTitle(
-  settings: DesktopSettings,
-  input: UpdateTaskTitleInput,
-): Promise<void> {
-  await requestJson<unknown>(
-    settings,
-    `/api/tasks/${encodeURIComponent(input.taskId)}/title`,
-    {
-      method: "PATCH",
-      signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({
-        title: input.title.trim(),
-      }),
     },
   );
 }
