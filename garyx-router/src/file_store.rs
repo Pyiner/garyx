@@ -2,18 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::{Mutex, Semaphore};
 use tracing::debug;
 
-use crate::store::{ThreadStore, ThreadStoreError};
+use crate::store::ThreadStoreError;
 
 // Constants matching the Python implementation.
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(45);
-const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
-const STALE_LOCK_THRESHOLD: Duration = Duration::from_secs(30);
-const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const DEFAULT_MAX_CONCURRENT_OPS: usize = 50;
 const DEFAULT_CACHE_MAX_SIZE: usize = 1000;
 
@@ -41,13 +37,11 @@ struct CacheEntry {
     inserted_at: Instant,
 }
 
-/// File-based thread storage with caching and locking.
+/// Read-only access to the legacy file-based thread archive.
 ///
-/// Port of the Python `FileThreadStore` with identical semantics:
-/// - JSON file storage per thread
-/// - Lock-file based concurrency control with stale lock detection
+/// Retains the archive's historical read semantics:
+/// - JSON file storage per record
 /// - In-memory TTL cache validated against file mtime
-/// - Atomic writes via temp-file + rename (POSIX)
 /// - Semaphore-limited concurrent file operations
 pub struct FileThreadStore {
     canonical_data_dir: PathBuf,
@@ -55,7 +49,6 @@ pub struct FileThreadStore {
     cache: Mutex<HashMap<String, CacheEntry>>,
     cache_ttl: Duration,
     cache_max_size: usize,
-    lock_timeout: Duration,
     semaphore: Semaphore,
 }
 
@@ -75,7 +68,6 @@ impl FileThreadStore {
             cache: Mutex::new(HashMap::new()),
             cache_ttl: DEFAULT_CACHE_TTL,
             cache_max_size: DEFAULT_CACHE_MAX_SIZE,
-            lock_timeout: DEFAULT_LOCK_TIMEOUT,
             semaphore: Semaphore::new(DEFAULT_MAX_CONCURRENT_OPS),
         })
     }
@@ -86,7 +78,6 @@ impl FileThreadStore {
         data_dir: impl AsRef<Path>,
         cache_ttl: Duration,
         cache_max_size: usize,
-        lock_timeout: Duration,
         max_concurrent_ops: usize,
     ) -> std::io::Result<Self> {
         let threads_dir = data_dir.as_ref().join("threads");
@@ -99,7 +90,6 @@ impl FileThreadStore {
             cache: Mutex::new(HashMap::new()),
             cache_ttl,
             cache_max_size,
-            lock_timeout,
             semaphore: Semaphore::new(max_concurrent_ops),
         })
     }
@@ -143,34 +133,6 @@ impl FileThreadStore {
         self.legacy_compat_thread_file(key)
     }
 
-    /// Return the thread path whose lock should be used for writes.
-    ///
-    /// When only legacy data exists, keep using the legacy lock during the
-    /// first write so legacy readers and updaters still serialize correctly
-    /// while the data is migrated to the canonical location.
-    fn resolve_write_lock_thread_file(&self, key: &str) -> PathBuf {
-        let canonical = self.thread_file(key);
-        if canonical.exists() {
-            return canonical;
-        }
-
-        let legacy = self.legacy_thread_file(key);
-        if legacy.exists() {
-            return legacy;
-        }
-
-        let legacy_compat = self.legacy_compat_thread_file(key);
-        if legacy_compat.exists() {
-            legacy_compat
-        } else {
-            canonical
-        }
-    }
-
-    fn lock_file_for_path(path: &Path) -> PathBuf {
-        path.with_extension("lock")
-    }
-
     fn decode_key(hex: &str) -> Option<String> {
         if hex.is_empty() || !hex.len().is_multiple_of(2) {
             return None;
@@ -194,59 +156,6 @@ impl FileThreadStore {
             return Self::decode_key(encoded);
         }
         Some(stem.replace("__", "::"))
-    }
-
-    /// Check for and remove stale lock files (older than [`STALE_LOCK_THRESHOLD`]).
-    async fn check_stale_lock(&self, thread_path: &Path) {
-        let lock_path = Self::lock_file_for_path(thread_path);
-        if let Ok(meta) = tokio::fs::metadata(&lock_path).await
-            && let Ok(modified) = meta.modified()
-            && let Ok(age) = SystemTime::now().duration_since(modified)
-            && age > STALE_LOCK_THRESHOLD
-        {
-            debug!(
-                thread_path = %thread_path.display(),
-                age_secs = age.as_secs(),
-                "removing stale lock"
-            );
-            let _ = tokio::fs::remove_file(&lock_path).await;
-        }
-    }
-
-    /// Acquire a lock file, polling until timeout.
-    ///
-    /// Returns a [`LockGuard`] that removes the lock file on drop (async cleanup
-    /// is handled by the caller via [`release_lock`]).
-    async fn acquire_lock(&self, thread_path: &Path) -> Result<(), std::io::Error> {
-        let lock_path = Self::lock_file_for_path(thread_path);
-        let deadline = Instant::now() + self.lock_timeout;
-
-        loop {
-            // Try to create the lock file exclusively.
-            match tokio::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&lock_path)
-                .await
-            {
-                Ok(_) => return Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if Instant::now() >= deadline {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            format!("lock timeout for path: {}", thread_path.display()),
-                        ));
-                    }
-                    tokio::time::sleep(LOCK_POLL_INTERVAL).await;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
-    /// Release a lock file.
-    async fn release_lock(&self, thread_path: &Path) {
-        let _ = tokio::fs::remove_file(Self::lock_file_for_path(thread_path)).await;
     }
 
     /// Get file modification time, or `None` if the file does not exist.
@@ -282,22 +191,11 @@ impl FileThreadStore {
         v.clone()
     }
 
-    /// Atomic write: write to a temp file then rename.
-    async fn atomic_write(path: &Path, data: &[u8]) -> std::io::Result<()> {
-        let tmp = path.with_extension("tmp");
-        tokio::fs::write(&tmp, data).await?;
-        tokio::fs::rename(&tmp, path).await?;
-        Ok(())
-    }
-
     fn storage_roots(&self) -> [&PathBuf; 2] {
         [&self.canonical_data_dir, &self.legacy_data_dir]
     }
-}
 
-#[async_trait]
-impl ThreadStore for FileThreadStore {
-    async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
+    pub async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
         // Check cache first.
         {
             let mut cache = self.cache.lock().await;
@@ -335,11 +233,8 @@ impl ThreadStore for FileThreadStore {
             .await
             .map_err(|error| ThreadStoreError::Backend(format!("semaphore closed: {error}")))?;
 
-        // Lock-free read: every writer lands through `atomic_write`
-        // (temp file + rename), so a plain read always observes one
-        // complete record. Readers must not queue on the write lock —
-        // concurrent history polling otherwise starves other readers
-        // and thread-create paths into lock timeouts.
+        // Reads never consult historical per-record lock files. The archive is
+        // read only during boot import while the lifecycle lock is held.
         let bytes = tokio::fs::read(&path)
             .await
             .map_err(|error| ThreadStoreError::Backend(format!("read failed: {error}")))?;
@@ -375,104 +270,7 @@ impl ThreadStore for FileThreadStore {
         Ok(Some(data))
     }
 
-    async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
-        let path = self.thread_file(thread_id);
-        let legacy_path = self.legacy_thread_file(thread_id);
-        let legacy_compat_path = self.legacy_compat_thread_file(thread_id);
-        let lock_thread_path = self.resolve_write_lock_thread_file(thread_id);
-
-        self.check_stale_lock(&lock_thread_path).await;
-
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|error| ThreadStoreError::Backend(format!("semaphore closed: {error}")))?;
-
-        self.acquire_lock(&lock_thread_path)
-            .await
-            .map_err(|error| ThreadStoreError::Backend(format!("lock timeout: {error}")))?;
-
-        let result = async {
-            let bytes = serde_json::to_vec_pretty(&data).map_err(|error| {
-                ThreadStoreError::Serialization {
-                    thread_id: thread_id.to_owned(),
-                    message: error.to_string(),
-                }
-            })?;
-            Self::atomic_write(&path, &bytes)
-                .await
-                .map_err(|error| ThreadStoreError::Backend(format!("write failed: {error}")))?;
-            if legacy_path != path && legacy_path.exists() {
-                let _ = tokio::fs::remove_file(&legacy_path).await;
-                let _ = tokio::fs::remove_file(Self::lock_file_for_path(&legacy_path)).await;
-            }
-            if legacy_compat_path != path && legacy_compat_path.exists() {
-                let _ = tokio::fs::remove_file(&legacy_compat_path).await;
-                let _ = tokio::fs::remove_file(Self::lock_file_for_path(&legacy_compat_path)).await;
-            }
-
-            let mtime = Self::file_mtime(&path)
-                .await
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-
-            let mut cache = self.cache.lock().await;
-            Self::evict_if_needed(&mut cache, self.cache_max_size);
-            cache.insert(
-                thread_id.to_owned(),
-                CacheEntry {
-                    data: Self::deep_clone(&data),
-                    mtime,
-                    inserted_at: Instant::now(),
-                },
-            );
-
-            debug!(thread_id, "saved thread");
-            Ok(())
-        }
-        .await;
-
-        self.release_lock(&lock_thread_path).await;
-        result
-    }
-
-    async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
-        // Remove from cache first.
-        self.cache.lock().await.remove(thread_id);
-
-        let path = self.resolve_thread_file(thread_id);
-        if !path.exists() {
-            return Ok(false);
-        }
-
-        self.check_stale_lock(&path).await;
-
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|error| ThreadStoreError::Backend(format!("semaphore closed: {error}")))?;
-
-        self.acquire_lock(&path)
-            .await
-            .map_err(|error| ThreadStoreError::Backend(format!("lock timeout: {error}")))?;
-
-        let result = tokio::fs::remove_file(&path).await;
-
-        // Release lock and clean up the lock file.
-        self.release_lock(&path).await;
-
-        match result {
-            Ok(()) => {
-                debug!(thread_id, "deleted thread");
-                Ok(true)
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(ThreadStoreError::Backend(format!("delete failed: {error}"))),
-        }
-    }
-
-    async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
+    pub async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
         let mut keys = Vec::new();
         let mut seen = HashSet::new();
         for root in self.storage_roots() {
@@ -519,91 +317,6 @@ impl ThreadStore for FileThreadStore {
             }
         }
         Ok(keys)
-    }
-
-    async fn exists(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
-        // Fast path: check cache.
-        {
-            let cache = self.cache.lock().await;
-            if cache.contains_key(thread_id) {
-                return Ok(true);
-            }
-        }
-        Ok(self.thread_file(thread_id).exists()
-            || self.legacy_thread_file(thread_id).exists()
-            || self.legacy_compat_thread_file(thread_id).exists())
-    }
-
-    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), ThreadStoreError> {
-        let path = self.resolve_thread_file(thread_id);
-
-        self.check_stale_lock(&path).await;
-
-        let _permit = self
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|error| ThreadStoreError::Backend(format!("semaphore closed: {error}")))?;
-
-        self.acquire_lock(&path)
-            .await
-            .map_err(|error| ThreadStoreError::Backend(format!("lock timeout: {error}")))?;
-
-        let result = async {
-            if !path.exists() {
-                return Err(ThreadStoreError::NotFound(thread_id.to_owned()));
-            }
-
-            let bytes = tokio::fs::read(&path)
-                .await
-                .map_err(|error| ThreadStoreError::Backend(format!("read failed: {error}")))?;
-
-            let mut data: Value = serde_json::from_slice(&bytes).map_err(|error| {
-                ThreadStoreError::Serialization {
-                    thread_id: thread_id.to_owned(),
-                    message: error.to_string(),
-                }
-            })?;
-
-            // Merge top-level keys.
-            if let (Some(existing), Some(new_fields)) = (data.as_object_mut(), updates.as_object())
-            {
-                for (k, v) in new_fields {
-                    existing.insert(k.clone(), v.clone());
-                }
-            }
-
-            let out_bytes = serde_json::to_vec_pretty(&data).map_err(|error| {
-                ThreadStoreError::Serialization {
-                    thread_id: thread_id.to_owned(),
-                    message: error.to_string(),
-                }
-            })?;
-            Self::atomic_write(&path, &out_bytes)
-                .await
-                .map_err(|error| ThreadStoreError::Backend(format!("write failed: {error}")))?;
-
-            let mtime = Self::file_mtime(&path)
-                .await
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-
-            let mut cache = self.cache.lock().await;
-            Self::evict_if_needed(&mut cache, self.cache_max_size);
-            cache.insert(
-                thread_id.to_owned(),
-                CacheEntry {
-                    data: Self::deep_clone(&data),
-                    mtime,
-                    inserted_at: Instant::now(),
-                },
-            );
-
-            Ok(())
-        }
-        .await;
-
-        self.release_lock(&path).await;
-        result
     }
 }
 

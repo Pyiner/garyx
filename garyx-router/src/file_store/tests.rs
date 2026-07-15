@@ -8,40 +8,27 @@ async fn make_store() -> (FileThreadStore, TempDir) {
     (store, tmp)
 }
 
-// ---------------------------------------------------------------
-// Basic CRUD
-// ---------------------------------------------------------------
+async fn seed_canonical(store: &FileThreadStore, key: &str, data: &Value) {
+    tokio::fs::write(
+        store.thread_file(key),
+        serde_json::to_vec_pretty(data).unwrap(),
+    )
+    .await
+    .unwrap();
+}
 
 #[tokio::test]
-async fn test_basic_crud() {
+async fn test_get_returns_none_for_missing_key() {
     let (store, _tmp) = make_store().await;
-
-    assert!(!store.exists("k1").await.unwrap());
-    assert_eq!(store.get("k1").await.unwrap(), None);
-
-    // Set and get.
-    store.set("k1", json!({"hello": "world"})).await.unwrap();
-    assert!(store.exists("k1").await.unwrap());
-    let v = store.get("k1").await.unwrap().unwrap();
-    assert_eq!(v["hello"], "world");
-
-    // Update.
-    store.update("k1", json!({"foo": "bar"})).await.unwrap();
-    let v = store.get("k1").await.unwrap().unwrap();
-    assert_eq!(v["hello"], "world");
-    assert_eq!(v["foo"], "bar");
-
-    // Delete.
-    assert!(store.delete("k1").await.unwrap());
-    assert!(!store.delete("k1").await.unwrap());
+    assert_eq!(store.get("missing").await.unwrap(), None);
 }
 
 #[tokio::test]
 async fn test_list_keys_with_prefix() {
     let (store, _tmp) = make_store().await;
-    store.set("agent1::main::u1", json!({})).await.unwrap();
-    store.set("agent1::main::u2", json!({})).await.unwrap();
-    store.set("agent2::main::u1", json!({})).await.unwrap();
+    seed_canonical(&store, "agent1::main::u1", &json!({})).await;
+    seed_canonical(&store, "agent1::main::u2", &json!({})).await;
+    seed_canonical(&store, "agent2::main::u1", &json!({})).await;
 
     let all = store.list_keys(None).await.unwrap();
     assert_eq!(all.len(), 3);
@@ -52,24 +39,12 @@ async fn test_list_keys_with_prefix() {
 }
 
 #[tokio::test]
-async fn test_update_missing_key() {
-    let (store, _tmp) = make_store().await;
-    let result = store.update("missing", json!({})).await;
-    assert!(result.is_err());
-}
-
-// ---------------------------------------------------------------
-// Key/filename conversion
-// ---------------------------------------------------------------
-
-#[tokio::test]
 async fn test_key_to_filename_roundtrip() {
     let (store, _tmp) = make_store().await;
     let key = "main::main::user123";
     let path = store.thread_file(key);
     assert!(path.to_str().unwrap().contains("k_"));
 
-    // Roundtrip.
     let stem = path.file_stem().unwrap().to_str().unwrap();
     assert_eq!(FileThreadStore::stem_to_key(stem), Some(key.to_owned()));
 }
@@ -77,17 +52,14 @@ async fn test_key_to_filename_roundtrip() {
 #[tokio::test]
 async fn test_key_encoding_avoids_filename_collisions() {
     let (store, _tmp) = make_store().await;
-    let a = store.thread_file("a:b");
-    let b = store.thread_file("a/b");
-    assert_ne!(a, b);
+    assert_ne!(store.thread_file("a:b"), store.thread_file("a/b"));
 }
 
 #[tokio::test]
 async fn test_get_reads_legacy_filename() {
     let (store, _tmp) = make_store().await;
     let key = "main::main::legacy";
-    let legacy_path = store.legacy_thread_file(key);
-    tokio::fs::write(&legacy_path, br#"{"v":"legacy"}"#)
+    tokio::fs::write(store.legacy_thread_file(key), br#"{"v":"legacy"}"#)
         .await
         .unwrap();
 
@@ -99,158 +71,40 @@ async fn test_get_reads_legacy_filename() {
 async fn test_get_reads_legacy_compat_filename() {
     let (store, _tmp) = make_store().await;
     let key = "main::main::legacy-safe";
-    let legacy_path = store.legacy_compat_thread_file(key);
-    tokio::fs::write(&legacy_path, br#"{"v":"legacy-safe"}"#)
-        .await
-        .unwrap();
+    tokio::fs::write(
+        store.legacy_compat_thread_file(key),
+        br#"{"v":"legacy-safe"}"#,
+    )
+    .await
+    .unwrap();
 
     let loaded = store.get(key).await.unwrap().unwrap();
     assert_eq!(loaded["v"], "legacy-safe");
 }
 
 #[tokio::test]
-async fn test_set_migrates_legacy_filename_to_modern_filename() {
+async fn test_cache_hit_preserves_deep_clone_isolation() {
     let (store, _tmp) = make_store().await;
-    let key = "main::main::legacy-migrate";
-    let legacy_path = store.legacy_thread_file(key);
-    let modern_path = store.thread_file(key);
-    tokio::fs::write(&legacy_path, br#"{"v":"legacy"}"#)
-        .await
-        .unwrap();
+    seed_canonical(&store, "cached", &json!({"arr": [1, 2, 3]})).await;
 
-    store.set(key, json!({"v":"modern"})).await.unwrap();
+    let mut first = store.get("cached").await.unwrap().unwrap();
+    first["arr"] = json!([99]);
 
-    assert!(modern_path.exists());
-    assert!(!legacy_path.exists());
-    let loaded = store.get(key).await.unwrap().unwrap();
-    assert_eq!(loaded["v"], "modern");
-}
-
-#[tokio::test]
-async fn test_set_migrates_legacy_compat_filename_to_canonical_directory() {
-    let (store, _tmp) = make_store().await;
-    let key = "main::main::legacy-safe-migrate";
-    let legacy_path = store.legacy_compat_thread_file(key);
-    let modern_path = store.thread_file(key);
-    tokio::fs::write(&legacy_path, br#"{"v":"legacy"}"#)
-        .await
-        .unwrap();
-
-    store.set(key, json!({"v":"modern"})).await.unwrap();
-
-    assert!(modern_path.exists());
-    assert!(!legacy_path.exists());
-    let loaded = store.get(key).await.unwrap().unwrap();
-    assert_eq!(loaded["v"], "modern");
-}
-
-#[tokio::test]
-async fn test_set_uses_legacy_lock_while_migrating_legacy_file() {
-    let tmp = TempDir::new().unwrap();
-    let store = FileThreadStore::with_options(
-        tmp.path(),
-        DEFAULT_CACHE_TTL,
-        DEFAULT_CACHE_MAX_SIZE,
-        Duration::from_millis(50),
-        DEFAULT_MAX_CONCURRENT_OPS,
-    )
-    .await
-    .unwrap();
-    let key = "main::main::legacy-locked";
-    let legacy_path = store.legacy_thread_file(key);
-    let modern_path = store.thread_file(key);
-    tokio::fs::write(&legacy_path, br#"{"v":"legacy"}"#)
-        .await
-        .unwrap();
-
-    let legacy_lock_path = FileThreadStore::lock_file_for_path(&legacy_path);
-    tokio::fs::write(&legacy_lock_path, b"").await.unwrap();
-
-    let blocked = store.set(key, json!({"v":"modern"})).await;
-    assert!(
-        blocked.is_err(),
-        "set must fail while another holder owns the legacy lock"
-    );
-
-    assert!(legacy_path.exists());
-    assert!(!modern_path.exists());
-    tokio::fs::remove_file(&legacy_lock_path).await.unwrap();
-    let loaded = store.get(key).await.unwrap().unwrap();
-    assert_eq!(loaded["v"], "legacy");
-}
-
-#[tokio::test]
-async fn test_set_uses_legacy_compat_lock_while_migrating_legacy_compat_file() {
-    let tmp = TempDir::new().unwrap();
-    let store = FileThreadStore::with_options(
-        tmp.path(),
-        DEFAULT_CACHE_TTL,
-        DEFAULT_CACHE_MAX_SIZE,
-        Duration::from_millis(50),
-        DEFAULT_MAX_CONCURRENT_OPS,
-    )
-    .await
-    .unwrap();
-    let key = "main::main::legacy-safe-locked";
-    let legacy_path = store.legacy_compat_thread_file(key);
-    let modern_path = store.thread_file(key);
-    tokio::fs::write(&legacy_path, br#"{"v":"legacy"}"#)
-        .await
-        .unwrap();
-
-    let legacy_lock_path = FileThreadStore::lock_file_for_path(&legacy_path);
-    tokio::fs::write(&legacy_lock_path, b"").await.unwrap();
-
-    let blocked = store.set(key, json!({"v":"modern"})).await;
-    assert!(
-        blocked.is_err(),
-        "set must fail while another holder owns the legacy compat lock"
-    );
-
-    assert!(legacy_path.exists());
-    assert!(!modern_path.exists());
-    tokio::fs::remove_file(&legacy_lock_path).await.unwrap();
-    let loaded = store.get(key).await.unwrap().unwrap();
-    assert_eq!(loaded["v"], "legacy");
-}
-
-// ---------------------------------------------------------------
-// Cache behaviour
-// ---------------------------------------------------------------
-
-#[tokio::test]
-async fn test_cache_hit() {
-    let (store, _tmp) = make_store().await;
-    store.set("c1", json!({"val": 1})).await.unwrap();
-
-    // First read populates cache (or it was populated by set).
-    let v1 = store.get("c1").await.unwrap().unwrap();
-    assert_eq!(v1["val"], 1);
-
-    // Second read should come from cache.
-    let v2 = store.get("c1").await.unwrap().unwrap();
-    assert_eq!(v2["val"], 1);
+    let second = store.get("cached").await.unwrap().unwrap();
+    assert_eq!(second["arr"], json!([1, 2, 3]));
 }
 
 #[tokio::test]
 async fn test_cache_invalidation_on_external_write() {
     let (store, _tmp) = make_store().await;
-    store.set("ext", json!({"v": 1})).await.unwrap();
+    seed_canonical(&store, "external", &json!({"v": 1})).await;
+    let _ = store.get("external").await.unwrap();
 
-    // Read to populate cache.
-    let _ = store.get("ext").await.unwrap();
-
-    // Externally modify the file (simulate another process).
-    let path = store.thread_file("ext");
-    // Wait a tiny bit so mtime differs.
     tokio::time::sleep(Duration::from_millis(50)).await;
-    tokio::fs::write(&path, serde_json::to_vec_pretty(&json!({"v": 2})).unwrap())
-        .await
-        .unwrap();
+    seed_canonical(&store, "external", &json!({"v": 2})).await;
 
-    // Next read should detect mtime change and return fresh data.
-    let v = store.get("ext").await.unwrap().unwrap();
-    assert_eq!(v["v"], 2);
+    let loaded = store.get("external").await.unwrap().unwrap();
+    assert_eq!(loaded["v"], 2);
 }
 
 #[tokio::test]
@@ -258,194 +112,52 @@ async fn test_cache_ttl_expiry() {
     let tmp = TempDir::new().unwrap();
     let store = FileThreadStore::with_options(
         tmp.path(),
-        Duration::from_millis(100), // very short TTL
+        Duration::from_millis(100),
         1000,
-        DEFAULT_LOCK_TIMEOUT,
         DEFAULT_MAX_CONCURRENT_OPS,
     )
     .await
     .unwrap();
+    seed_canonical(&store, "ttl", &json!({"v": 1})).await;
+    let _ = store.get("ttl").await.unwrap();
 
-    store.set("ttl", json!({"v": 1})).await.unwrap();
-    let _ = store.get("ttl").await.unwrap(); // populate cache
-
-    // Wait for TTL to expire.
     tokio::time::sleep(Duration::from_millis(150)).await;
 
-    // Should still return data (reads from disk after cache expires).
-    let v = store.get("ttl").await.unwrap().unwrap();
-    assert_eq!(v["v"], 1);
-}
-
-// ---------------------------------------------------------------
-// Stale lock cleanup
-// ---------------------------------------------------------------
-
-#[tokio::test]
-async fn test_stale_lock_cleanup() {
-    let (store, _tmp) = make_store().await;
-
-    // Create a fake stale lock file.
-    let thread_path = store.thread_file("stale");
-    let lock_path = FileThreadStore::lock_file_for_path(&thread_path);
-    tokio::fs::write(&lock_path, b"").await.unwrap();
-
-    // Backdate it.
-    let old_time = SystemTime::now() - Duration::from_secs(60);
-    filetime::set_file_mtime(&lock_path, filetime::FileTime::from_system_time(old_time)).unwrap();
-
-    // The stale check should clean it up.
-    store.check_stale_lock(&thread_path).await;
-    assert!(!lock_path.exists());
+    let loaded = store.get("ttl").await.unwrap().unwrap();
+    assert_eq!(loaded["v"], 1);
 }
 
 #[tokio::test]
-async fn test_get_reads_while_write_lock_is_held() {
+async fn test_cache_evicts_oldest_entry() {
     let tmp = TempDir::new().unwrap();
-    let store = FileThreadStore::with_options(
-        tmp.path(),
-        Duration::ZERO, // disable the read cache so get always hits the disk path
-        1000,
-        Duration::from_millis(200),
-        DEFAULT_MAX_CONCURRENT_OPS,
-    )
-    .await
-    .unwrap();
+    let store =
+        FileThreadStore::with_options(tmp.path(), DEFAULT_CACHE_TTL, 1, DEFAULT_MAX_CONCURRENT_OPS)
+            .await
+            .unwrap();
+    for key in ["first", "second", "third"] {
+        seed_canonical(&store, key, &json!({"key": key})).await;
+        store.get(key).await.unwrap().unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
 
-    store.set("busy", json!({"v": 1})).await.unwrap();
+    let cache = store.cache.lock().await;
+    assert!(!cache.contains_key("first"));
+    assert!(cache.contains_key("second"));
+    assert!(cache.contains_key("third"));
+}
 
-    // Simulate another holder owning a fresh (non-stale) write lock.
-    let lock_path = FileThreadStore::lock_file_for_path(&store.thread_file("busy"));
+#[tokio::test]
+async fn test_get_ignores_historical_write_lock_file() {
+    let tmp = TempDir::new().unwrap();
+    let store =
+        FileThreadStore::with_options(tmp.path(), Duration::ZERO, 1000, DEFAULT_MAX_CONCURRENT_OPS)
+            .await
+            .unwrap();
+    seed_canonical(&store, "busy", &json!({"v": 1})).await;
+    let lock_path = store.thread_file("busy").with_extension("lock");
     tokio::fs::write(&lock_path, b"").await.unwrap();
 
-    // Reads are lock-free: writers publish via atomic rename, so get must
-    // return data instead of queueing on the lock until timeout.
-    let v = store.get("busy").await.unwrap().unwrap();
-    assert_eq!(v["v"], 1);
-    assert!(
-        lock_path.exists(),
-        "get must not remove another holder's fresh lock"
-    );
-}
-
-// ---------------------------------------------------------------
-// Atomic writes
-// ---------------------------------------------------------------
-
-#[tokio::test]
-async fn test_atomic_write_leaves_no_tmp() {
-    let (store, _tmp) = make_store().await;
-    store.set("atom", json!({"x": 42})).await.unwrap();
-
-    let tmp_path = store.thread_file("atom").with_extension("tmp");
-    assert!(!tmp_path.exists(), "temp file should not remain on disk");
-}
-
-// ---------------------------------------------------------------
-// Concurrent access
-// ---------------------------------------------------------------
-
-#[tokio::test]
-async fn test_concurrent_writes() {
-    let (store, _tmp) = make_store().await;
-    let store = std::sync::Arc::new(store);
-
-    let mut handles = Vec::new();
-    for i in 0..20 {
-        let s = store.clone();
-        handles.push(tokio::spawn(async move {
-            s.set("concurrent", json!({"writer": i})).await.unwrap();
-        }));
-    }
-    for h in handles {
-        h.await.unwrap();
-    }
-
-    // Must have exactly one file, with data from one writer.
-    assert!(store.exists("concurrent").await.unwrap());
-    let v = store.get("concurrent").await.unwrap().unwrap();
-    assert!(v["writer"].is_number());
-}
-
-#[tokio::test]
-async fn test_concurrent_read_write() {
-    let (store, _tmp) = make_store().await;
-    let store = std::sync::Arc::new(store);
-
-    store.set("rw", json!({"v": 0})).await.unwrap();
-
-    let mut handles = Vec::new();
-    for i in 0..10 {
-        let s = store.clone();
-        handles.push(tokio::spawn(async move {
-            s.set("rw", json!({"v": i})).await.unwrap();
-        }));
-        let s = store.clone();
-        handles.push(tokio::spawn(async move {
-            let _ = s.get("rw").await.unwrap();
-        }));
-    }
-    for h in handles {
-        h.await.unwrap();
-    }
-
-    // Thread entry should exist and be valid JSON.
-    let v = store.get("rw").await.unwrap().unwrap();
-    assert!(v["v"].is_number());
-}
-
-// ---------------------------------------------------------------
-// Exists & delete edge cases
-// ---------------------------------------------------------------
-
-#[tokio::test]
-async fn test_exists_after_delete() {
-    let (store, _tmp) = make_store().await;
-    store.set("del", json!({})).await.unwrap();
-    assert!(store.exists("del").await.unwrap());
-    store.delete("del").await.unwrap();
-    assert!(!store.exists("del").await.unwrap());
-}
-
-#[tokio::test]
-async fn test_get_returns_none_after_delete() {
-    let (store, _tmp) = make_store().await;
-    store.set("gd", json!({"a": 1})).await.unwrap();
-    assert!(store.get("gd").await.unwrap().is_some());
-    store.delete("gd").await.unwrap();
-    assert!(store.get("gd").await.unwrap().is_none());
-}
-
-// ---------------------------------------------------------------
-// Deep clone isolation
-// ---------------------------------------------------------------
-
-#[tokio::test]
-async fn test_deep_clone_isolation() {
-    let (store, _tmp) = make_store().await;
-    store.set("iso", json!({"arr": [1, 2, 3]})).await.unwrap();
-
-    let mut v1 = store.get("iso").await.unwrap().unwrap();
-    // Mutate the returned value.
-    v1["arr"] = json!([99]);
-
-    // A subsequent get should return the original data.
-    let v2 = store.get("iso").await.unwrap().unwrap();
-    assert_eq!(v2["arr"], json!([1, 2, 3]));
-}
-
-// ---------------------------------------------------------------
-// Update merges only top-level keys
-// ---------------------------------------------------------------
-
-#[tokio::test]
-async fn test_update_preserves_existing_keys() {
-    let (store, _tmp) = make_store().await;
-    store.set("up", json!({"a": 1, "b": 2})).await.unwrap();
-    store.update("up", json!({"b": 20, "c": 3})).await.unwrap();
-
-    let v = store.get("up").await.unwrap().unwrap();
-    assert_eq!(v["a"], 1);
-    assert_eq!(v["b"], 20);
-    assert_eq!(v["c"], 3);
+    let loaded = store.get("busy").await.unwrap().unwrap();
+    assert_eq!(loaded["v"], 1);
+    assert!(lock_path.exists(), "reads must not touch old lock files");
 }

@@ -22,4 +22,3 @@ sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-filetime = { workspace = true }

@@ -2373,32 +2373,37 @@ async fn startup_runtime_wiring_enables_operational_handlers() {
 async fn startup_runtime_assembles_without_rebuilding_thread_indexes_from_canonical_threads() {
     use crate::runtime_assembler::RuntimeAssembler;
     use garyx_models::config::{GaryxConfig, TelegramAccount};
-    use garyx_router::{FileThreadStore, ThreadStore};
     use serde_json::json;
 
     let tmp = tempfile::TempDir::new().unwrap();
     let session_dir = tmp.path().join("sessions");
-    let store: Arc<dyn ThreadStore> = Arc::new(FileThreadStore::new(&session_dir).await.unwrap());
-    store
-        .set(
-            "thread::startup-alice",
-            json!({
-                "thread_id": "thread::startup-alice",
-                "label": "Alice",
-                "workspace_dir": "/tmp/runtime-assembler-ws",
-                "messages": [{"role": "user", "content": "hello"}],
-                "sdk_session_id": "sdk-123",
-                "channel_bindings": [{
-                    "channel": "telegram",
-                    "account_id": "main",
-                    "peer_id": "alice",
-                    "chat_id": "alice",
-                    "display_label": "Alice"
-                }]
-            }),
-        )
+    let legacy_threads_dir = session_dir.join("threads");
+    tokio::fs::create_dir_all(&legacy_threads_dir)
         .await
         .unwrap();
+    let legacy_record = json!({
+        "thread_id": "thread::startup-alice",
+        "label": "Alice",
+        "workspace_dir": "/tmp/runtime-assembler-ws",
+        "messages": [{"role": "user", "content": "hello"}],
+        "sdk_session_id": "sdk-123",
+        "channel_bindings": [{
+            "channel": "telegram",
+            "account_id": "main",
+            "peer_id": "alice",
+            "chat_id": "alice",
+            "display_label": "Alice"
+        }]
+    });
+    let legacy_record_path = legacy_threads_dir.join(
+        garyx_router::file_store::thread_storage_file_name("thread::startup-alice", "json"),
+    );
+    tokio::fs::write(
+        legacy_record_path,
+        serde_json::to_vec_pretty(&legacy_record).unwrap(),
+    )
+    .await
+    .unwrap();
 
     let mut config = GaryxConfig::default();
     config.sessions.data_dir = Some(session_dir.display().to_string());

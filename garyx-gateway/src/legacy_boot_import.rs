@@ -79,11 +79,11 @@ pub(crate) trait LegacyArchiveReader: Send + Sync {
 #[async_trait]
 impl LegacyArchiveReader for FileThreadStore {
     async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {
-        ThreadStore::list_keys(self, prefix).await
+        FileThreadStore::list_keys(self, prefix).await
     }
 
     async fn get(&self, key: &str) -> Result<Option<Value>, ThreadStoreError> {
-        ThreadStore::get(self, key).await
+        FileThreadStore::get(self, key).await
     }
 }
 
@@ -963,8 +963,32 @@ mod tests {
             .expect("probe directory");
     }
 
-    async fn put(store: &dyn ThreadStore, key: &str, data: Value) {
-        store.set(key, data).await.expect("seed source record");
+    async fn prepare_archive_dirs(data_dir: &Path) {
+        for name in ARCHIVE_DIR_NAMES {
+            tokio::fs::create_dir_all(data_dir.join(name))
+                .await
+                .expect("legacy archive directory");
+        }
+    }
+
+    async fn seed_legacy_archive_record(data_dir: &Path, key: &str, data: &Value) {
+        let threads_dir = data_dir.join("threads");
+        tokio::fs::create_dir_all(&threads_dir)
+            .await
+            .expect("legacy threads directory");
+        let path = threads_dir.join(garyx_router::file_store::thread_storage_file_name(
+            key, "json",
+        ));
+        tokio::fs::write(
+            path,
+            serde_json::to_vec_pretty(data).expect("legacy record JSON"),
+        )
+        .await
+        .expect("legacy record file");
+    }
+
+    async fn put_target(store: &dyn ThreadStore, key: &str, data: Value) {
+        store.set(key, data).await.expect("seed target record");
     }
 
     fn assert_markers_and_generation(db: &GaryxDbService, pair: (bool, bool), generation: i64) {
@@ -993,6 +1017,59 @@ mod tests {
             source_factory,
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn file_archive_reader_satisfies_the_read_only_contract() {
+        let data_dir = TempDir::new().expect("temp data dir");
+        prepare_archive_dirs(data_dir.path()).await;
+        seed_legacy_archive_record(
+            data_dir.path(),
+            "thread::canonical",
+            &json!({"thread_id": "thread::canonical", "layout": "threads"}),
+        )
+        .await;
+        let legacy_key = "thread::legacy";
+        let legacy_path = data_dir.path().join("sessions").join(
+            garyx_router::file_store::thread_storage_file_name(legacy_key, "json"),
+        );
+        tokio::fs::write(
+            legacy_path,
+            serde_json::to_vec_pretty(&json!({"thread_id": legacy_key, "layout": "sessions"}))
+                .expect("legacy record JSON"),
+        )
+        .await
+        .expect("legacy record file");
+
+        let reader = FileArchiveSourceFactory
+            .open(data_dir.path())
+            .await
+            .expect("archive reader");
+        let mut keys = reader.list_keys(None).await.expect("list archive keys");
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["thread::canonical".to_owned(), "thread::legacy".to_owned()]
+        );
+        assert_eq!(
+            reader
+                .list_keys(Some("thread::canonical"))
+                .await
+                .expect("list prefixed archive keys"),
+            vec!["thread::canonical".to_owned()]
+        );
+        assert_eq!(
+            reader
+                .get("thread::legacy")
+                .await
+                .expect("read legacy record")
+                .expect("legacy record")["layout"],
+            "sessions"
+        );
+        assert_eq!(
+            reader.get("thread::missing").await.expect("missing read"),
+            None
+        );
     }
 
     #[tokio::test]
@@ -1876,13 +1953,11 @@ mod tests {
     #[tokio::test]
     async fn full_success_retires_both_directories_and_reboot_is_fs_free() {
         let data_dir = TempDir::new().expect("temp data dir");
-        let source = FileThreadStore::new(data_dir.path())
-            .await
-            .expect("legacy file store");
-        put(
-            &source,
+        prepare_archive_dirs(data_dir.path()).await;
+        seed_legacy_archive_record(
+            data_dir.path(),
             "thread::retire-success",
-            json!({"thread_id": "thread::retire-success", "label": "legacy"}),
+            &json!({"thread_id": "thread::retire-success", "label": "legacy"}),
         )
         .await;
         let db = test_db();
@@ -1933,20 +2008,18 @@ mod tests {
     #[tokio::test]
     async fn existing_machine_is_retirement_only_and_preserves_evolved_sqlite_truth() {
         let data_dir = TempDir::new().expect("temp data dir");
-        let source = FileThreadStore::new(data_dir.path())
-            .await
-            .expect("legacy file store");
+        prepare_archive_dirs(data_dir.path()).await;
         let key = "thread::evolved";
-        put(
-            &source,
+        seed_legacy_archive_record(
+            data_dir.path(),
             key,
-            json!({"thread_id": key, "label": "stale archive"}),
+            &json!({"thread_id": key, "label": "stale archive"}),
         )
         .await;
         let db = test_db();
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        put(
+        put_target(
             target.as_ref(),
             key,
             json!({"thread_id": key, "label": "evolved sqlite"}),
@@ -1994,9 +2067,7 @@ mod tests {
     #[tokio::test]
     async fn partial_retirement_moves_first_dir_then_retries_only_remainder() {
         let data_dir = TempDir::new().expect("temp data dir");
-        FileThreadStore::new(data_dir.path())
-            .await
-            .expect("legacy file store");
+        prepare_archive_dirs(data_dir.path()).await;
         let db = test_db();
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
@@ -2054,13 +2125,11 @@ mod tests {
     #[tokio::test]
     async fn retirement_destination_conflict_preserves_both_trees_without_merge() {
         let data_dir = TempDir::new().expect("temp data dir");
-        let source = FileThreadStore::new(data_dir.path())
-            .await
-            .expect("legacy file store");
-        put(
-            &source,
+        prepare_archive_dirs(data_dir.path()).await;
+        seed_legacy_archive_record(
+            data_dir.path(),
             "thread::conflict",
-            json!({"thread_id": "thread::conflict", "label": "source"}),
+            &json!({"thread_id": "thread::conflict", "label": "source"}),
         )
         .await;
         let backup = data_dir.path().join("backups").join(RETIREMENT_BACKUP_DIR);
@@ -2119,7 +2188,7 @@ mod tests {
             .expect("clear import marker");
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
-        put(
+        put_target(
             target.as_ref(),
             "thread::sqlite-sentinel",
             json!({"thread_id": "thread::sqlite-sentinel", "label": "untouched"}),
@@ -2205,7 +2274,7 @@ mod tests {
                 .expect("clear import marker");
             let transcripts = Arc::new(ThreadTranscriptStore::memory());
             let target = sqlite_target(&db, &transcripts);
-            put(
+            put_target(
                 target.as_ref(),
                 "thread::sentinel",
                 json!({"thread_id": "thread::sentinel", "label": "untouched"}),
@@ -2316,13 +2385,11 @@ mod tests {
         });
 
         {
-            let archive = FileThreadStore::new(data_dir.path())
-                .await
-                .expect("legacy archive");
-            put(
-                &archive,
+            prepare_archive_dirs(data_dir.path()).await;
+            seed_legacy_archive_record(
+                data_dir.path(),
                 task_key,
-                json!({
+                &json!({
                     "thread_id": task_key,
                     "thread_title_source": "task",
                     "task": {
@@ -2335,10 +2402,10 @@ mod tests {
                 }),
             )
             .await;
-            put(
-                &archive,
+            seed_legacy_archive_record(
+                data_dir.path(),
                 endpoint_loser,
-                json!({
+                &json!({
                     "thread_id": endpoint_loser,
                     "label": "Older endpoint holder",
                     "updated_at": "2026-07-01T00:00:00Z",
@@ -2346,10 +2413,10 @@ mod tests {
                 }),
             )
             .await;
-            put(
-                &archive,
+            seed_legacy_archive_record(
+                data_dir.path(),
                 endpoint_winner,
-                json!({
+                &json!({
                     "thread_id": endpoint_winner,
                     "label": "Newer endpoint holder",
                     "updated_at": "2026-07-02T00:00:00Z",
@@ -2357,10 +2424,10 @@ mod tests {
                 }),
             )
             .await;
-            put(
-                &archive,
+            seed_legacy_archive_record(
+                data_dir.path(),
                 archived_key,
-                json!({
+                &json!({
                     "thread_id": archived_key,
                     "messages": [{"role": "user", "content": "must remain archived"}],
                     "updated_at": "2026-07-03T00:00:00Z",
@@ -2372,7 +2439,7 @@ mod tests {
         let db = test_db();
         let transcripts = file_transcripts(data_dir.path()).await;
         let target = sqlite_target(&db, &transcripts);
-        put(
+        put_target(
             target.as_ref(),
             task_key,
             json!({
@@ -2387,7 +2454,7 @@ mod tests {
             }),
         )
         .await;
-        put(
+        put_target(
             target.as_ref(),
             archived_key,
             json!({"thread_id": archived_key, "label": "removed before recovery"}),
