@@ -1,9 +1,11 @@
 import type {
   DesktopAutomationActivityEntry,
   DesktopAutomationActivityFeed,
+  DesktopAutomationAgentResolution,
   DesktopAutomationSchedule,
   DesktopAutomationStatus,
   DesktopAutomationSummary,
+  DesktopAutomationValidationState,
   DesktopSettings,
 } from "@shared/contracts";
 import {
@@ -25,6 +27,8 @@ interface AutomationSummaryPayload {
   label?: string | null;
   prompt?: string | null;
   agentId?: string | null;
+  agentResolution?: string;
+  effectiveAgentId?: string | null;
   enabled?: boolean;
   workspaceDir?: string | null;
   targetThreadId?: string | null;
@@ -35,6 +39,8 @@ interface AutomationSummaryPayload {
   unreadHintTimestamp?: string | null;
   threadMode?: string | null;
   schedule?: unknown;
+  validationState?: string;
+  validationError?: string | null;
 }
 
 interface AutomationsPayload {
@@ -153,6 +159,41 @@ function optionalAutomationString(
   return requireContractString(record[field], `${path}.${field}`);
 }
 
+function requiredNullableAutomationId(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): string | null {
+  const value = requireContractField(record, field, path);
+  if (value === null) {
+    return null;
+  }
+  return requireContractNonEmptyString(value, `${path}.${field}`);
+}
+
+function mapAutomationAgentResolution(
+  value: unknown,
+  path: string,
+): DesktopAutomationAgentResolution {
+  if (value === "resolved" || value === "follow_thread" || value === "target_missing") {
+    return value;
+  }
+  throw new GatewayContractError(
+    path,
+    "must be resolved, follow_thread, or target_missing",
+  );
+}
+
+function mapAutomationValidationState(
+  value: unknown,
+  path: string,
+): DesktopAutomationValidationState {
+  if (value === "valid" || value === "invalid") {
+    return value;
+  }
+  throw new GatewayContractError(path, "must be valid or invalid");
+}
+
 function mapAutomationSummary(value: unknown, index?: number): DesktopAutomationSummary {
   const path = index === undefined
     ? "automation summary"
@@ -175,10 +216,12 @@ function mapAutomationSummary(value: unknown, index?: number): DesktopAutomation
       requireContractField(record, "prompt", path),
       `${path}.prompt`,
     ),
-    agentId: requireContractNonEmptyString(
-      requireContractField(record, "agentId", path),
-      `${path}.agentId`,
+    agentId: requiredNullableAutomationId(record, "agentId", path),
+    agentResolution: mapAutomationAgentResolution(
+      requireContractField(record, "agentResolution", path),
+      `${path}.agentResolution`,
     ),
+    effectiveAgentId: requiredNullableAutomationId(record, "effectiveAgentId", path),
     enabled: requireContractBoolean(
       requireContractField(record, "enabled", path),
       `${path}.enabled`,
@@ -207,6 +250,11 @@ function mapAutomationSummary(value: unknown, index?: number): DesktopAutomation
       requireContractField(record, "schedule", path),
       `${path}.schedule`,
     ),
+    validationState: mapAutomationValidationState(
+      requireContractField(record, "validationState", path),
+      `${path}.validationState`,
+    ),
+    validationError: optionalAutomationString(record, "validationError", path),
   };
 }
 

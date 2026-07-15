@@ -15,11 +15,17 @@ impl ThreadCreator for FallbackOnlyThreadCreator {
         &self,
         thread_store: Arc<dyn ThreadStore>,
         options: ThreadEnsureOptions,
-    ) -> Result<(String, Value), String> {
+    ) -> Result<(String, Value), ThreadCreationError> {
         match options.agent_id.as_deref() {
-            Some("claude") => create_thread_record(&thread_store, options).await,
-            Some(agent_id) => Err(format!("unknown agent_id: {agent_id}")),
-            None => Err("agent_id is required".to_owned()),
+            Some("claude") => create_thread_record(&thread_store, options)
+                .await
+                .map_err(ThreadCreationError::Other),
+            Some(agent_id) => Err(ThreadCreationError::Other(format!(
+                "unknown agent_id: {agent_id}"
+            ))),
+            None => Err(ThreadCreationError::Other(
+                "agent_id is required".to_owned(),
+            )),
         }
     }
 }
@@ -30,8 +36,8 @@ impl ThreadCreator for NoEnabledThreadCreator {
         &self,
         _thread_store: Arc<dyn ThreadStore>,
         _options: ThreadEnsureOptions,
-    ) -> Result<(String, Value), String> {
-        Err("no enabled standalone agent is available".to_owned())
+    ) -> Result<(String, Value), ThreadCreationError> {
+        Err(garyx_models::AgentBindingError::NoEnabledAgent.into())
     }
 }
 
@@ -53,7 +59,7 @@ impl ThreadCreator for CapturingThreadCreator {
         &self,
         thread_store: Arc<dyn ThreadStore>,
         options: ThreadEnsureOptions,
-    ) -> Result<(String, Value), String> {
+    ) -> Result<(String, Value), ThreadCreationError> {
         self.options.lock().await.push(options.clone());
         let thread_id = "thread::captured";
         let value = json!({
@@ -64,7 +70,7 @@ impl ThreadCreator for CapturingThreadCreator {
         thread_store
             .set(thread_id, value.clone())
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| ThreadCreationError::Other(error.to_string()))?;
         Ok((thread_id.to_owned(), value))
     }
 }

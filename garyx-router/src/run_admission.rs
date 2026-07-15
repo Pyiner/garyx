@@ -577,6 +577,10 @@ mod tests {
             AdmittedRun::provider_tool(request("thread::1"), ProviderType::ClaudeCode),
             Err(RunAdmissionError::InvalidProviderToolId(_))
         ));
+        assert!(matches!(
+            AdmittedRun::provider_tool(request("cron::1"), ProviderType::ClaudeCode),
+            Err(RunAdmissionError::InvalidProviderToolId(_))
+        ));
     }
 
     async fn store_with_thread(thread_id: &str) -> Arc<dyn ThreadStore> {

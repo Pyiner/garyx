@@ -106,6 +106,7 @@ struct SuccessfulAutomationProvider;
 struct CountingAutomationProvider {
     calls: std::sync::atomic::AtomicUsize,
     delay_ms: u64,
+    provider_type: ProviderType,
 }
 
 /// Records every `run_streaming` invocation's thread, message, and metadata
@@ -263,9 +264,14 @@ impl ProviderRuntime for SuccessfulAutomationProvider {
 
 impl CountingAutomationProvider {
     fn new(delay_ms: u64) -> Self {
+        Self::new_with_type(delay_ms, ProviderType::ClaudeCode)
+    }
+
+    fn new_with_type(delay_ms: u64, provider_type: ProviderType) -> Self {
         Self {
             calls: std::sync::atomic::AtomicUsize::new(0),
             delay_ms,
+            provider_type,
         }
     }
 
@@ -277,7 +283,7 @@ impl CountingAutomationProvider {
 #[async_trait]
 impl ProviderRuntime for CountingAutomationProvider {
     fn provider_type(&self) -> ProviderType {
-        ProviderType::ClaudeCode
+        self.provider_type.clone()
     }
 
     fn is_ready(&self) -> bool {
@@ -1386,6 +1392,81 @@ async fn test_bound_automation_run_reuses_existing_thread() {
 
     assert_eq!(reloaded_job.thread_id.as_deref(), Some(target_thread_id));
     assert!(store.get(target_thread_id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn target_automation_runtime_uses_live_codex_binding_not_legacy_claude_job_cache() {
+    let tmp = TempDir::new().unwrap();
+    let svc = Arc::new(CronService::new(tmp.path().to_path_buf()));
+    let target_thread_id = "thread::target-live-codex";
+    svc.add(CronJobConfig {
+        id: "automation-target-live-codex".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Live target binding".to_owned()),
+        schedule: CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("use the target binding".to_owned()),
+        workspace_dir: None,
+        // Historical target jobs could persist a stale explicit cache. The
+        // target thread below is canonically Codex and must win at runtime.
+        agent_id: Some("claude".to_owned()),
+        thread_id: Some(target_thread_id.to_owned()),
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .unwrap();
+
+    let bridge = Arc::new(MultiProviderBridge::new());
+    let claude = Arc::new(CountingAutomationProvider::new_with_type(
+        0,
+        ProviderType::ClaudeCode,
+    ));
+    let codex = Arc::new(CountingAutomationProvider::new_with_type(
+        0,
+        ProviderType::CodexAppServer,
+    ));
+    bridge
+        .register_provider("legacy-claude-provider", claude.clone())
+        .await;
+    bridge
+        .register_provider("live-codex-provider", codex.clone())
+        .await;
+    bridge
+        .set_default_provider_key("legacy-claude-provider")
+        .await;
+    let state = wire_front_door_state(&svc, bridge).await;
+    state
+        .threads
+        .thread_store
+        .set(
+            target_thread_id,
+            serde_json::json!({
+                "thread_id": target_thread_id,
+                "agent_id": "codex",
+                "provider_type": "codex_app_server",
+                "workspace_dir": "/tmp/target-live-codex",
+                "metadata": {
+                    "agent_id": "codex",
+                    "requested_provider_type": "codex_app_server"
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+    let run = svc.run_now("automation-target-live-codex").await.unwrap();
+    assert_eq!(run.status, JobRunStatus::Success);
+    assert_eq!(run.thread_id.as_deref(), Some(target_thread_id));
+    assert_eq!(codex.calls(), 1, "the live target binding selects Codex");
+    assert_eq!(
+        claude.calls(),
+        0,
+        "the stale job-level Claude cache must not influence dispatch"
+    );
 }
 
 #[tokio::test]
@@ -2774,6 +2855,32 @@ fn structurally_invalid_job_config(id: &str, action: CronAction, enabled: bool) 
         enabled,
         system: false,
     }
+}
+
+#[test]
+fn noncanonical_thread_id_cannot_hide_behind_generated_workspace_or_delivery_target() {
+    let mut agent_turn =
+        structurally_invalid_job_config("invalid-thread-agent", CronAction::AgentTurn, true);
+    agent_turn.workspace_dir = Some("/tmp/generated-but-invalid-thread".to_owned());
+    agent_turn.thread_id = Some("cron::not-a-thread".to_owned());
+    agent_turn.target = Some("last".to_owned());
+    assert_eq!(
+        CronJob::from_config(&agent_turn)
+            .validation_error
+            .as_deref(),
+        Some("invalid canonical thread_id for agent turn")
+    );
+
+    let mut system_event =
+        structurally_invalid_job_config("invalid-thread-system", CronAction::SystemEvent, true);
+    system_event.thread_id = Some("cron::not-a-thread".to_owned());
+    system_event.target = Some("last".to_owned());
+    assert_eq!(
+        CronJob::from_config(&system_event)
+            .validation_error
+            .as_deref(),
+        Some("invalid canonical thread_id for system event")
+    );
 }
 
 #[tokio::test]

@@ -5459,6 +5459,92 @@ async fn create_thread_rejects_unknown_agent_id() {
 }
 
 #[tokio::test]
+async fn create_thread_http_rejects_explicit_disabled_agent_as_bad_request() {
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .set_enabled("codex", false)
+        .await
+        .expect("disable codex");
+    let state = AppStateBuilder::new(test_config())
+        .with_custom_agent_store(custom_agents)
+        .build();
+    let response = build_router(state.clone())
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/api/threads")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "label": "Disabled agent", "agentId": "codex" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["error"],
+        "agent is disabled: codex"
+    );
+    assert!(
+        state
+            .threads
+            .thread_store
+            .list_keys(None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn create_thread_http_rejects_implicit_binding_when_all_agents_are_disabled() {
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    for agent in custom_agents.list_agents().await {
+        custom_agents
+            .set_enabled(&agent.agent_id, false)
+            .await
+            .expect("disable agent");
+    }
+    let state = AppStateBuilder::new(test_config())
+        .with_custom_agent_store(custom_agents)
+        .build();
+    let response = build_router(state.clone())
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/api/threads")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({ "label": "No default" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["error"],
+        "no enabled standalone agent is available"
+    );
+    assert!(
+        state
+            .threads
+            .thread_store
+            .list_keys(None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn create_thread_without_workspace_uses_private_thread_workspace() {
     let data_dir = tempdir().unwrap();
     let mut config = test_config();
@@ -7464,6 +7550,65 @@ async fn configured_bots_route_returns_only_account_workspace_bindings() {
     assert_eq!(plugin_bot["main_endpoint_status"], "unresolved");
     assert!(bound["default_open_endpoint"].is_null());
     assert!(plugin_bot["default_open_endpoint"].is_null());
+}
+
+#[tokio::test]
+async fn channel_account_follow_global_stamps_effective_default_on_first_inbound_thread() {
+    let mut config = test_config();
+    config
+        .channels
+        .plugin_channel_mut(garyx_models::config::BUILTIN_CHANNEL_PLUGIN_TELEGRAM)
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::telegram_account_to_plugin_entry(
+                &garyx_models::config::TelegramAccount {
+                    token: "test-token".to_owned(),
+                    enabled: true,
+                    name: None,
+                    agent_id: None,
+                    workspace_dir: None,
+                    owner_target: None,
+                    groups: Default::default(),
+                },
+            ),
+        );
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .set_default_agent("codex")
+        .await
+        .expect("set global default");
+    let state = AppStateBuilder::new(config)
+        .with_custom_agent_store(custom_agents)
+        .build();
+
+    let thread_id = state
+        .threads
+        .router
+        .lock()
+        .await
+        .resolve_or_create_inbound_thread(
+            "telegram",
+            "main",
+            "1000000001",
+            &HashMap::from([(
+                "display_label".to_owned(),
+                Value::String("Test User".to_owned()),
+            )]),
+        )
+        .await
+        .expect("first inbound resolves a thread");
+    let record = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .unwrap()
+        .expect("thread record");
+
+    assert_eq!(record["agent_id"], "codex");
+    assert_eq!(record["metadata"]["agent_id"], "codex");
+    assert_eq!(record["account_id"], "main");
 }
 
 #[tokio::test]

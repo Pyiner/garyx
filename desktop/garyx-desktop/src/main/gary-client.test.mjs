@@ -7,6 +7,7 @@ import {
   createTask,
   updateCustomAgent,
   fetchRecentThreads,
+  fetchAutomations,
   fetchThreadHistory,
   listCapsules,
   listTaskForest,
@@ -18,6 +19,49 @@ import {
   streamThreadEvents,
   validateListRecentThreadsInput,
 } from "./gary-client.ts";
+
+test("fetchAutomations preserves nullable target-agent and validation wire state", async () => {
+  setGatewayFetch(async () =>
+    new Response(
+      JSON.stringify({
+        automations: [
+          {
+            id: "cron::target",
+            label: "Target job",
+            prompt: "Continue",
+            agentId: null,
+            agentResolution: "follow_thread",
+            effectiveAgentId: "codex",
+            enabled: true,
+            workspaceDir: "",
+            targetThreadId: "thread::target",
+            threadId: "thread::target",
+            threadMode: "target",
+            nextRun: "2026-07-17T00:00:00Z",
+            lastStatus: "never_run",
+            schedule: { kind: "interval", hours: 24 },
+            validationState: "invalid",
+            validationError: "target has no canonical binding",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ),
+  );
+  try {
+    const [automation] = await fetchAutomations({
+      gatewayUrl: "http://127.0.0.1:31337",
+      gatewayAuthToken: "",
+    });
+    assert.equal(automation.agentId, null);
+    assert.equal(automation.agentResolution, "follow_thread");
+    assert.equal(automation.effectiveAgentId, "codex");
+    assert.equal(automation.validationState, "invalid");
+    assert.equal(automation.validationError, "target has no canonical binding");
+  } finally {
+    setGatewayFetch(null);
+  }
+});
 
 function canonicalHistoryStats(overrides = {}) {
   return {

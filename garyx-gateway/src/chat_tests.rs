@@ -15,7 +15,10 @@ use garyx_models::config::{ApiAccount, GaryxConfig};
 use garyx_models::provider::{
     AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
 };
-use garyx_router::{AdmittedRun, AgentDispatcher};
+use garyx_router::{
+    AdmittedRun, AgentDispatcher, ThreadCreationError, ThreadCreator, ThreadEnsureOptions,
+    ThreadStore,
+};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -46,6 +49,21 @@ struct WorkspaceRecordingProvider {
 struct MetadataRecordingProvider {
     calls: Arc<AtomicUsize>,
     observed: Arc<Mutex<Vec<ProviderRunOptions>>>,
+}
+
+struct FailingStorageThreadCreator;
+
+#[async_trait]
+impl ThreadCreator for FailingStorageThreadCreator {
+    async fn create_thread(
+        &self,
+        _thread_store: Arc<dyn ThreadStore>,
+        _options: ThreadEnsureOptions,
+    ) -> Result<(String, Value), ThreadCreationError> {
+        Err(ThreadCreationError::Storage(
+            "injected creation backend failure".to_owned(),
+        ))
+    }
 }
 
 #[derive(Default)]
@@ -628,6 +646,46 @@ async fn test_chat_start_implicit_thread_fails_with_no_enabled_agent_before_brid
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error"], "no enabled standalone agent is available");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(
+        state
+            .threads
+            .thread_store
+            .list_keys(Some("thread::"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn test_chat_start_implicit_thread_storage_failure_returns_500() {
+    let state = test_state_with_provider().await;
+    state
+        .threads
+        .router
+        .lock()
+        .await
+        .set_thread_creator(Arc::new(FailingStorageThreadCreator));
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "message": "must fail closed",
+                "waitForResponse": false
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = test_router(state.clone()).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error"], "injected creation backend failure");
     assert!(
         state
             .threads

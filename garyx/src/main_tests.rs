@@ -1545,7 +1545,7 @@ async fn channels_add_non_interactive_telegram() {
     assert!(account.enabled);
     assert_eq!(account.token, "123:ABCDEF");
     assert_eq!(account.name.as_deref(), Some("Alice Bot"));
-    assert_eq!(account.agent_id.as_deref(), Some("claude"));
+    assert_eq!(account.agent_id, None);
 }
 
 #[tokio::test]
@@ -1583,7 +1583,7 @@ async fn channels_add_non_interactive_discord() {
     assert_eq!(account.token, "discord-token");
     assert_eq!(account.name.as_deref(), Some("Discord Bot"));
     assert!(account.require_mention);
-    assert_eq!(account.agent_id.as_deref(), Some("claude"));
+    assert_eq!(account.agent_id, None);
 }
 
 #[tokio::test]
@@ -1625,7 +1625,7 @@ async fn channels_add_non_interactive_feishu() {
     assert!(account.enabled);
     assert_eq!(account.config["app_id"], "cli_abcdef");
     assert_eq!(account.config["app_secret"], "s_xyz");
-    assert_eq!(account.agent_id.as_deref(), Some("claude"));
+    assert_eq!(account.agent_id, None);
 }
 
 #[tokio::test]
@@ -1660,7 +1660,7 @@ async fn channels_add_non_interactive_api_only_needs_account() {
     let account = loaded.config.channels.api.accounts.get("scripted").unwrap();
     assert!(account.enabled);
     assert_eq!(account.workspace_dir.as_deref(), Some("/tmp/ws"));
-    assert_eq!(account.agent_id.as_deref(), Some("claude"));
+    assert_eq!(account.agent_id, None);
 }
 
 #[tokio::test]

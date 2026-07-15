@@ -4,12 +4,24 @@ public struct GaryxAutomationsPage: Decodable, Equatable, Sendable {
     public var automations: [GaryxAutomationSummary]
 }
 
+public enum GaryxAutomationAgentResolution: String, Codable, Equatable, Sendable {
+    case resolved
+    case followThread = "follow_thread"
+    case targetMissing = "target_missing"
+}
+
+public enum GaryxAutomationValidationState: String, Codable, Equatable, Sendable {
+    case valid
+    case invalid
+}
 
 public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendable {
     public var id: String
     public var label: String
     public var prompt: String
-    public var agentId: String
+    public var agentId: String?
+    public var agentResolution: GaryxAutomationAgentResolution
+    public var effectiveAgentId: String?
     public var enabled: Bool
     public var workspacePath: String
     public var targetThreadId: String?
@@ -19,12 +31,16 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
     public var lastRunAt: String?
     public var lastStatus: String
     public var schedule: GaryxAutomationSchedule
+    public var validationState: GaryxAutomationValidationState
+    public var validationError: String?
 
     public init(
         id: String,
         label: String,
         prompt: String,
-        agentId: String,
+        agentId: String?,
+        agentResolution: GaryxAutomationAgentResolution = .resolved,
+        effectiveAgentId: String? = nil,
         enabled: Bool = true,
         workspacePath: String,
         targetThreadId: String? = nil,
@@ -33,12 +49,16 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         nextRun: String = "",
         lastRunAt: String? = nil,
         lastStatus: String = "success",
-        schedule: GaryxAutomationSchedule = .interval(hours: 24)
+        schedule: GaryxAutomationSchedule = .interval(hours: 24),
+        validationState: GaryxAutomationValidationState = .valid,
+        validationError: String? = nil
     ) {
         self.id = id
         self.label = label
         self.prompt = prompt
         self.agentId = agentId
+        self.agentResolution = agentResolution
+        self.effectiveAgentId = effectiveAgentId
         self.enabled = enabled
         self.workspacePath = workspacePath
         self.targetThreadId = targetThreadId
@@ -48,6 +68,8 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         self.lastRunAt = lastRunAt
         self.lastStatus = lastStatus
         self.schedule = schedule
+        self.validationState = validationState
+        self.validationError = validationError
     }
 
     enum CodingKeys: String, CodingKey {
@@ -56,6 +78,10 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         case prompt
         case agentId = "agent_id"
         case agentIdCamel = "agentId"
+        case agentResolution = "agent_resolution"
+        case agentResolutionCamel = "agentResolution"
+        case effectiveAgentId = "effective_agent_id"
+        case effectiveAgentIdCamel = "effectiveAgentId"
         case enabled
         case workspaceDir = "workspace_dir"
         case workspaceDirCamel = "workspaceDir"
@@ -72,6 +98,10 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         case lastStatus = "last_status"
         case lastStatusCamel = "lastStatus"
         case schedule
+        case validationState = "validation_state"
+        case validationStateCamel = "validationState"
+        case validationError = "validation_error"
+        case validationErrorCamel = "validationError"
     }
 
     public init(from decoder: Decoder) throws {
@@ -79,7 +109,10 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         id = try container.garyxDecodeFirstString(.id) ?? ""
         label = try container.garyxDecodeFirstString(.label) ?? id
         prompt = try container.garyxDecodeFirstString(.prompt) ?? ""
-        agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel) ?? "claude"
+        agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel)
+        agentResolution = try container.garyxDecodeFirstString(.agentResolution, .agentResolutionCamel)
+            .flatMap(GaryxAutomationAgentResolution.init(rawValue:)) ?? .resolved
+        effectiveAgentId = try container.garyxDecodeFirstString(.effectiveAgentId, .effectiveAgentIdCamel)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         workspacePath = try container.garyxDecodeFirstString(.workspaceDir, .workspaceDirCamel) ?? ""
         targetThreadId = try container.garyxDecodeFirstString(.targetThreadId, .targetThreadIdCamel)
@@ -90,6 +123,9 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         lastRunAt = try container.garyxDecodeFirstString(.lastRunAt, .lastRunAtCamel)
         lastStatus = try container.garyxDecodeFirstString(.lastStatus, .lastStatusCamel) ?? "success"
         schedule = try container.decodeIfPresent(GaryxAutomationSchedule.self, forKey: .schedule) ?? .interval(hours: 24)
+        validationState = try container.garyxDecodeFirstString(.validationState, .validationStateCamel)
+            .flatMap(GaryxAutomationValidationState.init(rawValue:)) ?? .valid
+        validationError = try container.garyxDecodeFirstString(.validationError, .validationErrorCamel)
     }
 
     public var isGeneratedThreadMode: Bool {

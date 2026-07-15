@@ -516,7 +516,7 @@ struct GaryxEditAutomationSheet: View {
         draft = GaryxAutomationDraft(
             label: automation.label,
             prompt: automation.prompt,
-            agentTargetId: automation.agentId,
+            agentTargetId: automation.agentId ?? automation.effectiveAgentId ?? "",
             schedule: GaryxAutomationScheduleDraft(schedule: automation.schedule),
             targetsExistingThread: !target.isEmpty,
             targetThreadId: target,

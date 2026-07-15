@@ -2,6 +2,44 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobileCatalogCacheTests: XCTestCase {
+    func testSnapshotPreservesNullableAutomationAgentResolutionAndValidation() throws {
+        let automation = GaryxAutomationSummary(
+            id: "cron::target",
+            label: "Target job",
+            prompt: "Continue",
+            agentId: nil,
+            agentResolution: .followThread,
+            effectiveAgentId: "codex",
+            workspacePath: "",
+            targetThreadId: "thread::target",
+            validationState: .invalid,
+            validationError: "target has no canonical binding"
+        )
+        let snapshot = GaryxMobileCatalogCacheSnapshot(
+            agents: [],
+            workspacePaths: [],
+            skills: [],
+            automations: [automation],
+            slashCommands: [],
+            mcpServers: [],
+            channelEndpoints: [],
+            configuredBots: [],
+            configuredBotAccounts: [],
+            botConsoles: [],
+            channelPlugins: []
+        )
+
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(GaryxMobileCatalogCacheSnapshot.self, from: data)
+        XCTAssertEqual(decoded.version, 4)
+        let restored = try XCTUnwrap(decoded.automations.first?.model)
+        XCTAssertNil(restored.agentId)
+        XCTAssertEqual(restored.agentResolution, .followThread)
+        XCTAssertEqual(restored.effectiveAgentId, "codex")
+        XCTAssertEqual(restored.validationState, .invalid)
+        XCTAssertEqual(restored.validationError, "target has no canonical binding")
+    }
+
     func testSnapshotRestoresCatalogFieldsWithoutHiddenAgentConfiguration() throws {
         let agent = GaryxAgentSummary(
             id: "agent-alpha",

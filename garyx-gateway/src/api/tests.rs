@@ -772,6 +772,10 @@ async fn custom_agent_toggle_default_and_put_enabled_tristate_contract() {
     )
     .unwrap();
     assert_eq!(disabled["enabled"], false);
+    assert_ne!(
+        disabled["updated_at"], created["updated_at"],
+        "a real custom-agent toggle must advance its optimistic-write token"
+    );
 
     let rejected_default = Request::builder()
         .method("PATCH")
@@ -1893,6 +1897,24 @@ async fn test_cron_jobs_with_service() {
     })
     .await
     .unwrap();
+    svc.add(garyx_models::config::CronJobConfig {
+        id: "invalid-system-event".to_owned(),
+        kind: Default::default(),
+        label: None,
+        schedule: garyx_models::config::CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: garyx_models::config::CronAction::SystemEvent,
+        target: None,
+        message: Some("repair this target".to_owned()),
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: None,
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .unwrap();
 
     // Replace state with cron service
     let mut state_with_cron = (*state).clone_for_test();
@@ -1913,7 +1935,7 @@ async fn test_cron_jobs_with_service() {
         .await
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["count"], 2);
+    assert_eq!(json["count"], 3);
     assert_eq!(json["service_available"], true);
     let jobs = json["jobs"].as_array().unwrap();
     let valid = jobs.iter().find(|job| job["id"] == "test-job").unwrap();
@@ -1927,6 +1949,15 @@ async fn test_cron_jobs_with_service() {
     assert_eq!(
         invalid["validation_error"],
         "missing canonical target for agent turn"
+    );
+    let invalid_system = jobs
+        .iter()
+        .find(|job| job["id"] == "invalid-system-event")
+        .unwrap();
+    assert_eq!(invalid_system["validation_state"], "invalid");
+    assert_eq!(
+        invalid_system["validation_error"],
+        "missing canonical target for system event"
     );
 }
 

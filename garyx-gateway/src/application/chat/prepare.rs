@@ -12,8 +12,9 @@ use garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID;
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_models::{SERVER_OWNED_AGENT_METADATA_KEYS, strip_server_owned_agent_metadata};
 use garyx_router::{
-    ChannelBinding, NATIVE_COMMAND_TEXT_METADATA_KEY, build_runtime_context_metadata,
-    is_thread_key, normalize_workspace_dir, update_thread_record, workspace_dir_from_value,
+    ChannelBinding, NATIVE_COMMAND_TEXT_METADATA_KEY, ThreadCreationError,
+    build_runtime_context_metadata, is_thread_key, normalize_workspace_dir, update_thread_record,
+    workspace_dir_from_value,
 };
 use serde_json::{Value, json};
 
@@ -48,6 +49,41 @@ fn storage_error(
     move |error| ChatPreparationError::Storage {
         thread_id: thread_id.clone(),
         error: error.to_string(),
+    }
+}
+
+fn implicit_thread_creation_error(error: ThreadCreationError) -> ChatPreparationError {
+    match error {
+        ThreadCreationError::AgentBinding(error) => ChatPreparationError::InvalidRequest(
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "runId": "",
+                "threadId": Value::Null,
+                "response": Value::Null,
+                "error": error.to_string(),
+            })),
+        ),
+        ThreadCreationError::Other(error)
+            if error.starts_with("unknown agent_id:")
+                || error.starts_with("agent_id is not standalone:")
+                || error.starts_with("workspace_mode=worktree") =>
+        {
+            ChatPreparationError::InvalidRequest(
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "runId": "",
+                    "threadId": Value::Null,
+                    "response": Value::Null,
+                    "error": error,
+                })),
+            )
+        }
+        ThreadCreationError::Storage(error) | ThreadCreationError::Other(error) => {
+            ChatPreparationError::Storage {
+                thread_id: String::new(),
+                error,
+            }
+        }
     }
 }
 
@@ -630,24 +666,14 @@ async fn resolve_chat_target(
         let thread_id = {
             let mut router = state.threads.router.lock().await;
             router
-                .resolve_or_create_inbound_thread(
+                .resolve_or_create_inbound_thread_typed(
                     &endpoint.channel,
                     &endpoint.account_id,
                     &endpoint.binding_key,
                     &metadata,
                 )
                 .await
-                .map_err(|error| {
-                    ChatPreparationError::InvalidRequest(
-                        StatusCode::BAD_REQUEST,
-                        Json(json!({
-                            "runId": "",
-                            "threadId": Value::Null,
-                            "response": Value::Null,
-                            "error": error,
-                        })),
-                    )
-                })?
+                .map_err(implicit_thread_creation_error)?
         };
         return Ok(ResolvedChatTarget {
             thread_id,
@@ -662,19 +688,14 @@ async fn resolve_chat_target(
     let thread_id = {
         let mut router = state.threads.router.lock().await;
         router
-            .resolve_or_create_inbound_thread("api", &req.account_id, &req.from_id, &req.metadata)
+            .resolve_or_create_inbound_thread_typed(
+                "api",
+                &req.account_id,
+                &req.from_id,
+                &req.metadata,
+            )
             .await
-            .map_err(|error| {
-                ChatPreparationError::InvalidRequest(
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({
-                        "runId": "",
-                        "threadId": Value::Null,
-                        "response": Value::Null,
-                        "error": error,
-                    })),
-                )
-            })?
+            .map_err(implicit_thread_creation_error)?
     };
     Ok(ResolvedChatTarget {
         thread_id,

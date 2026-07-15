@@ -24,9 +24,9 @@ use garyx_models::provider::{
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::ThreadStoreExt;
 use garyx_router::{
-    ChannelBinding, KnownChannelEndpoint, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadEnsureOptions,
-    ThreadTranscriptRecord, WorkspaceMode, bindings_from_value, history_message_count,
-    is_thread_key, update_thread_record, workspace_dir_from_value,
+    ChannelBinding, KnownChannelEndpoint, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadCreationError,
+    ThreadEnsureOptions, ThreadTranscriptRecord, WorkspaceMode, bindings_from_value,
+    history_message_count, is_thread_key, update_thread_record, workspace_dir_from_value,
     workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
@@ -2881,16 +2881,24 @@ pub async fn create_thread(
             state.invalidate_gateway_sync_caches().await;
             (StatusCode::CREATED, Json(thread_summary(&thread_id, &data)))
         }
-        Err(error)
+        Err(ThreadCreationError::AgentBinding(error)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": error.to_string() })),
+        ),
+        Err(ThreadCreationError::Other(error))
             if error.starts_with("unknown agent_id:")
                 || error.starts_with("agent_id is not standalone:")
                 || error.starts_with("workspace_mode=worktree") =>
         {
             (StatusCode::BAD_REQUEST, Json(json!({ "error": error })))
         }
-        Err(error) => (
+        Err(ThreadCreationError::Storage(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error })),
+        ),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
         ),
     }
 }

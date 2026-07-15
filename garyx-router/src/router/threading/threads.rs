@@ -224,6 +224,23 @@ impl MessageRouter {
         thread_binding_key: &str,
         extra_metadata: &HashMap<String, Value>,
     ) -> Result<String, String> {
+        self.resolve_or_create_inbound_thread_typed(
+            channel,
+            account_id,
+            thread_binding_key,
+            extra_metadata,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+
+    pub async fn resolve_or_create_inbound_thread_typed(
+        &mut self,
+        channel: &str,
+        account_id: &str,
+        thread_binding_key: &str,
+        extra_metadata: &HashMap<String, Value>,
+    ) -> Result<String, ThreadCreationError> {
         if let Some(existing) = self
             .current_canonical_thread_for_binding(channel, account_id, thread_binding_key)
             .await

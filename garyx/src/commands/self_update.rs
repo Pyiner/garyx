@@ -14,8 +14,6 @@ const MACOS_CLI_CODESIGN_IDENTIFIER: &str = "com.garyx.gateway";
 
 const MACOS_CCTTY_CODESIGN_IDENTIFIER: &str = "com.garyx.cctty";
 
-pub(super) const DEFAULT_CHANNEL_AGENT_ID: &str = "claude";
-
 #[derive(Debug, Deserialize)]
 struct GitHubReleaseSummary {
     tag_name: String,

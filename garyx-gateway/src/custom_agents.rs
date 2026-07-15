@@ -1,18 +1,17 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+#[cfg(test)]
+use garyx_models::AGENT_STORE_VERSION;
 use garyx_models::{
     AgentAvailabilitySnapshot, CustomAgentProfile, ProviderType, builtin_provider_agent_profiles,
-    resolve_effective_default,
+    parse_agent_store_document, resolve_effective_default, serialize_agent_store_document,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::Deserialize;
 use tokio::sync::RwLock;
 
 use crate::optimistic_write::{StoreWriteError, WriteExpectation, check_write_expectation};
-
-const AGENT_STORE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpsertCustomAgentRequest {
@@ -48,16 +47,6 @@ struct AgentStoreState {
     agents: HashMap<String, CustomAgentProfile>,
     default_agent_id: Option<String>,
     revision: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PersistedAgentEnvelope {
-    version: u32,
-    agents: HashMap<String, Value>,
-    #[serde(default)]
-    disabled_builtin_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    default_agent_id: Option<String>,
 }
 
 fn normalize_system_prompt(value: &str) -> String {
@@ -103,31 +92,21 @@ impl CustomAgentStore {
         if path.exists() {
             let content = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
             if !content.trim().is_empty() {
-                let root: Value =
-                    serde_json::from_str(&content).map_err(|error| error.to_string())?;
-                if root.get("version").and_then(Value::as_u64).is_some()
-                    && root.get("agents").is_some_and(Value::is_object)
-                {
-                    let envelope: PersistedAgentEnvelope =
-                        serde_json::from_value(root).map_err(|error| error.to_string())?;
-                    if envelope.version != AGENT_STORE_VERSION {
-                        return Err(format!(
-                            "unsupported custom-agents.json version: {}",
-                            envelope.version
-                        ));
-                    }
-                    state.default_agent_id = normalize_optional_id(envelope.default_agent_id);
-                    apply_disabled_builtins(
-                        &mut state.agents,
-                        envelope.disabled_builtin_ids.into_iter(),
+                let parsed =
+                    parse_agent_store_document(&content).map_err(|error| error.to_string())?;
+                for agent_id in parsed.skipped_unsupported_agent_ids {
+                    tracing::warn!(
+                        agent_id,
+                        "skipping persisted custom agent with unsupported provider type"
                     );
-                    load_custom_profiles(&mut state.agents, envelope.agents)?;
-                } else {
-                    let legacy = serde_json::from_value::<HashMap<String, Value>>(root)
-                        .map_err(|error| error.to_string())?;
-                    load_custom_profiles(&mut state.agents, legacy)?;
-                    migrate_legacy = true;
                 }
+                state.agents = parsed
+                    .agents
+                    .into_iter()
+                    .map(|profile| (profile.agent_id.clone(), profile))
+                    .collect();
+                state.default_agent_id = parsed.default_agent_id;
+                migrate_legacy = parsed.migrated_from_legacy;
             }
         }
 
@@ -158,14 +137,11 @@ impl CustomAgentStore {
 
     /// Snapshot the whole decision unit without entering async context.
     pub fn snapshot_blocking(&self) -> AgentAvailabilitySnapshot {
-        self.inner
+        let state = self
+            .inner
             .try_read()
-            .map(|state| snapshot_from_state(&state))
-            .unwrap_or_else(|_| AgentAvailabilitySnapshot {
-                agents: Vec::new(),
-                default_agent_id: None,
-                agent_state_revision: 0,
-            })
+            .expect("custom agent store lock contested during boot snapshot");
+        snapshot_from_state(&state)
     }
 
     pub async fn list_agents(&self) -> Vec<CustomAgentProfile> {
@@ -405,39 +381,11 @@ impl CustomAgentStore {
         let Some(path) = &self.persistence_path else {
             return Ok(());
         };
-        let agents = state
-            .agents
-            .iter()
-            .filter(|(_, profile)| !profile.built_in)
-            .map(|(agent_id, profile)| {
-                serde_json::to_value(profile)
-                    .map(|value| (agent_id.clone(), value))
-                    .map_err(|error| error.to_string())
-            })
-            .collect::<Result<HashMap<_, _>, _>>()?;
-        let mut disabled_builtin_ids = state
-            .agents
-            .values()
-            .filter(|profile| profile.built_in && !profile.enabled)
-            .map(|profile| profile.agent_id.clone())
-            .collect::<Vec<_>>();
-        disabled_builtin_ids.sort_unstable();
-        let envelope = PersistedAgentEnvelope {
-            version: AGENT_STORE_VERSION,
-            agents,
-            disabled_builtin_ids,
-            default_agent_id: state.default_agent_id.clone(),
-        };
-        let json = serde_json::to_string_pretty(&envelope).map_err(|error| error.to_string())?;
+        let agents = sorted_profiles(&state.agents);
+        let json = serialize_agent_store_document(&agents, state.default_agent_id.as_deref())
+            .map_err(|error| error.to_string())?;
         crate::atomic_write::write_json_atomic(path, &json)
     }
-}
-
-fn normalize_optional_id(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let value = value.trim();
-        (!value.is_empty()).then(|| value.to_owned())
-    })
 }
 
 fn builtin_map() -> HashMap<String, CustomAgentProfile> {
@@ -445,41 +393,6 @@ fn builtin_map() -> HashMap<String, CustomAgentProfile> {
         .into_iter()
         .map(|profile| (profile.agent_id.clone(), profile))
         .collect()
-}
-
-fn apply_disabled_builtins(
-    agents: &mut HashMap<String, CustomAgentProfile>,
-    disabled: impl IntoIterator<Item = String>,
-) {
-    let disabled = disabled.into_iter().collect::<HashSet<_>>();
-    for profile in agents.values_mut().filter(|profile| profile.built_in) {
-        profile.enabled = !disabled.contains(&profile.agent_id);
-    }
-}
-
-fn load_custom_profiles(
-    agents: &mut HashMap<String, CustomAgentProfile>,
-    persisted: HashMap<String, Value>,
-) -> Result<(), String> {
-    for (agent_id, value) in persisted {
-        let unsupported_provider = value
-            .get("provider_type")
-            .and_then(Value::as_str)
-            .is_some_and(|provider_type| ProviderType::from_slug(provider_type).is_none());
-        if unsupported_provider {
-            tracing::warn!(
-                agent_id,
-                "skipping persisted custom agent with unsupported provider type"
-            );
-            continue;
-        }
-        let mut profile = serde_json::from_value::<CustomAgentProfile>(value)
-            .map_err(|error| error.to_string())?;
-        profile.agent_id = agent_id.clone();
-        profile.built_in = false;
-        agents.insert(agent_id, profile);
-    }
-    Ok(())
 }
 
 fn sorted_profiles(agents: &HashMap<String, CustomAgentProfile>) -> Vec<CustomAgentProfile> {

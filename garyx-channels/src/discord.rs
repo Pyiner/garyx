@@ -1702,11 +1702,22 @@ impl DiscordChannel {
                 }
             }
             Err(error) => {
+                replay_subscription.abort();
                 warn!(
                     account_id = %runtime.account_id,
                     error = %error,
                     "failed to route Discord inbound message"
                 );
+                if let Err(send_error) = sender
+                    .send_text(&reply_target, &format!("Error: {error}"), Some(&reply_to))
+                    .await
+                {
+                    warn!(
+                        account_id = %runtime.account_id,
+                        error = %send_error,
+                        "failed to send Discord routing error reply"
+                    );
+                }
             }
         }
     }
@@ -1760,10 +1771,26 @@ impl Channel for DiscordChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use garyx_models::AgentBindingError;
     use garyx_models::config::DiscordAccount;
     use garyx_models::provider::StreamEvent;
+    use garyx_router::{ThreadCreationError, ThreadCreator, ThreadEnsureOptions, ThreadStore};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    struct NoEnabledThreadCreator;
+
+    #[async_trait]
+    impl ThreadCreator for NoEnabledThreadCreator {
+        async fn create_thread(
+            &self,
+            _thread_store: Arc<dyn ThreadStore>,
+            _options: ThreadEnsureOptions,
+        ) -> Result<(String, Value), ThreadCreationError> {
+            Err(AgentBindingError::NoEnabledAgent.into())
+        }
+    }
 
     fn account(require_mention: bool) -> DiscordAccount {
         DiscordAccount {
@@ -1777,6 +1804,71 @@ mod tests {
             api_base: "https://discord.com/api/v10".to_owned(),
             gateway_url: "wss://gateway.discord.gg/?v=10&encoding=json".to_owned(),
         }
+    }
+
+    #[tokio::test]
+    async fn inbound_no_enabled_agent_sends_visible_error_reply() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-error-reply"
+            })))
+            .mount(&server)
+            .await;
+
+        let router = crate::test_helpers::make_router();
+        router
+            .lock()
+            .await
+            .set_thread_creator(Arc::new(NoEnabledThreadCreator));
+        let bridge = crate::test_helpers::make_bridge_with(Arc::new(
+            crate::test_helpers::ConfigurableTestProvider::echo(),
+        ))
+        .await;
+        let mut configured_account = account(false);
+        configured_account.api_base = server.uri();
+        let runtime = DiscordInboundRuntime {
+            http: Client::new(),
+            account_id: "main".to_owned(),
+            account: configured_account,
+            router,
+            bridge,
+            dispatcher: Arc::new(crate::dispatcher::ChannelDispatcherImpl::new()),
+        };
+        let bot = DiscordCurrentUser {
+            id: "bot-999".to_owned(),
+            username: Some("Garyx".to_owned()),
+        };
+
+        DiscordChannel::handle_message_create(
+            &runtime,
+            &bot,
+            DiscordMessageCreateEvent {
+                id: "message-001".to_owned(),
+                channel_id: "dm-channel-123".to_owned(),
+                guild_id: None,
+                content: "hello".to_owned(),
+                author: DiscordUser {
+                    id: "user-123".to_owned(),
+                    username: Some("Test User".to_owned()),
+                    bot: false,
+                },
+                mentions: Vec::new(),
+                message_reference: None,
+                attachments: Vec::new(),
+            },
+        )
+        .await;
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(
+            body["content"],
+            "Error: no enabled standalone agent is available"
+        );
+        assert_eq!(body["message_reference"]["message_id"], "message-001");
     }
 
     #[test]

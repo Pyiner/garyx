@@ -1433,20 +1433,33 @@ pub(super) async fn handle_im_message_event(
             }
         }
         Err(e) => {
+            replay_subscription.abort();
             error!(
                 account_id = %runtime.account_id,
                 chat_id = %message.chat_id,
                 error = %e,
                 "failed to route+dispatch Feishu message"
             );
-            notify_permission_error_if_needed(
-                runtime.client,
-                runtime.account_id,
-                &message.chat_id,
-                &message.message_id,
-                &e,
-            )
-            .await;
+            let reply = format!("Error: {e}");
+            if let Err(send_error) =
+                send_native_command_reply(runtime.client, &message.message_id, &reply).await
+            {
+                error!(
+                    account_id = %runtime.account_id,
+                    chat_id = %message.chat_id,
+                    message_id = %message.message_id,
+                    error = %send_error,
+                    "failed to send Feishu routing error reply"
+                );
+                notify_permission_error_if_needed(
+                    runtime.client,
+                    runtime.account_id,
+                    &message.chat_id,
+                    &message.message_id,
+                    &send_error.to_string(),
+                )
+                .await;
+            }
         }
     }
 }

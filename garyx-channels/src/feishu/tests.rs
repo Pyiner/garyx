@@ -1170,20 +1170,34 @@ mod e2e_tests {
     use async_trait::async_trait;
     use garyx_bridge::provider_trait::StreamCallback;
     use garyx_bridge::{BridgeError, ProviderRuntime};
+    use garyx_models::AgentBindingError;
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind,
         StreamEvent,
     };
     use garyx_router::{
-        ChannelBinding, InMemoryThreadStore, MessageRouter, ThreadEnsureOptions, ThreadStore,
-        bindings_from_value, create_thread_record, is_thread_key,
+        ChannelBinding, InMemoryThreadStore, MessageRouter, ThreadCreationError, ThreadCreator,
+        ThreadEnsureOptions, ThreadStore, bindings_from_value, create_thread_record, is_thread_key,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use wiremock::matchers::{method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     struct FeishuUserAckBoundaryProvider;
+
+    struct NoEnabledThreadCreator;
+
+    #[async_trait]
+    impl ThreadCreator for NoEnabledThreadCreator {
+        async fn create_thread(
+            &self,
+            _thread_store: Arc<dyn ThreadStore>,
+            _options: ThreadEnsureOptions,
+        ) -> Result<(String, Value), ThreadCreationError> {
+            Err(AgentBindingError::NoEnabledAgent.into())
+        }
+    }
 
     #[async_trait]
     impl ProviderRuntime for FeishuUserAckBoundaryProvider {
@@ -2121,6 +2135,48 @@ mod e2e_tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn test_e2e_feishu_no_enabled_agent_sends_visible_error_reply() {
+        let (server, client) = setup_feishu_mock().await;
+        let provider = Arc::new(ConfigurableTestProvider::echo());
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
+        let router = make_router_with_store(store);
+        router
+            .lock()
+            .await
+            .set_thread_creator(Arc::new(NoEnabledThreadCreator));
+        let account = make_default_account();
+        let event = FeishuEventBuilder::dm("ou_user123", "hello")
+            .with_message_id("om_no_enabled_001")
+            .build();
+
+        dispatch_im_message_event(
+            "app1",
+            &event,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+
+        assert_eq!(provider.call_count.load(Ordering::Relaxed), 0);
+        let requests = server.received_requests().await.unwrap_or_default();
+        let reply = requests
+            .iter()
+            .find(|request| request.url.path() == "/im/v1/messages/om_no_enabled_001/reply")
+            .expect("routing gate error reply");
+        let body: Value = serde_json::from_slice(&reply.body).unwrap();
+        let content: Value = serde_json::from_str(body["content"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            content["text"],
+            "Error: no enabled standalone agent is available"
+        );
     }
 
     #[tokio::test]

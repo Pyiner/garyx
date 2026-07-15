@@ -21,9 +21,9 @@ mod run;
 mod threading;
 
 pub use command_catalog::{command_catalog_for_config, reserved_command_names};
-pub use contracts::ThreadCreator;
 pub use contracts::{AgentDispatcher, InboundRequest, InboundResult, ThreadMessageRequest};
 pub(crate) use contracts::{DispatchMetadataContext, NavigationContext, RouteContext};
+pub use contracts::{ThreadCreationError, ThreadCreator};
 pub use inbound::is_native_command_text;
 
 #[cfg(test)]
@@ -110,11 +110,13 @@ impl MessageRouter {
     pub async fn create_thread_with_options(
         &self,
         options: crate::ThreadEnsureOptions,
-    ) -> Result<(String, Value), String> {
+    ) -> Result<(String, Value), ThreadCreationError> {
         if let Some(creator) = &self.thread_creator {
             creator.create_thread(self.threads.clone(), options).await
         } else {
-            crate::create_thread_record(&self.threads, options).await
+            crate::create_thread_record(&self.threads, options)
+                .await
+                .map_err(ThreadCreationError::from_record_creation_error)
         }
     }
 

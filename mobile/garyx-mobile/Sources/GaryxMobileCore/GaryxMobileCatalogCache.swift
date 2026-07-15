@@ -1,7 +1,7 @@
 import Foundation
 
 struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     var version: Int
     var savedAt: Date
@@ -207,7 +207,9 @@ struct GaryxCachedAutomation: Codable, Equatable {
     var id: String
     var label: String
     var prompt: String
-    var agentId: String
+    var agentId: String?
+    var agentResolution: GaryxAutomationAgentResolution
+    var effectiveAgentId: String?
     var enabled: Bool
     var workspacePath: String
     var targetThreadId: String?
@@ -217,12 +219,16 @@ struct GaryxCachedAutomation: Codable, Equatable {
     var lastRunAt: String?
     var lastStatus: String
     var schedule: GaryxAutomationSchedule
+    var validationState: GaryxAutomationValidationState
+    var validationError: String?
 
     enum CodingKeys: String, CodingKey {
         case id
         case label
         case prompt
         case agentId
+        case agentResolution
+        case effectiveAgentId
         case enabled
         case workspacePath
         case targetThreadId
@@ -232,6 +238,8 @@ struct GaryxCachedAutomation: Codable, Equatable {
         case lastRunAt
         case lastStatus
         case schedule
+        case validationState
+        case validationError
     }
 
     init(_ automation: GaryxAutomationSummary) {
@@ -239,6 +247,8 @@ struct GaryxCachedAutomation: Codable, Equatable {
         label = automation.label
         prompt = automation.prompt
         agentId = automation.agentId
+        agentResolution = automation.agentResolution
+        effectiveAgentId = automation.effectiveAgentId
         enabled = automation.enabled
         workspacePath = automation.workspacePath
         targetThreadId = automation.targetThreadId
@@ -248,6 +258,8 @@ struct GaryxCachedAutomation: Codable, Equatable {
         lastRunAt = automation.lastRunAt
         lastStatus = automation.lastStatus
         schedule = automation.schedule
+        validationState = automation.validationState
+        validationError = automation.validationError
     }
 
     init(from decoder: Decoder) throws {
@@ -255,7 +267,9 @@ struct GaryxCachedAutomation: Codable, Equatable {
         id = try container.decode(String.self, forKey: .id)
         label = try container.decode(String.self, forKey: .label)
         prompt = try container.decode(String.self, forKey: .prompt)
-        agentId = try container.decode(String.self, forKey: .agentId)
+        agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
+        agentResolution = try container.decodeIfPresent(GaryxAutomationAgentResolution.self, forKey: .agentResolution) ?? .resolved
+        effectiveAgentId = try container.decodeIfPresent(String.self, forKey: .effectiveAgentId)
         enabled = try container.decode(Bool.self, forKey: .enabled)
         workspacePath = try container.decode(String.self, forKey: .workspacePath)
         targetThreadId = try container.decodeIfPresent(String.self, forKey: .targetThreadId)
@@ -266,6 +280,8 @@ struct GaryxCachedAutomation: Codable, Equatable {
         lastRunAt = try container.decodeIfPresent(String.self, forKey: .lastRunAt)
         lastStatus = try container.decode(String.self, forKey: .lastStatus)
         schedule = try container.decode(GaryxAutomationSchedule.self, forKey: .schedule)
+        validationState = try container.decodeIfPresent(GaryxAutomationValidationState.self, forKey: .validationState) ?? .valid
+        validationError = try container.decodeIfPresent(String.self, forKey: .validationError)
     }
 
     var model: GaryxAutomationSummary {
@@ -274,6 +290,8 @@ struct GaryxCachedAutomation: Codable, Equatable {
             label: label,
             prompt: prompt,
             agentId: agentId,
+            agentResolution: agentResolution,
+            effectiveAgentId: effectiveAgentId,
             enabled: enabled,
             workspacePath: workspacePath,
             targetThreadId: targetThreadId,
@@ -282,7 +300,9 @@ struct GaryxCachedAutomation: Codable, Equatable {
             nextRun: nextRun,
             lastRunAt: lastRunAt,
             lastStatus: lastStatus,
-            schedule: schedule
+            schedule: schedule,
+            validationState: validationState,
+            validationError: validationError
         )
     }
 }

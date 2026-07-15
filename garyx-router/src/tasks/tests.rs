@@ -2,6 +2,7 @@ use super::*;
 use crate::{
     InMemoryTaskCounterStore, InMemoryThreadStore, update_thread_record, workspace_dir_from_value,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct AllowTestAgents;
 
@@ -24,6 +25,13 @@ impl NewTaskAgentGate for AllowTestAgents {
             ]),
             default_workspace_dir: None,
         })
+    }
+
+    async fn resolve_existing_task_agent(
+        &self,
+        current_agent_id: &str,
+    ) -> Result<garyx_models::ResolvedAgentBinding, garyx_models::AgentBindingError> {
+        self.resolve_new_task_agent(Some(current_agent_id)).await
     }
 }
 
@@ -61,6 +69,13 @@ impl NewTaskAgentGate for RecordingTaskAgentGate {
             runtime_metadata: HashMap::from([("agent_id".to_owned(), Value::String(agent_id))]),
             default_workspace_dir: Some("/tmp/task-agent-default".to_owned()),
         })
+    }
+
+    async fn resolve_existing_task_agent(
+        &self,
+        current_agent_id: &str,
+    ) -> Result<garyx_models::ResolvedAgentBinding, garyx_models::AgentBindingError> {
+        self.resolve_new_task_agent(Some(current_agent_id)).await
     }
 }
 
@@ -258,6 +273,63 @@ struct StoreWithTaskProjection {
     reader: Arc<dyn TaskProjectionReader>,
 }
 
+struct FailNthGetStore {
+    inner: InMemoryThreadStore,
+    get_calls: AtomicUsize,
+    fail_on_get: AtomicUsize,
+}
+
+impl FailNthGetStore {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryThreadStore::new(),
+            get_calls: AtomicUsize::new(0),
+            fail_on_get: AtomicUsize::new(0),
+        }
+    }
+
+    fn fail_on_get(&self, call: usize) {
+        self.get_calls.store(0, Ordering::SeqCst);
+        self.fail_on_get.store(call, Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl ThreadStore for FailNthGetStore {
+    async fn get(&self, thread_id: &str) -> Result<Option<Value>, crate::ThreadStoreError> {
+        let call = self.get_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.fail_on_get.load(Ordering::SeqCst) == call {
+            return Err(crate::ThreadStoreError::Backend(
+                "injected task read failure".to_owned(),
+            ));
+        }
+        self.inner.get(thread_id).await
+    }
+
+    async fn set(&self, thread_id: &str, data: Value) -> Result<(), crate::ThreadStoreError> {
+        self.inner.set(thread_id, data).await
+    }
+
+    async fn delete(&self, thread_id: &str) -> Result<bool, crate::ThreadStoreError> {
+        self.inner.delete(thread_id).await
+    }
+
+    async fn list_keys(
+        &self,
+        prefix: Option<&str>,
+    ) -> Result<Vec<String>, crate::ThreadStoreError> {
+        self.inner.list_keys(prefix).await
+    }
+
+    async fn exists(&self, thread_id: &str) -> Result<bool, crate::ThreadStoreError> {
+        self.inner.exists(thread_id).await
+    }
+
+    async fn update(&self, thread_id: &str, updates: Value) -> Result<(), crate::ThreadStoreError> {
+        self.inner.update(thread_id, updates).await
+    }
+}
+
 #[async_trait]
 impl ThreadStore for StoreWithTaskProjection {
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, crate::ThreadStoreError> {
@@ -343,6 +415,117 @@ async fn list_tasks_uses_current_projection_reader_without_file_scan() {
     assert_eq!(tasks[0].title, summary.title);
     assert_eq!(total, 1);
     assert!(!has_more);
+}
+
+#[tokio::test]
+async fn assign_new_binding_and_task_event_commit_in_one_record_write() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let gate = Arc::new(RecordingTaskAgentGate::allowing());
+    let service = TaskService::new(
+        store.clone(),
+        Arc::new(InMemoryTaskCounterStore::new()),
+        gate.clone(),
+    );
+    let (thread_id, _) = service
+        .create_task(CreateTaskInput {
+            title: Some("Unbound task".to_owned()),
+            body: None,
+            assignee: None,
+            notification_target: None,
+            source: None,
+            executor: None,
+            start: false,
+            actor: Some(Principal::Human {
+                user_id: "test-user".to_owned(),
+            }),
+            workspace_dir: None,
+            runtime: None,
+        })
+        .await
+        .unwrap();
+
+    let (assigned_thread_id, committed, task) = service
+        .assign_task_with_record(
+            &thread_id,
+            Principal::Agent {
+                agent_id: "reviewer".to_owned(),
+            },
+            Some(Principal::Human {
+                user_id: "test-user".to_owned(),
+            }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(assigned_thread_id, thread_id);
+    assert_eq!(committed["agent_id"], "reviewer");
+    assert_eq!(committed["metadata"]["agent_id"], "reviewer");
+    assert_eq!(committed["workspace_dir"], "/tmp/task-agent-default");
+    assert_eq!(
+        task.assignee
+            .and_then(|principal| match principal {
+                Principal::Agent { agent_id } => Some(agent_id),
+                _ => None,
+            })
+            .as_deref(),
+        Some("reviewer")
+    );
+    assert_eq!(
+        gate.requested.lock().unwrap().as_slice(),
+        &[Some("reviewer".to_owned())],
+        "one admission result must be reused for the record mutation"
+    );
+    assert_eq!(store.get(&thread_id).await.unwrap().unwrap(), committed);
+}
+
+#[tokio::test]
+async fn assign_read_failure_is_fail_closed_without_task_or_binding_mutation() {
+    let store = Arc::new(FailNthGetStore::new());
+    let service = TaskService::new(
+        store.clone(),
+        Arc::new(InMemoryTaskCounterStore::new()),
+        Arc::new(AllowTestAgents),
+    );
+    let (thread_id, _) = service
+        .create_task(CreateTaskInput {
+            title: Some("Read failure".to_owned()),
+            body: None,
+            assignee: None,
+            notification_target: None,
+            source: None,
+            executor: None,
+            start: false,
+            actor: Some(actor()),
+            workspace_dir: None,
+            runtime: None,
+        })
+        .await
+        .unwrap();
+    let before = store.inner.get(&thread_id).await.unwrap().unwrap();
+    store.fail_on_get(2);
+
+    let error = service
+        .assign_task(
+            &thread_id,
+            Principal::Agent {
+                agent_id: "reviewer".to_owned(),
+            },
+            Some(actor()),
+        )
+        .await
+        .expect_err("second authoritative read must fail closed");
+
+    assert!(matches!(error, TaskServiceError::Store(_)));
+    let after = store.inner.get(&thread_id).await.unwrap().unwrap();
+    assert_eq!(after, before);
+    assert!(crate::agent_id_from_value(&after).is_none());
+    assert!(
+        task_from_record(&after)
+            .unwrap()
+            .unwrap()
+            .assignee
+            .is_none()
+    );
 }
 
 #[tokio::test]

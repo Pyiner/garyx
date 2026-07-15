@@ -544,7 +544,13 @@ fn automation_workspace(job: &CronJob) -> Result<String, String> {
     if let Some(workspace_dir) = workspace_dir {
         return Ok(workspace_dir.to_owned());
     }
-    if automation_target_thread(job).is_some() {
+    if automation_target_thread(job).is_some()
+        || job
+            .target
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    {
         return Ok(String::new());
     }
     if job.validation_error.is_some() {
@@ -592,6 +598,17 @@ fn automation_schedule(job: &CronJob) -> Result<AutomationScheduleView, String> 
     }
     infer_schedule_view(&job.schedule)
         .map_err(|error| format!("automation {} has unsupported schedule: {error}", job.id))
+}
+
+/// User-managed automations normally persist `ui_schedule`, but legacy cron
+/// rows may use a valid schedule that the automation editor cannot infer
+/// losslessly. Keep such rows visible and repairable by presenting their next
+/// fire as a one-time fallback. Update paths that omit `schedule` preserve the
+/// original raw schedule instead of compiling this display-only fallback.
+fn automation_schedule_for_display(job: &CronJob) -> AutomationScheduleView {
+    automation_schedule(job).unwrap_or_else(|_| AutomationScheduleView::Once {
+        at: automation_next_run(job),
+    })
 }
 
 fn unread_hint_timestamp(job: &CronJob, latest_run: Option<&RunRecord>) -> Option<String> {
@@ -671,7 +688,7 @@ async fn to_summary(
         last_run_at: job.last_run_at.map(|value| value.to_rfc3339()),
         last_status: job.last_status.clone(),
         unread_hint_timestamp: unread_hint_timestamp(job, latest_run),
-        schedule: automation_schedule(job)?,
+        schedule: automation_schedule_for_display(job),
         validation_state: if job.validation_error.is_some() {
             AutomationValidationState::Invalid
         } else {
@@ -1145,16 +1162,13 @@ pub async fn update_automation(
     } else {
         Some(workspace_dir.as_str())
     };
-    let schedule = match body.schedule.clone() {
-        Some(value) => value,
-        None => match automation_schedule(&current) {
-            Ok(value) => value,
-            Err(error) => return internal(error),
-        },
+    let (schedule, preserve_raw_schedule) = match body.schedule.clone() {
+        Some(value) => (value, false),
+        None => (automation_schedule_for_display(&current), true),
     };
     let enabled = body.enabled.unwrap_or(current.enabled);
 
-    let cfg = match build_automation_job(
+    let mut cfg = match build_automation_job(
         &id,
         &label,
         &prompt,
@@ -1169,6 +1183,10 @@ pub async fn update_automation(
         Ok(cfg) => cfg,
         Err(error) => return invalid(error),
     };
+    if preserve_raw_schedule {
+        cfg.schedule = current.schedule.clone();
+        cfg.ui_schedule = current.ui_schedule.clone();
+    }
 
     let Some(job) = (match service.update(&id, cfg).await {
         Ok(value) => value,

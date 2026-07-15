@@ -666,9 +666,7 @@ async fn interactive_fill_channel_overrides(
             }
         }
         if overrides.agent_id.is_none() {
-            overrides.agent_id = Some(prompt_agent_reference_choice(Some(
-                DEFAULT_CHANNEL_AGENT_ID,
-            ))?);
+            overrides.agent_id = prompt_agent_reference_choice(None)?;
         }
         overrides = interactive_fill_plugin_channel_overrides(&manifest, overrides).await?;
         prompt_channel_identity_if_missing(channel, &mut overrides)?;
@@ -689,9 +687,7 @@ async fn interactive_fill_channel_overrides(
         }
     }
     if overrides.agent_id.is_none() {
-        overrides.agent_id = Some(prompt_agent_reference_choice(Some(
-            DEFAULT_CHANNEL_AGENT_ID,
-        ))?);
+        overrides.agent_id = prompt_agent_reference_choice(None)?;
     }
     match channel {
         "telegram" if overrides.token.is_none() => {
@@ -1025,7 +1021,7 @@ pub(super) fn prompt_channel_choice() -> Result<String, Box<dyn std::error::Erro
 
 #[derive(Debug, Clone)]
 struct AgentReferenceOption {
-    id: String,
+    id: Option<String>,
     label: String,
 }
 
@@ -1038,26 +1034,12 @@ fn provider_type_label(provider_type: &ProviderType) -> &'static str {
     }
 }
 
-fn load_cli_agent_profiles() -> Vec<CustomAgentProfile> {
-    let mut agents = builtin_provider_agent_profiles()
+fn selectable_cli_agent_profiles(
+    profiles: impl IntoIterator<Item = CustomAgentProfile>,
+) -> Vec<CustomAgentProfile> {
+    let mut profiles = profiles
         .into_iter()
-        .map(|profile| (profile.agent_id.clone(), profile))
-        .collect::<std::collections::HashMap<_, _>>();
-    let path = default_custom_agents_state_path();
-    if path.exists()
-        && let Ok(content) = fs::read_to_string(&path)
-        && !content.trim().is_empty()
-        && let Ok(persisted) =
-            serde_json::from_str::<std::collections::HashMap<String, CustomAgentProfile>>(&content)
-    {
-        for (agent_id, profile) in persisted {
-            agents.insert(agent_id, profile);
-        }
-    }
-
-    let mut profiles = agents
-        .into_values()
-        .filter(|profile| profile.standalone)
+        .filter(|profile| profile.standalone && profile.enabled)
         .collect::<Vec<_>>();
     profiles.sort_by(|left, right| {
         left.built_in
@@ -1067,6 +1049,22 @@ fn load_cli_agent_profiles() -> Vec<CustomAgentProfile> {
             .then_with(|| left.agent_id.cmp(&right.agent_id))
     });
     profiles
+}
+
+fn parse_cli_agent_profiles(
+    content: &str,
+) -> Result<Vec<CustomAgentProfile>, garyx_models::AgentStoreDocumentError> {
+    parse_agent_store_document(content)
+        .map(|document| selectable_cli_agent_profiles(document.agents))
+}
+
+fn load_cli_agent_profiles() -> Vec<CustomAgentProfile> {
+    let path = default_custom_agents_state_path();
+    fs::read_to_string(&path)
+        .ok()
+        .filter(|content| !content.trim().is_empty())
+        .and_then(|content| parse_cli_agent_profiles(&content).ok())
+        .unwrap_or_else(|| selectable_cli_agent_profiles(builtin_provider_agent_profiles()))
 }
 
 fn format_cli_agent_label(agent: &CustomAgentProfile) -> String {
@@ -1087,37 +1085,32 @@ fn format_cli_agent_label(agent: &CustomAgentProfile) -> String {
 }
 
 fn available_agent_reference_options() -> Vec<AgentReferenceOption> {
-    load_cli_agent_profiles()
-        .into_iter()
-        .map(|agent| {
-            let label = format_cli_agent_label(&agent);
-            AgentReferenceOption {
-                id: agent.agent_id,
-                label,
-            }
-        })
-        .collect()
+    std::iter::once(AgentReferenceOption {
+        id: None,
+        label: "跟随全局默认 Agent".to_owned(),
+    })
+    .chain(load_cli_agent_profiles().into_iter().map(|agent| {
+        let label = format_cli_agent_label(&agent);
+        AgentReferenceOption {
+            id: Some(agent.agent_id),
+            label,
+        }
+    }))
+    .collect()
 }
 
 fn prompt_agent_reference_choice(
     default_id: Option<&str>,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
     use dialoguer::{Select, theme::ColorfulTheme};
     let items = available_agent_reference_options();
-    if items.is_empty() {
-        return Ok(DEFAULT_CHANNEL_AGENT_ID.to_owned());
-    }
     let labels = items
         .iter()
         .map(|item| item.label.as_str())
         .collect::<Vec<_>>();
     let default_index = default_id
-        .and_then(|id| items.iter().position(|item| item.id == id))
-        .or_else(|| {
-            items
-                .iter()
-                .position(|item| item.id == DEFAULT_CHANNEL_AGENT_ID)
-        })
+        .and_then(|id| items.iter().position(|item| item.id.as_deref() == Some(id)))
+        .or_else(|| items.iter().position(|item| item.id.is_none()))
         .unwrap_or(0);
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("选择 Agent")
@@ -1144,7 +1137,7 @@ fn upsert_channel_account(
     domain: Option<String>,
     plugin_extras: Map<String, Value>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let agent_id = trim_opt(agent_id).unwrap_or_else(|| DEFAULT_CHANNEL_AGENT_ID.to_owned());
+    let agent_id = trim_opt(agent_id);
     let workspace_mode = normalize_channel_workspace_mode(workspace_mode)?;
     match channel {
         BUILTIN_CHANNEL_PLUGIN_TELEGRAM => {
@@ -1155,7 +1148,7 @@ fn upsert_channel_account(
                 token,
                 enabled: true,
                 name,
-                agent_id: Some(agent_id.clone()),
+                agent_id: agent_id.clone(),
                 workspace_dir,
                 owner_target: None,
                 groups: Default::default(),
@@ -1174,7 +1167,7 @@ fn upsert_channel_account(
                 token,
                 enabled: true,
                 name,
-                agent_id: Some(agent_id.clone()),
+                agent_id: agent_id.clone(),
                 workspace_dir,
                 owner_target: None,
                 require_mention: true,
@@ -1204,7 +1197,7 @@ fn upsert_channel_account(
                 enabled: true,
                 domain: resolved_domain,
                 name,
-                agent_id: Some(agent_id.clone()),
+                agent_id: agent_id.clone(),
                 workspace_dir,
                 owner_target: None,
                 require_mention: true,
@@ -1226,7 +1219,7 @@ fn upsert_channel_account(
                 enabled: true,
                 base_url: base_url.unwrap_or_else(|| "https://ilinkai.weixin.qq.com".to_owned()),
                 name,
-                agent_id: Some(agent_id.clone()),
+                agent_id: agent_id.clone(),
                 workspace_dir,
                 streaming_update: true,
             });
@@ -1242,7 +1235,7 @@ fn upsert_channel_account(
                 ApiAccount {
                     enabled: true,
                     name,
-                    agent_id: Some(agent_id.clone()),
+                    agent_id: agent_id.clone(),
                     workspace_dir,
                     workspace_mode,
                 },
@@ -1257,7 +1250,7 @@ fn upsert_channel_account(
                 name: name.clone(),
                 workspace_dir: workspace_dir.clone(),
                 workspace_mode: workspace_mode.clone(),
-                agent_id: Some(agent_id.clone()),
+                agent_id: agent_id.clone(),
                 token,
                 uin,
                 base_url,
@@ -1276,7 +1269,7 @@ fn upsert_channel_account(
                     PluginAccountEntry {
                         enabled: true,
                         name,
-                        agent_id: Some(agent_id),
+                        agent_id,
                         workspace_dir,
                         workspace_mode,
                         config: Value::Object(form_state),
@@ -1690,9 +1683,7 @@ pub(crate) async fn cmd_channels_login(
     let mut selected_agent_id =
         trim_opt(agent_id).or_else(|| reauthorize_entry.as_ref().and_then(|e| e.agent_id.clone()));
     if selected_agent_id.is_none() && can_prompt_interactively() && !json_output {
-        selected_agent_id = Some(prompt_agent_reference_choice(Some(
-            DEFAULT_CHANNEL_AGENT_ID,
-        ))?);
+        selected_agent_id = prompt_agent_reference_choice(None)?;
     }
 
     match channel.as_str() {
@@ -2183,10 +2174,114 @@ type = "string"
             .and_then(|plugin| plugin.accounts.get("agent-1"))
             .expect("plugin account should exist");
         assert_eq!(entry.name.as_deref(), Some("AcmeChat Main"));
-        assert_eq!(entry.agent_id.as_deref(), Some("claude"));
+        assert_eq!(entry.agent_id, None);
         assert_eq!(entry.workspace_mode.as_deref(), Some("worktree"));
         assert_eq!(entry.config["token"], "tok-1");
         assert_eq!(entry.config["base_url"], "https://chat.example.com");
+    }
+
+    #[test]
+    fn upsert_all_channel_account_shapes_preserve_follow_global_none() {
+        let mut cfg = GaryxConfig::default();
+        let cases = [
+            (
+                BUILTIN_CHANNEL_PLUGIN_TELEGRAM,
+                Some("telegram-token".to_owned()),
+                None,
+                None,
+                None,
+                None,
+            ),
+            (
+                BUILTIN_CHANNEL_PLUGIN_DISCORD,
+                Some("discord-token".to_owned()),
+                None,
+                None,
+                None,
+                None,
+            ),
+            (
+                BUILTIN_CHANNEL_PLUGIN_FEISHU,
+                None,
+                None,
+                None,
+                Some("app-id".to_owned()),
+                Some("app-secret".to_owned()),
+            ),
+            (
+                BUILTIN_CHANNEL_PLUGIN_WEIXIN,
+                Some("weixin-token".to_owned()),
+                Some("1000000001".to_owned()),
+                Some("https://ilinkai.weixin.qq.com".to_owned()),
+                None,
+                None,
+            ),
+        ];
+        for (channel, token, uin, base_url, app_id, app_secret) in cases {
+            upsert_channel_account(
+                &mut cfg,
+                channel,
+                "main",
+                None,
+                None,
+                None,
+                None,
+                token,
+                uin,
+                base_url,
+                app_id,
+                app_secret,
+                None,
+                Map::new(),
+            )
+            .unwrap();
+            assert_eq!(
+                cfg.channels.plugin_channel(channel).unwrap().accounts["main"].agent_id,
+                None,
+                "{channel} must preserve follow-global state"
+            );
+        }
+
+        upsert_channel_account(
+            &mut cfg,
+            "api",
+            "main",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Map::new(),
+        )
+        .unwrap();
+        assert_eq!(cfg.channels.api.accounts["main"].agent_id, None);
+    }
+
+    #[test]
+    fn cli_picker_decodes_v2_envelope_and_filters_disabled_agents() {
+        let mut agents = builtin_provider_agent_profiles();
+        agents
+            .iter_mut()
+            .find(|agent| agent.agent_id == "claude")
+            .unwrap()
+            .enabled = false;
+        let mut custom = agents[1].clone();
+        custom.agent_id = "reviewer".to_owned();
+        custom.display_name = "Reviewer".to_owned();
+        custom.built_in = false;
+        agents.push(custom);
+        let encoded =
+            garyx_models::serialize_agent_store_document(&agents, Some("reviewer")).unwrap();
+
+        let parsed = parse_cli_agent_profiles(&encoded).unwrap();
+        assert!(!parsed.iter().any(|agent| agent.agent_id == "claude"));
+        assert!(parsed.iter().any(|agent| agent.agent_id == "reviewer"));
+        assert!(parsed.iter().any(|agent| agent.agent_id == "codex"));
     }
 
     #[test]

@@ -546,13 +546,18 @@ pub(crate) fn validate_cron_job(job: &CronJob) -> Option<String> {
     }
     match job.action {
         CronAction::AgentTurn => {
-            let has_thread = job
+            let thread_id = job
                 .thread_id
                 .as_deref()
                 .map(str::trim)
-                .is_some_and(is_canonical_thread_id);
+                .filter(|value| !value.is_empty());
+            if thread_id.is_some_and(|value| !is_canonical_thread_id(value)) {
+                return Some("invalid canonical thread_id for agent turn".to_owned());
+            }
+            let has_thread = thread_id.is_some();
             let has_target = has_non_empty_cron_text(job.target.as_deref());
-            let generated = is_automation_prompt_job(job)
+            let generated = thread_id.is_none()
+                && is_automation_prompt_job(job)
                 && has_non_empty_cron_text(job.workspace_dir.as_deref());
             if !has_thread && !has_target && !generated {
                 Some("missing canonical target for agent turn".to_owned())
@@ -561,11 +566,15 @@ pub(crate) fn validate_cron_job(job: &CronJob) -> Option<String> {
             }
         }
         CronAction::SystemEvent => {
-            let has_thread = job
+            let thread_id = job
                 .thread_id
                 .as_deref()
                 .map(str::trim)
-                .is_some_and(is_canonical_thread_id);
+                .filter(|value| !value.is_empty());
+            if thread_id.is_some_and(|value| !is_canonical_thread_id(value)) {
+                return Some("invalid canonical thread_id for system event".to_owned());
+            }
+            let has_thread = thread_id.is_some();
             let has_target = has_non_empty_cron_text(job.target.as_deref());
             if !has_thread && !has_target {
                 Some("missing canonical target for system event".to_owned())

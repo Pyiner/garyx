@@ -15,12 +15,19 @@ export type DesktopAutomationSchedule =
     };
 
 export type DesktopAutomationStatus = "success" | "failed" | "skipped";
+export type DesktopAutomationAgentResolution =
+  | "resolved"
+  | "follow_thread"
+  | "target_missing";
+export type DesktopAutomationValidationState = "valid" | "invalid";
 
 export interface DesktopAutomationSummary {
   id: string;
   label: string;
   prompt: string;
-  agentId: string;
+  agentId: string | null;
+  agentResolution: DesktopAutomationAgentResolution;
+  effectiveAgentId: string | null;
   enabled: boolean;
   workspacePath: string;
   // Existing thread this automation pushes scheduled prompts into, when set.
@@ -32,6 +39,8 @@ export interface DesktopAutomationSummary {
   lastStatus: DesktopAutomationStatus;
   unreadHintTimestamp?: string | null;
   schedule: DesktopAutomationSchedule;
+  validationState: DesktopAutomationValidationState;
+  validationError?: string | null;
 }
 
 export interface DesktopAutomationActivityEntry {

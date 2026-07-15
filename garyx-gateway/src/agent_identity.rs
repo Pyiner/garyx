@@ -7,7 +7,8 @@ use garyx_models::{
     agent_runtime_snapshot_metadata, resolve_agent_binding, resolve_agent_reference,
 };
 use garyx_router::{
-    ThreadCreator, ThreadEnsureOptions, ThreadStore, create_thread_record, workspace_dir_from_value,
+    ThreadCreationError, ThreadCreator, ThreadEnsureOptions, ThreadStore, create_thread_record,
+    workspace_dir_from_value,
 };
 use serde_json::Value;
 
@@ -104,7 +105,7 @@ pub(crate) async fn create_thread_for_agent_reference(
     custom_agents: Arc<CustomAgentStore>,
     options: ThreadEnsureOptions,
     intent: AgentBindingIntent,
-) -> Result<(String, Value, AgentReference), String> {
+) -> Result<(String, Value, AgentReference), ThreadCreationError> {
     let snapshot = custom_agents.snapshot().await;
     let binding = match intent {
         AgentBindingIntent::Fresh | AgentBindingIntent::Fork => {
@@ -113,9 +114,9 @@ pub(crate) async fn create_thread_for_agent_reference(
         AgentBindingIntent::RecoverExistingSession => {
             resolve_agent_binding(&snapshot, None, options.agent_id.as_deref())
         }
-    }
-    .map_err(|error| error.to_string())?;
-    let resolved = resolve_agent_reference(&binding.agent_id, &snapshot.agents)?;
+    }?;
+    let resolved = resolve_agent_reference(&binding.agent_id, &snapshot.agents)
+        .map_err(ThreadCreationError::Other)?;
 
     let mut canonical_options = options;
     canonical_options.agent_id = Some(resolved.bound_agent_id().to_owned());
@@ -131,7 +132,15 @@ pub(crate) async fn create_thread_for_agent_reference(
         canonical_options.workspace_dir = default_workspace_dir_from_agent_reference(&resolved);
     }
 
-    let (thread_id, mut data) = create_thread_record(&thread_store, canonical_options).await?;
+    let (thread_id, mut data) = create_thread_record(&thread_store, canonical_options)
+        .await
+        .map_err(|error| {
+            if error.starts_with("workspace_mode=worktree") {
+                ThreadCreationError::Other(error)
+            } else {
+                ThreadCreationError::Storage(error)
+            }
+        })?;
     set_thread_metadata_fields(
         &mut data,
         &[(
@@ -174,7 +183,7 @@ impl ThreadCreator for GatewayThreadCreator {
         &self,
         thread_store: Arc<dyn ThreadStore>,
         options: ThreadEnsureOptions,
-    ) -> Result<(String, Value), String> {
+    ) -> Result<(String, Value), ThreadCreationError> {
         let (thread_id, data, _) = create_thread_for_agent_reference(
             thread_store,
             self.bridge.clone(),
@@ -321,7 +330,7 @@ mod tests {
             )
             .await
             .expect_err("new binding to disabled agent must be rejected");
-            assert_eq!(error, "agent is disabled: codex");
+            assert_eq!(error.to_string(), "agent is disabled: codex");
             assert!(store.list_keys(None).await.unwrap().is_empty());
         }
 
@@ -446,7 +455,10 @@ mod tests {
         )
         .await
         .expect_err("implicit binding must fail with no enabled agents");
-        assert_eq!(error, "no enabled standalone agent is available");
+        assert_eq!(
+            error.to_string(),
+            "no enabled standalone agent is available"
+        );
         assert!(store.list_keys(None).await.unwrap().is_empty());
     }
 }

@@ -1651,6 +1651,44 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(bots.bots.first?.mainThreadId, "thread::main")
     }
 
+    func testAutomationTypedAgentAndValidationWireFieldsDecodeWithoutClaudeFallback() throws {
+        let page = try JSONDecoder().decode(
+            GaryxAutomationsPage.self,
+            from: Data(
+                """
+                {
+                  "automations": [
+                    {
+                      "id": "cron::target",
+                      "label": "Target job",
+                      "prompt": "Continue",
+                      "agentId": null,
+                      "agentResolution": "follow_thread",
+                      "effectiveAgentId": "codex",
+                      "enabled": true,
+                      "workspaceDir": "",
+                      "targetThreadId": "thread::target",
+                      "threadMode": "target",
+                      "nextRun": "2026-07-17T00:00:00Z",
+                      "lastStatus": "never_run",
+                      "schedule": { "kind": "interval", "hours": 6 },
+                      "validationState": "invalid",
+                      "validationError": "target has no canonical binding"
+                    }
+                  ]
+                }
+                """.utf8
+            )
+        )
+
+        let automation = try XCTUnwrap(page.automations.first)
+        XCTAssertNil(automation.agentId)
+        XCTAssertEqual(automation.agentResolution, .followThread)
+        XCTAssertEqual(automation.effectiveAgentId, "codex")
+        XCTAssertEqual(automation.validationState, .invalid)
+        XCTAssertEqual(automation.validationError, "target has no canonical binding")
+    }
+
     func testMacParityRequestsEncodeGatewayShapes() throws {
         let automation = GaryxAutomationCreateRequest(
             label: "Interval Review",

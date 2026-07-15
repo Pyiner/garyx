@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod agent_availability;
 pub mod agent_reference;
+pub mod agent_store;
 pub mod channel_outbound;
 pub mod codex_models;
 pub mod command_catalog;
@@ -34,6 +35,10 @@ pub use agent_availability::{
 pub use agent_reference::{
     AgentReference, agent_runtime_metadata, agent_runtime_snapshot_metadata,
     merge_thread_agent_runtime_snapshot, resolve_agent_reference,
+};
+pub use agent_store::{
+    AGENT_STORE_VERSION, AgentStoreDocumentError, ParsedAgentStoreDocument,
+    parse_agent_store_document, serialize_agent_store_document,
 };
 pub use channel_outbound::ChannelOutboundContent;
 pub use command_catalog::{

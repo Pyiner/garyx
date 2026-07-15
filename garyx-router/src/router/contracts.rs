@@ -2,11 +2,38 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use garyx_models::AgentBindingError;
 use garyx_models::messages::MessageMetadata;
 use garyx_models::provider::{AgentDispatchOutcome, ImagePayload, StreamEvent};
 use serde_json::Value;
 
 use crate::{AdmittedRun, ThreadEnsureOptions, ThreadStore};
+
+#[derive(Debug, thiserror::Error)]
+pub enum ThreadCreationError {
+    #[error(transparent)]
+    AgentBinding(#[from] AgentBindingError),
+    #[error("thread store backend failed: {0}")]
+    Storage(String),
+    #[error("{0}")]
+    Other(String),
+}
+
+impl From<String> for ThreadCreationError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl ThreadCreationError {
+    pub(crate) fn from_record_creation_error(error: String) -> Self {
+        if error.starts_with("workspace_mode=worktree") {
+            Self::Other(error)
+        } else {
+            Self::Storage(error)
+        }
+    }
+}
 
 #[async_trait]
 pub trait AgentDispatcher: Send + Sync {
@@ -23,7 +50,7 @@ pub trait ThreadCreator: Send + Sync {
         &self,
         thread_store: Arc<dyn ThreadStore>,
         options: ThreadEnsureOptions,
-    ) -> Result<(String, Value), String>;
+    ) -> Result<(String, Value), ThreadCreationError>;
 }
 
 pub struct InboundRequest {
