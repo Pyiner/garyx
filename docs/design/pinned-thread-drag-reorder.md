@@ -1,10 +1,19 @@
 # Pinned Thread Drag Reorder (Mobile-First)
 
-Status: v5 draft for design review (revised after review rounds 1-4, #TASK-2287)
+Status: v6 draft for design review (revised after review rounds 1-5, #TASK-2287)
 Scope: gateway + iOS (phase 1), Mac desktop (phase 2)
 
 Revision notes:
 
+- v5 → v6 (review round 5): membership-gated reorder dispatch
+  (`waitingForMembership`) so a reorder never spins against live optimistic
+  pin/unpin intents; all settle comparisons use the server page's raw
+  canonical order (never an intent-overlay projection); any accepted page
+  whose raw order equals `desiredOrder` settles the outbox; empty
+  `desiredOrder` clears the outbox and the client never sends an empty
+  `thread_ids` (gateway 400 stays as defense-in-depth); bounded-write test
+  obligations (PUT count bounded, no 400, no revision storm, outbox drains)
+  at Core, App-URLProtocol, and desktop main-store layers.
 - v4 → v5 (review round 4): V4-1 desktop stamp ownership corrected — persisted
   `DesktopState` carries server-domain fields only; `capturedEpoch` +
   `rendererSessionId` + gateway identity live in a renderer-only delivery
@@ -227,7 +236,10 @@ Invariants:
     merges and resends — repo's strict conditional-update pattern).
   - Validation (400): missing `expected_revision`; `thread_ids` not a
     non-empty array of non-empty strings; duplicate ids. Unknown/unpinned
-    ids are *not* an error (unpin race tolerance).
+    ids are *not* an error (unpin race tolerance). Clients are specified to
+    never send an empty `thread_ids` (an emptied `desiredOrder` clears the
+    client outbox instead, §5.2); the 400 remains as defense-in-depth, not a
+    path a conforming client can hit.
 - Concurrency: per-transaction atomicity + CAS revision gives cross-client
   intent ordering; a stale-view reorder 409s instead of silently overriding
   concurrent pin/unpin/reorder.
@@ -349,10 +361,24 @@ Core concepts:
   them can later be mistaken for authoritative).
 - **`highestObservedRevision`** — monotone acceptance floor over server
   `revision` values.
-- **Single-flight reorder writes** — at most one collection PUT in flight; it
-  always carries the current `desiredOrder` + latest known revision; when it
-  completes without settling (order moved on, 409, *or* a below-floor
-  completion), the next PUT fires with the current values.
+- **Single-flight reorder writes, membership-gated (round-5 F1)** — at most
+  one collection PUT in flight; it always carries the current `desiredOrder`
+  + latest known revision. **Dispatch is gated on membership quiescence**: a
+  PUT may only be issued while no per-id pin/unpin intent is live. When a PUT
+  completes without settling (order moved on, 409, below-floor) *and* no
+  membership intent is live, the next PUT fires immediately with current
+  values; if membership intents are live, the outbox instead enters an
+  explicit **`waitingForMembership`** state — flight slot freed, no resend.
+  Wake triggers: the last live membership intent resolves (success *or*
+  failure rollback), or any accepted page lands. On wake: re-reduce
+  `desiredOrder` over the merged membership; if it is **empty**, clear the
+  outbox (nothing left to order — the client never sends an empty
+  `thread_ids`); if the last accepted page's **raw canonical order** already
+  equals `desiredOrder`, settle without a write; otherwise dispatch with the
+  floor token. This bounds writes to at most one PUT per
+  membership-quiescent window: a reorder can no longer spin re-appending an
+  id whose unpin is still in flight, nor 400 itself into a permanently
+  paused outbox after a full unpin.
 
 **Page acceptance vs. flight completion (review round-3 F1).** Every response
 does two independent things: it always **completes its transport flight**
@@ -447,20 +473,27 @@ Rules:
 - **R3 — local order wins while unsettled.** Every page landing while
   unsettled goes through the acceptance procedure and can at most merge
   membership (step 3). Server order is not adopted.
-- **R4 — settle without motion, revision-aware.** A PUT ack settles only if:
-  ack order == current `desiredOrder`, the request's epoch is still current
-  (no local mutation since send), and `ack.revision ≥
+- **R4 — settle without motion, revision-aware, raw-order-compared.** All
+  settle equality checks compare the server page's **raw canonical order**
+  against `desiredOrder` — never an intent-overlay projection (round-5 F1;
+  while membership intents are live the two legitimately differ, which is
+  exactly why dispatch is gated until quiescence). A PUT ack settles only
+  if: ack raw order == current `desiredOrder`, the request's epoch is still
+  current (no local mutation since send), and `ack.revision ≥
   highestObservedRevision`. Settling adopts `ack.revision`, advances `epoch`
-  (V2-1), clears the outbox, and changes nothing visually (order already
-  identical). A below-floor ack never settles; it ends the flight and
-  triggers the immediate floor-token resend (round-3 F1). On **409**: run
-  the acceptance procedure on the returned page; if the page is
-  `discardedBelowFloor`, resend with `expected_revision =
-  highestObservedRevision`; if the accepted page's order already equals
-  `desiredOrder`, **settle directly without re-PUT** (V2-4 — no pointless
-  write/revision bump); otherwise resend with the accepted page's revision —
-  a silent, closed CAS loop (a concurrent other-device pin produces one 409
-  → merged full-order resend → convergence, zero visible motion locally).
+  (V2-1), clears the outbox, and changes nothing visually. A below-floor ack
+  never settles; it ends the flight and triggers the floor-token resend —
+  subject to the membership gate (round-3 F1, round-5 F1). On **409**: run
+  the acceptance procedure on the returned page; if `discardedBelowFloor`,
+  resend with `expected_revision = highestObservedRevision` (membership gate
+  applies); if the accepted page's raw order already equals `desiredOrder`,
+  **settle directly without re-PUT** (V2-4); otherwise resend with the
+  accepted page's revision — a silent, closed CAS loop. Additionally, **any
+  accepted page from any request** (GET, pin/unpin write-back) whose raw
+  canonical order equals the current `desiredOrder` settles the outbox — a
+  reorder that in fact landed server-side (or was arranged identically by
+  another device) never leaves a stale outbox behind, including across
+  restarts (round-5 F1).
 - **R5 — failure never loses the order; retries are classified (V2-4).** A
   failed reorder write never snaps the UI back. The unsettled `desiredOrder`
   (+ gateway identity + last known revision) persists as a **gateway-scoped
@@ -520,6 +553,15 @@ response write-back captures epoch/revision like any other response.
   - R3: poll during in-flight merge keeps local order; other-device pin →
     head insert → merged full-order PUT → next GET no jump;
   - reorder × optimistic pin/unpin interleavings (success and failure legs);
+    **round-5 F1 exact regressions**: delayed unpin (reorder completes
+    unsettled while unpin in flight ⇒ `waitingForMembership`, no resend, no
+    re-append spin; unpin resolves ⇒ single PUT with reduced order ⇒ settle);
+    delayed pin (unknown-id PUT never dispatched while pin intent live);
+    membership-intent failure rollback wakes the gate; full unpin ⇒
+    `desiredOrder` empties ⇒ outbox cleared, no `[]` PUT, no 400; restart
+    with outbox while server already equals desired (or is empty) ⇒ settled
+    by accepted-page-equals-desired, no write. Each asserts **bounded PUT
+    count, zero 400s, no revision storm, outbox eventually empty**;
   - R5: durable outbox restart recovery; supersede-by-newer-drop; retry
     classification (429/5xx backoff vs 405 pause + pending-sync state);
     gateway-switch clear;
@@ -538,7 +580,12 @@ response write-back captures epoch/revision like any other response.
     gateway's revision-0 page is accepted;
   - high-revision opposite pin/unpin page, then the local low-revision ack ⇒
     the real presentation immediately shows the saved high-revision baseline
-    (intent retired, nothing hidden).
+    (intent retired, nothing hidden);
+  - **round-5 F1 at real transport**: reorder PUT completes unsettled while a
+    real unpin request is still in flight ⇒ no second PUT until the unpin
+    resolves, then exactly one PUT with the reduced order; full unpin ⇒ no
+    `[]` PUT ever issued; assert total PUT count bounded and no 400
+    responses.
 - Spike carries the quantified hitch gate (§5.1 point 7). Manual simulator
   pass only for gesture *feel*, never as ordering-logic acceptance.
 
@@ -586,7 +633,14 @@ response write-back captures epoch/revision like any other response.
     stale epoch, below-floor revision, wrong session, or wrong gateway
     identity is rejected/rebased against the current authoritative order —
     even after the overlay has retired.
+- The main-store reducer carries the same membership gate
+  (`waitingForMembership`), raw-order settle comparisons,
+  accepted-page-equals-desired settle path, and empty-order outbox clearing
+  as iOS (round-5 F1).
 - Tests (`npm run test:unit`): main-store guard at the real overwrite site;
+  the round-5 F1 set (delayed pin/unpin, failure rollback, full unpin,
+  restart + server-already-equal/empty; bounded PUT count, no 400, no
+  revision storm, outbox drains);
   the V2-3 race — refresh resolved and `nextState` captured, drop happens,
   deferred transition commits ⇒ committed state carries the local order;
   the round-3 F2 race — stale transition queued → drop → ack settle clears
@@ -612,7 +666,10 @@ response write-back captures epoch/revision like any other response.
 | Concurrent pin on another device | 409 → merge (new id at head) → resend full order → converge; if 409 page already matches, settle without re-PUT (R4) |
 | Concurrent unpin on another device | Unknown id ignored server-side; drops out locally on membership merge |
 | Two devices reorder | CAS: stale writer 409s and resends; deterministic last-writer-wins |
-| Remote write raises floor; our 200/409 completes below floor | Flight ends, page discarded, no settle; immediate resend with floor token (round-3 F1) |
+| Reorder completes unsettled while local pin/unpin still in flight | `waitingForMembership`: no resend until intents resolve; then ≤1 PUT with reduced order; no re-append spin (round-5 F1) |
+| All pinned threads unpinned while reorder outbox live | `desiredOrder` empties ⇒ outbox cleared; `[]` is never sent; no 400 (round-5 F1) |
+| Restart with outbox; server already equals desired (or empty) | Accepted-page-equals-desired settles without a write (round-5 F1) |
+| Remote write raises floor; our 200/409 completes below floor | Flight ends, page discarded, no settle; floor-token resend once membership-quiescent (round-3 F1, round-5 F1) |
 | Remote opposite pin/unpin at higher revision, local low-revision ack later | Per-id intent retires at completion; higher-revision page wins (LWW); nothing permanently hidden (round-3 F1) |
 | Transient failure (network/429/5xx) | Local order kept; capped backoff with jitter (R5) |
 | Permanent failure (400/401/403/404/405, old gateway) | Local order kept; requests paused; non-blocking pending-sync state; resume on env change (R5) |
@@ -656,8 +713,12 @@ response write-back captures epoch/revision like any other response.
    outbox; per-id intents retire at completion with revision-bounded
    overlays (LWW). Responses run a fixed pipeline — identity → transport
    completion → revision acceptance → publication — and drag-freeze buffers
-   hold accepted projections only, never raw arrivals. This is the corrected
-   form of the in-repo `GaryxCapsuleFavorites` pattern.
+   hold accepted projections only, never raw arrivals. Reorder dispatch is
+   **membership-gated** (`waitingForMembership` while per-id intents are
+   live), settle comparisons use raw canonical order, any accepted
+   page equal to `desiredOrder` settles the outbox, and an emptied
+   `desiredOrder` clears it (no `[]` writes). This is the corrected form of
+   the in-repo `GaryxCapsuleFavorites` pattern.
 4. Reorder failure does **not** roll back the UI; the unsettled order is a
    durable, gateway-scoped outbox. Retries are **classified**: CAS loop for
    409, capped jittered backoff for transient errors, and a paused,
