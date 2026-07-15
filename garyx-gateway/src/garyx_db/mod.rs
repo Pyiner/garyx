@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+#[cfg(any(test, feature = "test-seams"))]
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -22,6 +24,25 @@ pub(crate) const RECENT_TASK_THREAD_KIND_MIGRATION_NAME: &str = "recent_task_thr
 const RECENT_TASK_THREAD_KIND_MIGRATION_VERSION: i64 = 1;
 pub(crate) const ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME: &str = "endpoint_holder_dedup_v1";
 const ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION: i64 = 1;
+const LEGACY_IMPORT_GENERATION_NAME: &str = "legacy_import_generation";
+const LEGACY_IMPORT_GENERATION_VERSION: i64 = 1;
+
+#[cfg(any(test, feature = "test-seams"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum TestDbFaultPoint {
+    LegacyMarkerPairRead,
+    LegacyImportCommit,
+    LegacyRetirementMarkerWrite,
+    ArchivedThreadRead,
+    LegacyGenerationSeedWrite,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+#[derive(Debug, Default)]
+struct TestDbFaults {
+    calls: HashMap<TestDbFaultPoint, usize>,
+    fail_on: HashSet<(TestDbFaultPoint, usize)>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum GaryxDbError {
@@ -335,6 +356,8 @@ pub struct GaryxDbService {
     readers: Vec<Mutex<Connection>>,
     /// Round-robin cursor into `readers`.
     next_reader: std::sync::atomic::AtomicUsize,
+    #[cfg(any(test, feature = "test-seams"))]
+    test_faults: Mutex<TestDbFaults>,
 }
 
 /// Narrow read-only handle for offline control-plane reads while the gateway
@@ -390,6 +413,8 @@ impl GaryxDbService {
             conn: Mutex::new(conn),
             readers,
             next_reader: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(any(test, feature = "test-seams"))]
+            test_faults: Mutex::new(TestDbFaults::default()),
         })
     }
 
@@ -401,7 +426,38 @@ impl GaryxDbService {
             conn: Mutex::new(conn),
             readers: Vec::new(),
             next_reader: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(any(test, feature = "test-seams"))]
+            test_faults: Mutex::new(TestDbFaults::default()),
         })
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    pub(crate) fn fail_test_db_call(&self, point: TestDbFaultPoint, occurrence: usize) {
+        assert!(occurrence > 0, "fault occurrence is one-based");
+        self.test_faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .fail_on
+            .insert((point, occurrence));
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    fn maybe_fail_test_db_call(&self, point: TestDbFaultPoint) -> GaryxDbResult<()> {
+        let mut faults = self
+            .test_faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let occurrence = {
+            let calls = faults.calls.entry(point).or_default();
+            *calls += 1;
+            *calls
+        };
+        if faults.fail_on.remove(&(point, occurrence)) {
+            return Err(GaryxDbError::Configuration(format!(
+                "injected database fault at {point:?} call {occurrence}"
+            )));
+        }
+        Ok(())
     }
 
     pub(crate) fn list_active_recent_thread_ids(
@@ -537,6 +593,8 @@ impl GaryxDbService {
     }
 
     pub fn is_thread_archived(&self, thread_id: &str) -> GaryxDbResult<bool> {
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_fail_test_db_call(TestDbFaultPoint::ArchivedThreadRead)?;
         let thread_id = normalize_thread_id(thread_id)?;
         let conn = self.read_conn()?;
         let archived: Option<String> = conn
@@ -898,6 +956,146 @@ impl GaryxDbService {
             .total)
     }
 
+    /// Read the import and retirement markers in one SQL query. The boot
+    /// importer double-checks this pair after taking the lifecycle lock.
+    pub(crate) fn legacy_import_marker_pair(&self) -> GaryxDbResult<(bool, bool)> {
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_fail_test_db_call(TestDbFaultPoint::LegacyMarkerPairRead)?;
+        let conn = self.read_conn()?;
+        let pair = conn.query_row(
+            "SELECT
+                 COALESCE(MAX(CASE
+                     WHEN projection_name = ?1 AND projection_version = ?2 THEN 1 ELSE 0
+                 END), 0),
+                 COALESCE(MAX(CASE
+                     WHEN projection_name = ?3 AND projection_version = ?4 THEN 1 ELSE 0
+                 END), 0)
+               FROM projection_states",
+            params![
+                crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME,
+                crate::legacy_boot_import::THREAD_RECORDS_IMPORT_VERSION,
+                crate::legacy_boot_import::LEGACY_ARCHIVE_RETIREMENT_NAME,
+                crate::legacy_boot_import::LEGACY_ARCHIVE_RETIREMENT_VERSION,
+            ],
+            |row| Ok((row.get::<_, i64>(0)? != 0, row.get::<_, i64>(1)? != 0)),
+        )?;
+        Ok(pair)
+    }
+
+    /// Commit the frozen import marker and the next monotonic import
+    /// generation together. Recovery also clears the retirement marker in
+    /// this transaction, making `(0,1) -> (1,0)` atomic.
+    pub(crate) fn commit_legacy_import(
+        &self,
+        source_row_count: usize,
+        recovery: bool,
+    ) -> GaryxDbResult<i64> {
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_fail_test_db_call(TestDbFaultPoint::LegacyImportCommit)?;
+        let source_row_count = i64::try_from(source_row_count).unwrap_or(i64::MAX);
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let generation = match legacy_import_generation_row_tx(&tx)? {
+            Some(generation) => generation,
+            None => legacy_import_compat_generation_tx(&tx)?,
+        };
+        let next_generation = generation.checked_add(1).ok_or_else(|| {
+            GaryxDbError::Configuration("legacy import generation overflow".to_owned())
+        })?;
+        record_projection_state_tx(
+            &tx,
+            crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME,
+            crate::legacy_boot_import::THREAD_RECORDS_IMPORT_VERSION,
+            source_row_count,
+            None,
+        )?;
+        record_projection_state_tx(
+            &tx,
+            LEGACY_IMPORT_GENERATION_NAME,
+            LEGACY_IMPORT_GENERATION_VERSION,
+            next_generation,
+            None,
+        )?;
+        if recovery {
+            tx.execute(
+                "DELETE FROM projection_states WHERE projection_name = ?1",
+                params![crate::legacy_boot_import::LEGACY_ARCHIVE_RETIREMENT_NAME],
+            )?;
+        }
+        tx.commit()?;
+        Ok(next_generation)
+    }
+
+    pub(crate) fn record_legacy_archive_retirement(&self) -> GaryxDbResult<()> {
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_fail_test_db_call(TestDbFaultPoint::LegacyRetirementMarkerWrite)?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        record_projection_state_tx(
+            &tx,
+            crate::legacy_boot_import::LEGACY_ARCHIVE_RETIREMENT_NAME,
+            crate::legacy_boot_import::LEGACY_ARCHIVE_RETIREMENT_VERSION,
+            0,
+            None,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Current generation for cutover gating. A pre-generation database with
+    /// the frozen import marker is lazily seeded to generation 1; a builder
+    /// that never ran the boot importer observes generation 0 without
+    /// creating a generation row.
+    #[cfg(any(test, feature = "test-seams"))]
+    pub(crate) fn current_legacy_import_generation(&self) -> GaryxDbResult<i64> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let generation = self.current_legacy_import_generation_tx(&tx)?;
+        tx.commit()?;
+        Ok(generation)
+    }
+
+    fn current_legacy_import_generation_tx(&self, tx: &Transaction<'_>) -> GaryxDbResult<i64> {
+        if let Some(generation) = legacy_import_generation_row_tx(tx)? {
+            return Ok(generation);
+        }
+        let generation = legacy_import_compat_generation_tx(tx)?;
+        if generation == 1 {
+            #[cfg(any(test, feature = "test-seams"))]
+            self.maybe_fail_test_db_call(TestDbFaultPoint::LegacyGenerationSeedWrite)?;
+            record_projection_state_tx(
+                tx,
+                LEGACY_IMPORT_GENERATION_NAME,
+                LEGACY_IMPORT_GENERATION_VERSION,
+                generation,
+                None,
+            )?;
+        }
+        Ok(generation)
+    }
+
+    fn import_generation_cutover_gate(
+        &self,
+        tx: &Transaction<'_>,
+        migration_name: &str,
+        migration_version: i64,
+    ) -> GaryxDbResult<(i64, Option<i64>)> {
+        let generation = self.current_legacy_import_generation_tx(tx)?;
+        let completed = tx
+            .query_row(
+                "SELECT source_row_count,
+                        COALESCE(based_on_import_generation, 1)
+                   FROM projection_states
+                  WHERE projection_name = ?1 AND projection_version = ?2",
+                params![migration_name, migration_version],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        let completed_source_count = completed
+            .and_then(|(source_count, based_on)| (based_on == generation).then_some(source_count));
+        Ok((generation, completed_source_count))
+    }
+
     /// Run every versioned thread-data migration that must complete after
     /// the one-shot archive import and before the gateway starts serving.
     pub(crate) fn run_thread_data_startup_migrations(&self) -> GaryxDbResult<()> {
@@ -916,18 +1114,11 @@ impl GaryxDbService {
     ) -> GaryxDbResult<OneShotMigrationSummary> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        let completed_source_count = tx
-            .query_row(
-                "SELECT source_row_count
-                   FROM projection_states
-                  WHERE projection_name = ?1 AND projection_version = ?2",
-                params![
-                    ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME,
-                    ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION
-                ],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
+        let (import_generation, completed_source_count) = self.import_generation_cutover_gate(
+            &tx,
+            ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME,
+            ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION,
+        )?;
         if let Some(source_row_count) = completed_source_count {
             tx.commit()?;
             return Ok(OneShotMigrationSummary {
@@ -1147,20 +1338,12 @@ impl GaryxDbService {
               ORDER BY holder.thread_id ASC, holder.binding_index ASC",
             params![now_string()],
         )?;
-        tx.execute(
-            "INSERT INTO projection_states (
-                projection_name, projection_version, source_row_count, projected_at
-             ) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(projection_name) DO UPDATE SET
-                projection_version = excluded.projection_version,
-                source_row_count = excluded.source_row_count,
-                projected_at = excluded.projected_at",
-            params![
-                ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME,
-                ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION,
-                source_row_count,
-                now_string(),
-            ],
+        record_projection_state_tx(
+            &tx,
+            ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME,
+            ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION,
+            source_row_count,
+            Some(import_generation),
         )?;
         tx.execute_batch(
             "DROP TABLE endpoint_holder_dedup_winners;
@@ -1184,18 +1367,11 @@ impl GaryxDbService {
     ) -> GaryxDbResult<OneShotMigrationSummary> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        let completed_source_count = tx
-            .query_row(
-                "SELECT source_row_count
-                   FROM projection_states
-                  WHERE projection_name = ?1 AND projection_version = ?2",
-                params![
-                    RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
-                    RECENT_TASK_THREAD_KIND_MIGRATION_VERSION
-                ],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
+        let (import_generation, completed_source_count) = self.import_generation_cutover_gate(
+            &tx,
+            RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
+            RECENT_TASK_THREAD_KIND_MIGRATION_VERSION,
+        )?;
         if let Some(source_row_count) = completed_source_count {
             tx.commit()?;
             return Ok(OneShotMigrationSummary {
@@ -1262,20 +1438,12 @@ impl GaryxDbService {
                 AND thread_type <> 'task'",
             [],
         )?;
-        tx.execute(
-            "INSERT INTO projection_states (
-                projection_name, projection_version, source_row_count, projected_at
-             ) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(projection_name) DO UPDATE SET
-                projection_version = excluded.projection_version,
-                source_row_count = excluded.source_row_count,
-                projected_at = excluded.projected_at",
-            params![
-                RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
-                RECENT_TASK_THREAD_KIND_MIGRATION_VERSION,
-                source_row_count,
-                now_string(),
-            ],
+        record_projection_state_tx(
+            &tx,
+            RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
+            RECENT_TASK_THREAD_KIND_MIGRATION_VERSION,
+            source_row_count,
+            Some(import_generation),
         )?;
         tx.commit()?;
 
@@ -1335,6 +1503,11 @@ impl GaryxDbService {
     /// archived source (review #TASK-1901: a same-key-count rewrite must
     /// not be skipped by the next import).
     pub fn clear_projection_state(&self, name: &str) -> GaryxDbResult<bool> {
+        if name == LEGACY_IMPORT_GENERATION_NAME {
+            return Err(GaryxDbError::BadRequest(
+                "legacy_import_generation is monotonic and cannot be cleared".to_owned(),
+            ));
+        }
         let conn = self.conn()?;
         let removed = conn.execute(
             "DELETE FROM projection_states WHERE projection_name = ?1",
@@ -1350,24 +1523,22 @@ impl GaryxDbService {
         source_row_count: usize,
     ) -> GaryxDbResult<()> {
         let projection_name = normalize_required("projection_name", projection_name)?;
+        if projection_name == LEGACY_IMPORT_GENERATION_NAME {
+            return Err(GaryxDbError::BadRequest(
+                "legacy_import_generation is owned by the boot importer".to_owned(),
+            ));
+        }
         let source_row_count = i64::try_from(source_row_count).unwrap_or(i64::MAX);
-        let conn = self.conn()?;
-        conn.execute(
-            "INSERT INTO projection_states (
-                projection_name, projection_version, source_row_count, projected_at
-             )
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(projection_name) DO UPDATE SET
-                projection_version = excluded.projection_version,
-                source_row_count = excluded.source_row_count,
-                projected_at = excluded.projected_at",
-            params![
-                projection_name,
-                projection_version,
-                source_row_count,
-                now_string(),
-            ],
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        record_projection_state_tx(
+            &tx,
+            &projection_name,
+            projection_version,
+            source_row_count,
+            None,
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1998,6 +2169,71 @@ fn list_active_recent_thread_ids(
     Ok(ActiveRecentThreadPage { thread_ids, total })
 }
 
+fn legacy_import_generation_row_tx(tx: &Transaction<'_>) -> GaryxDbResult<Option<i64>> {
+    let row = tx
+        .query_row(
+            "SELECT projection_version, source_row_count
+               FROM projection_states
+              WHERE projection_name = ?1",
+            params![LEGACY_IMPORT_GENERATION_NAME],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let Some((version, generation)) = row else {
+        return Ok(None);
+    };
+    if version != LEGACY_IMPORT_GENERATION_VERSION || generation < 0 {
+        return Err(GaryxDbError::Configuration(format!(
+            "invalid legacy import generation row: version={version}, generation={generation}"
+        )));
+    }
+    Ok(Some(generation))
+}
+
+fn legacy_import_compat_generation_tx(tx: &Transaction<'_>) -> GaryxDbResult<i64> {
+    let imported = tx
+        .query_row(
+            "SELECT 1 FROM projection_states
+              WHERE projection_name = ?1 AND projection_version = ?2",
+            params![
+                crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME,
+                crate::legacy_boot_import::THREAD_RECORDS_IMPORT_VERSION,
+            ],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    Ok(if imported { 1 } else { 0 })
+}
+
+fn record_projection_state_tx(
+    tx: &Transaction<'_>,
+    projection_name: &str,
+    projection_version: i64,
+    source_row_count: i64,
+    based_on_import_generation: Option<i64>,
+) -> GaryxDbResult<()> {
+    tx.execute(
+        "INSERT INTO projection_states (
+            projection_name, projection_version, source_row_count, projected_at,
+            based_on_import_generation
+         ) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(projection_name) DO UPDATE SET
+            projection_version = excluded.projection_version,
+            source_row_count = excluded.source_row_count,
+            projected_at = excluded.projected_at,
+            based_on_import_generation = excluded.based_on_import_generation",
+        params![
+            projection_name,
+            projection_version,
+            source_row_count,
+            now_string(),
+            based_on_import_generation,
+        ],
+    )?;
+    Ok(())
+}
+
 fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(
@@ -2055,7 +2291,8 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             projection_name TEXT PRIMARY KEY,
             projection_version INTEGER NOT NULL,
             source_row_count INTEGER NOT NULL,
-            projected_at TEXT NOT NULL
+            projected_at TEXT NOT NULL,
+            based_on_import_generation INTEGER
         ) STRICT;
 
         -- Task-number allocator (single row). Allocation happens in one
@@ -2257,6 +2494,7 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         "#,
     )?;
     ensure_capsules_favorited_at_column(conn)?;
+    ensure_projection_state_import_generation_column(conn)?;
     ensure_thread_meta_projection_columns(conn)?;
     ensure_thread_channel_endpoint_columns(conn)?;
     ensure_thread_channel_endpoint_single_holder_schema(conn)?;
@@ -3040,6 +3278,21 @@ fn ensure_capsules_favorited_at_column(conn: &Connection) -> GaryxDbResult<()> {
     Ok(())
 }
 
+fn ensure_projection_state_import_generation_column(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(projection_states)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == "based_on_import_generation" {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        "ALTER TABLE projection_states ADD COLUMN based_on_import_generation INTEGER",
+        [],
+    )?;
+    Ok(())
+}
+
 fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()> {
     let mut stmt = conn.prepare("PRAGMA table_info(thread_meta)")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -3551,6 +3804,167 @@ mod tests {
             )
             .expect("seed task projection");
         }
+    }
+
+    fn raw_legacy_import_generation(service: &GaryxDbService) -> Option<i64> {
+        service
+            .conn()
+            .expect("conn")
+            .query_row(
+                "SELECT source_row_count FROM projection_states
+                  WHERE projection_name = ?1",
+                params![LEGACY_IMPORT_GENERATION_NAME],
+                |row| row.get(0),
+            )
+            .optional()
+            .expect("generation query")
+    }
+
+    fn seed_pre_generation_cutover_markers(service: &GaryxDbService) {
+        let conn = service.conn().expect("conn");
+        for (name, version) in [
+            (
+                RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
+                RECENT_TASK_THREAD_KIND_MIGRATION_VERSION,
+            ),
+            (
+                ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME,
+                ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION,
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO projection_states (
+                    projection_name, projection_version, source_row_count, projected_at
+                 ) VALUES (?1, ?2, 0, '2026-07-15T00:00:00Z')",
+                params![name, version],
+            )
+            .expect("seed pre-generation cutover marker");
+        }
+    }
+
+    #[test]
+    fn legacy_import_generation_commit_is_atomic_monotonic_and_recovery_clears_retirement() {
+        let service = GaryxDbService::memory().expect("memory db");
+        service.fail_test_db_call(TestDbFaultPoint::LegacyImportCommit, 1);
+        assert!(service.commit_legacy_import(0, false).is_err());
+        assert_eq!(service.legacy_import_marker_pair().unwrap(), (false, false));
+        assert_eq!(raw_legacy_import_generation(&service), None);
+
+        assert_eq!(service.commit_legacy_import(0, false).unwrap(), 1);
+        assert_eq!(service.legacy_import_marker_pair().unwrap(), (true, false));
+        assert_eq!(raw_legacy_import_generation(&service), Some(1));
+        service.record_legacy_archive_retirement().unwrap();
+        assert_eq!(service.legacy_import_marker_pair().unwrap(), (true, true));
+
+        assert!(
+            service
+                .clear_projection_state(crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME)
+                .unwrap()
+        );
+        assert_eq!(service.legacy_import_marker_pair().unwrap(), (false, true));
+        assert_eq!(service.commit_legacy_import(3, true).unwrap(), 2);
+        assert_eq!(service.legacy_import_marker_pair().unwrap(), (true, false));
+        assert_eq!(raw_legacy_import_generation(&service), Some(2));
+        assert!(
+            service
+                .clear_projection_state(LEGACY_IMPORT_GENERATION_NAME)
+                .is_err(),
+            "the generation owner can never be deleted"
+        );
+        assert_eq!(raw_legacy_import_generation(&service), Some(2));
+    }
+
+    #[test]
+    fn pre_generation_cutover_markers_seed_one_without_rerun_then_generation_two_reruns_once() {
+        let service = GaryxDbService::memory().expect("memory db");
+        service
+            .record_projection_state(
+                crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME,
+                crate::legacy_boot_import::THREAD_RECORDS_IMPORT_VERSION,
+                1,
+            )
+            .unwrap();
+        seed_pre_generation_cutover_markers(&service);
+        seed_task_kind_migration_row(
+            &service,
+            "thread::pre-generation-task",
+            r#"{"thread_id":"thread::pre-generation-task","thread_title_source":"task"}"#,
+            false,
+        );
+
+        service.run_thread_data_startup_migrations().unwrap();
+        assert_eq!(raw_legacy_import_generation(&service), Some(1));
+        let before_recovery: Value = serde_json::from_str(
+            &service
+                .get_thread_record_body("thread::pre-generation-task")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            before_recovery.get("thread_kind").is_none(),
+            "pre-generation markers are pinned to generation 1 and must not rerun"
+        );
+
+        service.record_legacy_archive_retirement().unwrap();
+        service
+            .clear_projection_state(crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME)
+            .unwrap();
+        assert_eq!(service.commit_legacy_import(1, true).unwrap(), 2);
+        service.run_thread_data_startup_migrations().unwrap();
+        let after_recovery: Value = serde_json::from_str(
+            &service
+                .get_thread_record_body("thread::pre-generation-task")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(after_recovery["thread_kind"], "task");
+        assert_eq!(raw_legacy_import_generation(&service), Some(2));
+        assert!(
+            service
+                .migrate_recent_task_thread_kind_v1()
+                .unwrap()
+                .already_completed
+        );
+        assert!(
+            service
+                .migrate_endpoint_holder_dedup_v1()
+                .unwrap()
+                .already_completed
+        );
+    }
+
+    #[test]
+    fn lazy_generation_seed_failure_aborts_without_marker_movement() {
+        let service = GaryxDbService::memory().expect("memory db");
+        service
+            .record_projection_state(
+                crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME,
+                crate::legacy_boot_import::THREAD_RECORDS_IMPORT_VERSION,
+                0,
+            )
+            .unwrap();
+        seed_pre_generation_cutover_markers(&service);
+        service.fail_test_db_call(TestDbFaultPoint::LegacyGenerationSeedWrite, 1);
+
+        assert!(service.run_thread_data_startup_migrations().is_err());
+        assert_eq!(raw_legacy_import_generation(&service), None);
+        assert_eq!(service.legacy_import_marker_pair().unwrap(), (true, false));
+        let conn = service.conn().expect("conn");
+        let unchanged: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM projection_states
+                  WHERE projection_name IN (?1, ?2)
+                    AND based_on_import_generation IS NULL",
+                params![
+                    RECENT_TASK_THREAD_KIND_MIGRATION_NAME,
+                    ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME,
+                ],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unchanged, 2);
     }
 
     #[test]

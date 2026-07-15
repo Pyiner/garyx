@@ -10,6 +10,7 @@ description = "HTTP and WebSocket gateway server for the garyx AI chat gateway"
 [features]
 default = []
 real-provider-tests = []
+test-seams = []
 
 [dependencies]
 garyx-models = { workspace = true }

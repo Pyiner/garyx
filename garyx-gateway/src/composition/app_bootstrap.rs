@@ -285,6 +285,9 @@ impl AppStateBuilder {
 
     pub fn build(self) -> Arc<AppState> {
         let start_time = Instant::now();
+        // Runtime assembly runs the legacy boot import before reaching this
+        // point. Direct builder construction in tests intentionally skips it:
+        // the shared cutover gate then uses import generation 0.
         self.garyx_db
             .run_thread_data_startup_migrations()
             .unwrap_or_else(|error| {

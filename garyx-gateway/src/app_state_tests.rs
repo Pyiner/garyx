@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_bootstrap::{AppStateBuilder, create_app_state};
+use crate::garyx_db::GaryxDbService;
 use crate::recent_thread_projection::ActiveRunProbe;
 use async_trait::async_trait;
 use axum::body::Body;
@@ -19,6 +20,32 @@ fn test_state() -> Arc<AppState> {
     create_app_state(crate::test_support::with_gateway_auth(
         GaryxConfig::default(),
     ))
+}
+
+#[test]
+fn app_state_builder_without_boot_import_uses_generation_zero_cutover_gate() {
+    let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+    assert_eq!(garyx_db.current_legacy_import_generation().unwrap(), 0);
+
+    let _state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
+        GaryxConfig::default(),
+    ))
+    .with_garyx_db(Arc::clone(&garyx_db))
+    .build();
+
+    assert_eq!(garyx_db.current_legacy_import_generation().unwrap(), 0);
+    assert!(
+        garyx_db
+            .migrate_recent_task_thread_kind_v1()
+            .unwrap()
+            .already_completed
+    );
+    assert!(
+        garyx_db
+            .migrate_endpoint_holder_dedup_v1()
+            .unwrap()
+            .already_completed
+    );
 }
 
 #[tokio::test]

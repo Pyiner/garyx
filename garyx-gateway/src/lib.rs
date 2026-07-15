@@ -20,6 +20,7 @@ pub mod garyx_db;
 pub mod gateway_auth;
 pub mod health;
 mod internal_inbound;
+mod legacy_boot_import;
 mod managed_mcp_metadata;
 pub mod mcp;
 pub mod mcp_config;
