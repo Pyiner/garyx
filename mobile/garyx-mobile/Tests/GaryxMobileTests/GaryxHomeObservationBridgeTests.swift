@@ -76,7 +76,6 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
             0,
             "Actor-backed live rendering must not derive home sections in the legacy main-actor store."
         )
-        XCTAssertEqual(model.homeProjectionGateway.parityMismatchCount, 0)
     }
 
     func testCommittedRunStateDeltaDoesNotAlsoEmitFullCaptureFromDictionaryDidSet() async throws {
@@ -103,7 +102,6 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         XCTAssertTrue(row.presentation.isRunning)
         XCTAssertEqual(model.homeThreadListStore.acceptedInputCount, 0)
         XCTAssertEqual(model.homeThreadListStore.sectionDerivationCount, 0)
-        XCTAssertEqual(model.homeProjectionGateway.parityMismatchCount, 0)
     }
 
     private func makeModel() -> GaryxMobileModel {

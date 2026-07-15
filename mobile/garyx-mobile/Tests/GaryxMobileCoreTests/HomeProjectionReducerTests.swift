@@ -46,6 +46,28 @@ final class HomeProjectionReducerTests: XCTestCase {
             let pinned = ["thread-7", "thread-0", "thread-1"]
             state = reduce(state, .pinsChanged(pinnedThreadIds: pinned)).state
             assertCheckpointParity(state, store, file: #filePath, line: #line)
+
+            state = reduce(
+                state,
+                ingest(corpus, epoch: 2, selectedRecentFilter: .nonTask)
+            ).state
+            assertCheckpointParity(state, store, file: #filePath, line: #line)
+
+            state = reduce(
+                state,
+                ingest(
+                    corpus,
+                    epoch: 3,
+                    selectedRecentFilter: .nonTask,
+                    recentFeedPresentation: .init(
+                        isPrimed: false,
+                        isRefreshingHead: false,
+                        headFailure: true,
+                        footerState: .hidden
+                    )
+                )
+            ).state
+            assertCheckpointParity(state, store, file: #filePath, line: #line)
         }
     }
 
@@ -598,15 +620,17 @@ final class HomeProjectionReducerTests: XCTestCase {
 
     private func ingest(
         _ input: HomeThreadSectionsReference.Inputs,
-        epoch: Int
+        epoch: Int,
+        selectedRecentFilter: GaryxRecentThreadFilter = .all,
+        recentFeedPresentation: GaryxRecentThreadFeedPresentation = .init(isPrimed: true)
     ) -> HomeProjectionEvent {
         .recentThreadsIngested(
             threads: input.threads,
             recentThreadIds: input.recentThreadIds,
             agents: input.agents,
             automations: input.automations,
-            selectedRecentFilter: .all,
-            recentFeedPresentation: .init(isPrimed: true),
+            selectedRecentFilter: selectedRecentFilter,
+            recentFeedPresentation: recentFeedPresentation,
             recentRunStateEpoch: epoch
         )
     }
@@ -621,6 +645,8 @@ final class HomeProjectionReducerTests: XCTestCase {
         XCTAssertEqual(store.snapshot.sections, state.snapshot.sections, file: file, line: line)
         XCTAssertEqual(store.snapshot.isLoadingThreads, state.snapshot.isLoadingThreads, file: file, line: line)
         XCTAssertEqual(store.snapshot.isHomeVisible, state.snapshot.isHomeVisible, file: file, line: line)
+        XCTAssertEqual(store.snapshot.selectedRecentFilter, state.snapshot.selectedRecentFilter, file: file, line: line)
+        XCTAssertEqual(store.snapshot.recentFeedPresentation, state.snapshot.recentFeedPresentation, file: file, line: line)
     }
 
     private func row(in state: HomeProjectionState, id: String) throws -> GaryxHomeThreadRow {
