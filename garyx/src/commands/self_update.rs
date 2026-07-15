@@ -901,7 +901,10 @@ mod tests {
         // The probe must NOT touch the caller's real HOME. We point HOME at
         // a sentinel dir the fake binary is forbidden to write under (the
         // probe sets its own isolated HOME), then assert no `.garyx` shows
-        // up there even though the fake binary tries to create one.
+        // up there even though the fake binary tries to create it. Other
+        // parallel tests may legitimately create the shared `.garyx`
+        // directory while this scoped HOME is active, so assert the probe's
+        // unique side effect rather than ownership of the whole directory.
         let _guard = ENV_LOCK.lock().expect("env lock");
         let real_home = tempdir().expect("real home");
         let _home = ScopedEnvVar::set_path("HOME", real_home.path());
@@ -918,7 +921,7 @@ mod tests {
         // works, that landed in the probe's throwaway HOME (already dropped)
         // and NOT under the caller's HOME.
         assert!(
-            !real_home.path().join(".garyx").exists(),
+            !real_home.path().join(".garyx/probe-marker").exists(),
             "version probe leaked into the caller's HOME"
         );
     }

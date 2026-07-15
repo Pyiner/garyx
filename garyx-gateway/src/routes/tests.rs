@@ -20,7 +20,8 @@ use garyx_models::provider::{
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink};
 use garyx_models::{RenderDelta, apply_render_delta, render_rows_digest};
 use garyx_router::{
-    InMemoryThreadStore, MessageRouter, RunTranscriptRecordDraft, ThreadStore, ThreadStoreError,
+    InMemoryThreadStore, MessageRouter, RunTranscriptRecordDraft, ThreadHistoryRepository,
+    ThreadStore, ThreadStoreError, ThreadTranscriptStore,
 };
 use std::path::Path;
 use std::process::Command;
@@ -5118,6 +5119,83 @@ async fn seed_imported_thread_history_persists_transcript_and_thread_state() {
     assert_eq!(combined.len(), 2);
     assert_eq!(combined[0]["content"], "hello");
     assert_eq!(combined[1]["content"], "world");
+}
+
+#[tokio::test]
+async fn local_provider_session_import_uses_atomic_transcript_replace() {
+    let root = tempdir().expect("temp transcript root");
+    let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let transcript_store = Arc::new(
+        ThreadTranscriptStore::file(root.path())
+            .await
+            .expect("file transcript store"),
+    );
+    let history = Arc::new(ThreadHistoryRepository::new(
+        Arc::clone(&thread_store),
+        Arc::clone(&transcript_store),
+    ));
+    let state = AppStateBuilder::new(test_config())
+        .with_thread_store(Arc::clone(&thread_store))
+        .with_thread_history(history)
+        .build();
+    let thread_id = "thread::local-provider-atomic-import";
+    transcript_store
+        .rewrite_from_messages(
+            thread_id,
+            &[json!({"role": "user", "content": "old transcript"})],
+        )
+        .await
+        .expect("seed old transcript");
+    let imported_messages = vec![
+        json!({"role": "user", "content": "replacement question"}),
+        json!({"role": "assistant", "content": "replacement answer"}),
+    ];
+    let mut thread_data = json!({"thread_id": thread_id, "history": {}});
+
+    seed_imported_thread_history(&state, thread_id, &mut thread_data, &imported_messages)
+        .await
+        .expect("atomic local-session import");
+
+    let path = transcript_store
+        .transcript_path(thread_id)
+        .expect("transcript path");
+    let bytes = tokio::fs::read(&path).await.expect("transcript bytes");
+    assert_eq!(bytes.last(), Some(&b'\n'));
+    let lines = std::str::from_utf8(&bytes)
+        .expect("utf8 transcript")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("valid transcript line"))
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 4, "one header plus three complete messages");
+    assert_eq!(lines[0]["type"], "session");
+    assert_eq!(lines[1]["message"]["content"], "replacement question");
+    assert_eq!(lines[2]["message"]["content"], "replacement answer");
+    assert_eq!(lines[3]["message"]["control"]["kind"], "range_rewrite");
+    let mut entries = tokio::fs::read_dir(root.path())
+        .await
+        .expect("transcript directory");
+    while let Some(entry) = entries.next_entry().await.expect("directory entry") {
+        assert!(
+            !entry.file_name().to_string_lossy().ends_with(".tmp"),
+            "successful atomic replacement leaves no temp artifact"
+        );
+    }
+    assert_eq!(
+        transcript_store
+            .provider_session_tail(thread_id, 10)
+            .await
+            .expect("same-store transcript read"),
+        imported_messages,
+        "the same store instance must immediately serve the replacement"
+    );
+    assert_eq!(
+        thread_store
+            .get(thread_id)
+            .await
+            .expect("thread read")
+            .expect("stored thread")["history"]["message_count"],
+        3
+    );
 }
 
 #[tokio::test]

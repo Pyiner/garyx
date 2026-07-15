@@ -9,8 +9,7 @@ use garyx_models::local_paths::{
     default_session_data_dir, message_ledger_dir_for_data_dir, thread_transcripts_dir_for_data_dir,
 };
 use garyx_router::{
-    FileThreadStore, InMemoryThreadStore, MessageLedgerStore, ThreadHistoryRepository, ThreadStore,
-    ThreadTranscriptStore,
+    MessageLedgerStore, ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
 };
 
 pub struct RuntimeAssembly {
@@ -39,26 +38,6 @@ impl RuntimeAssembler {
             .data_dir
             .clone()
             .unwrap_or_else(|| default_session_data_dir().to_string_lossy().to_string());
-        let legacy_import_source: Arc<dyn ThreadStore> = match FileThreadStore::new(
-            &session_data_dir,
-        )
-        .await
-        {
-            Ok(store) => {
-                tracing::info!(
-                    data_dir = %session_data_dir,
-                    "legacy thread archive import source initialized"
-                );
-                Arc::new(store)
-            }
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "failed to open legacy thread archive import source; boot import will use an empty source"
-                );
-                Arc::new(InMemoryThreadStore::new())
-            }
-        };
         let transcript_root = thread_transcripts_dir_for_data_dir(Path::new(&session_data_dir));
         let transcript_store = Arc::new(ThreadTranscriptStore::file(&transcript_root).await?);
         let message_ledger = Arc::new(
@@ -80,16 +59,20 @@ impl RuntimeAssembler {
                 &session_data_dir,
             )),
         )?);
-        let assembled_garyx_db = Some(garyx_db.clone());
         tracing::info!("thread store backend: sqlite");
         // One-shot migration of the retired file-based task counter into the
         // SQLite allocator row (no-op once the row exists).
         garyx_gateway::seed_task_counter_from_legacy(&garyx_db, Path::new(&session_data_dir));
         let thread_store: Arc<dyn ThreadStore> = garyx_gateway::assemble_sqlite_thread_store(
-            garyx_db,
+            garyx_db.clone(),
             transcript_store.clone(),
             &bridge,
-            legacy_import_source,
+        )?;
+        garyx_gateway::run_legacy_boot_import(
+            &garyx_db,
+            &thread_store,
+            &transcript_store,
+            Path::new(&session_data_dir),
         )
         .await?;
         let thread_history = Arc::new(ThreadHistoryRepository::new(
@@ -125,12 +108,10 @@ impl RuntimeAssembler {
         let thread_logs = Arc::new(ThreadFileLogger::new(default_thread_log_dir()));
 
         let mut builder = AppStateBuilder::new(self.config.clone()).with_persistent_local_stores();
-        if let Some(garyx_db) = assembled_garyx_db {
-            // The sqlite thread-store backend already opened the garyx
-            // database; share that instance instead of letting the builder
-            // open a second one (single-writer discipline, D4).
-            builder = builder.with_garyx_db(garyx_db);
-        }
+        // The sqlite thread-store backend already opened the garyx database;
+        // share that instance instead of letting the builder open a second
+        // one (single-writer discipline, D4).
+        builder = builder.with_garyx_db(garyx_db);
         let state = builder
             .with_thread_store(thread_store.clone())
             .with_thread_history(thread_history.clone())

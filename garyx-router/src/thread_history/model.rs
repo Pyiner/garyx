@@ -12,6 +12,53 @@ pub enum ThreadHistoryError {
     TranscriptIo { thread_id: String, message: String },
     #[error("invalid transcript for thread {thread_id}: {message}")]
     InvalidTranscript { thread_id: String, message: String },
+    #[error("atomic transcript replace failed for thread {thread_id} at {stage}: {message}")]
+    AtomicReplace {
+        thread_id: String,
+        stage: TranscriptReplaceStage,
+        message: String,
+    },
+}
+
+/// Durable stages of a whole-transcript replacement. Failures before the
+/// parent-directory fsync leave the old target untouched; a parent-fsync
+/// failure is reported after the complete new target has been renamed into
+/// place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptReplaceStage {
+    TempWrite,
+    FileFsync,
+    Rename,
+    ParentFsync,
+}
+
+impl std::fmt::Display for TranscriptReplaceStage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::TempWrite => "temp_write",
+            Self::FileFsync => "file_fsync",
+            Self::Rename => "rename",
+            Self::ParentFsync => "parent_fsync",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackfillOutcome {
+    /// The target was absent, empty, a strict identity prefix, or had a
+    /// recoverable torn tail and was replaced atomically.
+    Backfilled,
+    /// The existing logical message sequence already matched the archive.
+    AlreadyComplete,
+    /// The structurally valid transcript has evolved beyond the archive and
+    /// therefore remains authoritative.
+    PreservedDiverged,
+}
+
+impl BackfillOutcome {
+    pub fn wrote_transcript(self) -> bool {
+        matches!(self, Self::Backfilled)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -823,7 +823,6 @@ async fn thread_snapshot_after_index_respects_limit_without_overlay() {
     assert_eq!(combined[0]["content"], "b");
 }
 
-
 fn draft(message: serde_json::Value) -> RunTranscriptRecordDraft {
     RunTranscriptRecordDraft::from_message(message)
 }
@@ -1416,6 +1415,482 @@ async fn rewrite_from_messages_uses_same_seq_overwrite_marker_for_changed_prefix
         "same_seq_overwrite"
     );
     assert!(records[3].run_id.is_none());
+}
+
+fn transcript_session_line(thread_id: &str, version: u32) -> String {
+    serde_json::to_string(&json!({
+        "type": "session",
+        "version": version,
+        "thread_id": thread_id,
+        "created_at": "2026-07-15T00:00:00Z"
+    }))
+    .unwrap()
+}
+
+fn transcript_message_line(
+    thread_id: &str,
+    seq: u64,
+    run_id: Option<&str>,
+    timestamp: &str,
+    message: Value,
+) -> String {
+    serde_json::to_string(&json!({
+        "type": "message",
+        "seq": seq,
+        "thread_id": thread_id,
+        "run_id": run_id,
+        "timestamp": timestamp,
+        "message": message
+    }))
+    .unwrap()
+}
+
+async fn write_raw_transcript(store: &ThreadTranscriptStore, thread_id: &str, raw: &[u8]) {
+    tokio::fs::write(store.transcript_path(thread_id).unwrap(), raw)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn legacy_backfill_absent_and_empty_is_atomic_and_idempotent() {
+    let dir = tempdir().unwrap();
+    let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    let legacy = vec![
+        json!({"role": "user", "content": "one"}),
+        json!({"role": "assistant", "content": "two"}),
+    ];
+
+    for thread_id in ["thread::absent-backfill", "thread::empty-backfill"] {
+        if thread_id.contains("empty") {
+            write_raw_transcript(&store, thread_id, b"").await;
+        }
+        assert_eq!(
+            store
+                .ensure_transcript_backfilled(thread_id, &legacy)
+                .await
+                .unwrap(),
+            BackfillOutcome::Backfilled
+        );
+        let first = tokio::fs::read(store.transcript_path(thread_id).unwrap())
+            .await
+            .unwrap();
+        assert!(first.ends_with(b"\n"));
+        assert_eq!(store.records(thread_id).await.unwrap().len(), 2);
+        assert_eq!(
+            store
+                .ensure_transcript_backfilled(thread_id, &legacy)
+                .await
+                .unwrap(),
+            BackfillOutcome::AlreadyComplete
+        );
+        assert_eq!(
+            tokio::fs::read(store.transcript_path(thread_id).unwrap())
+                .await
+                .unwrap(),
+            first
+        );
+    }
+}
+
+#[tokio::test]
+async fn legacy_backfill_header_only_completes_once() {
+    let dir = tempdir().unwrap();
+    let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    let thread_id = "thread::header-only";
+    write_raw_transcript(
+        &store,
+        thread_id,
+        format!("{}\n", transcript_session_line(thread_id, 1)).as_bytes(),
+    )
+    .await;
+    let legacy = vec![json!({"role": "user", "content": "no timestamp"})];
+
+    assert_eq!(
+        store
+            .ensure_transcript_backfilled(thread_id, &legacy)
+            .await
+            .unwrap(),
+        BackfillOutcome::Backfilled
+    );
+    let completed = tokio::fs::read(store.transcript_path(thread_id).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .ensure_transcript_backfilled(thread_id, &legacy)
+            .await
+            .unwrap(),
+        BackfillOutcome::AlreadyComplete
+    );
+    assert_eq!(
+        tokio::fs::read(store.transcript_path(thread_id).unwrap())
+            .await
+            .unwrap(),
+        completed
+    );
+}
+
+#[tokio::test]
+async fn legacy_backfill_repairs_identity_prefix_torn_tail_and_retries_cleanly() {
+    let dir = tempdir().unwrap();
+    let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    let thread_id = "thread::torn-prefix";
+    let first = json!({"role": "user", "content": "one"});
+    let raw = format!(
+        "{}\n{}\n{{\"type\":\"message\",\"seq\":2",
+        transcript_session_line(thread_id, 1),
+        transcript_message_line(
+            thread_id,
+            7,
+            Some("legacy-run"),
+            "2026-07-15T01:02:03Z",
+            first.clone(),
+        )
+    );
+    write_raw_transcript(&store, thread_id, raw.as_bytes()).await;
+    let legacy = vec![first, json!({"role": "assistant", "content": "two"})];
+
+    assert_eq!(
+        store
+            .ensure_transcript_backfilled(thread_id, &legacy)
+            .await
+            .unwrap(),
+        BackfillOutcome::Backfilled
+    );
+    let repaired = store.records(thread_id).await.unwrap();
+    assert_eq!(repaired.len(), 2);
+    assert_eq!(repaired[0].seq, 7);
+    assert_eq!(repaired[0].run_id.as_deref(), Some("legacy-run"));
+    assert_eq!(repaired[0].timestamp, "2026-07-15T01:02:03Z");
+    let bytes = tokio::fs::read(store.transcript_path(thread_id).unwrap())
+        .await
+        .unwrap();
+    assert!(bytes.ends_with(b"\n"));
+    assert_eq!(
+        store
+            .ensure_transcript_backfilled(thread_id, &legacy)
+            .await
+            .unwrap(),
+        BackfillOutcome::AlreadyComplete
+    );
+
+    let missing_newline_id = "thread::missing-newline";
+    let only_message = json!({"role": "user", "content": "complete json"});
+    let missing_newline = format!(
+        "{}\n{}",
+        transcript_session_line(missing_newline_id, 1),
+        transcript_message_line(
+            missing_newline_id,
+            1,
+            None,
+            "2026-07-15T02:03:04Z",
+            only_message.clone(),
+        )
+    );
+    write_raw_transcript(&store, missing_newline_id, missing_newline.as_bytes()).await;
+    assert_eq!(
+        store
+            .ensure_transcript_backfilled(missing_newline_id, &[only_message])
+            .await
+            .unwrap(),
+        BackfillOutcome::Backfilled
+    );
+    assert!(
+        tokio::fs::read(store.transcript_path(missing_newline_id).unwrap())
+            .await
+            .unwrap()
+            .ends_with(b"\n")
+    );
+}
+
+#[tokio::test]
+async fn legacy_backfill_rejects_middle_garbage_wrong_record_thread_nonmonotonic_and_duplicate_header()
+ {
+    let legacy = vec![json!({"role": "user", "content": "one"})];
+    let cases = [
+        (
+            "thread::garbage-middle",
+            format!(
+                "{}\nnot-json\n{}\n",
+                transcript_session_line("thread::garbage-middle", 1),
+                transcript_message_line(
+                    "thread::garbage-middle",
+                    1,
+                    None,
+                    "2026-07-15T00:00:01Z",
+                    legacy[0].clone(),
+                )
+            ),
+        ),
+        (
+            "thread::wrong-record",
+            format!(
+                "{}\n{}\n",
+                transcript_session_line("thread::wrong-record", 1),
+                transcript_message_line(
+                    "thread::other",
+                    1,
+                    None,
+                    "2026-07-15T00:00:01Z",
+                    legacy[0].clone(),
+                )
+            ),
+        ),
+        (
+            "thread::nonmonotonic",
+            format!(
+                "{}\n{}\n{}\n",
+                transcript_session_line("thread::nonmonotonic", 1),
+                transcript_message_line(
+                    "thread::nonmonotonic",
+                    2,
+                    None,
+                    "2026-07-15T00:00:01Z",
+                    legacy[0].clone(),
+                ),
+                transcript_message_line(
+                    "thread::nonmonotonic",
+                    2,
+                    None,
+                    "2026-07-15T00:00:02Z",
+                    json!({"role": "assistant", "content": "two"}),
+                )
+            ),
+        ),
+        (
+            "thread::duplicate-header",
+            format!(
+                "{}\n{}\n",
+                transcript_session_line("thread::duplicate-header", 1),
+                transcript_session_line("thread::duplicate-header", 1),
+            ),
+        ),
+    ];
+
+    for (thread_id, raw) in cases {
+        let dir = tempdir().unwrap();
+        let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+        write_raw_transcript(&store, thread_id, raw.as_bytes()).await;
+        let before = tokio::fs::read(store.transcript_path(thread_id).unwrap())
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.ensure_transcript_backfilled(thread_id, &legacy).await,
+            Err(ThreadHistoryError::InvalidTranscript { .. })
+        ));
+        assert_eq!(
+            tokio::fs::read(store.transcript_path(thread_id).unwrap())
+                .await
+                .unwrap(),
+            before,
+            "{thread_id} must not be overwritten"
+        );
+    }
+}
+
+#[tokio::test]
+async fn legacy_backfill_rejects_wrong_header_thread_and_unsupported_version() {
+    let legacy = vec![json!({"role": "user", "content": "one"})];
+    for (thread_id, header) in [
+        (
+            "thread::wrong-header",
+            transcript_session_line("thread::other", 1),
+        ),
+        (
+            "thread::unsupported-header",
+            transcript_session_line("thread::unsupported-header", 99),
+        ),
+    ] {
+        let dir = tempdir().unwrap();
+        let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+        let raw = format!("{header}\n");
+        write_raw_transcript(&store, thread_id, raw.as_bytes()).await;
+        assert!(matches!(
+            store.ensure_transcript_backfilled(thread_id, &legacy).await,
+            Err(ThreadHistoryError::InvalidTranscript { .. })
+        ));
+        assert_eq!(
+            tokio::fs::read(store.transcript_path(thread_id).unwrap())
+                .await
+                .unwrap(),
+            raw.as_bytes()
+        );
+    }
+}
+
+#[tokio::test]
+async fn legacy_backfill_identity_prefix_preserves_existing_record_fields_and_is_idempotent() {
+    let dir = tempdir().unwrap();
+    let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    let thread_id = "thread::identity-prefix";
+    let first_message = json!({"role": "user", "content": "one"});
+    let raw = format!(
+        "{}\n{}\n",
+        transcript_session_line(thread_id, 1),
+        transcript_message_line(
+            thread_id,
+            41,
+            Some("kept-run"),
+            "2026-07-15T04:05:06Z",
+            first_message.clone(),
+        )
+    );
+    write_raw_transcript(&store, thread_id, raw.as_bytes()).await;
+    let legacy = vec![
+        first_message,
+        json!({"role": "assistant", "content": "two"}),
+    ];
+
+    assert_eq!(
+        store
+            .ensure_transcript_backfilled(thread_id, &legacy)
+            .await
+            .unwrap(),
+        BackfillOutcome::Backfilled
+    );
+    let records = store.records(thread_id).await.unwrap();
+    assert_eq!(records[0].seq, 41);
+    assert_eq!(records[0].run_id.as_deref(), Some("kept-run"));
+    assert_eq!(records[0].timestamp, "2026-07-15T04:05:06Z");
+    let completed = tokio::fs::read(store.transcript_path(thread_id).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .ensure_transcript_backfilled(thread_id, &legacy)
+            .await
+            .unwrap(),
+        BackfillOutcome::AlreadyComplete
+    );
+    assert_eq!(
+        tokio::fs::read(store.transcript_path(thread_id).unwrap())
+            .await
+            .unwrap(),
+        completed
+    );
+}
+
+#[tokio::test]
+async fn legacy_backfill_diverged_identity_preserves_existing_bytes() {
+    let dir = tempdir().unwrap();
+    let store = ThreadTranscriptStore::file(dir.path()).await.unwrap();
+    let thread_id = "thread::diverged";
+    let raw = format!(
+        "{}\n{}\n",
+        transcript_session_line(thread_id, 1),
+        transcript_message_line(
+            thread_id,
+            1,
+            Some("runtime-run"),
+            "2026-07-15T00:00:01Z",
+            json!({"role": "user", "content": "runtime evolved"}),
+        )
+    );
+    write_raw_transcript(&store, thread_id, raw.as_bytes()).await;
+
+    assert_eq!(
+        store
+            .ensure_transcript_backfilled(
+                thread_id,
+                &[json!({"role": "user", "content": "stale archive"})],
+            )
+            .await
+            .unwrap(),
+        BackfillOutcome::PreservedDiverged
+    );
+    assert_eq!(
+        tokio::fs::read(store.transcript_path(thread_id).unwrap())
+            .await
+            .unwrap(),
+        raw.as_bytes()
+    );
+}
+
+#[tokio::test]
+async fn atomic_replace_stage_failures_have_exact_disk_and_cache_postconditions() {
+    for stage in [
+        TranscriptReplaceStage::TempWrite,
+        TranscriptReplaceStage::FileFsync,
+        TranscriptReplaceStage::Rename,
+        TranscriptReplaceStage::ParentFsync,
+    ] {
+        let dir = tempdir().unwrap();
+        let store = ThreadTranscriptStore::file_with_atomic_failure_for_tests(dir.path(), stage)
+            .await
+            .unwrap();
+        let thread_id = format!("thread::atomic-{stage}");
+        let first = json!({"role": "user", "content": "one"});
+        let raw = format!(
+            "{}\n{}\n",
+            transcript_session_line(&thread_id, 1),
+            transcript_message_line(
+                &thread_id,
+                1,
+                Some("old-run"),
+                "2026-07-15T00:00:01Z",
+                first.clone(),
+            )
+        );
+        write_raw_transcript(&store, &thread_id, raw.as_bytes()).await;
+        let legacy = vec![first, json!({"role": "assistant", "content": "two"})];
+
+        let error = store
+            .ensure_transcript_backfilled(&thread_id, &legacy)
+            .await
+            .expect_err("the configured stage fails once");
+        assert!(matches!(
+            error,
+            ThreadHistoryError::AtomicReplace {
+                stage: failed_stage,
+                ..
+            } if failed_stage == stage
+        ));
+        assert!(
+            store
+                .render_cache_checkpoint_debug(&thread_id)
+                .await
+                .is_none(),
+            "every failed stage invalidates the cache"
+        );
+        let after_failure = tokio::fs::read(store.transcript_path(&thread_id).unwrap())
+            .await
+            .unwrap();
+        if stage == TranscriptReplaceStage::ParentFsync {
+            assert_ne!(after_failure, raw.as_bytes());
+            assert_eq!(store.records(&thread_id).await.unwrap().len(), 2);
+        } else {
+            assert_eq!(after_failure, raw.as_bytes());
+        }
+
+        let retry = store
+            .ensure_transcript_backfilled(&thread_id, &legacy)
+            .await
+            .unwrap();
+        assert_eq!(
+            retry,
+            if stage == TranscriptReplaceStage::ParentFsync {
+                BackfillOutcome::AlreadyComplete
+            } else {
+                BackfillOutcome::Backfilled
+            }
+        );
+        assert_eq!(
+            store.provider_session_tail(&thread_id, 10).await.unwrap(),
+            legacy
+        );
+        assert!(
+            store
+                .render_cache_checkpoint_debug(&thread_id)
+                .await
+                .is_some(),
+            "success is immediately served by the same store cache"
+        );
+        let final_bytes = tokio::fs::read(store.transcript_path(&thread_id).unwrap())
+            .await
+            .unwrap();
+        assert!(final_bytes.ends_with(b"\n"));
+        assert_eq!(store.records(&thread_id).await.unwrap().len(), 2);
+    }
 }
 
 // ---------------------------------------------------------------------------

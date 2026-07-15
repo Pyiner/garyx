@@ -20,6 +20,11 @@ pub mod garyx_db;
 pub mod gateway_auth;
 pub mod health;
 mod internal_inbound;
+mod legacy_boot_import;
+pub use legacy_boot_import::{
+    LegacyBootImportError, LegacyBootImportOutcome, ThreadRecordImportSummary,
+    run_legacy_boot_import,
+};
 mod managed_mcp_metadata;
 pub mod mcp;
 pub mod mcp_config;
@@ -28,8 +33,8 @@ mod provider_auth;
 mod provider_models;
 mod provider_session_locator;
 mod quota_resend;
-mod recent_thread_reader;
 mod recent_thread_projection;
+mod recent_thread_reader;
 pub mod restart;
 pub mod restart_wake;
 mod route_graph;

@@ -1,5 +1,8 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
+
 use super::*;
 
 const TAIL_SCAN_CHUNK_BYTES: u64 = 64 * 1024;
@@ -10,6 +13,93 @@ const TRANSCRIPT_CACHE_TAIL_MAX_RECORDS: usize = 4096;
 /// Store-wide cache budget; least-recently-used thread entries are dropped
 /// once the sum of cached tail bytes exceeds it.
 const TRANSCRIPT_CACHE_TOTAL_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+#[async_trait]
+trait TranscriptAtomicFs: std::fmt::Debug + Send + Sync {
+    async fn write_temp(&self, path: &Path, payload: &[u8]) -> std::io::Result<tokio::fs::File>;
+    async fn fsync_file(&self, file: &tokio::fs::File) -> std::io::Result<()>;
+    async fn rename(&self, source: &Path, target: &Path) -> std::io::Result<()>;
+    async fn fsync_parent(&self, parent: &Path) -> std::io::Result<()>;
+}
+
+#[derive(Debug, Default)]
+struct RealTranscriptAtomicFs;
+
+#[async_trait]
+impl TranscriptAtomicFs for RealTranscriptAtomicFs {
+    async fn write_temp(&self, path: &Path, payload: &[u8]) -> std::io::Result<tokio::fs::File> {
+        let mut file = tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+            .await?;
+        file.write_all(payload).await?;
+        file.flush().await?;
+        Ok(file)
+    }
+
+    async fn fsync_file(&self, file: &tokio::fs::File) -> std::io::Result<()> {
+        file.sync_all().await
+    }
+
+    async fn rename(&self, source: &Path, target: &Path) -> std::io::Result<()> {
+        tokio::fs::rename(source, target).await
+    }
+
+    async fn fsync_parent(&self, parent: &Path) -> std::io::Result<()> {
+        tokio::fs::File::open(parent).await?.sync_all().await
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct FailOnceTranscriptAtomicFs {
+    inner: RealTranscriptAtomicFs,
+    stage: TranscriptReplaceStage,
+    failed: AtomicBool,
+}
+
+#[cfg(test)]
+impl FailOnceTranscriptAtomicFs {
+    fn new(stage: TranscriptReplaceStage) -> Self {
+        Self {
+            inner: RealTranscriptAtomicFs,
+            stage,
+            failed: AtomicBool::new(false),
+        }
+    }
+
+    fn fail_now(&self, stage: TranscriptReplaceStage) -> std::io::Result<()> {
+        if self.stage == stage && !self.failed.swap(true, Ordering::SeqCst) {
+            return Err(std::io::Error::other(format!("injected {stage} failure")));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl TranscriptAtomicFs for FailOnceTranscriptAtomicFs {
+    async fn write_temp(&self, path: &Path, payload: &[u8]) -> std::io::Result<tokio::fs::File> {
+        self.fail_now(TranscriptReplaceStage::TempWrite)?;
+        self.inner.write_temp(path, payload).await
+    }
+
+    async fn fsync_file(&self, file: &tokio::fs::File) -> std::io::Result<()> {
+        self.fail_now(TranscriptReplaceStage::FileFsync)?;
+        self.inner.fsync_file(file).await
+    }
+
+    async fn rename(&self, source: &Path, target: &Path) -> std::io::Result<()> {
+        self.fail_now(TranscriptReplaceStage::Rename)?;
+        self.inner.rename(source, target).await
+    }
+
+    async fn fsync_parent(&self, parent: &Path) -> std::io::Result<()> {
+        self.fail_now(TranscriptReplaceStage::ParentFsync)?;
+        self.inner.fsync_parent(parent).await
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct TranscriptCacheBudget {
@@ -415,7 +505,6 @@ impl ThreadCache {
     }
 }
 
-
 #[derive(Debug)]
 enum RecordsReconcilePlan {
     NoOp,
@@ -702,6 +791,7 @@ enum TranscriptStoreMode {
         slots: std::sync::Mutex<HashMap<String, Arc<ThreadSlot>>>,
         budget: TranscriptCacheBudget,
         created_at: std::time::Instant,
+        atomic_fs: Arc<dyn TranscriptAtomicFs>,
     },
     Memory {
         records: Mutex<HashMap<String, Vec<ThreadTranscriptRecord>>>,
@@ -735,6 +825,16 @@ pub(super) enum TranscriptLine {
     },
 }
 
+#[derive(Debug)]
+enum ValidatedImportTranscript {
+    MissingOrEmpty,
+    Parsed {
+        records: Vec<ThreadTranscriptRecord>,
+        torn_tail: bool,
+        file_len: u64,
+    },
+}
+
 impl ThreadTranscriptStore {
     pub async fn file(root_dir: impl AsRef<Path>) -> std::io::Result<Self> {
         Self::file_with_budget(root_dir, TranscriptCacheBudget::default()).await
@@ -744,6 +844,15 @@ impl ThreadTranscriptStore {
         root_dir: impl AsRef<Path>,
         budget: TranscriptCacheBudget,
     ) -> std::io::Result<Self> {
+        Self::file_with_budget_and_atomic_fs(root_dir, budget, Arc::new(RealTranscriptAtomicFs))
+            .await
+    }
+
+    async fn file_with_budget_and_atomic_fs(
+        root_dir: impl AsRef<Path>,
+        budget: TranscriptCacheBudget,
+        atomic_fs: Arc<dyn TranscriptAtomicFs>,
+    ) -> std::io::Result<Self> {
         tokio::fs::create_dir_all(root_dir.as_ref()).await?;
         Ok(Self {
             mode: TranscriptStoreMode::File {
@@ -751,6 +860,7 @@ impl ThreadTranscriptStore {
                 slots: std::sync::Mutex::new(HashMap::new()),
                 budget,
                 created_at: std::time::Instant::now(),
+                atomic_fs,
             },
             #[cfg(test)]
             full_file_reads: AtomicUsize::new(0),
@@ -771,6 +881,19 @@ impl ThreadTranscriptStore {
                 tail_max_records,
                 total_max_bytes,
             },
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn file_with_atomic_failure_for_tests(
+        root_dir: impl AsRef<Path>,
+        stage: TranscriptReplaceStage,
+    ) -> std::io::Result<Self> {
+        Self::file_with_budget_and_atomic_fs(
+            root_dir,
+            TranscriptCacheBudget::default(),
+            Arc::new(FailOnceTranscriptAtomicFs::new(stage)),
         )
         .await
     }
@@ -1371,6 +1494,100 @@ impl ThreadTranscriptStore {
     // Rewrites
     // -----------------------------------------------------------------------
 
+    /// Replace the complete transcript with a header plus `records` using a
+    /// same-directory temp file, file fsync, atomic rename, and parent fsync.
+    /// The per-thread cache is invalidated on every error, including the
+    /// parent-fsync case where the complete new target is already visible.
+    pub async fn replace_transcript_atomic(
+        &self,
+        thread_id: &str,
+        records: &[ThreadTranscriptRecord],
+    ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
+        match &self.mode {
+            TranscriptStoreMode::File { .. } => {
+                let slot = self.file_slot(thread_id).expect("file mode has slots");
+                let mut cache = slot.state.lock().await;
+                let result = self
+                    .replace_transcript_atomic_file(&mut cache, thread_id, records)
+                    .await;
+                if result.is_err() {
+                    *cache = None;
+                }
+                self.sync_slot_accounting(&slot, &cache);
+                drop(cache);
+                self.evict_over_budget(thread_id);
+                result
+            }
+            TranscriptStoreMode::Memory { records: stored } => {
+                stored
+                    .lock()
+                    .await
+                    .insert(thread_id.to_owned(), records.to_vec());
+                Ok(TranscriptAppendResult {
+                    total_messages: records.len(),
+                    last_message_at: records.last().map(|record| record.timestamp.clone()),
+                    transcript_file: None,
+                })
+            }
+        }
+    }
+
+    /// Import-only transcript gate. Structurally invalid files fail closed;
+    /// valid identity prefixes are completed while diverged transcripts stay
+    /// authoritative.
+    pub async fn ensure_transcript_backfilled(
+        &self,
+        thread_id: &str,
+        legacy_messages: &[Value],
+    ) -> Result<BackfillOutcome, ThreadHistoryError> {
+        match &self.mode {
+            TranscriptStoreMode::File { .. } => {
+                let slot = self.file_slot(thread_id).expect("file mode has slots");
+                let mut cache = slot.state.lock().await;
+                let result = self
+                    .ensure_transcript_backfilled_file(&mut cache, thread_id, legacy_messages)
+                    .await;
+                if result.is_err() {
+                    *cache = None;
+                }
+                self.sync_slot_accounting(&slot, &cache);
+                drop(cache);
+                self.evict_over_budget(thread_id);
+                result
+            }
+            TranscriptStoreMode::Memory { records } => {
+                let mut guard = records.lock().await;
+                let Some(existing) = guard.get_mut(thread_id) else {
+                    guard.insert(
+                        thread_id.to_owned(),
+                        reconcile_rewrite_records(thread_id, &[], legacy_messages),
+                    );
+                    return Ok(BackfillOutcome::Backfilled);
+                };
+                if existing.is_empty() {
+                    *existing = reconcile_rewrite_records(thread_id, &[], legacy_messages);
+                    return Ok(BackfillOutcome::Backfilled);
+                }
+                let existing_identity: Vec<Value> = existing
+                    .iter()
+                    .map(|record| message_identity(&record.message))
+                    .collect();
+                let legacy_identity: Vec<Value> =
+                    legacy_messages.iter().map(message_identity).collect();
+                if existing_identity == legacy_identity {
+                    return Ok(BackfillOutcome::AlreadyComplete);
+                }
+                if existing_identity.len() < legacy_identity.len()
+                    && legacy_identity[..existing_identity.len()] == existing_identity
+                {
+                    *existing = reconcile_rewrite_records(thread_id, existing, legacy_messages);
+                    return Ok(BackfillOutcome::Backfilled);
+                }
+                Ok(BackfillOutcome::PreservedDiverged)
+            }
+        }
+    }
+
     pub async fn rewrite_from_messages(
         &self,
         thread_id: &str,
@@ -1431,47 +1648,8 @@ impl ThreadTranscriptStore {
             });
         }
 
-        let mut lines = Vec::with_capacity(records.len() + 1);
-        lines.push(
-            serde_json::to_string(&TranscriptLine::Session {
-                version: 1,
-                thread_id: thread_id.to_owned(),
-                created_at: chrono::Utc::now().to_rfc3339(),
-            })
-            .map_err(|error| ThreadHistoryError::InvalidTranscript {
-                thread_id: thread_id.to_owned(),
-                message: error.to_string(),
-            })?,
-        );
-        let mut last_message_at = None;
-        for record in &records {
-            last_message_at = Some(record.timestamp.clone());
-            lines.push(
-                serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(|error| {
-                    ThreadHistoryError::InvalidTranscript {
-                        thread_id: thread_id.to_owned(),
-                        message: error.to_string(),
-                    }
-                })?,
-            );
-        }
-        let payload = format!("{}\n", lines.join("\n"));
-        tokio::fs::write(&path, payload).await.map_err(|error| {
-            ThreadHistoryError::TranscriptIo {
-                thread_id: thread_id.to_owned(),
-                message: error.to_string(),
-            }
-        })?;
-        let file_len = tokio::fs::metadata(&path)
+        self.replace_transcript_atomic_file(cache, thread_id, &records)
             .await
-            .map(|meta| meta.len())
-            .unwrap_or(0);
-        self.rebuild_cache_from_records(cache, &records, file_len);
-        Ok(TranscriptAppendResult {
-            total_messages: records.len(),
-            last_message_at,
-            transcript_file: Some(path),
-        })
     }
 
     /// Overwrite the whole transcript with `records`, preserving each record's
@@ -1483,60 +1661,149 @@ impl ThreadTranscriptStore {
         thread_id: &str,
         records: &[ThreadTranscriptRecord],
     ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
+        self.replace_transcript_atomic_file(cache, thread_id, records)
+            .await
+    }
+
+    async fn replace_transcript_atomic_file(
+        &self,
+        cache: &mut Option<ThreadCache>,
+        thread_id: &str,
+        records: &[ThreadTranscriptRecord],
+    ) -> Result<TranscriptAppendResult, ThreadHistoryError> {
+        let (path, atomic_fs) = match &self.mode {
+            TranscriptStoreMode::File {
+                root_dir,
+                atomic_fs,
+                ..
+            } => (
+                root_dir.join(thread_storage_file_name(thread_id, "jsonl")),
+                Arc::clone(atomic_fs),
+            ),
+            TranscriptStoreMode::Memory { .. } => {
+                return Err(ThreadHistoryError::TranscriptIo {
+                    thread_id: thread_id.to_owned(),
+                    message: "atomic file replace requested for memory store".to_owned(),
+                });
+            }
+        };
+        let parent = path
+            .parent()
+            .ok_or_else(|| ThreadHistoryError::TranscriptIo {
+                thread_id: thread_id.to_owned(),
+                message: "missing transcript parent directory".to_owned(),
+            })?;
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("transcript.jsonl");
+        let temp = parent.join(format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4()));
+        let payload = serialize_transcript(thread_id, records)?;
+
+        let temp_file = atomic_fs
+            .write_temp(&temp, &payload)
+            .await
+            .map_err(|error| {
+                atomic_replace_error(thread_id, TranscriptReplaceStage::TempWrite, error)
+            })?;
+        atomic_fs.fsync_file(&temp_file).await.map_err(|error| {
+            atomic_replace_error(thread_id, TranscriptReplaceStage::FileFsync, error)
+        })?;
+        drop(temp_file);
+        atomic_fs.rename(&temp, &path).await.map_err(|error| {
+            atomic_replace_error(thread_id, TranscriptReplaceStage::Rename, error)
+        })?;
+        atomic_fs.fsync_parent(parent).await.map_err(|error| {
+            atomic_replace_error(thread_id, TranscriptReplaceStage::ParentFsync, error)
+        })?;
+
+        self.rebuild_cache_from_records(cache, records, payload.len() as u64);
+        Ok(TranscriptAppendResult {
+            total_messages: records.len(),
+            last_message_at: records.last().map(|record| record.timestamp.clone()),
+            transcript_file: Some(path),
+        })
+    }
+
+    async fn ensure_transcript_backfilled_file(
+        &self,
+        cache: &mut Option<ThreadCache>,
+        thread_id: &str,
+        legacy_messages: &[Value],
+    ) -> Result<BackfillOutcome, ThreadHistoryError> {
         let path =
             self.transcript_path(thread_id)
                 .ok_or_else(|| ThreadHistoryError::TranscriptIo {
                     thread_id: thread_id.to_owned(),
                     message: "missing transcript path".to_owned(),
                 })?;
-        let mut lines = Vec::with_capacity(records.len() + 1);
-        lines.push(
-            serde_json::to_string(&TranscriptLine::Session {
-                version: 1,
-                thread_id: thread_id.to_owned(),
-                created_at: chrono::Utc::now().to_rfc3339(),
-            })
-            .map_err(|error| ThreadHistoryError::InvalidTranscript {
-                thread_id: thread_id.to_owned(),
-                message: error.to_string(),
-            })?,
-        );
-        for record in records {
-            lines.push(
-                serde_json::to_string(&TranscriptLine::from(record.clone())).map_err(|error| {
-                    ThreadHistoryError::InvalidTranscript {
-                        thread_id: thread_id.to_owned(),
-                        message: error.to_string(),
-                    }
-                })?,
-            );
+        let state = self
+            .read_validated_import_transcript(thread_id, &path)
+            .await?;
+        let ValidatedImportTranscript::Parsed {
+            records: existing,
+            torn_tail,
+            file_len,
+        } = state
+        else {
+            let records = reconcile_rewrite_records(thread_id, &[], legacy_messages);
+            self.replace_transcript_atomic_file(cache, thread_id, &records)
+                .await?;
+            return Ok(BackfillOutcome::Backfilled);
+        };
+
+        let existing_identity: Vec<Value> = existing
+            .iter()
+            .map(|record| message_identity(&record.message))
+            .collect();
+        let legacy_identity: Vec<Value> = legacy_messages.iter().map(message_identity).collect();
+        let existing_is_prefix = existing_identity.len() <= legacy_identity.len()
+            && legacy_identity[..existing_identity.len()] == existing_identity;
+
+        if torn_tail && !existing_is_prefix {
+            return Err(invalid_transcript(
+                thread_id,
+                "torn tail follows records that are not an identity prefix of the legacy archive",
+            ));
         }
-        let payload = format!("{}\n", lines.join("\n"));
-        // Atomic replace: write to a temp file then rename, so a crash
-        // mid-write can never truncate the committed transcript.
-        let tmp = path.with_extension("jsonl.tmp");
-        tokio::fs::write(&tmp, payload).await.map_err(|error| {
-            ThreadHistoryError::TranscriptIo {
-                thread_id: thread_id.to_owned(),
-                message: error.to_string(),
+        if !torn_tail && existing_identity == legacy_identity {
+            self.rebuild_cache_from_records(cache, &existing, file_len);
+            return Ok(BackfillOutcome::AlreadyComplete);
+        }
+        if existing_is_prefix {
+            let completed = if existing_identity == legacy_identity {
+                existing
+            } else {
+                reconcile_rewrite_records(thread_id, &existing, legacy_messages)
+            };
+            self.replace_transcript_atomic_file(cache, thread_id, &completed)
+                .await?;
+            return Ok(BackfillOutcome::Backfilled);
+        }
+
+        self.rebuild_cache_from_records(cache, &existing, file_len);
+        Ok(BackfillOutcome::PreservedDiverged)
+    }
+
+    async fn read_validated_import_transcript(
+        &self,
+        thread_id: &str,
+        path: &Path,
+    ) -> Result<ValidatedImportTranscript, ThreadHistoryError> {
+        let raw = match tokio::fs::read(path).await {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(ValidatedImportTranscript::MissingOrEmpty);
             }
-        })?;
-        tokio::fs::rename(&tmp, &path)
-            .await
-            .map_err(|error| ThreadHistoryError::TranscriptIo {
-                thread_id: thread_id.to_owned(),
-                message: error.to_string(),
-            })?;
-        let file_len = tokio::fs::metadata(&path)
-            .await
-            .map(|meta| meta.len())
-            .unwrap_or(0);
-        self.rebuild_cache_from_records(cache, records, file_len);
-        Ok(TranscriptAppendResult {
-            total_messages: records.len(),
-            last_message_at: records.last().map(|record| record.timestamp.clone()),
-            transcript_file: Some(path),
-        })
+            Err(error) => return Err(transcript_io_error(thread_id, error)),
+        };
+        #[cfg(test)]
+        self.full_file_reads.fetch_add(1, Ordering::Relaxed);
+        if raw.is_empty() {
+            return Ok(ValidatedImportTranscript::MissingOrEmpty);
+        }
+
+        parse_import_transcript_bytes(thread_id, &raw)
     }
 
     /// Rebuild a thread's cache entry from a full record set already in
@@ -1564,7 +1831,6 @@ impl ThreadTranscriptStore {
     // -----------------------------------------------------------------------
     // Reconciles
     // -----------------------------------------------------------------------
-
 
     pub async fn reconcile_run_records_tail(
         &self,
@@ -2493,6 +2759,166 @@ impl ThreadTranscriptStore {
         }
         Ok(records)
     }
+}
+
+fn serialize_transcript(
+    thread_id: &str,
+    records: &[ThreadTranscriptRecord],
+) -> Result<Vec<u8>, ThreadHistoryError> {
+    let mut lines = Vec::with_capacity(records.len() + 1);
+    lines.push(
+        serde_json::to_string(&TranscriptLine::Session {
+            version: 1,
+            thread_id: thread_id.to_owned(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        })
+        .map_err(|error| invalid_transcript(thread_id, error))?,
+    );
+    for record in records {
+        lines.push(
+            serde_json::to_string(&TranscriptLine::from(record.clone()))
+                .map_err(|error| invalid_transcript(thread_id, error))?,
+        );
+    }
+    Ok(format!("{}\n", lines.join("\n")).into_bytes())
+}
+
+fn atomic_replace_error(
+    thread_id: &str,
+    stage: TranscriptReplaceStage,
+    error: impl std::fmt::Display,
+) -> ThreadHistoryError {
+    ThreadHistoryError::AtomicReplace {
+        thread_id: thread_id.to_owned(),
+        stage,
+        message: error.to_string(),
+    }
+}
+
+fn invalid_transcript(thread_id: &str, message: impl std::fmt::Display) -> ThreadHistoryError {
+    ThreadHistoryError::InvalidTranscript {
+        thread_id: thread_id.to_owned(),
+        message: message.to_string(),
+    }
+}
+
+fn parse_import_transcript_bytes(
+    expected_thread_id: &str,
+    raw: &[u8],
+) -> Result<ValidatedImportTranscript, ThreadHistoryError> {
+    let trailing_newline = raw.ends_with(b"\n");
+    let mut lines: Vec<&[u8]> = raw.split(|byte| *byte == b'\n').collect();
+    if trailing_newline {
+        lines.pop();
+    }
+    let mut records = Vec::new();
+    let mut saw_header = false;
+    let mut previous_seq = None;
+    let mut torn_tail = !trailing_newline;
+
+    for (index, raw_line) in lines.iter().enumerate() {
+        let line_no = index + 1;
+        let is_unterminated_tail = !trailing_newline && index + 1 == lines.len();
+        let line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
+        if line.iter().all(|byte| byte.is_ascii_whitespace()) {
+            if is_unterminated_tail && saw_header {
+                break;
+            }
+            return Err(invalid_transcript(
+                expected_thread_id,
+                format!("line {line_no}: empty transcript line"),
+            ));
+        }
+
+        let parsed = match serde_json::from_slice::<TranscriptLine>(line) {
+            Ok(parsed) => parsed,
+            Err(_) if is_unterminated_tail && saw_header => break,
+            Err(error) => {
+                return Err(invalid_transcript(
+                    expected_thread_id,
+                    format!("line {line_no}: {error}"),
+                ));
+            }
+        };
+        match parsed {
+            TranscriptLine::Session {
+                version, thread_id, ..
+            } if line_no == 1 => {
+                if version != 1 {
+                    return Err(invalid_transcript(
+                        expected_thread_id,
+                        format!("unsupported session version {version}"),
+                    ));
+                }
+                if thread_id != expected_thread_id {
+                    return Err(invalid_transcript(
+                        expected_thread_id,
+                        format!(
+                            "session header thread_id {thread_id:?} does not match {expected_thread_id:?}"
+                        ),
+                    ));
+                }
+                saw_header = true;
+            }
+            TranscriptLine::Session { .. } => {
+                return Err(invalid_transcript(
+                    expected_thread_id,
+                    format!("line {line_no}: duplicate session header"),
+                ));
+            }
+            TranscriptLine::Message { .. } if line_no == 1 => {
+                return Err(invalid_transcript(
+                    expected_thread_id,
+                    "first line is not a session header",
+                ));
+            }
+            TranscriptLine::Message {
+                seq,
+                thread_id,
+                run_id,
+                timestamp,
+                message,
+            } => {
+                if thread_id != expected_thread_id {
+                    return Err(invalid_transcript(
+                        expected_thread_id,
+                        format!(
+                            "line {line_no}: record thread_id {thread_id:?} does not match {expected_thread_id:?}"
+                        ),
+                    ));
+                }
+                if previous_seq.is_some_and(|previous| seq <= previous) {
+                    return Err(invalid_transcript(
+                        expected_thread_id,
+                        format!("line {line_no}: seq {seq} is not strictly increasing"),
+                    ));
+                }
+                previous_seq = Some(seq);
+                records.push(ThreadTranscriptRecord {
+                    seq,
+                    thread_id,
+                    run_id,
+                    timestamp,
+                    message,
+                });
+            }
+        }
+    }
+
+    if !saw_header {
+        return Err(invalid_transcript(
+            expected_thread_id,
+            "missing session header",
+        ));
+    }
+    if trailing_newline {
+        torn_tail = false;
+    }
+    Ok(ValidatedImportTranscript::Parsed {
+        records,
+        torn_tail,
+        file_len: raw.len() as u64,
+    })
 }
 
 /// Backward window start for "the last K user queries before `end`": walk
