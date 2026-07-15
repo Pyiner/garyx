@@ -29,12 +29,21 @@ extension GaryxMobileModel {
         return GaryxGatewayProfileStorage.stableId(for: normalized)
     }
 
+    var currentGatewayRuntimeIdentity: GaryxGatewayRuntimeIdentity {
+        GaryxGatewayRuntimeIdentity(
+            gatewayURL: normalizedGatewayURL(gatewayURL),
+            authToken: gatewayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines),
+            headers: GaryxGatewayHeaders.normalizedBlock(gatewayHeaders)
+        )
+    }
+
     func scopedSettingsKey(_ key: String) -> String {
         "\(key).\(currentGatewayScopeId)"
     }
 
     func loadGatewayScopedUserState(fallbackToLegacy: Bool) {
         activeGatewayScopeId = currentGatewayScopeId
+        activeGatewayRuntimeIdentity = currentGatewayRuntimeIdentity
         catalogSnapshotRestored = false
         let agentKey = scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId)
         let workspaceKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
@@ -128,6 +137,7 @@ extension GaryxMobileModel {
         transcriptCacheStore.clearAll()
         activeAssistantMessageIdsByThread = [:]
         pendingDirectFollowUpsByThread = [:]
+        pendingQueuedInputsByIntentId = [:]
         clearAllComposerDrafts()
         draftThreadTitle = ""
         agents = []
@@ -385,7 +395,9 @@ extension GaryxMobileModel {
     func connectAndRefresh() async {
         gatewayURL = normalizedGatewayURL(gatewayURL)
         gatewayAuthToken = gatewayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        if activeGatewayScopeId != currentGatewayScopeId {
+        gatewayHeaders = GaryxGatewayHeaders.normalizedBlock(gatewayHeaders)
+        if activeGatewayScopeId != currentGatewayScopeId
+            || activeGatewayRuntimeIdentity != currentGatewayRuntimeIdentity {
             resetGatewayRuntimeState()
             loadGatewayScopedUserState(fallbackToLegacy: false)
         }

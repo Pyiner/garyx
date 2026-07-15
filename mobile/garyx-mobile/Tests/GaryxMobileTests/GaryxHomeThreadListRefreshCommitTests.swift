@@ -2,11 +2,376 @@ import Foundation
 import XCTest
 @testable import GaryxMobile
 
+@MainActor
+final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
+    func testQueuedInputFallbackDoesNotCrossGatewayRuntime() async throws {
+        let streamInputStarted = expectation(description: "Gateway A queued input request started")
+        let streamInputGate = DispatchSemaphore(value: 0)
+        let replacementChatStarts = GaryxLockedCounter()
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            switch (url.host, url.path) {
+            case ("gateway-a.example.test", "/api/chat/stream-input"):
+                streamInputStarted.fulfill()
+                guard streamInputGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    data: Data(#"{"status":"inactive"}"#.utf8)
+                )
+            case ("gateway-b.example.test", "/api/chat/start"):
+                replacementChatStarts.increment()
+                return try garyxStubResponse(
+                    request,
+                    data: Data(#"{"status":"accepted","run_id":"run-on-b","thread_id":"shared-thread"}"#.utf8)
+                )
+            default:
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+        }
+        defer {
+            streamInputGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.gatewayURL = "http://gateway-a.example.test"
+        let sharedThread = makeThread(id: "shared-thread", title: "Shared thread ID")
+        model.threads = [sharedThread]
+        model.selectedThread = sharedThread
+        let queuedInputTask = Task { @MainActor in
+            await model.queueRemoteInput("Queue on Gateway A", attachments: [], in: sharedThread)
+        }
+        await fulfillment(of: [streamInputStarted], timeout: 2)
+
+        model.resetGatewayRuntimeState()
+        model.gatewayURL = "http://gateway-b.example.test"
+        model.threads = [sharedThread]
+        model.selectedThread = sharedThread
+        streamInputGate.signal()
+        await queuedInputTask.value
+
+        XCTAssertEqual(
+            replacementChatStarts.value,
+            0,
+            "Gateway A's fallback input must not start a chat on Gateway B"
+        )
+        XCTAssertTrue(model.pendingQueuedInputsByIntentId.isEmpty)
+    }
+
+    func testSameURLHeaderChangeRotatesGatewayRuntimeGeneration() async throws {
+        let replacementConnectStarted = expectation(description: "replacement header connect request started")
+        let replacementConnectGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            guard url.path == "/api/status",
+                  request.value(forHTTPHeaderField: "X-Environment") == "B" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            replacementConnectStarted.fulfill()
+            guard replacementConnectGate.wait(timeout: .now() + 5) == .success else {
+                throw GaryxRefreshStubError.timedOut
+            }
+            return try garyxStubResponse(
+                request,
+                statusCode: 503,
+                data: Data(#"{"error":"replacement gateway unavailable"}"#.utf8)
+            )
+        }
+        defer {
+            replacementConnectGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.gatewayHeaders = "X-Environment=A"
+        model.loadGatewayScopedUserState(fallbackToLegacy: false)
+        let originalGeneration = model.gatewayRuntimeGeneration
+
+        model.gatewayHeaders = "X-Environment=B"
+        let connectTask = Task { @MainActor in
+            await model.connectAndRefresh()
+        }
+        await fulfillment(of: [replacementConnectStarted], timeout: 2)
+
+        XCTAssertNotEqual(model.gatewayRuntimeGeneration, originalGeneration)
+
+        replacementConnectGate.signal()
+        await connectTask.value
+    }
+
+    func testSameURLCredentialChangeInvalidatesInFlightDraftCreation() async throws {
+        let createStarted = expectation(description: "credential A create request started")
+        let replacementConnectStarted = expectation(description: "credential B connect request started")
+        let createGate = DispatchSemaphore(value: 0)
+        let replacementConnectGate = DispatchSemaphore(value: 0)
+        let replacementChatStarts = GaryxLockedCounter()
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            let authorization = request.value(forHTTPHeaderField: "Authorization")
+            let environment = request.value(forHTTPHeaderField: "X-Environment")
+            switch (url.path, authorization, environment) {
+            case ("/api/threads", "Bearer token-a", "stable"):
+                createStarted.fulfill()
+                guard createGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    data: Data(#"{"thread_id":"thread-from-a","title":"Credential A thread"}"#.utf8)
+                )
+            case ("/api/status", "Bearer token-b", "stable"):
+                replacementConnectStarted.fulfill()
+                guard replacementConnectGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    statusCode: 503,
+                    data: Data(#"{"error":"replacement gateway unavailable"}"#.utf8)
+                )
+            case ("/api/chat/start", "Bearer token-b", "stable"):
+                replacementChatStarts.increment()
+                return try garyxStubResponse(
+                    request,
+                    data: Data(#"{"status":"accepted","run_id":"run-on-b","thread_id":"thread-from-a"}"#.utf8)
+                )
+            default:
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+        }
+        defer {
+            createGate.signal()
+            replacementConnectGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.gatewayURL = "http://gateway.example.test"
+        model.gatewayAuthToken = "token-a"
+        model.gatewayHeaders = "X-Environment=stable"
+        model.loadGatewayScopedUserState(fallbackToLegacy: false)
+        let sendTask = Task { @MainActor in
+            await model.send("Hello from credential A")
+        }
+        await fulfillment(of: [createStarted], timeout: 2)
+
+        model.gatewayAuthToken = "token-b"
+        let connectTask = Task { @MainActor in
+            await model.connectAndRefresh()
+        }
+        await fulfillment(of: [replacementConnectStarted], timeout: 2)
+        createGate.signal()
+        await sendTask.value
+
+        XCTAssertEqual(
+            replacementChatStarts.value,
+            0,
+            "a same-URL credential change must invalidate the old create request"
+        )
+        XCTAssertNil(model.selectedThread)
+        XCTAssertTrue(model.threads.isEmpty)
+
+        replacementConnectGate.signal()
+        await connectTask.value
+    }
+
+    func testChatStartResponseDoesNotCommitAfterGatewaySwitch() async throws {
+        let chatStartStarted = expectation(description: "Gateway A chat start request started")
+        let chatStartGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            guard url.host == "gateway-a.example.test", url.path == "/api/chat/start" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            chatStartStarted.fulfill()
+            guard chatStartGate.wait(timeout: .now() + 5) == .success else {
+                throw GaryxRefreshStubError.timedOut
+            }
+            return try garyxStubResponse(
+                request,
+                data: Data(#"{"status":"accepted","run_id":"run-on-a","thread_id":"thread-on-a"}"#.utf8)
+            )
+        }
+        defer {
+            chatStartGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.gatewayURL = "http://gateway-a.example.test"
+        let thread = makeThread(id: "thread-on-a", title: "Gateway A thread")
+        model.threads = [thread]
+        model.selectedThread = thread
+        let sendTask = Task { @MainActor in
+            await model.send("Hello on Gateway A")
+        }
+        await fulfillment(of: [chatStartStarted], timeout: 2)
+
+        model.resetGatewayRuntimeState()
+        model.gatewayURL = "http://gateway-b.example.test"
+        chatStartGate.signal()
+        await sendTask.value
+
+        XCTAssertTrue(model.runTracker.busyThreadIds.isEmpty)
+        XCTAssertNil(model.selectedThread)
+        XCTAssertTrue(model.threads.isEmpty)
+        XCTAssertNil(model.lastError)
+    }
+
+    func testDraftThreadCreationDoesNotStartChatOnReplacementGateway() async throws {
+        let createStarted = expectation(description: "Gateway A create request started")
+        let createGate = DispatchSemaphore(value: 0)
+        let replacementChatStarts = GaryxLockedCounter()
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            switch (url.host, url.path) {
+            case ("gateway-a.example.test", "/api/threads"):
+                createStarted.fulfill()
+                guard createGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    data: Data(#"{"thread_id":"thread-from-a","title":"Gateway A thread"}"#.utf8)
+                )
+            case ("gateway-b.example.test", "/api/chat/start"):
+                replacementChatStarts.increment()
+                return try garyxStubResponse(
+                    request,
+                    data: Data(#"{"status":"started","run_id":"run-on-b","thread_id":"thread-from-a"}"#.utf8)
+                )
+            default:
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+        }
+        defer {
+            createGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.gatewayURL = "http://gateway-a.example.test"
+        let sendTask = Task { @MainActor in
+            await model.send("Hello from the draft")
+        }
+        await fulfillment(of: [createStarted], timeout: 2)
+
+        model.resetGatewayRuntimeState()
+        model.gatewayURL = "http://gateway-b.example.test"
+        createGate.signal()
+        await sendTask.value
+
+        XCTAssertEqual(
+            replacementChatStarts.value,
+            0,
+            "a thread created by Gateway A must never be sent to Gateway B"
+        )
+        XCTAssertNil(model.selectedThread)
+        XCTAssertTrue(model.threads.isEmpty)
+        XCTAssertNil(model.lastError)
+    }
+
+    func testDirectThreadCreationDoesNotCommitResponseFromSupersededGateway() async throws {
+        let createStarted = expectation(description: "Gateway A direct create request started")
+        let createGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            guard url.host == "gateway-a.example.test", url.path == "/api/threads" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            createStarted.fulfill()
+            guard createGate.wait(timeout: .now() + 5) == .success else {
+                throw GaryxRefreshStubError.timedOut
+            }
+            return try garyxStubResponse(
+                request,
+                data: Data(#"{"thread_id":"thread-from-a","title":"Gateway A thread"}"#.utf8)
+            )
+        }
+        defer {
+            createGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.gatewayURL = "http://gateway-a.example.test"
+        let createTask = Task { @MainActor in
+            await model.createThread(workspaceOverride: nil)
+        }
+        await fulfillment(of: [createStarted], timeout: 2)
+
+        model.resetGatewayRuntimeState()
+        model.gatewayURL = "http://gateway-b.example.test"
+        createGate.signal()
+        await createTask.value
+
+        XCTAssertNil(model.selectedThread)
+        XCTAssertTrue(model.threads.isEmpty)
+        XCTAssertNil(model.lastError)
+    }
+
+    private func makeModel(session: URLSession) -> GaryxMobileModel {
+        let suiteName = "GaryxGatewayRuntimeGenerationTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set(
+            "http://gateway.example.test",
+            forKey: GaryxMobileSettingsKeys.gatewayUrl
+        )
+        return GaryxMobileModel(
+            defaults: defaults,
+            gatewayClientFactory: { configuration in
+                GaryxGatewayClient(
+                    configuration: configuration,
+                    session: session,
+                    retryPolicy: .disabled
+                )
+            }
+        )
+    }
+
+    private func makeThread(id: String, title: String) -> GaryxThreadSummary {
+        GaryxThreadSummary(
+            id: id,
+            title: title,
+            createdAt: nil,
+            updatedAt: "2026-07-07T02:00:00Z",
+            lastMessagePreview: "",
+            workspacePath: nil,
+            messageCount: nil,
+            agentId: nil,
+            providerType: nil,
+            recentRunId: nil,
+            activeRunId: nil,
+            runState: nil,
+            worktreePath: nil
+        )
+    }
+
+    private func makeStubSession(
+        handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
+    ) -> URLSession {
+        GaryxRecentThreadsURLProtocolStub.requestHandler = handler
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxRecentThreadsURLProtocolStub.self]
+        return URLSession(configuration: configuration)
+    }
+}
+
 /// TASK-1802: head refresh owns its filter-keyed pager ticket through the
 /// final pre-commit await. Pins the App orchestration and #TASK-1804 archive
 /// interleavings with an in-process URL loading stub.
 @MainActor
 final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
+
     func testCommitDoesNotResurrectThreadArchivedDuringBackfillAwait() throws {
         let model = makeModel()
         let pinned = makeThread(id: "thread-pinned", title: "Pinned build")
