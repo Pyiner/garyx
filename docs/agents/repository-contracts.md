@@ -17,9 +17,10 @@ reinterpreted in feature code.
   lives in the transcript jsonl files. Known endpoint state and the
   `ThreadStore` trait: `garyx-router`; the production store is
   `SqliteThreadStore` (garyx-gateway). The former JSON archive under
-  `<data_dir>/threads` survives only as the one-shot boot-import source for
-  pre-SQLite upgrades. There is no runtime JSON backend or dual-write mirror;
-  recovery uses the archived backup plus an explicitly forced fresh import.
+  `<data_dir>/threads` and `<data_dir>/sessions` survives only as the one-shot
+  boot-import source for pre-SQLite upgrades. There is no runtime JSON backend
+  or dual-write mirror; recovery uses the archived backup plus an explicitly
+  forced fresh import.
 - MCP schema and tool behavior: `garyx-gateway/src/mcp.rs`.
 - Provider session behavior: `garyx-bridge`.
 - Channel/plugin stream presentation policy, buffering, and tool-call display
@@ -39,8 +40,24 @@ reinterpreted in feature code.
   by listing keys and fetching bodies — that is a projection's job.
 - The only full walk over the legacy JSON archive is the one-shot boot
   import into `thread_records` (and it streams one record at a time). The
-  archive is not written by any primary path and is retired to
-  `~/.garyx/backups/` after the switchover.
+  archive is not written by any primary path. After a successful import its
+  `threads/` and `sessions/` directories are moved to
+  `<data_dir>/backups/legacy-archive-v1/`; keeping the backup under the data
+  directory makes each retirement a same-filesystem atomic rename. For the
+  default data directory this is
+  `~/.garyx/data/backups/legacy-archive-v1/`.
+- A failed legacy import aborts startup and retries on the next boot; no
+  failure is recorded as complete. Recovery intent with no restored archive,
+  or with only a partially moved-back archive, also aborts startup.
+- Manual legacy-import recovery is: move (do not copy) the backup `threads/`
+  and `sessions/` directories back under `<data_dir>`, clear only the
+  `thread_records_import` projection-state row, then reboot. The importer
+  atomically restores the import marker, advances the monotonic import
+  generation, and clears the prior retirement marker; generation-dependent
+  SQL cutovers then run once against the restored records. Archived-thread
+  tombstones always win over restored records and transcripts, so recovery
+  cannot resurrect their record, projections, or conversation. False-success
+  markers written by older binaries are not repaired automatically.
 
 ## Recent Threads And Active Runs
 
