@@ -71,6 +71,12 @@ pub struct ThreadPinsPage {
     pub revision: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReorderThreadPinsResult {
+    Updated(ThreadPinsPage),
+    Conflict(ThreadPinsPage),
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RecentThreadRecord {
     pub thread_id: String,
@@ -523,6 +529,60 @@ impl GaryxDbService {
         let page = read_thread_pins_page_tx(&tx)?;
         tx.commit()?;
         Ok((removed, page))
+    }
+
+    pub fn reorder_thread_pins(
+        &self,
+        ordered_ids: Vec<String>,
+        expected_revision: i64,
+    ) -> GaryxDbResult<ReorderThreadPinsResult> {
+        let ordered_ids = normalize_thread_pin_order(ordered_ids)?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let current = read_thread_pins_page_tx(&tx)?;
+        if current.revision != expected_revision {
+            tx.commit()?;
+            return Ok(ReorderThreadPinsResult::Conflict(current));
+        }
+
+        let current_ids = current
+            .pins
+            .iter()
+            .map(|pin| pin.thread_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let requested_ids = ordered_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let mut next_order = Vec::with_capacity(current.pins.len());
+        for thread_id in &ordered_ids {
+            if current_ids.contains(thread_id.as_str()) {
+                next_order.push(thread_id.clone());
+            }
+        }
+        for pin in &current.pins {
+            if !requested_ids.contains(pin.thread_id.as_str()) {
+                next_order.push(pin.thread_id.clone());
+            }
+        }
+
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE thread_pins
+                    SET sort_order = ?1
+                  WHERE thread_id = ?2",
+            )?;
+            for (index, thread_id) in next_order.iter().enumerate() {
+                let sort_order = i64::try_from(index).map_err(|_| {
+                    GaryxDbError::BadRequest("too many thread_ids to reorder".to_owned())
+                })?;
+                stmt.execute(params![sort_order, thread_id])?;
+            }
+        }
+        bump_thread_pins_revision_if_changed_tx(&tx, true)?;
+        let page = read_thread_pins_page_tx(&tx)?;
+        tx.commit()?;
+        Ok(ReorderThreadPinsResult::Updated(page))
     }
 
     /// Product archive semantics in one transaction: write the tombstone
@@ -2649,6 +2709,26 @@ fn normalize_thread_id(thread_id: &str) -> GaryxDbResult<String> {
         ));
     }
     Ok(trimmed.to_owned())
+}
+
+fn normalize_thread_pin_order(ordered_ids: Vec<String>) -> GaryxDbResult<Vec<String>> {
+    if ordered_ids.is_empty() {
+        return Err(GaryxDbError::BadRequest(
+            "thread_ids must be a non-empty array".to_owned(),
+        ));
+    }
+    let mut normalized = Vec::with_capacity(ordered_ids.len());
+    let mut seen = BTreeSet::new();
+    for thread_id in ordered_ids {
+        let thread_id = normalize_thread_id(&thread_id)?;
+        if !seen.insert(thread_id.clone()) {
+            return Err(GaryxDbError::BadRequest(format!(
+                "duplicate thread_id: {thread_id}"
+            )));
+        }
+        normalized.push(thread_id);
+    }
+    Ok(normalized)
 }
 
 fn now_string() -> String {
@@ -5047,6 +5127,112 @@ mod tests {
                 .0
         );
         assert_eq!(db.list_pinned_threads().expect("final page").revision, 3);
+    }
+
+    #[test]
+    fn reorder_thread_pins_handles_full_subset_unknown_and_stale_requests() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.pin_thread("thread::a").expect("pin a");
+        db.pin_thread("thread::b").expect("pin b");
+        let initial = db.pin_thread("thread::c").expect("pin c");
+        assert_eq!(initial.revision, 3);
+        let original_metadata = initial
+            .pins
+            .iter()
+            .map(|pin| (pin.thread_id.clone(), pin.pinned_at.clone()))
+            .collect::<BTreeSet<_>>();
+
+        let full = match db
+            .reorder_thread_pins(
+                vec![
+                    "thread::a".to_owned(),
+                    "thread::c".to_owned(),
+                    "thread::b".to_owned(),
+                ],
+                3,
+            )
+            .expect("full reorder")
+        {
+            ReorderThreadPinsResult::Updated(page) => page,
+            ReorderThreadPinsResult::Conflict(_) => panic!("fresh CAS conflicted"),
+        };
+        assert_eq!(full.revision, 4);
+        assert_eq!(
+            full.pins
+                .iter()
+                .map(|pin| (pin.thread_id.as_str(), pin.sort_order))
+                .collect::<Vec<_>>(),
+            vec![("thread::a", 0), ("thread::c", 1), ("thread::b", 2)]
+        );
+
+        let subset = match db
+            .reorder_thread_pins(vec!["thread::b".to_owned()], 4)
+            .expect("subset reorder")
+        {
+            ReorderThreadPinsResult::Updated(page) => page,
+            ReorderThreadPinsResult::Conflict(_) => panic!("fresh CAS conflicted"),
+        };
+        assert_eq!(subset.revision, 5);
+        assert_eq!(
+            subset
+                .pins
+                .iter()
+                .map(|pin| pin.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::b", "thread::a", "thread::c"]
+        );
+
+        let unknown = match db
+            .reorder_thread_pins(
+                vec!["thread::unknown".to_owned(), "thread::c".to_owned()],
+                5,
+            )
+            .expect("unknown-id reorder")
+        {
+            ReorderThreadPinsResult::Updated(page) => page,
+            ReorderThreadPinsResult::Conflict(_) => panic!("fresh CAS conflicted"),
+        };
+        assert_eq!(unknown.revision, 6);
+        assert_eq!(
+            unknown
+                .pins
+                .iter()
+                .map(|pin| pin.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::c", "thread::b", "thread::a"]
+        );
+        assert_eq!(
+            unknown
+                .pins
+                .iter()
+                .map(|pin| (pin.thread_id.clone(), pin.pinned_at.clone()))
+                .collect::<BTreeSet<_>>(),
+            original_metadata,
+            "reorder must preserve membership and pin metadata"
+        );
+
+        let conflict = match db
+            .reorder_thread_pins(vec!["thread::a".to_owned()], 5)
+            .expect("stale reorder")
+        {
+            ReorderThreadPinsResult::Conflict(page) => page,
+            ReorderThreadPinsResult::Updated(_) => panic!("stale CAS unexpectedly succeeded"),
+        };
+        assert_eq!(conflict, unknown);
+        assert_eq!(db.list_pinned_threads().expect("GET page"), unknown);
+
+        assert!(matches!(
+            db.reorder_thread_pins(Vec::new(), 6),
+            Err(GaryxDbError::BadRequest(_))
+        ));
+        assert!(matches!(
+            db.reorder_thread_pins(vec!["thread::a".to_owned(), " thread::a ".to_owned()], 6,),
+            Err(GaryxDbError::BadRequest(_))
+        ));
+        assert_eq!(
+            db.list_pinned_threads().expect("unchanged page").revision,
+            6
+        );
     }
 
     #[test]

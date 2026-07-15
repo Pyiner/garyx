@@ -40,7 +40,8 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::agent_identity::create_thread_for_agent_reference;
 use crate::garyx_db::{
-    GaryxDbError, RecentThreadRecord, RecentThreadTaskFilter, ThreadMetaRecord, ThreadPinsPage,
+    GaryxDbError, RecentThreadRecord, RecentThreadTaskFilter, ReorderThreadPinsResult,
+    ThreadMetaRecord, ThreadPinsPage,
 };
 use crate::provider_session_locator::{
     list_recent_local_provider_sessions, recover_local_provider_session,
@@ -1454,6 +1455,46 @@ fn thread_pins_payload(page: &ThreadPinsPage) -> Value {
     })
 }
 
+fn parse_reorder_thread_pins_request(payload: &Value) -> Result<(Vec<String>, i64), GaryxDbError> {
+    let object = payload
+        .as_object()
+        .ok_or_else(|| GaryxDbError::BadRequest("request body must be a JSON object".to_owned()))?;
+    let expected_revision = object
+        .get("expected_revision")
+        .and_then(Value::as_i64)
+        .filter(|revision| *revision >= 0)
+        .ok_or_else(|| {
+            GaryxDbError::BadRequest("expected_revision must be a non-negative integer".to_owned())
+        })?;
+    let values = object
+        .get("thread_ids")
+        .and_then(Value::as_array)
+        .filter(|values| !values.is_empty())
+        .ok_or_else(|| {
+            GaryxDbError::BadRequest("thread_ids must be a non-empty array".to_owned())
+        })?;
+    let mut thread_ids = Vec::with_capacity(values.len());
+    let mut seen = BTreeSet::new();
+    for value in values {
+        let thread_id = value
+            .as_str()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                GaryxDbError::BadRequest(
+                    "thread_ids must contain only non-empty strings".to_owned(),
+                )
+            })?;
+        if !seen.insert(thread_id.to_owned()) {
+            return Err(GaryxDbError::BadRequest(format!(
+                "duplicate thread_id: {thread_id}"
+            )));
+        }
+        thread_ids.push(thread_id.to_owned());
+    }
+    Ok((thread_ids, expected_revision))
+}
+
 async fn recent_threads_payload(
     state: &Arc<AppState>,
     records: &[RecentThreadRecord],
@@ -1663,6 +1704,31 @@ pub async fn list_thread_pins(State(state): State<Arc<AppState>>) -> impl IntoRe
         .await
     {
         Ok(page) => (StatusCode::OK, Json(thread_pins_payload(&page))).into_response(),
+        Err(error) => garyx_db_error_response(error).into_response(),
+    }
+}
+
+/// PUT /api/thread-pins - reorder the pinned collection with revision CAS.
+pub async fn reorder_thread_pins(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<Value>,
+) -> impl IntoResponse {
+    let (thread_ids, expected_revision) = match parse_reorder_thread_pins_request(&payload) {
+        Ok(request) => request,
+        Err(error) => return garyx_db_error_response(error).into_response(),
+    };
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| db.reorder_thread_pins(thread_ids, expected_revision))
+        .await
+    {
+        Ok(ReorderThreadPinsResult::Updated(page)) => {
+            (StatusCode::OK, Json(thread_pins_payload(&page))).into_response()
+        }
+        Ok(ReorderThreadPinsResult::Conflict(page)) => {
+            (StatusCode::CONFLICT, Json(thread_pins_payload(&page))).into_response()
+        }
         Err(error) => garyx_db_error_response(error).into_response(),
     }
 }
