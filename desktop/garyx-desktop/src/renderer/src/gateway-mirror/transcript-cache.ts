@@ -25,7 +25,6 @@ import {
 import type { MessageIntent } from "../message-machine.ts";
 import type { UiTranscriptMessage } from "../app-shell/types";
 import { extractImageGenerationImageContent } from "../app-shell/image-generation-content.ts";
-import { isRunLoadingPlaceholderMessage } from "../app-shell/loading-labels.ts";
 import {
   appendCommittedMessageForwardPage,
   committedMessageForwardPage,
@@ -391,7 +390,6 @@ export class ThreadTranscriptCache {
       snapshot.threadId !== event.threadId ||
       state.snapshotLastIndex !== event.seq - 2 ||
       isControlTranscriptMessage(event.message) ||
-      isRunLoadingPlaceholderMessage(event.message) ||
       (event.message.role === "tool_result" &&
         extractImageGenerationImageContent(event.message) !== null)
     ) {

@@ -56,7 +56,6 @@ import {
   useGatewayRoot,
   useThreadMirror,
 } from "../../gateway-mirror/react";
-import { isRunLoadingPlaceholderMessage } from "../loading-labels";
 import {
   pendingAckIntentsNotRepresented,
   representedUserIntentIds,
@@ -271,10 +270,7 @@ export function SideChatPanel({
   const sideChatRawMessages = sideChatMirror?.messages ||
     EMPTY_UI_TRANSCRIPT_MESSAGES;
   const sideChatMessages = useMemo(
-    () =>
-      sideChatRawMessages.filter(
-        (message) => !isRunLoadingPlaceholderMessage(message),
-      ),
+    () => [...sideChatRawMessages],
     [sideChatRawMessages],
   );
   const sideChatThreadInfo = sideChatMirror?.threadInfo || null;

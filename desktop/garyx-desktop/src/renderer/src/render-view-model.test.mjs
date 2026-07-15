@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import * as renderViewModel from './render-view-model.ts';
+import { materializeRemoteTranscript } from './gateway-mirror/transcript-materialize.ts';
 
 const {
   buildThreadViewRows,
@@ -256,6 +257,47 @@ test('render_state ref seq resolves the body keyed by that same seq', () => {
     [1, { id: 'stable-intent-id', seq: 2, role: 'user', text: 'hi' }],
   ]);
   assert.equal(buildThreadViewRows(renderState, wrongKeyed).length, 0);
+});
+
+test('server-visible assistant text is not inferred to be a loading placeholder', () => {
+  const assistant = {
+    id: 'assistant:legacy-loading-copy',
+    seq: 1,
+    role: 'assistant',
+    text: 'Garyx is working through the run…',
+    kind: 'assistant_reply',
+  };
+  const renderState = {
+    based_on_seq: 1,
+    rows: [
+      {
+        kind: 'user_turn',
+        id: 'orphan-visible-assistant',
+        user: null,
+        activity: [
+          {
+            kind: 'assistant_reply',
+            message: { id: assistant.id, seq: assistant.seq, role: assistant.role },
+          },
+        ],
+        capsule_cards: [],
+        started_at: null,
+        finished_at: null,
+      },
+    ],
+    tailActivity: 'none',
+    activeToolGroupId: null,
+    progress_locus: 'none',
+    filtered_placeholders: [],
+  };
+  const materialized = materializeRemoteTranscript([assistant], []);
+  const messages = new Map(materialized.map((message) => [message.seq, message]));
+
+  const rows = buildThreadViewRows(renderState, messages);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'flat');
+  assert.equal(rows[0].block.entry.message.text, assistant.text);
 });
 
 test('origin user ids remain stable while the body resolves by seq', () => {

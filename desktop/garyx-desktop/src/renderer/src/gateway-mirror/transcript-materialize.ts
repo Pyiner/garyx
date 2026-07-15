@@ -27,9 +27,6 @@ import {
 import {
   extractImageGenerationImageContent,
 } from "../app-shell/image-generation-content.ts";
-import {
-  isRunLoadingPlaceholderMessage,
-} from "../app-shell/loading-labels.ts";
 import type {
   UiTranscriptMessage,
 } from "../app-shell/types.ts";
@@ -657,9 +654,6 @@ export function materializeRemoteTranscript(
   const materializedRemote: UiTranscriptMessage[] = [];
   for (const message of transcript) {
     if (isControlTranscriptMessage(message)) {
-      continue;
-    }
-    if (isRunLoadingPlaceholderMessage(message)) {
       continue;
     }
     const normalizedMessage = normalizeTranscriptMessageId(message);
