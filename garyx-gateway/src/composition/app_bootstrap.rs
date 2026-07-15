@@ -29,8 +29,8 @@ use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::provider_auth::ClaudeAuthSessionStore;
-use crate::recent_thread_reader::SqlRecentThreadPageReader;
 use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe};
+use crate::recent_thread_reader::SqlRecentThreadPageReader;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 
