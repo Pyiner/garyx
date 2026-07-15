@@ -1,14 +1,22 @@
 # Pinned Thread Drag Reorder (Mobile-First)
 
-Status: v2 draft for design review (revised after review round 1, #TASK-2287)
+Status: v3 draft for design review (revised after review rounds 1-2, #TASK-2287)
 Scope: gateway + iOS (phase 1), Mac desktop (phase 2)
 
-Revision notes: v2 addresses review findings F1-F7 — response-generation
-guarding + single-flight desired-order writes (F1), collection revision CAS on
-reorder (F2), drag-lifecycle requirements and gesture arbitration as an
-architecture gate (F3), durable reorder outbox (F4), corrected STRICT
-schema/migration plan and idempotent re-pin (F5), task-forest ordering
-consumers (F6), expanded race/test coverage (F7).
+Revision notes:
+
+- v2 → v3 (review round 2): V2-1 revision-monotonic page acceptance +
+  epoch advance on settle + intent-overlay membership merge; V2-2 atomic
+  `ThreadPinsPage` snapshot contract + shared revision-bump tx helper over
+  *all* pin delete points; V2-3 desktop reducer applied at the last hop before
+  React state, not only in the main store; V2-4 classified retry policy with a
+  non-blocking pending-sync state instead of unbounded silent retry; V2-5
+  drag preview order, accepted-drop-vs-cancel proof obligations, quantified
+  hitch regression in the spike.
+- v1 → v2 (review round 1): F1 generation guard + desired-order reducer +
+  single-flight writes; F2 revision CAS; F3 drag-lifecycle architecture gate;
+  F4 durable outbox; F5 corrected STRICT schema/migration + idempotent
+  re-pin; F6 task_forest ordering consumers; F7 expanded race/test coverage.
 
 ## 1. Problem And Goals
 
@@ -19,12 +27,12 @@ Goals, in priority order:
 
 1. Drag-to-reorder inside the pinned area of the iOS home list (mobile-first).
 2. The interaction must feel native and smooth: system reorder animation,
-   haptics, no dropped frames.
+   haptics, quantified no-hitch scrolling.
 3. **Zero flicker from server round-trips.** The local order the user just
    created is authoritative on screen. Background refresh loops (10s/15s),
-   pin-write responses, reorder-write responses, and *late/stale responses*
-   must never visibly reshuffle the pinned section. "Backend not settled yet"
-   is never a visible state — including across app restarts.
+   pin-write responses, reorder-write responses, and *late/stale/out-of-order
+   responses* must never visibly reshuffle the pinned section. "Backend not
+   settled yet" is never a visible reshuffle — including across app restarts.
 4. Same capability on Mac desktop afterwards, reusing the same wire contract.
 
 Non-goals:
@@ -33,8 +41,9 @@ Non-goals:
 - Cross-section drag (dragging a pinned row into Recent is not an unpin
   gesture; it clamps back into the pinned segment).
 - Legacy-gateway compatibility shims (repo policy: desktop/gateway ship
-  together; a reorder call failing against an old gateway follows the normal
-  outbox retry path in §6).
+  together). A reorder call hitting an old gateway (405) is handled by the
+  permanent-error leg of the retry policy (§5.2 R5) — order kept, requests
+  paused, pending-sync surfaced — not by a compat path.
 
 ## 2. Current State (verified)
 
@@ -43,84 +52,82 @@ Gateway:
 - Pins live in a dedicated direct-write table `thread_pins
   (thread_id TEXT PRIMARY KEY, pinned_at TEXT NOT NULL) STRICT`
   (`garyx-gateway/src/garyx_db/mod.rs:2005`). Not a projection of
-  `thread_records`; not a `recent_threads` column. Archive deletes the pin in
-  the same transaction (`archive_thread_record`).
+  `thread_records`; not a `recent_threads` column.
 - `list_pinned_threads` orders by `pinned_at DESC, thread_id ASC`
-  (`mod.rs:463`). There is no user-defined order concept.
+  (`mod.rs:463`) and runs on the WAL read pool (`mod.rs:327-423`) —
+  independent of any write transaction.
 - `pin_thread` upserts and refreshes `pinned_at` on re-pin (`mod.rs:481`).
-- **task_forest reads `thread_pins` directly** (not via
-  `list_pinned_threads`): root rank and skipped-pin order are built from
-  `pinned_at` in the forest CTE
-  (`garyx-gateway/src/garyx_db/task_forest.rs:592`). Any ordering change must
-  cover these read sites too.
+- Existing pin/unpin handlers mutate first, then *separately* list pins for
+  the response (`routes.rs:1693-1696,1728-1730`) — i.e. today's response page
+  is not from the mutation's transaction.
+- **Pin rows are deleted from four sites**, not one: `unpin_thread`
+  (`mod.rs:501`), `archive_thread_record` (`mod.rs:532`), runtime hard delete
+  `delete_thread_record_with_projections` (`mod.rs:1709`), and startup
+  cleanup `purge_retired_workflow_state` (`mod.rs:2368`).
+- **task_forest reads `thread_pins` directly**: root rank and skipped-pin
+  order come from `pinned_at` in the forest CTE (`task_forest.rs:592`).
 - HTTP: `GET /api/thread-pins`, `PUT /api/thread-pins/{key}` (pin),
   `DELETE /api/thread-pins/{key}` (unpin) — handlers in
-  `garyx-gateway/src/routes.rs:1660-1747`, routes in `route_graph.rs:62-85`.
-  All write responses return the full pins page
-  `{ thread_ids: [...], pins: [{thread_id, pinned_at}] }`
-  (`thread_pins_payload`, `routes.rs:1449`).
-- Schema handling convention: structural `ensure` in
-  `initialize_connection` (`mod.rs:2259`) + versioned one-shot startup
-  migrations with a durable marker (`mod.rs:901`).
+  `routes.rs:1660-1747`, routes in `route_graph.rs:62-85`. Write responses
+  return the full pins page (`thread_pins_payload`, `routes.rs:1449`).
+- Schema handling convention: structural `ensure` in `initialize_connection`
+  (`mod.rs:2259`) + versioned one-shot startup migrations with a durable
+  marker (`mod.rs:901`).
 - No SSE/push carries pins or recent-threads; clients poll.
 
 iOS:
 
-- Home list is a native SwiftUI `List` with one flat `ForEach(items)` — the
-  pinned header, pinned rows, spacer, recent header, recent rows are flat
-  items with one stable identity space (`thread:<id>`), so pin/unpin animates
-  as a *move*, not delete+insert
+- Home list is a native SwiftUI `List` with one flat `ForEach(items)`; one
+  stable identity space (`thread:<id>`) makes pin/unpin animate as a *move*
   (`GaryxMobileSidebarViews.swift:192-283`,
-  `GaryxHomeThreadListLayout.primaryItems`,
   `GaryxHomeThreadListPresentation.swift:312,338-355`).
-- Pinned order = `pinnedThreadIds` array order = server pins-page order.
-  Sections built by `GaryxHomeThreadSectionsBuilder.build`
-  (`GaryxHomeThreadListPresentation.swift:670-715`).
-- Optimistic pin/unpin already exists: `GaryxHomeThreadTransitionState`
-  overlays a sequence-stamped pin transition until the remote write resolves,
-  with rollback restoration (`GaryxHomeThreadListPresentation.swift:559-607`,
-  `GaryxMobileModel+ThreadPersistence.swift:63-159`).
-- Refresh loops (`runSilentSidebarRefreshLoop` ~10s, reconcile ~15s, plus
-  every user action) re-fetch `listRecentThreads` + `listThreadPins`
-  concurrently and re-apply `applyPinnedThreadIds(server ids)`
-  (`GaryxMobileModel+ThreadList.swift:20-243`). Requests race freely today:
-  there is no response-generation tracking, so a stale GET can land after a
-  newer write's ack.
+- Pinned order = `pinnedThreadIds` array order = server pins-page order
+  (`GaryxHomeThreadSectionsBuilder.build`,
+  `GaryxHomeThreadListPresentation.swift:670-715`).
+- Optimistic pin/unpin exists: `GaryxHomeThreadTransitionState` sequence-
+  stamped per-id transitions with rollback
+  (`GaryxHomeThreadListPresentation.swift:377-607`,
+  `GaryxMobileModel+ThreadPersistence.swift:63-168`).
+- Refresh loops (~10s silent, ~15s reconcile, plus every user action)
+  re-fetch pins concurrently and overwrite `pinnedThreadIds`
+  (`GaryxMobileModel+ThreadList.swift:20-243`). Requests race freely; no
+  response-generation tracking.
 - Thread rows carry a custom 0.36s long-press action menu
-  (`GaryxMessageActionMenu.swift:308,329`, mounted at
-  `GaryxMobileSidebarViews.swift:408`) that will compete with a long-press
-  drag lift.
-- No drag/onMove/EditMode code exists anywhere in the list today.
-- `pinnedThreadIds` is in-memory only (`GaryxMobileModel.swift:218`) and is
-  cleared on gateway reset (`GaryxMobileModel+Gateway.swift:110`).
-- Generation-guarded merge precedent already in the codebase:
-  `GaryxCapsuleFavorites` (generation capture + stale-response
-  membership-only merge, `GaryxCapsuleFavorites.swift:83,175`).
-- Publication path: `HomeProjectionActor`/`HomeProjectionReducer` →
-  `GaryxHomeThreadListStore.apply(actorSnapshot:)` → transition-state overlay
-  in `presentationSnapshot`.
+  (`GaryxMessageActionMenu.swift:329-343`, mounted at
+  `GaryxMobileSidebarViews.swift:408`) that competes with a long-press lift.
+- `pinnedThreadIds` is in-memory (`GaryxMobileModel.swift:218`), cleared on
+  gateway reset (`GaryxMobileModel+Gateway.swift:110`).
+- In-repo precedents: generation-guarded merge that **advances its
+  generation on success/failure settle** (`GaryxCapsuleFavorites.swift:83-175`,
+  test `testRefreshSentDuringPendingCannotClobberSettledFavorite`);状态级
+  retry classifier `GaryxGatewayRetryClassifier`
+  (`GaryxGatewayClient.swift:205-256`); quantified list-performance harness
+  with hitch probe (`HomeListScrollPerformanceTests.swift:35-59`).
 
 Desktop:
 
-- `PinnedThreadsSidebar.tsx` renders `pinnedThreadRows` in
-  `desktopState.pinnedThreadIds` order; the main-process store fills it from
-  `GET /api/thread-pins` and overwrites it on every state refresh
-  (`main/garyx-client/threads.ts:1111-1156`, `main/store.ts:769`,
-  `mergeRemoteDesktopState` at `store.ts:752` overwriting `pinnedThreadIds`
-  at `store.ts:850`). No client-side re-sort.
-- `@dnd-kit/{core,sortable,modifiers,utilities}` already installed; the
-  ComposerQueue (`ComposerQueue.tsx`) is a working vertical-sortable
-  precedent.
+- `PinnedThreadsSidebar.tsx` renders `desktopState.pinnedThreadIds` order;
+  the main store overwrites it on every state refresh
+  (`mergeRemoteDesktopState`, `main/store.ts:752,850`).
+- **Stale state can also reach the renderer around the main store**: the
+  gateway mirror keeps an already-computed `nextState`
+  (`gateway-mirror/mirror.ts:350-355`) and
+  `useGatewayConnectionController.ts:368-376` commits it via a deferred
+  `startTransition(setDesktopState)`. A snapshot computed before a drop can
+  therefore commit to React after the renderer's optimistic reorder.
+- `@dnd-kit/{core,sortable,modifiers,utilities}` installed; ComposerQueue
+  (`ComposerQueue.tsx`) is the vertical-sortable precedent.
 
 ## 3. Design Overview
 
-One new ordering column + a revision-guarded collection-level reorder endpoint
-on the gateway; on the client a **desired-order reducer** with
-generation-guarded response merging, single-flight writes, and a durable
-outbox, so the user's order is authoritative on screen from the moment of the
-drop until the server provably matches it — across races, failures, and
-restarts. The gesture uses native `List` reorder so lift/gap/settle animations
-are the system's.
+One new ordering column + a revision-CAS reorder endpoint whose pages are
+**atomic snapshots** (page + revision from one transaction); on the client a
+**desired-order reducer** with revision-monotonic page acceptance,
+epoch-guarded authority, single-flight writes, a durable outbox with a
+classified retry policy, and reducer application at the *last hop* before UI
+state. The gesture uses native `List` reorder so lift/gap/settle animations
+are the system's, with drag ordering held in a preview state until an
+accepted drop.
 
 Order semantics: **the pinned order is a user-managed list.** `pinned_at`
 stays as "when it was first pinned" metadata; ordering is carried exclusively
@@ -132,320 +139,370 @@ by a new `sort_order`, everywhere pins are ordered (API and task_forest).
 
 - Structural ensure (in `initialize_connection`, per repo convention):
   `ALTER TABLE thread_pins ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0`
-  — valid on a STRICT table; the column is database-level NOT NULL from the
-  start, so no NULL-ordering footgun exists (`ORDER BY sort_order ASC` would
-  otherwise sort NULLs first).
+  — valid on a STRICT table; database-level NOT NULL from the start (no
+  NULL-ordering footgun).
 - Versioned one-shot startup migration with a durable marker
-  (`thread_pin_sort_order_v1`, alongside the existing versioned cutovers):
-  atomically backfill `sort_order = 0..n-1` following the current display
-  order (`pinned_at DESC, thread_id ASC`), so the visible order does not
-  change on upgrade. Marker recorded in the same transaction; second boot
-  does not re-run; zero-row DB still records the marker.
+  (`thread_pin_sort_order_v1`): atomically backfill `sort_order = 0..n-1`
+  following the current display order (`pinned_at DESC, thread_id ASC`), so
+  the visible order does not change on upgrade. Marker recorded in the same
+  transaction; second boot does not re-run; zero-row DB still records the
+  marker; a failed migration transaction leaves the marker unrecorded.
 - Collection revision: a `pins_revision` integer (single-row meta storage
-  next to the existing migration-marker storage), bumped inside **every**
-  transaction that mutates `thread_pins` (pin, unpin, reorder, archive-side
-  deletes). Fresh DB starts at 0.
+  next to the existing marker storage), starting at 0 on fresh DBs.
 
-### 4.2 Read/write paths (`garyx_db/mod.rs`, `task_forest.rs`)
+### 4.2 The atomic `ThreadPinsPage` boundary (review V2-2)
+
+A single database-layer type is the only way pins cross the db boundary:
+
+```
+ThreadPinsPage { pins: [ { thread_id, pinned_at, sort_order } ], revision }
+```
+
+Invariants:
+
+- **Reads**: `GET` produces `pins` and `revision` inside one WAL read
+  transaction (or one equivalent SQL statement joining the meta row). A page
+  can never pair a newer revision with older membership or vice versa.
+- **Writes**: pin, unpin, and reorder each perform *mutation + revision bump
+  + response-page read* inside the same write transaction and return the
+  resulting `ThreadPinsPage`. Handlers must not re-list after the
+  transaction (change from today's mutate-then-list shape at
+  `routes.rs:1693-1696,1728-1730`).
+- **Every mutation bumps `pins_revision`**, enforced by a shared tx helper
+  used at *all four* delete/write sites: `unpin_thread` (`mod.rs:501`),
+  `archive_thread_record` (`mod.rs:532`), runtime hard delete
+  (`delete_thread_record_with_projections`, `mod.rs:1709`), startup cleanup
+  (`purge_retired_workflow_state`, `mod.rs:2368`), plus `pin_thread` and the
+  new reorder. No pin-row mutation may bypass the helper.
+
+### 4.3 Read/write paths (`garyx_db/mod.rs`, `task_forest.rs`)
 
 - `list_pinned_threads`: `ORDER BY sort_order ASC, pinned_at DESC,
   thread_id ASC` (trailing keys are tie-breakers for the `DEFAULT 0` edge
   only; steady state is unique).
-- `pin_thread`: new pin gets
-  `sort_order = COALESCE(MIN(sort_order), 0) - 1` (head), computed and
-  upserted in one transaction. **Re-pin is idempotent**: `ON CONFLICT DO
-  NOTHING` — it preserves both the existing `sort_order` and the existing
-  `pinned_at` (behavior change from today's upsert, which refreshes
-  `pinned_at`; "first pinned at" is the meaningful semantic once ordering no
-  longer depends on it).
-- `unpin_thread`: unchanged (row delete). Gaps in `sort_order` are fine.
-- `task_forest.rs`: both direct `thread_pins` read sites (root rank and
-  skipped-pin order, `task_forest.rs:592`) switch from `pinned_at` to the
-  canonical `sort_order` ordering; fixtures and ordering tests updated.
-- New `reorder_thread_pins(ordered_ids: &[String], expected_revision: i64)`,
-  single transaction:
-  - Reads current `pins_revision`; on mismatch, returns a conflict result
-    carrying the current ordered pins + revision (no mutation).
-  - On match: ids in the request that exist in `thread_pins` get
-    `sort_order = 0,1,2,...` in request sequence; existing pins *not*
-    mentioned are renumbered after the mentioned ones, preserving their
-    current relative order; request ids that are not pinned are ignored.
-    **This function never changes membership.** Bumps `pins_revision`.
-  - Returns the full ordered pins list + new revision.
+- `pin_thread`: new pin gets `sort_order = COALESCE(MIN(sort_order), 0) - 1`
+  (head), computed in the same transaction. **Re-pin is idempotent**
+  (`ON CONFLICT DO NOTHING`): preserves existing `sort_order` *and*
+  `pinned_at` (deliberate behavior change; `pinned_at` now means "first
+  pinned at"). An idempotent re-pin that changes nothing does not bump the
+  revision.
+- `unpin_thread`: row delete via the shared helper. Gaps in `sort_order` are
+  fine.
+- `task_forest.rs`: both direct read sites (root rank, skipped-pin order at
+  `task_forest.rs:592`) switch from `pinned_at` to canonical `sort_order`;
+  fixtures and ordering tests updated.
+- New `reorder_thread_pins(ordered_ids, expected_revision)` in one write
+  transaction: on revision mismatch, return conflict + current
+  `ThreadPinsPage` (no mutation). On match: mentioned-and-pinned ids get
+  `sort_order = 0,1,2,...` in request sequence; unmentioned pins renumber
+  after them preserving current relative order; non-pinned ids ignored.
+  **Never changes membership.** Bumps revision; returns the new page.
 
-### 4.3 HTTP API
+### 4.4 HTTP API
 
-- `GET /api/thread-pins` and both existing write responses additionally carry
-  `revision` and per-pin `sort_order` (additive fields; existing clients only
-  read `thread_ids`).
-- New `PUT /api/thread-pins` (collection PUT, registered next to the existing
-  pin routes in `route_graph.rs`), body
-  `{"thread_ids": ["...", ...], "expected_revision": N}`.
-  - Success: 200 with the standard pins page + `revision`.
-  - Revision mismatch: **409** with the current pins page + `revision`, so
-    the client can merge and resend — mirrors the repo's strict conditional
-    update pattern (custom-agents `expected_updated_at`).
-  - Validation (400): missing/absent `expected_revision`; `thread_ids` not a
-    non-empty array of non-empty strings; duplicate ids in the array.
-    Unknown/unpinned ids are *not* an error (tolerated per §4.2, which is what
-    makes the call race-tolerant against concurrent unpin).
-- Concurrency model: SQLite serialized writes give per-transaction atomicity;
-  the CAS revision gives cross-client intent ordering — a reorder based on a
-  stale view cannot silently override a concurrent pin/unpin/reorder; it 409s
-  and the client resends a merged order (closed loop, see §5.2 R3/R4).
+- `GET /api/thread-pins` and both existing write responses carry `revision`
+  and per-pin `sort_order` (additive; existing clients read `thread_ids`).
+- New `PUT /api/thread-pins` (collection PUT), body
+  `{"thread_ids": [...], "expected_revision": N}`.
+  - Success: 200 with the transaction's `ThreadPinsPage`.
+  - Revision mismatch: **409** with the current page + revision (client
+    merges and resends — repo's strict conditional-update pattern).
+  - Validation (400): missing `expected_revision`; `thread_ids` not a
+    non-empty array of non-empty strings; duplicate ids. Unknown/unpinned
+    ids are *not* an error (unpin race tolerance).
+- Concurrency: per-transaction atomicity + CAS revision gives cross-client
+  intent ordering; a stale-view reorder 409s instead of silently overriding
+  concurrent pin/unpin/reorder.
 
-### 4.4 Gateway tests
+### 4.5 Gateway tests
 
 Final validation: `cargo test -p garyx-gateway --all-targets`.
 
-- Migration: fresh DB (column present, revision 0, marker recorded);
-  legacy rows backfilled to previous visible order; zero-row DB records
-  marker; second boot no re-run; failed migration transaction leaves marker
-  unrecorded (re-runs cleanly).
-- Pin: first pin on empty table gets a valid head `sort_order`
-  (COALESCE path); pin inserts at head of existing; **re-pin keeps both
-  `sort_order` and `pinned_at`**; unpin leaves order of the rest; every
-  mutation bumps `revision`.
-- Reorder: full permutation; subset (unmentioned keep relative order, after
-  mentioned); unknown ids ignored; duplicate ids 400; empty body 400; missing
-  `expected_revision` 400; stale revision 409 returns current page;
-  membership never changes; response order equals subsequent `GET`.
-- Route/body-level tests for `PUT /api/thread-pins` (not just the db layer).
+- Migration: fresh DB (column, revision 0, marker); legacy backfill keeps
+  visible order; zero-row marker; second boot no re-run; failed transaction
+  re-runs cleanly.
+- Atomic snapshot (V2-2): deterministic seam test proving a writer committing
+  between "read pins" and "read revision" is impossible through the
+  `ThreadPinsPage` API (single-transaction read); handler-level test that
+  write responses come from the mutation transaction.
+- Revision inventory (V2-2): pin, unpin, reorder, archive, runtime hard
+  delete, and startup cleanup each bump revision exactly once; idempotent
+  re-pin bumps nothing and preserves `pinned_at` + `sort_order`.
+- Pin/order: first pin on empty table (COALESCE head); head insert; unpin
+  leaves rest; reorder full permutation / subset / unknown-id / duplicate-400
+  / empty-400 / missing-revision-400 / stale-revision-409-with-page;
+  membership never changes; response order equals subsequent GET.
+- Route/body-level tests for `PUT /api/thread-pins`.
 - task_forest: root rank and skipped order follow `sort_order`; fixtures
   updated.
-- Archive still removes the pin row and bumps revision.
 
 ## 5. iOS Changes (Phase 1 core)
 
 ### 5.1 Gesture: native `List` reorder, gated by an architecture spike
 
-The move mechanics use `.onMove` on the existing flat `ForEach(items)`:
+Move mechanics: `.onMove` on the existing flat `ForEach(items)`;
+`.moveDisabled(...)` on every non-pinned-thread item; flat indices translate
+to pinned-relative indices with destination **clamped into the pinned
+segment**; haptic `.sensoryFeedback` on a completed drop.
 
-- `.moveDisabled(...)` on every non-pinned-thread item (headers, spacer,
-  recent rows, placeholders) so only pinned rows lift.
-- The `onMove` handler receives flat-array indices; translate to
-  pinned-section-relative indices and **clamp the destination into the pinned
-  segment**. The handler emits a pure Core command (`movePinned(from:to:)`),
-  never mutates view state directly.
-- Haptics: system drag lift provides feedback; add `.sensoryFeedback` on a
-  completed reorder drop.
+**Drag ordering is a preview, not a commit (review V2-5).** `onMove`
+callbacks update only a `dragPreviewOrder` inside the drag session. They
+never advance the epoch, touch the outbox, or trigger a PUT. Exactly one
+commit happens, on an *accepted drop* (preview folds into `desiredOrder`,
+§5.2 R2). A cancelled drag — including after multiple `onMove` callbacks —
+restores from the pre-drag baseline with **zero remote mutation**.
 
-**Known gap (review F3): `onMove` alone has no drag lifecycle.** Its public
-API is only `(IndexSet, destination)` — no began/cancelled/ended callbacks —
-so it cannot by itself drive the R1 freeze window, and a cancelled drag (lift
-then release in place) produces no callback at all. Additionally, thread rows
-already own a custom 0.36s long-press menu that competes with the system
-reorder lift.
+**Known gaps (reviews F3/V2-5):** `onMove` exposes no began/cancelled/ended
+lifecycle; `dragSessionDidEnd` alone cannot distinguish an accepted drop from
+a terminated session; thread rows already own a 0.36s long-press menu that
+competes with the lift.
 
-Therefore the first commit of the batch is an **architecture-gate spike**
-that must demonstrate, on the minimum deployment target (iOS 17) and the
-current OS, all of:
+The first commit of the batch is therefore an **architecture-gate spike**
+that must demonstrate, on the app's minimum deployment target and the current
+OS (using the runtimes actually installable locally/CI; if the minimum-target
+runtime is unavailable, verify on the oldest available, restrict the
+implementation to APIs available since the minimum target, and record the
+residual risk in the spike commit):
 
-1. drag *began*, *drop*, and *cancel* each reliably drive freeze/unfreeze;
-2. long-press arbitration between the existing row action menu and the
-   reorder lift is deterministic (acceptable outcomes: system arbitration
-   proves clean, or pinned rows move the action menu to a non-conflicting
-   affordance — swipe/ellipsis — with the product owner informed);
-3. a poll/ack snapshot injected mid-lift moves no rows;
-4. out-of-segment destinations clamp with sane live gap/settle behavior;
-5. the existing pin/unpin single-identity *move* animation is not regressed.
+1. drag *began*, *accepted drop*, and *cancel* are reliably distinguished and
+   each drives freeze/unfreeze (accepted drop ⇒ single commit; cancel ⇒
+   baseline restore, zero mutation);
+2. the UIKit observation adapter does **not** replace or interfere with
+   SwiftUI's own drag/drop delegates on the backing `UICollectionView`
+   (observe, never substitute);
+3. long-press arbitration between the row action menu and the reorder lift is
+   deterministic (acceptable outcomes: system arbitration proves clean, or
+   pinned rows move the action menu to a non-conflicting affordance —
+   swipe/ellipsis — with the product owner informed);
+4. a poll/ack snapshot injected mid-lift moves no rows;
+5. out-of-segment destinations clamp with sane live gap/settle behavior;
+6. the existing pin/unpin single-identity *move* animation is not regressed;
+7. **quantified performance**: the existing hitch probe harness
+   (`HomeListScrollPerformanceTests.swift:35-59`) extended over
+   drag-session enter/exit and reorder settle shows no hitch regression —
+   "no dropped frames" is a measured gate, not a feel check.
 
-Candidate mechanisms, in order of preference:
-
-- **(a) plain `List` + `onMove` + a scoped UIKit adapter for lifecycle**: a
-  lightweight introspection hook on the backing `UICollectionView` observes
-  its drag-interaction state (`hasActiveDrag` / drag delegate callbacks) to
-  drive freeze/unfreeze, covering began/cancel/end. Keeps the fully native
-  animation.
-- **(b) transient reorder mode with explicit drag handles**: long-press on a
-  pinned row (or a "Reorder" action) enters a short-lived reorder state whose
-  entry/exit *is* the freeze lifecycle (`editMode` binding); handles remove
-  the menu-arbitration problem entirely. Slightly heavier UI, fully
-  deterministic lifecycle.
-
-Hand-rolled offset-animation gesture reordering is rejected. Splitting the
-pinned rows into their own `ForEach` is a last resort only, because it
-threatens the single identity space that makes pin/unpin animate as a move
-(`GaryxHomeThreadListPresentation.swift:312`); if ever attempted it must
-re-prove point 5 above. The state-machine wiring (§5.2) does not start until
-the spike commit demonstrates points 1-5.
+Candidate mechanisms, in order of preference: (a) plain `List` + `onMove` +
+a scoped, observation-only UIKit adapter for lifecycle (keeps fully native
+animation); (b) transient reorder mode with explicit drag handles
+(`editMode`-bound lifecycle, officially supported; removes menu arbitration
+entirely). Hand-rolled offset-animation reordering is rejected; splitting
+pinned rows into their own `ForEach` is a last resort that would re-open the
+single-identity-space proof (point 6). State-machine wiring (§5.2) does not
+start until the spike demonstrates points 1-7.
 
 ### 5.2 Local order authority (Core state machine, the anti-flicker core)
 
-New pure state in `GaryxMobileCore` (a value-type `GaryxPinnedOrderState`
-owned by `GaryxHomeThreadListStore`, cooperating with the existing
-`GaryxHomeThreadTransitionState`; pure, SwiftPM-testable). It follows the
-generation-guard pattern already proven in `GaryxCapsuleFavorites`
-(`GaryxCapsuleFavorites.swift:83,175`).
+New pure value-type state in `GaryxMobileCore` (`GaryxPinnedOrderState`,
+owned by `GaryxHomeThreadListStore`, cooperating with
+`GaryxHomeThreadTransitionState`), following — and correcting to — the
+`GaryxCapsuleFavorites` precedent, **including its settle-time generation
+advance** (`GaryxCapsuleFavorites.swift:114-166`).
 
 Core concepts:
 
-- **`desiredOrder`** — the reduced, always-current user-intended pinned order.
-  Every drop folds into it. There is no queue of individual move intents;
-  later drops supersede earlier ones by construction (review F1's
-  out-of-order-PUT hazard is removed structurally).
-- **`mutationGeneration`** — monotonically increasing; bumped by every local
-  mutation that affects pinned membership or order (reorder drop, optimistic
-  pin, unpin).
-- **Response capture** — every pins-touching request (pins GET, pin/unpin
-  write, reorder PUT) captures `mutationGeneration` at send time. A response
-  whose captured generation is behind the current generation, or that arrives
-  while `desiredOrder` is unsettled, may only **merge membership** (new ids
-  enter at the head, keeping their server-relative order among themselves;
-  unpinned ids drop out; survivors keep local order). It never contributes
-  order. This closes F1's "stale GET lands after ack" reversion: the stale
-  GET was sent at an older generation, so it is membership-only forever.
-- **Single-flight reorder writes** — at most one `PUT /api/thread-pins` in
-  flight per client. It always sends the *current* `desiredOrder` and the
-  latest known `revision`. When it completes and `desiredOrder` has moved on,
-  the next PUT fires with the newer value.
+- **`desiredOrder`** — the reduced, always-current user-intended pinned
+  order. Every accepted drop folds into it; later drops supersede earlier
+  ones structurally (no intent queue, no out-of-order finals).
+- **`epoch`** — monotone counter advanced by (a) every local mutation
+  affecting pinned membership or order (accepted drop, optimistic pin,
+  unpin) **and (b) every settle, success or failure** (review V2-1: settle
+  invalidates all requests issued during the unsettled window, so none of
+  them can later be mistaken for authoritative).
+- **`highestObservedRevision`** — monotone acceptance floor over server
+  `revision` values.
+- **Single-flight reorder writes** — at most one collection PUT in flight; it
+  always carries the current `desiredOrder` + latest known revision; when it
+  completes and `desiredOrder` moved on, the next PUT fires with the newer
+  value.
+
+**Page acceptance decision procedure** (applies to *every* pins page from any
+response — GET, pin/unpin write-back at
+`GaryxMobileModel+ThreadPersistence.swift:127`, reorder ack/409):
+
+1. `page.revision < highestObservedRevision` → **discard the entire page**
+   (not even membership). This closes V2-1's main timeline: a poll that read
+   pre-PUT state always carries a lower revision than the PUT ack, no matter
+   when it arrives or what epoch it captured. It equally closes
+   revision-descending pin write-backs (old pin-B page arriving after pin-C
+   ack cannot temporarily delete C).
+2. Otherwise raise `highestObservedRevision` to `page.revision`.
+3. If the request's captured epoch < current epoch, **or** `desiredOrder` is
+   unsettled → **membership-only merge with intent overlay**: merged
+   membership = page membership, minus ids with an active unpin intent, plus
+   ids with an active or just-confirmed pin intent (per-id transitions from
+   `GaryxHomeThreadTransitionState`); new ids enter at the head keeping their
+   server-relative order among themselves; survivors keep local order.
+   Missing-from-page is never interpreted as unpin for an id with a live pin
+   intent. `desiredOrder` is re-reduced over the merged membership, so the
+   next PUT carries the full merged order.
+4. Only if settled **and** captured epoch is current **and** step 1-2 passed
+   → adopt the page's order directly (cold start with empty outbox,
+   other-device changes at rest).
 
 Rules:
 
 - **R1 — freeze during drag.** While a drag session is active (lifecycle from
-  §5.1), the store buffers (latest-wins) incoming snapshots instead of
-  publishing; the buffered snapshot is applied after drop/cancel with the
-  order overlay on top. Rows never shift under the user's finger. A cancelled
-  drag unfreezes without any order change.
-- **R2 — commit on drop.** The drop folds into `desiredOrder`, bumps
-  `mutationGeneration`, calls `recentThreadFeeds.noteLocalMutation()`,
-  persists the outbox (R5), and (if none in flight) fires the single-flight
-  PUT. The only visible motion is the system drop-settle.
-- **R3 — local order wins while unsettled.** While `desiredOrder` is
-  unsettled (in-flight or un-acked), every incoming pins page merges
-  membership-only per the response-capture rule. If a membership merge
-  changes the pinned set (e.g. another device pinned D → D enters local head),
-  `desiredOrder` is re-reduced to include it — so the next PUT carries the
-  *full merged* order. Server order is not adopted.
-- **R4 — settle without motion, revision-aware.** On PUT success: if the ack
-  matches the current `desiredOrder` and no newer local mutation exists, the
-  intent settles — the presented order is already identical, so settling is
-  invisible; the acked `revision` becomes the CAS token. On **409**: merge
-  membership from the returned page into `desiredOrder` (per R3), adopt the
-  returned `revision`, and immediately resend — a silent, closed CAS loop
-  (this is F2's fix: a concurrent pin on another device produces one 409 →
-  merged full-order resend → convergence, with zero visible motion locally).
-  Only when `desiredOrder` is settled and a response's captured generation is
-  current does a server pins page order apply directly (cold start with empty
-  outbox, other-device changes at rest).
-- **R5 — failure never loses the order (durable outbox).** A failed reorder
-  write never snaps the UI back. The unsettled `desiredOrder` (+ gateway
-  identity) is persisted as a **gateway-scoped durable outbox** entry when
-  committed (R2), replayed after transient failures on subsequent poll ticks
-  with backoff, and — because it is durable — resumed across app restarts and
-  gateway reconnects: on cold start with a non-empty outbox, the fetched page
-  merges membership under the outbox order and idempotent retry continues
-  until acked or superseded by a newer local drop. No retry cap and no
-  user-facing error path is needed: retries are idempotent CAS PUTs, a newer
-  drop supersedes, and cross-device conflicts stay last-writer-wins. The
-  outbox is cleared on settle and on gateway switch (an outbox is only ever
-  valid against the gateway it was created for).
+  §5.1), the store buffers (latest-wins) incoming snapshots; the buffered
+  snapshot is applied after drop/cancel under the order overlay. Rows never
+  shift under the finger; cancel unfreezes with no order change.
+- **R2 — commit on accepted drop.** The preview folds into `desiredOrder`,
+  `epoch` advances, `recentThreadFeeds.noteLocalMutation()` fires, the outbox
+  persists (R5), and (if none in flight) the single-flight PUT fires. The
+  only visible motion is the system drop-settle.
+- **R3 — local order wins while unsettled.** Every page landing while
+  unsettled goes through the acceptance procedure and can at most merge
+  membership (step 3). Server order is not adopted.
+- **R4 — settle without motion, revision-aware.** A PUT ack settles only if:
+  ack order == current `desiredOrder`, the request's epoch is still current
+  (no local mutation since send), and `ack.revision ≥
+  highestObservedRevision`. Settling adopts `ack.revision`, advances `epoch`
+  (V2-1), clears the outbox, and changes nothing visually (order already
+  identical). On **409**: run the acceptance procedure on the returned page
+  (steps 1-3); if the returned page's order already equals `desiredOrder`,
+  **settle directly without re-PUT** (V2-4 — no pointless write/revision
+  bump); otherwise resend with the returned revision — a silent, closed CAS
+  loop (a concurrent other-device pin produces one 409 → merged full-order
+  resend → convergence, zero visible motion locally).
+- **R5 — failure never loses the order; retries are classified (V2-4).** A
+  failed reorder write never snaps the UI back. The unsettled `desiredOrder`
+  (+ gateway identity + last known revision) persists as a **gateway-scoped
+  durable outbox**, restored across app restarts (cold start with a non-empty
+  outbox: fetched pages merge membership under the outbox order; retry
+  resumes). Retry policy via the existing status classifier
+  (`GaryxGatewayRetryClassifier`, `GaryxGatewayClient.swift:205-256`):
+  - 409 → CAS loop per R4 (not a failure);
+  - network errors / 429 / retryable 5xx → capped backoff with jitter,
+    piggybacking poll ticks;
+  - **permanent errors (400/401/403/404/405 / contract violations, incl. an
+    old gateway's 405)** → keep the outbox and the on-screen order, **pause
+    requests**, and expose a **non-blocking pending-sync state** from the
+    store (subtle indicator; no alert, no rollback). Retry resumes on
+    gateway/settings/app-version change, app foreground, or an explicit
+    user refresh.
+  A newer drop always supersedes the outbox; settle and gateway switch clear
+  it (an outbox is only valid against the gateway it was created for).
 
 `applyPinnedThreadIds` and `commitRefreshedRecentThreadsPage`
-(`GaryxMobileModel+ThreadList.swift`) route through this state instead of
-overwriting `pinnedThreadIds` unconditionally; the pin/unpin response
-write-back (`GaryxMobileModel+ThreadPersistence.swift:127`) captures
-generation like any other response.
+(`GaryxMobileModel+ThreadList.swift`) route through this state; the pin/unpin
+response write-back captures epoch/revision like any other response.
 
 ### 5.3 Files and tests
 
-- Core: `GaryxPinnedOrderState` + move/clamp computation next to
+- Core: `GaryxPinnedOrderState` + move/clamp + acceptance procedure next to
   `GaryxHomeThreadListPresentation.swift`; outbox persistence behind a small
   protocol seam (UserDefaults-backed in the app target). New files need
   `xcodegen generate` with the regenerated `pbxproj` committed.
-- SwiftPM tests (`Tests/GaryxMobileCoreTests/`), no-UI first per repo rule:
-  - move/clamp: flat-index → pinned-relative translation, edge clamps,
-    single-item and top/bottom moves, drag cancel (no-op unfreeze);
-  - R1: snapshots buffered during drag, latest-wins, replayed after
-    drop/cancel;
-  - R2/R4: intent lifecycle — commit, ack settle asserts **zero row-order
-    delta**; 409 → membership merge → resend → settle;
-  - F1 regressions: stale GET (older captured generation) landing *after*
-    ack is membership-only; two successive drops produce one superseding
-    desired order (no out-of-order final state);
-  - R3: poll page during in-flight reorder merges membership but preserves
-    local order; concurrent other-device pin add → head insert → next PUT
-    carries merged full order → next GET shows no jump;
-  - reorder × optimistic pin/unpin interleavings, both success and failure
-    legs of the pin transition;
-  - R5: durable outbox — restart recovery replays and settles; gateway
-    switch clears; supersede-by-newer-drop;
+- SwiftPM tests (`Tests/GaryxMobileCoreTests/`), no-UI first:
+  - move/clamp: flat→pinned-relative translation, edge clamps, top/bottom
+    moves; preview-only `onMove` folding; cancel after multiple `onMove`s ⇒
+    baseline restore, zero mutation (V2-5);
+  - R1: buffering, latest-wins, replay after drop/cancel;
+  - **V2-1 exact regressions**: GET issued *after* drop (same epoch) reading
+    the old page, arriving *after* ack ⇒ discarded by revision floor, no
+    reversion; two pin write-backs arriving revision-descending ⇒ old page
+    fully discarded, confirmed pin never temporarily removed; settle advances
+    epoch so unsettled-window requests can't become authoritative;
+  - R2/R4: ack settle asserts zero row-order delta; 409 → merge → resend →
+    settle; 409-page-equals-desired → direct settle without re-PUT;
+  - R3: poll during in-flight merge keeps local order; other-device pin →
+    head insert → merged full-order PUT → next GET no jump;
+  - reorder × optimistic pin/unpin interleavings (success and failure legs);
+  - R5: durable outbox restart recovery; supersede-by-newer-drop; retry
+    classification (429/5xx backoff vs 405 pause + pending-sync state);
+    gateway-switch clear;
   - regression: existing pin/unpin transition tests stay green.
 - App-target no-UI integration tests at the existing URLProtocol seam
   (`Tests/GaryxMobileTests/GaryxHomeThreadListRefreshCommitTests.swift:639`):
-  real network wiring for reorder PUT single-flight, 409 resend, and
-  stale-GET-after-ack — run via `xcodebuild test` (not compile-only).
-- Manual simulator pass only for gesture *feel* (lift, gap, settle, haptic),
-  not as the acceptance for ordering logic.
+  real network wiring for single-flight, 409 resend, stale-GET-after-ack,
+  and permanent-error pause — run via `xcodebuild test` (not compile-only).
+- Spike carries the quantified hitch gate (§5.1 point 7). Manual simulator
+  pass only for gesture *feel*, never as ordering-logic acceptance.
 
 ## 6. Desktop Changes (Phase 2)
 
-- `PinnedThreadsSidebar` becomes a `DndContext` + `SortableContext`
-  (`verticalListSortingStrategy`, `restrictToVerticalAxis`) following the
-  ComposerQueue precedent; row lift/drop uses dnd-kit's transform animations.
-- On drop: optimistic reorder of `desktopState.pinnedThreadIds` in the
-  renderer, then preload → main `setThreadPinOrder(threadIds)` → gateway
-  `PUT /api/thread-pins` (same CAS body).
-- The main-process store gets the same desired-order reducer +
-  generation guard + single-flight + outbox (persisted in the main-process
-  store's existing persistence), applied exactly where the poll overwrite
-  happens today: `mergeRemoteDesktopState` (`store.ts:752`) must merge
-  membership-only into `pinnedThreadIds` (`store.ts:850`) while an intent is
-  unsettled.
-- Contract additions in `shared/contracts` + unit tests via
-  `npm run test:unit` (not bare `node --test`, per repo test-runner rule),
-  covering the main-store guard at the real overwrite site.
+- `PinnedThreadsSidebar` becomes `DndContext` + `SortableContext`
+  (vertical strategy, `restrictToVerticalAxis`) per the ComposerQueue
+  precedent.
+- On drop: optimistic reorder in the renderer, then preload → main
+  `setThreadPinOrder(threadIds)` → gateway `PUT /api/thread-pins` (same CAS
+  body). Main store owns the desired-order reducer, epoch/revision guards,
+  single-flight, and outbox (persisted in the main store's existing
+  persistence), applied where the poll overwrite happens
+  (`mergeRemoteDesktopState`, `store.ts:752,850`).
+- **Last-hop projection (review V2-3).** The main-store guard alone is
+  insufficient: already-computed snapshots reach React through the gateway
+  mirror (`mirror.ts:350-355`) and a deferred
+  `startTransition(setDesktopState)`
+  (`useGatewayConnectionController.ts:368-376`). Therefore: a drop registers
+  the local intent generation *synchronously* in the renderer/mirror layer,
+  and **every `DesktopState` entering React state passes through the
+  desired-order reducer at that last hop** — a stale snapshot computed before
+  the drop gets the local pinned order re-applied before commit.
+- Tests (`npm run test:unit`): main-store guard at the real overwrite site;
+  **the V2-3 race** — refresh resolved and `nextState` captured, drop happens,
+  deferred transition commits ⇒ committed state carries the local order;
+  contract tests for the new preload/main API.
 
 ## 7. Failure / Race Matrix (summary)
 
 | Scenario | Behavior |
 | --- | --- |
 | Poll reply lands mid-drag | Buffered; applied after drop/cancel under overlay (R1) |
-| Drag cancelled (lift, no move) | Unfreeze, no order change, no PUT (R1) |
-| Poll reply while reorder unsettled | Membership merged, local order kept (R3) |
-| Stale GET arrives *after* ack | Captured generation is old → membership-only, no reversion (F1) |
-| Two quick drops | Desired-order reducer + single-flight: second supersedes; last PUT carries final order (F1) |
-| Reorder ack | Invisible settle; zero row-order delta (R4) |
-| Concurrent pin on another device | 409 → merge (new id at head) → resend full order → converge, no visible jump (F2/R4) |
-| Concurrent unpin on another device | Unknown id ignored server-side; id drops out locally on membership merge |
-| Two devices reorder | CAS: stale writer 409s and resends; last writer wins deterministically |
-| Reorder HTTP failure / unreachable gateway | Local order kept; durable outbox retries with backoff (R5) |
-| App restart with unsettled reorder | Outbox restored; local order overlays fetch; retry continues (R5/F4) |
+| Drag cancelled (even after several `onMove`s) | Baseline restore; zero remote mutation (V2-5) |
+| Poll reply while reorder unsettled | Membership-only merge with intent overlay (R3) |
+| GET sent after drop, reads pre-PUT page, arrives after ack | Revision floor discards the whole page (V2-1) |
+| Pin write-backs arrive revision-descending | Older page fully discarded; confirmed pin never flickers out (V2-1) |
+| Two quick drops | Reducer + single-flight: second supersedes; final PUT carries final order |
+| Reorder ack | Settles only when order/epoch/revision all match; zero visual delta; epoch advances (R4) |
+| Concurrent pin on another device | 409 → merge (new id at head) → resend full order → converge; if 409 page already matches, settle without re-PUT (R4) |
+| Concurrent unpin on another device | Unknown id ignored server-side; drops out locally on membership merge |
+| Two devices reorder | CAS: stale writer 409s and resends; deterministic last-writer-wins |
+| Transient failure (network/429/5xx) | Local order kept; capped backoff with jitter (R5) |
+| Permanent failure (400/401/403/404/405, old gateway) | Local order kept; requests paused; non-blocking pending-sync state; resume on env change (R5) |
+| App restart with unsettled reorder | Durable outbox restored; local order overlays fetch; retry resumes (R5) |
 | Gateway switch | Outbox cleared; server order adopted fresh |
+| Desktop: snapshot computed pre-drop, committed post-drop via startTransition | Last-hop reducer re-applies local order (V2-3) |
 | Drop outside pinned segment | Clamped to segment edge; never unpins |
 
 ## 8. Delivery Batches
 
-1. **B1 gateway**: schema ensure + versioned backfill migration + revision +
-   `reorder_thread_pins` + `PUT /api/thread-pins` + task_forest ordering +
+1. **B1 gateway**: schema ensure + versioned backfill + atomic
+   `ThreadPinsPage` boundary + shared revision helper over all four delete
+   sites + `reorder_thread_pins` + collection PUT + task_forest ordering +
    tests (`--all-targets`).
-2. **B2 iOS**: architecture-gate spike commit (gesture lifecycle proof,
-   §5.1 points 1-5) → Core state machine + outbox + tests → wiring +
-   haptics → `xcodebuild test`. Ships with B1 in the same merge train
-   (mobile-first deliverable).
-3. **B3 desktop**: dnd-kit reorder + main-store guard + contract + tests.
-   Separate follow-up task after B1/B2 land.
+2. **B2 iOS**: architecture-gate spike (§5.1 points 1-7, incl. hitch gate) →
+   Core state machine + outbox + tests → wiring + haptics + pending-sync
+   surface → `xcodebuild test`. Ships with B1 in the same merge train.
+3. **B3 desktop**: dnd-kit reorder + main-store guard + last-hop projection +
+   contract + tests. Separate follow-up task after B1/B2 land.
 
 ## 9. Decisions Taken (review these explicitly)
 
 1. Order carried by a dedicated `sort_order` on the direct-write `thread_pins`
-   table — *not* a `thread_records` body field or `recent_threads` projection
-   column, because pins are deliberately outside the projection contract.
-   All ordering consumers (API *and* task_forest) switch to it.
+   table (pins stay outside the projection contract). All ordering consumers
+   (API *and* task_forest) switch to it.
 2. Reorder endpoint is a **revision-CAS** collection PUT that never mutates
-   membership; unknown ids ignored (unpin race tolerance); duplicates/blank
-   ids/missing revision are 400; stale revision is 409 + current page
-   (concurrent-pin race closed by merge-and-resend).
-3. Reorder failure does **not** roll back the UI, and the unsettled order is
-   a **durable, gateway-scoped outbox** with unbounded idempotent retry —
-   surviving restarts — rather than a session-only ×3 retry. Rationale: the
-   user's explicit spatial arrangement snapping back (including after a
-   relaunch) reads as flicker/data loss; convergence is guaranteed by CAS +
-   supersession, so no user-facing failure surface is required.
-4. Re-pin becomes idempotent (`pinned_at` and `sort_order` both preserved) —
-   deliberate behavior change; `pinned_at` now means "first pinned at".
-5. Recent-section ordering untouched; no cross-section drag semantics.
-6. Native `List`/`onMove` over custom gestures, gated by a mandatory
-   architecture spike that must prove drag began/cancel/end lifecycle, menu
-   arbitration, and mid-drag injection stability before any wiring starts;
-   explicit drag-handle reorder mode is the sanctioned fallback.
+   membership; pages are **atomic snapshots** (page + revision from one
+   transaction) and every pin-row mutation — including archive, runtime hard
+   delete, and startup cleanup — bumps the revision through one shared
+   helper.
+3. Client authority = revision-monotonic page acceptance (below-floor pages
+   discarded whole) + epoch guard that advances on local mutation **and on
+   settle** + membership merges overlaid with per-id pin intents. This is the
+   corrected form of the in-repo `GaryxCapsuleFavorites` pattern.
+4. Reorder failure does **not** roll back the UI; the unsettled order is a
+   durable, gateway-scoped outbox. Retries are **classified**: CAS loop for
+   409, capped jittered backoff for transient errors, and a paused,
+   non-blocking **pending-sync state** for permanent errors — not unbounded
+   silent retry.
+5. Re-pin becomes idempotent (`pinned_at` and `sort_order` preserved, no
+   revision bump) — deliberate behavior change; `pinned_at` means "first
+   pinned at".
+6. Recent-section ordering untouched; no cross-section drag semantics.
+7. Native `List`/`onMove` over custom gestures, gated by a mandatory
+   architecture spike proving lifecycle (began/accepted-drop/cancel),
+   observation-only UIKit adaptation, menu arbitration, mid-drag injection
+   stability, and a quantified hitch gate; drag ordering is preview-only
+   until an accepted drop; explicit drag-handle reorder mode is the
+   sanctioned fallback.
