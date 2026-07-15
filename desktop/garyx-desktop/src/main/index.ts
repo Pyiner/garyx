@@ -224,6 +224,7 @@ import {
   removeDesktopWorkspace,
   setDesktopBotBinding,
   setDesktopThreadPinned,
+  setDesktopThreadPinOrder,
 } from "./store";
 import { readMemoryDocument, saveMemoryDocument } from "./memory-documents";
 import {
@@ -1264,6 +1265,15 @@ function registerIpcHandlers(): void {
     "garyx:set-thread-pinned",
     async (_event, input: { threadId: string; pinned: boolean }) => {
       return setDesktopThreadPinned(input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:set-thread-pin-order",
+    async (_event, input: { threadIds?: string[] }) => {
+      return setDesktopThreadPinOrder(
+        Array.isArray(input?.threadIds) ? input.threadIds : [],
+      );
     },
   );
 

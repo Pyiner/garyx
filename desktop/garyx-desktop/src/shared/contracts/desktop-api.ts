@@ -130,6 +130,7 @@ import type {
   SendMessageInput,
   SendStreamingInputResult,
   SetThreadPinnedInput,
+  SetThreadPinOrderInput,
   StartThreadStreamInput,
   StopThreadStreamInput,
   ThreadLogChunk,
@@ -404,6 +405,7 @@ export interface GaryxDesktopApi {
   archiveThread: (input: ArchiveThreadInput) => Promise<DesktopState>;
   deleteThread: (input: DeleteThreadInput) => Promise<DesktopState>;
   setThreadPinned: (input: SetThreadPinnedInput) => Promise<DesktopState>;
+  setThreadPinOrder: (input: SetThreadPinOrderInput) => Promise<DesktopState>;
   getThreadHistory: (
     input: string | GetThreadHistoryInput,
   ) => Promise<ThreadTranscript>;

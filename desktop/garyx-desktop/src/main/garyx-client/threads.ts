@@ -2,6 +2,7 @@ import type {
   DesktopSettings,
   DesktopRecentThreadsPage,
   DesktopThreadProviderType,
+  DesktopThreadPinsPage,
   DesktopThreadSummary,
   GetThreadHistoryInput,
   ListRecentThreadsInput,
@@ -14,6 +15,7 @@ import type {
   TranscriptMessage,
 } from "@shared/contracts";
 import {
+  GatewayRequestError,
   GatewayContractError,
   REMOTE_STATE_FETCH_TIMEOUT_MS,
   asBoolean,
@@ -29,6 +31,7 @@ import {
   requireContractNonNegativeInteger,
   requireContractRecord,
   requireContractString,
+  tryParseJson,
 } from "./http.ts";
 
 const DEFAULT_THREAD_HISTORY_PAGE_SIZE = 100;
@@ -1108,7 +1111,7 @@ export async function fetchThreadSummary(
   }
 }
 
-function mapThreadPinIds(value: unknown): string[] {
+export function mapThreadPinsPage(value: unknown): DesktopThreadPinsPage {
   const payload = requireContractRecord(value, "thread pins");
   const rawIds = requireContractArray(
     requireContractField(payload, "thread_ids", "thread pins"),
@@ -1127,23 +1130,29 @@ function mapThreadPinIds(value: unknown): string[] {
     seen.add(id);
     ids.push(id);
   }
-  return ids;
+  return {
+    threadIds: ids,
+    revision: requireContractNonNegativeInteger(
+      requireContractField(payload, "revision", "thread pins"),
+      "thread pins.revision",
+    ),
+  };
 }
 
 export async function fetchThreadPins(
   settings: DesktopSettings,
-): Promise<string[]> {
+): Promise<DesktopThreadPinsPage> {
   const payload = await requestJson<unknown>(settings, "/api/thread-pins", {
     signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
   });
-  return mapThreadPinIds(payload);
+  return mapThreadPinsPage(payload);
 }
 
 export async function setRemoteThreadPinned(
   settings: DesktopSettings,
   threadId: string,
   pinned: boolean,
-): Promise<string[]> {
+): Promise<DesktopThreadPinsPage> {
   const payload = await requestJson<unknown>(
     settings,
     `/api/thread-pins/${encodeURIComponent(threadId)}`,
@@ -1152,7 +1161,33 @@ export async function setRemoteThreadPinned(
       signal: AbortSignal.timeout(8000),
     },
   );
-  return mapThreadPinIds(payload);
+  return mapThreadPinsPage(payload);
+}
+
+export async function reorderRemoteThreadPins(
+  settings: DesktopSettings,
+  threadIds: string[],
+  expectedRevision: number,
+): Promise<{ kind: "accepted" | "conflict"; page: DesktopThreadPinsPage }> {
+  try {
+    const payload = await requestJson<unknown>(settings, "/api/thread-pins", {
+      method: "PUT",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({
+        thread_ids: threadIds,
+        expected_revision: expectedRevision,
+      }),
+    });
+    return { kind: "accepted", page: mapThreadPinsPage(payload) };
+  } catch (error) {
+    if (error instanceof GatewayRequestError && error.status === 409) {
+      const payload = tryParseJson<unknown>(error.body);
+      if (payload !== null) {
+        return { kind: "conflict", page: mapThreadPinsPage(payload) };
+      }
+    }
+    throw error;
+  }
 }
 
 export async function createRemoteThread(

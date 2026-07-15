@@ -20,6 +20,7 @@ import {
   listTasks,
   listWorkspaceFiles,
   openChatStream,
+  reorderRemoteThreadPins,
   sendStreamingInput,
   setGatewayFetch,
 } from "./gary-client.ts";
@@ -451,7 +452,7 @@ test("thread log chunks stay camelCase and thread pins stay snake_case", async (
     async (url) => {
       const path = new URL(String(url)).pathname;
       return path === "/api/thread-pins"
-        ? jsonResponse({ thread_ids: ["thread::pinned-test"], pins: [] })
+        ? jsonResponse({ thread_ids: ["thread::pinned-test"], pins: [], revision: 7 })
         : jsonResponse({
             threadId: "thread::log-test",
             path: "/Users/test/.garyx/logs/thread-test.log",
@@ -462,7 +463,10 @@ test("thread log chunks stay camelCase and thread pins stay snake_case", async (
     },
     async () => {
       assert.equal((await fetchThreadLogs(settings, "thread::log-test")).cursor, 18);
-      assert.deepEqual(await fetchThreadPins(settings), ["thread::pinned-test"]);
+      assert.deepEqual(await fetchThreadPins(settings), {
+        threadIds: ["thread::pinned-test"],
+        revision: 7,
+      });
     },
   );
 
@@ -480,6 +484,51 @@ test("thread log chunks stay camelCase and thread pins stay snake_case", async (
         () => fetchThreadLogs(settings, "thread::log-test"),
         /thread log chunk\.threadId is required/,
       ),
+  );
+});
+
+test("thread pin reorder sends the revision CAS body and returns 409 pages", async () => {
+  const requests = [];
+  await withGatewayFetch(
+    async (url, init) => {
+      requests.push({
+        path: new URL(String(url)).pathname,
+        method: init?.method,
+        body: JSON.parse(String(init?.body)),
+      });
+      return jsonResponse(
+        {
+          thread_ids: ["thread::b", "thread::a"],
+          pins: [],
+          revision: 12,
+        },
+        409,
+      );
+    },
+    async () => {
+      const result = await reorderRemoteThreadPins(
+        settings,
+        ["thread::b", "thread::a"],
+        11,
+      );
+      assert.deepEqual(result, {
+        kind: "conflict",
+        page: {
+          threadIds: ["thread::b", "thread::a"],
+          revision: 12,
+        },
+      });
+      assert.deepEqual(requests, [
+        {
+          path: "/api/thread-pins",
+          method: "PUT",
+          body: {
+            thread_ids: ["thread::b", "thread::a"],
+            expected_revision: 11,
+          },
+        },
+      ]);
+    },
   );
 });
 
