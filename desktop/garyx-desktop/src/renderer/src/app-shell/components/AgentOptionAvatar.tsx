@@ -61,7 +61,7 @@ export function AgentOptionAvatar({
   agentId,
   avatarDataUrl,
   className,
-  kind = 'agent',
+  kind: _kind = 'agent',
   label,
   providerIcon,
   providerType,

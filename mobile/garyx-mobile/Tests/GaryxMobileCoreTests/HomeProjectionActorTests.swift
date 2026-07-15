@@ -2,19 +2,17 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class HomeProjectionActorTests: XCTestCase {
-    func testCheckpointParityIgnoresLiveSummaryOnlyRunningMismatch() async throws {
+    func testRunTrackerBusyOverridesSummaryOnlyRunningState() async throws {
         let fixture = GaryxHomeListFixture.makeInputs(threadCount: 20, pinnedCount: 2, runningCount: 0)
         let legacyInput = GaryxHomeThreadListInput(
             fixture,
             isLoadingThreads: false,
             isHomeVisible: true
         )
-        let liveStore = GaryxHomeThreadListStore()
-        XCTAssertTrue(liveStore.apply(legacyInput))
         XCTAssertFalse(
-            try XCTUnwrap(liveStore.snapshot.sections.allRows.first { $0.id == "thread-10" })
-                .presentation
-                .isRunning
+            GaryxThreadSummaryRunStateResolver.isRunning(
+                try XCTUnwrap(fixture.threads.first { $0.id == "thread-10" })
+            )
         )
 
         let actor = HomeProjectionActor()
@@ -23,19 +21,12 @@ final class HomeProjectionActorTests: XCTestCase {
                 legacyInput: legacyInput,
                 runTrackerBusyThreadIds: ["thread-10"]
             ),
-            transactionId: 1,
-            liveLegacySnapshot: liveStore.snapshot
+            transactionId: 1
         )
 
         let actorRow = try XCTUnwrap(result.snapshot.sections.allRows.first { $0.id == "thread-10" })
         XCTAssertTrue(actorRow.presentation.isRunning)
-        XCTAssertEqual(result.parityMismatchCount, 0)
-        XCTAssertNil(result.latestParityMismatch)
         XCTAssertEqual(result.snapshotEmitCount, 1)
-        XCTAssertFalse(
-            try XCTUnwrap(result.liveLegacyDiagnostics).matchesActorSnapshot,
-            "The live store is summary-only today; M2 parity must treat this as diagnostics, not a gate."
-        )
     }
 
     @MainActor
@@ -75,7 +66,6 @@ final class HomeProjectionActorTests: XCTestCase {
         let result = try XCTUnwrap(gateway.latestResult)
         XCTAssertEqual(result.snapshotEmitCount, 1)
         XCTAssertEqual(gateway.snapshotEmitCount, 1)
-        XCTAssertEqual(result.parityMismatchCount, 0)
         XCTAssertEqual(result.snapshot.sections.allRows.filter { $0.presentation.isRunning }.count, 0)
         XCTAssertTrue(result.snapshot.isHomeVisible)
     }
@@ -103,7 +93,6 @@ final class HomeProjectionActorTests: XCTestCase {
 
         let result = try XCTUnwrap(gateway.latestResult)
         XCTAssertLessThanOrEqual(result.snapshotEmitCount, 2)
-        XCTAssertEqual(result.parityMismatchCount, 0)
         let selectedRows = result.snapshot.sections.allRows.filter { $0.presentation.isSelected }
         XCTAssertEqual(selectedRows.map(\.id), ["thread-30"])
         XCTAssertTrue(
@@ -164,7 +153,6 @@ final class HomeProjectionActorTests: XCTestCase {
 
         XCTAssertNil(gateway.latestResult)
         XCTAssertEqual(gateway.snapshotEmitCount, 0)
-        XCTAssertEqual(gateway.parityMismatchCount, 0)
     }
 
     func testFilterAndPhasePublishWhenBothFeedsHaveIdenticalIds() async throws {
@@ -209,7 +197,6 @@ final class HomeProjectionActorTests: XCTestCase {
         XCTAssertEqual(result.snapshot.selectedRecentFilter, .nonTask)
         XCTAssertTrue(result.snapshot.recentFeedPresentation.headFailure)
         XCTAssertEqual(result.snapshot.sections.recent.map(\.id), fixture.recentThreadIds)
-        XCTAssertEqual(result.parityMismatchCount, 0)
     }
 }
 

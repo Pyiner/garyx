@@ -227,9 +227,6 @@ impl MultiProviderBridge {
         topology
             .provider_pool
             .retain(|provider_key, _| desired_provider_keys.contains(provider_key));
-        topology
-            .provider_health
-            .retain(|provider_key, _| desired_provider_keys.contains(provider_key));
         let retained_provider_keys: HashSet<String> =
             topology.provider_pool.keys().cloned().collect();
         let provider_count = topology.provider_pool.len();

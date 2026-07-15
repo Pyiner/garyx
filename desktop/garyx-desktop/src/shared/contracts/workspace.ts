@@ -70,35 +70,6 @@ export interface DesktopWorkspaceGitStatus {
   isDirty: boolean;
 }
 
-export interface DesktopWorkspaceGitFile {
-  path: string;
-  status: string;
-}
-
-export interface DesktopWorkspaceGitDetails extends DesktopWorkspaceGitStatus {
-  ahead: number;
-  behind: number;
-  changedCount: number;
-  stagedCount: number;
-  unstagedCount: number;
-  untrackedCount: number;
-  files: DesktopWorkspaceGitFile[];
-}
-
-export interface CommitWorkspaceChangesInput {
-  workspacePath: string;
-  message: string;
-}
-
-export interface PushWorkspaceBranchInput {
-  workspacePath: string;
-}
-
-export interface WorkspaceGitMutationResult {
-  status: DesktopWorkspaceGitDetails;
-  output: string;
-}
-
 export interface ListWorkspaceFilesInput {
   workspacePath: string;
   directoryPath?: string;

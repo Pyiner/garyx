@@ -8,11 +8,6 @@ import {
 } from "react";
 import { FileText } from "lucide-react";
 
-import type {
-  MessageFileAttachment,
-  MessageImageAttachment,
-} from "@shared/contracts";
-
 import {
   Dialog,
   DialogContent,

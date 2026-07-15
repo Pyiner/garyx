@@ -76,15 +76,6 @@ function coerceInteger(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function coerceNumber(value: unknown, fallback: number): number {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
-  const parsed = Number.parseFloat(String(value ?? ''));
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
 function coerceOptionalString(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
   return text ? text : null;

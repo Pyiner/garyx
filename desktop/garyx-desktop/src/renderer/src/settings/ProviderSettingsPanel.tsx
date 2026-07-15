@@ -50,7 +50,6 @@ import {
   usageResetText,
 } from '../provider-usage';
 import { classNames } from './shared';
-import { SettingsControlRow } from './shared-components';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
 type GatewaySettingsSaveOptions = {
@@ -146,10 +145,6 @@ const PROVIDER_MODEL_TYPES = Array.from(
 );
 
 const METERED_MODEL_PROVIDER_ROWS = MODEL_PROVIDER_ROWS.filter((row) => row.usageProviderId);
-
-function providerTypeValue(provider: any): string {
-  return String(provider?.provider_type || 'claude_code');
-}
 
 function fixedModelProviderRow(key: FixedModelProviderKey): FixedModelProviderRow {
   return MODEL_PROVIDER_ROWS.find((row) => row.key === key) || MODEL_PROVIDER_ROWS[0];
@@ -295,71 +290,6 @@ function modelProviderDraftFromState(
     model: configModel,
     modelReasoningEffort: configReasoning,
   };
-}
-
-type AgentProviderFieldsProps = {
-  provider: any;
-  onMutate: (mutator: (provider: any) => void) => void;
-};
-
-function AgentProviderFields({
-  provider,
-  onMutate,
-}: AgentProviderFieldsProps) {
-  const { t } = useI18n();
-  const providerType = providerTypeValue(provider);
-
-  return (
-    <div className="codex-section">
-      <div className="codex-section-header">
-        <span className="codex-section-title">{t('Agent Provider')}</span>
-        <span className="codex-section-note">{t('Provider runtime')}</span>
-      </div>
-      <div className="codex-list-card">
-        <SettingsControlRow
-          control={
-            <Select
-              value={providerType}
-              onValueChange={(value) => {
-                onMutate((next) => {
-                  next.provider_type = value;
-                });
-              }}
-            >
-              <SelectTrigger className="w-full rounded-[14px] border-[#e7e7e5] bg-white text-[13px] shadow-none">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="claude_code">claude_code</SelectItem>
-                  <SelectItem value="codex_app_server">codex_app_server</SelectItem>
-                  <SelectItem value="traex">traex</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          }
-          description={t('Select the runtime backing this bot.')}
-          label="provider_type"
-        />
-        <SettingsControlRow
-          control={
-            <Input
-              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-              value={String(provider?.workspace_dir || '')}
-              onChange={(event) => {
-                onMutate((next) => {
-                  next.workspace_dir = event.target.value.trim() || null;
-                });
-              }}
-            />
-          }
-          description={t('Workspace bound to this bot. When the bot creates its first thread, that thread starts in this workspace.')}
-          label="workspace_dir"
-          stacked
-        />
-      </div>
-    </div>
-  );
 }
 
 type ProviderSettingsPanelProps = {

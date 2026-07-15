@@ -33,17 +33,6 @@ export interface ConnectionStatus {
   error?: string;
 }
 
-export interface GatewayProbeResult {
-  ok: boolean;
-  isGaryGateway: boolean;
-  gatewayUrl: string;
-  path: string;
-  version?: string;
-  host?: string;
-  port?: number;
-  error?: string;
-}
-
 export type GatewayConfigDocument = Record<string, unknown>;
 
 export type GatewaySettingsSource = "local_file" | "gateway_api";

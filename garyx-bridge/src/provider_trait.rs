@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::time::Instant;
 
 use async_trait::async_trait;
 use garyx_models::provider::{
@@ -200,101 +199,6 @@ pub struct ProviderMeta {
     pub provider_key: String,
     /// Arbitrary metadata carried alongside the provider.
     pub extra: HashMap<String, Value>,
-}
-
-// ---------------------------------------------------------------------------
-// ProviderHealth — per-provider health tracking
-// ---------------------------------------------------------------------------
-
-/// Health status for a single provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HealthStatus {
-    /// Provider is functioning normally.
-    Healthy,
-    /// Provider has experienced recent failures but is still usable.
-    Degraded,
-    /// Provider is completely unavailable.
-    Unavailable,
-}
-
-/// Tracks health metrics for a provider over a sliding window.
-#[derive(Debug, Clone)]
-pub struct ProviderHealth {
-    pub provider_key: String,
-    pub status: HealthStatus,
-    pub total_runs: u64,
-    pub successful_runs: u64,
-    pub failed_runs: u64,
-    pub consecutive_failures: u32,
-    pub last_error: Option<String>,
-    pub last_success_time: Option<Instant>,
-    pub last_failure_time: Option<Instant>,
-    pub avg_latency_ms: f64,
-}
-
-impl ProviderHealth {
-    /// Create a new healthy provider tracker.
-    pub fn new(provider_key: impl Into<String>) -> Self {
-        Self {
-            provider_key: provider_key.into(),
-            status: HealthStatus::Healthy,
-            total_runs: 0,
-            successful_runs: 0,
-            failed_runs: 0,
-            consecutive_failures: 0,
-            last_error: None,
-            last_success_time: None,
-            last_failure_time: None,
-            avg_latency_ms: 0.0,
-        }
-    }
-
-    /// Record a successful run.
-    pub fn record_success(&mut self, latency_ms: f64) {
-        self.total_runs += 1;
-        self.successful_runs += 1;
-        self.consecutive_failures = 0;
-        self.last_success_time = Some(Instant::now());
-        self.update_latency(latency_ms);
-        self.recompute_status();
-    }
-
-    /// Record a failed run.
-    pub fn record_failure(&mut self, error: &str) {
-        self.total_runs += 1;
-        self.failed_runs += 1;
-        self.consecutive_failures += 1;
-        self.last_error = Some(error.to_owned());
-        self.last_failure_time = Some(Instant::now());
-        self.recompute_status();
-    }
-
-    /// Success rate as a fraction (0.0 to 1.0).
-    pub fn success_rate(&self) -> f64 {
-        if self.total_runs == 0 {
-            return 1.0;
-        }
-        self.successful_runs as f64 / self.total_runs as f64
-    }
-
-    fn update_latency(&mut self, latency_ms: f64) {
-        if self.successful_runs <= 1 {
-            self.avg_latency_ms = latency_ms;
-        } else {
-            // Exponential moving average (alpha = 0.3)
-            self.avg_latency_ms = 0.7 * self.avg_latency_ms + 0.3 * latency_ms;
-        }
-    }
-
-    fn recompute_status(&mut self) {
-        if self.consecutive_failures >= 5 {
-            self.status = HealthStatus::Unavailable;
-        } else if self.consecutive_failures >= 2 || self.success_rate() < 0.5 {
-            self.status = HealthStatus::Degraded;
-        } else {
-            self.status = HealthStatus::Healthy;
-        }
-    }
 }
 
 #[cfg(test)]

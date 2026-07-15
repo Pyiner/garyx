@@ -101,6 +101,7 @@ struct HomeProjectionState: Equatable, Sendable {
         return ids
     }
 
+    /// Test-oracle support: builds the legacy fallback input for reducer equivalence checks.
     func legacyCheckpointInput() -> GaryxHomeThreadListInput {
         GaryxHomeThreadListInput(
             sectionsInput: sectionsInput,

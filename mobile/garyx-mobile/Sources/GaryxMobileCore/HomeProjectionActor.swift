@@ -200,82 +200,17 @@ struct HomeProjectionBoundaryResult: Equatable, Sendable {
     var snapshot: HomeSnapshot
     var difference: CollectionDifference<String>?
     var snapshotEmitCount: Int
-    var parityMismatchCount: Int
-    var latestParityMismatch: HomeProjectionParityMismatch?
-    var liveLegacyDiagnostics: HomeProjectionLiveLegacyDiagnostics?
-}
-
-struct HomeProjectionParityMismatch: Equatable, Sendable {
-    var transactionId: UInt64
-    var appliedSeq: Int
-    var actorCheckpoint: HomeProjectionCheckpoint
-    var legacyCheckpoint: HomeProjectionCheckpoint
-}
-
-struct HomeProjectionCheckpoint: Equatable, Sendable {
-    var sections: GaryxHomeThreadSections
-    var isLoadingThreads: Bool
-    var isHomeVisible: Bool
-    var selectedRecentFilter: GaryxRecentThreadFilter
-    var recentFeedPresentation: GaryxRecentThreadFeedPresentation
-    var counters: HomeProjectionSnapshotCounters
-
-    init(snapshot: HomeSnapshot) {
-        sections = snapshot.sections
-        isLoadingThreads = snapshot.isLoadingThreads
-        isHomeVisible = snapshot.isHomeVisible
-        selectedRecentFilter = snapshot.selectedRecentFilter
-        recentFeedPresentation = snapshot.recentFeedPresentation
-        counters = HomeProjectionSnapshotCounters(sections: snapshot.sections)
-    }
-
-    init(snapshot: GaryxHomeThreadListSnapshot) {
-        sections = snapshot.sections
-        isLoadingThreads = snapshot.isLoadingThreads
-        isHomeVisible = snapshot.isHomeVisible
-        selectedRecentFilter = snapshot.selectedRecentFilter
-        recentFeedPresentation = snapshot.recentFeedPresentation
-        counters = HomeProjectionSnapshotCounters(sections: snapshot.sections)
-    }
-}
-
-struct HomeProjectionSnapshotCounters: Equatable, Sendable {
-    var pinnedRowCount: Int
-    var recentRowCount: Int
-    var totalRowCount: Int
-    var selectedRowCount: Int
-    var runningRowCount: Int
-    var archiveableRowCount: Int
-
-    init(sections: GaryxHomeThreadSections) {
-        pinnedRowCount = sections.pinned.count
-        recentRowCount = sections.recent.count
-        let rows = sections.allRows
-        totalRowCount = rows.count
-        selectedRowCount = rows.filter { $0.presentation.isSelected }.count
-        runningRowCount = rows.filter { $0.presentation.isRunning }.count
-        archiveableRowCount = rows.filter { $0.canArchive }.count
-    }
-}
-
-struct HomeProjectionLiveLegacyDiagnostics: Equatable, Sendable {
-    var matchesActorSnapshot: Bool
-    var checkpoint: HomeProjectionCheckpoint
 }
 
 actor HomeProjectionActor {
     private var state = HomeProjectionState()
     private var previousCapture: HomeProjectionCapture?
-    private var checkpointStore = GaryxHomeThreadListStore()
     private var boundaryEpoch = 0
     private(set) var snapshotEmitCount = 0
-    private(set) var parityMismatchCount = 0
-    private(set) var latestParityMismatch: HomeProjectionParityMismatch?
 
     func applyBoundary(
         capture: HomeProjectionCapture,
-        transactionId: UInt64,
-        liveLegacySnapshot: GaryxHomeThreadListSnapshot? = nil
+        transactionId: UInt64
     ) -> HomeProjectionBoundaryResult {
         boundaryEpoch += 1
         let events = capture.events(comparedTo: previousCapture, epoch: boundaryEpoch)
@@ -288,8 +223,7 @@ actor HomeProjectionActor {
         previousCapture = capture
         return finishBoundary(
             transactionId: transactionId,
-            latestDifference: latestDifference,
-            liveLegacySnapshot: liveLegacySnapshot
+            latestDifference: latestDifference
         )
     }
 
@@ -311,46 +245,21 @@ actor HomeProjectionActor {
         state = result.state
         return finishBoundary(
             transactionId: transactionId,
-            latestDifference: result.difference,
-            liveLegacySnapshot: nil
+            latestDifference: result.difference
         )
     }
 
     private func finishBoundary(
         transactionId: UInt64,
-        latestDifference: CollectionDifference<String>?,
-        liveLegacySnapshot: GaryxHomeThreadListSnapshot?
+        latestDifference: CollectionDifference<String>?
     ) -> HomeProjectionBoundaryResult {
         snapshotEmitCount += 1
-        let actorCheckpoint = HomeProjectionCheckpoint(snapshot: state.snapshot)
-        _ = checkpointStore.apply(state.legacyCheckpointInput())
-        let legacyCheckpoint = HomeProjectionCheckpoint(snapshot: checkpointStore.snapshot)
-        if actorCheckpoint != legacyCheckpoint {
-            parityMismatchCount += 1
-            latestParityMismatch = HomeProjectionParityMismatch(
-                transactionId: transactionId,
-                appliedSeq: state.snapshot.appliedSeq,
-                actorCheckpoint: actorCheckpoint,
-                legacyCheckpoint: legacyCheckpoint
-            )
-        }
-
-        let liveDiagnostics = liveLegacySnapshot.map { snapshot in
-            HomeProjectionLiveLegacyDiagnostics(
-                matchesActorSnapshot: HomeProjectionCheckpoint(snapshot: snapshot) == actorCheckpoint,
-                checkpoint: HomeProjectionCheckpoint(snapshot: snapshot)
-            )
-        }
-
         return HomeProjectionBoundaryResult(
             transactionId: transactionId,
             appliedSeq: state.snapshot.appliedSeq,
             snapshot: state.snapshot,
             difference: latestDifference,
-            snapshotEmitCount: snapshotEmitCount,
-            parityMismatchCount: parityMismatchCount,
-            latestParityMismatch: latestParityMismatch,
-            liveLegacyDiagnostics: liveDiagnostics
+            snapshotEmitCount: snapshotEmitCount
         )
     }
 }
@@ -360,7 +269,7 @@ final class HomeProjectionGateway {
     typealias ResultHandler = @MainActor (HomeProjectionBoundaryResult) -> Void
 
     private enum BoundaryPayload: Sendable {
-        case capture(HomeProjectionCapture, GaryxHomeThreadListSnapshot?)
+        case capture(HomeProjectionCapture)
         case committedRunStateDelta(threadId: String, isRunning: Bool)
     }
 
@@ -381,7 +290,6 @@ final class HomeProjectionGateway {
 
     private(set) var latestResult: HomeProjectionBoundaryResult?
     private(set) var snapshotEmitCount = 0
-    private(set) var parityMismatchCount = 0
 
     init(
         actor: HomeProjectionActor = HomeProjectionActor(),
@@ -420,21 +328,18 @@ final class HomeProjectionGateway {
         }
     }
 
-    func capture(
-        _ capture: HomeProjectionCapture,
-        liveLegacySnapshot: GaryxHomeThreadListSnapshot? = nil
-    ) {
+    func capture(_ capture: HomeProjectionCapture) {
         guard isEnabled else { return }
         if transactionDepth > 0, let transactionId = activeTransactionId {
             pendingTransactionBoundary = Boundary(
                 transactionId: transactionId,
-                payload: .capture(capture, liveLegacySnapshot)
+                payload: .capture(capture)
             )
             return
         }
         enqueue(Boundary(
             transactionId: allocateTransactionId(),
-            payload: .capture(capture, liveLegacySnapshot)
+            payload: .capture(capture)
         ))
     }
 
@@ -469,11 +374,10 @@ final class HomeProjectionGateway {
         inFlightTask = Task { [actor] in
             let result: HomeProjectionBoundaryResult
             switch boundary.payload {
-            case let .capture(capture, liveLegacySnapshot):
+            case let .capture(capture):
                 result = await actor.applyBoundary(
                     capture: capture,
-                    transactionId: boundary.transactionId,
-                    liveLegacySnapshot: liveLegacySnapshot
+                    transactionId: boundary.transactionId
                 )
             case let .committedRunStateDelta(threadId, isRunning):
                 result = await actor.applyCommittedRunStateDelta(
@@ -491,7 +395,6 @@ final class HomeProjectionGateway {
     private func finishDrain(_ result: HomeProjectionBoundaryResult) {
         latestResult = result
         snapshotEmitCount = result.snapshotEmitCount
-        parityMismatchCount = result.parityMismatchCount
         resultHandler?(result)
         inFlightTask = nil
         startDrainIfNeeded()

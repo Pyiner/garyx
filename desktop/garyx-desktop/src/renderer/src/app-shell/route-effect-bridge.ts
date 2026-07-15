@@ -77,7 +77,6 @@ type RouteEffectBridgeArgs = {
 };
 
 export function useRouteEffectBridge({
-  clearComposerDraft,
   desktopState,
   desktopRouteStore,
   ensureThreadOpenable,
@@ -87,13 +86,10 @@ export function useRouteEffectBridge({
   openExistingThread,
   enterNewThreadDraft,
   pushToast,
-  requestComposerFocus,
   selectedThreadId,
   selectThreadRequestSequenceRef,
   setConnection,
   setNewThreadDraftActive,
-  setPendingAgentId,
-  setPendingBotId,
   setPendingWorkspaceMode,
   setPendingWorkspacePath,
   setSelectedThreadId,

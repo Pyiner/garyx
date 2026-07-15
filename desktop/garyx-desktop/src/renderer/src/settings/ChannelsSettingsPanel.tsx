@@ -7,7 +7,6 @@ import type {
   DesktopWorkspace,
   GatewaySettingsSource,
 } from '@shared/contracts';
-import { defaultChannelAgentId } from '@renderer/gateway-settings';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,11 +17,11 @@ import { Switch } from '@/components/ui/switch';
 import { buildAgentTargetOptions, type AgentTargetOption } from '../app-shell/agent-options';
 import { AddBotDialog } from '../app-shell/components/AddBotDialog';
 import { AgentOptionAvatar } from '../app-shell/components/AgentOptionAvatar';
-import { EditBotDialog, type EditBotDialogContext, type EditBotPatch } from '../app-shell/components/EditBotDialog';
+import { EditBotDialog, type EditBotDialogContext } from '../app-shell/components/EditBotDialog';
 import { MoreDotsIcon } from '../app-shell/icons';
 import { ChannelPluginCatalogPanel } from '../channel-plugins/ChannelPluginCatalogPanel';
 import { useChannelPluginCatalog } from '../channel-plugins/useChannelPluginCatalog';
-import { useI18n, type Translate } from '../i18n';
+import { useI18n } from '../i18n';
 import { classNames, noopAsync } from './shared';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
@@ -75,9 +74,9 @@ function sortedAgentTargets(
 }
 
 function resolveChannelAgentId(
-  config: any,
-  channel: string,
-  accountId: string,
+  _config: any,
+  _channel: string,
+  _accountId: string,
   provider: any,
   agents: DesktopCustomAgent[],
 ): string {
@@ -132,17 +131,6 @@ function preferredStandaloneAgentId(
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-
-function compactPathLabel(value: unknown): string | null {
-  const path = typeof value === 'string' ? value.trim() : '';
-  if (!path) {
-    return null;
-  }
-
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] || path;
-}
-
 
 type ChannelsSettingsPanelProps = {
   agents?: DesktopCustomAgent[];

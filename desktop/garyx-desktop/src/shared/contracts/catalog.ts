@@ -129,12 +129,6 @@ export interface CreateSkillInput {
   body: string;
 }
 
-export interface UpdateSkillInput {
-  skillId: string;
-  name: string;
-  description: string;
-}
-
 export interface ToggleSkillInput {
   skillId: string;
 }

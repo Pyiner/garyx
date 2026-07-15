@@ -9,7 +9,7 @@ export function useBotConsoleState(route: Extract<WebRoute, { view: 'bot-console
   const [groups, setGroups] = useState<DesktopBotConsoleSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
+  const [status] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);

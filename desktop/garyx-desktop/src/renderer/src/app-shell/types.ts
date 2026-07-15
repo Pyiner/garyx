@@ -1,5 +1,4 @@
 import type {
-  DesktopAutomationActivityFeed,
   DesktopAutomationSchedule,
   DesktopBotConsoleSummary,
   DesktopChannelEndpoint,

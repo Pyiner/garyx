@@ -78,10 +78,6 @@ export interface BrowserAnnotationCommentRequest {
   screenshot?: CaptureBrowserTabResult | null;
 }
 
-export interface CopyImageToClipboardInput {
-  dataUrl: string;
-}
-
 export interface CopyTextToClipboardInput {
   text: string;
 }

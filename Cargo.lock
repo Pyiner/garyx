@@ -945,11 +945,7 @@ name = "garyx-core"
 version = "0.1.32"
 dependencies = [
  "garyx-models",
- "once_cell",
- "regex",
  "serde_json",
- "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]

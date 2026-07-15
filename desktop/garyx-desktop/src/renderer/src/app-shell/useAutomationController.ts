@@ -100,12 +100,11 @@ export function useAutomationController({
   selectedThreadId,
   setDesktopState,
   setError,
-  setNewThreadDraftActive,
   setSelectedThreadId,
   setPendingAutomationRun,
   reconcilePendingAutomationRun,
 }: UseAutomationControllerArgs) {
-  const [automationActivityById, setAutomationActivityById] = useState<
+  const [, setAutomationActivityById] = useState<
     Record<string, DesktopAutomationActivityFeed>
   >({});
   const [automationActivityLoadingId, setAutomationActivityLoadingId] = useState<string | null>(

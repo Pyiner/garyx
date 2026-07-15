@@ -11,14 +11,9 @@ mount** — import a component and render it; tokens resolve from `:root`. Just 
 `styles.css` is loaded on the page.
 
 ```jsx
-import { Button, Card, CardHeader, CardTitle, CardContent } from 'garyx-desktop';
+import { Button } from 'garyx-desktop';
 
-<Card>
-  <CardHeader><CardTitle>Claude Code</CardTitle></CardHeader>
-  <CardContent>
-    <Button>New thread</Button>
-  </CardContent>
-</Card>
+<Button>New thread</Button>
 ```
 
 ## Styling idiom — compose components, use the CSS token variables for your own layout
@@ -67,14 +62,14 @@ design time. Two safe ways to style:
   Read those before composing a component you haven't used.
 
 ## Components available
-Avatar, Badge, Button, Card, Checkbox, Dialog, DropdownMenu, Field, FloatingActionMenuContent,
+Avatar, Badge, Button, Checkbox, Dialog, DropdownMenu, Field, FloatingActionMenuContent,
 Input, Label, Popover, Select, Separator, Switch, Table, Textarea, Toggle, ToggleGroup — plus
-their compound parts (e.g. `CardHeader`/`CardContent`, `DialogContent`/`DialogFooter`,
+their compound parts (e.g. `DialogContent`/`DialogFooter`,
 `SelectTrigger`/`SelectItem`, `TableHeader`/`TableRow`/`TableCell`), all named exports of
 `garyx-desktop`. `Button` and `Badge` take a `variant` prop (default / secondary / outline /
 ghost / link / destructive); overlays (`Dialog`, `DropdownMenu`, `Popover`) follow the radix
 trigger+content composition.
 
-App-shell composites are also exported: `AgentAvatar`, `ProviderAgentIcon`, `AgentOptionAvatar`
+App-shell composites are also exported: `ProviderAgentIcon`, `AgentOptionAvatar`
 (agent/team identity marks) and `RateLimitBanner` (quota banner) — these carry app-specific
 styling and read simple data props.

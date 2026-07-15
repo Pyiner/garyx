@@ -113,7 +113,6 @@ export function WebSettingsPage({
   status,
   onChangeJson,
   onPatchGateway,
-  onPatchSessions,
   onAddTelegramAccount,
   onRemoveTelegramAccount,
   onPatchTelegramAccount,
@@ -128,15 +127,12 @@ export function WebSettingsPage({
   const gateway = asRecord(config.gateway);
   const sessions = asRecord(config.sessions);
   const channels = flatChannelMap(asRecord(config.channels));
-  const publicUrl = String(gateway.public_url || '').trim();
   const channelConfigs = Object.fromEntries(Object.entries(channels).filter(([channelId]) => channelId !== 'api'));
   const telegramAccountsMap = channelAccountsMap(channels, 'telegram');
   const feishuAccountsMap = channelAccountsMap(channels, 'feishu');
   const totalPluginAccounts = Object.values(channelConfigs).reduce<number>((sum, pluginValue) => {
     return sum + countAccounts(asRecord(asRecord(pluginValue).accounts));
   }, 0);
-  const telegramAccounts = countAccounts(telegramAccountsMap);
-  const feishuAccounts = countAccounts(feishuAccountsMap);
   const telegramEntries = Object.entries(telegramAccountsMap);
   const feishuEntries = Object.entries(feishuAccountsMap);
   const botParts = (focusedBotId || '').split('::');

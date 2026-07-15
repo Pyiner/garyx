@@ -4,15 +4,9 @@ import { Pencil, Plus, RefreshCw, Server, Trash } from 'lucide-react';
 
 import {
   DEFAULT_DESKTOP_SETTINGS,
-  type ChannelPluginCatalogEntry,
   type ConnectionStatus,
-  type DesktopApiProviderType,
-  type DesktopCodingUsage,
   type DesktopCustomAgent,
   type DesktopFollowUpBehavior,
-  type DesktopProviderModelOption,
-  type DesktopProviderModels,
-  type DesktopProviderUsage,
   type DesktopWorkspace,
   type DesktopGatewayProfile,
   type DesktopSettings,
@@ -21,7 +15,6 @@ import {
   type DesktopUpdateStatus,
   type GatewayConfigDocument,
   type GatewaySettingsSource,
-  type McpTransportType,
   type SlashCommand,
   type UpdateMcpServerInput,
   type UpdateSlashCommandInput,
@@ -29,8 +22,6 @@ import {
   type UpsertSlashCommandInput,
 } from '@shared/contracts';
 
-import { defaultChannelAgentId } from '@renderer/gateway-settings';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -47,7 +38,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
@@ -56,27 +46,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Switch } from '@/components/ui/switch';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { AddBotDialog } from './app-shell/components/AddBotDialog';
-import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
 import { GatewayHeadersEditor } from './GatewayHeadersEditor';
-import { WorkspacePathPicker } from './components/WorkspacePathPicker';
 import { MoreDotsIcon } from './app-shell/icons';
-import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalogPanel';
-import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
-import { EditBotDialog, type EditBotDialogContext, type EditBotPatch } from './app-shell/components/EditBotDialog';
 import { languagePreferenceLabel, type Translate, useI18n } from './i18n';
-import { usageProviderIdForModelProviderKey } from './provider-usage';
 import { SETTINGS_TABS, type SettingsTabId } from './settings-tabs';
 import { CommandsSettingsPanel } from './settings/CommandsSettingsPanel';
 import { McpSettingsPanel } from './settings/McpSettingsPanel';
@@ -162,24 +135,6 @@ type GatewaySettingsPanelProps = {
   }) => Promise<void>;
 };
 
-function providerTypeValue(provider: any): string {
-  return String(provider?.provider_type || 'claude_code');
-}
-
-function providerTypeLabel(provider: any): string {
-  const value = providerTypeValue(provider);
-  if (value === 'codex_app_server') {
-    return 'codex';
-  }
-  if (value === 'antigravity') {
-    return 'antigravity';
-  }
-  if (value === 'traex') {
-    return 'traex';
-  }
-  return 'claude';
-}
-
 const noop = () => {};
 const noopAsync = async () => {};
 const noopAsyncBoolean = async () => false;
@@ -248,41 +203,12 @@ function updateStatusDisplay(
   }
 }
 
-type SummaryItem = {
-  label: string;
-  value: string;
-};
-
-type SummaryChipProps = SummaryItem;
 type SettingsFactTone = 'default' | 'success' | 'danger';
-
-type SettingsSectionProps = {
-  eyebrow: string;
-  title: string;
-  description?: string;
-  aside?: ReactNode;
-  children: ReactNode;
-  className?: string;
-};
 
 type SettingsFactProps = {
   label: string;
   value: string;
   tone?: SettingsFactTone;
-};
-
-type SettingsSummaryRowProps = {
-  label: string;
-  value: string;
-  details: string[];
-  tone?: SettingsFactTone;
-};
-
-type SettingsSurfaceProps = {
-  title?: string;
-  note?: ReactNode;
-  children: ReactNode;
-  className?: string;
 };
 
 type SettingsControlRowProps = {
@@ -293,152 +219,11 @@ type SettingsControlRowProps = {
   className?: string;
 };
 
-type SettingsSwitchProps = {
-  checked: boolean;
-  disabled?: boolean;
-  label: string;
-  onChange: (nextValue: boolean) => void;
-};
-
-function bindingAgentId(binding: any): string | null {
-  const raw = typeof binding?.agentId === 'string'
-    ? binding.agentId
-    : typeof binding?.agent_id === 'string'
-      ? binding.agent_id
-      : '';
-  const normalized = raw.trim();
-  return normalized || null;
-}
-
-function bindingMatch(binding: any): Record<string, any> {
-  return binding && typeof binding === 'object' && binding.match && typeof binding.match === 'object'
-    ? binding.match as Record<string, any>
-    : {};
-}
-
-function isAccountAgentBinding(binding: any, channel: string, accountId: string): boolean {
-  if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
-    return false;
-  }
-
-  const match = bindingMatch(binding);
-  const bindingChannel = typeof match.channel === 'string' ? match.channel.trim() : '';
-  const bindingAccountId = typeof match.accountId === 'string'
-    ? match.accountId.trim()
-    : typeof match.account_id === 'string'
-      ? match.account_id.trim()
-      : '';
-
-  if (bindingChannel !== channel || bindingAccountId !== accountId) {
-    return false;
-  }
-
-  return !match.peer && !match.guildId && !match.guild_id && !match.teamId && !match.team_id;
-}
-
-function findAccountAgentBinding(config: any, channel: string, accountId: string): any | null {
-  const bindings = Array.isArray(config?.agents?.bindings) ? config.agents.bindings : [];
-  return bindings.find((binding: any) => isAccountAgentBinding(binding, channel, accountId)) || null;
-}
-
-function upsertAccountAgentBinding(
-  config: any,
-  channel: string,
-  accountId: string,
-  agentId: string,
-): void {
-  if (!config.agents || typeof config.agents !== 'object' || Array.isArray(config.agents)) {
-    config.agents = {};
-  }
-
-  const currentBindings = Array.isArray(config.agents.bindings) ? config.agents.bindings : [];
-  const existing = currentBindings.find((binding: any) => isAccountAgentBinding(binding, channel, accountId));
-  const priority =
-    typeof existing?.priority === 'number' && Number.isFinite(existing.priority) ? existing.priority : 100;
-
-  config.agents.bindings = currentBindings.filter(
-    (binding: any) => !isAccountAgentBinding(binding, channel, accountId),
-  );
-
-  if (agentId.trim()) {
-    config.agents.bindings.push({
-      agentId: agentId.trim(),
-      match: {
-        channel,
-        accountId,
-      },
-      priority,
-    });
-  }
-}
-
-function syncAccountProviderWithTargetId(account: any, targetId: string | null): void {
-  account.agent_id = targetId?.trim() || defaultChannelAgentId();
-}
-
-function countRecordEntries(value: unknown): number {
-  return value && typeof value === 'object' ? Object.keys(value as Record<string, unknown>).length : 0;
-}
-
-function summarizeTelegramRules(account: any): SettingsSummaryRowProps {
-  const groups = account?.groups && typeof account.groups === 'object'
-    ? Object.values(account.groups as Record<string, any>)
-    : [];
-  const groupRuleCount = groups.length;
-  const topicRuleCount = groups.reduce((count, groupConfig) => {
-    return count + countRecordEntries(groupConfig?.topics);
-  }, 0);
-
-  const details: string[] = [];
-  if (groupRuleCount > 0) {
-    details.push(`${groupRuleCount} group override${groupRuleCount === 1 ? '' : 's'}`);
-  }
-  if (topicRuleCount > 0) {
-    details.push(`${topicRuleCount} topic override${topicRuleCount === 1 ? '' : 's'}`);
-  }
-
-  return {
-    label: 'Advanced rules',
-    value: details.length ? details[0] : 'Defaults only',
-    details: details.length
-      ? details
-      : ['No inline button allowlists or group/topic overrides configured.'],
-  };
-}
-
-function summarizeFeishuRules(account: any): SettingsSummaryRowProps {
-  const requireMention = account?.require_mention !== false;
-  const topicMode = String(account?.topic_session_mode || 'disabled');
-  const details = [
-    requireMention ? 'Requires @mention in group chats' : 'Responds to group chats without @mention',
-    topicMode === 'enabled' ? 'Group chats are split by topic' : 'Each group chat uses one session',
-  ];
-
-  return {
-    label: 'Group behavior',
-    value: details[0],
-    details,
-  };
-}
-
-
 function countNonEmptyLines(value: string): number {
   return value
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith('#')).length;
-}
-
-function SummaryChip({ label, value }: SummaryChipProps) {
-  return (
-    <Badge
-      variant="outline"
-      className="h-auto rounded-full border-border bg-secondary px-2 py-0.5 text-[11px] font-normal text-secondary-foreground shadow-none"
-    >
-      <span className="uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
-      <span>{value}</span>
-    </Badge>
-  );
 }
 
 function classNames(...values: Array<string | false | null | undefined>): string {
@@ -455,64 +240,6 @@ function SettingsFact({
       <span className="settings-fact-label">{label}</span>
       <strong>{value}</strong>
     </span>
-  );
-}
-
-function SettingsSummaryRow({
-  label,
-  value,
-  details,
-  tone = 'default',
-}: SettingsSummaryRowProps) {
-  const detailText = details.filter(Boolean).join(' · ');
-  const title = [label, value, detailText].filter(Boolean).join(' · ');
-
-  return (
-    <div
-      className={classNames('settings-summary-row', tone !== 'default' && `tone-${tone}`)}
-      title={title}
-    >
-      <span className="settings-summary-row-label">{label}</span>
-      <div className="settings-summary-row-content">
-        <strong className="settings-summary-row-value">{value}</strong>
-        {detailText ? <span className="settings-summary-row-details">{detailText}</span> : null}
-      </div>
-    </div>
-  );
-}
-
-function SettingsSwitch({
-  checked,
-  disabled = false,
-  label,
-  onChange,
-}: SettingsSwitchProps) {
-  return (
-    <Switch
-      aria-label={label}
-      checked={checked}
-      disabled={disabled}
-      onCheckedChange={onChange}
-    />
-  );
-}
-
-function SettingsSurface({
-  title,
-  note,
-  children,
-  className,
-}: SettingsSurfaceProps) {
-  return (
-    <div className={classNames('settings-surface-group', className)}>
-      {title || note ? (
-        <div className="settings-surface-heading">
-          {title ? <h4 className="settings-surface-title">{title}</h4> : <span />}
-          {note ? <div className="settings-surface-note">{note}</div> : null}
-        </div>
-      ) : null}
-      <div className="settings-surface-list">{children}</div>
-    </div>
   );
 }
 
@@ -678,29 +405,6 @@ function GatewayProfileDialog({
   );
 }
 
-function SettingsSection({
-  eyebrow,
-  title,
-  description,
-  aside,
-  children,
-  className,
-}: SettingsSectionProps) {
-  return (
-    <section className={classNames('panel settings-section', className)}>
-      <div className="panel-header settings-section-header">
-        <div className="settings-section-copy">
-          <span className="eyebrow">{eyebrow}</span>
-          <h3 className="settings-section-title">{title}</h3>
-          {description ? <p className="small-note">{description}</p> : null}
-        </div>
-        {aside ? <div className="settings-section-aside">{aside}</div> : null}
-      </div>
-      <div className="settings-section-body">{children}</div>
-    </section>
-  );
-}
-
 export function GatewaySettingsPanel({
   activeTab,
   commands = [],
@@ -720,7 +424,6 @@ export function GatewaySettingsPanel({
   gatewayStatusMessage = null,
   savingLocalSettings = false,
   agents = [],
-  skills = [],
   workspaces = [],
   onAddWorkspace,
   onCreateSlashCommand = noopAsync,
@@ -733,7 +436,6 @@ export function GatewaySettingsPanel({
   onLocalSettingsChange = noop,
   onSaveLocalSettingsNow = noopAsyncBoolean,
   onSaveGatewaySettings = noopAsyncBoolean,
-  onSaveGatewaySettingsPatch = noopAsyncBoolean,
   gatewayProfiles = [],
   onAddGatewayProfile = noopAsync,
   onUpdateGatewayProfile = noopAsync,
@@ -767,7 +469,6 @@ export function GatewaySettingsPanel({
         : t('Config changes save only when you click Save.');
   const activeTabMeta =
     SETTINGS_TABS.find((tab) => tab.id === normalizedActiveTab) || SETTINGS_TABS[0];
-  const enabledMcpServerCount = mcpServers.filter((server) => server.enabled).length;
   const syncStateLabel = gatewaySaving
     ? t('Saving')
     : gatewayLoading
@@ -862,15 +563,6 @@ export function GatewaySettingsPanel({
     };
   }, []);
 
-
-  function renderGatewaySaveAction(_buttonLabel?: string) {
-    const statusLabel = gatewaySaving
-      ? t('Saving…')
-      : gatewayDirty
-        ? t('Unsaved')
-        : t('Saved');
-    return <span className="codex-autosave-status">{statusLabel}</span>;
-  }
 
   function renderLocalSaveAction(label = t('Save Desktop Settings')) {
     return (

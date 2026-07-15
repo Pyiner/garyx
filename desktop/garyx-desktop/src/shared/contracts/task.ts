@@ -106,10 +106,6 @@ export interface ListTaskForestInput extends ListTasksInput {
   anchorThreadId?: string | null;
 }
 
-export interface GetTaskInput {
-  taskId: string;
-}
-
 export type DesktopTaskNotificationTarget =
   | { kind: "none" }
   | { kind: "bot"; channel: string; accountId: string };
@@ -139,19 +135,10 @@ export interface AssignTaskInput {
   principal: string;
 }
 
-export interface UnassignTaskInput {
-  taskId: string;
-}
-
 export interface StopTaskInput {
   taskId: string;
 }
 
 export interface DeleteTaskInput {
   taskId: string;
-}
-
-export interface UpdateTaskTitleInput {
-  taskId: string;
-  title: string;
 }

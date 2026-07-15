@@ -20,7 +20,6 @@ import type {
   BrowserBoundsInput,
   CaptureBrowserTabInput,
   CaptureBrowserTabResult,
-  CopyImageToClipboardInput,
   CreateBrowserTabInput,
   DesktopBrowserDebugEndpoint,
   DesktopBrowserState,
@@ -1188,17 +1187,6 @@ export async function setBrowserAnnotationMode(
   input: BrowserAnnotationModeInput,
 ): Promise<void> {
   await browserRuntime.setAnnotationMode(input);
-}
-
-export function copyImageToClipboard(
-  _event: IpcMainInvokeEvent,
-  input: CopyImageToClipboardInput,
-): void {
-  const image = nativeImage.createFromDataURL(input.dataUrl);
-  if (image.isEmpty()) {
-    throw new Error('Image is empty.');
-  }
-  clipboard.writeImage(image);
 }
 
 export function updateBrowserBounds(_event: IpcMainInvokeEvent, input: BrowserBoundsInput): void {
