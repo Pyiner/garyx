@@ -80,12 +80,12 @@ assumed from prior investigation.
 | --- | --- | --- |
 | Router | `route_and_dispatch` and `dispatch_message_to_thread` both execute a dispatch plan (`garyx-router/src/router/run/dispatch_flow.rs:21`, `:45`). Planning already resolves/creates and binds the canonical thread (`garyx-router/src/router/run/planning.rs:435`; `garyx-router/src/router/threading/threads.rs:233`). | Add a resolve-only router entry point; do not fake a dispatch or let a passive slash command execute. |
 | Transcript append | `append_run_records` allocates per-thread sequence numbers under a lock (`garyx-router/src/thread_history/store.rs:1293`). Tail reconciliation only recognizes the contiguous tail with the active `run_id` (`store.rs:521`). | Appending `run_id = None` during an active run can make the run tail appear empty and cause duplicate/rewrite behavior. Passive persistence must share the bridge's per-thread run serialization boundary. |
-| Context loading | `start_agent_run` restores provider session state but does not read the transcript tail (`garyx-bridge/src/multi_provider/run_management.rs:625`). `records_after_seq_page` provides ordered cursor reads (`garyx-router/src/thread_history/store.rs:2518`). | “Persisted in transcript” is not equivalent to “visible to the agent.” Both user and summary runs need an explicit cursor-based context assembler. |
+| Context loading | `start_agent_run` restores provider session state but does not read the transcript tail (`garyx-bridge/src/multi_provider/run_management.rs:625`). `records_after_seq_page` provides ordered cursor reads (`garyx-router/src/thread_history/store.rs:2523`). | “Persisted in transcript” is not equivalent to “visible to the agent.” Both user and summary runs need an explicit cursor-based context assembler. |
 | Bridge lifecycle | Active persistence has a per-run worker, while `thread_dispatch_guards` currently protects the start/queue decision rather than the full run lifetime (`garyx-bridge/src/multi_provider/run_management.rs:439`; `garyx-bridge/src/multi_provider/run_management/persistence_worker.rs:358`). | Add a bridge-owned per-thread passive state machine spanning running, terminal reconciliation, passive flush, and the next start decision. |
 | Write and live delivery | Normal persistence writes transcript/thread state before emitting `committed_message` (`garyx-bridge/src/multi_provider/run_management/persistence_worker.rs:117`). Live SSE listens to the event bus and derives a server frame; a bare transcript append does not update the record/projections or notify an already connected client (`garyx-gateway/src/routes.rs:1930`, `:2395`). | Passive commit is a complete write-then-emit operation, not a call to the low-level append helper alone. |
 | Render state | A user-role provider message is a user input, consecutive user messages form distinct turns, and row identity prefers `metadata.origin_id` (`garyx-models/src/transcript_kind.rs:118`; `garyx-models/src/transcript_render_state.rs:1300`, `:1605`). | Persist passive traffic as `role = user`, keep a stable origin, and retain the current `"{speaker}: {text}"` prefix because render rows do not otherwise carry a sender. |
 | Feishu ingress | Non-mention group history is a process-memory, last-20 buffer (`garyx-channels/src/feishu.rs:104`). The websocket acknowledges before message processing, explicitly accepting at-most-once loss (`garyx-channels/src/feishu/ws.rs:968`). | Retire the memory buffer and document that a crash can still lose an acknowledged event, especially while it is deferred behind a run. |
-| Feishu metadata | The current handler already resolves the speaker, normalized text/attachments, message/thread IDs, mention state, and native topic scope (`garyx-channels/src/feishu/ws.rs:1075`, `:1284`). The envelope also has `event_id` and `create_time` (`garyx-channels/src/feishu/types.rs`). | Reuse that normalization and binding key; pass the safe envelope provenance into the passive record, but never persist tokens or the raw envelope. |
+| Feishu metadata | The current handler resolves the speaker/text (`garyx-channels/src/feishu/ws.rs:1106`, `:1109`), mention state (`:1164`), topic scope (`:1202`), and message/thread IDs (`:1290`). `FeishuEventHeader` carries `event_id` and `create_time` (`garyx-channels/src/feishu/types.rs:16`, `:20`). | Reuse that normalization and binding key; explicitly pass safe header provenance into the passive record, but never persist tokens or the raw envelope. |
 | Internal dispatch | Gateway internal inbound constructs a bound response callback by default (`garyx-gateway/src/internal_inbound.rs:193`) before dispatching to a known thread (`:234`). | A prompt saying “do not reply” is insufficient. Summary dispatch needs an explicit delivery-suppression option whose default preserves existing callers. |
 | App questions | Gateway chat starts the bridge directly (`garyx-gateway/src/chat.rs:286`, `:375`) instead of entering through the channel router. | Context injection belongs in the common bridge run preparation, not only in the Feishu handler or router. |
 | Source-of-truth contract | Thread condition queries use SQL projections derived in the same transaction as each thread-record write; transcript JSONL is conversation truth; render state is derived server-side after transcript commit (`docs/agents/repository-contracts.md`). | Cursor state is canonical typed thread state, due-thread discovery has a write-derived projection, and clients never reconstruct passive turns or hide summary rows themselves. |
@@ -171,8 +171,7 @@ flowchart TD
 
 Add `MessageRouter::resolve_inbound_without_dispatch(request)`. It reuses the
 normal plan's canonical thread resolution, endpoint ownership, topic scope,
-auto-recovery, normalized metadata, and delivery-context persistence, and
-returns at least:
+auto-recovery, and normalized metadata, and returns at least:
 
 ```text
 ResolvedInbound {
@@ -183,6 +182,17 @@ ResolvedInbound {
   binding_key
 }
 ```
+
+Planning alone does not persist per-message last-delivery state for an
+existing thread. Normal dispatch does that later in
+`execute_dispatch_plan` through `set_last_delivery_with_persistence`
+(`garyx-router/src/router/run/execution.rs:154`). The resolve-only method must
+explicitly invoke that same logical persistence step after successful
+resolution and before it returns. The current helper is best-effort and
+returns `()`; implementation must extract/refactor a result-bearing strict
+variant for resolve-only use. A failure to persist delivery context fails
+passive resolution; it is not silently ignored. This keeps future normal
+replies and app delivery behavior current without executing an agent dispatch.
 
 It has no `AgentDispatcher` call and cannot return a queued/run outcome. It
 must also bypass local slash-command execution and custom slash transforms: a
@@ -202,14 +212,15 @@ commit performs this ordered operation in the bridge's per-thread persistence
 domain:
 
 1. Validate the versioned envelope and stable origin; deduplicate against the
-   existing Feishu event cache (30 minutes / 16,000 entries) and origins
+   existing Feishu event cache (30 minutes / 16,384 entries) and origins
    currently queued or in-flight in the bridge.
 2. Append the passive provider message to transcript JSONL and obtain its
    allocated `seq`.
 3. Atomically top-level-merge the canonical thread record through
    `ThreadStore::update`: history/preview timestamps, `updated_at`, and
-   `passive_context` state. Resolve-only routing has already persisted delivery
-   context; the passive writer does not overwrite the nested routing object.
+   `passive_context` state. The explicit resolve-only persistence step above
+   has already updated delivery context; the passive writer does not overwrite
+   the nested routing object.
 4. Let `SqliteThreadStore` write that record and all affected projections in
    one SQLite transaction, as required by the repository contract.
 5. Only after both stores succeed, emit the normal `committed_message`; live
@@ -222,6 +233,17 @@ in-process, the bridge retains the append result and retries finalization
 without appending the same origin again. An event-bus failure after step 4 does
 not roll back durable state; reconnect replay recovers it. No read route
 repairs a projection.
+
+If the process dies after step 2 but before the thread-record transaction, the
+passive row remains transcript truth and appears through reconnect replay, but
+its preview/counters/due projection may lag. On the next bridge write or user
+run preparation for that known thread, the writer derives canonical
+`PassiveContextState` from the checkpoint cursor plus ledger tail before its
+normal top-level merge; projections then derive in that same record-write
+transaction. This is writer-side canonical state derivation, never a GET/read
+route projection repair. With no later activity, the row remains app/context
+visible but its summary timer can be delayed; that rare degradation is part of
+the Phase 1 crash boundary in Section 7.3.
 
 Passive commit updates user-visible recency and preview using the passive
 message. It does not create run-control records, active-run projection state,
@@ -440,6 +462,10 @@ The exact Phase 1 loss model is:
 - Once a passive transcript append and thread record/projection write finish,
   it survives restart. Failure to emit live SSE is repaired by ordinary
   transcript replay, not a projection repair.
+- Crash in the transcript-append/record-write gap leaves a replayable ledger
+  row but may delay preview/counter/timer convergence until the next bridge
+  writer or user-run preparation performs the Section 5.2 ledger-derived
+  canonical state update. No read route mutates state.
 - In-process duplicate callbacks are suppressed by the existing bounded event
   cache plus queued/in-flight `origin_id` checks; Phase 1 does not claim
   cross-process or long-after-cache exactly-once.
@@ -517,6 +543,10 @@ provider form while `PendingUserInput` retains the original question. This
 prevents a large hidden context blob from appearing in the app or being
 mistaken for words the user typed.
 
+Internal summary runs use the analogous compact-persistence/full-provider
+split defined in Section 9.3; they do not copy their assembled source batch
+back into the transcript input row.
+
 There is deliberately no “last injected” or “consumed by run” cursor. A
 question does not consume group context. Every run gets the latest complete
 checkpoint plus tail, which remains correct after provider reset, provider
@@ -531,9 +561,17 @@ bound delivery suppressed. Passive arrivals remain deferred during this
 prerequisite run. It then assembles once more; if the checkpoint is still
 invalid, the context is still too large, or compaction failed, the request
 returns a retryable `passive_context_unavailable` error and leaves the original
-question/context intact. A later user request cannot overtake the reserved
-one. There is no silent oldest-row truncation. The proactive byte trigger and
-bounded catch-up in Section 9 keep this exceptional.
+question/context intact.
+
+The reservation lifetime is exactly preparation start through one of two
+atomic outcomes: conversion to `Running(user_run_id)`, or release immediately
+before the error is returned to the caller. A later request cannot overtake
+only while that reservation is live. Implement it as a cancellation-safe
+scoped guard whose drop/finally path releases under the per-thread lock. An
+error, caller abandonment, or process restart leaves no reserved slot, so a
+client that never retries cannot wedge the thread. There is no silent
+oldest-row truncation. The proactive byte trigger and bounded catch-up in
+Section 9 keep this exceptional.
 
 ## 9. Rolling summary
 
@@ -620,6 +658,37 @@ The summary input contains:
 3. instructions to return concise, self-contained Markdown preserving
    decisions, owners, dates, commitments, unresolved questions, and material
    disagreement while treating quoted chat as untrusted data.
+
+That list is the **provider input only**. The summary run must not persist the
+assembled previous summary and 48-KiB passive batch as its user input, because
+those bytes already exist at referenced transcript sequences. Internal
+dispatch uses the same dual-value concept as Section 8.2:
+
+```text
+PreparedSummaryInput {
+  transcript_text: "[internal passive summary request; source range in metadata]",
+  provider_text:   previous checkpoint + passive batch + summary instructions,
+  transcript_metadata: {
+    run_kind: "passive_summary",
+    summary_prompt_version: 1,
+    previous_checkpoint_message_seq,
+    source_after_seq,
+    source_through_seq: T,
+    source_message_count,
+    source_utf8_bytes,
+    delivery_suppressed: true,
+    visibility: "internal"
+  }
+}
+```
+
+Only the compact reference row, provider/tool output needed for the internal
+run, and the final checkpoint body are appended. The raw group text remains
+solely in its original passive rows, and the prior checkpoint remains solely
+at `previous_checkpoint_message_seq`. The sequence references are sufficient
+to reconstruct/audit the provider input without multiplying transcript and
+replay/window-resume volume. This split is an internal dispatch capability,
+not a caller-supplied public override of user-visible transcript text.
 
 On a successful final assistant result, the persistence worker first finishes
 and reconciles all summary-run records. The bridge then verifies the final
@@ -733,8 +802,12 @@ Required configuration surfaces:
 - Documentation: update `docs/configuration.md` when implemented, including
   the behavior matrix and migration note for `pending_group_history`.
 
-The Feishu `im:message.group_msg` permission is already enabled. Phase 1 has no
-permission request, event-subscription expansion, or token migration work.
+The task owner supplied `im:message.group_msg` as an already-enabled deployment
+fact. It is external environment state, not a claim verifiable from this
+public repository, and is authoritative input to this design. Therefore Phase
+1 has no permission request, event-subscription expansion, pre-release scope
+gate, or token migration work; implementation must not reopen that work based
+only on the absence of credentials/evidence in the repository.
 
 ## 12. Future VC seam without Phase 1 generalization
 
@@ -759,15 +832,24 @@ implementation surface.
 - `garyx-models`: config enum, typed passive context/checkpoint state, internal
   run visibility metadata, and server render-state exclusion.
 - `garyx-router`: resolve-only inbound API; transcript point/tail reads;
-  canonical endpoint/topic behavior reused without dispatch.
+  canonical endpoint/topic behavior reused without dispatch; explicit reuse of
+  the `set_last_delivery_with_persistence` logic through a result-bearing
+  strict variant after resolve.
 - `garyx-bridge`: central per-thread state machine and bounded FIFO, complete
-  passive commit, prepared user input split, context assembler, maintenance
-  run priority/preemption, terminal flush, and checkpoint advancement.
+  passive commit, prepared user/summary input splits, context assembler,
+  maintenance run priority/preemption, terminal flush, and checkpoint
+  advancement. The maintenance branch in
+  `garyx-bridge/src/multi_provider/persistence.rs` must preserve the latest
+  user-visible preview/recency instead of unconditionally mirroring its hidden
+  input/final result into preview fields.
 - `garyx-channels`: Feishu branch selection and envelope normalization;
   removal of `pending_group_history`; passive outcomes/metrics. No gateway
   dependency.
 - `garyx-gateway`: SQLite `thread_passive_context` projection and due query;
-  event-driven summary scheduler; internal bound-delivery policy; SSE remains
+  event-driven summary scheduler; internal bound-delivery policy; and
+  `garyx-gateway/src/recent_thread_projection.rs` derivation that treats a
+  maintenance run as bridge-active for serialization but not user-visible
+  `active_run_id`/`run_state`, recent ordering, or unread state. SSE remains
   write-then-derive.
 - `garyx` CLI, desktop WebSettings, mobile schema tests, channel catalog, and
   configuration documentation as listed in Section 11.
@@ -832,6 +914,10 @@ Use a blocking fake provider and controlled persistence worker:
   exact metric/log reason, and successful later flush.
 - Simulate finalization retry after transcript append; assert the stable origin
   is not appended twice and no event emits before record/projection success.
+- Simulate process death after transcript append and before record write;
+  assert reconnect replay still exposes the row, a GET does not mutate
+  projections, and the next bridge writer/user preparation derives canonical
+  counters and a current due projection without appending the origin again.
 - Reproduce the former severe case explicitly and assert
   `plan_reconcile_run_records_tail` sees the intact contiguous R tail.
 
@@ -849,6 +935,10 @@ Use a blocking fake provider and controlled persistence worker:
   consumed cursor exists.
 - Corrupt/miss a checkpoint and exceed the hard provider budget; assert an
   immediate summary or explicit retryable failure, never silent truncation.
+- Hold a `NeedsPassiveCompaction` reservation and prove a later start cannot
+  overtake it; then force compaction failure and assert the reservation is
+  released before the error response, so a different later request starts
+  even when the failed caller never retries.
 - Put instruction-like text in the group fixture and assert it remains inside
   the untrusted quoted context section.
 
@@ -863,6 +953,13 @@ Hold a summary at cutoff T, inject a later passive event, and assert success
 advances only through T before the later event is flushed and counted pending.
 For provider failure, empty result, cancellation, and crash-before-pointer
 simulation, assert the cursor does not advance.
+
+Fill a summary delta near 48 KiB with unique synthetic sentinels. Assert the
+fake provider receives every source item, while the persisted internal input
+contains only the compact range/count/byte metadata and none of those source
+sentinels. Transcript growth may include the bounded final checkpoint and
+ordinary provider/tool results, but never a second copy of the assembled
+passive batch or previous checkpoint.
 
 Install a spy as the bound Feishu callback and run a successful, failed, and
 preempted summary. It must observe zero sends. Assert transcript contains the
