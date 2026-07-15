@@ -37,11 +37,11 @@ pub mod storage {
     };
     pub use crate::store::{ThreadStore, ThreadStoreError};
     pub use crate::thread_history::{
-        DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
+        BackfillOutcome, DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
         THREAD_TRANSCRIPT_REPLAY_CAP, ThreadHistoryError, ThreadHistoryRepository,
         ThreadHistorySnapshot, ThreadTranscriptRecord, ThreadTranscriptStore,
-        ThreadTranscriptWindow, count_user_query_messages, extract_run_id, history_message_count,
-        is_user_query_message, message_text,
+        ThreadTranscriptWindow, TranscriptReplaceStage, count_user_query_messages, extract_run_id,
+        history_message_count, is_user_query_message, message_text,
     };
 }
 
@@ -87,11 +87,12 @@ pub use tasks::{
     mark_thread_task_in_review_if_in_progress, task_projection_reader_for,
 };
 pub use thread_history::{
-    DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
+    BackfillOutcome, DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT,
     RunTranscriptRecordDraft, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadHistoryError,
     ThreadHistoryRepository, ThreadHistorySnapshot, ThreadTranscriptRecord, ThreadTranscriptStore,
-    ThreadTranscriptWindow, TranscriptAppendRecordsResult, count_user_query_messages,
-    extract_run_id, history_message_count, is_user_query_message, message_text,
+    ThreadTranscriptWindow, TranscriptAppendRecordsResult, TranscriptReplaceStage,
+    count_user_query_messages, extract_run_id, history_message_count, is_user_query_message,
+    message_text,
 };
 pub use threads::{
     ChannelBinding, KNOWN_CHANNEL_ENDPOINTS_KEY, KnownChannelEndpoint, ThreadEnsureOptions,

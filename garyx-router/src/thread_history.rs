@@ -3,6 +3,7 @@ use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use garyx_models::{
     RenderSnapshot, RenderWindow, TranscriptRenderPrefixState, TranscriptRunState,
     apply_transcript_record, apply_transcript_render_prefix_record,
@@ -23,8 +24,9 @@ mod repository;
 mod store;
 
 pub use model::{
-    RunTranscriptRecordDraft, ThreadHistoryError, ThreadHistorySnapshot, ThreadTranscriptRecord,
-    ThreadTranscriptWindow, TranscriptAppendRecordsResult, TranscriptAppendResult,
+    BackfillOutcome, RunTranscriptRecordDraft, ThreadHistoryError, ThreadHistorySnapshot,
+    ThreadTranscriptRecord, ThreadTranscriptWindow, TranscriptAppendRecordsResult,
+    TranscriptAppendResult, TranscriptReplaceStage,
 };
 pub use reconcile::{
     count_user_query_messages, extract_run_id, history_message_count, is_user_query_message,
