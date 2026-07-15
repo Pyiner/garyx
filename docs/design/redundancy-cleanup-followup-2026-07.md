@@ -75,9 +75,17 @@ but NOT yet implemented (no `legacy_boot_import.rs` in tree); inventing a
 competing narrowing here would conflict with it.
 
 Phase 1 (this cleanup round — safe now):
-- Delete `clear()`, `size()`, `with_options()` from
-  `garyx-router/src/file_store.rs` (non-trait, test-only consumers) plus
-  their tests in `file_store/tests.rs`.
+- Delete `clear()` and `size()` from `garyx-router/src/file_store.rs`,
+  removing only `test_clear` and the specific `size()` assertions in
+  `file_store/tests.rs`.
+- `with_options()` is NOT deletable in phase 1: it is the configuration
+  entry for four live behavior tests
+  (`file_store/tests.rs:165/200/274/320` — two write-lock tests,
+  cache-TTL, lock-free read). Demote it to a `#[cfg(test)]` constructor
+  (same-crate tests only) or a test-module helper instead of deleting.
+- Phase 2 deletes the two write-lock tests together with the write half;
+  the cache-TTL and lock-free-read tests stay, on disk-seeded data plus
+  the test constructor.
 
 Phase 2 (sequenced AFTER the legacy v5 implementation lands; execute as
 its final step, not as an independent competing refactor):
@@ -86,10 +94,20 @@ its final step, not as an independent competing refactor):
   "concrete type" shortcut. The full archive walk stays legal ONLY inside
   boot import (repository contract; no `list_keys`-scan condition queries
   anywhere else, no runtime JSON backend resurrection).
-- Then delete from `file_store.rs`: the `ThreadStore` write impls
-  (`set`/`delete`/`update`), lock machinery (`acquire_lock`,
-  `release_lock`, `check_stale_lock`, `lock_file_for_path`,
-  `resolve_write_lock_thread_file`), and `atomic_write`.
+- Then remove the ENTIRE `impl ThreadStore for FileThreadStore`
+  (`file_store.rs:333` region) — `set`/`delete`/`exists`/`update` are all
+  required trait methods with no default bodies (`store.rs:27`), so a
+  partial deletion cannot compile. `exists` is deleted with the impl
+  (zero production callers). `get`/`list_keys` become inherent (or
+  narrow-interface) methods consumed by the gateway's
+  `pub(crate) LegacyArchiveReader` read-only adapter. Also delete the lock
+  machinery (`acquire_lock`, `release_lock`, `check_stale_lock`,
+  `lock_file_for_path`, `resolve_write_lock_thread_file`) and
+  `atomic_write`.
+- Update `docs/design/legacy-boot-import-isolation.md` in the same change:
+  its test-seam section (:461 region) still says `dyn ThreadStore` —
+  align it with the `LegacyArchiveReader` seam so the two design documents
+  do not conflict.
 
 Keep (production boot import uses list+get only — verified at
 `sqlite_thread_store.rs:366/408`):
@@ -103,10 +121,20 @@ Test migration (phase 2; complete consumer list from design review):
 - Gateway full read/write `ThreadStore` contract case for `FileThreadStore`
   (`sqlite_thread_store.rs:635` region) — delete that case; add a
   disk-JSON-driven read-only archive-reader contract in its place.
-- Gateway import seeding via `source.set(...)`
-  (`sqlite_thread_store.rs:847`, cfg(test)) — rework to write legacy JSON
-  layout files directly on disk (more faithful to the real pre-upgrade
-  scenario). Do not keep a pub write path just for tests.
+- Gateway import tests seed the legacy source through `ThreadStore::set`
+  in MULTIPLE places, not one (multiline call syntax — sweep by method
+  name `.set(`, never by receiver): `cleared_import_state_forces_a_reimport`
+  (`sqlite_thread_store.rs:659`, seeds at :669/:682 — keep its forced
+  re-import coverage), `boot_import_migrates_the_archive_once` (:711,
+  seeds at :723/:740/:759 — keep single-import, transcript backfill and
+  projection assertions), the ordering test (seed at :847), plus any other
+  cfg(test) `.set(` seeding that targets the legacy `FileThreadStore`
+  source — classify every `.set(` receiver in the module before migrating.
+  Migration split: the real archive-reader/import contract and the `garyx`
+  startup integration test seed by writing legacy JSON layout files on
+  disk; import-logic, ordering, and fault-injection tests use the
+  injectable `LegacyArchiveReader` fake. Do not keep a pub write path just
+  for tests.
 - `garyx/src/main_tests.rs:2578` (`startup_runtime_assembles...` calls
   `FileThreadStore.set`) — seed by writing legacy JSON files directly;
   keep its startup-import assertions.
@@ -212,10 +240,13 @@ count, no piping through tail); `xcodebuild` build.
 
 Delete from `mobile/garyx-mobile/Sources/GaryxMobileCore/GaryxGatewayClient.swift`
 (verified zero App/Core/Widget/test consumers each):
-- `threadLogs` (:393), `saveSkillFile` (:581), `createSkillEntry` (:588),
-  `deleteSkillEntry` (:595), `automationActivity` (:631),
-  `deleteWorkspace` (:693), `startChannelAuthFlow` (:825),
-  `pollChannelAuthFlow` (:835)
+- `threadLogs` (:422), `saveSkillFile` (:610), `createSkillEntry` (:617),
+  `deleteSkillEntry` (:624), `automationActivity` (:660),
+  `deleteWorkspace` (:722), `startChannelAuthFlow` (:854),
+  `pollChannelAuthFlow` (:864)
+  (anchors re-verified 2026-07-15 after the pin-reorder API landed; line
+  numbers drift with parallel work — implementer re-locates by signature,
+  not line)
 
 Do NOT touch the look-alikes with live consumers: `createSkill`/
 `updateSkill`/`toggleSkill`/`deleteSkill`, `skillEditor`/`readSkillFile`,
