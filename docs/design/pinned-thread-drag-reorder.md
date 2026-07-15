@@ -1,10 +1,19 @@
 # Pinned Thread Drag Reorder (Mobile-First)
 
-Status: v7 draft for design review (revised after review rounds 1-6, #TASK-2287)
+Status: v8 draft for design review (revised after review rounds 1-7, #TASK-2287)
 Scope: gateway + iOS (phase 1), Mac desktop (phase 2)
 
 Revision notes:
 
+- v7 → v8 (review round 7): the drain checklist gains an **active-flight
+  branch as its first check** — an in-flight reorder PUT parks the wake in
+  `coalescedBehindFlight` (no dispatch; the flight's completion always
+  triggers another drain), and a late flight completion can only close its
+  own token, never revive an outbox that settled/cleared meanwhile; the last
+  remaining "immediate floor-token resend" wording in Decisions #3 replaced
+  with the drain contract; reverse-completion-order regressions (membership
+  response returns before the old reorder flight) added at all three test
+  layers.
 - v6 → v7 (review round 6): the empty-`desiredOrder` shortcut is conditioned
   (clears the outbox only when no membership intent is live, or the accepted
   raw order is itself empty; projected-empty with live intents stays
@@ -34,8 +43,9 @@ Revision notes:
   pipeline order (identity → completion → acceptance → publication) and the
   freeze buffer holds accepted projections, never raw pages.
 - v3 → v4 (review round 3): F1 explicit page-acceptance outcomes, transport
-  completion decoupled from page acceptance, immediate floor-token resend of
-  an unsettled outbox, revision-bounded per-id intent lifecycle; F2 desktop
+  completion decoupled from page acceptance, floor-token resend of an
+  unsettled outbox (later gated and drain-scheduled by v6-v8),
+  revision-bounded per-id intent lifecycle; F2 desktop
   stamped pins envelope with epoch/revision rejection at the React ingress
   (commit-time rebase, centralized setter); F3 iOS 17 on-runtime verification
   made non-waivable, version-gated `EditMode` fallback, decidable perf
@@ -375,18 +385,26 @@ Core concepts:
   + latest known revision. **Dispatch is gated on membership quiescence**: a
   PUT may only be issued while no per-id pin/unpin intent is live. When a PUT
   completes without settling (order moved on, 409, below-floor) *and* no
-  membership intent is live, the next PUT fires immediately with current
-  values; if membership intents are live, the outbox instead enters an
-  explicit **`waitingForMembership`** state — flight slot freed, no resend.
+  membership intent is live, the post-acceptance drain issues the next PUT
+  with current values; if membership intents are live, the outbox instead
+  enters an explicit **`waitingForMembership`** state — flight slot freed, no
+  resend.
   Wake triggers: the last live membership intent resolves (success *or*
   failure rollback), or any accepted page lands — in both cases the trigger
   only sets `wakeRequested`; the actual **drain runs exactly once, after that
   response has completed revision acceptance** (pipeline step 3), so a
   drained PUT always carries the freshest floor and cannot be trivially
   409'd by the very page that woke it (round-6 F2). The drain re-checks, in
-  order: live membership intents (any live ⇒ stay `waitingForMembership`);
-  the empty rule; settle-by-equality; then dispatches at most one PUT with
-  the floor token. The **empty rule** (round-6 F1): an empty re-reduced
+  order: **an active reorder flight** (one already in the air ⇒ park the wake
+  as `coalescedBehindFlight`, dispatch nothing — membership responses can
+  legitimately complete before an older reorder PUT returns, and dispatching
+  would break single-flight and guarantee a self-inflicted 409 on the old
+  flight; every flight completion triggers another drain, so the trailing
+  wake is never lost — round-7 F1); live membership intents (any live ⇒ stay
+  `waitingForMembership`); the empty rule; settle-by-equality; then
+  dispatches at most one PUT with the floor token. A flight that completes
+  *after* the outbox already settled by raw equality or was cleared by the
+  empty rule only closes its own token — it can never revive the outbox. The **empty rule** (round-6 F1): an empty re-reduced
   `desiredOrder` clears the outbox **only if** no membership intent is live,
   **or** the accepted page's raw canonical order is itself empty. A
   projected-empty order while intents are still live and the raw membership
@@ -468,10 +486,13 @@ so neither drop nor cancel replays it.
 
 Step 2 never dispatches work: intent resolution and unsettled completions
 only set `wakeRequested`. The dispatch scheduler drains **once, after steps
-3-4 for that response complete**, re-checking live intents, the empty rule,
+3-4 for that response complete**, re-checking — in order — the active-flight
+branch (`coalescedBehindFlight`), live intents, the empty rule,
 settle-by-equality, and the latest floor before issuing at most one PUT
 (round-6 F2 — a drain at step 2 would carry a stale floor and be 409'd by
-the very page accepted at step 3, producing a second PUT).
+the very page accepted at step 3, producing a second PUT; round-7 F1 — a
+drain that ignores an in-flight reorder would run two collection PUTs
+concurrently).
 
 **Gateway-scoped state domain (review round-3 F4).** The entire pinned-order
 state — revision floor, `desiredOrder`/baseline, drag preview and freeze
@@ -568,7 +589,7 @@ response write-back captures epoch/revision like any other response.
     epoch so unsettled-window requests can't become authoritative;
   - **round-3 F1 exact regressions**: high-revision remote page raises floor,
     then our 200 ack with lower revision arrives ⇒ flight ends, no settle,
-    immediate resend with `expected_revision = floor`, eventual settle (no
+    drain-scheduled resend with `expected_revision = floor`, eventual settle (no
     permanently hanging outbox); same with a below-floor 409 (returned page
     unusable as CAS token); remote opposite pin/unpin at higher revision then
     local low-revision ack ⇒ intent retires, higher-revision state shown, no
@@ -601,6 +622,14 @@ response write-back captures epoch/revision like any other response.
     sequencing: an intent completion whose own response raises the floor ⇒
     the drained PUT carries the *new* floor and succeeds — exactly one PUT,
     no 409 second round (round-6 F2);
+  - **round-7 F1 reverse-completion-order regressions**: reorder R1 in
+    flight, optimistic pin C's membership response returns *before* R1
+    (raises floor, resolves the last live intent) ⇒ drain parks in
+    `coalescedBehindFlight`, PUT count stays 1 while R1 is airborne; R1
+    completes ⇒ another drain ⇒ at most one follow-up PUT carrying the
+    latest floor; variant where the outbox settles by raw equality (or
+    clears via the empty rule) while R1 is airborne ⇒ R1's completion closes
+    only its own token, the outbox is not revived;
   - R5: durable outbox restart recovery; supersede-by-newer-drop; retry
     classification (429/5xx backoff vs 405 pause + pending-sync state);
     gateway-switch clear;
@@ -612,7 +641,8 @@ response write-back captures epoch/revision like any other response.
   F1/F4 behaviors are **orchestration-level** and must be proven here against
   real transport, not only in the pure reducer (round-4 V4-2):
   - high-revision GET → low-revision 200 ack ⇒ assert a second PUT is
-    *actually issued immediately* and its body carries
+    *actually issued* right after that ack's acceptance completes (via the
+    drain, no earlier and none concurrent) and its body carries
     `expected_revision = floor`;
   - the same for a below-floor 409;
   - gateway switch ⇒ a late old-identity response triggers no retry; the new
@@ -627,7 +657,11 @@ response write-back captures epoch/revision like any other response.
     responses;
   - **round-6 combo at real transport**: 409 + full optimistic unpin +
     unpin failure rollback ⇒ outbox survives, exactly one post-rollback PUT,
-    subsequent GET does not flip the restored order.
+    subsequent GET does not flip the restored order;
+  - **round-7 F1 at real transport**: pin response returns while the reorder
+    PUT is still in flight ⇒ no concurrent second PUT (count stays 1); after
+    the old flight completes, at most one follow-up PUT with the latest
+    floor.
 - Spike carries the quantified hitch gate (§5.1 point 7). Manual simulator
   pass only for gesture *feel*, never as ordering-logic acceptance.
 
@@ -685,6 +719,10 @@ response write-back captures epoch/revision like any other response.
   revision storm, outbox drains); the round-6 combo (409 + full optimistic
   unpin + rollback ⇒ outbox survives, one post-rollback PUT, no flip) and
   wake-after-acceptance drain sequencing;
+  the round-7 F1 reverse-completion-order set (membership response before
+  old reorder flight ⇒ `coalescedBehindFlight`, single PUT until flight
+  ends, one fresh-floor follow-up; late flight cannot revive a
+  settled/cleared outbox);
   the V2-3 race — refresh resolved and `nextState` captured, drop happens,
   deferred transition commits ⇒ committed state carries the local order;
   the round-3 F2 race — stale transition queued → drop → ack settle clears
@@ -714,6 +752,8 @@ response write-back captures epoch/revision like any other response.
 | All pinned threads unpinned, no live intents | `desiredOrder` empties ⇒ outbox cleared; `[]` is never sent; no 400 (round-5 F1) |
 | Projected-empty order while unpin intents live and raw membership non-empty | Outbox kept in `waitingForMembership`; rollback restores order and drains exactly one PUT; later poll cannot flip (round-6 F1) |
 | Wake triggered by a response that itself raises the floor | Drain runs after that response's acceptance ⇒ single PUT with fresh floor, no self-inflicted 409 (round-6 F2) |
+| Membership response completes while an older reorder PUT is still in flight | Drain parks in `coalescedBehindFlight`; single flight preserved; one fresh-floor follow-up after the flight ends (round-7 F1) |
+| Reorder flight completes after the outbox already settled/cleared | Completion closes its own token only; outbox not revived (round-7 F1) |
 | Restart with outbox; server already equals desired (or empty) | Accepted-page-equals-desired settles without a write (round-5 F1) |
 | Remote write raises floor; our 200/409 completes below floor | Flight ends, page discarded, no settle; floor-token resend once membership-quiescent (round-3 F1, round-5 F1) |
 | Remote opposite pin/unpin at higher revision, local low-revision ack later | Per-id intent retires at completion; higher-revision page wins (LWW); nothing permanently hidden (round-3 F1) |
@@ -755,8 +795,10 @@ response write-back captures epoch/revision like any other response.
    that advances on local mutation **and on settle** + membership merges
    overlaid with per-id pin intents. **Transport completion is decoupled from
    page acceptance**: a below-floor completion frees the flight, never
-   settles, and triggers an immediate floor-token resend of the unsettled
-   outbox; per-id intents retire at completion with revision-bounded
+   settles, and only sets `wakeRequested` — the post-acceptance drain then
+   decides dispatch / settle / clear / park (`waitingForMembership` or
+   `coalescedBehindFlight`); per-id intents retire at completion with
+   revision-bounded
    overlays (LWW). Responses run a fixed pipeline — identity → transport
    completion → revision acceptance → publication — where completions only
    set `wakeRequested` and the dispatch scheduler **drains once after
