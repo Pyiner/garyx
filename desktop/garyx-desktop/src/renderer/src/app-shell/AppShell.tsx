@@ -32,6 +32,7 @@ import {
   type DesktopSessionProviderHint,
   type DesktopState,
   type DesktopThreadSummary,
+  type DesktopThreadPinOrderSnapshot,
   type DesktopWorkspace,
   type DesktopWorkspaceFileEntry,
   type DesktopWorkspaceFileListing,
@@ -216,6 +217,14 @@ import {
   type TranscriptScrollIntent,
 } from "./components/thread-transcript-scroll";
 import { SideChatSessions } from "./side-chat-sessions";
+import {
+  beginPinnedOrderGatewaySwitch,
+  PinnedOrderIngress,
+  installPinnedOrderIngress,
+  requestDesktopState,
+  requestDesktopStateResult,
+  restorePinnedOrderGatewayDomain,
+} from "../pinned-order-ingress";
 import {
   ensureSideChatThread as ensureSideChatThreadOp,
   type SideChatOpsContext,
@@ -624,6 +633,18 @@ export function AppShell() {
     initialWindowLayout && !initialWindowLayout.bootstrap.freshSession
       ? initialWindowLayout.bootstrap.acknowledgedSession.desiredOccupancy
       : null;
+  const [pinnedOrderIngress] = useState(() => {
+    const rendererSessionId =
+      initialWindowLayout?.rendererEpoch ||
+      (typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `pins-renderer-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const ingress = new PinnedOrderIngress(rendererSessionId);
+    installPinnedOrderIngress(ingress);
+    return ingress;
+  });
+  const [pinnedOrderMainSnapshot, setPinnedOrderMainSnapshot] =
+    useState<DesktopThreadPinOrderSnapshot | null>(null);
   // Endgame architecture (docs/design/appshell-endgame-architecture.md):
   // the mirror instance is created once and provided via context. During
   // the migration it runs alongside the legacy React state; batches move
@@ -631,7 +652,14 @@ export function AppShell() {
   const [gatewayMirror] = useState(
     () =>
       new GatewayMirror({
-        getState: () => window.garyxDesktop.getState(),
+        getState: async () => {
+          const state = await requestDesktopState(() => window.garyxDesktop.getState());
+          void window.garyxDesktop
+            .getThreadPinOrderSnapshot()
+            .then(setPinnedOrderMainSnapshot)
+            .catch(() => undefined);
+          return state;
+        },
         listCustomAgents: () => window.garyxDesktop.listCustomAgents(),
         getThreadHistory: (input) => window.garyxDesktop.getThreadHistory(input),
         getThreadHistoryFull: (threadId) =>
@@ -656,7 +684,17 @@ export function AppShell() {
   // 5b-7a: shell-owned side-chat session store (bindings/drafts/transients
   // outlive the inspector dock; its shadow refs feed the orchestration deps).
   const [sideChatSessions] = useState(() => new SideChatSessions());
-  const [desktopState, setDesktopState] = useState<DesktopState | null>(null);
+  const [desktopState, setDesktopStateRaw] = useState<DesktopState | null>(null);
+  const setDesktopState = useCallback<
+    React.Dispatch<React.SetStateAction<DesktopState | null>>
+  >(
+    (action) => {
+      setDesktopStateRaw((current) =>
+        pinnedOrderIngress.commitState(current, action),
+      );
+    },
+    [pinnedOrderIngress],
+  );
   const [desktopAgents, setDesktopAgents] = useState<DesktopCustomAgent[]>([]);
   const [connection, setConnection] = useState<ConnectionStatus | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() =>
@@ -1912,45 +1950,46 @@ export function AppShell() {
       visibleThreadEntrySelectionSource,
     ],
   );
-  function pinnedThreadIdsWith(
-    ids: string[],
-    threadId: string,
-    pinned: boolean,
-  ): string[] {
-    const normalizedId = threadId.trim();
-    if (!normalizedId) {
-      return ids;
-    }
-    const withoutThread = ids.filter((id) => id !== normalizedId);
-    return pinned ? [normalizedId, ...withoutThread] : withoutThread;
-  }
-
   async function setThreadPinned(threadId: string, pinned: boolean) {
     const normalizedId = threadId.trim();
     if (!normalizedId) {
       return;
     }
     recentThreadFeeds.noteLocalMutation();
+    const rollbackOrder = pinnedOrderIngress.presentedOrder;
+    const optimisticOrder = pinnedOrderIngress.commitLocalMembership(
+      normalizedId,
+      pinned,
+    );
+    const membershipEpoch = pinnedOrderIngress.currentEpoch;
     setDesktopState((current) =>
       current
         ? {
             ...current,
-            pinnedThreadIds: pinnedThreadIdsWith(
-              current.pinnedThreadIds || [],
-              normalizedId,
-              pinned,
-            ),
+            pinnedThreadIds: optimisticOrder,
           }
         : current,
     );
     try {
-      const nextState = await window.garyxDesktop.setThreadPinned({
-        threadId: normalizedId,
-        pinned,
-      });
+      const nextState = await requestDesktopState(() =>
+        window.garyxDesktop.setThreadPinned({
+          threadId: normalizedId,
+          pinned,
+        }),
+      );
       setDesktopState(nextState);
       setPinnedThreadsVersion((version) => version + 1);
+      void window.garyxDesktop
+        .getThreadPinOrderSnapshot()
+        .then(setPinnedOrderMainSnapshot)
+        .catch(() => undefined);
     } catch (error) {
+      if (pinnedOrderIngress.currentEpoch === membershipEpoch) {
+        const restored = pinnedOrderIngress.rollbackLocalMembership(rollbackOrder);
+        setDesktopState((current) =>
+          current ? { ...current, pinnedThreadIds: restored } : current,
+        );
+      }
       setError(
         error instanceof Error
           ? error.message
@@ -1959,7 +1998,65 @@ export function AppShell() {
             : t("Failed to unpin thread"),
       );
       void refreshDesktopState().catch(() => null);
+      void window.garyxDesktop
+        .getThreadPinOrderSnapshot()
+        .then(setPinnedOrderMainSnapshot)
+        .catch(() => undefined);
     }
+  }
+
+  function beginPinnedThreadDrag() {
+    pinnedOrderIngress.beginDrag();
+  }
+
+  function cancelPinnedThreadDrag() {
+    const acceptedOrder = pinnedOrderIngress.cancelDrag();
+    setDesktopState((current) =>
+      current
+        ? {
+            ...current,
+            pinnedThreadIds: acceptedOrder,
+          }
+        : current,
+    );
+  }
+
+  function reorderPinnedThreads(threadIds: string[]) {
+    const previousEpoch = pinnedOrderIngress.currentEpoch;
+    const optimisticOrder = pinnedOrderIngress.commitDragOrder(threadIds);
+    setDesktopState((current) =>
+      current
+        ? {
+            ...current,
+            pinnedThreadIds: optimisticOrder,
+          }
+        : current,
+    );
+    if (pinnedOrderIngress.currentEpoch === previousEpoch) {
+      return;
+    }
+
+    recentThreadFeeds.noteLocalMutation();
+    void requestDesktopState(() =>
+      window.garyxDesktop.setThreadPinOrder({ threadIds: optimisticOrder }),
+    )
+      .then((nextState) => {
+        setDesktopState(nextState);
+        setPinnedThreadsVersion((version) => version + 1);
+        void window.garyxDesktop
+          .getThreadPinOrderSnapshot()
+          .then(setPinnedOrderMainSnapshot)
+          .catch(() => undefined);
+      })
+      .catch(() => {
+        // R5: keep the optimistic order. Main owns retry classification and
+        // the durable outbox; a refresh can only merge membership beneath it.
+        void refreshDesktopState().catch(() => null);
+        void window.garyxDesktop
+          .getThreadPinOrderSnapshot()
+          .then(setPinnedOrderMainSnapshot)
+          .catch(() => undefined);
+      });
   }
 
   function togglePinnedThread(threadId: string) {
@@ -2574,7 +2671,9 @@ export function AppShell() {
     /** Opaque plugin config for subprocess plugins. */
     config?: Record<string, unknown> | null;
   }) {
-    const nextState = await window.garyxDesktop.addChannelAccount(input);
+    const nextState = await requestDesktopState(() =>
+      window.garyxDesktop.addChannelAccount(input),
+    );
     startTransition(() => {
       setDesktopState(nextState);
     });
@@ -2767,7 +2866,7 @@ export function AppShell() {
           // repaired by id). The full set follows below, off the paint path.
           const [nextState, nextStatus, nextAgents] =
             await Promise.all([
-              window.garyxDesktop.getStateFast(),
+              requestDesktopState(() => window.garyxDesktop.getStateFast()),
               window.garyxDesktop.checkConnection(),
               window.garyxDesktop
                 .listCustomAgents()
@@ -2778,9 +2877,19 @@ export function AppShell() {
           }
 
           state = nextState;
+          pinnedOrderIngress.initializeFromState(nextState);
+          const pinOrderSnapshot = await window.garyxDesktop
+            .getThreadPinOrderSnapshot()
+            .catch(() => null);
+          if (cancelled) {
+            return;
+          }
 
           startTransition(() => {
             setDesktopState(nextState);
+            if (pinOrderSnapshot) {
+              setPinnedOrderMainSnapshot(pinOrderSnapshot);
+            }
             setDesktopAgents(nextAgents);
             setSettingsDraft(nextState.settings);
             setConnection(nextStatus);
@@ -2798,10 +2907,13 @@ export function AppShell() {
         let hydratedState = state;
         const startupRoute = initialRouteRef.current || { kind: "thread-home" };
         if (startupRoute.kind === "automation" && startupRoute.automationId) {
+          const automationId = startupRoute.automationId;
           try {
-            hydratedState = await window.garyxDesktop.selectAutomation({
-              automationId: startupRoute.automationId,
-            });
+            hydratedState = await requestDesktopState(() =>
+              window.garyxDesktop.selectAutomation({
+                automationId,
+              }),
+            );
             if (cancelled) {
               return;
             }
@@ -2846,8 +2958,7 @@ export function AppShell() {
         // groups, worktree exclusions, bot gates) shortly after first
         // paint. Failures are non-fatal — any later refreshDesktopState
         // delivers the full set too.
-        void window.garyxDesktop
-          .getState()
+        void requestDesktopState(() => window.garyxDesktop.getState())
           .then((fullState) => {
             if (!cancelled) {
               startTransition(() => {
@@ -3126,10 +3237,13 @@ export function AppShell() {
 
     setError(null);
     try {
-      const created = await window.garyxDesktop.createThread({
-        sdkSessionId: trimmedSessionId,
-        sdkSessionProviderHint: providerHint || undefined,
-      });
+      const created = await requestDesktopStateResult(
+        () => window.garyxDesktop.createThread({
+          sdkSessionId: trimmedSessionId,
+          sdkSessionProviderHint: providerHint || undefined,
+        }),
+        (response) => response.state,
+      );
       setDesktopState(created.state);
       recentThreadFeeds.upsertChat(created.thread);
       // Selection + view flip is the thread-route application (6c-2a).
@@ -3168,14 +3282,18 @@ export function AppShell() {
     let nextDesktopState: DesktopState | null = null;
 
     if (!botId) {
-      nextDesktopState = await window.garyxDesktop.setBotBinding({
-        threadId,
-        botId: null,
-      });
+      nextDesktopState = await requestDesktopState(() =>
+        window.garyxDesktop.setBotBinding({
+          threadId,
+          botId: null,
+        }),
+      );
       for (const endpoint of currentEndpoints) {
-        nextDesktopState = await window.garyxDesktop.detachChannelEndpoint({
-          endpointKey: endpoint.endpointKey,
-        });
+        nextDesktopState = await requestDesktopState(() =>
+          window.garyxDesktop.detachChannelEndpoint({
+            endpointKey: endpoint.endpointKey,
+          }),
+        );
       }
       if (nextDesktopState) {
         const finalState = nextDesktopState;
@@ -3192,10 +3310,12 @@ export function AppShell() {
     const targetGroup = botGroups.find((group) => group.id === botId);
     const targetEndpoint =
       targetGroup?.defaultOpenEndpoint || targetGroup?.mainEndpoint || null;
-    nextDesktopState = await window.garyxDesktop.setBotBinding({
-      threadId,
-      botId,
-    });
+    nextDesktopState = await requestDesktopState(() =>
+      window.garyxDesktop.setBotBinding({
+        threadId,
+        botId,
+      }),
+    );
 
     for (const endpoint of currentEndpoints) {
       if (endpoint.endpointKey === targetEndpoint?.endpointKey) {
@@ -3204,9 +3324,11 @@ export function AppShell() {
       if (botGroupIdForEndpoint(endpoint) === botId) {
         continue;
       }
-      nextDesktopState = await window.garyxDesktop.detachChannelEndpoint({
-        endpointKey: endpoint.endpointKey,
-      });
+      nextDesktopState = await requestDesktopState(() =>
+        window.garyxDesktop.detachChannelEndpoint({
+          endpointKey: endpoint.endpointKey,
+        }),
+      );
     }
 
     if (
@@ -3214,10 +3336,12 @@ export function AppShell() {
       targetGroup?.mainThreadId !== threadId &&
       targetEndpoint.threadId !== threadId
     ) {
-      nextDesktopState = await window.garyxDesktop.bindChannelEndpoint({
-        endpointKey: targetEndpoint.endpointKey,
-        threadId,
-      });
+      nextDesktopState = await requestDesktopState(() =>
+        window.garyxDesktop.bindChannelEndpoint({
+          endpointKey: targetEndpoint.endpointKey,
+          threadId,
+        }),
+      );
     }
 
     if (nextDesktopState) {
@@ -3479,7 +3603,10 @@ export function AppShell() {
     setError(null);
     setWorkspaceMutation("add");
     try {
-      const result = await window.garyxDesktop.addWorkspaceByPath({ path });
+      const result = await requestDesktopStateResult(
+        () => window.garyxDesktop.addWorkspaceByPath({ path }),
+        (response) => response.state,
+      );
       setDesktopState(result.state);
       return result.workspace || null;
     } catch (workspaceError) {
@@ -3537,9 +3664,9 @@ export function AppShell() {
       });
     }
     try {
-      const nextState = await window.garyxDesktop.removeWorkspace({
-        workspacePath,
-      });
+      const nextState = await requestDesktopState(() =>
+        window.garyxDesktop.removeWorkspace({ workspacePath }),
+      );
       setDesktopState(nextState);
       if (selectedThreadId) {
         const selectedThreadStillExists = nextState.threads.some(
@@ -4492,6 +4619,9 @@ export function AppShell() {
         onArchivePinnedThread={(threadId) => {
           void handleDeleteThread(threadId);
         }}
+        onPinnedThreadDragCancel={cancelPinnedThreadDrag}
+        onPinnedThreadDragStart={beginPinnedThreadDrag}
+        onReorderPinnedThreads={reorderPinnedThreads}
         onToggleBotConversationGroup={(group) => {
           commitLegacyLayoutIntent("user-route", (current) => ({
             ...current,
@@ -4559,6 +4689,17 @@ export function AppShell() {
           );
         }}
         pinnedThreadRows={pinnedThreadRows}
+        pinnedThreadSyncPending={
+          Boolean(pinnedOrderIngress.desiredOrder) ||
+          Boolean(
+            pinnedOrderMainSnapshot?.unsettled &&
+              pinnedOrderMainSnapshot.gatewayIdentity ===
+                (desktopState?.entitiesGatewayUrl || desktopState?.settings.gatewayUrl || "")
+                  .trim()
+                  .replace(/\/+$/, "")
+                  .toLowerCase(),
+          )
+        }
         selectedAutomationId={selectedAutomationId}
         selectedThreadId={botRootSelectedThreadId}
         setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
@@ -4787,11 +4928,46 @@ export function AppShell() {
                     localSettingsDirty={localSettingsDirty}
                     localSettings={settingsDraft}
                     onAddGatewayProfile={async (input) => {
-                      const nextState = await window.garyxDesktop.addGatewayProfile(input);
+                      const nextState = await requestDesktopState(() =>
+                        window.garyxDesktop.addGatewayProfile(input),
+                      );
                       setDesktopState(nextState);
                     }}
                     onUpdateGatewayProfile={async (input) => {
-                      const nextState = await window.garyxDesktop.updateGatewayProfile(input);
+                      const normalizeIdentity = (value: string) =>
+                        value.trim().replace(/\/+$/, "").toLowerCase();
+                      const previousIdentity = normalizeIdentity(
+                        desktopState?.entitiesGatewayUrl ||
+                          desktopState?.settings.gatewayUrl ||
+                          "",
+                      );
+                      const editedProfile = desktopState?.gatewayProfiles.find(
+                        (profile) => profile.id === input.profileId,
+                      );
+                      const switchesCurrentGateway = Boolean(
+                        editedProfile &&
+                          normalizeIdentity(editedProfile.gatewayUrl) ===
+                            previousIdentity &&
+                          normalizeIdentity(input.gatewayUrl) !== previousIdentity,
+                      );
+                      const targetIdentity = switchesCurrentGateway
+                        ? normalizeIdentity(input.gatewayUrl)
+                        : previousIdentity;
+                      const gatewayRollback = switchesCurrentGateway
+                        ? beginPinnedOrderGatewaySwitch(targetIdentity)
+                        : null;
+                      let nextState: DesktopState;
+                      try {
+                        nextState = await requestDesktopState(
+                          () => window.garyxDesktop.updateGatewayProfile(input),
+                          targetIdentity,
+                        );
+                      } catch (error) {
+                        if (gatewayRollback) {
+                          restorePinnedOrderGatewayDomain(gatewayRollback);
+                        }
+                        throw error;
+                      }
                       setDesktopState(nextState);
                       setSettingsDraft((current) => ({
                         ...current,
@@ -4803,9 +4979,9 @@ export function AppShell() {
                       setConnection(status);
                     }}
                     onDeleteGatewayProfile={async (profileId) => {
-                      const nextState = await window.garyxDesktop.deleteGatewayProfile({
-                        profileId,
-                      });
+                      const nextState = await requestDesktopState(() =>
+                        window.garyxDesktop.deleteGatewayProfile({ profileId }),
+                      );
                       setDesktopState(nextState);
                     }}
                     workspaces={workspacePickerWorkspaces}

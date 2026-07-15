@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
+import { requestDesktopStateResult } from '@/pinned-order-ingress';
 
 export type WorkspacePathPickerProps = {
   value: string;
@@ -485,7 +486,10 @@ export function WorkspacePathPicker({
     try {
       const added = onAddWorkspace
         ? await onAddWorkspace(path)
-        : await window.garyxDesktop.addWorkspaceByPath({ path }).then((result) => result.workspace || null);
+        : await requestDesktopStateResult(
+            () => window.garyxDesktop.addWorkspaceByPath({ path }),
+            (result) => result.state,
+          ).then((result) => result.workspace || null);
       if (!added?.path) {
         return;
       }

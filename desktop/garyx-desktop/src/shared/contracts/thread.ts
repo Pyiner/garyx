@@ -253,6 +253,32 @@ export interface SetThreadPinnedInput {
   pinned: boolean;
 }
 
+export interface SetThreadPinOrderInput {
+  threadIds: string[];
+}
+
+export interface DesktopThreadPinsPage {
+  threadIds: string[];
+  revision: number;
+}
+
+export type DesktopThreadPinOrderSyncState =
+  | "settled"
+  | "ready"
+  | "in_flight"
+  | "waiting_for_membership"
+  | "coalesced_behind_flight"
+  | "retry_scheduled"
+  | "paused_permanent";
+
+export interface DesktopThreadPinOrderSnapshot {
+  gatewayIdentity: string;
+  desiredOrder: string[];
+  highestObservedRevision: number;
+  unsettled: boolean;
+  syncState: DesktopThreadPinOrderSyncState;
+}
+
 export interface SendMessageInput {
   threadId: string;
   // Compatibility fallback for older callers. Prefer `threadId`.

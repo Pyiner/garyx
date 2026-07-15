@@ -209,6 +209,7 @@ import {
   deleteDesktopThread,
   getDesktopState,
   getDesktopStateFast,
+  getDesktopThreadPinOrderSnapshot,
   getLocalDesktopSettings,
   markDesktopAutomationSeen,
   runDesktopAutomationNow,
@@ -222,8 +223,10 @@ import {
   selectDesktopWorkspace,
   updateDesktopAutomation,
   removeDesktopWorkspace,
+  resumeDesktopPinnedOrderSync,
   setDesktopBotBinding,
   setDesktopThreadPinned,
+  setDesktopThreadPinOrder,
 } from "./store";
 import { readMemoryDocument, saveMemoryDocument } from "./memory-documents";
 import {
@@ -504,6 +507,9 @@ function createMainWindow(): BrowserWindow {
       window.hide();
     }
   });
+  window.on("focus", () => {
+    void resumeDesktopPinnedOrderSync().catch(() => undefined);
+  });
   window.on("closed", () => {
     writeBootstrapTrace("createMainWindow:closed");
     unbindBrowserWindow(window);
@@ -557,6 +563,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("garyx:get-state-fast", async () => {
     return getDesktopStateFast();
+  });
+
+  ipcMain.handle("garyx:get-thread-pin-order-snapshot", async () => {
+    return getDesktopThreadPinOrderSnapshot();
   });
 
   ipcMain.handle(
@@ -1264,6 +1274,15 @@ function registerIpcHandlers(): void {
     "garyx:set-thread-pinned",
     async (_event, input: { threadId: string; pinned: boolean }) => {
       return setDesktopThreadPinned(input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:set-thread-pin-order",
+    async (_event, input: { threadIds?: string[] }) => {
+      return setDesktopThreadPinOrder(
+        Array.isArray(input?.threadIds) ? input.threadIds : [],
+      );
     },
   );
 

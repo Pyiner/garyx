@@ -21,6 +21,8 @@ export interface DesktopState {
   workspaces: DesktopWorkspace[];
   selectedWorkspacePath: string | null;
   pinnedThreadIds: string[];
+  /** Highest accepted revision of the gateway's atomic thread-pins page. */
+  pinsRevision: number;
   threads: DesktopThreadSummary[];
   sessions: DesktopThreadSummary[];
   endpoints: DesktopChannelEndpoint[];

@@ -324,6 +324,15 @@
   padding: 0 4px 2px 8px;
 }
 
+.pinned-thread-sync-pending {
+  width: 5px;
+  height: 5px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: var(--color-token-text-secondary);
+  opacity: 0.62;
+}
+
 .pinned-thread-list {
   display: flex;
   flex-direction: column;
@@ -334,6 +343,11 @@
 .pinned-thread-row-shell {
   position: relative;
   border-radius: 12.5px;
+}
+
+.pinned-thread-row-shell.dragging {
+  z-index: 2;
+  box-shadow: var(--shadow-sm);
 }
 
 .pinned-thread-row {
@@ -356,6 +370,14 @@
   transition:
     background-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
+}
+
+.pinned-thread-row.sortable {
+  cursor: grab;
+}
+
+.pinned-thread-row-shell.dragging .pinned-thread-row.sortable {
+  cursor: grabbing;
 }
 
 .pinned-thread-row-shell:hover .pinned-thread-row {

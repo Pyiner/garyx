@@ -17,6 +17,8 @@ import {
   type DesktopLanguagePreference,
   type DesktopRemoteStateError,
   type DesktopThreadSummary,
+  type DesktopThreadPinOrderSnapshot,
+  type DesktopThreadPinsPage,
   type DesktopSettings,
   type DesktopState,
   type DesktopWorkspace,
@@ -41,19 +43,38 @@ import {
   fetchThreadSummary,
   fetchThreads,
   fetchWorkspaces,
+  GatewayRequestError,
   mapChannelEndpoint,
   normalizeGatewayUrl,
+  reorderRemoteThreadPins,
   runRemoteAutomationNow,
   setRemoteThreadPinned,
   updateRemoteAutomation,
   updateRemoteThread,
 } from './gary-client';
+import { PinnedOrderController } from './pinned-order-controller.ts';
+import {
+  PinnedOrderState,
+  type PinnedOrderOutbox,
+  type PinnedOrderReorderFailure,
+} from './pinned-order-state.ts';
 const STATE_FILE_NAME = 'garyx-desktop-state.json';
 const MAX_GATEWAY_PROFILES = 12;
 const LEGACY_DEFAULT_GATEWAY_URLS = new Set([
   'http://127.0.0.1:3000',
   'http://localhost:3000',
 ]);
+
+type PersistedDesktopState = Partial<DesktopState> & {
+  /** Main-only durable intent; never crosses the DesktopState contract. */
+  pinnedOrderOutbox?: PinnedOrderOutbox | null;
+};
+
+let persistedPinnedOrderOutbox: PinnedOrderOutbox | null = null;
+let persistedPinnedOrderOutboxLoaded = false;
+let latestLocalDesktopState: DesktopState | null = null;
+let pinnedOrderController: PinnedOrderController | null = null;
+let pinnedOrderSettings: DesktopSettings | null = null;
 
 function stateFilePath(): string {
   return join(app.getPath('userData'), STATE_FILE_NAME);
@@ -170,6 +191,38 @@ function normalizePinnedThreadIds(value: unknown): string[] {
     ids.push(id);
   }
   return ids;
+}
+
+function normalizePinsRevision(value: unknown): number {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? value as number
+    : 0;
+}
+
+function normalizePinnedOrderOutbox(value: unknown): PinnedOrderOutbox | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const candidate = value as Partial<PinnedOrderOutbox>;
+  const gatewayIdentity = typeof candidate.gatewayIdentity === 'string'
+    ? normalizeGatewayUrl(candidate.gatewayIdentity)
+    : '';
+  if (!gatewayIdentity) {
+    return null;
+  }
+  return {
+    gatewayIdentity,
+    desiredOrder: normalizePinnedThreadIds(candidate.desiredOrder),
+    lastKnownRevision: normalizePinsRevision(candidate.lastKnownRevision),
+  };
+}
+
+function loadPersistedPinnedOrderOutbox(document: PersistedDesktopState): void {
+  if (persistedPinnedOrderOutboxLoaded) {
+    return;
+  }
+  persistedPinnedOrderOutbox = normalizePinnedOrderOutbox(document.pinnedOrderOutbox);
+  persistedPinnedOrderOutboxLoaded = true;
 }
 
 function normalizeWorkspacePathInput(value?: string | null): string | null {
@@ -484,6 +537,7 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
     workspaces,
     selectedWorkspacePath: entityScopeMatches ? (value?.selectedWorkspacePath ?? null) : null,
     pinnedThreadIds: entityScopeMatches ? normalizePinnedThreadIds(value?.pinnedThreadIds) : [],
+    pinsRevision: entityScopeMatches ? normalizePinsRevision(value?.pinsRevision) : 0,
     threads,
     sessions: threads,
     endpoints: [],
@@ -531,8 +585,15 @@ async function writeState(state: DesktopState): Promise<void> {
   // tripped the corruption recovery below and wiped settings and gateway
   // profiles to defaults.
   const tempPath = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  await writeFile(tempPath, JSON.stringify(state, null, 2), 'utf8');
+  const persisted: PersistedDesktopState = persistedPinnedOrderOutbox
+    ? {
+        ...state,
+        pinnedOrderOutbox: persistedPinnedOrderOutbox,
+      }
+    : state;
+  await writeFile(tempPath, JSON.stringify(persisted, null, 2), 'utf8');
   await rename(tempPath, filePath);
+  latestLocalDesktopState = state;
 }
 
 function isAbsoluteWorkspacePath(path: string): boolean {
@@ -686,6 +747,176 @@ function lastGoodSlice<T>(
   return pick(hydrated);
 }
 
+function pinnedOrderGatewayIdentity(state: DesktopState): string {
+  return normalizeGatewayUrl(state.settings.gatewayUrl || '');
+}
+
+function pinnedOrderTransportFingerprint(settings: DesktopSettings): string {
+  return JSON.stringify([
+    normalizeGatewayUrl(settings.gatewayUrl || ''),
+    settings.gatewayAuthToken || '',
+    settings.gatewayHeaders || '',
+  ]);
+}
+
+function projectPinnedOrderState(
+  state: DesktopState,
+  controller: PinnedOrderController,
+): DesktopState {
+  return {
+    ...state,
+    pinnedThreadIds: controller.state.presentedOrder,
+    pinsRevision: controller.state.highestObservedRevision,
+  };
+}
+
+async function persistPinnedOrderOutbox(
+  outbox: PinnedOrderOutbox | null,
+  gatewayIdentity: string,
+): Promise<void> {
+  if (outbox) {
+    persistedPinnedOrderOutbox = outbox;
+  } else if (
+    !persistedPinnedOrderOutbox ||
+    persistedPinnedOrderOutbox.gatewayIdentity === gatewayIdentity
+  ) {
+    persistedPinnedOrderOutbox = null;
+  }
+  persistedPinnedOrderOutboxLoaded = true;
+  if (latestLocalDesktopState) {
+    await writeState(latestLocalDesktopState);
+  }
+}
+
+const PIN_ORDER_RETRY_BASE_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+
+function classifyPinnedOrderFailure(
+  error: unknown,
+  attempt: number,
+): PinnedOrderReorderFailure {
+  const retryDelay = () => {
+    const base = PIN_ORDER_RETRY_BASE_MS[
+      Math.min(Math.max(0, attempt - 1), PIN_ORDER_RETRY_BASE_MS.length - 1)
+    ];
+    return Math.round(base * (0.8 + Math.random() * 0.4));
+  };
+  if (error instanceof GatewayRequestError) {
+    if (error.status === 429 || error.status >= 500) {
+      return { kind: 'retryable', delay: retryDelay() };
+    }
+    return { kind: 'permanent', statusCode: error.status };
+  }
+  if (
+    error instanceof TypeError ||
+    (error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name))
+  ) {
+    return { kind: 'retryable', delay: retryDelay() };
+  }
+  return { kind: 'permanent', statusCode: null };
+}
+
+async function ensurePinnedOrderController(
+  state: DesktopState,
+): Promise<PinnedOrderController> {
+  const gatewayIdentity = pinnedOrderGatewayIdentity(state);
+  const previousSettings = pinnedOrderSettings;
+  pinnedOrderSettings = state.settings;
+  if (
+    pinnedOrderController &&
+    pinnedOrderController.state.gatewayIdentity === gatewayIdentity
+  ) {
+    if (
+      previousSettings &&
+      pinnedOrderTransportFingerprint(previousSettings) !==
+        pinnedOrderTransportFingerprint(state.settings)
+    ) {
+      await pinnedOrderController.resumePausedSync();
+    }
+    return pinnedOrderController;
+  }
+
+  const previousIdentity = pinnedOrderController?.state.gatewayIdentity ?? null;
+  let controller: PinnedOrderController;
+  controller = new PinnedOrderController(
+    new PinnedOrderState({
+      gatewayIdentity,
+      initialOrder: state.pinnedThreadIds,
+      revision: state.pinsRevision,
+      restoredOutbox:
+        persistedPinnedOrderOutbox?.gatewayIdentity === gatewayIdentity
+          ? persistedPinnedOrderOutbox
+          : null,
+    }),
+    {
+      now: () => Date.now(),
+      persist: async (outbox, identity) => {
+        if (
+          latestLocalDesktopState &&
+          pinnedOrderGatewayIdentity(latestLocalDesktopState) === controller.state.gatewayIdentity
+        ) {
+          latestLocalDesktopState = projectPinnedOrderState(
+            latestLocalDesktopState,
+            controller,
+          );
+        }
+        await persistPinnedOrderOutbox(outbox, identity);
+      },
+      sendReorder: async (request) => {
+        const settings = pinnedOrderSettings;
+        if (
+          !settings ||
+          normalizeGatewayUrl(settings.gatewayUrl || '') !== request.stamp.gatewayIdentity
+        ) {
+          throw new DOMException('Pinned-order gateway changed', 'AbortError');
+        }
+        const result = await reorderRemoteThreadPins(
+          settings,
+          request.threadIds,
+          request.expectedRevision,
+        );
+        return {
+          threadIds: result.page.threadIds,
+          revision: result.page.revision,
+        };
+      },
+      classifyFailure: classifyPinnedOrderFailure,
+      isCurrent: () => pinnedOrderController === controller,
+      onPublish: (order) => {
+        const hydrated = latestHydratedDesktopState;
+        if (
+          hydrated &&
+          pinnedOrderGatewayIdentity(hydrated) === controller.state.gatewayIdentity
+        ) {
+          latestHydratedDesktopState = {
+            ...hydrated,
+            pinnedThreadIds: order,
+            pinsRevision: controller.state.highestObservedRevision,
+          };
+        }
+      },
+    },
+  );
+  pinnedOrderController = controller;
+
+  if (previousIdentity && previousIdentity !== gatewayIdentity) {
+    await persistPinnedOrderOutbox(null, previousIdentity);
+  }
+  return controller;
+}
+
+/** Environment-change wake for a paused durable reorder outbox. */
+export async function resumeDesktopPinnedOrderSync(): Promise<void> {
+  await pinnedOrderController?.resumePausedSync();
+}
+
+export async function getDesktopThreadPinOrderSnapshot(): Promise<DesktopThreadPinOrderSnapshot> {
+  if (pinnedOrderController) {
+    return pinnedOrderController.snapshot();
+  }
+  const state = latestHydratedDesktopState ?? latestLocalDesktopState ?? await getLocalDesktopState();
+  return (await ensurePinnedOrderController(state)).snapshot();
+}
+
 async function fetchRemoteSlice<T>(
   source: RemoteFetchSource,
   label: string,
@@ -753,6 +984,16 @@ async function mergeRemoteDesktopState(
   localState: DesktopState,
   options?: MergeRemoteStateOptions,
 ): Promise<DesktopState> {
+  const pinOrder = await ensurePinnedOrderController(localState);
+  const pinsRequestStamp = pinOrder.requestStamp();
+  const lastGoodPinnedState = lastGoodSlice(localState, (state) => ({
+    threadIds: state.pinnedThreadIds,
+    revision: state.pinsRevision,
+  }));
+  const pinsFallback: DesktopThreadPinsPage = lastGoodPinnedState ?? {
+    threadIds: localState.pinnedThreadIds,
+    revision: localState.pinsRevision,
+  };
   const [threadsResult, pinsResult, endpointsResult, workspacesResult, configuredBotsResult, botConsolesResult, automationsResult] =
     await Promise.all([
       fetchRemoteSlice(
@@ -765,7 +1006,7 @@ async function mergeRemoteDesktopState(
       fetchRemoteSlice(
         'thread_pins',
         'thread pins',
-        lastGoodSlice(localState, (state) => state.pinnedThreadIds) ?? localState.pinnedThreadIds,
+        pinsFallback,
         () => fetchThreadPins(localState.settings),
       ),
       fetchRemoteSlice(
@@ -813,12 +1054,25 @@ async function mergeRemoteDesktopState(
     automationsResult.error,
   ].filter((error): error is DesktopRemoteStateError => Boolean(error));
   const remoteThreads = threadsResult.value;
-  const remotePinnedThreadIds = pinsResult.value;
+  const remotePinsPage = pinsResult.value;
   const remoteEndpoints = endpointsResult.value;
   const remoteWorkspaces = workspacesResult.value;
   const remoteConfiguredBots = configuredBotsResult.value;
   const remoteBotConsoles = botConsolesResult.value;
   const remoteAutomations = automationsResult.value;
+
+  if (pinsResult.ok) {
+    await pinOrder.receivePage(
+      {
+        threadIds: remotePinsPage.threadIds,
+        revision: remotePinsPage.revision,
+      },
+      pinsRequestStamp,
+    );
+  } else {
+    await pinOrder.retryTick();
+  }
+  const effectivePinnedThreadIds = pinOrder.state.presentedOrder;
 
   const workspaces = remoteWorkspacesWithAvailability(remoteWorkspaces);
 
@@ -828,7 +1082,7 @@ async function mergeRemoteDesktopState(
   }));
   if (options?.threadLimit && threadsResult.ok && pinsResult.ok) {
     const pageIds = new Set(threads.map((thread) => thread.id));
-    const missingPinnedIds = normalizePinnedThreadIds(remotePinnedThreadIds).filter(
+    const missingPinnedIds = normalizePinnedThreadIds(effectivePinnedThreadIds).filter(
       (threadId) => !pageIds.has(threadId),
     );
     if (missingPinnedIds.length > 0) {
@@ -847,7 +1101,7 @@ async function mergeRemoteDesktopState(
     }
   }
   const threadIds = new Set(threads.map((thread) => thread.id));
-  const pinnedThreadIds = normalizePinnedThreadIds(remotePinnedThreadIds).filter((threadId) => {
+  const pinnedThreadIds = normalizePinnedThreadIds(effectivePinnedThreadIds).filter((threadId) => {
     return threadIds.has(threadId);
   });
 
@@ -882,6 +1136,7 @@ async function mergeRemoteDesktopState(
     workspaces,
     threads,
     pinnedThreadIds,
+    pinsRevision: pinOrder.state.highestObservedRevision,
     endpoints,
     configuredBots,
     botConsoles,
@@ -936,7 +1191,9 @@ async function getLocalDesktopState(): Promise<DesktopState> {
     const raw = await readFile(filePath, 'utf8');
     let state: DesktopState;
     try {
-      state = await hydrateState(JSON.parse(raw) as Partial<DesktopState>);
+      const document = JSON.parse(raw) as PersistedDesktopState;
+      loadPersistedPinnedOrderOutbox(document);
+      state = await hydrateState(document);
     } catch (error) {
       if (!(error instanceof SyntaxError)) {
         throw error;
@@ -949,13 +1206,16 @@ async function getLocalDesktopState(): Promise<DesktopState> {
       let retryState: DesktopState | null = null;
       try {
         const retryRaw = await readFile(filePath, 'utf8');
-        retryState = await hydrateState(JSON.parse(retryRaw) as Partial<DesktopState>);
+        const retryDocument = JSON.parse(retryRaw) as PersistedDesktopState;
+        loadPersistedPinnedOrderOutbox(retryDocument);
+        retryState = await hydrateState(retryDocument);
       } catch (retryError) {
         if (!(retryError instanceof SyntaxError)) {
           throw retryError;
         }
       }
       if (retryState) {
+        latestLocalDesktopState = retryState;
         return retryState;
       }
 
@@ -981,12 +1241,17 @@ async function getLocalDesktopState(): Promise<DesktopState> {
       await writeState(next);
       return next;
     }
+    latestLocalDesktopState = state;
     return state;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return hydrateState({
+      persistedPinnedOrderOutbox = null;
+      persistedPinnedOrderOutboxLoaded = true;
+      const state = await hydrateState({
         settings: resolvedDefaults,
       });
+      latestLocalDesktopState = state;
+      return state;
     }
     throw error;
   }
@@ -1288,8 +1553,47 @@ export async function setDesktopThreadPinned(input: {
 }): Promise<DesktopState> {
   const current = await getDesktopState();
   const thread = requireThread(current, input.threadId);
-  await setRemoteThreadPinned(current.settings, thread.id, input.pinned);
-  return getDesktopState();
+  const pinOrder = await ensurePinnedOrderController(current);
+  const membershipRequest = await pinOrder.beginMembershipChange(
+    thread.id,
+    input.pinned,
+  );
+  if (!membershipRequest) {
+    return projectPinnedOrderState(current, pinOrder);
+  }
+  try {
+    const page = await setRemoteThreadPinned(
+      current.settings,
+      thread.id,
+      input.pinned,
+    );
+    await pinOrder.completeMembership(membershipRequest, {
+      threadIds: page.threadIds,
+      revision: page.revision,
+    });
+    await pinOrder.waitForTransportIdle();
+    return rememberHydratedDesktopState(projectPinnedOrderState(current, pinOrder));
+  } catch (error) {
+    await pinOrder.failMembership(membershipRequest);
+    throw error;
+  }
+}
+
+export async function setDesktopThreadPinOrder(
+  threadIds: string[],
+): Promise<DesktopState> {
+  const normalizedOrder = normalizePinnedThreadIds(threadIds);
+  if (normalizedOrder.length === 0) {
+    throw new Error('Pinned thread order must be a non-empty array.');
+  }
+  if (normalizedOrder.length !== threadIds.length) {
+    throw new Error('Pinned thread order must contain unique non-empty ids.');
+  }
+  const current = await getHydratedDesktopStateForUiMutation();
+  const pinOrder = await ensurePinnedOrderController(current);
+  await pinOrder.commitOrder(normalizedOrder);
+  await pinOrder.waitForTransportIdle();
+  return rememberHydratedDesktopState(projectPinnedOrderState(current, pinOrder));
 }
 
 export async function createDesktopThread(input?: {

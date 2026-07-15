@@ -235,6 +235,10 @@ const api: GaryxDesktopApi = {
   deleteThread: (input) => ipcRenderer.invoke("garyx:delete-thread", input),
   setThreadPinned: (input) =>
     ipcRenderer.invoke("garyx:set-thread-pinned", input),
+  setThreadPinOrder: (input) =>
+    ipcRenderer.invoke("garyx:set-thread-pin-order", input),
+  getThreadPinOrderSnapshot: () =>
+    ipcRenderer.invoke("garyx:get-thread-pin-order-snapshot"),
   getThreadHistory: (input) =>
     ipcRenderer.invoke("garyx:get-thread-history", input),
   loadThreadTranscriptCache: (threadId) =>

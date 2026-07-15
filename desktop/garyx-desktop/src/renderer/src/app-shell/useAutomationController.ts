@@ -9,6 +9,10 @@ import type {
 } from '@shared/contracts';
 
 import { selectedAutomation } from '../thread-model';
+import {
+  requestDesktopState,
+  requestDesktopStateResult,
+} from '../pinned-order-ingress';
 import { buildStandaloneAgentOptions } from './agent-options';
 import type { DesktopRoute } from './desktop-route';
 import type {
@@ -146,7 +150,9 @@ export function useAutomationController({
     // newer navigation installed while this one awaited the IPC.
     const routeVersion = getRouteVersion();
     try {
-      const nextState = await window.garyxDesktop.selectAutomation({ automationId });
+      const nextState = await requestDesktopState(() =>
+        window.garyxDesktop.selectAutomation({ automationId }),
+      );
       if (getRouteVersion() !== routeVersion) {
         return;
       }
@@ -249,15 +255,15 @@ export function useAutomationController({
 
     try {
       const result = automationDialog.mode === 'create'
-        ? await window.garyxDesktop.createAutomation({
+        ? await requestDesktopStateResult(() => window.garyxDesktop.createAutomation({
             label,
             prompt,
             agentId: targetThreadId ? undefined : automationDialog.draft.agentId,
             workspacePath: targetThreadId ? undefined : workspacePath || undefined,
             targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,
-          })
-        : await window.garyxDesktop.updateAutomation({
+          }), (response) => response.state)
+        : await requestDesktopStateResult(() => window.garyxDesktop.updateAutomation({
             automationId: automationDialog.automationId || '',
             label,
             prompt,
@@ -265,7 +271,7 @@ export function useAutomationController({
             workspacePath: targetThreadId ? undefined : workspacePath || undefined,
             targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,
-          });
+          }), (response) => response.state);
       setDesktopState(result.state);
       setAutomationDialog(null);
       // Navigate to the SERVER-confirmed selection (create selects the
@@ -295,10 +301,13 @@ export function useAutomationController({
     setAutomationMutation(mutationKey);
     setError(null);
     try {
-      const result = await window.garyxDesktop.updateAutomation({
-        automationId: automation.id,
-        enabled,
-      });
+      const result = await requestDesktopStateResult(
+        () => window.garyxDesktop.updateAutomation({
+          automationId: automation.id,
+          enabled,
+        }),
+        (response) => response.state,
+      );
       setDesktopState(result.state);
     } catch (automationError) {
       setError(
@@ -320,9 +329,11 @@ export function useAutomationController({
     setAutomationMutation(mutationKey);
     setError(null);
     try {
-      const nextState = await window.garyxDesktop.deleteAutomation({
-        automationId: automation.id,
-      });
+      const nextState = await requestDesktopState(() =>
+        window.garyxDesktop.deleteAutomation({
+          automationId: automation.id,
+        }),
+      );
       setDesktopState(nextState);
       setAutomationActivityById((current) => {
         const next = { ...current };
@@ -358,9 +369,12 @@ export function useAutomationController({
     setError(null);
     setAutomationStatus(null);
     try {
-      const result = await window.garyxDesktop.runAutomationNow({
-        automationId: automation.id,
-      });
+      const result = await requestDesktopStateResult(
+        () => window.garyxDesktop.runAutomationNow({
+          automationId: automation.id,
+        }),
+        (response) => response.state,
+      );
       const latestThreadId = result.activity.threadId || automation.targetThreadId || automation.threadId;
       setDesktopState({
         ...result.state,
@@ -451,10 +465,12 @@ export function useAutomationController({
           && activeAutomationUnreadAt
           && (!activeAutomationSeenAt || activeAutomationUnreadAt > activeAutomationSeenAt)
         ) {
-          const nextState = await window.garyxDesktop.markAutomationSeen({
-            automationId: activeAutomation.id,
-            seenAt: activeAutomationUnreadAt,
-          });
+          const nextState = await requestDesktopState(() =>
+            window.garyxDesktop.markAutomationSeen({
+              automationId: activeAutomation.id,
+              seenAt: activeAutomationUnreadAt,
+            }),
+          );
           if (!cancelled) {
             startTransition(() => {
               setDesktopState(nextState);
