@@ -36,11 +36,27 @@ test("pinned sidebar owns the vertical sortable lifecycle contract", async () =>
   assert.match(source, /onDragCancel=\{handleDragCancel\}/);
   assert.match(source, /onDragStart=\{handleDragStart\}/);
   assert.match(source, /onReorderThreads\(nextOrder\)/);
-  // Mid-drag unmount (responsive collapse / rows emptied) must cancel the
-  // drag so the ingress baseline never dangles.
+  // The rows projection emptying mid-drag must cancel the drag: the
+  // component renders null while staying mounted, so the cancel keys off
+  // rows change (review #TASK-2312 P2); unmount cleanup stays as defense.
   assert.match(source, /dragActiveRef\.current\s*=\s*true/);
+  assert.match(
+    source,
+    /shouldCancelDanglingDrag\(rows\.length, dragActiveRef\.current\)/,
+  );
+  assert.match(source, /\}, \[rows\.length\]\);/);
   assert.match(
     source,
     /return \(\) => \{[\s\S]*?onDragCancelRef\.current\(\)/,
   );
+});
+
+test("dangling drag predicate cancels only an active drag with emptied rows", async () => {
+  const { shouldCancelDanglingDrag } = await import(
+    "./pinned-thread-reorder.ts"
+  );
+  assert.equal(shouldCancelDanglingDrag(0, true), true);
+  assert.equal(shouldCancelDanglingDrag(0, false), false);
+  assert.equal(shouldCancelDanglingDrag(1, true), false);
+  assert.equal(shouldCancelDanglingDrag(3, false), false);
 });

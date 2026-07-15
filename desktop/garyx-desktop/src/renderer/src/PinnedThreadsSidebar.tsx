@@ -25,7 +25,10 @@ import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
 import { PinIcon } from './app-shell/icons';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './components/ui/tooltip';
 import { useI18n } from './i18n';
-import { reorderPinnedThreadIds } from './pinned-thread-reorder';
+import {
+  reorderPinnedThreadIds,
+  shouldCancelDanglingDrag,
+} from './pinned-thread-reorder';
 import type { ThreadAvatarIdentity } from './thread-avatar';
 
 export type PinnedThreadRow = {
@@ -201,13 +204,22 @@ export function PinnedThreadsSidebar({
   const [confirmThreadId, setConfirmThreadId] = useState<string | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rowIds = useMemo(() => rows.map(({ thread }) => thread.id), [rows]);
-  // DndContext does not fire onDragCancel when it unmounts mid-drag (e.g.
-  // the 720px responsive collapse removes the sidebar, or a remote unpin
-  // empties the rows). Track the active drag and cancel it on unmount so the
-  // ingress drag baseline never dangles until the next drag.
+  // DndContext fires no onDragCancel when its subtree disappears mid-drag.
+  // The reachable path is the rows projection emptying (remote unpin during
+  // a drag): this component then renders null while STAYING MOUNTED — the
+  // parent renders it unconditionally and the 720px collapse is CSS-only —
+  // so the cancel must key off rows change; an unmount-only cleanup never
+  // fires there (review #TASK-2312 P2). The unmount cleanup below remains as
+  // defense for true unmounts.
   const dragActiveRef = useRef(false);
   const onDragCancelRef = useRef(onDragCancel);
   onDragCancelRef.current = onDragCancel;
+  useEffect(() => {
+    if (shouldCancelDanglingDrag(rows.length, dragActiveRef.current)) {
+      dragActiveRef.current = false;
+      onDragCancelRef.current();
+    }
+  }, [rows.length]);
   useEffect(() => {
     return () => {
       if (dragActiveRef.current) {
