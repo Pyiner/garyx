@@ -473,6 +473,19 @@ final class PinnedOrderStateTests: XCTestCase {
         XCTAssertTrue(update.effects.contains(.persist(nil, gatewayIdentity: gateway)))
     }
 
+    func testSameGatewayReloadRestoresOutboxWithoutStaleTransportTokens() throws {
+        var state = makeState(["a", "b"], revision: 10)
+        _ = try beginDrop(&state, order: ["b", "a"])
+        let persisted = try XCTUnwrap(state.outbox)
+
+        _ = state.reloadCurrentGateway(restoredOutbox: persisted)
+
+        XCTAssertEqual(state.gatewayIdentity, gateway)
+        XCTAssertEqual(state.desiredOrder, ["b", "a"])
+        XCTAssertEqual(state.pendingSync, .ready)
+        XCTAssertNil(state.activeReorderFlight)
+    }
+
     private func makeState(
         _ order: [String],
         revision: Int64

@@ -166,6 +166,7 @@ struct GaryxPinnedOrderState: Equatable, Sendable {
     var isDragging: Bool { dragSession != nil }
     var isUnsettled: Bool { outbox != nil }
     var hasPendingSync: Bool { outbox != nil }
+    var nextRetryAttempt: Int { retryAttempt + 1 }
     var liveMembershipIntentCount: Int {
         membershipIntents.values.filter { intent in
             if case .live = intent.phase { return true }
@@ -464,6 +465,22 @@ struct GaryxPinnedOrderState: Equatable, Sendable {
         return GaryxPinnedOrderUpdate(
             effects: [.persist(nil, gatewayIdentity: oldIdentity)]
         )
+    }
+
+    /// Recreates the same gateway domain after its transport runtime changes
+    /// (settings/app foreground reset). Persisted intent survives, while stale
+    /// transport tokens, membership intents, floors not in the outbox, and drag
+    /// state are dropped atomically.
+    mutating func reloadCurrentGateway(
+        initialOrder: [String] = [],
+        restoredOutbox: GaryxPinnedOrderOutbox? = nil
+    ) -> GaryxPinnedOrderUpdate {
+        self = GaryxPinnedOrderState(
+            gatewayIdentity: gatewayIdentity,
+            initialOrder: initialOrder,
+            restoredOutbox: restoredOutbox
+        )
+        return GaryxPinnedOrderUpdate()
     }
 
     private mutating func acceptPage(

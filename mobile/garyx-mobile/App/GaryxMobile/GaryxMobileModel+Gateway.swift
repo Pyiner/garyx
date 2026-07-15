@@ -51,6 +51,7 @@ extension GaryxMobileModel {
         )
         resetWorkspaceCatalogState()
         restoreCachedCatalogState()
+        reloadPinnedOrderDomainForCurrentGateway()
         let workspace = newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
         if !workspace.isEmpty, workspaceGitStatuses[workspace] == nil {
             Task { await refreshWorkspaceGitStatus(for: workspace) }
@@ -73,6 +74,9 @@ extension GaryxMobileModel {
 
     func resetGatewayRuntimeState() {
         gatewayRuntimeGeneration = UUID()
+        pinnedOrderReorderTask?.cancel()
+        pinnedOrderReorderTask = nil
+        pinnedOrderReorderTaskToken = nil
         hasAttemptedLastOpenedThreadRestore = false
         selectedThreadRecoveryTask?.cancel()
         selectedThreadRecoveryTask = nil
@@ -279,6 +283,7 @@ extension GaryxMobileModel {
         switch phase {
         case .active:
             capsulePreviewSceneSignal.publish(.active)
+            servicePinnedOrderRetry(source: .userAction)
             sceneRefreshTask?.cancel()
             let selectedThreadId = selectedThread?.id
             let plan = GaryxForegroundSyncPlan.plan(

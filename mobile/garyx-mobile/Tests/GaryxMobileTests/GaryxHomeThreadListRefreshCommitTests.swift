@@ -13,7 +13,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let recent = makeThread(id: "thread-recent", title: "Recent chat")
         let incoming = makeThread(id: "thread-new", title: "New arrival")
         model.threads = [pinned, recent]
-        model.pinnedThreadIds = [pinned.id]
+        model.applyPinnedThreadIds([pinned.id])
         primeRecentFeed(model, ids: [pinned.id, recent.id], filter: .all)
 
         // The refresh ticket is captured before the archive races the
@@ -94,7 +94,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let model = makeModel()
         let thread = makeThread(id: "thread-surgery", title: "Doomed")
         model.threads = [thread]
-        model.pinnedThreadIds = [thread.id]
+        model.applyPinnedThreadIds([thread.id])
         primeRecentFeed(model, ids: [thread.id], filter: .all)
         primeRecentFeed(model, ids: [thread.id], filter: .nonTask)
 
@@ -487,7 +487,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let archived = makeThread(id: "thread-archived", title: "Archived thread")
         let survivor = makeThread(id: "thread-survivor", title: "Surviving thread")
         model.threads = [archived, survivor]
-        model.pinnedThreadIds = [archived.id]
+        model.applyPinnedThreadIds([archived.id])
         primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .all)
         primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .nonTask)
         await model.homeProjectionGateway.waitForIdleForTesting()
@@ -721,7 +721,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let recentA = makeThread(id: "thread-recent-a", title: "Recent A")
         let recentB = makeThread(id: "thread-recent-b", title: "Recent B")
         model.threads = [zero, one, two, recentA, recentB]
-        model.pinnedThreadIds = [zero.id, one.id, two.id]
+        model.applyPinnedThreadIds([zero.id, one.id, two.id])
         primeRecentFeed(
             model,
             ids: [zero.id, one.id, two.id, recentA.id, recentB.id],
@@ -871,7 +871,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let two = makeThread(id: "thread-two", title: "Pinned two")
         let new = makeThread(id: "thread-new", title: "New pin")
         model.threads = [zero, one, two, new]
-        model.pinnedThreadIds = [zero.id, one.id, two.id]
+        model.applyPinnedThreadIds([zero.id, one.id, two.id])
         primeRecentFeed(model, ids: [zero.id, one.id, two.id, new.id], filter: .all)
         await model.homeProjectionGateway.waitForIdleForTesting()
 
@@ -934,7 +934,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let pinned = makeThread(id: "thread-pinned", title: "Pinned task")
         let chat = makeThread(id: "thread-chat", title: "Visible chat")
         model.threads = [pinned, chat]
-        model.pinnedThreadIds = [pinned.id]
+        model.applyPinnedThreadIds([pinned.id])
         primeRecentFeed(model, ids: [pinned.id, chat.id], filter: .all)
         primeRecentFeed(model, ids: [chat.id], filter: .nonTask)
         model.recentThreadFeeds.select(.nonTask)

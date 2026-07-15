@@ -406,13 +406,15 @@ final class GaryxGatewayClientTests: XCTestCase {
             from: Data(
                 """
                 {
-                  "thread_ids": ["thread::one", " thread::two ", "thread::one", ""]
+                  "thread_ids": ["thread::one", " thread::two ", "thread::one", ""],
+                  "revision": 7
                 }
                 """.utf8
             )
         )
 
         XCTAssertEqual(page.threadIds, ["thread::one", "thread::two"])
+        XCTAssertEqual(page.revision, 7)
     }
 
     func testThreadPinsPageDecodesPinsFallback() throws {
@@ -431,6 +433,108 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
 
         XCTAssertEqual(page.threadIds, ["thread::from-snake", "thread::from-camel"])
+        XCTAssertEqual(page.revision, 0)
+    }
+
+    func testReorderThreadPinsSendsOneCASAttemptAndDecodesAcceptedPage() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "PUT")
+            XCTAssertEqual(request.url?.path, "/garyx/api/thread-pins")
+            let body = try XCTUnwrap(garyxRequestBodyData(from: request))
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: body) as? [String: Any]
+            )
+            XCTAssertEqual(object["thread_ids"] as? [String], ["thread::two", "thread::one"])
+            XCTAssertEqual(object["expected_revision"] as? Int, 8)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(#"{"thread_ids":["thread::two","thread::one"],"revision":9}"#.utf8)
+            )
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: URL(string: "http://127.0.0.1:31337/garyx")!
+            ),
+            session: session
+        )
+
+        let result = try await client.reorderThreadPins(
+            threadIds: ["thread::two", "thread::one"],
+            expectedRevision: 8
+        )
+
+        XCTAssertEqual(
+            result,
+            .accepted(GaryxThreadPinsPage(
+                threadIds: ["thread::two", "thread::one"],
+                revision: 9
+            ))
+        )
+    }
+
+    func testReorderThreadPinsReturnsConflictPageWithoutInternalRetry() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        var requestCount = 0
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            requestCount += 1
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 409,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(#"{"thread_ids":["thread::one","thread::two"],"revision":11}"#.utf8)
+            )
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: URL(string: "http://127.0.0.1:31337/garyx")!
+            ),
+            session: session
+        )
+
+        let result = try await client.reorderThreadPins(
+            threadIds: ["thread::two", "thread::one"],
+            expectedRevision: 8
+        )
+
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(
+            result,
+            .conflict(GaryxThreadPinsPage(
+                threadIds: ["thread::one", "thread::two"],
+                revision: 11
+            ))
+        )
     }
 
     func testRecentThreadsPageDecodesGatewayShape() throws {

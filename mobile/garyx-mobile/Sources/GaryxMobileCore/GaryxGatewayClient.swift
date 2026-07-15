@@ -357,6 +357,35 @@ public final class GaryxGatewayClient {
         return try await delete("/api/thread-pins/\(threadId.urlPathEncoded)")
     }
 
+    /// Performs exactly one collection CAS attempt. Reorder retry ownership
+    /// belongs to `GaryxPinnedOrderState`, so transport retries here would hide
+    /// request counts and bypass its membership/single-flight gates.
+    public func reorderThreadPins(
+        threadIds: [String],
+        expectedRevision: Int64
+    ) async throws -> GaryxThreadPinsReorderResult {
+        var request = try makeRequest(path: "/api/thread-pins", method: "PUT")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(
+            GaryxThreadPinsReorderRequest(
+                threadIds: threadIds,
+                expectedRevision: max(0, expectedRevision)
+            )
+        )
+        do {
+            let data = try await sendRaw(request, idempotent: true, maxAttempts: 1)
+            return .accepted(try decoder.decode(GaryxThreadPinsPage.self, from: data))
+        } catch GaryxGatewayError.httpStatus(409, let body, _) {
+            guard let data = body.data(using: .utf8) else {
+                throw GaryxGatewayError.encodingFailed(
+                    "The Garyx gateway returned a non-UTF-8 thread-pins conflict page."
+                )
+            }
+            return .conflict(try decoder.decode(GaryxThreadPinsPage.self, from: data))
+        }
+    }
+
     public func threadHistory(
         threadId: String,
         limit: Int = 100,
@@ -1136,6 +1165,16 @@ public final class GaryxGatewayClient {
             return max(0, date.timeIntervalSinceNow)
         }
         return nil
+    }
+}
+
+private struct GaryxThreadPinsReorderRequest: Encodable {
+    var threadIds: [String]
+    var expectedRevision: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case threadIds = "thread_ids"
+        case expectedRevision = "expected_revision"
     }
 }
 private extension String {
