@@ -419,14 +419,6 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func threadLogs(threadId: String, cursor: Int? = nil) async throws -> GaryxThreadLogChunk {
-        var queryItems: [URLQueryItem] = []
-        if let cursor {
-            queryItems.append(URLQueryItem(name: "cursor", value: String(cursor)))
-        }
-        return try await get("/api/threads/\(threadId.urlPathEncoded)/logs", queryItems: queryItems)
-    }
-
     public func createThread(_ request: GaryxCreateThreadRequest) async throws -> GaryxThreadSummary {
         try await post("/api/threads", body: request)
     }
@@ -607,27 +599,6 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func saveSkillFile(
-        skillId: String,
-        request: GaryxSkillFileWriteRequest
-    ) async throws -> GaryxSkillFileDocument {
-        try await put("/api/skills/\(skillId.urlPathEncoded)/file", body: request)
-    }
-
-    public func createSkillEntry(
-        skillId: String,
-        request: GaryxSkillEntryCreateRequest
-    ) async throws -> GaryxSkillEditorState {
-        try await post("/api/skills/\(skillId.urlPathEncoded)/entries", body: request)
-    }
-
-    public func deleteSkillEntry(skillId: String, path: String) async throws -> GaryxSkillEditorState {
-        try await delete(
-            "/api/skills/\(skillId.urlPathEncoded)/entries",
-            queryItems: [URLQueryItem(name: "path", value: path)]
-        )
-    }
-
     /// Anchored task forest for the conversation task-tree sidebar. The
     /// gateway owns retention and layout; callers render the page as-is.
     public func listTaskForest(anchorThreadId: String) async throws -> GaryxTaskForestPage {
@@ -655,13 +626,6 @@ public final class GaryxGatewayClient {
 
     public func deleteAutomation(id: String) async throws -> GaryxEmptyResponse {
         try await delete("/api/automations/\(id.urlPathEncoded)")
-    }
-
-    public func automationActivity(id: String, limit: Int = 20) async throws -> GaryxAutomationActivityFeed {
-        try await get(
-            "/api/automations/\(id.urlPathEncoded)/activity",
-            queryItems: [URLQueryItem(name: "limit", value: String(limit))]
-        )
     }
 
     public func automationThreads(
@@ -714,15 +678,6 @@ public final class GaryxGatewayClient {
         let page: GaryxWorkspacesPage = try await post(
             "/api/workspaces",
             body: GaryxWorkspaceUpsertRequest(path: path, name: name)
-        )
-        return page.workspaces
-    }
-
-    @discardableResult
-    public func deleteWorkspace(path: String) async throws -> [GaryxWorkspaceSummary] {
-        let page: GaryxWorkspacesPage = try await delete(
-            "/api/workspaces",
-            queryItems: [URLQueryItem(name: "path", value: path)]
         )
         return page.workspaces
     }
@@ -849,26 +804,6 @@ public final class GaryxGatewayClient {
     public func listChannelPlugins() async throws -> [GaryxChannelPluginCatalogEntry] {
         let page: GaryxChannelPluginCatalogPage = try await get("/api/channels/plugins")
         return page.plugins
-    }
-
-    public func startChannelAuthFlow(
-        pluginId: String,
-        formState: [String: GaryxJSONValue] = [:]
-    ) async throws -> GaryxChannelAuthSession {
-        try await post(
-            "/api/channels/plugins/\(pluginId.urlPathEncoded)/auth_flow/start",
-            body: GaryxChannelAuthStartRequest(formState: formState)
-        )
-    }
-
-    public func pollChannelAuthFlow(
-        pluginId: String,
-        sessionId: String
-    ) async throws -> GaryxChannelAuthPollResult {
-        try await post(
-            "/api/channels/plugins/\(pluginId.urlPathEncoded)/auth_flow/poll",
-            body: GaryxChannelAuthPollRequest(sessionId: sessionId)
-        )
     }
 
     public func validateChannelAccount(
