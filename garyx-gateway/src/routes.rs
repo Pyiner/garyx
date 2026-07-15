@@ -40,7 +40,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::agent_identity::create_thread_for_agent_reference;
 use crate::garyx_db::{
-    GaryxDbError, PinnedThreadRecord, RecentThreadRecord, RecentThreadTaskFilter, ThreadMetaRecord,
+    GaryxDbError, RecentThreadRecord, RecentThreadTaskFilter, ThreadMetaRecord, ThreadPinsPage,
 };
 use crate::provider_session_locator::{
     list_recent_local_provider_sessions, recover_local_provider_session,
@@ -1439,21 +1439,18 @@ fn thread_summary_from_meta(record: &ThreadMetaRecord) -> Value {
     })
 }
 
-fn thread_pin_ids(records: &[PinnedThreadRecord]) -> Vec<String> {
-    records
+fn thread_pin_ids(page: &ThreadPinsPage) -> Vec<String> {
+    page.pins
         .iter()
         .map(|record| record.thread_id.clone())
         .collect()
 }
 
-fn thread_pins_payload(records: &[PinnedThreadRecord]) -> Value {
-    let thread_ids = records
-        .iter()
-        .map(|record| Value::String(record.thread_id.clone()))
-        .collect::<Vec<_>>();
+fn thread_pins_payload(page: &ThreadPinsPage) -> Value {
     json!({
-        "thread_ids": thread_ids,
-        "pins": records,
+        "thread_ids": thread_pin_ids(page),
+        "pins": page.pins,
+        "revision": page.revision,
     })
 }
 
@@ -1665,7 +1662,7 @@ pub async fn list_thread_pins(State(state): State<Arc<AppState>>) -> impl IntoRe
         .run_blocking(|db| db.list_pinned_threads())
         .await
     {
-        Ok(records) => (StatusCode::OK, Json(thread_pins_payload(&records))).into_response(),
+        Ok(page) => (StatusCode::OK, Json(thread_pins_payload(&page))).into_response(),
         Err(error) => garyx_db_error_response(error).into_response(),
     }
 }
@@ -1690,23 +1687,27 @@ pub async fn pin_thread(
     match state
         .ops
         .garyx_db
-        .run_blocking(move |db| {
-            let record = db.pin_thread(&pin_thread_id)?;
-            let records = db.list_pinned_threads()?;
-            Ok((record, records))
-        })
+        .run_blocking(move |db| db.pin_thread(&pin_thread_id))
         .await
     {
-        Ok((record, records)) => (
-            StatusCode::OK,
-            Json(json!({
+        Ok(page) => {
+            let pin = page
+                .pins
+                .iter()
+                .find(|record| record.thread_id == thread_id)
+                .cloned();
+            (
+                StatusCode::OK,
+                Json(json!({
                 "pinned": true,
-                "pin": record,
-                "thread_ids": thread_pin_ids(&records),
-                "pins": records,
-            })),
-        )
-            .into_response(),
+                "pin": pin,
+                "thread_ids": thread_pin_ids(&page),
+                "pins": page.pins,
+                "revision": page.revision,
+                })),
+            )
+                .into_response()
+        }
         Err(error) => garyx_db_error_response(error).into_response(),
     }
 }
@@ -1724,21 +1725,18 @@ pub async fn unpin_thread(
     match state
         .ops
         .garyx_db
-        .run_blocking(move |db| {
-            let removed = db.unpin_thread(&unpin_thread_id)?;
-            let records = db.list_pinned_threads()?;
-            Ok((removed, records))
-        })
+        .run_blocking(move |db| db.unpin_thread(&unpin_thread_id))
         .await
     {
-        Ok((removed, records)) => (
+        Ok((removed, page)) => (
             StatusCode::OK,
             Json(json!({
                 "pinned": false,
                 "removed": removed,
                 "thread_id": thread_id,
-                "thread_ids": thread_pin_ids(&records),
-                "pins": records,
+                "thread_ids": thread_pin_ids(&page),
+                "pins": page.pins,
+                "revision": page.revision,
             })),
         )
             .into_response(),

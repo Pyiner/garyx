@@ -3150,6 +3150,13 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
         .unwrap();
     let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let pin_payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(pin_payload["revision"], 1);
+    assert_eq!(pin_payload["thread_ids"], json!([thread_id]));
+    assert_eq!(pin_payload["pins"][0]["sort_order"], -1);
 
     let request = authed_request()
         .uri("/api/thread-pins")
@@ -3162,6 +3169,8 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["thread_ids"], json!([thread_id]));
+    assert_eq!(payload["revision"], pin_payload["revision"]);
+    assert_eq!(payload["pins"], pin_payload["pins"]);
 
     let request = authed_request()
         .method("DELETE")
@@ -3170,6 +3179,12 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
         .unwrap();
     let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let unpin_payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(unpin_payload["revision"], 2);
+    assert_eq!(unpin_payload["thread_ids"], json!([]));
 
     let request = authed_request()
         .uri("/api/thread-pins")
@@ -3181,6 +3196,8 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["thread_ids"], json!([]));
+    assert_eq!(payload["revision"], unpin_payload["revision"]);
+    assert_eq!(payload["pins"], unpin_payload["pins"]);
 }
 
 #[tokio::test]
@@ -3221,6 +3238,7 @@ async fn delete_thread_removes_garyx_db_pin() {
             .garyx_db
             .list_pinned_threads()
             .expect("list pins")
+            .pins
             .is_empty()
     );
 }
@@ -5809,6 +5827,7 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
             .garyx_db
             .list_pinned_threads()
             .expect("pins after archive")
+            .pins
             .is_empty()
     );
 
