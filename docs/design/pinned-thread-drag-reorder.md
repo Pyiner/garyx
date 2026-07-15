@@ -329,9 +329,17 @@ demonstrate:
    SwiftUI's own drag/drop delegates on the backing `UICollectionView`
    (observe, never substitute);
 3. long-press arbitration between the row action menu and the reorder lift is
-   deterministic (acceptable outcomes: system arbitration proves clean, or
-   pinned rows move the action menu to a non-conflicting affordance —
-   swipe/ellipsis — with the product owner informed);
+   deterministic. **Preferred outcome (product owner decision, 2026-07-15):
+   both recognizers arm; detected drag movement cancels the menu** — a
+   stationary hold opens the menu, movement hands the touch to the reorder
+   lift. If the menu popover is already visible when movement starts, dismiss
+   it and hand off to the lift *if technically feasible*; if the spike proves
+   post-popover handoff infeasible (the menu window may own the touch
+   stream), the sanctioned variant is **movement-suppresses-menu**: any
+   movement during the hold suppresses menu presentation, only a stationary
+   hold presents it — matching native contextMenu+drag semantics. Moving the
+   pinned-row action menu to a non-conflicting affordance (swipe/ellipsis)
+   is demoted to last resort and requires going back to the product owner;
 4. a poll/ack snapshot injected mid-lift moves no rows;
 5. out-of-segment destinations clamp with sane live gap/settle behavior;
 6. the existing pin/unpin single-identity *move* animation is not regressed;
