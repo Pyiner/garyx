@@ -96,6 +96,13 @@ final class PinnedOrderStateTests: XCTestCase {
         let cancel = state.cancelDrag()
         XCTAssertEqual(state.presentedOrder, ["c", "a", "b"])
         XCTAssertEqual(publications(cancel), [["c", "a", "b"]])
+
+        let settledPoll = state.receivePage(
+            page(["c", "a", "b"], 12),
+            stamp: state.requestStamp()
+        )
+        XCTAssertEqual(state.presentedOrder, ["c", "a", "b"])
+        XCTAssertTrue(publications(settledPoll).isEmpty)
     }
 
     func testDragBufferKeepsHighestAcceptedProjectionUnderDropOverlay() throws {
@@ -331,6 +338,25 @@ final class PinnedOrderStateTests: XCTestCase {
         XCTAssertEqual(state.presentedOrder, ["c", "b", "a"])
         XCTAssertEqual(sends(rollback).count, 1)
         XCTAssertEqual(sends(rollback).first?.threadIds, ["c", "b", "a"])
+    }
+
+    func testDelayedPinFailureRollsBackUnknownIdAndWakesGateOnce() throws {
+        var state = makeState(["a", "b"], revision: 10)
+        let first = try beginDrop(&state, order: ["b", "a"])
+        let pin = try XCTUnwrap(
+            state.beginMembershipChange(threadId: "c", pinned: true).membershipRequest
+        )
+
+        let oldFlight = state.completeReorder(first, page: page(["a", "b"], 11))
+        XCTAssertTrue(sends(oldFlight).isEmpty)
+        XCTAssertEqual(state.pendingSync, .waitingForMembership)
+
+        let rollback = state.failMembership(pin)
+
+        XCTAssertEqual(state.presentedOrder, ["b", "a"])
+        XCTAssertEqual(sends(rollback).count, 1)
+        XCTAssertEqual(sends(rollback).first?.threadIds, ["b", "a"])
+        XCTAssertEqual(sends(rollback).first?.expectedRevision, 11)
     }
 
     func testFullUnpinClearsOutboxAndNeverSendsEmptyPut() throws {
