@@ -39,6 +39,7 @@ type AppLeftRailProps = {
   activeWorkspaceThreadGroupPath: string | null;
   botGroups: ReturnType<typeof buildBotGroups>;
   pinnedThreadRows: PinnedThreadRow[];
+  pinnedThreadSyncPending: boolean;
   workspaceThreadGroups: ReturnType<typeof buildWorkspaceThreadGroups>;
   selectedThreadId: string | null;
   workspaceMenuOpenPath: string | null;
@@ -56,6 +57,9 @@ type AppLeftRailProps = {
   onOpenPinnedThread: (threadId: string) => void;
   onUnpinThread: (threadId: string) => void;
   onArchivePinnedThread: (threadId: string) => void;
+  onPinnedThreadDragStart: () => void;
+  onPinnedThreadDragCancel: () => void;
+  onReorderPinnedThreads: (threadIds: string[]) => void;
   onToggleBotConversationGroup: (group: ReturnType<typeof buildBotGroups>[number]) => void;
   onToggleWorkspaceThreadGroup: (workspacePath: string) => void;
   onAddBot: () => void;
@@ -85,6 +89,7 @@ export function AppLeftRail({
   activeWorkspaceThreadGroupPath,
   botGroups,
   pinnedThreadRows,
+  pinnedThreadSyncPending,
   workspaceThreadGroups,
   selectedThreadId,
   workspaceMenuOpenPath,
@@ -102,6 +107,9 @@ export function AppLeftRail({
   onOpenPinnedThread,
   onUnpinThread,
   onArchivePinnedThread,
+  onPinnedThreadDragStart,
+  onPinnedThreadDragCancel,
+  onReorderPinnedThreads,
   onToggleBotConversationGroup,
   onToggleWorkspaceThreadGroup,
   onAddBot,
@@ -224,9 +232,13 @@ export function AppLeftRail({
             <PinnedThreadsSidebar
               formatThreadTimestamp={formatThreadTimestamp}
               onArchiveThread={onArchivePinnedThread}
+              onDragCancel={onPinnedThreadDragCancel}
+              onDragStart={onPinnedThreadDragStart}
               onOpenThread={onOpenPinnedThread}
+              onReorderThreads={onReorderPinnedThreads}
               onUnpinThread={onUnpinThread}
               rows={pinnedThreadRows}
+              syncPending={pinnedThreadSyncPending}
             />
 
             <BotSidebar

@@ -17,6 +17,11 @@ import {
 
 import { SETTINGS_TABS, type SettingsTabId } from '../settings-tabs';
 import {
+  beginPinnedOrderGatewaySwitch,
+  requestDesktopState,
+  restorePinnedOrderGatewayDomain,
+} from '../pinned-order-ingress';
+import {
   cloneJson,
   ensureGatewayConfig,
 } from '../gateway-settings';
@@ -478,6 +483,15 @@ export function useSettingsController({
     draftOverride?: typeof DEFAULT_DESKTOP_SETTINGS,
   ): Promise<boolean> {
     const draft = draftOverride ?? settingsDraft;
+    const normalizeGatewayIdentity = (value: string | null | undefined) =>
+      (value || '').trim().replace(/\/+$/, '').toLowerCase();
+    const previousGatewayIdentity = normalizeGatewayIdentity(
+      desktopState?.entitiesGatewayUrl || desktopState?.settings.gatewayUrl,
+    );
+    const targetGatewayIdentity = normalizeGatewayIdentity(draft.gatewayUrl);
+    const switchesGateway = targetGatewayIdentity !== previousGatewayIdentity;
+    let savedLocalSettings = false;
+    let gatewayRollback: ReturnType<typeof beginPinnedOrderGatewaySwitch> | null = null;
     if (savingSettings) {
       return true;
     }
@@ -501,11 +515,21 @@ export function useSettingsController({
         }
       }
 
-      let nextState = await window.garyxDesktop.saveSettings(draft);
+      if (switchesGateway) {
+        gatewayRollback = beginPinnedOrderGatewaySwitch(targetGatewayIdentity);
+      }
+      let nextState = await requestDesktopState(
+        () => window.garyxDesktop.saveSettings(draft),
+        targetGatewayIdentity,
+      );
+      savedLocalSettings = true;
       setDesktopState(nextState);
 
       if (options?.requireGatewayConnection) {
-        nextState = await window.garyxDesktop.rememberGatewayProfile();
+        nextState = await requestDesktopState(
+          () => window.garyxDesktop.rememberGatewayProfile(),
+          targetGatewayIdentity,
+        );
         setDesktopState(nextState);
       } else if (options?.refreshConnection) {
         const status = await window.garyxDesktop.checkConnection();
@@ -517,6 +541,9 @@ export function useSettingsController({
       }
       return true;
     } catch (saveError) {
+      if (gatewayRollback && !savedLocalSettings) {
+        restorePinnedOrderGatewayDomain(gatewayRollback);
+      }
       const message = saveError instanceof Error ? saveError.message : 'Failed to save local settings';
       setLocalSettingsStatus(message);
       setError(message);
@@ -566,7 +593,7 @@ export function useSettingsController({
   ): Promise<void> {
     const [status, nextState] = await Promise.all([
       window.garyxDesktop.checkConnection(),
-      window.garyxDesktop.getState(),
+      requestDesktopState(() => window.garyxDesktop.getState()),
     ]);
     if (saveGeneration !== gatewaySaveGenerationRef.current) {
       return;

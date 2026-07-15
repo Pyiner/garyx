@@ -11,6 +11,7 @@ import type {
 } from "@shared/contracts";
 
 import type { GatewayMirror } from "../gateway-mirror/mirror";
+import { requestDesktopStateResult } from "../pinned-order-ingress";
 import type { MessageMap } from "./types";
 import type { SideChatSessions } from "./side-chat-sessions";
 
@@ -77,17 +78,20 @@ export async function ensureSideChatThread(
     try {
       const sourceThread =
         threadSummaryById.get(sourceThreadId) || activeThread || null;
-      const created = await window.garyxDesktop.createThread({
-        title: "Side chat",
-        agentId: sourceThread?.agentId || pendingAgentId || "claude",
-        forkFromThreadId: sourceThreadId,
-        metadata: {
-          source: "side_chat",
-          hidden: true,
-          exclude_from_recent: true,
-          side_chat_parent_thread_id: sourceThreadId,
-        },
-      });
+      const created = await requestDesktopStateResult(
+        () => window.garyxDesktop.createThread({
+          title: "Side chat",
+          agentId: sourceThread?.agentId || pendingAgentId || "claude",
+          forkFromThreadId: sourceThreadId,
+          metadata: {
+            source: "side_chat",
+            hidden: true,
+            exclude_from_recent: true,
+            side_chat_parent_thread_id: sourceThreadId,
+          },
+        }),
+        (response) => response.state,
+      );
       setDesktopState(created.state);
       mirror.updateMessagesByThread((current: MessageMap) => ({
         ...current,

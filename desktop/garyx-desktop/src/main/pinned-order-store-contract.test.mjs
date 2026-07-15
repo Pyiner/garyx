@@ -35,14 +35,20 @@ test("main-store pin merge captures before await and projects through the reduce
   assert.match(source.slice(commit, commit + 180), /pinsRevision: pinOrder\.state\.highestObservedRevision/);
 });
 
-test("preload and main expose one setThreadPinOrder IPC contract", async () => {
-  const [apiSource, preloadSource, mainSource] = await Promise.all([
+test("preload and main expose reorder plus non-persisted sync snapshot contracts", async () => {
+  const [apiSource, preloadSource, mainSource, storeSource] = await Promise.all([
     readFile(new URL("../shared/contracts/desktop-api.ts", import.meta.url), "utf8"),
     readFile(new URL("../preload/index.ts", import.meta.url), "utf8"),
     readFile(new URL("./index.ts", import.meta.url), "utf8"),
+    readFile(new URL("./store.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(apiSource, /setThreadPinOrder: \(input: SetThreadPinOrderInput\) => Promise<DesktopState>/);
   assert.match(preloadSource, /setThreadPinOrder:[\s\S]*garyx:set-thread-pin-order/);
   assert.match(mainSource, /garyx:set-thread-pin-order[\s\S]*setDesktopThreadPinOrder/);
+  assert.match(apiSource, /getThreadPinOrderSnapshot: \(\) => Promise<DesktopThreadPinOrderSnapshot>/);
+  assert.match(preloadSource, /getThreadPinOrderSnapshot:[\s\S]*garyx:get-thread-pin-order-snapshot/);
+  assert.match(mainSource, /garyx:get-thread-pin-order-snapshot[\s\S]*getDesktopThreadPinOrderSnapshot/);
+  assert.match(storeSource, /export async function resumeDesktopPinnedOrderSync/);
+  assert.match(mainSource, /window\.on\("focus"[\s\S]*resumeDesktopPinnedOrderSync/);
 });

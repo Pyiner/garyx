@@ -121,6 +121,7 @@ import type {
   DeleteThreadInput,
   DesktopDeepLinkListener,
   DesktopThreadSummary,
+  DesktopThreadPinOrderSnapshot,
   GetThreadHistoryInput,
   InterruptResult,
   ListRecentThreadsInput,
@@ -406,6 +407,7 @@ export interface GaryxDesktopApi {
   deleteThread: (input: DeleteThreadInput) => Promise<DesktopState>;
   setThreadPinned: (input: SetThreadPinnedInput) => Promise<DesktopState>;
   setThreadPinOrder: (input: SetThreadPinOrderInput) => Promise<DesktopState>;
+  getThreadPinOrderSnapshot: () => Promise<DesktopThreadPinOrderSnapshot>;
   getThreadHistory: (
     input: string | GetThreadHistoryInput,
   ) => Promise<ThreadTranscript>;

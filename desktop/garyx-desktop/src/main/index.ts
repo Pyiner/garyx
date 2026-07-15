@@ -209,6 +209,7 @@ import {
   deleteDesktopThread,
   getDesktopState,
   getDesktopStateFast,
+  getDesktopThreadPinOrderSnapshot,
   getLocalDesktopSettings,
   markDesktopAutomationSeen,
   runDesktopAutomationNow,
@@ -222,6 +223,7 @@ import {
   selectDesktopWorkspace,
   updateDesktopAutomation,
   removeDesktopWorkspace,
+  resumeDesktopPinnedOrderSync,
   setDesktopBotBinding,
   setDesktopThreadPinned,
   setDesktopThreadPinOrder,
@@ -505,6 +507,9 @@ function createMainWindow(): BrowserWindow {
       window.hide();
     }
   });
+  window.on("focus", () => {
+    void resumeDesktopPinnedOrderSync().catch(() => undefined);
+  });
   window.on("closed", () => {
     writeBootstrapTrace("createMainWindow:closed");
     unbindBrowserWindow(window);
@@ -558,6 +563,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle("garyx:get-state-fast", async () => {
     return getDesktopStateFast();
+  });
+
+  ipcMain.handle("garyx:get-thread-pin-order-snapshot", async () => {
+    return getDesktopThreadPinOrderSnapshot();
   });
 
   ipcMain.handle(

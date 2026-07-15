@@ -17,6 +17,7 @@ import {
   type DesktopLanguagePreference,
   type DesktopRemoteStateError,
   type DesktopThreadSummary,
+  type DesktopThreadPinOrderSnapshot,
   type DesktopThreadPinsPage,
   type DesktopSettings,
   type DesktopState,
@@ -750,6 +751,14 @@ function pinnedOrderGatewayIdentity(state: DesktopState): string {
   return normalizeGatewayUrl(state.settings.gatewayUrl || '');
 }
 
+function pinnedOrderTransportFingerprint(settings: DesktopSettings): string {
+  return JSON.stringify([
+    normalizeGatewayUrl(settings.gatewayUrl || ''),
+    settings.gatewayAuthToken || '',
+    settings.gatewayHeaders || '',
+  ]);
+}
+
 function projectPinnedOrderState(
   state: DesktopState,
   controller: PinnedOrderController,
@@ -810,11 +819,19 @@ async function ensurePinnedOrderController(
   state: DesktopState,
 ): Promise<PinnedOrderController> {
   const gatewayIdentity = pinnedOrderGatewayIdentity(state);
+  const previousSettings = pinnedOrderSettings;
   pinnedOrderSettings = state.settings;
   if (
     pinnedOrderController &&
     pinnedOrderController.state.gatewayIdentity === gatewayIdentity
   ) {
+    if (
+      previousSettings &&
+      pinnedOrderTransportFingerprint(previousSettings) !==
+        pinnedOrderTransportFingerprint(state.settings)
+    ) {
+      await pinnedOrderController.resumePausedSync();
+    }
     return pinnedOrderController;
   }
 
@@ -885,6 +902,19 @@ async function ensurePinnedOrderController(
     await persistPinnedOrderOutbox(null, previousIdentity);
   }
   return controller;
+}
+
+/** Environment-change wake for a paused durable reorder outbox. */
+export async function resumeDesktopPinnedOrderSync(): Promise<void> {
+  await pinnedOrderController?.resumePausedSync();
+}
+
+export async function getDesktopThreadPinOrderSnapshot(): Promise<DesktopThreadPinOrderSnapshot> {
+  if (pinnedOrderController) {
+    return pinnedOrderController.snapshot();
+  }
+  const state = latestHydratedDesktopState ?? latestLocalDesktopState ?? await getLocalDesktopState();
+  return (await ensurePinnedOrderController(state)).snapshot();
 }
 
 async function fetchRemoteSlice<T>(
