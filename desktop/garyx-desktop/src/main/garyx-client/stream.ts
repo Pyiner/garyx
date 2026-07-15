@@ -153,8 +153,8 @@ interface StreamThreadEventsOptions {
   renderFloor?: number;
   onConnected?: () => void;
   onCommittedSeq?: (seq: number) => void;
-  /** Fires whenever a frame carries `render_state.window.floor_seq > 0` —
-   * the floor this connection is now rendering with. */
+  /** Fires for every accepted full frame, including floor 0, so callers can
+   * clear a formerly-windowed connection state. */
   onWindowFloor?: (floorSeq: number) => void;
   /** Test override for {@link STREAM_HEADER_TIMEOUT_MS}. */
   headerTimeoutMs?: number;
@@ -805,9 +805,7 @@ async function forwardThreadStreamBody(
       frame.event.type === "thread_render_frame"
         ? (frame.event.renderState.window?.floor_seq ?? 0)
         : 0;
-    if (windowFloor > 0) {
-      options?.onWindowFloor?.(windowFloor);
-    }
+    options?.onWindowFloor?.(windowFloor);
   };
   const processLine = (line: string) => {
     if (line === "") {

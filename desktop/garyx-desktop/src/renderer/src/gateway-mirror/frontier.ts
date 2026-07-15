@@ -13,13 +13,11 @@
 export interface ThreadFrontierSnapshot {
   readonly committedSeq: number;
   readonly renderBasedOnSeq: number;
-  readonly renderFloor: number;
 }
 
 export class ThreadFrontier {
   private committedSeq = 0;
   private renderBasedOnSeq = 0;
-  private renderFloor = 0;
   // A caught-up frame for an empty ledger legitimately carries
   // based_on_seq=0 (the server clamps to the committed tail), so "have we
   // ever accepted a render snapshot" needs its own flag instead of using
@@ -38,32 +36,20 @@ export class ThreadFrontier {
   }
 
   /**
-   * Accept a render snapshot cursor monotonically. Returns whether the
-   * snapshot may be applied at all; `changed` is true only when the cursor
-   * moved. Re-delivery at the same `based_on_seq` is accepted (the server
-   * derives render_state deterministically from the committed ledger, so an
-   * equal cursor means an equal snapshot) but does not count as a change.
+   * Accept a render snapshot cursor monotonically. Cursor equality is an
+   * ordering success, not snapshot identity: the server may legitimately
+   * send same-seq overwrite or wider-window snapshots. Full-value change
+   * detection belongs to the transcript mirror.
    */
-  acceptRender(basedOnSeq: number): { accepted: boolean; changed: boolean } {
+  acceptRender(basedOnSeq: number): boolean {
     if (!Number.isFinite(basedOnSeq) || basedOnSeq < this.renderBasedOnSeq) {
-      return { accepted: false, changed: false };
-    }
-    if (basedOnSeq === this.renderBasedOnSeq && this.hasRenderSnapshot) {
-      return { accepted: true, changed: false };
-    }
-    this.renderBasedOnSeq = basedOnSeq;
-    this.hasRenderSnapshot = true;
-    this.cached = null;
-    return { accepted: true, changed: true };
-  }
-
-  setRenderFloor(floor: number): boolean {
-    const next = Number.isFinite(floor) && floor > 0 ? floor : 0;
-    if (next === this.renderFloor) {
       return false;
     }
-    this.renderFloor = next;
-    this.cached = null;
+    if (basedOnSeq > this.renderBasedOnSeq || !this.hasRenderSnapshot) {
+      this.renderBasedOnSeq = basedOnSeq;
+      this.hasRenderSnapshot = true;
+      this.cached = null;
+    }
     return true;
   }
 
@@ -73,7 +59,6 @@ export class ThreadFrontier {
       this.cached = {
         committedSeq: this.committedSeq,
         renderBasedOnSeq: this.renderBasedOnSeq,
-        renderFloor: this.renderFloor,
       };
     }
     return this.cached;

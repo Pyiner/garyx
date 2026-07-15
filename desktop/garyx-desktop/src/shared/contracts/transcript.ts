@@ -290,6 +290,9 @@ export interface RenderDelta {
 
 export interface CommittedMessageEvent {
   type: "committed_message";
+  /** Local main→renderer correlation only; absent on gateway wire payloads
+   * and on committed events nested inside a thread-render frame. */
+  requestId?: string;
   runId: string;
   threadId: string;
   sessionId?: string;
@@ -303,6 +306,8 @@ export type DesktopChatStreamEvent =
       // One atomic per-thread render frame: the contiguous committed `events`
       // plus the full `renderState` snapshot derived at `based_on_seq`.
       type: "thread_render_frame";
+      /** Logical renderer request that owns this locally forwarded frame. */
+      requestId?: string;
       threadId: string;
       events: CommittedMessageEvent[];
       renderState: RenderState;
@@ -316,6 +321,8 @@ export type DesktopChatStreamEvent =
     }
   | {
       type: "error";
+      /** Logical renderer request that owns this locally forwarded error. */
+      requestId?: string;
       runId: string;
       threadId: string;
       sessionId?: string;

@@ -36,6 +36,7 @@ import {
   normalizeTranscriptMessageId,
   paginationStateFromTranscript,
   preserveLocalTranscriptEntries,
+  jsonValuesEqual,
   visibleTranscriptMessages,
   type ThreadHistoryPaginationState,
 } from "./transcript-materialize.ts";
@@ -47,6 +48,11 @@ import {
  */
 export interface RemoteApplyOptions {
   intentForId: (intentId: string) => MessageIntent | null;
+}
+
+export interface AcceptedCommittedEvent {
+  readonly event: CommittedMessageEvent;
+  readonly disposition: "insert" | "overwrite";
 }
 
 interface IncrementalTranscriptState {
@@ -120,6 +126,23 @@ export class ThreadTranscriptCache {
 
   getHistoryPagination(): ThreadHistoryPaginationState | null {
     return this.historyPagination;
+  }
+
+  /**
+   * Earliest committed body the UI can actually resolve. Pagination writes
+   * `uiMessages` without populating `recordsBySeq`, while local optimistic
+   * rows carry no positive finite seq, so this store is the coverage truth.
+   */
+  earliestLoadedCommittedBodySeq(): number | null {
+    let earliest: number | null = null;
+    for (const entry of this.uiMessages) {
+      const seq = entry.seq;
+      if (typeof seq !== "number" || !Number.isFinite(seq) || seq <= 0) {
+        continue;
+      }
+      earliest = earliest === null ? seq : Math.min(earliest, seq);
+    }
+    return earliest;
   }
 
   isTranscriptLoaded(): boolean {
@@ -277,9 +300,14 @@ export class ThreadTranscriptCache {
   applyCommittedMessage(
     event: CommittedMessageEvent,
     options: RemoteApplyOptions,
+    disposition: AcceptedCommittedEvent["disposition"] = "insert",
   ): "refetch_authoritative" | "applied" {
     if (transcriptRewriteAction(event.message) === "refetch_authoritative") {
       return "refetch_authoritative";
+    }
+    if (disposition === "overwrite") {
+      this.applyCommittedBodyOverwrite(event, options);
+      return "applied";
     }
     if (this.applyCommittedMessageIncrementally(event, options)) {
       this.committedApplyStats.incremental += 1;
@@ -291,6 +319,59 @@ export class ThreadTranscriptCache {
       options,
     );
     return "applied";
+  }
+
+  private applyCommittedBodyOverwrite(
+    event: CommittedMessageEvent,
+    options: RemoteApplyOptions,
+  ): void {
+    const replacement =
+      event.message.seq === event.seq
+        ? event.message
+        : { ...event.message, seq: event.seq };
+    const messageSeq = (message: CommittedMessageEvent["message"]): number | null => {
+      if (
+        typeof message.seq === "number" &&
+        Number.isFinite(message.seq) &&
+        message.seq > 0
+      ) {
+        return message.seq;
+      }
+      const index = transcriptMessageIndex(message);
+      return index === null ? null : index + 1;
+    };
+
+    const snapshot = this.snapshotTranscript;
+    if (snapshot) {
+      let replaced = false;
+      const messages = snapshot.messages.map((message) => {
+        if (messageSeq(message) !== event.seq) {
+          return message;
+        }
+        replaced = true;
+        return replacement;
+      });
+      if (replaced) {
+        this.applyRemoteSnapshot({ ...snapshot, messages }, options);
+        return;
+      }
+    }
+
+    const index = this.uiMessages.findIndex((entry) => entry.seq === event.seq);
+    if (index < 0) {
+      this.rebuildIncrementalState();
+      return;
+    }
+    const remapped = materializeRemoteTranscript(
+      [replacement],
+      [this.uiMessages[index]],
+    );
+    this.uiMessages = [
+      ...this.uiMessages.slice(0, index),
+      ...remapped,
+      ...this.uiMessages.slice(index + 1),
+    ];
+    this.rebuildIncrementalState();
   }
 
   /**
@@ -471,12 +552,6 @@ export class ThreadTranscriptCache {
   }
 
   /**
-   * Apply committed events idempotently. An event whose seq is already
-   * cached is ignored (the committed ledger is append-only; a re-delivered
-   * seq carries the same record). Returns the newly applied events in input
-   * order (empty when nothing changed).
-   */
-  /**
    * Windowed-resume reset: drop committed records below the window floor.
    * They predate the server-served window and are no longer contiguous
    * with the connection that delivered it. Returns true when anything
@@ -498,17 +573,25 @@ export class ThreadTranscriptCache {
 
   applyCommittedEvents(
     events: readonly CommittedMessageEvent[],
-  ): CommittedMessageEvent[] {
-    const applied: CommittedMessageEvent[] = [];
+  ): AcceptedCommittedEvent[] {
+    const applied: AcceptedCommittedEvent[] = [];
     for (const event of events) {
       if (!Number.isFinite(event.seq) || event.seq <= 0) {
         continue;
       }
-      if (this.recordsBySeq.has(event.seq)) {
-        continue;
+      const existing = this.recordsBySeq.get(event.seq);
+      if (existing) {
+        const { requestId: _existingRequestId, ...existingPayload } = existing;
+        const { requestId: _eventRequestId, ...eventPayload } = event;
+        if (jsonValuesEqual(existingPayload, eventPayload)) {
+          continue;
+        }
       }
       this.recordsBySeq.set(event.seq, event);
-      applied.push(event);
+      applied.push({
+        event,
+        disposition: existing ? "overwrite" : "insert",
+      });
     }
     if (applied.length > 0) {
       this.sortedCache = null;

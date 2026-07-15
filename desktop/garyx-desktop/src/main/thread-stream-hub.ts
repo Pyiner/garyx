@@ -45,9 +45,12 @@ interface ThreadStreamForwarder {
   controller: AbortController;
   owners: Set<string>;
   lastSeq: number;
-  /** Render window floor this stream is rendering with; pinned across
-   * reconnects so a caught-up resume keeps the server's windowed derivation
-   * instead of falling back to the full-transcript path. */
+  /** Logical renderer request; preserved across transport-only reconnects. */
+  streamRequestId: string;
+  /** Every physical SSE attempt gets a fresh generation even though retry
+   * attempts share this forwarder's AbortController. */
+  connectionGeneration: number;
+  /** Render window floor used by the next physical reconnect. */
   lastFloor: number;
 }
 
@@ -80,6 +83,7 @@ export function createThreadStreamHub(deps: ThreadStreamHubDeps): ThreadStreamHu
   const retryInitialDelayMs = deps.retryInitialDelayMs ?? 500;
   const retryMaxDelayMs = deps.retryMaxDelayMs ?? 10_000;
   const forwarders = new Map<string, ThreadStreamForwarder>();
+  let nextConnectionGeneration = 0;
 
   function stop(input?: StopThreadStreamInput | null): void {
     const normalizedThreadId = input?.threadId?.trim() || null;
@@ -110,7 +114,8 @@ export function createThreadStreamHub(deps: ThreadStreamHubDeps): ThreadStreamHu
     ownerIds?: Iterable<string>,
   ): void {
     const threadId = input.threadId.trim();
-    if (!threadId || !deps.isSinkAlive()) {
+    const streamRequestId = input.requestId.trim();
+    if (!threadId || !streamRequestId || !deps.isSinkAlive()) {
       return;
     }
     const owners = new Set(ownerIds ?? [threadStreamConsumerId(input)]);
@@ -130,10 +135,11 @@ export function createThreadStreamHub(deps: ThreadStreamHubDeps): ThreadStreamHu
       controller,
       owners,
       lastSeq: afterSeq,
-      lastFloor: Math.max(
-        Math.max(0, Math.trunc(input.renderFloor ?? 0)),
-        existing?.lastFloor ?? 0,
-      ),
+      streamRequestId,
+      connectionGeneration: 0,
+      // A renderer-issued start is authoritative in both directions. In
+      // particular, expansion deliberately lowers this value.
+      lastFloor: Math.max(0, Math.trunc(input.renderFloor ?? 0)),
     };
     forwarders.set(threadId, forwarder);
     void (async () => {
@@ -141,14 +147,27 @@ export function createThreadStreamHub(deps: ThreadStreamHubDeps): ThreadStreamHu
         let retryDelayMs = retryInitialDelayMs;
         let resumeAfterSeq = forwarder.lastSeq;
         while (!controller.signal.aborted && deps.isSinkAlive()) {
+          const attemptGeneration = ++nextConnectionGeneration;
+          forwarder.connectionGeneration = attemptGeneration;
+          const isCurrentAttempt = () =>
+            !controller.signal.aborted &&
+            forwarders.get(threadId) === forwarder &&
+            forwarder.controller === controller &&
+            forwarder.connectionGeneration === attemptGeneration;
           try {
             const settings = await deps.resolveSettings();
+            if (!isCurrentAttempt()) {
+              break;
+            }
             await streamImpl(
               settings,
               threadId,
               (payload) => {
-                if (deps.isSinkAlive()) {
-                  deps.sendEvent(payload);
+                if (isCurrentAttempt() && deps.isSinkAlive()) {
+                  deps.sendEvent({
+                    ...payload,
+                    requestId: forwarder.streamRequestId,
+                  });
                 }
               },
               controller.signal,
@@ -158,11 +177,20 @@ export function createThreadStreamHub(deps: ThreadStreamHubDeps): ThreadStreamHu
                 headerTimeoutMs: deps.headerTimeoutMs,
                 idleTimeoutMs: deps.idleTimeoutMs,
                 onCommittedSeq: (seq) => {
+                  if (!isCurrentAttempt()) {
+                    return;
+                  }
                   resumeAfterSeq = seq;
                   forwarder.lastSeq = seq;
                 },
                 onWindowFloor: (floorSeq) => {
-                  forwarder.lastFloor = floorSeq;
+                  if (!isCurrentAttempt()) {
+                    return;
+                  }
+                  forwarder.lastFloor = Math.max(
+                    0,
+                    Math.trunc(floorSeq),
+                  );
                 },
               },
             );
@@ -171,9 +199,10 @@ export function createThreadStreamHub(deps: ThreadStreamHubDeps): ThreadStreamHu
             if (controller.signal.aborted || !deps.isSinkAlive()) {
               break;
             }
-            if (error instanceof ThreadStreamGapError) {
+            if (error instanceof ThreadStreamGapError && isCurrentAttempt()) {
               deps.sendEvent({
                 type: "error",
+                requestId: forwarder.streamRequestId,
                 runId: "thread-stream-gap",
                 threadId,
                 sessionId: threadId,
@@ -181,6 +210,11 @@ export function createThreadStreamHub(deps: ThreadStreamHubDeps): ThreadStreamHu
               });
               break;
             }
+          }
+          if (forwarder.connectionGeneration === attemptGeneration) {
+            // The physical attempt is over. Invalidate its callbacks during
+            // the retry delay, before the next attempt allocates a generation.
+            forwarder.connectionGeneration = 0;
           }
           await sleepWithAbort(retryDelayMs, controller.signal);
           retryDelayMs = Math.min(
@@ -206,6 +240,7 @@ export function createThreadStreamHub(deps: ThreadStreamHubDeps): ThreadStreamHu
         threadId,
         afterSeq: forwarder.lastSeq,
         renderFloor: forwarder.lastFloor,
+        requestId: forwarder.streamRequestId,
         owners: new Set(forwarder.owners),
       }),
     );
@@ -217,6 +252,7 @@ export function createThreadStreamHub(deps: ThreadStreamHubDeps): ThreadStreamHu
       start(
         {
           threadId: item.threadId,
+          requestId: item.requestId,
           afterSeq: item.afterSeq,
           renderFloor: item.renderFloor,
         },
