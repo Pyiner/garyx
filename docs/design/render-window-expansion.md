@@ -1,20 +1,29 @@
 # Render Window Expansion: History Below the Windowed-Resume Floor
 
-Status: v3 (revised after design review #TASK-2299 v2 FAIL; re-review pending)
+Status: v4 (revised after design review #TASK-2299 v3 FAIL; re-review pending)
 Related: `thread-render-frame-incremental.md` (knife 2: over-budget degrade),
 `thread-open-replay-trim-design.md` (floor-windowed rows),
 `perf-thread-stream-replay-degrade.md`.
 
-v3 changes after v2 review: logical `streamRequestId` correlates renderer
-state with hub attempts across the IPC boundary (physical connection
-generations stay hub-internal); the anti-loop budget (`demandEpoch`,
-`retryCount`) is formal state with an explicitly weakened convergence
-semantics (no timers); speculative widening is capped in records, grows only
-on success, and the perf contract asserts snapshot bytes/rows/duration — the
-unbounded exponential jump to floor 0 is gone; reconcile returns a single
-start plan (no double starts); pending lifecycle transitions (restartAll,
-consumer join, last-owner stop, errors, cache clear) are enumerated;
-change-detection comparison ignores `rows_hash`; test placement fixed.
+v4 changes after v3 review: stale-request frames are no longer dropped whole
+— `streamRequestId` gates only connection-scoped semantics (render state,
+windowed marker, errors, pending settle) while committed events are
+ledger-scoped and always applied idempotently, closing the deterministic
+event-loss trace (hub cursor advances at `sendEvent`, so a dropped event is
+never replayed); the start gate defines the normal-plan fallback when
+reconcile returns null and pins joins as new logical requests; a pending
+rebind is counted as the new epoch's first consumed attempt
+(`retryCount = 1`); cache-restored snapshots seed `effectiveFloor` (but never
+settle a pending); physical generations are per-SSE-attempt (the hub retry
+loop shares one controller across attempts, so controller identity alone
+cannot distinguish them); the perf contract gets concrete gating criteria
+(rows/bytes gating, duration informational).
+
+v3 changes: logical `streamRequestId` across the IPC boundary; formal
+anti-loop state (`demandEpoch`, `retryCount`) with demand-convergent
+semantics (no timers); capped success-gated prepay replacing unbounded
+exponential widening; single start plan; pending transitions enumerated;
+`rows_hash` excluded from value comparison.
 
 ## Problem
 
@@ -140,9 +149,13 @@ Two distinct identities, one per layer, correlated by a token that rides the
 **local** event envelope (the gateway wire is untouched):
 
 - **Physical `connectionGeneration` (hub-internal)**: each SSE attempt inside
-  the hub's retry loop gets a generation; `sendEvent` forwarding,
-  `onCommittedSeq`, and `onWindowFloor` are guarded by "this controller is
-  still the thread's current forwarder". This kills post-abort callbacks.
+  the hub's retry loop gets its own generation number. The retry loop shares
+  one `AbortController` across successive attempts, so controller identity
+  alone cannot distinguish attempt N from N+1; callbacks (`sendEvent`
+  forwarding, `onCommittedSeq`, `onWindowFloor`) capture their attempt's
+  generation and are guarded by "this generation is still the forwarder's
+  current one AND this controller is still the thread's current forwarder".
+  This kills both post-abort callbacks and cross-attempt stragglers.
   `restartAll` and hub-internal reconnects create new physical attempts under
   the *same* logical request (below).
 - **Logical `streamRequestId` (renderer-assigned)**: every lifecycle-issued
@@ -153,22 +166,30 @@ Two distinct identities, one per layer, correlated by a token that rides the
   `streamRequestId` — the renderer's logical request survives transport
   churn.
 
-Renderer-side rules built on the token:
+Renderer-side rules built on the token — **the request id gates
+connection-scoped semantics only; it never filters ledger-scoped data**:
 
-- The mirror ingests stream frames **only when the frame's
-  `streamRequestId` equals the thread's current logical request**. This
-  closes the race the hub guard alone cannot: a frame that passed the old
-  connection's guard and sat in the IPC queue while a new start superseded it
-  would otherwise apply after the new request's wider frame — and, being a
-  same-`based_on_seq` different-value snapshot, would *pass* the §1 value
-  gate and re-narrow the window. Stale-request frames are dropped whole
-  (events and snapshot; the committed events they carry are redelivered by
-  the new connection's replay, which resumes from the hub's committed
-  cursor).
+- **Committed events are ledger-scoped and always applied**, whatever request
+  id their frame carries. They are seq-keyed and idempotent in the cache, and
+  same-seq rewrite/reset controls must keep triggering the authoritative
+  refetch path. Dropping them is not an option: the hub's committed cursor
+  advances at `sendEvent` time (before the renderer consumes the frame), a
+  superseding start resumes from `max(input.afterSeq, lastSeq)`, and the
+  server only replays `seq > after_seq` — so an event dropped from a stale
+  queued frame is deterministically never redelivered (and a same-seq
+  overwrite equal to `after_seq` would not be replayed even by a
+  cursor-rewind scheme). A stale frame therefore applies as an
+  **event-only mirror commit**.
+- **Connection-scoped parts of a stale-request frame are dropped**: its
+  `render_state` (a same-`based_on_seq` different-value snapshot from the old
+  narrow window would pass the §1 value gate and re-narrow the window), its
+  `replay: "windowed"` marker (a stale marker must not fire
+  `dropCommittedBelow`), its error signals, and any pending-settle effect.
+  Structure for the thread comes from the current request's snapshot.
 - `pendingExpansion` (§4) settles **only** on an authoritative stream frame
   that carries the pending request's id, holds a full `render_state`, and
   passes the ordering gate. Cache-restored or locally synthesized snapshots
-  never settle a pending.
+  never settle a pending (they may seed `effectiveFloor`, §4).
 
 IPC surface changes: `StartThreadStreamInput.requestId` (opaque string) and a
 `requestId` field on the locally-forwarded stream event envelope. `start`
@@ -178,15 +199,44 @@ the correlation is carried by the events themselves.
 ### 3. Single start gate: reconcile returns a plan
 
 All stream starts for a thread — selected consumer, side-chat consumer,
-post-refetch restart — go through **one lifecycle gate** per thread. The gate
-runs `reconcile` (§5), which returns a single start plan
-`{ afterSeq, renderFloor, requestId }`; the gate executes exactly one
-`start()` with it. Consumers therefore never compute their own floor, never
-race reconcile with their own start (the v2 double-start ambiguity is
-structurally gone), and a second consumer joining a thread **rebinds** any
-in-flight `pendingExpansion` to the new request id atomically inside the gate
-(the plan adopts `pendingExpansion.targetFloor` as its floor, so the joined
-start cannot raise an unmet request).
+post-refetch restart — go through **one lifecycle gate** per thread, which
+executes exactly one `start()`:
+
+```
+gate(thread, consumerStart):
+  seedEffectiveFloorIfCold(thread)                    # §4
+  expansionPlan = reconcile(thread)                   # may be null
+  if expansionPlan == null and not consumerStart.mustEstablishStream:
+    return                                            # nothing to do
+  plan = expansionPlan
+       ?? normalPlan(afterSeq: committedCursor,
+                     renderFloor: pendingExpansion?.targetFloor
+                                  ?? effectiveFloor,
+                     requestId: fresh())
+  execute start(plan)                                 # exactly one
+```
+
+`reconcile` returning null (full window, invariant satisfied, or budget held)
+therefore still yields a **normal plan** for any consumer start that must
+establish or join the stream — a new thread, a full-window thread, or a plain
+reopen starts its stream exactly as today, at the current effective floor.
+Consumers never compute their own floor and never race reconcile with their
+own start.
+
+**Joins are new logical requests.** A second owner joining a thread's stream
+goes through the gate and gets a fresh `requestId`; the hub keeps today's
+semantics (abort + restart with merged owners) — there is no silent
+no-reconnect join, so no dangling generation. If a `pendingExpansion` is in
+flight, the gate **rebinds** it to the new request id atomically and the plan
+adopts `pendingExpansion.targetFloor` as its floor, so a joined start can
+never raise an unmet request.
+
+**Rebind retry accounting**: a consumer start is a demand trigger (§5) — it
+bumps `demandEpoch` and resets `retryCount` — and when it rebinds an in-flight
+pending, that rebound start is **counted as the new epoch's first consumed
+attempt (`retryCount = 1`)**. The per-epoch invariant "attempts ≤ 1 +
+RETRY_BUDGET" holds unconditionally: a rebound attempt that settles in a
+degrade has exactly one retry left, not a fresh double budget.
 
 `pendingExpansion` lifecycle transitions (exhaustive):
 
@@ -207,7 +257,18 @@ effectiveFloor : number        # window.floor_seq ?? 0 of the latest accepted
                                # (0 = full window; normalized on EVERY full
                                # frame, clearing included — today's
                                # "only fires when positive" onWindowFloor is
-                               # replaced by this)
+                               # replaced by this).
+                               # COLD SEED: when no live-stream frame has
+                               # been accepted yet this session (no active
+                               # request, no pending), a cache-restored
+                               # snapshot seeds effectiveFloor from its
+                               # window.floor_seq ?? 0 — the gate runs this
+                               # seed before its first reconcile. Without it
+                               # a cold restore at floor F would read as
+                               # "full window" and the first consumer start
+                               # would request floor 0: exactly the
+                               # full-thread snapshot this design avoids.
+                               # Seeding never settles a pending.
 neededFloor    : derived       # min(earliestLoadedCommittedBodySeq ?? +inf,
                                #     effectiveFloor)
 pendingExpansion : { requestId, targetFloor } | null   # at most one
@@ -232,7 +293,9 @@ desiredFloor = pendingExpansion ? pendingExpansion.targetFloor
 **Demand triggers** (bump `demandEpoch`, reset `retryCount`, then run
 reconcile): older-history page apply; cache-restored transcript ingest;
 authoritative-refetch transcript apply; a consumer start entering the gate
-(thread open/reopen, side-chat join).
+(thread open/reopen, side-chat join — with the §3 rebind rule: when the start
+rebinds an in-flight pending, the rebound attempt immediately consumes the
+new epoch's first slot, `retryCount = 1`).
 
 **Settle triggers** (run reconcile *without* bumping the epoch): every
 accepted full `render_state` frame. A frame updates `effectiveFloor`, settles
@@ -369,10 +432,21 @@ lower `render_floor`. `AGENTS.md`/`CLAUDE.md` mirror-sync applies.
   - delta-mode: expansion full frame reseeds the base; next live delta chains
     from the wide snapshot (true downward-expansion chain test).
 - **Router store (`garyx-router` store tests — `full_file_reads` is a
-  store-internal test counter, so these live here, not in gateway tests)**:
-  rolled-file thread, repeated floor lowering via the window derivation →
-  bounded `full_file_reads` per derivation; derivation duration and window
-  record counts consistent with the §6 cost model.
+  store-internal test counter, so these live here, not in gateway tests)**,
+  with a **deterministic fixture and concrete gating criteria**: a rolled-file
+  thread of R records (R > tail-cache record budget, e.g. R = 12_000) with
+  fixed-size bodies, driven through K successive floor lowerings of one
+  prepay-cap span each. Gating assertions (deterministic, CI-safe):
+  - `full_file_reads` increases by exactly 1 per below-tail derivation
+    (≤ K total);
+  - each derived window's row count ≤ (tail − target) and grows by at most
+    (demand span + MAX_PREPAY_RECORDS) per step;
+  - each snapshot's serialized bytes ≤ ceil(row count × per-row byte bound
+    measured from the fixture's own first window) × slack factor 2 — a
+    self-calibrated bound, not a machine-dependent constant.
+  Derivation wall-time is recorded and reported as an **informational**
+  diagnostic only (timing assertions are not CI-gating; the byte/row/read
+  bounds are the contract).
 - **Frontier unit tests**: ordering matrix — stale rejected; same-seq
   accepted; forward cursor accepted.
 - **Mirror change-detection tests** (value gate lives here, not in the
@@ -390,16 +464,34 @@ lower `render_floor`. `AGENTS.md`/`CLAUDE.md` mirror-sync applies.
      start requesting floor ≤ 1 → full wide frame (same `based_on_seq`, no
      marker, matching request id) applies → `buildThreadViewRows` yields the
      turns owning seq 1–2.
-  2. **Stale queued frame**: a floor-3 frame with the *old* request id
-     arrives after the new request's floor-1 frame → dropped whole; window
-     stays wide.
+  2. **Stale queued frame (split semantics)**: a floor-3 frame with the
+     *old* request id, carrying a unique committed event (a seq the hub
+     cursor has passed but the renderer never applied) plus a
+     `replay: "windowed"` marker, arrives after the new request's floor-1
+     frame. Assert: the event's body is applied exactly once (present, not
+     duplicated); the frontier committed cursor advances correctly; the
+     stale `render_state` is NOT applied (window stays wide); the stale
+     windowed marker does NOT fire `dropCommittedBelow`; a same-seq
+     rewrite/reset control carried by a stale frame still triggers the
+     authoritative refetch.
   3. **Retry budget**: expansion answered by a degrade → exactly one retry;
      a second degrade → held (no further starts on settle triggers); next
      demand trigger (page apply) issues a fresh attempt. Quiescence during
      hold produces no starts (weakened-invariant semantics pinned by test).
   4. **Consumer join during pending**: side-chat start rebinds pending to the
      new request id; plan floor = pending target; exactly one physical start;
-     the joined start cannot raise the floor.
+     the joined start cannot raise the floor; `retryCount` is set to 1 —
+     "pending join → degrade → one retry → second degrade → held" shows
+     total attempts within the per-epoch budget, never a fresh double
+     budget.
+  4b. **Normal-plan fallback**: consumer start on a new thread / full-window
+     thread / invariant-satisfied thread (reconcile null) still issues
+     exactly one start at the current effective floor with a fresh request
+     id.
+  4c. **Cold seed**: cache-restored snapshot at floor 3 with body seq 1
+     present → gate seeds `effectiveFloor = 3` before first reconcile; the
+     first issued plan is an expansion target ≤ 1 — never floor 0 from a
+     "no state" read; the restored snapshot settles no pending.
   5. **Last-owner stop before first frame** → pending cancelled; thread
      reopen reconciles fresh (no permanently-stuck `pending != null`).
   6. **Gap error during pending** → pending cancelled; authoritative refetch
