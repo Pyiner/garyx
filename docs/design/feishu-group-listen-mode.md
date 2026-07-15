@@ -18,8 +18,10 @@ passive transcript row, and any passive messages deferred behind the currently
 active run. The visible/persisted current question stays unchanged; only the
 provider input receives the context preamble.
 
-Rolling summaries are low-priority internal runs. Their records form an
-append-only internal checkpoint stream in the same transcript, while a typed
+Background rolling summaries are low-priority internal runs; a compaction
+required by a reserved user request inherits that request's FIFO position.
+Their records form an append-only internal checkpoint stream in the same
+transcript, while a typed
 cursor in the thread record points at the latest successful checkpoint. The
 summary dispatch explicitly suppresses bound-channel delivery and all of its
 records are hidden by the server-owned render reducer.
@@ -45,7 +47,8 @@ reconciliation and before another run may start.
    Garyx never silently drops older context merely to fit a prompt.
 4. Summary work never replies to the group, raises a user-visible typing or
    running indicator, changes the thread preview to maintenance text, or
-   creates unread user content.
+   creates unread user content. It also never resumes/overwrites the user's
+   provider session or receives an executable tool surface.
 5. Phase 1 supports Feishu group chat only. The persistence seam can later
    accept speaker utterances from a VC adapter without introducing a generic
    event framework now.
@@ -88,6 +91,7 @@ assumed from prior investigation.
 | Feishu metadata | The current handler resolves the speaker/text (`garyx-channels/src/feishu/ws.rs:1106`, `:1109`), mention state (`:1164`), topic scope (`:1202`), and message/thread IDs (`:1290`). `FeishuEventHeader` carries `event_id` and `create_time` (`garyx-channels/src/feishu/types.rs:16`, `:20`). | Reuse that normalization and binding key; explicitly pass safe header provenance into the passive record, but never persist tokens or the raw envelope. |
 | Internal dispatch | Gateway internal inbound constructs a bound response callback by default (`garyx-gateway/src/internal_inbound.rs:193`) before dispatching to a known thread (`:234`). | A prompt saying “do not reply” is insufficient. Summary dispatch needs an explicit delivery-suppression option whose default preserves existing callers. |
 | App questions | Gateway chat starts the bridge directly (`garyx-gateway/src/chat.rs:286`, `:375`) instead of entering through the channel router. | Context injection belongs in the common bridge run preparation, not only in the Feishu handler or router. |
+| Provider session and tools | `start_agent_run` attaches the thread's persisted SDK session (`garyx-bridge/src/multi_provider/run_management.rs:643`), and terminal persistence writes provider/session identity (`garyx-bridge/src/multi_provider/persistence.rs:1551`). Provider options currently inherit agent permission/tool and MCP configuration (for example `garyx-bridge/src/claude_provider.rs:1194`, `:1275`, `:1302`). | A summary on the ordinary path would pollute/replace user session lineage and expose unattended untrusted chat to tools. It requires an ephemeral no-writeback session plus a fail-closed text-only run capability. |
 | Source-of-truth contract | Thread condition queries use SQL projections derived in the same transaction as each thread-record write; transcript JSONL is conversation truth; render state is derived server-side after transcript commit (`docs/agents/repository-contracts.md`). | Cursor state is canonical typed thread state, due-thread discovery has a write-derived projection, and clients never reconstruct passive turns or hide summary rows themselves. |
 
 `garyx-channels` must not depend on `garyx-gateway`. Programmatic work uses
@@ -218,9 +222,10 @@ domain:
    allocated `seq`.
 3. Atomically top-level-merge the canonical thread record through
    `ThreadStore::update`: history/preview timestamps, `updated_at`, and
-   `passive_context` state. The explicit resolve-only persistence step above
-   has already updated delivery context; the passive writer does not overwrite
-   the nested routing object.
+   `passive_context` state (including `latest_passive_seq = seq` and
+   `passive_scan_through_seq = seq`). The explicit resolve-only persistence
+   step above has already updated delivery context; the passive writer does
+   not overwrite the nested routing object.
 4. Let `SqliteThreadStore` write that record and all affected projections in
    one SQLite transaction, as required by the repository contract.
 5. Only after both stores succeed, emit the normal `committed_message`; live
@@ -238,12 +243,12 @@ If the process dies after step 2 but before the thread-record transaction, the
 passive row remains transcript truth and appears through reconnect replay, but
 its preview/counters/due projection may lag. On the next bridge write or user
 run preparation for that known thread, the writer derives canonical
-`PassiveContextState` from the checkpoint cursor plus ledger tail before its
-normal top-level merge; projections then derive in that same record-write
-transaction. This is writer-side canonical state derivation, never a GET/read
-route projection repair. With no later activity, the row remains app/context
-visible but its summary timer can be delayed; that rare degradation is part of
-the Phase 1 crash boundary in Section 7.3.
+`PassiveContextState` by paging from `passive_scan_through_seq` through the
+ledger tail before its normal top-level merge; projections then derive in that
+same record-write transaction. This is writer-side canonical state derivation,
+never a GET/read route projection repair. With no later activity, the row
+remains app/context visible but its summary timer can be delayed; that rare
+degradation is part of the Phase 1 crash boundary in Section 7.3.
 
 Passive commit updates user-visible recency and preview using the passive
 message. It does not create run-control records, active-run projection state,
@@ -324,6 +329,7 @@ hide correctness cursors in arbitrary metadata:
 {
   "schema_version": 1,
   "latest_passive_seq": 147,
+  "passive_scan_through_seq": 150,
   "pending_message_count": 12,
   "pending_utf8_bytes": 8200,
   "oldest_pending_at": "2026-01-15T08:00:00Z",
@@ -349,6 +355,17 @@ are normal runs or controls. `summary_message_seq` points to the final
 assistant message containing the checkpoint body. `source_message_count` is
 the cumulative number of passive messages represented by that body.
 
+`latest_passive_seq` is the upper bound for user-context delta reads.
+`passive_scan_through_seq` is separate: it means the bridge writer has
+inspected every ledger record through that sequence for passive classification.
+Before a known-thread write or user-run preparation, the writer scans only
+`(passive_scan_through_seq, current_ledger_tail]`, incorporates any passive row
+left by the transcript/record crash gap, and advances this cursor in the normal
+canonical record write. Thus ordinary run records are inspected at most once
+for this purpose, while `covered_through_seq` remains solely summary coverage.
+A scan-cursor-only write preserves user-visible `updated_at`, preview, recency,
+and unread fields.
+
 `pending_*` describes committed passive rows after `covered_through_seq` and is
 maintained on the write path. A dedicated `thread_passive_context` SQL
 projection contains only scheduler/query fields (`thread_id`, pending count and
@@ -373,7 +390,7 @@ Idle
   -> Idle
 
 Idle
-  -> Running(run_id, user | maintenance)
+  -> Running(run_id, user | maintenance(owner))
   -> Closing(run_id)
   -> FlushingPassive
   -> Idle
@@ -428,11 +445,21 @@ the later row.
 
 If another user request arrives while a normal user run is active, existing
 provider queue/interrupt behavior remains, except its provider-only context
-snapshot also includes the current deferred passive queue. If a user request
-arrives during a maintenance summary, it never becomes streaming input to the
-summary: the user request preempts/cancels the maintenance run, waits for its
-failed terminal cleanup and passive flush, then starts normally. A cancelled
-summary cannot advance its cursor.
+snapshot also includes the current deferred passive queue. Maintenance runs
+have an explicit owner:
+
+- `Background`: a later user request preempts/cancels the summary, waits for
+  its failed terminal cleanup and passive flush, then starts normally.
+- `PendingUser(request_id)`: this is the single prerequisite compaction for an
+  active `NeedsPassiveCompaction` reservation. A later user request cannot
+  preempt it or become its streaming input; it waits behind the owner until
+  compaction completes and that owner either starts or releases with error.
+  Cancellation/abandonment of the owning request itself cancels the summary
+  through the scoped-guard cleanup, then allows the next waiter to proceed.
+
+A cancelled summary of either owner kind cannot advance its cursor. This
+distinction prevents a stream of later requests from repeatedly cancelling the
+only compaction that can make the reserved request runnable.
 
 ### 7.3 Queue bounds and delivery guarantee
 
@@ -485,15 +512,20 @@ Every user-initiated `start_agent_run`, regardless of caller, uses
 non-public `run_kind = passive_summary`; callers cannot casually disable
 context.
 
-Under the per-thread guard, preparation captures a stable transcript tail
-sequence and a snapshot of the deferred passive FIFO. It then:
+Under the per-thread guard, preparation captures a stable passive upper bound
+`P` and a snapshot of the deferred passive FIFO. It then:
 
-1. Point-reads `PassiveContextState`.
+1. Point-reads `PassiveContextState`, scans only from
+   `passive_scan_through_seq` through the current ledger tail, and performs the
+   Section 6.2 writer-side state update if needed. It then sets
+   `P = latest_passive_seq` (or no committed delta when absent).
 2. If a checkpoint exists, point-reads `summary_message_seq`, verifies that it
    is a successful `passive_summary` assistant checkpoint, and takes its text.
 3. Calls `records_after_seq_page(thread_id, covered_through_seq, ...)` in
-   ascending pages through the captured tail. It advances the scan cursor by
-   every record but selects only `context_kind = passive_channel_message`.
+   ascending pages only through `P`. It advances the scan cursor by every
+   record up to that bound but selects only
+   `context_kind = passive_channel_message`; it never walks user/tool records
+   appended after the newest passive row.
 4. Appends the snapshotted deferred envelopes in FIFO order. These are not
    assigned fake transcript sequences and are labelled “received, commit
    pending.”
@@ -502,7 +534,9 @@ sequence and a snapshot of the deferred passive FIFO. It then:
 
 The history repository should add small point/tail helpers rather than load the
 whole transcript: `latest_seq(thread_id)` and `record_at_seq(thread_id, seq)`.
-Paged reads remain the authoritative delta path.
+`records_after_seq_page` may stop as soon as a returned record exceeds `P` (or
+gain an equivalent inclusive upper-bound parameter). Paged reads remain the
+authoritative delta path.
 
 The provider preamble has explicit trust boundaries:
 
@@ -573,6 +607,11 @@ client that never retries cannot wedge the thread. There is no silent
 oldest-row truncation. The proactive byte trigger and bounded catch-up in
 Section 9 keep this exceptional.
 
+The prerequisite summary is tagged `maintenance_owner = PendingUser(request_id)`
+and follows the non-preemptible-by-later-requests rule in Section 7.2. Only the
+owning request's cancellation or a provider/timeout/shutdown failure may end
+it early.
+
 ## 9. Rolling summary
 
 ### 9.1 Recommended carrier and alternatives
@@ -636,20 +675,24 @@ When a timer fires:
 
 A small global maintenance semaphore (two concurrent summaries) prevents many
 groups from bursting provider work after restart. Threads waiting for that
-semaphore remain event-driven and user work always has priority.
+semaphore remain event-driven. User work always preempts background summaries;
+a `PendingUser(A)` compaction counts as part of A's user work and retains its
+FIFO position against later requests.
 
 ### 9.3 Cutoff, prompt, and successful advancement
 
 Starting a summary marks the thread active before releasing the guard and
-captures the current committed ledger tail `L`. Later passive arrivals are
-deferred, so they cannot be accidentally represented by the run. The scanner
-selects the oldest complete prefix after the previous cursor that fits the
-200-message / 48-KiB delta budget. Its cutoff `T` is the ledger sequence
-immediately before the first excluded passive row, or `L` if all pending rows
-fit. Intervening non-passive records advance `T` but are not prompt content.
-No individual message is truncated; a single row that cannot fit the provider
-budget produces the explicit context error from Section 8 rather than a false
-coverage claim.
+first performs the Section 6.2 writer scan, then captures
+`L = latest_passive_seq`, the newest committed passive row. Later passive
+arrivals are deferred, so they cannot be accidentally represented by the run.
+The scanner selects the oldest complete prefix after the previous cursor that
+fits the 200-message / 48-KiB delta budget. Its cutoff `T` is the ledger
+sequence immediately before the first excluded passive row, or `L` if all
+pending rows fit. Intervening non-passive records advance `T` but are not
+prompt content; records after `L` are never scanned merely because normal runs
+extended the ledger. No individual message is truncated; a single row that
+cannot fit the provider budget produces the explicit context error from
+Section 8 rather than a false coverage claim.
 
 The summary input contains:
 
@@ -671,6 +714,9 @@ PreparedSummaryInput {
   transcript_metadata: {
     run_kind: "passive_summary",
     summary_prompt_version: 1,
+    maintenance_owner: "background | pending_user:<request_id>",
+    provider_session_policy: "ephemeral_no_writeback",
+    run_capability_profile: "text_only_maintenance",
     previous_checkpoint_message_seq,
     source_after_seq,
     source_through_seq: T,
@@ -682,7 +728,11 @@ PreparedSummaryInput {
 }
 ```
 
-Only the compact reference row, provider/tool output needed for the internal
+The policy strings in `transcript_metadata` are audit copies only. Bridge and
+provider adapters consume the trusted typed run fields from Section 9.4; they
+must never authorize session/tool behavior from transcript metadata.
+
+Only the compact reference row, provider control/output needed for the internal
 run, and the final checkpoint body are appended. The raw group text remains
 solely in its original passive rows, and the prior checkpoint remains solely
 at `previous_checkpoint_message_seq`. The sequence references are sufficient
@@ -697,18 +747,20 @@ checkpoint record and point-updates:
 - `summary_message_seq` to that assistant record;
 - `covered_through_seq = T`;
 - cumulative `source_message_count`;
-- retry state to zero; and
+- retry state to zero;
 - pending count/bytes/times recomputed for the already committed passive rows
-  in `(T, L]` (usually empty).
+  in `(T, L]` (usually empty); and
+- `passive_scan_through_seq` to the reconciled summary-run ledger tail, whose
+  new records are known to be internal/non-passive.
 
 Only after that state/projection transaction does the normal terminal path
-flush passive messages received after `L`, adding them to the remaining
-pending counters and calculating a new due time. If `(T, L]` is still above a
-count/size trigger, a finite catch-up summary is scheduled immediately through
-the same maintenance semaphore; otherwise the ordinary age/debounce rules
-apply. This ordering prevents a new or over-budget message from being cleared
-by the summary success update and lets an old backlog converge in bounded
-chunks without a periodic poll.
+flush passive messages received after the `L` snapshot, adding them to the
+remaining pending counters and calculating a new due time. If `(T, L]` is
+still above a count/size trigger, a finite catch-up summary is scheduled
+immediately through the same maintenance semaphore; otherwise the ordinary
+age/debounce rules apply. This ordering prevents a new or over-budget message
+from being cleared by the summary success update and lets an old backlog
+converge in bounded chunks without a periodic poll.
 
 Crash after the hidden summary row is durable but before cursor advancement
 leaves an orphan checkpoint. On restart the old cursor remains authoritative
@@ -716,7 +768,75 @@ and a later summary may repeat the work; hidden duplicate maintenance rows are
 preferable to falsely claiming coverage. Cancelled, partial, empty, or failed
 runs never advance the cursor.
 
-### 9.4 Delivery and presentation suppression
+### 9.4 Maintenance provider isolation and text-only capability
+
+`passive_summary` is self-contained and must not enter the user's persistent
+provider conversation or inherit the thread agent's tool surface. Add
+internal-only run policies (typed fields on `ProviderRunOptions` or an
+equivalent bridge-owned contract):
+
+```rust
+enum ProviderSessionPolicy {
+    ThreadPersistent, // existing default for user runs
+    EphemeralNoWriteback { session_scope: String },
+}
+
+enum RunCapabilityProfile {
+    UserAgent, // existing default
+    TextOnlyMaintenance,
+}
+```
+
+Every summary run uses `EphemeralNoWriteback` with a run-unique scope such as
+`maintenance:{canonical_thread_id}:{run_id}`. Provider adapters use that scope,
+not the canonical thread ID, for all in-memory session maps. The bridge active
+run index retains both canonical thread ID and provider session scope, and all
+interrupt/timeout/cleanup calls use the latter. The bridge does not attach the
+thread's persisted `sdk_session_id`, provider-scoped session ID, or session
+file. At terminal persistence it forces `SdkSessionUpdate::Preserve`
+on success and failure, discards any session identity returned by the
+provider, removes the ephemeral map entry, and skips maintenance writes to the
+thread's provider key/type, runtime snapshot, session file, response-usage
+snapshot, and generated title. Summary usage may feed separately tagged
+aggregate cost/latency metrics, but it cannot replace user-run runtime state.
+Thus the next user run resumes exactly the session lineage that existed before
+the summary.
+
+The policy branch is evaluated before today's session attachment and runtime
+snapshot calls (`garyx-bridge/src/multi_provider/run_management.rs:643`,
+`:659`), and terminal save receives an explicit preserve/no-title/no-runtime
+writeback policy rather than trying to undo those writes afterward.
+
+`TextOnlyMaintenance` is a fail-closed capability profile, not prompt advice:
+
+- Reuse only provider authentication plus chosen model/reasoning defaults.
+  Use a fixed versioned summary system prompt, one model turn, no user/project
+  setting sources, agent prompt, skills, attachments, workspace instructions,
+  conversational memory, or arbitrary agent environment overlay; only the
+  provider adapter's allowlisted authentication/runtime environment remains.
+- Supply no remote MCP servers and do not install the local Garyx MCP server
+  for the run.
+- Deny every built-in/local/shell/filesystem/network/subagent/channel tool
+  before execution through a provider-specific per-run authorization hook.
+  An approval prompt, plan mode, sandbox after launch, or post-hoc observation
+  of `ToolUse` is not sufficient.
+- Each provider adapter must explicitly advertise and test support for this
+  profile. If it cannot guarantee pre-execution deny-all, bridge refuses to
+  start the summary with `maintenance_profile_unsupported`; the summary cursor
+  stays unchanged and the bounded summary retry policy applies.
+- Receiving any tool-use event despite the advertised profile is an invariant
+  breach: interrupt the run, persist only hidden failure controls, advance no
+  cursor, and emit a security metric without group text. The adapter's
+  pre-execution denial remains the side-effect boundary; this check is
+  defense-in-depth.
+
+Normal user runs retain `ThreadPersistent + UserAgent`. These policies are
+selected only from trusted internal `run_kind`, never from Feishu metadata,
+group text, or a general internal-dispatch caller. A summary rate limit/error
+returns to the summary scheduler; it does not enter normal user auto-resend or
+pending-input state.
+
+### 9.5 Delivery and presentation suppression
 
 Extend `InternalDispatchOptions` with an explicit enum, defaulting to current
 behavior:
@@ -735,6 +855,13 @@ internal observer needed for persistence. Run metadata also records
 code path may infer suppression from prompt text, channel name, or a missing
 chat ID.
 
+`SuppressBoundDelivery` and `TextOnlyMaintenance` are joint start
+preconditions. The former closes Garyx's normal bound-response callback; the
+latter closes shell/MCP/channel and other tool side channels before execution.
+If either boundary cannot be installed, the summary does not start and its
+cursor does not advance. This is what makes the Phase 1 “no summary outcome can
+send to the group” acceptance claim structural rather than prompt-dependent.
+
 The gateway scheduler reaches the known thread through the internal inbound
 service and `MessageRouter::dispatch_message_to_thread`; it does not route a
 synthetic Feishu event. Normal `@bot` runs and questions started from the app
@@ -744,8 +871,9 @@ into an app-only reply; changing that product behavior would require a
 separate user-facing delivery choice.
 
 Summary runs carry `run_kind = passive_summary` and `visibility = internal`.
-Every persisted provider/control/tool record inherits that run visibility, and
-the server transcript reducer excludes the whole run from user rows. Thread
+Every persisted provider/control record (including a tool-attempt failure
+record from the invariant check) inherits that run visibility, and the server
+transcript reducer excludes the whole run from user rows. Thread
 record/projection derivation also ensures maintenance runs do not replace the
 latest user preview, reorder recent threads, create unread state, or expose a
 user-visible active/running badge. Desktop and mobile receive an already
@@ -757,9 +885,12 @@ filtered `render_state`; neither client adds special-case hiding logic.
 | --- | --- |
 | Passive event races with a user run start | The shared guard chooses exactly one order: commit then include it in the new run snapshot, or mark the run active then defer it. |
 | Passive event arrives during run terminal persistence | State is `Closing`, so it is deferred until after final reconciliation. |
-| `@bot`/app question arrives during summary | Cancel summary without cursor advance, flush passive FIFO, then prepare and start the user run. Never queue the question into the summarizer. |
+| `@bot`/app question arrives during a background summary | Cancel summary without cursor advance, flush passive FIFO, then prepare and start the user run. Never queue the question into the summarizer. |
+| Later question arrives during `PendingUser(A)` compaction | Do not preempt; queue behind A's live reservation. Only cancellation of owner A cancels its prerequisite run. |
 | New passive event arrives after summary cutoff | It is deferred and committed after cursor advancement; it remains pending for the next summary. |
 | Summary provider succeeds but bound delivery callback would normally exist | Suppression prevents callback construction, and a callback-spy test must observe zero sends. |
+| Summary provider returns a new SDK session identity | Discard it, remove the ephemeral session-scope entry, and preserve every thread/user provider session field and mapping. |
+| Summary attempts any tool | Provider authorization denies before execution; interrupt/fail the hidden run, send nothing, and do not advance the cursor. |
 | SSE emit fails after commit | Durable transcript and thread state remain; normal replay exposes the row. |
 | Duplicate Feishu event in one process | Stable origin plus existing event dedup yields `Duplicate`, with no extra seq. |
 | Queue overflow | Reject newest, retain older FIFO, emit rate-limited log/metric; never silently evict. |
@@ -769,9 +900,9 @@ filtered `render_state`; neither client adds special-case hiding logic.
 Add counters/histograms with channel/account/thread labels only, never message
 text or participant IDs: passive received, committed, deferred, duplicate,
 rejected, queue depth/bytes, flush latency, summary trigger reason, summary
-duration/result, suppressed-delivery attempts, and context assembled
-checkpoint/tail sizes. Thread logs use stable reason codes and synthetic-safe
-metadata.
+duration/result, maintenance-profile unsupported/tool-denied/session-cleanup
+result, suppressed-delivery attempts, and context assembled checkpoint/tail
+sizes. Thread logs use stable reason codes and synthetic-safe metadata.
 
 ## 11. Configuration, clients, and permission
 
@@ -829,8 +960,9 @@ events” bus, meeting schema, or dormant UI is added now.
 This task changes none of these product files; they are the expected later
 implementation surface.
 
-- `garyx-models`: config enum, typed passive context/checkpoint state, internal
-  run visibility metadata, and server render-state exclusion.
+- `garyx-models`: config enum, typed passive context/checkpoint state,
+  `ProviderSessionPolicy`/`RunCapabilityProfile`, internal run visibility
+  metadata, and server render-state exclusion.
 - `garyx-router`: resolve-only inbound API; transcript point/tail reads;
   canonical endpoint/topic behavior reused without dispatch; explicit reuse of
   the `set_last_delivery_with_persistence` logic through a result-bearing
@@ -841,12 +973,19 @@ implementation surface.
   advancement. The maintenance branch in
   `garyx-bridge/src/multi_provider/persistence.rs` must preserve the latest
   user-visible preview/recency instead of unconditionally mirroring its hidden
-  input/final result into preview fields.
+  input/final result into preview fields, force provider session identity to
+  `Preserve`, and skip user runtime/title writeback. Provider adapters and
+  their in-memory session maps must implement run-unique ephemeral scope plus
+  fail-closed pre-execution `TextOnlyMaintenance`; unsupported adapters fail
+  summary start rather than falling back to user capabilities. This touches
+  `garyx-bridge/src/claude_provider.rs`, `codex_provider.rs`, and
+  `antigravity_provider.rs` (Codex behavior also covers Traex).
 - `garyx-channels`: Feishu branch selection and envelope normalization;
   removal of `pending_group_history`; passive outcomes/metrics. No gateway
   dependency.
 - `garyx-gateway`: SQLite `thread_passive_context` projection and due query;
-  event-driven summary scheduler; internal bound-delivery policy; and
+  event-driven summary scheduler; trusted internal session/capability and
+  bound-delivery policies; and
   `garyx-gateway/src/recent_thread_projection.rs` derivation that treats a
   maintenance run as bridge-active for serialization but not user-visible
   `active_run_id`/`run_state`, recent ordering, or unread state. SSE remains
@@ -906,8 +1045,8 @@ Use a blocking fake provider and controlled persistence worker:
   turns.
 - Inject at every terminal boundary (worker drain, terminal append,
   reconciliation, thread-record write) to prove the state stays `Closing`.
-- Cover normal, provider-error, interrupt, timeout, user-preempted summary,
-  and graceful-shutdown paths.
+- Cover normal, provider-error, interrupt, timeout, user-preempted background
+  summary, and graceful-shutdown paths.
 - Race passive commit and new run start repeatedly; assert each event is either
   committed-and-included or deferred-and-included, never missing or doubled.
 - Fill message/byte/global bounds; assert newest rejection, no old eviction,
@@ -926,6 +1065,11 @@ Use a blocking fake provider and controlled persistence worker:
 - Seed checkpoint C, interleaved normal/tool records, committed passive rows,
   and deferred rows. Assert paged scanning advances by every ledger sequence
   but provider context contains only C plus passive delta in correct order.
+- Put six pending passive rows before thousands of normal run/tool records.
+  Assert context paging stops at `latest_passive_seq`; the writer scan advances
+  `passive_scan_through_seq` over each later ledger record only once rather
+  than rescanning the unbounded run suffix on every question, without changing
+  preview/recency/unread state.
 - Verify an `@bot` route and a direct gateway app question produce equivalent
   context preambles.
 - For both fresh and active-provider queue paths, assert transcript persistence
@@ -939,10 +1083,14 @@ Use a blocking fake provider and controlled persistence worker:
   overtake it; then force compaction failure and assert the reservation is
   released before the error response, so a different later request starts
   even when the failed caller never retries.
+- While A's prerequisite compaction is running, submit B and assert B neither
+  interrupts the maintenance run nor enters its provider input; A compacts and
+  starts first. Separately cancel A itself and assert scoped cleanup cancels
+  that compaction, releases the reservation, and lets B progress.
 - Put instruction-like text in the group fixture and assert it remains inside
   the untrusted quoted context section.
 
-### 14.4 Summary and suppression tests
+### 14.4 Summary, isolation, and suppression tests
 
 With a fake clock, assert exact count, byte, age, 30-second quiet, and 2-minute
 maximum-debounce boundaries. Prove one-to-seven idle messages have no timer;
@@ -958,8 +1106,24 @@ Fill a summary delta near 48 KiB with unique synthetic sentinels. Assert the
 fake provider receives every source item, while the persisted internal input
 contains only the compact range/count/byte metadata and none of those source
 sentinels. Transcript growth may include the bounded final checkpoint and
-ordinary provider/tool results, but never a second copy of the assembled
+ordinary provider controls, but never a second copy of the assembled
 passive batch or previous checkpoint.
+
+Seed a thread's legacy and provider-scoped SDK session IDs, session file,
+provider runtime snapshot, title, and provider in-memory session map. Run a
+summary whose fake provider returns a different session ID. Assert it received
+no persisted resume identity and a run-unique session scope; after success,
+failure, and preemption, every seeded user-runtime value and mapping is
+unchanged, the ephemeral entry is gone, and the next user run resumes the
+original ID.
+
+Add a provider contract suite for every built-in adapter. An adapter that does
+not advertise `TextOnlyMaintenance` must fail before provider start. A
+supporting fake receives the fixed prompt with no agent settings, skills,
+attachments, or MCP servers; force a shell/channel tool attempt and assert the
+pre-execution authorization spy denies it, all side-effect/channel spies stay
+at zero, the run becomes a hidden summary failure, the cursor does not advance,
+and the security metric increments.
 
 Install a spy as the bound Feishu callback and run a successful, failed, and
 preempted summary. It must observe zero sends. Assert transcript contains the
@@ -989,9 +1153,11 @@ state remains user-derived.
    passive rows are transcript/render/projection-visible and no path answers
    without its context snapshot.
 3. **Rolling checkpoint:** add event-driven triggers, internal summary run,
-   cursor advancement, user preemption, hidden render behavior, and explicit
-   bound-delivery suppression. Phase 1 is not generally released until the
-   callback-spy and cutoff-race suites pass.
+   cursor advancement, owner-aware preemption, ephemeral/no-writeback provider
+   scope, fail-closed text-only capability for every enabled built-in provider,
+   hidden render behavior, and explicit bound-delivery suppression. Phase 1 is
+   not generally released until the callback/tool/session and cutoff-race
+   suites pass.
 4. **Operational soak:** measure queue depth, active-run defer time, summary
    failure/size, and provider cost under opt-in groups. Keep the default
    disabled. The documented at-most-once/deferred-loss acceptance is a release
