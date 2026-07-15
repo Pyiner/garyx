@@ -143,6 +143,14 @@ fn test_stringify_message_content_summarizes_image_only_payloads() {
     assert_eq!(stringify_message_content(&content), "[2 images]");
 }
 
+#[test]
+fn test_stringify_message_content_preserves_text_beyond_5000_characters() {
+    let long = "x".repeat(8_339);
+    let rendered = stringify_message_content(&json!(long.clone()));
+    assert_eq!(rendered.chars().count(), long.chars().count());
+    assert_eq!(rendered, long);
+}
+
 #[tokio::test]
 async fn test_thread_history_empty() {
     let state = test_state();
@@ -1055,6 +1063,79 @@ async fn test_thread_history_detail_with_thread_id_and_tool_messages() {
     assert_eq!(json["messages"][0]["message"]["role"], "user");
     assert_eq!(json["messages"][1]["text"], "world");
     assert_eq!(json["messages"][1]["message"]["content"], "world");
+}
+
+#[tokio::test]
+async fn test_thread_history_preserves_complete_long_task_notification_content() {
+    const CAPTURED_TEXT_CHARS: usize = 8_339;
+    let state = test_state();
+    let prefix = [
+        r##"<garyx_task_notification event="ready_for_review" task_id="#TASK-42" status="in_review">"##,
+        "Task #TASK-42 is ready for review: Synthetic renderer review",
+        "",
+        "# Review conclusion: FAIL",
+        "",
+    ]
+    .join("\n");
+    let suffix = [
+        "",
+        "View details:",
+        "garyx task get #TASK-42",
+        "</garyx_task_notification>",
+    ]
+    .join("\n");
+    let padding_chars = CAPTURED_TEXT_CHARS - prefix.chars().count() - suffix.chars().count();
+    let notification = format!("{prefix}{}{suffix}", "x".repeat(padding_chars));
+    assert_eq!(notification.chars().count(), CAPTURED_TEXT_CHARS);
+
+    seed_transcript_backed_thread(
+        &state,
+        "thread::long-task-notification",
+        json!({
+            "messages": [{
+                "role": "user",
+                "text": notification,
+                "content": notification,
+                "internal": true,
+                "metadata": {
+                    "internal_dispatch": true,
+                    "task_notification": true,
+                    "task_notification_event": "ready_for_review",
+                    "task_id": "#TASK-42"
+                }
+            }]
+        }),
+    )
+    .await;
+
+    let router = api_router(state);
+    let req = Request::builder()
+        .uri("/api/threads/history?thread_id=thread%3A%3Along-task-notification&limit=10")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let message = &json["messages"][0];
+    let text = message["text"].as_str().expect("history text");
+    let content = message["content"].as_str().expect("history content");
+    let nested_content = message["message"]["content"]
+        .as_str()
+        .expect("nested history message content");
+    assert_eq!(text.chars().count(), CAPTURED_TEXT_CHARS);
+    assert_eq!(content.chars().count(), CAPTURED_TEXT_CHARS);
+    assert_eq!(nested_content.chars().count(), CAPTURED_TEXT_CHARS);
+    assert_eq!(text, notification);
+    assert_eq!(content, notification);
+    assert_eq!(nested_content, notification);
+    assert!(content.ends_with("</garyx_task_notification>"));
+    assert!(nested_content.ends_with("</garyx_task_notification>"));
+    assert!(!content.contains("[truncated:"));
+    assert!(!nested_content.contains("[truncated:"));
 }
 
 #[tokio::test]
@@ -2857,13 +2938,12 @@ fn enrich_message_content_for_history_inlines_image_path_blocks() {
 }
 
 #[test]
-fn enrich_history_caps_long_string_content() {
+fn enrich_history_preserves_long_string_content() {
     let long = "x".repeat(20_000);
-    let enriched = enrich_message_content_for_history(&json!(long));
+    let enriched = enrich_message_content_for_history(&json!(long.clone()));
     let value = enriched.as_str().expect("string content");
-    assert!(value.chars().count() <= MAX_HISTORY_CONTENT_TEXT_CHARS + 80);
-    assert!(value.contains("[truncated: showing"));
-    assert!(value.starts_with(&"x".repeat(100)));
+    assert_eq!(value.chars().count(), long.chars().count());
+    assert_eq!(value, long);
 }
 
 #[test]
@@ -2873,26 +2953,27 @@ fn enrich_history_keeps_short_string_content() {
 }
 
 #[test]
-fn enrich_history_caps_text_inside_blocks() {
+fn enrich_history_preserves_text_inside_blocks() {
     let long = "y".repeat(20_000);
-    let enriched = enrich_message_content_for_history(&json!([{ "type": "text", "text": long }]));
+    let enriched =
+        enrich_message_content_for_history(&json!([{ "type": "text", "text": long.clone() }]));
     let text = enriched[0]["text"].as_str().expect("block text");
-    assert!(text.chars().count() <= MAX_HISTORY_CONTENT_TEXT_CHARS + 80);
-    assert!(text.contains("[truncated:"));
+    assert_eq!(text.chars().count(), long.chars().count());
+    assert_eq!(text, long);
 }
 
 #[test]
-fn enrich_history_caps_text_nested_in_object() {
+fn enrich_history_preserves_text_nested_in_object() {
     let long = "z".repeat(20_000);
     let enriched = enrich_message_content_for_history(&json!({
         "type": "tool_result",
-        "content": [{ "type": "text", "text": long }],
+        "content": [{ "type": "text", "text": long.clone() }],
     }));
     let text = enriched["content"][0]["text"]
         .as_str()
         .expect("nested text");
-    assert!(text.chars().count() <= MAX_HISTORY_CONTENT_TEXT_CHARS + 80);
-    assert!(text.contains("[truncated:"));
+    assert_eq!(text.chars().count(), long.chars().count());
+    assert_eq!(text, long);
 }
 
 #[test]
@@ -2910,7 +2991,7 @@ fn enrich_history_does_not_cap_image_base64() {
         .as_str()
         .expect("inline base64 data");
     assert!(
-        data.chars().count() > MAX_HISTORY_CONTENT_TEXT_CHARS,
+        data.chars().count() > 30_000,
         "image base64 must not be truncated, got {} chars",
         data.chars().count()
     );

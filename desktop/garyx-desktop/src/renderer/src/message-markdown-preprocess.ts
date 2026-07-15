@@ -15,7 +15,11 @@
 // through the first literal `</name>`. Internal payloads are XML-escaped
 // upstream by garyx-bridge, so they never contain a raw close marker — a
 // first-match close search is correct. Display-only; agent-bound text is never
-// touched. No whitespace normalization, so untouched text is byte-identical.
+// touched. Paired internal blocks are removed. If an opener arrives without
+// its close, only the opener shell is removed and its readable payload
+// remains; a malformed partial opener is surfaced instead of discarding the
+// rest of the message. No whitespace normalization, so untouched text is
+// byte-identical.
 
 export const HTML_TAG_NAMES = new Set<string>([
   'a', 'b', 'blockquote', 'br', 'code', 'dd', 'del', 'details', 'div', 'dl',
@@ -260,7 +264,17 @@ function transform(text: string, opts: { strip: boolean; escape: boolean }): str
           if (atBlockBoundary(text, i)) {                     // block-level => real injected block
             const close = findCloseTag(text, tag.end, tag.name);
             if (close !== -1) { i = close; continue; }
-            i = n; continue;                                  // streaming unclosed -> EOF
+            // A partial or interrupted message can omit the close tag. Peel
+            // the incomplete envelope, preserving its payload rather than
+            // treating the rest of the text as hidden.
+            let bodyStart = tag.end;
+            if (restOfLineIsBlank(text, tag.end)) {
+              while (text[bodyStart] === ' ' || text[bodyStart] === '\t') bodyStart++;
+              if (text[bodyStart] === '\r') bodyStart++;
+              if (text[bodyStart] === '\n') bodyStart++;
+            }
+            i = bodyStart;
+            continue;
           }
           // mid-line opener => prose; fall through to escape
         }
@@ -290,7 +304,12 @@ function transform(text: string, opts: { strip: boolean; escape: boolean }): str
         continue;
       }
       // malformed/incomplete tag
-      if (opts.strip && atBlockBoundary(text, i) && malformedInternalOpener(text, i)) { i = n; continue; }
+      if (opts.strip && atBlockBoundary(text, i) && malformedInternalOpener(text, i)) {
+        const raw = text.slice(i, end);
+        emit(opts.escape ? escapeTag(raw) : raw);
+        i = end;
+        continue;
+      }
       emit(text.slice(i, end)); // emit raw, advance to scan end (linear)
       i = end;
       continue;

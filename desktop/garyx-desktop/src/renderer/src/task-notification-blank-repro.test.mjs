@@ -9,11 +9,10 @@ import { buildThreadViewRows } from "./render-view-model.ts";
 import { parseTaskNotificationText } from "./task-notification.ts";
 
 // Redacted deterministic projection of the captured seq-227 evidence. The
-// original committed text is 8,339 characters; the desktop history/cache copy
-// of `content` is capped at 8,000 characters and therefore loses the closing
-// garyx_task_notification tag. Identifiers and body text are synthetic.
+// original committed text is 8,339 characters. History must preserve that
+// complete body, including the task-notification close tag. Identifiers and
+// body text are synthetic.
 const CAPTURED_TEXT_CHARS = 8_339;
-const HISTORY_CONTENT_CHARS = 8_000;
 
 function capturedNotificationText() {
   const prefix = [
@@ -43,9 +42,7 @@ function capturedHistoryMessage() {
     seq: 227,
     role: "user",
     text,
-    content:
-      `${text.slice(0, HISTORY_CONTENT_CHARS)}\n` +
-      `[truncated: showing ${HISTORY_CONTENT_CHARS} of ${CAPTURED_TEXT_CHARS} chars]`,
+    content: text,
     timestamp: "2026-01-01T00:00:00.000Z",
     kind: "user_input",
     internal: true,
@@ -118,8 +115,7 @@ function visibleText(html) {
   return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 }
 
-test("captured long internal task notification keeps a visible card body", async () => {
-  const message = capturedHistoryMessage();
+async function assertCapturedNotificationRenders(message) {
   const rows = buildThreadViewRows(
     capturedRenderState,
     new Map([[message.seq, message]]),
@@ -130,10 +126,9 @@ test("captured long internal task notification keeps a visible card body", async
     parseTaskNotificationText(userTurn.userBlock.entry.message.text),
     "the complete text selects the task-notification presentation",
   );
-  assert.equal(
+  assert.ok(
     parseTaskNotificationText(userTurn.userBlock.entry.message.content),
-    null,
-    "the history-capped content has no closing envelope tag",
+    "the complete history content selects the task-notification presentation",
   );
 
   const renderer = await buildRichMessageRenderer();
@@ -144,8 +139,23 @@ test("captured long internal task notification keeps a visible card body", async
   });
 
   assert.match(
+    html,
+    /class="task-notification-card"/,
+    "the complete text should select the task-notification card renderer",
+  );
+  assert.match(
     visibleText(html),
     /Review conclusion: FAIL/,
     "the captured notification body should remain visible",
   );
+}
+
+test("captured long history content stays complete and renders a visible task-notification card", async () => {
+  const message = capturedHistoryMessage();
+  assert.equal(message.content.length, CAPTURED_TEXT_CHARS);
+  assert.equal(message.content, message.text);
+  assert.match(message.content, /<\/garyx_task_notification>$/);
+  assert.doesNotMatch(message.content, /\[truncated:/);
+
+  await assertCapturedNotificationRenders(message);
 });

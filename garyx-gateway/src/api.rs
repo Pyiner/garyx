@@ -1158,7 +1158,7 @@ fn last_message_content(messages: &[Value], role: &str) -> Option<String> {
         if let Some(content) = obj.get("content") {
             let text = stringify_message_content(content);
             if !text.trim().is_empty() {
-                return Some(truncate_text(text, 260));
+                return Some(truncate_preview_text(text, 260));
             }
         }
     }
@@ -1291,24 +1291,8 @@ fn enrich_image_block_for_history(block: &serde_json::Map<String, Value>) -> Val
     Value::Object(hydrated)
 }
 
-/// Upper bound on any single text/string segment embedded in a thread-history
-/// `message` payload. Large tool inputs/outputs (file reads, command output,
-/// agent reports) can be hundreds of KB each; clipping them here keeps the
-/// history response small without affecting the already-capped `text`/`content`
-/// summary fields. Images are never clipped (see below).
-const MAX_HISTORY_CONTENT_TEXT_CHARS: usize = 8000;
-
-fn cap_history_text(text: &str) -> Value {
-    let total = text.chars().count();
-    if total <= MAX_HISTORY_CONTENT_TEXT_CHARS {
-        return Value::String(text.to_owned());
-    }
-    let kept: String = text.chars().take(MAX_HISTORY_CONTENT_TEXT_CHARS).collect();
-    Value::String(format!(
-        "{kept}\n[truncated: showing {MAX_HISTORY_CONTENT_TEXT_CHARS} of {total} chars]"
-    ))
-}
-
+/// Prepare structured content for thread history. Message text is preserved
+/// verbatim; image path blocks are additionally hydrated for the client.
 fn enrich_message_content_for_history(content: &Value) -> Value {
     match content {
         Value::Array(items) => Value::Array(
@@ -1324,7 +1308,7 @@ fn enrich_message_content_for_history(content: &Value) -> Value {
         {
             // Images are hydrated to inline base64 and must not be length-capped.
             "image" => enrich_image_block_for_history(block),
-            // Recurse into other objects so nested tool text is capped too.
+            // Recurse into other objects so nested image blocks are hydrated.
             _ => Value::Object(
                 block
                     .iter()
@@ -1332,7 +1316,7 @@ fn enrich_message_content_for_history(content: &Value) -> Value {
                     .collect(),
             ),
         },
-        Value::String(text) => cap_history_text(text),
+        Value::String(text) => Value::String(text.clone()),
         _ => content.clone(),
     }
 }
@@ -1370,7 +1354,7 @@ fn humanize_structured_content(content: &Value) -> Option<String> {
 }
 
 fn stringify_message_content(content: &Value) -> String {
-    let text = match content {
+    match content {
         Value::Null => String::new(),
         Value::String(text) => text.to_owned(),
         Value::Array(_) | Value::Object(_) => {
@@ -1381,11 +1365,10 @@ fn stringify_message_content(content: &Value) -> String {
             }
         }
         _ => content.to_string(),
-    };
-    truncate_text(text, 5000)
+    }
 }
 
-fn truncate_text(text: String, max_len: usize) -> String {
+fn truncate_preview_text(text: String, max_len: usize) -> String {
     if text.chars().count() <= max_len {
         return text;
     }

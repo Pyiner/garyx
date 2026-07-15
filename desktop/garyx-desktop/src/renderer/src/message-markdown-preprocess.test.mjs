@@ -9,9 +9,29 @@ test('self-closing', () => assert.equal(stripGaryxInternalTags('a <garyx_models 
 test('self-closing > in attr', () => assert.equal(stripGaryxInternalTags('<garyx_models data=">"/> visible').trim(), 'visible'));
 test('system_instructions', () => assert.equal(stripGaryxInternalTags('<system_instructions>be nice</system_instructions>\n\nbody').trim(), 'body'));
 test('multiple blocks', () => { const o = stripGaryxInternalTags('<garyx_models a="1"/>\nkeep me\n<garyx_memory_context>secret</garyx_memory_context>\ntail'); assert.match(o,/keep me/); assert.match(o,/tail/); noGaryx(o); assert.doesNotMatch(o,/secret/); });
-test('streaming unclosed', () => assert.equal(stripGaryxInternalTags('visible\n\n<garyx_memory_context>\nhalf...').trim(), 'visible'));
-test('streaming digits', () => assert.equal(stripGaryxInternalTags('x\n<garyx_model1').trim(), 'x'));
-test('streaming prefix', () => { assert.equal(stripGaryxInternalTags('visible\n<garyx_').trim(), 'visible'); assert.equal(stripGaryxInternalTags('visible\n<system_instr').trim(), 'visible'); });
+test('streaming unclosed peels opener and preserves payload', () => {
+  const o = stripGaryxInternalTags('visible\n\n<garyx_memory_context>\nhalf...');
+  assert.match(o, /visible/);
+  assert.match(o, /half\.\.\./);
+  noGaryx(o);
+});
+test('unclosed internal envelope peels the opener but keeps its readable body', () => {
+  const o = prepareMessageMarkdown([
+    '<garyx_task_notification event="ready_for_review" task_id="#TASK-42">',
+    'Task #TASK-42 is ready for review: Synthetic renderer review',
+    '',
+    '# Review conclusion: FAIL',
+  ].join('\n'));
+  assert.doesNotMatch(o, /garyx_task_notification/);
+  assert.match(o, /Review conclusion: FAIL/);
+});
+test('incomplete internal opener cannot erase a following readable body', () => {
+  const o = prepareMessageMarkdown('<garyx_models data="partial\nReview conclusion: FAIL');
+  assert.ok(o.trim());
+  assert.match(o, /Review conclusion: FAIL/);
+});
+test('streaming digits preserved when opener is incomplete', () => assert.equal(stripGaryxInternalTags('x\n<garyx_model1'), 'x\n<garyx_model1'));
+test('streaming prefix preserved when opener is incomplete', () => { assert.equal(stripGaryxInternalTags('visible\n<garyx_'), 'visible\n<garyx_'); assert.equal(stripGaryxInternalTags('visible\n<system_instr'), 'visible\n<system_instr'); });
 test('no strip prefix-match name', () => { assert.match(prepareMessageMarkdown('<system_instructions-v2>hi</system_instructions-v2>'), /system_instructions-v2/); });
 test('no strip short partials', () => { assert.equal(prepareMessageMarkdown('prose <g'),'prose <g'); assert.equal(prepareMessageMarkdown('prose <s'),'prose <s'); assert.equal(prepareMessageMarkdown('prose <sys'),'prose <sys'); });
 test('no strip mid-line partial', () => { const o = prepareMessageMarkdown('prose <garyx_me'); assert.match(o,/prose/); assert.match(o,/garyx_me/); });
@@ -23,11 +43,11 @@ test('distant whitespace untouched', () => assert.equal(stripGaryxInternalTags('
 test('R4 P1a fenced inside internal removed', () => { const o = stripGaryxInternalTags('<garyx_memory_context>\n```\nsecret code\n```\n</garyx_memory_context>\n\nhi'); assert.equal(o.trim(),'hi'); assert.doesNotMatch(o,/secret/); assert.doesNotMatch(o,/```/); noGaryx(o); });
 test('R4 P1a inline inside internal removed', () => assert.equal(stripGaryxInternalTags('<garyx_models>a `b` c</garyx_models>X').trim(), 'X'));
 test('R4 P1b backtick-in-attr escaped', () => { const o = escapeNonHtmlTagsOutsideCode('<custom title="`code`">x</custom>'); assert.match(o,/&lt;custom title="`code`"&gt;/); assert.match(o,/x/); assert.match(o,/&lt;\/custom&gt;/); assert.doesNotMatch(o,/<custom/); });
-test('R4 P1c streaming incomplete quoted attr stripped', () => assert.equal(stripGaryxInternalTags('visible\n<garyx_models data="').trim(), 'visible'));
+test('R4 P1c streaming incomplete quoted attr preserved', () => assert.equal(stripGaryxInternalTags('visible\n<garyx_models data="'), 'visible\n<garyx_models data="'));
 
 // round-5
 test('R5 P1a malformed many tags linear & unchanged', () => { const i='<custom "'.repeat(20000); assert.equal(escapeNonHtmlTagsOutsideCode(i), i); });
-test('R5 P1b streaming > in unclosed quote stripped', () => assert.equal(stripGaryxInternalTags('visible\n<garyx_models data=">').trim(), 'visible'));
+test('R5 P1b streaming > in unclosed quote preserved', () => assert.equal(stripGaryxInternalTags('visible\n<garyx_models data=">'), 'visible\n<garyx_models data=">'));
 test('R5 P2d entity in attr escaped (& first)', () => assert.equal(escapeNonHtmlTagsOutsideCode('<custom data="&lt;">'), '&lt;custom data="&amp;lt;"&gt;'));
 
 // round-6
@@ -63,8 +83,8 @@ test('R8 P1 malformed garyx_ partial with bad terminator/dot/dash NOT stripped',
   assert.match(stripGaryxInternalTags('<garyx_models.v2\nVISIBLE'), /VISIBLE/);
   assert.match(stripGaryxInternalTags('<garyx_models-x\nVISIBLE'), /VISIBLE/);
 });
-test('R8 clean incomplete garyx_ family still stripped at block boundary', () => {
-  assert.equal(stripGaryxInternalTags('visible\n<garyx_models foo').trim(), 'visible');
+test('R8 clean incomplete garyx_ family is preserved at block boundary', () => {
+  assert.equal(stripGaryxInternalTags('visible\n<garyx_models foo'), 'visible\n<garyx_models foo');
 });
 
 // round-9
@@ -85,9 +105,9 @@ test('R10 P1a URL autolink preserved (not escaped)', () => {
 test('R10 P1a email autolink preserved', () => assert.equal(escapeNonHtmlTagsOutsideCode('mail <a.b@example.com> ok'), 'mail <a.b@example.com> ok'));
 test('R10 P1a non-autolink custom still escaped', () => assert.equal(escapeNonHtmlTagsOutsideCode('<custom>x</custom>'), '&lt;custom&gt;x&lt;/custom&gt;'));
 test('R10 P1a autolink-look does not break internal strip', () => assert.equal(stripGaryxInternalTags('<garyx_memory_context>s</garyx_memory_context>\n\nhi').trim(), 'hi'));
-test('R10 P1b streaming partial self-closing internal stripped', () => {
-  assert.equal(stripGaryxInternalTags('visible\n<garyx_models/').trim(), 'visible');
-  assert.equal(stripGaryxInternalTags('visible\n<system_instructions/').trim(), 'visible');
+test('R10 P1b streaming partial self-closing internal preserved', () => {
+  assert.equal(stripGaryxInternalTags('visible\n<garyx_models/'), 'visible\n<garyx_models/');
+  assert.equal(stripGaryxInternalTags('visible\n<system_instructions/'), 'visible\n<system_instructions/');
 });
 test('R10 P1b /foo still surfaced (not over-stripped)', () => assert.match(stripGaryxInternalTags('<garyx_models/foo\nVISIBLE'), /VISIBLE/));
 

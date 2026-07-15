@@ -72,6 +72,9 @@ for personal data and remove it.
 - Configured bot account `config` is ordinary application state; do not add
   token-specific merge, redaction, or preservation paths beyond keeping real
   secrets out of committed fixtures.
+- `/api/threads/history` preserves message string segments and text/content
+  summaries without size truncation; larger history responses are accepted.
+  Do not reintroduce caps for user, assistant, or nested tool text.
 - Provider, agent, bot, and channel identity presentation should resolve
   through shared presentation helpers instead of local view switch tables.
 - A Claude Code `result` is a turn boundary, not a process boundary. Normal
