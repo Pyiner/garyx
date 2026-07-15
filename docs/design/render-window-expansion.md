@@ -1,11 +1,21 @@
 # Render Window Expansion: History Below the Windowed-Resume Floor
 
-Status: v4 (revised after design review #TASK-2299 v3 FAIL; re-review pending)
+Status: v5 (revised after design review #TASK-2299 v4 FAIL; re-review pending)
 Related: `thread-render-frame-incremental.md` (knife 2: over-budget degrade),
 `thread-open-replay-trim-design.md` (floor-windowed rows),
 `perf-thread-stream-replay-degrade.md`.
 
-v4 changes after v3 review: stale-request frames are no longer dropped whole
+v5 changes after v4 review: ledger-event acceptance is payload-aware — the
+identity matrix (seq unseen → apply; same seq equal payload → silent
+duplicate; same seq different payload → overwrite, semantics run exactly once
+per distinct payload) replaces the cache's seq-only dedup as one shared entry
+point for stale and current frames; the cursor-rewind rejection rationale is
+corrected (rejected as dirtier, not impossible); the repository-contracts
+update gains the core rule that a logical stream request id never filters
+committed ledger events; the perf window bound fixes the inclusive-ends
+off-by-one.
+
+v4 changes: stale-request frames are no longer dropped whole
 — `streamRequestId` gates only connection-scoped semantics (render state,
 windowed marker, errors, pending settle) while committed events are
 ledger-scoped and always applied idempotently, closing the deterministic
@@ -170,16 +180,30 @@ Renderer-side rules built on the token — **the request id gates
 connection-scoped semantics only; it never filters ledger-scoped data**:
 
 - **Committed events are ledger-scoped and always applied**, whatever request
-  id their frame carries. They are seq-keyed and idempotent in the cache, and
-  same-seq rewrite/reset controls must keep triggering the authoritative
-  refetch path. Dropping them is not an option: the hub's committed cursor
-  advances at `sendEvent` time (before the renderer consumes the frame), a
-  superseding start resumes from `max(input.afterSeq, lastSeq)`, and the
-  server only replays `seq > after_seq` — so an event dropped from a stale
-  queued frame is deterministically never redelivered (and a same-seq
-  overwrite equal to `after_seq` would not be replayed even by a
-  cursor-rewind scheme). A stale frame therefore applies as an
-  **event-only mirror commit**.
+  id their frame carries. Dropping them is not an option: the hub's committed
+  cursor advances at `sendEvent` time (before the renderer consumes the
+  frame), a superseding start resumes from `max(input.afterSeq, lastSeq)`,
+  and the server only replays `seq > after_seq` — so an event dropped from a
+  stale queued frame is never redelivered by the normal resume. (A
+  cursor-rewind scheme *could* re-replay the tail, but is rejected as the
+  dirtier design: it adds a rewind protocol, re-replays already-applied
+  records, and bakes in assumptions about where overwrites can sit.
+  Event-only application from the frame in hand needs none of that.) A stale
+  frame therefore applies as an **event-only mirror commit**.
+- **Ledger-event acceptance is payload-aware, one shared entry point for
+  stale and current frames alike.** The cache's current seq-only dedup
+  (`recordsBySeq.has(seq) → skip`) silently swallows legitimate same-seq
+  overwrites — the server explicitly distinguishes same-seq duplicates from
+  overwrites by payload. The acceptance matrix:
+
+  | condition | behavior |
+  |---|---|
+  | seq unseen | insert and apply |
+  | seq present, payload structurally equal | duplicate → no-op (idempotent redelivery stays silent; no repeated refetch) |
+  | seq present, payload different | same-seq overwrite → update the cached record and run the record's semantics (body overwrite re-maps the message; rewrite/reset controls trigger the authoritative refetch exactly once per distinct payload) |
+
+  This matrix is not stale-frame-specific — it is the corrected ledger
+  identity for every committed-event apply, replacing the seq-only rule.
 - **Connection-scoped parts of a stale-request frame are dropped**: its
   `render_state` (a same-`based_on_seq` different-value snapshot from the old
   narrow window would pass the §1 value gate and re-narrow the window), its
@@ -392,10 +416,15 @@ changes, only the coverage guarantee feeding it.
 `docs/agents/repository-contracts.md` (Transcript Rendering) gains: the
 server may emit same-seq overwrite frames, so clients gate render-state
 acceptance on cursor ordering and detect change by full-snapshot value
-(excluding `rows_hash`), never by cursor equality alone; clients that narrow
-structure via `render_floor` own the demand-convergent invariant that the
-window covers their loaded committed bodies, and widen it by resuming with a
-lower `render_floor`. `AGENTS.md`/`CLAUDE.md` mirror-sync applies.
+(excluding `rows_hash`), never by cursor equality alone; committed-event
+identity is `(seq, payload)` — same-seq redelivery with an equal payload is a
+silent duplicate, a different payload is an overwrite that must apply;
+**a logical stream request id gates connection-scoped state only (render
+state, window markers, errors, pending settles) and must never filter
+committed ledger events**; clients that narrow structure via `render_floor`
+own the demand-convergent invariant that the window covers their loaded
+committed bodies, and widen it by resuming with a lower `render_floor`.
+`AGENTS.md`/`CLAUDE.md` mirror-sync applies.
 
 ## Alternatives Rejected
 
@@ -439,8 +468,9 @@ lower `render_floor`. `AGENTS.md`/`CLAUDE.md` mirror-sync applies.
   prepay-cap span each. Gating assertions (deterministic, CI-safe):
   - `full_file_reads` increases by exactly 1 per below-tail derivation
     (≤ K total);
-  - each derived window's row count ≤ (tail − target) and grows by at most
-    (demand span + MAX_PREPAY_RECORDS) per step;
+  - each derived window's record count ≤ (tailSeq − targetFloor + 1) — both
+    ends inclusive — and grows by at most (demand span + MAX_PREPAY_RECORDS)
+    per step;
   - each snapshot's serialized bytes ≤ ceil(row count × per-row byte bound
     measured from the fixture's own first window) × slack factor 2 — a
     self-calibrated bound, not a machine-dependent constant.
@@ -471,9 +501,17 @@ lower `render_floor`. `AGENTS.md`/`CLAUDE.md` mirror-sync applies.
      frame. Assert: the event's body is applied exactly once (present, not
      duplicated); the frontier committed cursor advances correctly; the
      stale `render_state` is NOT applied (window stays wide); the stale
-     windowed marker does NOT fire `dropCommittedBelow`; a same-seq
-     rewrite/reset control carried by a stale frame still triggers the
-     authoritative refetch.
+     windowed marker does NOT fire `dropCommittedBelow`.
+  2b. **Payload-aware ledger identity** (shared entry point, not
+     stale-specific):
+     - cache holds `seq=10, payload=A`; a stale frame delivers a same-seq
+       rewrite control `seq=10, payload=B` → the authoritative refetch
+       fires exactly once;
+     - redelivery of the identical `seq=10, payload=B` → duplicate, no
+       second refetch (pins the existing idempotency contract);
+     - a non-control same-seq **body** overwrite is applied (re-mapped),
+       not silently swallowed by seq-only dedup;
+     - the stale frame's marker/render parts remain dropped throughout.
   3. **Retry budget**: expansion answered by a degrade → exactly one retry;
      a second degrade → held (no further starts on settle triggers); next
      demand trigger (page apply) issues a fresh attempt. Quiescence during
