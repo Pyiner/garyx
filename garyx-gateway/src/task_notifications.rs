@@ -297,6 +297,12 @@ async fn deliver_notification_to_bot(
                     &metadata,
                 )
                 .await
+                .map_err(|error| {
+                    TaskNotificationError::new(
+                        event,
+                        format!("failed to create notification target thread: {error}"),
+                    )
+                })?
         }
     };
 

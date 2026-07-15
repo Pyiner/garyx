@@ -116,7 +116,7 @@ fn test_api_channels_deserialize() {
     let account = cfg.channels.api.accounts.get("main").unwrap();
     assert!(account.enabled);
     assert_eq!(account.name.as_deref(), Some("API Bot"));
-    assert_eq!(account.agent_id, "codex");
+    assert_eq!(account.agent_id.as_deref(), Some("codex"));
     assert_eq!(
         account.workspace_dir.as_deref(),
         Some("/tmp/codex-workspace")
@@ -136,7 +136,7 @@ fn test_channels_serialize_flattens_channel_entries() {
                     token: "telegram-token".to_owned(),
                     enabled: true,
                     name: Some("Telegram".to_owned()),
-                    agent_id: "claude".to_owned(),
+                    agent_id: Some("claude".to_owned()),
                     workspace_dir: None,
                     owner_target: None,
                     groups: HashMap::new(),
@@ -198,7 +198,7 @@ fn test_discord_channel_deserialize_from_flattened_shape() {
     let account = resolved.accounts.get("main").unwrap();
     assert_eq!(account.token, "discord-token");
     assert_eq!(account.name.as_deref(), Some("Discord"));
-    assert_eq!(account.agent_id, "codex");
+    assert_eq!(account.agent_id.as_deref(), Some("codex"));
     assert_eq!(
         account.workspace_dir.as_deref(),
         Some("/tmp/test-workspace")
@@ -320,4 +320,34 @@ fn api_account_default_matches_serde_defaults() {
     assert_eq!(from_default.agent_id, from_serde.agent_id);
     assert_eq!(from_default.workspace_dir, from_serde.workspace_dir);
     assert_eq!(from_default.workspace_mode, from_serde.workspace_mode);
+}
+
+#[test]
+fn channel_account_agent_id_preserves_none_and_explicit_claude_across_all_five_types() {
+    fn assert_agent_state<T>(base: serde_json::Value)
+    where
+        T: serde::de::DeserializeOwned + serde::Serialize,
+    {
+        let missing: T = serde_json::from_value(base.clone()).expect("missing agent_id");
+        let missing_json = serde_json::to_value(&missing).expect("serialize missing agent_id");
+        assert!(missing_json.get("agent_id").is_none());
+
+        let mut explicit = base;
+        explicit
+            .as_object_mut()
+            .unwrap()
+            .insert("agent_id".to_owned(), serde_json::json!("claude"));
+        let explicit: T = serde_json::from_value(explicit).expect("explicit claude");
+        let explicit_json = serde_json::to_value(&explicit).expect("serialize explicit claude");
+        assert_eq!(explicit_json["agent_id"], "claude");
+    }
+
+    assert_agent_state::<ApiAccount>(serde_json::json!({}));
+    assert_agent_state::<TelegramAccount>(serde_json::json!({"token": "${TOKEN}"}));
+    assert_agent_state::<DiscordAccount>(serde_json::json!({"token": "${TOKEN}"}));
+    assert_agent_state::<FeishuAccount>(serde_json::json!({
+        "app_id": "test_app",
+        "app_secret": "${APP_SECRET}"
+    }));
+    assert_agent_state::<WeixinAccount>(serde_json::json!({"token": "${TOKEN}"}));
 }

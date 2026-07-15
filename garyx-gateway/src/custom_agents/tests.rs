@@ -12,6 +12,7 @@ fn model_contract_request(
         agent_id: agent_id.to_owned(),
         display_name: "Reviewer".to_owned(),
         provider_type: ProviderType::CodexAppServer,
+        enabled: None,
         model: model.map(str::to_owned),
         model_reasoning_effort: model_reasoning_effort.map(str::to_owned),
         model_service_tier: model_service_tier.map(str::to_owned),
@@ -60,10 +61,15 @@ async fn file_store_skips_profiles_with_unsupported_provider_types() {
         .expect("supported profile");
     let temp = tempfile::tempdir().expect("tempdir");
     let path = temp.path().join("custom-agents.json");
+    let mut legacy_supported = serde_json::to_value(&supported).expect("serialize profile");
+    legacy_supported
+        .as_object_mut()
+        .expect("profile object")
+        .remove("enabled");
     std::fs::write(
         &path,
         serde_json::to_vec_pretty(&serde_json::json!({
-            "supported-reviewer": supported,
+            "supported-reviewer": legacy_supported,
             "removed-reviewer": {
                 "provider_type": "removed_provider"
             }
@@ -81,10 +87,23 @@ async fn file_store_skips_profiles_with_unsupported_provider_types() {
             .any(|agent| agent.agent_id == "supported-reviewer")
     );
     assert!(
+        agents
+            .iter()
+            .find(|agent| agent.agent_id == "supported-reviewer")
+            .unwrap()
+            .enabled,
+        "legacy profiles without enabled migrate as enabled"
+    );
+    assert!(
         !agents
             .iter()
             .any(|agent| agent.agent_id == "removed-reviewer")
     );
+    let migrated: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read migrated envelope"))
+            .expect("parse migrated envelope");
+    assert_eq!(migrated["version"], AGENT_STORE_VERSION);
+    assert!(migrated["agents"].is_object());
 }
 
 #[tokio::test]
@@ -95,6 +114,7 @@ async fn rejects_builtin_agent_modification() {
             agent_id: "claude".to_owned(),
             display_name: "Claude Override".to_owned(),
             provider_type: ProviderType::ClaudeCode,
+            enabled: None,
             model: Some("claude-opus-4-1".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
@@ -290,6 +310,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
+            enabled: None,
             model: Some("gpt-5".to_owned()),
             model_reasoning_effort: Some("high".to_owned()),
             model_service_tier: Some("priority".to_owned()),
@@ -312,6 +333,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
+            enabled: None,
             model: Some("gpt-5".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
@@ -332,6 +354,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
+            enabled: None,
             model: Some("gpt-5".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
@@ -353,6 +376,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             agent_id: "designer".to_owned(),
             display_name: "Designer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
+            enabled: None,
             model: Some("gpt-5".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
@@ -373,6 +397,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             agent_id: "designer".to_owned(),
             display_name: "Designer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
+            enabled: None,
             model: Some("gpt-5".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
@@ -393,6 +418,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             agent_id: "designer".to_owned(),
             display_name: "Designer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
+            enabled: None,
             model: Some("gpt-5".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
@@ -447,4 +473,105 @@ async fn concurrent_writers_never_lose_each_others_agents() {
             "{agent_id} was lost from the persisted file by a concurrent writer"
         );
     }
+}
+
+#[tokio::test]
+async fn envelope_round_trip_preserves_enabled_builtins_custom_and_raw_default() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("custom-agents.json");
+    let store = CustomAgentStore::file(&path).expect("file store");
+    store
+        .set_enabled("claude", false)
+        .await
+        .expect("disable builtin");
+    let mut request = model_contract_request("reviewer", Some("gpt-5"), None, None);
+    request.enabled = Some(false);
+    store
+        .upsert_agent_for_test(request)
+        .await
+        .expect("disabled custom agent");
+    store
+        .set_default_agent("codex")
+        .await
+        .expect("set raw default");
+
+    let reloaded = CustomAgentStore::file(&path).expect("reload envelope");
+    assert!(!reloaded.get_agent("claude").await.unwrap().enabled);
+    assert!(!reloaded.get_agent("reviewer").await.unwrap().enabled);
+    assert_eq!(reloaded.default_agent_id().await.as_deref(), Some("codex"));
+    assert_eq!(
+        reloaded.effective_default_agent_id().await.as_deref(),
+        Some("codex")
+    );
+}
+
+#[tokio::test]
+async fn delete_raw_default_clears_it_in_the_same_persisted_mutation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("custom-agents.json");
+    let store = CustomAgentStore::file(&path).expect("file store");
+    store
+        .upsert_agent_for_test(model_contract_request("reviewer", None, None, None))
+        .await
+        .expect("custom agent");
+    store
+        .set_default_agent("reviewer")
+        .await
+        .expect("set default");
+    store
+        .delete_agent("reviewer")
+        .await
+        .expect("delete default");
+
+    assert!(store.default_agent_id().await.is_none());
+    let reloaded = CustomAgentStore::file(&path).expect("reload");
+    assert!(reloaded.default_agent_id().await.is_none());
+    assert!(reloaded.get_agent("reviewer").await.is_none());
+}
+
+#[tokio::test]
+async fn persist_failure_leaves_memory_revision_and_disk_state_unchanged() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("custom-agents.json");
+    let store = CustomAgentStore::file(&path).expect("file store");
+    store
+        .set_default_agent("codex")
+        .await
+        .expect("seed envelope");
+    let before = store.snapshot().await;
+    let before_disk = std::fs::read(&path).expect("read before");
+
+    // A directory at the sibling temp path makes the atomic write fail while
+    // leaving the previously committed destination file untouched.
+    let mut blocking_tmp = path.as_os_str().to_owned();
+    blocking_tmp.push(".tmp");
+    let blocking_tmp = std::path::PathBuf::from(blocking_tmp);
+    std::fs::create_dir(&blocking_tmp).expect("create blocking temp directory");
+    let error = store
+        .set_enabled("claude", false)
+        .await
+        .expect_err("persist must fail");
+    assert!(matches!(error, StoreWriteError::Persist(_)));
+    assert_eq!(store.snapshot().await, before);
+    assert_eq!(
+        std::fs::read(&path).expect("read unchanged disk state"),
+        before_disk
+    );
+    std::fs::remove_dir(&blocking_tmp).expect("remove blocking temp directory");
+    let reloaded = CustomAgentStore::file(&path).expect("reload old disk state");
+    assert_eq!(reloaded.default_agent_id().await.as_deref(), Some("codex"));
+    assert!(reloaded.get_agent("claude").await.unwrap().enabled);
+}
+
+#[tokio::test]
+async fn idempotent_toggle_does_not_advance_revision_but_real_mutations_do() {
+    let store = CustomAgentStore::new();
+    let initial = store.snapshot().await.agent_state_revision;
+    store
+        .set_enabled("claude", true)
+        .await
+        .expect("idempotent set");
+    assert_eq!(store.snapshot().await.agent_state_revision, initial);
+    store.set_enabled("claude", false).await.expect("disable");
+    assert_eq!(store.snapshot().await.agent_state_revision, initial + 1);
 }

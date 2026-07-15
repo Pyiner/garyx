@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use garyx_bridge::MultiProviderBridge;
-use garyx_models::{AgentReference, agent_runtime_snapshot_metadata, resolve_agent_reference};
+use garyx_models::{
+    AgentBindingError, AgentReference, ResolvedAgentBinding, SERVER_OWNED_AGENT_METADATA_KEYS,
+    agent_runtime_snapshot_metadata, resolve_agent_binding, resolve_agent_reference,
+};
 use garyx_router::{
     ThreadCreator, ThreadEnsureOptions, ThreadStore, create_thread_record, workspace_dir_from_value,
 };
@@ -10,18 +13,11 @@ use serde_json::Value;
 
 use crate::custom_agents::CustomAgentStore;
 
-pub(crate) const DEFAULT_AGENT_REFERENCE_ID: &str = "claude";
-
-pub(crate) fn selected_agent_reference_id(
-    requested: Option<&str>,
-    current: Option<&str>,
-) -> String {
-    requested
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| current.map(str::trim).filter(|value| !value.is_empty()))
-        .unwrap_or(DEFAULT_AGENT_REFERENCE_ID)
-        .to_owned()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentBindingIntent {
+    Fresh,
+    Fork,
+    RecoverExistingSession,
 }
 
 pub(crate) async fn resolve_agent_reference_from_stores(
@@ -30,6 +26,13 @@ pub(crate) async fn resolve_agent_reference_from_stores(
 ) -> Result<AgentReference, String> {
     let agents = custom_agents.list_agents().await;
     resolve_agent_reference(requested_id, &agents)
+}
+
+pub(crate) async fn resolve_new_agent_binding_from_store(
+    custom_agents: &CustomAgentStore,
+    requested: Option<&str>,
+) -> Result<ResolvedAgentBinding, AgentBindingError> {
+    resolve_agent_binding(&custom_agents.snapshot().await, requested, None)
 }
 
 pub(crate) fn default_workspace_dir_from_agent_reference(
@@ -52,7 +55,11 @@ pub(crate) fn merge_agent_runtime_snapshot_metadata(
     reference: &AgentReference,
 ) {
     for (key, value) in agent_runtime_snapshot_metadata(reference) {
-        metadata.entry(key).or_insert(value);
+        if SERVER_OWNED_AGENT_METADATA_KEYS.contains(&key.as_str()) {
+            metadata.insert(key, value);
+        } else {
+            metadata.entry(key).or_insert(value);
+        }
     }
 }
 
@@ -73,7 +80,11 @@ pub(crate) fn snapshot_agent_runtime_metadata_to_thread_record(
         .as_object_mut()
         .ok_or_else(|| "thread metadata is not an object".to_owned())?;
     for (key, value) in agent_runtime_snapshot_metadata(reference) {
-        metadata.entry(key).or_insert(value);
+        if SERVER_OWNED_AGENT_METADATA_KEYS.contains(&key.as_str()) {
+            metadata.insert(key, value);
+        } else {
+            metadata.entry(key).or_insert(value);
+        }
     }
     Ok(())
 }
@@ -92,10 +103,19 @@ pub(crate) async fn create_thread_for_agent_reference(
     bridge: Arc<MultiProviderBridge>,
     custom_agents: Arc<CustomAgentStore>,
     options: ThreadEnsureOptions,
+    intent: AgentBindingIntent,
 ) -> Result<(String, Value, AgentReference), String> {
-    let requested_agent_id = selected_agent_reference_id(options.agent_id.as_deref(), None);
-    let resolved =
-        resolve_agent_reference_from_stores(custom_agents.as_ref(), &requested_agent_id).await?;
+    let snapshot = custom_agents.snapshot().await;
+    let binding = match intent {
+        AgentBindingIntent::Fresh | AgentBindingIntent::Fork => {
+            resolve_agent_binding(&snapshot, options.agent_id.as_deref(), None)
+        }
+        AgentBindingIntent::RecoverExistingSession => {
+            resolve_agent_binding(&snapshot, None, options.agent_id.as_deref())
+        }
+    }
+    .map_err(|error| error.to_string())?;
+    let resolved = resolve_agent_reference(&binding.agent_id, &snapshot.agents)?;
 
     let mut canonical_options = options;
     canonical_options.agent_id = Some(resolved.bound_agent_id().to_owned());
@@ -160,6 +180,7 @@ impl ThreadCreator for GatewayThreadCreator {
             self.bridge.clone(),
             self.custom_agents.clone(),
             options,
+            AgentBindingIntent::Fresh,
         )
         .await?;
         Ok((thread_id, data))
@@ -182,6 +203,7 @@ mod tests {
                 agent_id: "reviewer".to_owned(),
                 display_name: "Reviewer".to_owned(),
                 provider_type: ProviderType::CodexAppServer,
+                enabled: None,
                 model: Some("gpt-5".to_owned()),
                 model_reasoning_effort: Some("high".to_owned()),
                 model_service_tier: Some("priority".to_owned()),
@@ -210,6 +232,7 @@ mod tests {
                 agent_id: Some("reviewer".to_owned()),
                 ..ThreadEnsureOptions::default()
             },
+            AgentBindingIntent::Fresh,
         )
         .await
         .expect("thread created");
@@ -234,6 +257,7 @@ mod tests {
                 workspace_dir: Some("/tmp/bot-workspace".to_owned()),
                 ..ThreadEnsureOptions::default()
             },
+            AgentBindingIntent::Fresh,
         )
         .await
         .expect("thread created");
@@ -256,6 +280,7 @@ mod tests {
                 agent_id: Some("reviewer".to_owned()),
                 ..ThreadEnsureOptions::default()
             },
+            AgentBindingIntent::Fresh,
         )
         .await
         .expect("thread created");
@@ -272,5 +297,156 @@ mod tests {
             metadata["provider_env"]["OPENAI_BASE_URL"],
             "http://127.0.0.1:15721/v1"
         );
+    }
+
+    #[tokio::test]
+    async fn fresh_and_fork_reject_disabled_but_recovery_preserves_existing_binding() {
+        let custom_agents = Arc::new(CustomAgentStore::new());
+        custom_agents
+            .set_enabled("codex", false)
+            .await
+            .expect("disable codex");
+
+        for intent in [AgentBindingIntent::Fresh, AgentBindingIntent::Fork] {
+            let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+            let error = create_thread_for_agent_reference(
+                store.clone(),
+                Arc::new(MultiProviderBridge::new()),
+                custom_agents.clone(),
+                ThreadEnsureOptions {
+                    agent_id: Some("codex".to_owned()),
+                    ..ThreadEnsureOptions::default()
+                },
+                intent,
+            )
+            .await
+            .expect_err("new binding to disabled agent must be rejected");
+            assert_eq!(error, "agent is disabled: codex");
+            assert!(store.list_keys(None).await.unwrap().is_empty());
+        }
+
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let (_, recovered, resolved) = create_thread_for_agent_reference(
+            store,
+            Arc::new(MultiProviderBridge::new()),
+            custom_agents,
+            ThreadEnsureOptions {
+                agent_id: Some("codex".to_owned()),
+                ..ThreadEnsureOptions::default()
+            },
+            AgentBindingIntent::RecoverExistingSession,
+        )
+        .await
+        .expect("recovery keeps an existing disabled binding");
+        assert_eq!(resolved.bound_agent_id(), "codex");
+        assert_eq!(recovered["agent_id"], "codex");
+    }
+
+    #[tokio::test]
+    async fn global_default_hot_switch_only_changes_later_implicit_bindings() {
+        let custom_agents = Arc::new(CustomAgentStore::new());
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let bridge = Arc::new(MultiProviderBridge::new());
+
+        let (first_id, first, _) = create_thread_for_agent_reference(
+            store.clone(),
+            bridge.clone(),
+            custom_agents.clone(),
+            ThreadEnsureOptions::default(),
+            AgentBindingIntent::Fresh,
+        )
+        .await
+        .expect("first implicit thread");
+        assert_eq!(first["agent_id"], "claude");
+
+        custom_agents
+            .set_default_agent("codex")
+            .await
+            .expect("switch default");
+        let (_, second, _) = create_thread_for_agent_reference(
+            store.clone(),
+            bridge,
+            custom_agents,
+            ThreadEnsureOptions::default(),
+            AgentBindingIntent::Fresh,
+        )
+        .await
+        .expect("second implicit thread");
+        assert_eq!(second["agent_id"], "codex");
+        assert_eq!(
+            store.get(&first_id).await.unwrap().unwrap()["agent_id"],
+            "claude"
+        );
+    }
+
+    #[tokio::test]
+    async fn canonical_binding_overwrites_reserved_identity_but_preserves_model_priority() {
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let custom_agents = custom_agent_store_with_default_workspace().await;
+        custom_agents
+            .set_enabled("codex", false)
+            .await
+            .expect("disable smuggled agent");
+        let metadata = std::collections::HashMap::from([
+            ("agent_id".to_owned(), Value::String("codex".to_owned())),
+            (
+                "requested_provider_type".to_owned(),
+                Value::String("claude_code".to_owned()),
+            ),
+            (
+                "provider_env".to_owned(),
+                serde_json::json!({"SHOULD_NOT_SURVIVE": "1"}),
+            ),
+            (
+                "model".to_owned(),
+                Value::String("typed-thread-model".to_owned()),
+            ),
+        ]);
+        let (_, data, _) = create_thread_for_agent_reference(
+            store,
+            Arc::new(MultiProviderBridge::new()),
+            custom_agents,
+            ThreadEnsureOptions {
+                agent_id: Some("reviewer".to_owned()),
+                metadata,
+                ..ThreadEnsureOptions::default()
+            },
+            AgentBindingIntent::Fresh,
+        )
+        .await
+        .expect("typed agent selection wins");
+
+        let metadata = thread_metadata_from_value(&data);
+        assert_eq!(metadata["agent_id"], "reviewer");
+        assert_eq!(metadata["requested_provider_type"], "codex_app_server");
+        assert_eq!(metadata["model"], "typed-thread-model");
+        assert_eq!(
+            metadata["provider_env"]["OPENAI_BASE_URL"],
+            "http://127.0.0.1:15721/v1"
+        );
+        assert!(metadata["provider_env"].get("SHOULD_NOT_SURVIVE").is_none());
+    }
+
+    #[tokio::test]
+    async fn all_disabled_rejects_only_fresh_implicit_binding() {
+        let custom_agents = Arc::new(CustomAgentStore::new());
+        for agent in custom_agents.list_agents().await {
+            custom_agents
+                .set_enabled(&agent.agent_id, false)
+                .await
+                .expect("disable agent");
+        }
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let error = create_thread_for_agent_reference(
+            store.clone(),
+            Arc::new(MultiProviderBridge::new()),
+            custom_agents,
+            ThreadEnsureOptions::default(),
+            AgentBindingIntent::Fresh,
+        )
+        .await
+        .expect_err("implicit binding must fail with no enabled agents");
+        assert_eq!(error, "no enabled standalone agent is available");
+        assert!(store.list_keys(None).await.unwrap().is_empty());
     }
 }

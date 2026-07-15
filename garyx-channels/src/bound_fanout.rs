@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
-use garyx_models::provider::{AgentRunRequest, StreamEvent};
+use garyx_models::provider::StreamEvent;
 use garyx_router::{
-    AgentDispatcher, MessageRouter, ThreadStore, ThreadStoreExt, bindings_from_value,
+    AdmittedRun, AgentDispatcher, MessageRouter, ThreadStore, ThreadStoreExt, bindings_from_value,
 };
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -222,13 +222,13 @@ impl<'a> DeferredFanoutAgentDispatcher<'a> {
 impl AgentDispatcher for DeferredFanoutAgentDispatcher<'_> {
     async fn dispatch(
         &self,
-        request: AgentRunRequest,
+        run: AdmittedRun,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
     ) -> Result<garyx_models::provider::AgentDispatchOutcome, String> {
         self.fanout
-            .attach_thread_from_store(self.thread_store.clone(), &request.thread_id)
+            .attach_thread_from_store(self.thread_store.clone(), run.thread_id())
             .await;
-        self.inner.dispatch(request, response_callback).await
+        self.inner.dispatch(run, response_callback).await
     }
 }
 
@@ -264,6 +264,7 @@ mod tests {
     use std::collections::HashMap;
 
     use garyx_models::config::GaryxConfig;
+    use garyx_models::provider::AgentRunRequest;
     use garyx_router::{InMemoryThreadStore, MessageRouter, ThreadStore};
     use serde_json::json;
 
@@ -312,12 +313,12 @@ mod tests {
     impl AgentDispatcher for MutatingAgentDispatcher {
         async fn dispatch(
             &self,
-            request: AgentRunRequest,
+            run: AdmittedRun,
             response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
         ) -> Result<garyx_models::provider::AgentDispatchOutcome, String> {
             self.store
                 .set(
-                    &request.thread_id,
+                    run.thread_id(),
                     json!({
                         "channel_bindings": [
                             {
@@ -473,20 +474,24 @@ mod tests {
             store: store.clone(),
         };
         let attaching_dispatcher =
-            DeferredFanoutAgentDispatcher::new(&inner, fanout.clone(), store);
+            DeferredFanoutAgentDispatcher::new(&inner, fanout.clone(), store.clone());
+
+        let admitted = AdmittedRun::thread_bound(
+            store,
+            AgentRunRequest::new(
+                "thread::bound",
+                "hello",
+                "run-1",
+                "telegram",
+                "bot1",
+                HashMap::new(),
+            ),
+        )
+        .await
+        .unwrap();
 
         attaching_dispatcher
-            .dispatch(
-                AgentRunRequest::new(
-                    "thread::bound",
-                    "hello",
-                    "run-1",
-                    "telegram",
-                    "bot1",
-                    HashMap::new(),
-                ),
-                Some(consumer),
-            )
+            .dispatch(admitted, Some(consumer))
             .await
             .unwrap();
 

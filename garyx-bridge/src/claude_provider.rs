@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -30,7 +30,7 @@ use crate::provider_common::{
     resolve_uuid_run_id as resolve_run_id, runtime_env_overlay,
 };
 use crate::provider_trait::{
-    ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
+    BridgeError, ProviderModelDefaults, ProviderRuntime, ProviderRuntimeSelection, StreamCallback,
 };
 
 // ---------------------------------------------------------------------------

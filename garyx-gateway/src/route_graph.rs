@@ -217,6 +217,14 @@ fn thread_routes() -> Router<Arc<AppState>> {
                 .delete(api::delete_custom_agent),
         )
         .route(
+            "/api/custom-agents/{agent_id}/toggle",
+            axum::routing::patch(api::toggle_custom_agent),
+        )
+        .route(
+            "/api/custom-agents/{agent_id}/default",
+            axum::routing::patch(api::set_default_custom_agent),
+        )
+        .route(
             "/api/skills",
             axum::routing::get(routes::list_skills).post(routes::create_skill),
         )

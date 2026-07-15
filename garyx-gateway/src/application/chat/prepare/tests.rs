@@ -164,6 +164,7 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
             agent_id: "spec-review".to_owned(),
             display_name: "Spec Review".to_owned(),
             provider_type: ProviderType::CodexAppServer,
+            enabled: None,
             model: Some("gpt-5-codex".to_owned()),
             model_reasoning_effort: Some("xhigh".to_owned()),
             model_service_tier: Some(String::new()),
@@ -296,6 +297,7 @@ async fn prepare_chat_request_prefers_thread_snapshot_before_agent_runtime_metad
             agent_id: "snapshot-agent".to_owned(),
             display_name: "Snapshot Agent".to_owned(),
             provider_type: ProviderType::ClaudeCode,
+            enabled: None,
             model: Some("agent-model-v2".to_owned()),
             model_reasoning_effort: Some("max".to_owned()),
             model_service_tier: Some("auto".to_owned()),
@@ -384,12 +386,9 @@ async fn prepare_chat_request_prefers_thread_snapshot_before_agent_runtime_metad
     );
 }
 
-/// External chat boundary guard: `provider_env` is reserved for server-side
-/// runtime resolution. A chat request that smuggles it through `metadata`
-/// must have it stripped in prepare — otherwise the bridge's existing-wins
-/// backfill would let the client value silently block the agent/thread
-/// snapshot env (the same failure class as the removed `providerMetadata`
-/// channel, through the front door).
+/// External chat boundary guard: binding identity is server-owned. Model
+/// fields are deliberately not scrubbed because request > thread > agent is
+/// the established runtime priority contract.
 #[tokio::test]
 async fn prepare_chat_request_strips_reserved_provider_env_from_request_metadata() {
     let state = test_state();
@@ -414,6 +413,12 @@ async fn prepare_chat_request_strips_reserved_provider_env_from_request_metadata
         "provider_env".to_owned(),
         json!({ "ANTHROPIC_BASE_URL": "http://127.0.0.1:19999" }),
     );
+    metadata.insert("agent_id".to_owned(), json!("smuggled-agent"));
+    metadata.insert(
+        "requested_provider_type".to_owned(),
+        json!("codex_app_server"),
+    );
+    metadata.insert("model".to_owned(), json!("request-model"));
     metadata.insert("client_note".to_owned(), json!("kept"));
 
     let prepared = prepare_chat_request(
@@ -440,6 +445,12 @@ async fn prepare_chat_request_strips_reserved_provider_env_from_request_metadata
     assert!(
         !prepared.metadata.contains_key("provider_env"),
         "client-supplied provider_env must be stripped at the chat boundary"
+    );
+    assert!(!prepared.metadata.contains_key("agent_id"));
+    assert!(!prepared.metadata.contains_key("requested_provider_type"));
+    assert_eq!(
+        prepared.metadata.get("model").and_then(Value::as_str),
+        Some("request-model")
     );
     assert_eq!(
         prepared.metadata.get("client_note").and_then(Value::as_str),

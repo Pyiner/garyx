@@ -14,6 +14,7 @@ use garyx_channels::generated_images::{
 };
 use garyx_models::local_paths::gary_home_dir;
 use garyx_models::provider::{AgentRunRequest, ProviderMessage, ProviderType, StreamEvent};
+use garyx_router::{AdmittedRun, AgentDispatcher};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -194,12 +195,14 @@ async fn run_image_tool(
     .with_workspace_dir(Some(workspace_dir))
     .with_requested_provider(Some(ProviderType::CodexAppServer));
 
+    let admitted = AdmittedRun::provider_tool(request, ProviderType::CodexAppServer)
+        .map_err(|error| ToolImageError::Bridge(error.to_string()))?;
     state
         .integration
         .bridge
-        .start_agent_run(request, Some(callback))
+        .dispatch(admitted, Some(callback))
         .await
-        .map_err(|error| ToolImageError::Bridge(error.to_string()))?;
+        .map_err(ToolImageError::Bridge)?;
 
     let mut abort_guard =
         ImageToolRunAbortGuard::new(Arc::clone(&state.integration.bridge), run_id.clone());
@@ -449,10 +452,18 @@ mod tests {
         bridge
             .set_default_provider_key("codex-image-provider")
             .await;
+        let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+        for agent in custom_agents.list_agents().await {
+            custom_agents
+                .set_enabled(&agent.agent_id, false)
+                .await
+                .expect("disable agent");
+        }
         let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
             GaryxConfig::default(),
         ))
         .with_bridge(bridge)
+        .with_custom_agent_store(custom_agents)
         .build();
         let router = build_router(state);
         let response = router

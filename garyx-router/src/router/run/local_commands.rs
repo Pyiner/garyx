@@ -298,11 +298,10 @@ impl MessageRouter {
                     origin_from_id: Some(from_id.to_owned()),
                     is_group: Some(is_group),
                 };
-                let Ok((new_thread_key, _thread_data)) =
-                    self.create_thread_with_options(options).await
-                else {
-                    return Err("failed to create thread".to_owned());
-                };
+                let (new_thread_key, _thread_data) = self
+                    .create_thread_with_options(options)
+                    .await
+                    .map_err(|error| format!("failed to create thread: {error}"))?;
 
                 let binding = self
                     .endpoint_binding_from_inbound(

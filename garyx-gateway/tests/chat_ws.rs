@@ -1,14 +1,17 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
 use garyx_gateway::garyx_db::GaryxDbService;
-use garyx_gateway::server::AppStateBuilder;
-use garyx_models::config::{ApiAccount, GaryxConfig};
+use garyx_gateway::server::{AppState, AppStateBuilder};
+use garyx_models::config::{
+    ApiAccount, GaryxConfig, OwnerTargetConfig, TelegramAccount, telegram_account_to_plugin_entry,
+};
 use garyx_models::provider::{
     ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput, StreamBoundaryKind,
     StreamEvent,
@@ -22,6 +25,9 @@ use tokio_tungstenite::tungstenite::Message;
 const TEST_GATEWAY_TOKEN: &str = "chat-ws-test-token";
 
 struct WsTestProvider;
+struct WsCountingProvider {
+    calls: Arc<AtomicUsize>,
+}
 
 type SharedStreamCallback = Arc<dyn Fn(StreamEvent) + Send + Sync>;
 
@@ -91,6 +97,52 @@ impl ProviderRuntime for WsTestProvider {
             error: None,
             input_tokens: 1,
             output_tokens: 1,
+            cost: 0.0,
+            duration_ms: 1,
+        })
+    }
+
+    async fn get_or_create_session(&self, thread_id: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{thread_id}"))
+    }
+}
+
+#[async_trait]
+impl ProviderRuntime for WsCountingProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        _on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(ProviderRunResult {
+            run_id: "chat-ws-counting-run".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: String::new(),
+            session_messages: vec![],
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: None,
+            success: true,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
             cost: 0.0,
             duration_ms: 1,
         })
@@ -179,6 +231,15 @@ async fn start_test_gateway_with_provider(
     provider_key: &str,
     provider: Arc<dyn ProviderRuntime>,
 ) -> SocketAddr {
+    start_test_gateway_with_provider_context(provider_key, provider)
+        .await
+        .0
+}
+
+async fn start_test_gateway_with_provider_context(
+    provider_key: &str,
+    provider: Arc<dyn ProviderRuntime>,
+) -> (SocketAddr, Arc<MultiProviderBridge>, Arc<AppState>) {
     let mut config = GaryxConfig::default();
     config.gateway.auth_token = TEST_GATEWAY_TOKEN.to_owned();
     config.channels.api.accounts.insert(
@@ -186,11 +247,30 @@ async fn start_test_gateway_with_provider(
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: None,
             workspace_dir: None,
             workspace_mode: None,
         },
     );
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            telegram_account_to_plugin_entry(&TelegramAccount {
+                token: "test-token".to_owned(),
+                enabled: true,
+                name: Some("Test Bot".to_owned()),
+                agent_id: None,
+                workspace_dir: None,
+                owner_target: Some(OwnerTargetConfig {
+                    target_type: "chat_id".to_owned(),
+                    target_id: "1000000001".to_owned(),
+                }),
+                groups: std::collections::HashMap::new(),
+            }),
+        );
 
     let bridge = Arc::new(MultiProviderBridge::new());
     bridge.register_provider(provider_key, provider).await;
@@ -201,19 +281,31 @@ async fn start_test_gateway_with_provider(
         .with_bridge(bridge.clone())
         .with_garyx_db(Arc::new(GaryxDbService::memory().expect("memory garyx db")))
         .build();
+    for thread_id in [
+        "thread::ws-start",
+        "thread::ws-codex-like-queued-input",
+        "thread::ws-recover",
+    ] {
+        state
+            .threads
+            .thread_store
+            .set(thread_id, json!({"thread_id": thread_id}))
+            .await
+            .expect("seed legacy test thread");
+    }
     bridge.set_event_tx(state.ops.events.sender()).await;
     bridge
         .set_thread_store(state.threads.thread_store.clone())
         .await;
 
-    let router = garyx_gateway::build_router(state);
+    let router = garyx_gateway::build_router(state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
-    addr
+    (addr, bridge, state)
 }
 
 fn authed_ws_url(addr: SocketAddr) -> String {
@@ -293,6 +385,183 @@ async fn chat_ws_start_streams_events() {
     assert!(seen.iter().any(|item| item == "accepted"));
     assert!(seen.iter().any(|item| item == "committed_message"));
     assert_eq!(assistant_text, vec!["ws-e2e: hello ws"]);
+}
+
+#[tokio::test]
+async fn chat_ws_missing_explicit_thread_is_not_found_with_all_agents_disabled() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (addr, bridge, _) = start_test_gateway_with_provider_context(
+        "counting-provider",
+        Arc::new(WsCountingProvider {
+            calls: calls.clone(),
+        }),
+    )
+    .await;
+    let client = reqwest::Client::new();
+    for agent_id in ["claude", "codex", "traex", "antigravity"] {
+        let response = client
+            .patch(format!("http://{addr}/api/custom-agents/{agent_id}/toggle"))
+            .bearer_auth(TEST_GATEWAY_TOKEN)
+            .json(&json!({"enabled": false}))
+            .send()
+            .await
+            .expect("disable agent");
+        assert!(response.status().is_success(), "disable {agent_id}");
+    }
+    let agents: Value = client
+        .get(format!("http://{addr}/api/custom-agents"))
+        .bearer_auth(TEST_GATEWAY_TOKEN)
+        .send()
+        .await
+        .expect("list agents")
+        .json()
+        .await
+        .expect("agent list json");
+    assert!(agents["effective_default_agent_id"].is_null());
+
+    let (mut ws, _) = connect_async(authed_ws_url(addr))
+        .await
+        .expect("ws connect");
+    let thread_id = "thread::ws-missing-all-disabled";
+    ws.send(Message::Text(
+        json!({
+            "op": "start",
+            "message": "must not run",
+            "threadId": thread_id,
+            "accountId": "main",
+            "fromId": "ws-test"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+
+    let payload = recv_json(&mut ws).await;
+    assert_eq!(payload["type"], "error");
+    assert_eq!(payload["threadId"], thread_id);
+    assert_eq!(payload["error"], "thread not found");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(bridge.thread_affinity_for(thread_id).await.is_none());
+
+    ws.send(Message::Text(
+        json!({
+            "op": "start",
+            "message": "must not create",
+            "accountId": "main",
+            "fromId": "ws-no-enabled"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let payload = recv_json(&mut ws).await;
+    assert_eq!(payload["type"], "error");
+    assert_eq!(payload["error"], "no enabled standalone agent is available");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn stale_bot_endpoint_reenters_fresh_gate_for_http_and_ws_without_bridge_calls() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (addr, bridge, state) = start_test_gateway_with_provider_context(
+        "stale-bot-counting-provider",
+        Arc::new(WsCountingProvider {
+            calls: calls.clone(),
+        }),
+    )
+    .await;
+    let stale_thread_id = "thread::stale-bot-endpoint";
+    state
+        .threads
+        .thread_store
+        .set(
+            stale_thread_id,
+            json!({
+                "thread_id": stale_thread_id,
+                "agent_id": "claude",
+                "channel": "telegram",
+                "account_id": "main",
+                "from_id": "1000000001",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "binding_key": "1000000001",
+                    "chat_id": "1000000001",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "1000000001",
+                    "display_label": "Test User"
+                }]
+            }),
+        )
+        .await
+        .expect("seed stale bot thread");
+    let cached = state
+        .cached_channel_endpoints()
+        .await
+        .expect("prime endpoint cache");
+    assert!(cached.iter().any(|endpoint| {
+        endpoint.thread_id.as_deref() == Some(stale_thread_id)
+            && endpoint.endpoint_key == "telegram::main::1000000001"
+    }));
+    assert!(
+        state
+            .threads
+            .thread_store
+            .delete(stale_thread_id)
+            .await
+            .expect("delete cached endpoint thread")
+    );
+
+    let client = reqwest::Client::new();
+    for agent_id in ["claude", "codex", "traex", "antigravity"] {
+        let response = client
+            .patch(format!("http://{addr}/api/custom-agents/{agent_id}/toggle"))
+            .bearer_auth(TEST_GATEWAY_TOKEN)
+            .json(&json!({"enabled": false}))
+            .send()
+            .await
+            .expect("disable agent");
+        assert!(response.status().is_success(), "disable {agent_id}");
+    }
+
+    let response = client
+        .post(format!("http://{addr}/api/chat/start"))
+        .bearer_auth(TEST_GATEWAY_TOKEN)
+        .json(&json!({
+            "bot": "telegram:main",
+            "message": "must re-enter the fresh binding gate",
+            "waitForResponse": false
+        }))
+        .send()
+        .await
+        .expect("HTTP chat start");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let payload: Value = response.json().await.expect("HTTP error json");
+    assert_eq!(payload["error"], "no enabled standalone agent is available");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(bridge.thread_affinity_for(stale_thread_id).await.is_none());
+
+    let (mut ws, _) = connect_async(authed_ws_url(addr))
+        .await
+        .expect("ws connect");
+    ws.send(Message::Text(
+        json!({
+            "op": "start",
+            "bot": "telegram:main",
+            "message": "must re-enter the same fresh binding gate"
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .expect("send WS start");
+    let payload = recv_json(&mut ws).await;
+    assert_eq!(payload["type"], "error");
+    assert_eq!(payload["error"], "no enabled standalone agent is available");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(bridge.thread_affinity_for(stale_thread_id).await.is_none());
 }
 
 #[tokio::test]

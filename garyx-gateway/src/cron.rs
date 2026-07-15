@@ -9,18 +9,19 @@ use chrono::{DateTime, Local, LocalResult, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use cron::Schedule;
 use garyx_bridge::MultiProviderBridge;
-use garyx_channels::{ChannelDispatcher, OutboundMessage, SendMessageResult};
+use garyx_channels::ChannelDispatcher;
+#[cfg(test)]
+use garyx_channels::{OutboundMessage, SendMessageResult};
+#[cfg(test)]
 use garyx_models::ChannelOutboundContent;
 use garyx_models::config::{
     CronAction, CronConfig, CronJobConfig, CronJobKind, CronSchedule, InternalDispatchJobPayload,
     McpServerConfig,
 };
-use garyx_models::provider::{AgentRunRequest, StreamBoundaryKind, StreamEvent};
+#[cfg(test)]
+use garyx_models::provider::{StreamBoundaryKind, StreamEvent};
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, is_canonical_thread_id};
-use garyx_router::{
-    MessageRouter, ThreadEnsureOptions, ThreadStore, delete_thread_record,
-    thread_metadata_from_value, workspace_dir_from_value,
-};
+use garyx_router::{MessageRouter, ThreadEnsureOptions, ThreadStore, delete_thread_record};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
@@ -31,7 +32,6 @@ use crate::custom_agents::CustomAgentStore;
 use crate::delivery_target::resolve_delivery_target_with_recovery;
 use crate::garyx_db::{AutomationThreadRunDraft, GaryxDbService};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
-use crate::managed_mcp_metadata::inject_managed_mcp_servers;
 use crate::server::AppState;
 use crate::skills::sync_default_external_user_skills;
 
@@ -135,6 +135,10 @@ pub struct CronJob {
     /// as `system = false`.
     #[serde(default)]
     pub system: bool,
+    /// Derived structural validation. Never persisted; every load/mutation
+    /// and both execution paths recompute it from the current job fields.
+    #[serde(skip)]
+    pub validation_error: Option<String>,
 }
 
 impl CronJob {
@@ -142,7 +146,7 @@ impl CronJob {
     pub fn from_config(cfg: &CronJobConfig) -> Self {
         let now = Utc::now();
         let next_run = Self::compute_next_run(&cfg.schedule, now);
-        Self {
+        let mut job = Self {
             id: cfg.id.clone(),
             kind: cfg.kind.clone(),
             label: cfg.label.clone(),
@@ -162,7 +166,31 @@ impl CronJob {
             created_at: now,
             last_run_at: None,
             system: cfg.system,
+            validation_error: None,
+        };
+        job.normalize_agent_contract();
+        job.revalidate();
+        job
+    }
+
+    fn normalize_agent_contract(&mut self) {
+        if is_automation_prompt_job(self)
+            && has_non_empty_cron_text(self.workspace_dir.as_deref())
+            && !has_non_empty_cron_text(self.thread_id.as_deref())
+        {
+            self.agent_id = Some(
+                self.agent_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("claude")
+                    .to_owned(),
+            );
         }
+    }
+
+    fn revalidate(&mut self) {
+        self.validation_error = validate_cron_job(self);
     }
 
     /// Compute the next run time from a schedule relative to `after`.
@@ -509,6 +537,46 @@ fn uses_generated_automation_thread_job(job: &CronJob) -> bool {
         && !has_non_empty_cron_text(job.thread_id.as_deref())
 }
 
+/// Structural validator shared by list state and dispatch admission. It does
+/// not query mutable stores: target existence is rechecked by the execution
+/// path, while this closes the historical thread-less pseudo-run bypass.
+pub(crate) fn validate_cron_job(job: &CronJob) -> Option<String> {
+    if matches!(job.kind, CronJobKind::InternalDispatch { .. }) {
+        return None;
+    }
+    match job.action {
+        CronAction::AgentTurn => {
+            let has_thread = job
+                .thread_id
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(is_canonical_thread_id);
+            let has_target = has_non_empty_cron_text(job.target.as_deref());
+            let generated = is_automation_prompt_job(job)
+                && has_non_empty_cron_text(job.workspace_dir.as_deref());
+            if !has_thread && !has_target && !generated {
+                Some("missing canonical target for agent turn".to_owned())
+            } else {
+                None
+            }
+        }
+        CronAction::SystemEvent => {
+            let has_thread = job
+                .thread_id
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(is_canonical_thread_id);
+            let has_target = has_non_empty_cron_text(job.target.as_deref());
+            if !has_thread && !has_target {
+                Some("missing canonical target for system event".to_owned())
+            } else {
+                None
+            }
+        }
+        CronAction::Log => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Persistence helpers
 // ---------------------------------------------------------------------------
@@ -620,9 +688,7 @@ struct CronDispatchRuntime {
     thread_store: Arc<dyn ThreadStore>,
     router: Arc<tokio::sync::Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
-    channel_dispatcher: Arc<dyn ChannelDispatcher>,
     thread_logs: Arc<dyn ThreadLogSink>,
-    managed_mcp_servers: HashMap<String, McpServerConfig>,
     custom_agents: Arc<CustomAgentStore>,
 }
 
@@ -691,18 +757,16 @@ impl CronService {
         thread_store: Arc<dyn ThreadStore>,
         router: Arc<tokio::sync::Mutex<MessageRouter>>,
         bridge: Arc<MultiProviderBridge>,
-        channel_dispatcher: Arc<dyn ChannelDispatcher>,
+        _channel_dispatcher: Arc<dyn ChannelDispatcher>,
         thread_logs: Arc<dyn ThreadLogSink>,
-        managed_mcp_servers: HashMap<String, McpServerConfig>,
+        _managed_mcp_servers: HashMap<String, McpServerConfig>,
         custom_agents: Arc<CustomAgentStore>,
     ) {
         *self.dispatch_runtime.write().await = Some(CronDispatchRuntime {
             thread_store,
             router,
             bridge,
-            channel_dispatcher,
             thread_logs,
-            managed_mcp_servers,
             custom_agents,
         });
     }
@@ -742,6 +806,8 @@ impl CronService {
                 );
                 job.last_status = JobRunStatus::Failed;
             }
+            job.normalize_agent_contract();
+            job.revalidate();
             map.insert(job.id.clone(), job);
         }
 
@@ -772,6 +838,8 @@ impl CronService {
                 existing.delete_after_run = cfg_job.delete_after_run;
                 existing.enabled = cfg_job.enabled;
                 existing.system = cfg_job.system;
+                existing.normalize_agent_contract();
+                existing.revalidate();
                 if schedule_changed {
                     existing.next_run = CronJob::compute_next_run(&existing.schedule, Utc::now());
                 }
@@ -966,6 +1034,8 @@ impl CronService {
             job.enabled = cfg.enabled;
             job.system = cfg.system;
             job.next_run = CronJob::compute_next_run(&job.schedule, Utc::now());
+            job.normalize_agent_contract();
+            job.revalidate();
 
             job.clone()
         };
@@ -988,6 +1058,25 @@ impl CronService {
 
     /// Execute a specific job immediately.
     pub async fn run_now(&self, id: &str) -> Option<RunRecord> {
+        let invalid = {
+            let mut jobs = self.jobs.write().await;
+            let job = jobs.get_mut(id)?;
+            job.normalize_agent_contract();
+            job.revalidate();
+            job.validation_error
+                .clone()
+                .map(|error| (job.clone(), error))
+        };
+        if let Some((job, error)) = invalid {
+            let run_id = Uuid::new_v4().to_string();
+            let record = Self::failed_run_record(&job, &run_id, error);
+            if let Some(stored) = self.jobs.write().await.get_mut(id) {
+                stored.settle_after_run(&record.status, record.started_at);
+                let _ = persist_job(&self.data_dir, stored).await;
+            }
+            let _ = Self::append_run_record(&self.data_dir, &self.runs, record.clone()).await;
+            return Some(record);
+        }
         if !Self::provider_runtime_ready_for_job(
             &self.jobs,
             &self.dispatch_runtime,
@@ -1144,6 +1233,11 @@ impl CronService {
         let claimed = {
             let mut map = jobs.write().await;
             let job = map.get_mut(id)?;
+            job.normalize_agent_contract();
+            job.revalidate();
+            if job.validation_error.is_some() {
+                return None;
+            }
             if !job.enabled || job.last_status == JobRunStatus::Running || has_active_agent_run {
                 return None;
             }
@@ -1276,6 +1370,7 @@ impl CronService {
                 &workspace_dir,
                 agent_id.as_deref(),
             ),
+            crate::agent_identity::AgentBindingIntent::Fresh,
         )
         .await
         .map_err(|error| format!("failed to create automation thread: {error}"))?;
@@ -1395,7 +1490,7 @@ impl CronService {
         let due_ids: Vec<String> = {
             let map = jobs.read().await;
             map.values()
-                .filter(|j| j.is_due())
+                .filter(|j| j.is_due() && validate_cron_job(j).is_none())
                 .map(|j| j.id.clone())
                 .collect()
         };
@@ -1935,7 +2030,7 @@ impl CronService {
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
-        let (thread_key, delivery_ctx, thread_record) = if let Some(thread_id) = job
+        let (thread_key, thread_record) = if let Some(thread_id) = job
             .thread_id
             .as_deref()
             .map(str::trim)
@@ -1947,7 +2042,7 @@ impl CronService {
                 .await
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("cron target thread not found: {thread_id}"))?;
-            (thread_id.to_owned(), None, Some(thread_record))
+            (thread_id.to_owned(), Some(thread_record))
         } else if let Some(target) = configured_target {
             // An explicit target must resolve to an existing thread record;
             // silently starting a bare run against a missing thread would
@@ -1958,18 +2053,13 @@ impl CronService {
                 } else {
                     target.strip_prefix("thread:").unwrap_or(target).to_owned()
                 };
-                let thread_target = format!("thread:{key}");
-                let delivery =
-                    resolve_delivery_target_with_recovery(&runtime.router, &thread_target)
-                        .await
-                        .map(|(_, ctx)| ctx);
                 let thread_record = runtime
                     .thread_store
                     .get(&key)
                     .await
                     .map_err(|error| format!("cron target thread read failed: {error}"))?
                     .ok_or_else(|| format!("cron target thread not found: {key}"))?;
-                (key, delivery, Some(thread_record))
+                (key, Some(thread_record))
             } else {
                 let resolved = resolve_delivery_target_with_recovery(&runtime.router, target)
                     .await
@@ -1985,23 +2075,18 @@ impl CronService {
                             resolved.0
                         )
                     })?;
-                (resolved.0, Some(resolved.1), Some(thread_record))
+                (resolved.0, Some(thread_record))
             }
         } else {
-            let delivery = resolve_delivery_target_with_recovery(&runtime.router, "last")
-                .await
-                .map(|(_, ctx)| ctx);
-            (format!("cron::{}", job.id), delivery, None)
+            (format!("cron::{}", job.id), None)
         };
 
         // Front door: any scheduled turn that resolved to a real, existing
         // thread dispatches through the same internal-inbound pipeline as
         // `schedule_followup` and the quota auto-resend — the prompt behaves
         // exactly like a user message (router inbound semantics, transcript
-        // user turn, busy queueing, channel echo). The direct
-        // `start_agent_run` path below survives only for the thread-less
-        // `cron::<job id>` pseudo-target, which has no thread record to
-        // dispatch into.
+        // user turn, busy queueing, channel echo). Thread-less pseudo-targets
+        // are invalid and never reach the bridge.
         if thread_record.is_some() {
             return Self::dispatch_agent_turn_via_thread(
                 job,
@@ -2015,202 +2100,10 @@ impl CronService {
             .await;
         }
 
-        let automation_job = is_automation_prompt_job(job);
-        let thread_bound_automation =
-            automation_job && Self::trimmed_non_empty(job.thread_id.as_deref()).is_some();
-        let thread_workspace_dir = thread_record.as_ref().and_then(workspace_dir_from_value);
-        let job_workspace_dir = Self::trimmed_non_empty(job.workspace_dir.as_deref());
-        let effective_workspace_dir = if thread_bound_automation {
-            thread_workspace_dir
-                .clone()
-                .or_else(|| job_workspace_dir.clone())
-        } else {
-            job_workspace_dir
-                .clone()
-                .or_else(|| thread_workspace_dir.clone())
-        };
-        let mut metadata = HashMap::new();
-        if let Some(thread_record) = thread_record.as_ref() {
-            for (key, value) in thread_metadata_from_value(thread_record) {
-                metadata.entry(key).or_insert(value);
-            }
-        }
-        metadata.insert(
-            "source".to_owned(),
-            serde_json::json!(if automation_job { "automation" } else { "cron" }),
-        );
-        if automation_job {
-            metadata.insert("automation_id".to_owned(), serde_json::json!(job.id));
-        } else {
-            metadata.insert("cron_job_id".to_owned(), serde_json::json!(job.id));
-        }
-        metadata.insert("run_id".to_owned(), serde_json::json!(run_id));
-        metadata.insert(
-            "cron_action".to_owned(),
-            serde_json::json!(format!("{:?}", job.action)),
-        );
-        metadata.insert(
-            "target".to_owned(),
-            serde_json::json!(
-                configured_target
-                    .or(job.thread_id.as_deref())
-                    .unwrap_or("last")
-            ),
-        );
-        metadata.insert(
-            "resolved_thread_id".to_owned(),
-            serde_json::json!(thread_key.clone()),
-        );
-        if let Some(workspace_dir) = thread_workspace_dir.as_ref() {
-            metadata.insert(
-                "workspace_dir".to_owned(),
-                serde_json::json!(workspace_dir.clone()),
-            );
-        }
-
-        let (channel, account_id, chat_id, thread_id, workspace_dir) =
-            if let Some(delivery) = &delivery_ctx {
-                metadata.insert(
-                    "delivery_target".to_owned(),
-                    serde_json::json!({
-                        "channel": delivery.channel,
-                        "chat_id": delivery.chat_id,
-                        "account_id": delivery.account_id,
-                    }),
-                );
-                if let Some(thread_id) = &delivery.thread_id {
-                    metadata.insert("thread_id".to_owned(), serde_json::json!(thread_id));
-                }
-                (
-                    delivery.channel.clone(),
-                    delivery.account_id.clone(),
-                    Some(delivery.chat_id.clone()),
-                    delivery.thread_id.clone(),
-                    effective_workspace_dir.clone(),
-                )
-            } else {
-                let default_channel = if automation_job { "api" } else { "cron" };
-                let default_account = if automation_job { "main" } else { "cron" };
-                (
-                    default_channel.to_owned(),
-                    default_account.to_owned(),
-                    None,
-                    job.thread_id.clone(),
-                    effective_workspace_dir,
-                )
-            };
-
-        let response_callback = if automation_job {
-            None
-        } else {
-            let delivery_target_type = delivery_ctx
-                .as_ref()
-                .map(|delivery| delivery.delivery_target_type.clone())
-                .unwrap_or_else(|| "chat_id".to_owned());
-            let delivery_target_id = delivery_ctx
-                .as_ref()
-                .map(|delivery| delivery.delivery_target_id.clone())
-                .or_else(|| chat_id.clone())
-                .unwrap_or_else(|| "last".to_owned());
-            chat_id.map(|chat_id| {
-                let thread_log_id = scheduled_thread_log_id(&thread_key, thread_id.as_deref());
-                build_scheduled_response_callback(
-                    runtime.channel_dispatcher.clone(),
-                    runtime.thread_logs.clone(),
-                    ScheduledResponseContext {
-                        thread_id: thread_key.clone(),
-                        channel: channel.clone(),
-                        account_id: account_id.clone(),
-                        chat_id,
-                        delivery_target_type: delivery_target_type.clone(),
-                        delivery_target_id: delivery_target_id.clone(),
-                        delivery_thread_id: thread_id.clone(),
-                        thread_log_id,
-                    },
-                )
-            })
-        };
-        inject_managed_mcp_servers(&runtime.managed_mcp_servers, &mut metadata);
-        let thread_log_id = scheduled_thread_log_id(&thread_key, thread_id.as_deref());
-        if let Some(thread_id) = &thread_log_id {
-            runtime
-                .thread_logs
-                .record_event(
-                    ThreadLogEvent::info(thread_id, "automation", "scheduled dispatch started")
-                        .with_run_id(run_id.to_owned())
-                        .with_field("job_id", serde_json::json!(job.id))
-                        .with_field("job_kind", serde_json::json!(format!("{:?}", job.kind)))
-                        .with_field(
-                            "source",
-                            serde_json::json!(if automation_job { "automation" } else { "cron" }),
-                        )
-                        .with_field("channel", serde_json::json!(channel))
-                        .with_field("account_id", serde_json::json!(account_id))
-                        .with_field("thread_id", serde_json::json!(thread_key)),
-                )
-                .await;
-        }
-        if let Err(error) = sync_default_external_user_skills() {
-            tracing::warn!(
-                error = %error,
-                thread_id = %thread_key,
-                "failed to sync external user skills before scheduled dispatch"
-            );
-        }
-        let outcome = match runtime
-            .bridge
-            .start_agent_run(
-                AgentRunRequest::new(
-                    &thread_key,
-                    message,
-                    run_id,
-                    &channel,
-                    &account_id,
-                    metadata,
-                )
-                .with_workspace_dir(workspace_dir),
-                response_callback,
-            )
-            .await
-        {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                if let Some(thread_id) = &thread_log_id {
-                    runtime
-                        .thread_logs
-                        .record_event(
-                            ThreadLogEvent::error(
-                                thread_id,
-                                "automation",
-                                "scheduled dispatch failed",
-                            )
-                            .with_run_id(run_id.to_owned())
-                            .with_field("job_id", serde_json::json!(job.id))
-                            .with_field("error", serde_json::json!(error.to_string())),
-                        )
-                        .await;
-                }
-                return Err(format!("cron dispatch failed: {error}"));
-            }
-        };
-        let effective_run_id = outcome.effective_run_id().unwrap_or(run_id).to_owned();
-        active_agent_runs
-            .write()
-            .await
-            .insert(job.id.clone(), effective_run_id.clone());
-        if let Some(thread_id) = &thread_log_id {
-            runtime
-                .thread_logs
-                .record_event(
-                    ThreadLogEvent::info(thread_id, "automation", "scheduled dispatch accepted")
-                        .with_run_id(run_id.to_owned())
-                        .with_field("job_id", serde_json::json!(job.id))
-                        .with_field("thread_id", serde_json::json!(thread_key)),
-                )
-                .await;
-        }
-
-        Ok(effective_run_id)
+        Err(format!(
+            "cron job {} is missing a canonical thread target",
+            job.id
+        ))
     }
 }
 
@@ -2254,17 +2147,7 @@ fn validate_cron_schedule(schedule: &CronSchedule) -> std::io::Result<()> {
     Ok(())
 }
 
-fn scheduled_thread_log_id(thread_key: &str, thread_id: Option<&str>) -> Option<String> {
-    thread_id
-        .map(str::trim)
-        .filter(|value| is_canonical_thread_id(value))
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            let trimmed = thread_key.trim();
-            is_canonical_thread_id(trimmed).then(|| trimmed.to_owned())
-        })
-}
-
+#[cfg(test)]
 fn format_scheduled_message(text: &str, thread_id: &str) -> String {
     if text.is_empty() || !MessageRouter::is_scheduled_thread(thread_id) {
         return text.to_owned();
@@ -2278,6 +2161,7 @@ fn format_scheduled_message(text: &str, thread_id: &str) -> String {
     format!("{header}\n{text}")
 }
 
+#[cfg(test)]
 struct ScheduledResponseContext {
     thread_id: String,
     channel: String,
@@ -2289,6 +2173,7 @@ struct ScheduledResponseContext {
     thread_log_id: Option<String>,
 }
 
+#[cfg(test)]
 fn build_scheduled_response_callback(
     dispatcher: Arc<dyn ChannelDispatcher>,
     thread_logs: Arc<dyn ThreadLogSink>,
@@ -2408,6 +2293,7 @@ fn build_scheduled_response_callback(
     })
 }
 
+#[cfg(test)]
 fn append_inline_assistant_separator(buffer: &mut String) {
     if buffer.trim().is_empty() || buffer.ends_with("\n\n") {
         return;
@@ -2419,6 +2305,7 @@ fn append_inline_assistant_separator(buffer: &mut String) {
     }
 }
 
+#[cfg(test)]
 #[derive(Default)]
 struct ScheduledStreamState {
     text: String,

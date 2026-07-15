@@ -31,7 +31,7 @@ impl MessageRouter {
 
         self.apply_custom_command_transform(&mut request, None);
 
-        let plan = self.build_dispatch_plan(request.into()).await;
+        let plan = self.build_dispatch_plan(request.into()).await?;
         self.execute_dispatch_plan(
             plan,
             dispatcher,

@@ -283,7 +283,7 @@ impl AppState {
     pub async fn apply_runtime_config(&self, config: GaryxConfig) -> Result<(), BridgeError> {
         self.integration
             .bridge
-            .replace_agent_profiles(self.ops.custom_agents.list_agents().await)
+            .replace_agent_profiles(self.ops.custom_agents.snapshot().await)
             .await;
         self.integration.bridge.reload_from_config(&config).await?;
         // Rebuild the built-in routes from the new config and publish

@@ -169,22 +169,23 @@ impl MessageRouter {
             .await;
         }
 
-        let dispatch_outcome = dispatcher
-            .dispatch(
-                AgentRunRequest::new(
-                    &thread_id,
-                    &context.message,
-                    &context.run_id,
-                    &context.channel,
-                    &context.account_id,
-                    dispatch_metadata,
-                )
-                .with_images(images)
-                .with_workspace_dir(thread_workspace_dir)
-                .with_requested_provider(requested_provider),
-                response_callback,
+        let admitted = crate::AdmittedRun::thread_bound(
+            self.threads.clone(),
+            AgentRunRequest::new(
+                &thread_id,
+                &context.message,
+                &context.run_id,
+                &context.channel,
+                &context.account_id,
+                dispatch_metadata,
             )
-            .await?;
+            .with_images(images)
+            .with_workspace_dir(thread_workspace_dir)
+            .with_requested_provider(requested_provider),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        let dispatch_outcome = dispatcher.dispatch(admitted, response_callback).await?;
 
         Ok(InboundResult {
             thread_id,

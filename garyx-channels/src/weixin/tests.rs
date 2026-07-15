@@ -10,7 +10,7 @@ fn weixin_test_account(api: &MockServer, token: &str) -> WeixinAccount {
         enabled: true,
         base_url: api.uri(),
         name: None,
-        agent_id: "claude".to_owned(),
+        agent_id: Some("claude".to_owned()),
         workspace_dir: None,
         streaming_update: true,
     }
@@ -457,7 +457,7 @@ async fn test_upload_media_to_cdn_pipeline_with_mocks() {
         enabled: true,
         base_url: api.uri(),
         name: None,
-        agent_id: "claude".to_owned(),
+        agent_id: Some("claude".to_owned()),
         workspace_dir: None,
         streaming_update: true,
     };

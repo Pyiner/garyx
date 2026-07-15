@@ -7,6 +7,8 @@ use crate::{
 
 struct FallbackOnlyThreadCreator;
 
+struct NoEnabledThreadCreator;
+
 #[async_trait]
 impl ThreadCreator for FallbackOnlyThreadCreator {
     async fn create_thread(
@@ -19,6 +21,17 @@ impl ThreadCreator for FallbackOnlyThreadCreator {
             Some(agent_id) => Err(format!("unknown agent_id: {agent_id}")),
             None => Err("agent_id is required".to_owned()),
         }
+    }
+}
+
+#[async_trait]
+impl ThreadCreator for NoEnabledThreadCreator {
+    async fn create_thread(
+        &self,
+        _thread_store: Arc<dyn ThreadStore>,
+        _options: ThreadEnsureOptions,
+    ) -> Result<(String, Value), String> {
+        Err("no enabled standalone agent is available".to_owned())
     }
 }
 
@@ -195,7 +208,7 @@ async fn test_route_and_dispatch_maps_legacy_claude_tty_provider_to_claude_code(
 }
 
 #[tokio::test]
-async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent() {
+async fn test_route_and_dispatch_preserves_invalid_channel_agent_without_fallback() {
     let store = Arc::new(InMemoryThreadStore::new());
     let mut config = GaryxConfig::default();
     config
@@ -233,33 +246,20 @@ async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent(
         file_paths: vec![],
     };
 
-    let result = router
+    let error = router
         .route_and_dispatch(request, &dispatcher, None)
         .await
-        .unwrap();
+        .expect_err("an invalid explicit channel agent must not fall back");
 
-    let saved = store
-        .get(&result.thread_id)
-        .await
-        .unwrap()
-        .expect("fallback thread should be persisted");
-    assert_eq!(saved["agent_id"], "claude");
-    assert_eq!(saved["channel"], "examplebot");
-    assert_eq!(saved["account_id"], "main");
-
-    let bindings = bindings_from_value(&saved);
-    assert_eq!(bindings.len(), 1);
-    assert_eq!(bindings[0].channel, "examplebot");
-    assert_eq!(bindings[0].account_id, "main");
-    assert_eq!(bindings[0].binding_key, "issue-1");
-
-    assert_eq!(
+    assert_eq!(error, "unknown agent_id: missing-agent");
+    assert!(store.list_keys(None).await.unwrap().is_empty());
+    assert!(
         router
             .resolve_endpoint_thread_id("examplebot", "main", "issue-1")
             .await
-            .as_deref(),
-        Some(result.thread_id.as_str())
+            .is_none()
     );
+    assert!(dispatcher.dispatched.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -296,7 +296,8 @@ async fn test_inbound_thread_creation_uses_configured_bot_workspace_mode() {
 
     let thread_id = router
         .resolve_or_create_inbound_thread("telegram", "main", "1000000001", &HashMap::new())
-        .await;
+        .await
+        .expect("thread created");
 
     assert_eq!(thread_id, "thread::captured");
     let options = creator.options.lock().await;
@@ -307,6 +308,38 @@ async fn test_inbound_thread_creation_uses_configured_bot_workspace_mode() {
         options[0].worktree_base_dir.as_deref(),
         Some(data_root.path().join("worktrees").as_path())
     );
+}
+
+#[tokio::test]
+async fn test_inbound_thread_creation_preserves_inherited_agent_as_none() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    let mut config = GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::PluginAccountEntry {
+                enabled: true,
+                agent_id: None,
+                config: json!({ "token": "test-token" }),
+                ..Default::default()
+            },
+        );
+
+    let creator = Arc::new(CapturingThreadCreator::new());
+    let mut router = MessageRouter::new(store, config);
+    router.set_thread_creator(creator.clone());
+
+    router
+        .resolve_or_create_inbound_thread("telegram", "main", "1000000001", &HashMap::new())
+        .await
+        .expect("thread created");
+
+    let options = creator.options.lock().await;
+    assert_eq!(options.len(), 1);
+    assert_eq!(options[0].agent_id, None);
 }
 
 #[tokio::test]
@@ -412,7 +445,7 @@ async fn test_route_and_dispatch_injects_runtime_context_and_workspace() {
                     token: "token".to_owned(),
                     enabled: true,
                     name: None,
-                    agent_id: "claude".to_owned(),
+                    agent_id: Some("claude".to_owned()),
                     workspace_dir: Some("/tmp/runtime-ws".to_owned()),
                     owner_target: None,
                     groups: Default::default(),
@@ -572,6 +605,30 @@ async fn test_route_and_dispatch_new_session_sets_last_delivery_on_new_thread() 
     assert_eq!(delivery.channel, "telegram");
     assert_eq!(delivery.account_id, "bot1");
     assert_eq!(delivery.chat_id, "user42");
+}
+
+#[tokio::test]
+async fn test_newthread_surfaces_no_enabled_agent_without_creating_or_dispatching() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    let (mut router, _) = test_router(store.clone(), GaryxConfig::default());
+    router.set_thread_creator(Arc::new(NoEnabledThreadCreator));
+    let dispatcher = MockDispatcher::new();
+
+    let error = router
+        .route_and_dispatch(
+            native_thread_request("/newthread", "run-no-enabled-newthread"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .expect_err("newthread must fail closed when no agent can be bound");
+
+    assert_eq!(
+        error,
+        "failed to create thread: no enabled standalone agent is available"
+    );
+    assert!(store.list_keys(None).await.unwrap().is_empty());
+    assert!(dispatcher.dispatched.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -1764,19 +1821,19 @@ async fn test_route_and_dispatch_uses_projected_owner_without_rebuilt_endpoint_m
 }
 
 #[tokio::test]
-async fn test_route_and_dispatch_scheduled_thread_skips_auto_recovery() {
+async fn test_route_and_dispatch_scheduled_pseudo_thread_cannot_bypass_admission() {
     let store = Arc::new(InMemoryThreadStore::new());
     store
         .set(
             "cron::daily::user42",
             json!({
-                "auto_recover_next_thread": "bot1::main::recovered"
+                "auto_recover_next_thread": "thread::recovered"
             }),
         )
         .await
         .unwrap();
     store
-        .set("bot1::main::recovered", json!({"messages": []}))
+        .set("thread::recovered", json!({"messages": []}))
         .await
         .unwrap();
 
@@ -1813,20 +1870,12 @@ async fn test_route_and_dispatch_scheduled_thread_skips_auto_recovery() {
         file_paths: vec![],
     };
 
-    let result = router
+    let error = router
         .route_and_dispatch(request, &dispatcher, None)
         .await
-        .unwrap();
-    assert_eq!(result.thread_id, "cron::daily::user42");
-    assert_eq!(
-        router
-            .resolve_endpoint_thread_id("telegram", "bot1", "user42")
-            .await
-            .as_deref(),
-        Some("cron::daily::user42")
-    );
-    let dispatched = dispatcher.dispatched.lock().await;
-    assert_eq!(dispatched[0].0, "cron::daily::user42");
+        .expect_err("cron pseudo threads cannot enter agent admission");
+    assert_eq!(error, "invalid canonical thread id: cron::daily::user42");
+    assert!(dispatcher.dispatched.lock().await.is_empty());
 }
 
 #[tokio::test]

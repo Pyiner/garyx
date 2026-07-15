@@ -1,22 +1,26 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
+use crate::run_admission::ThreadRunCoordinator;
 use crate::store::{AtomicRecordMerge, ThreadStore, ThreadStoreError};
 
 /// In-memory thread storage using a `HashMap` behind a [`RwLock`].
 ///
 /// Suitable for development and single-instance deployments.
 pub struct InMemoryThreadStore {
-    store: RwLock<HashMap<String, Value>>,
+    store: Arc<RwLock<HashMap<String, Value>>>,
+    run_coordinator: Arc<ThreadRunCoordinator>,
 }
 
 impl InMemoryThreadStore {
     pub fn new() -> Self {
         Self {
-            store: RwLock::new(HashMap::new()),
+            store: Arc::new(RwLock::new(HashMap::new())),
+            run_coordinator: Arc::new(ThreadRunCoordinator::new()),
         }
     }
 
@@ -39,17 +43,30 @@ impl Default for InMemoryThreadStore {
 
 #[async_trait]
 impl ThreadStore for InMemoryThreadStore {
+    fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
+        self.run_coordinator.clone()
+    }
+
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
         Ok(self.store.read().await.get(thread_id).cloned())
     }
 
     async fn set(&self, thread_id: &str, data: Value) -> Result<(), ThreadStoreError> {
         self.store.write().await.insert(thread_id.to_owned(), data);
+        self.run_coordinator.record_written(thread_id);
         Ok(())
     }
 
     async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
-        Ok(self.store.write().await.remove(thread_id).is_some())
+        let store = self.store.clone();
+        let thread_id = thread_id.to_owned();
+        self.run_coordinator
+            .start_delete(thread_id.clone(), async move {
+                Ok::<_, ThreadStoreError>(store.write().await.remove(&thread_id).is_some())
+            })
+            .await
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))?
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
 
     async fn list_keys(&self, prefix: Option<&str>) -> Result<Vec<String>, ThreadStoreError> {

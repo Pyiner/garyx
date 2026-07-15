@@ -27,7 +27,7 @@ pub(super) struct Inner {
     /// Thread-level workspace binding (`thread_id -> workspace_dir`).
     pub(super) thread_workspace_bindings: Arc<RwLock<HashMap<String, String>>>,
     /// Known standalone agent profiles (`agent_id -> profile`).
-    pub(super) agent_profiles: Arc<RwLock<HashMap<String, CustomAgentProfile>>>,
+    pub(super) agent_profiles: Arc<RwLock<AgentProfileState>>,
     /// Current runtime config for built-in/default providers.
     pub(super) default_provider_configs: Arc<RwLock<HashMap<ProviderType, AgentProviderConfig>>>,
     /// Run lifecycle indexes.
@@ -58,7 +58,7 @@ impl Inner {
             topology: Arc::new(RwLock::new(BridgeTopologyState::default())),
             thread_affinity: Arc::new(RwLock::new(HashMap::new())),
             thread_workspace_bindings: Arc::new(RwLock::new(HashMap::new())),
-            agent_profiles: Arc::new(RwLock::new(HashMap::new())),
+            agent_profiles: Arc::new(RwLock::new(AgentProfileState::default())),
             default_provider_configs: Arc::new(RwLock::new(HashMap::new())),
             run_index: Arc::new(RwLock::new(BridgeRunIndex::default())),
             active_tasks: Arc::new(Mutex::new(HashMap::new())),
@@ -72,6 +72,12 @@ impl Inner {
             max_concurrent_runs: limit,
         }
     }
+}
+
+#[derive(Default)]
+pub(super) struct AgentProfileState {
+    pub(super) revision: u64,
+    pub(super) profiles: HashMap<String, CustomAgentProfile>,
 }
 
 #[derive(Default)]

@@ -177,6 +177,8 @@ pub struct CustomAgentUpsertPayload {
     pub display_name: String,
     pub provider_type: garyx_models::ProviderType,
     #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
     pub model: Option<String>,
     #[serde(default, alias = "modelReasoningEffort")]
     pub model_reasoning_effort: Option<String>,
@@ -199,6 +201,11 @@ pub struct CustomAgentUpsertPayload {
     /// client based its edit on. Required on PUT; ignored on POST.
     #[serde(default, alias = "expectedUpdatedAt")]
     pub expected_updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CustomAgentTogglePayload {
+    pub enabled: bool,
 }
 
 /// GET /api/threads/history - thread history with optional filtering.
@@ -1387,6 +1394,8 @@ pub async fn cron_jobs(State(state): State<Arc<AppState>>) -> impl IntoResponse 
                 "last_status": j.last_status,
                 "run_count": j.run_count,
                 "last_run_at": j.last_run_at.map(|t| t.to_rfc3339()),
+                "validation_state": if j.validation_error.is_some() { "invalid" } else { "valid" },
+                "validation_error": j.validation_error,
             })
         })
         .collect();
@@ -2676,17 +2685,60 @@ fn collect_unknown_fields(
 }
 
 pub async fn list_custom_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let agents = state
-        .ops
-        .custom_agents
-        .list_agents()
-        .await
+    let snapshot = state.ops.custom_agents.snapshot().await;
+    let effective_default_agent_id =
+        garyx_models::resolve_effective_default(&snapshot).map(|binding| binding.agent_id);
+    let agents = snapshot
+        .agents
+        .iter()
         .into_iter()
         .map(|agent| custom_agent_response(&agent))
         .collect::<Vec<_>>();
     Json(json!({
         "agents": agents,
+        "default_agent_id": snapshot.default_agent_id,
+        "effective_default_agent_id": effective_default_agent_id,
     }))
+}
+
+async fn publish_custom_agent_snapshot(state: &AppState) {
+    state
+        .integration
+        .bridge
+        .replace_agent_profiles(state.ops.custom_agents.snapshot().await)
+        .await;
+}
+
+pub async fn toggle_custom_agent(
+    State(state): State<Arc<AppState>>,
+    Path(agent_id): Path<String>,
+    Json(payload): Json<CustomAgentTogglePayload>,
+) -> impl IntoResponse {
+    match state
+        .ops
+        .custom_agents
+        .set_enabled(&agent_id, payload.enabled)
+        .await
+    {
+        Ok(agent) => {
+            publish_custom_agent_snapshot(&state).await;
+            (StatusCode::OK, Json(custom_agent_response(&agent))).into_response()
+        }
+        Err(error) => store_write_error_response(error),
+    }
+}
+
+pub async fn set_default_custom_agent(
+    State(state): State<Arc<AppState>>,
+    Path(agent_id): Path<String>,
+) -> impl IntoResponse {
+    match state.ops.custom_agents.set_default_agent(&agent_id).await {
+        Ok(agent) => {
+            publish_custom_agent_snapshot(&state).await;
+            (StatusCode::OK, Json(custom_agent_response(&agent))).into_response()
+        }
+        Err(error) => store_write_error_response(error),
+    }
 }
 
 pub async fn list_provider_models(
@@ -2785,6 +2837,7 @@ pub async fn create_custom_agent(
                 agent_id: payload.agent_id,
                 display_name: payload.display_name,
                 provider_type: payload.provider_type,
+                enabled: payload.enabled,
                 model: payload.model,
                 model_reasoning_effort: payload.model_reasoning_effort,
                 model_service_tier: payload.model_service_tier,
@@ -2798,11 +2851,11 @@ pub async fn create_custom_agent(
         .await
     {
         Ok(agent) => {
-            let profiles = state.ops.custom_agents.list_agents().await;
+            let snapshot = state.ops.custom_agents.snapshot().await;
             state
                 .integration
                 .bridge
-                .replace_agent_profiles(profiles)
+                .replace_agent_profiles(snapshot)
                 .await;
             let config = state.config_snapshot();
             if let Err(error) = state
@@ -2841,6 +2894,7 @@ pub async fn update_custom_agent(
                 agent_id,
                 display_name: payload.display_name,
                 provider_type: payload.provider_type,
+                enabled: payload.enabled,
                 model: payload.model,
                 model_reasoning_effort: payload.model_reasoning_effort,
                 model_service_tier: payload.model_service_tier,
@@ -2854,11 +2908,11 @@ pub async fn update_custom_agent(
         .await
     {
         Ok(agent) => {
-            let profiles = state.ops.custom_agents.list_agents().await;
+            let snapshot = state.ops.custom_agents.snapshot().await;
             state
                 .integration
                 .bridge
-                .replace_agent_profiles(profiles)
+                .replace_agent_profiles(snapshot)
                 .await;
             let config = state.config_snapshot();
             if let Err(error) = state
@@ -2885,11 +2939,11 @@ pub async fn delete_custom_agent(
 ) -> impl IntoResponse {
     match state.ops.custom_agents.delete_agent(&agent_id).await {
         Ok(()) => {
-            let profiles = state.ops.custom_agents.list_agents().await;
+            let snapshot = state.ops.custom_agents.snapshot().await;
             state
                 .integration
                 .bridge
-                .replace_agent_profiles(profiles)
+                .replace_agent_profiles(snapshot)
                 .await;
             let config = state.config_snapshot();
             if let Err(error) = state
@@ -2906,7 +2960,7 @@ pub async fn delete_custom_agent(
             }
             StatusCode::NO_CONTENT.into_response()
         }
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
+        Err(error) => store_write_error_response(error),
     }
 }
 

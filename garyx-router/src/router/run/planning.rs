@@ -397,13 +397,15 @@ impl MessageRouter {
         }
     }
 
-    pub(super) async fn build_dispatch_plan(&mut self, context: DispatchContext) -> DispatchPlan {
+    pub(super) async fn build_dispatch_plan(
+        &mut self,
+        context: DispatchContext,
+    ) -> Result<DispatchPlan, String> {
         let route = context.route_context();
-        let thread_id = self.resolve_thread_for_request(route).await;
+        let thread_id = self.resolve_thread_for_request(route).await?;
         let thread_id = self.apply_auto_recovery_if_needed(route, thread_id).await;
 
-        self.build_dispatch_plan_for_thread(context, thread_id)
-            .await
+        Ok(self.build_dispatch_plan_for_thread(context, thread_id).await)
     }
 }
 

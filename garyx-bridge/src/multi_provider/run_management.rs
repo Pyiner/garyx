@@ -4,21 +4,25 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
+#[cfg(test)]
+use garyx_models::provider::ProviderRunResult;
 use garyx_models::provider::{
     AgentDispatchOutcome, AgentRunRequest, FORK_FROM_PROVIDER_TYPE_METADATA_KEY,
     FORK_FROM_SDK_SESSION_ID_METADATA_KEY, FilePayload, ImagePayload, MODEL_METADATA_KEY,
     MODEL_OVERRIDE_METADATA_KEY, MODEL_REASONING_EFFORT_METADATA_KEY,
     MODEL_REASONING_EFFORT_OVERRIDE_METADATA_KEY, MODEL_SERVICE_TIER_METADATA_KEY,
-    MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY, PromptAttachment, ProviderRunOptions,
-    ProviderRunResult, ProviderType, QueuedUserInput, SDK_SESSION_FORK_METADATA_KEY,
-    SDK_SESSION_ID_METADATA_KEY, StreamEvent, attachments_from_metadata,
-    build_user_content_from_parts, stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
+    MODEL_SERVICE_TIER_OVERRIDE_METADATA_KEY, PromptAttachment, ProviderRunOptions, ProviderType,
+    QueuedUserInput, SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamEvent,
+    attachments_from_metadata, build_user_content_from_parts, stage_file_payloads_for_prompt,
+    stage_image_payloads_for_prompt,
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
 use garyx_models::{Principal, final_assistant_text_from_render_records};
+#[cfg(test)]
+use garyx_router::thread_metadata_from_value;
 use garyx_router::{
-    ThreadHistoryRepository, ThreadStore, mark_thread_task_in_progress_on_wake,
-    mark_thread_task_in_review_if_in_progress, thread_metadata_from_value,
+    ThreadHistoryRepository, ThreadRunLease, ThreadStore, mark_thread_task_in_progress_on_wake,
+    mark_thread_task_in_review_if_in_progress,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
@@ -142,6 +146,7 @@ fn summarize_value(value: &Value, limit: usize) -> String {
     }
 }
 
+#[cfg(test)]
 fn scrub_inline_run_runtime_metadata(metadata: &mut HashMap<String, Value>) {
     // Inline runs inherit caller metadata for runtime context, but
     // thread-bound identity/provider fields must be re-derived from the target
@@ -436,11 +441,17 @@ impl MultiProviderBridge {
     }
 
     /// Start an agent run and forward optional image payloads to providers.
-    pub async fn start_agent_run(
+    pub(crate) async fn start_admitted_run(
         &self,
         request: AgentRunRequest,
+        mut run_lease: Option<ThreadRunLease>,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
     ) -> Result<AgentDispatchOutcome, BridgeError> {
+        if let Some(lease) = run_lease.as_ref() {
+            lease
+                .ensure_valid()
+                .map_err(|error| BridgeError::SessionError(error.to_string()))?;
+        }
         let AgentRunRequest {
             thread_id,
             message,
@@ -498,6 +509,11 @@ impl MultiProviderBridge {
         } else {
             Some(prompt_attachments.clone())
         };
+        if let Some(lease) = run_lease.as_ref() {
+            lease
+                .ensure_valid()
+                .map_err(|error| BridgeError::SessionError(error.to_string()))?;
+        }
         if let Some(queued) = self
             .add_streaming_input_with_metadata(
                 &thread_id,
@@ -510,6 +526,11 @@ impl MultiProviderBridge {
             )
             .await
         {
+            if let Some(lease) = run_lease.as_ref() {
+                lease
+                    .ensure_valid()
+                    .map_err(|error| BridgeError::SessionError(error.to_string()))?;
+            }
             tracing::info!(
                 thread_id = %thread_id,
                 run_id = %run_id,
@@ -580,6 +601,11 @@ impl MultiProviderBridge {
                     self.inner.max_concurrent_runs
                 ))
             })?;
+        if let Some(lease) = run_lease.as_mut() {
+            lease
+                .promote_to_active()
+                .map_err(|error| BridgeError::SessionError(error.to_string()))?;
+        }
         record_thread_log(
             thread_logs.clone(),
             thread_log_id.as_deref(),
@@ -602,22 +628,6 @@ impl MultiProviderBridge {
             thread_log_id.as_deref(),
         )
         .await;
-        // Track active run.
-        {
-            let mut run_index = self.inner.run_index.write().await;
-            run_index
-                .active_runs
-                .insert(run_id.to_owned(), provider_key.clone());
-            run_index
-                .run_sessions
-                .insert(run_id.to_owned(), thread_id.to_owned());
-        }
-        self.inner
-            .thread_affinity
-            .write()
-            .await
-            .insert(thread_id.to_owned(), provider_key.clone());
-
         let run_id_owned = run_id.to_owned();
         let thread_id_owned = thread_id.to_owned();
         let provider_key_owned = provider_key;
@@ -671,6 +681,32 @@ impl MultiProviderBridge {
         let partial_gateway_event_tx = self.inner.event_tx.read().await.clone();
         let partial_thread_store = self.inner.thread_store.read().await.clone();
         let partial_thread_history = self.inner.thread_history.read().await.clone();
+        drop(thread_dispatch_guard);
+
+        let inner = self.inner.clone();
+        let user_message = message.to_owned();
+        let thread_log_id_owned = thread_log_id.clone();
+        let thread_logs_for_task = thread_logs.clone();
+        let final_external_callback = response_callback.clone();
+        let final_gateway_event_tx = gateway_event_tx.clone();
+
+        // Publish the active indexes, persistence handle, and task ownership
+        // as one cancellation-free section. Every await happens before the
+        // persistence worker is spawned or any runtime index is mutated;
+        // once all guards are held there is no suspension point until the
+        // spawned task owns the promoted lease. Cancelling the dispatch
+        // future before this point therefore drops the lease without leaking
+        // an index or persistence worker, while DELETE can spin on the visible
+        // active lease until this handoff completes.
+        let mut run_index = self.inner.run_index.write().await;
+        let mut thread_affinity = self.inner.thread_affinity.write().await;
+        let mut active_thread_persistence = self.inner.active_thread_persistence.lock().await;
+        let mut active_tasks = self.inner.active_tasks.lock().await;
+        if let Some(lease) = run_lease.as_ref() {
+            lease
+                .ensure_valid()
+                .map_err(|error| BridgeError::SessionError(error.to_string()))?;
+        }
         let (partial_persistence_tx, partial_persistence_task) = partial_thread_store
             .zip(partial_thread_history)
             .map(|(store, history)| {
@@ -688,23 +724,6 @@ impl MultiProviderBridge {
                 )
             })
             .unzip();
-        if let Some(tx) = partial_persistence_tx.clone() {
-            self.inner.active_thread_persistence.lock().await.insert(
-                thread_id.to_owned(),
-                ActiveThreadPersistence {
-                    run_id: run_id.to_owned(),
-                    tx,
-                },
-            );
-        }
-        drop(thread_dispatch_guard);
-
-        let inner = self.inner.clone();
-        let user_message = message.to_owned();
-        let thread_log_id_owned = thread_log_id.clone();
-        let thread_logs_for_task = thread_logs.clone();
-        let final_external_callback = response_callback.clone();
-        let final_gateway_event_tx = gateway_event_tx.clone();
         let response_callback = {
             let external_callback = response_callback.clone();
             let sink = thread_logs.clone();
@@ -807,7 +826,25 @@ impl MultiProviderBridge {
             }) as Arc<dyn Fn(StreamEvent) + Send + Sync>)
         };
 
+        run_index
+            .active_runs
+            .insert(run_id.to_owned(), provider_key_owned.clone());
+        run_index
+            .run_sessions
+            .insert(run_id.to_owned(), thread_id.to_owned());
+        thread_affinity.insert(thread_id.to_owned(), provider_key_owned.clone());
+        if let Some(tx) = partial_persistence_tx.clone() {
+            active_thread_persistence.insert(
+                thread_id.to_owned(),
+                ActiveThreadPersistence {
+                    run_id: run_id.to_owned(),
+                    tx,
+                },
+            );
+        }
+
         let task: JoinHandle<()> = tokio::spawn(async move {
+            let _run_lease = run_lease;
             let _permit = run_permit;
             let mut graph_state = RunGraphState::new(
                 run_id_owned.clone(),
@@ -1186,12 +1223,24 @@ impl MultiProviderBridge {
             inner.active_tasks.lock().await.remove(&run_id_owned);
         });
 
-        self.inner
-            .active_tasks
-            .lock()
-            .await
-            .insert(run_id.to_owned(), task);
+        active_tasks.insert(run_id.to_owned(), task);
+        drop(active_tasks);
+        drop(active_thread_persistence);
+        drop(thread_affinity);
+        drop(run_index);
         Ok(AgentDispatchOutcome::Started)
+    }
+
+    /// Raw helper retained only for this crate's unit tests. Production
+    /// callers must cross the sealed `AdmittedRun` dispatcher boundary.
+    #[cfg(test)]
+    pub async fn start_agent_run(
+        &self,
+        request: AgentRunRequest,
+        response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    ) -> Result<AgentDispatchOutcome, BridgeError> {
+        self.start_admitted_run(request, None, response_callback)
+            .await
     }
 
     /// Run a thread-bound turn inline through the bridge's normal
@@ -1200,7 +1249,8 @@ impl MultiProviderBridge {
     /// Unlike `start_agent_run`, this helper awaits completion and persists the
     /// thread's transcript/provider state before returning the
     /// `ProviderRunResult`.
-    pub async fn run_inline_streaming(
+    #[cfg(test)]
+    pub(crate) async fn run_inline_streaming(
         &self,
         thread_id: &str,
         message: &str,
@@ -1806,6 +1856,16 @@ impl MultiProviderBridge {
             )
         };
 
+        // A promoted lease is published to `run_index` before the spawned
+        // JoinHandle is inserted into `active_tasks`. DELETE may arrive in
+        // that narrow window. Keep the index intact and let the coordinator
+        // retry instead of treating an early provider abort as proof that a
+        // task which has not started yet can no longer start.
+        if provider_key.is_some() && !self.inner.active_tasks.lock().await.contains_key(run_id) {
+            tokio::task::yield_now().await;
+            return false;
+        }
+
         let persistence_handle = if let Some(thread_id) = thread_id_for_run.as_deref() {
             let mut persistence = self.inner.active_thread_persistence.lock().await;
             let should_remove = persistence
@@ -1836,15 +1896,21 @@ impl MultiProviderBridge {
         }
 
         // Cancel the tokio task.
-        let task_cancelled = {
+        let cancelled_task = {
             let mut tasks = self.inner.active_tasks.lock().await;
             if let Some(task) = tasks.remove(run_id) {
                 task.abort();
-                true
+                Some(task)
             } else {
-                false
+                None
             }
         };
+        let task_cancelled = cancelled_task.is_some();
+        if let Some(task) = cancelled_task {
+            // `abort` is only a request. Await the JoinHandle so destructive
+            // thread mutation cannot race task-local cleanup or provider use.
+            let _ = task.await;
+        }
 
         // Also try provider-level abort.
         let provider = match provider_key {
@@ -1901,6 +1967,37 @@ impl MultiProviderBridge {
         }
 
         (!aborted.is_empty(), aborted)
+    }
+
+    /// Abort every active task for a thread and wait until the run index no
+    /// longer exposes an active run. A promoted lease may briefly precede the
+    /// run-index insertion; in that case retry instead of missing the task.
+    pub async fn abort_thread_runs_and_wait(&self, thread_id: &str) {
+        loop {
+            let _ = self.abort_thread_runs(thread_id).await;
+            let still_indexed = self
+                .inner
+                .run_index
+                .read()
+                .await
+                .run_sessions
+                .values()
+                .any(|value| value == thread_id);
+            let promoted_without_index = if still_indexed {
+                false
+            } else {
+                self.inner
+                    .thread_store
+                    .read()
+                    .await
+                    .as_ref()
+                    .is_some_and(|store| store.run_coordinator().has_active_lease(thread_id))
+            };
+            if !still_indexed && !promoted_without_index {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
     }
 
     /// Abort every active run across all threads. Called on graceful shutdown

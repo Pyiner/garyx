@@ -5,6 +5,7 @@ pub mod memory_store;
 pub mod message_ledger;
 pub mod recent_threads;
 pub mod router;
+pub mod run_admission;
 pub mod runtime_context;
 pub mod store;
 pub mod task_counter;
@@ -72,12 +73,16 @@ pub use router::{
     NATIVE_COMMAND_TEXT_METADATA_KEY, ThreadCreator, ThreadMessageRequest,
     command_catalog_for_config, is_native_command_text, reserved_command_names,
 };
+pub use run_admission::{
+    AdmittedRun, ArchiveReservationError, CoordinatedDeleteError, RunAdmissionError,
+    ThreadRunAborter, ThreadRunCoordinator, ThreadRunLease,
+};
 pub use runtime_context::build_runtime_context_metadata;
 pub use store::{AtomicRecordMerge, ThreadStore, ThreadStoreError, ThreadStoreExt};
 pub use task_counter::{InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore};
 pub use tasks::{
-    CreateTaskInput, EnterReview, ScanTaskProjectionReader, TaskHistoryPage, TaskId,
-    TaskListFilter, TaskProjectionReader, TaskRuntimeInput, TaskService, TaskServiceError,
+    CreateTaskInput, EnterReview, NewTaskAgentGate, ScanTaskProjectionReader, TaskHistoryPage,
+    TaskId, TaskListFilter, TaskProjectionReader, TaskRuntimeInput, TaskService, TaskServiceError,
     TaskSummary, UpdateTaskStatusInput, mark_thread_task_in_progress_on_wake,
     mark_thread_task_in_review_if_in_progress, task_projection_reader_for,
 };

@@ -10,7 +10,9 @@ use garyx_models::config::{GaryxConfig, TelegramAccount};
 use garyx_models::provider::{
     AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
 };
-use garyx_router::{InMemoryThreadStore, RunTranscriptRecordDraft, ThreadStore};
+use garyx_router::{
+    AdmittedRun, AgentDispatcher, InMemoryThreadStore, RunTranscriptRecordDraft, ThreadStore,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -215,7 +217,7 @@ async fn test_apply_runtime_config_reconciles_bridge_and_dispatcher() {
                 token: "token".to_owned(),
                 enabled: true,
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 groups: HashMap::new(),
@@ -338,7 +340,8 @@ async fn test_app_state_builder_shares_thread_store() {
     let mut router = state.threads.router.lock().await;
     let resolved = router
         .resolve_or_create_inbound_thread("api", "main", "api-user", &HashMap::new())
-        .await;
+        .await
+        .expect("resolve thread");
     drop(router);
     assert!(resolved.starts_with("thread::"));
     assert_eq!(
@@ -375,18 +378,27 @@ async fn test_app_state_builder_wires_bridge_thread_store_for_recent_projection(
     .with_bridge(bridge.clone())
     .build();
 
+    state
+        .threads
+        .thread_store
+        .set("thread::recent-projection-run", serde_json::json!({}))
+        .await
+        .unwrap();
+    let admitted = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        AgentRunRequest::new(
+            "thread::recent-projection-run",
+            "keep projection current",
+            "run::recent-projection",
+            "api",
+            "main",
+            HashMap::new(),
+        ),
+    )
+    .await
+    .unwrap();
     bridge
-        .start_agent_run(
-            AgentRunRequest::new(
-                "thread::recent-projection-run",
-                "keep projection current",
-                "run::recent-projection",
-                "api",
-                "main",
-                HashMap::new(),
-            ),
-            None,
-        )
+        .dispatch(admitted, None)
         .await
         .expect("run should start");
 
@@ -513,18 +525,27 @@ async fn aborting_a_streaming_run_commits_terminal_control() {
     .with_bridge(bridge.clone())
     .build();
 
+    state
+        .threads
+        .thread_store
+        .set("thread::aborted-run", serde_json::json!({}))
+        .await
+        .unwrap();
+    let admitted = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        AgentRunRequest::new(
+            "thread::aborted-run",
+            "do work",
+            "run::aborted",
+            "api",
+            "main",
+            HashMap::new(),
+        ),
+    )
+    .await
+    .unwrap();
     bridge
-        .start_agent_run(
-            AgentRunRequest::new(
-                "thread::aborted-run",
-                "do work",
-                "run::aborted",
-                "api",
-                "main",
-                HashMap::new(),
-            ),
-            None,
-        )
+        .dispatch(admitted, None)
         .await
         .expect("run should start");
 

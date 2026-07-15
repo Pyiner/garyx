@@ -11,12 +11,14 @@ use garyx_models::provider::{
     SDK_SESSION_FORK_METADATA_KEY, SDK_SESSION_ID_METADATA_KEY, StreamBoundaryKind, StreamEvent,
     attachments_to_metadata_value,
 };
+use garyx_models::thread_logs::{ThreadLogChunk, ThreadLogEvent, ThreadLogSink};
 use garyx_models::{
-    CustomAgentProfile, Principal, TaskEvent, TaskEventKind, TaskStatus, ThreadTask,
-    builtin_provider_agent_profiles,
+    AgentAvailabilitySnapshot, CustomAgentProfile, Principal, TaskEvent, TaskEventKind, TaskStatus,
+    ThreadTask, builtin_provider_agent_profiles,
 };
 use garyx_router::{
-    InMemoryThreadStore, ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
+    AdmittedRun, AgentDispatcher, ArchiveReservationError, InMemoryThreadStore,
+    ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
 };
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, mpsc};
@@ -112,10 +114,56 @@ fn custom_agent(
         avatar_data_url: None,
         system_prompt: system_prompt.to_owned(),
         built_in: false,
+        enabled: true,
         standalone: true,
         created_at: "2026-04-19T00:00:00Z".to_owned(),
         updated_at: "2026-04-19T00:00:00Z".to_owned(),
     }
+}
+
+fn agent_snapshot(agents: Vec<CustomAgentProfile>) -> AgentAvailabilitySnapshot {
+    AgentAvailabilitySnapshot {
+        agents,
+        default_agent_id: None,
+        agent_state_revision: 1,
+    }
+}
+
+#[tokio::test]
+async fn older_agent_profile_revision_cannot_overwrite_newer_snapshot() {
+    let bridge = MultiProviderBridge::new();
+    let mut current = custom_agent(
+        "reviewer",
+        "Reviewer v2",
+        ProviderType::CodexAppServer,
+        "gpt-5-v2",
+        "Review v2.",
+    );
+    current.updated_at = "2026-07-16T02:00:00Z".to_owned();
+    assert!(
+        bridge
+            .replace_agent_profiles(AgentAvailabilitySnapshot {
+                agents: vec![current.clone()],
+                default_agent_id: Some("reviewer".to_owned()),
+                agent_state_revision: 2,
+            })
+            .await
+    );
+    let mut stale = current;
+    stale.display_name = "Reviewer v1".to_owned();
+    stale.model = "gpt-5-v1".to_owned();
+    assert!(
+        !bridge
+            .replace_agent_profiles(AgentAvailabilitySnapshot {
+                agents: vec![stale],
+                default_agent_id: None,
+                agent_state_revision: 1,
+            })
+            .await
+    );
+    let applied = bridge.agent_profile("reviewer").await.unwrap();
+    assert_eq!(applied.display_name, "Reviewer v2");
+    assert_eq!(applied.model, "gpt-5-v2");
 }
 
 /// A mock provider for testing.
@@ -210,6 +258,8 @@ struct FailingCheckpointProvider {
 struct EmptyResponseProvider;
 
 struct FailedResultProvider;
+
+struct PanickingProvider;
 
 struct TitleProvider {
     title: String,
@@ -344,6 +394,37 @@ impl FailingCheckpointProvider {
 
     fn delta_sent(&self) -> Arc<Notify> {
         self.delta_sent.clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl ProviderRuntime for PanickingProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        _options: &ProviderRunOptions,
+        _on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        panic!("injected provider panic")
+    }
+
+    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{session_key}"))
     }
 }
 
@@ -1247,7 +1328,7 @@ async fn test_resolve_provider_default_fallback() {
 async fn built_in_agent_uses_configured_default_provider_model() {
     let bridge = MultiProviderBridge::new();
     bridge
-        .replace_agent_profiles(builtin_provider_agent_profiles())
+        .replace_agent_profiles(agent_snapshot(builtin_provider_agent_profiles()))
         .await;
     let mut config = GaryxConfig::default();
     config.agents.insert(
@@ -1307,7 +1388,9 @@ async fn test_thread_bound_claude_code_agent_snapshots_env_on_shared_provider() 
         "ANTHROPIC_BASE_URL".to_owned(),
         "http://127.0.0.1:15721".to_owned(),
     )]);
-    bridge.replace_agent_profiles(vec![agent]).await;
+    bridge
+        .replace_agent_profiles(agent_snapshot(vec![agent]))
+        .await;
 
     let default_provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
     bridge
@@ -1587,7 +1670,7 @@ async fn test_reload_from_config_removes_disabled_routes() {
                 token: "token".to_owned(),
                 enabled: true,
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 groups: HashMap::new(),
@@ -1628,13 +1711,13 @@ async fn run_inline_streaming_rederives_target_metadata_and_persists_history() {
         .register_provider("claude-child", provider.clone())
         .await;
     bridge
-        .replace_agent_profiles(vec![custom_agent(
+        .replace_agent_profiles(agent_snapshot(vec![custom_agent(
             "coder",
             "Coder",
             ProviderType::ClaudeCode,
             "claude-opus-child",
             "You are the coder child.",
-        )])
+        )]))
         .await;
 
     store
@@ -1748,13 +1831,13 @@ async fn run_inline_streaming_uses_global_run_limiter() {
         .register_provider("claude-child", provider.clone())
         .await;
     bridge
-        .replace_agent_profiles(vec![custom_agent(
+        .replace_agent_profiles(agent_snapshot(vec![custom_agent(
             "coder",
             "Coder",
             ProviderType::ClaudeCode,
             "claude-opus-child",
             "You are the coder child.",
-        )])
+        )]))
         .await;
 
     for thread_id in ["thread::child-one", "thread::child-two"] {
@@ -4559,13 +4642,13 @@ async fn test_start_agent_run_uses_thread_snapshot_before_agent_profile_metadata
     bridge.set_thread_store(store).await;
     bridge.set_thread_history(history);
     bridge
-        .replace_agent_profiles(vec![custom_agent(
+        .replace_agent_profiles(agent_snapshot(vec![custom_agent(
             "test-agent",
             "Test Agent",
             ProviderType::ClaudeCode,
             "agent-model-v2",
             "Synthetic test agent.",
-        )])
+        )]))
         .await;
     let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
     bridge.register_provider("p1", provider.clone()).await;
@@ -4764,13 +4847,13 @@ async fn test_backfill_runtime_metadata_prefers_model_cell_over_agent_model() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     bridge.set_thread_store(store.clone()).await;
     bridge
-        .replace_agent_profiles(vec![custom_agent(
+        .replace_agent_profiles(agent_snapshot(vec![custom_agent(
             "test-agent",
             "Test Agent",
             ProviderType::ClaudeCode,
             "agent-model-v2",
             "Synthetic test agent.",
-        )])
+        )]))
         .await;
     let thread_id = "thread::cell-vs-agent-model";
     store
@@ -4932,4 +5015,419 @@ async fn test_backfill_runtime_metadata_keeps_explicit_provider_env() {
         Some("http://127.0.0.1:19999"),
         "explicit run provider_env must win over the thread snapshot"
     );
+}
+
+async fn wait_for_lease_count(store: &Arc<dyn ThreadStore>, thread_id: &str, expected: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if store.run_coordinator().lease_count(thread_id) == expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("lease count should converge");
+}
+
+async fn history_with_blocked_transcript(
+    store: Arc<dyn ThreadStore>,
+    thread_id: &str,
+) -> (
+    Arc<ThreadHistoryRepository>,
+    tempfile::TempDir,
+    std::path::PathBuf,
+) {
+    let temp = tempfile::tempdir().expect("transcript tempdir");
+    let transcript_store = Arc::new(
+        ThreadTranscriptStore::file(temp.path())
+            .await
+            .expect("file transcript store"),
+    );
+    let transcript_path = transcript_store
+        .transcript_path(thread_id)
+        .expect("file transcript path");
+    std::fs::create_dir(&transcript_path).expect("block transcript file with directory");
+    (
+        Arc::new(ThreadHistoryRepository::new(store, transcript_store)),
+        temp,
+        transcript_path,
+    )
+}
+
+async fn wait_for_failed_initial_persistence(store: &Arc<dyn ThreadStore>, thread_id: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let attempted = store
+                .get(thread_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|record| {
+                    record
+                        .pointer("/history/message_count")
+                        .and_then(Value::as_u64)
+                })
+                == Some(0);
+            if attempted {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("initial persistence attempt should finish with zero committed rows");
+}
+
+struct BlockRunAcceptedLogSink {
+    entered: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[async_trait::async_trait]
+impl ThreadLogSink for BlockRunAcceptedLogSink {
+    async fn record_event(&self, event: ThreadLogEvent) {
+        if event.message == "run accepted" {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+    }
+
+    async fn read_chunk(
+        &self,
+        thread_id: &str,
+        cursor: Option<u64>,
+    ) -> Result<ThreadLogChunk, String> {
+        Ok(ThreadLogChunk {
+            thread_id: thread_id.to_owned(),
+            path: String::new(),
+            text: String::new(),
+            cursor: cursor.unwrap_or(0),
+            reset: cursor.is_none(),
+        })
+    }
+
+    async fn delete_thread(&self, _thread_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn cancelling_dispatch_after_lease_promotion_releases_without_runtime_state() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let thread_id = "thread::lease-cancelled-dispatch";
+    let run_id = "run::lease-cancelled-dispatch";
+    store.set(thread_id, json!({})).await.unwrap();
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+    let entered = Arc::new(Notify::new());
+    bridge.set_thread_log_sink(Arc::new(BlockRunAcceptedLogSink {
+        entered: entered.clone(),
+        release: Arc::new(Notify::new()),
+    }));
+
+    let admitted = AdmittedRun::thread_bound(
+        store.clone(),
+        run_request(thread_id, "cancel", run_id, "api", "main"),
+    )
+    .await
+    .unwrap();
+    let dispatch_bridge = bridge.clone();
+    let dispatch = tokio::spawn(async move { dispatch_bridge.dispatch(admitted, None).await });
+    tokio::time::timeout(std::time::Duration::from_secs(3), entered.notified())
+        .await
+        .expect("dispatch reached the post-promotion barrier");
+    assert!(store.run_coordinator().has_active_lease(thread_id));
+
+    dispatch.abort();
+    let _ = dispatch.await;
+    wait_for_lease_count(&store, thread_id, 0).await;
+    assert!(!bridge.is_run_active(run_id).await);
+    assert!(bridge.thread_affinity_for(thread_id).await.is_none());
+    assert!(provider.metadata_snapshots().is_empty());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), store.delete(thread_id))
+            .await
+            .expect("delete cannot hang on a cancelled dispatch")
+            .expect("delete result")
+    );
+}
+
+#[tokio::test]
+async fn delete_between_admission_and_dispatch_rejects_before_provider_or_affinity() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let thread_id = "thread::delete-before-dispatch";
+    store.set(thread_id, json!({})).await.unwrap();
+    bridge.set_thread_store(store.clone()).await;
+
+    let admitted = AdmittedRun::thread_bound(
+        store.clone(),
+        run_request(
+            thread_id,
+            "must not dispatch",
+            "run::delete-before-dispatch",
+            "api",
+            "main",
+        ),
+    )
+    .await
+    .unwrap();
+    let deleting_store = store.clone();
+    let delete = tokio::spawn(async move { deleting_store.delete(thread_id).await });
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !store.run_coordinator().mutation_in_progress(thread_id) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("delete must invalidate the admitted token");
+
+    let error = bridge
+        .dispatch(admitted, None)
+        .await
+        .expect_err("invalidated admission must fail at bridge entry");
+    assert!(error.contains("being archived or deleted"));
+    assert!(delete.await.unwrap().unwrap());
+    assert!(provider.metadata_snapshots().is_empty());
+    assert!(bridge.thread_affinity_for(thread_id).await.is_none());
+    assert!(store.get(thread_id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn admitted_started_run_holds_active_lease_until_provider_terminal() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(CheckpointingProvider::new());
+    let delta_sent = provider.delta_sent();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let thread_id = "thread::lease-started";
+    store.set(thread_id, json!({})).await.unwrap();
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+
+    let admitted = AdmittedRun::thread_bound(
+        store.clone(),
+        run_request(thread_id, "hold", "run::lease-started", "api", "main"),
+    )
+    .await
+    .unwrap();
+    bridge.dispatch(admitted, None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .unwrap();
+    assert!(store.run_coordinator().has_active_lease(thread_id));
+    let side_effect = Arc::new(AtomicBool::new(false));
+    let effect = side_effect.clone();
+    let archive = store
+        .run_coordinator()
+        .start_archive(thread_id.to_owned(), async move {
+            effect.store(true, Ordering::Release);
+            Ok::<_, ()>(())
+        });
+    assert!(matches!(archive, Err(ArchiveReservationError::ActiveLease)));
+    assert!(!side_effect.load(Ordering::Acquire));
+
+    provider.release_run();
+    wait_for_lease_count(&store, thread_id, 0).await;
+}
+
+#[tokio::test]
+async fn failed_initial_persistence_keeps_lease_until_provider_terminal_and_blocks_archive() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(CheckpointingProvider::new());
+    let delta_sent = provider.delta_sent();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let thread_id = "thread::lease-persistence-failure";
+    store.set(thread_id, json!({})).await.unwrap();
+    let (history, _temp, transcript_path) =
+        history_with_blocked_transcript(store.clone(), thread_id).await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(history);
+
+    let admitted = AdmittedRun::thread_bound(
+        store.clone(),
+        run_request(
+            thread_id,
+            "hold after persistence failure",
+            "run::lease-persistence-failure",
+            "api",
+            "main",
+        ),
+    )
+    .await
+    .unwrap();
+    bridge.dispatch(admitted, None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .unwrap();
+    wait_for_failed_initial_persistence(&store, thread_id).await;
+    assert!(
+        transcript_path.is_dir(),
+        "run_start append was forced to fail"
+    );
+    assert!(store.run_coordinator().has_active_lease(thread_id));
+
+    let side_effect = Arc::new(AtomicBool::new(false));
+    let effect = side_effect.clone();
+    let archive = store
+        .run_coordinator()
+        .start_archive(thread_id.to_owned(), async move {
+            effect.store(true, Ordering::Release);
+            Ok::<_, ()>(())
+        });
+    assert!(matches!(archive, Err(ArchiveReservationError::ActiveLease)));
+    assert!(!side_effect.load(Ordering::Acquire));
+
+    provider.release_run();
+    wait_for_lease_count(&store, thread_id, 0).await;
+}
+
+#[tokio::test]
+async fn delete_aborts_and_drains_a_run_even_after_initial_persistence_failed() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(CheckpointingProvider::new());
+    let delta_sent = provider.delta_sent();
+    bridge.register_provider("p1", provider).await;
+    bridge.set_default_provider_key("p1").await;
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let thread_id = "thread::delete-persistence-failure";
+    let run_id = "run::delete-persistence-failure";
+    store.set(thread_id, json!({})).await.unwrap();
+    let (history, _temp, transcript_path) =
+        history_with_blocked_transcript(store.clone(), thread_id).await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(history);
+
+    let admitted = AdmittedRun::thread_bound(
+        store.clone(),
+        run_request(
+            thread_id,
+            "delete after persistence failure",
+            run_id,
+            "api",
+            "main",
+        ),
+    )
+    .await
+    .unwrap();
+    bridge.dispatch(admitted, None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .unwrap();
+    wait_for_failed_initial_persistence(&store, thread_id).await;
+    assert!(
+        transcript_path.is_dir(),
+        "run_start append was forced to fail"
+    );
+    assert!(store.run_coordinator().has_active_lease(thread_id));
+
+    let deleted = tokio::time::timeout(std::time::Duration::from_secs(3), store.delete(thread_id))
+        .await
+        .expect("delete must drain without deadlocking")
+        .expect("coordinated delete");
+    assert!(deleted);
+    assert_eq!(store.run_coordinator().lease_count(thread_id), 0);
+    assert!(store.get(thread_id).await.unwrap().is_none());
+    assert!(!bridge.is_run_active(run_id).await);
+}
+
+#[tokio::test]
+async fn queued_dispatch_releases_its_request_lease_after_active_run_accepts_input() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(QueuedInputProvider::new());
+    let delta_sent = provider.delta_sent();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let thread_id = "thread::lease-queued";
+    store.set(thread_id, json!({})).await.unwrap();
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+
+    let first = AdmittedRun::thread_bound(
+        store.clone(),
+        run_request(thread_id, "first", "run::lease-first", "api", "main"),
+    )
+    .await
+    .unwrap();
+    bridge.dispatch(first, None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .unwrap();
+    wait_for_lease_count(&store, thread_id, 1).await;
+
+    let second = AdmittedRun::thread_bound(
+        store.clone(),
+        run_request(thread_id, "second", "run::lease-second", "api", "main"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        store.run_coordinator().lease_count(thread_id),
+        2,
+        "same-thread requests own independent leases before queue handoff"
+    );
+    let outcome = bridge.dispatch(second, None).await.unwrap();
+    assert!(matches!(
+        outcome,
+        garyx_models::provider::AgentDispatchOutcome::QueuedToActiveRun { .. }
+    ));
+    assert_eq!(store.run_coordinator().lease_count(thread_id), 1);
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while provider.received_inputs().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    provider.release_ack();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    provider.release_run();
+    wait_for_lease_count(&store, thread_id, 0).await;
+}
+
+#[tokio::test]
+async fn provider_error_and_panic_both_release_active_lease() {
+    let cases: Vec<(&str, Arc<dyn ProviderRuntime>)> = vec![
+        (
+            "error",
+            Arc::new(FailingCheckpointProvider::new()) as Arc<dyn ProviderRuntime>,
+        ),
+        (
+            "panic",
+            Arc::new(PanickingProvider) as Arc<dyn ProviderRuntime>,
+        ),
+    ];
+    for (case, provider) in cases {
+        let bridge = MultiProviderBridge::new();
+        bridge.register_provider("p1", provider).await;
+        bridge.set_default_provider_key("p1").await;
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let thread_id = format!("thread::lease-{case}");
+        store.set(&thread_id, json!({})).await.unwrap();
+        bridge.set_thread_store(store.clone()).await;
+        bridge.set_thread_history(make_history(store.clone()));
+        let run_id = format!("run::lease-{case}");
+        let admitted = AdmittedRun::thread_bound(
+            store.clone(),
+            run_request(&thread_id, "fail", &run_id, "api", "main"),
+        )
+        .await
+        .unwrap();
+        bridge.dispatch(admitted, None).await.unwrap();
+        wait_for_lease_count(&store, &thread_id, 0).await;
+        let _ = bridge.abort_run(&run_id).await;
+    }
 }

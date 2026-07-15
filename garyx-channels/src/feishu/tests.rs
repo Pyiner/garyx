@@ -498,7 +498,9 @@ mod dispatch_tests {
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
     };
-    use garyx_router::{InMemoryThreadStore, MessageRouter};
+    use garyx_router::{
+        AdmittedRun, AgentDispatcher, InMemoryThreadStore, MessageRouter, ThreadStore,
+    };
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// Mock provider that tracks calls.
@@ -597,6 +599,13 @@ mod dispatch_tests {
         (bridge, provider)
     }
 
+    async fn admit_test_run(request: garyx_models::provider::AgentRunRequest) -> AdmittedRun {
+        let thread_id = request.thread_id.clone();
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        store.set(&thread_id, serde_json::json!({})).await.unwrap();
+        AdmittedRun::thread_bound(store, request).await.unwrap()
+    }
+
     #[tokio::test]
     async fn test_feishu_session_resolution_dm() {
         let router = make_router();
@@ -628,19 +637,16 @@ mod dispatch_tests {
         };
         assert!(thread_id.starts_with("thread::"), "{thread_id}");
 
-        let result = bridge
-            .start_agent_run(
-                garyx_models::provider::AgentRunRequest::new(
-                    &thread_id,
-                    "hello from feishu",
-                    "feishu-run-1",
-                    "feishu",
-                    "app1",
-                    HashMap::new(),
-                ),
-                None,
-            )
-            .await;
+        let admitted = admit_test_run(garyx_models::provider::AgentRunRequest::new(
+            &thread_id,
+            "hello from feishu",
+            "feishu-run-1",
+            "feishu",
+            "app1",
+            HashMap::new(),
+        ))
+        .await;
+        let result = bridge.dispatch(admitted, None).await;
         assert!(result.is_ok());
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -671,19 +677,16 @@ mod dispatch_tests {
             }
         });
 
-        let result = bridge
-            .start_agent_run(
-                garyx_models::provider::AgentRunRequest::new(
-                    &session_key,
-                    "test message",
-                    "feishu-cb-1",
-                    "feishu",
-                    "app1",
-                    HashMap::new(),
-                ),
-                Some(callback),
-            )
-            .await;
+        let admitted = admit_test_run(garyx_models::provider::AgentRunRequest::new(
+            &session_key,
+            "test message",
+            "feishu-cb-1",
+            "feishu",
+            "app1",
+            HashMap::new(),
+        ))
+        .await;
+        let result = bridge.dispatch(admitted, Some(callback)).await;
         assert!(result.is_ok());
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -794,7 +797,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: true,
@@ -888,7 +891,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: true,
@@ -950,7 +953,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: true,
@@ -1003,7 +1006,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: false,
@@ -1068,7 +1071,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: false,
@@ -1119,7 +1122,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: false,
@@ -1866,7 +1869,7 @@ mod e2e_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: false,
@@ -4956,7 +4959,7 @@ mod policy_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: true,

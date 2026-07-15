@@ -3,16 +3,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use garyx_models::messages::MessageMetadata;
-use garyx_models::provider::{AgentDispatchOutcome, AgentRunRequest, ImagePayload, StreamEvent};
+use garyx_models::provider::{AgentDispatchOutcome, ImagePayload, StreamEvent};
 use serde_json::Value;
 
-use crate::{ThreadEnsureOptions, ThreadStore};
+use crate::{AdmittedRun, ThreadEnsureOptions, ThreadStore};
 
 #[async_trait]
 pub trait AgentDispatcher: Send + Sync {
     async fn dispatch(
         &self,
-        request: AgentRunRequest,
+        run: AdmittedRun,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
     ) -> Result<AgentDispatchOutcome, String>;
 }

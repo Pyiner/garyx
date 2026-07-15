@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
+#[cfg(any(test, feature = "test-seams"))]
+use std::sync::{Condvar, atomic::AtomicBool, atomic::Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use chrono::{SecondsFormat, Utc};
@@ -39,6 +41,7 @@ pub(crate) enum TestDbFaultPoint {
     LegacyRetirementMarkerWrite,
     ArchivedThreadRead,
     LegacyGenerationSeedWrite,
+    DeleteThreadRecord,
 }
 
 #[cfg(any(test, feature = "test-seams"))]
@@ -46,6 +49,90 @@ pub(crate) enum TestDbFaultPoint {
 struct TestDbFaults {
     calls: HashMap<TestDbFaultPoint, usize>,
     fail_on: HashSet<(TestDbFaultPoint, usize)>,
+    mutation_barriers: HashMap<TestDbMutationPoint, std::sync::Arc<TestDbMutationBarrierState>>,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum TestDbMutationPoint {
+    ArchiveThreadRecord,
+    DeleteThreadRecord,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+#[derive(Debug)]
+struct TestDbMutationBarrierState {
+    started: AtomicBool,
+    started_notify: tokio::sync::Notify,
+    released: Mutex<bool>,
+    release_notify: Condvar,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+impl TestDbMutationBarrierState {
+    fn new() -> Self {
+        Self {
+            started: AtomicBool::new(false),
+            started_notify: tokio::sync::Notify::new(),
+            released: Mutex::new(false),
+            release_notify: Condvar::new(),
+        }
+    }
+
+    fn block(&self) {
+        self.started.store(true, Ordering::Release);
+        self.started_notify.notify_waiters();
+        let mut released = self
+            .released
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while !*released {
+            released = self
+                .release_notify
+                .wait(released)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+
+    fn release(&self) {
+        *self
+            .released
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        self.release_notify.notify_all();
+    }
+}
+
+/// One-shot deterministic seam proving that a coordinator-owned blocking
+/// mutation outlives cancellation of the HTTP future that initiated it.
+#[cfg(any(test, feature = "test-seams"))]
+pub(crate) struct TestDbMutationBarrier {
+    state: std::sync::Arc<TestDbMutationBarrierState>,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+impl TestDbMutationBarrier {
+    pub(crate) async fn wait_until_started(&self) {
+        loop {
+            let notified = self.state.started_notify.notified();
+            if self.state.started.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        self.state.release();
+    }
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+impl Drop for TestDbMutationBarrier {
+    fn drop(&mut self) {
+        // A failed test must never strand a blocking-pool worker.
+        self.state.release();
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -433,6 +520,33 @@ impl GaryxDbService {
     }
 
     #[cfg(any(test, feature = "test-seams"))]
+    pub(crate) fn block_test_db_mutation(
+        &self,
+        point: TestDbMutationPoint,
+    ) -> TestDbMutationBarrier {
+        let state = std::sync::Arc::new(TestDbMutationBarrierState::new());
+        self.test_faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mutation_barriers
+            .insert(point, state.clone());
+        TestDbMutationBarrier { state }
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    fn maybe_block_test_db_mutation(&self, point: TestDbMutationPoint) {
+        let barrier = self
+            .test_faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mutation_barriers
+            .remove(&point);
+        if let Some(barrier) = barrier {
+            barrier.block();
+        }
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
     fn maybe_fail_test_db_call(&self, point: TestDbFaultPoint) -> GaryxDbResult<()> {
         let mut faults = self
             .test_faults
@@ -623,7 +737,9 @@ impl GaryxDbService {
     /// other path — a write racing this transaction either lands before
     /// the tombstone (and is deleted here) or is rejected by the in-tx
     /// tombstone check in `write_thread_record_with_projections`.
-    pub fn archive_thread_record(&self, thread_id: &str) -> GaryxDbResult<bool> {
+    pub(crate) fn archive_thread_record(&self, thread_id: &str) -> GaryxDbResult<bool> {
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_block_test_db_mutation(TestDbMutationPoint::ArchiveThreadRecord);
         let thread_id = normalize_thread_id(thread_id)?;
         let archived_at = now_string();
         let mut conn = self.conn()?;
@@ -2041,7 +2157,11 @@ impl GaryxDbService {
 
     /// Single-transaction delete of a thread record, all its projection
     /// rows, and its pin. Returns whether the record existed.
-    pub fn delete_thread_record_with_projections(&self, key: &str) -> GaryxDbResult<bool> {
+    pub(crate) fn delete_thread_record_with_projections(&self, key: &str) -> GaryxDbResult<bool> {
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_fail_test_db_call(TestDbFaultPoint::DeleteThreadRecord)?;
         let key = normalize_required("key", key)?;
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;

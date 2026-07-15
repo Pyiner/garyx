@@ -100,7 +100,7 @@ async fn test_status_lists_api_channels() {
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -128,7 +128,7 @@ async fn test_status_lists_weixin_channels() {
             enabled: true,
             base_url: "https://ilinkai.weixin.qq.com".to_owned(),
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             streaming_update: true,
         },
@@ -160,7 +160,7 @@ async fn test_status_reports_current_and_other_bots() {
             token: "token".to_owned(),
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             owner_target: None,
             groups: Default::default(),
@@ -175,7 +175,7 @@ async fn test_status_reports_current_and_other_bots() {
             enabled: true,
             domain: Default::default(),
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             owner_target: None,
             require_mention: true,
@@ -187,7 +187,7 @@ async fn test_status_reports_current_and_other_bots() {
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -894,9 +894,8 @@ fn test_decode_mcp_path_context_extracts_thread_and_run_ids() {
 
 #[test]
 fn test_decode_mcp_path_context_extracts_ids_after_auth_token() {
-    let (thread_id, run_id) = decode_mcp_path_context(
-        "/mcp/auth/secret%2Ftoken/thread%3A%3Aalpha/run%2F1",
-    );
+    let (thread_id, run_id) =
+        decode_mcp_path_context("/mcp/auth/secret%2Ftoken/thread%3A%3Aalpha/run%2F1");
     assert_eq!(thread_id.as_deref(), Some("thread::alpha"));
     assert_eq!(run_id.as_deref(), Some("run/1"));
 }

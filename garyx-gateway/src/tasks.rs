@@ -2,6 +2,7 @@ use garyx_router::ThreadStoreExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -13,8 +14,8 @@ use garyx_models::{
     ThreadTask,
 };
 use garyx_router::{
-    CreateTaskInput, TaskListFilter, TaskRuntimeInput, TaskService, TaskServiceError,
-    UpdateTaskStatusInput, WorkspaceMode, workspace_dir_from_value,
+    CreateTaskInput, NewTaskAgentGate, TaskListFilter, TaskRuntimeInput, TaskService,
+    TaskServiceError, UpdateTaskStatusInput, WorkspaceMode, workspace_dir_from_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -22,8 +23,9 @@ use uuid::Uuid;
 
 use crate::agent_identity::{
     default_workspace_dir_from_agent_reference, resolve_agent_reference_from_stores,
-    snapshot_agent_runtime_metadata_to_thread_record,
+    resolve_new_agent_binding_from_store, snapshot_agent_runtime_metadata_to_thread_record,
 };
+use crate::custom_agents::CustomAgentStore;
 use crate::garyx_db::{GaryxDbError, TaskForestScope};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
@@ -542,7 +544,24 @@ pub(crate) fn task_service(state: &Arc<AppState>) -> TaskService {
         Arc::new(crate::task_projection::SqliteTaskCounterStore::new(
             state.ops.garyx_db.clone(),
         )),
+        Arc::new(GatewayNewTaskAgentGate {
+            custom_agents: state.ops.custom_agents.clone(),
+        }),
     )
+}
+
+struct GatewayNewTaskAgentGate {
+    custom_agents: Arc<CustomAgentStore>,
+}
+
+#[async_trait]
+impl NewTaskAgentGate for GatewayNewTaskAgentGate {
+    async fn resolve_new_task_agent(
+        &self,
+        requested_agent_id: Option<&str>,
+    ) -> Result<garyx_models::ResolvedAgentBinding, garyx_models::AgentBindingError> {
+        resolve_new_agent_binding_from_store(self.custom_agents.as_ref(), requested_agent_id).await
+    }
 }
 
 fn task_list_filter(query: TaskListQuery) -> Result<TaskListFilter, TaskServiceError> {
@@ -760,23 +779,36 @@ async fn validate_thread_runtime_allows_assignee(
     else {
         return Ok(());
     };
-    let reference = resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
-        .await
-        .map_err(TaskServiceError::UnknownAgent)?;
-
     let thread_agent_id = thread
         .get("agent_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let Some(thread_agent_id) = thread_agent_id else {
-        return Ok(());
+    let (canonical_agent_id, provider_type) = if let Some(thread_agent_id) = thread_agent_id {
+        let reference =
+            resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
+                .await
+                .map_err(TaskServiceError::UnknownAgent)?;
+        if thread_agent_id != reference.bound_agent_id() {
+            return Err(TaskServiceError::BadRequest(format!(
+                "task thread {thread_id} is bound to agent {thread_agent_id}; cannot assign it to agent {}",
+                reference.bound_agent_id()
+            )));
+        }
+        (
+            reference.bound_agent_id().to_owned(),
+            reference.provider_type(),
+        )
+    } else {
+        let binding =
+            resolve_new_agent_binding_from_store(state.ops.custom_agents.as_ref(), Some(agent_id))
+                .await?;
+        (binding.agent_id, binding.provider_type)
     };
-    if thread_agent_id != reference.bound_agent_id() {
+    if canonical_agent_id != agent_id.trim() {
         return Err(TaskServiceError::BadRequest(format!(
-            "task thread {thread_id} is bound to agent {thread_agent_id}; cannot assign it to agent {}",
-            reference.bound_agent_id()
+            "task thread {thread_id} resolved agent {canonical_agent_id}; cannot assign it to agent {agent_id}"
         )));
     }
 
@@ -785,10 +817,9 @@ async fn validate_thread_runtime_allows_assignee(
         .cloned()
         .and_then(|value| serde_json::from_value::<garyx_models::ProviderType>(value).ok())
     {
-        let reference_provider_type = reference.provider_type();
-        if thread_provider_type != reference_provider_type {
+        if thread_provider_type != provider_type {
             return Err(TaskServiceError::BadRequest(format!(
-                "task thread {thread_id} is bound to provider {thread_provider_type:?}; cannot assign it to provider {reference_provider_type:?}"
+                "task thread {thread_id} is bound to provider {thread_provider_type:?}; cannot assign it to provider {provider_type:?}"
             )));
         }
     }
@@ -1136,15 +1167,21 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
         TaskServiceError::BadRequest(_) => "BadRequest",
         TaskServiceError::UnknownPrincipal(_) => "UnknownPrincipal",
         TaskServiceError::UnknownAgent(_) => "UnknownAgent",
+        TaskServiceError::AgentBinding(garyx_models::AgentBindingError::AgentDisabled(_)) => {
+            "AgentDisabled"
+        }
+        TaskServiceError::AgentBinding(garyx_models::AgentBindingError::NoEnabledAgent) => {
+            "NoEnabledAgent"
+        }
+        TaskServiceError::AgentBinding(_) => "UnknownAgent",
         TaskServiceError::Store(_) | TaskServiceError::Counter(_) | TaskServiceError::Serde(_) => {
             "Internal"
         }
     };
     let status = match code {
         "NotFound" => StatusCode::NOT_FOUND,
-        "NotATask" | "InvalidTransition" | "BadRequest" | "UnknownPrincipal" | "UnknownAgent" => {
-            StatusCode::BAD_REQUEST
-        }
+        "NotATask" | "InvalidTransition" | "BadRequest" | "UnknownPrincipal" | "UnknownAgent"
+        | "AgentDisabled" | "NoEnabledAgent" => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (

@@ -1257,7 +1257,7 @@ async fn test_auth_flow_start_routes_feishu_alias_end_to_end() {
             enabled: true,
             domain: Default::default(),
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: true,

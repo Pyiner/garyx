@@ -8,7 +8,10 @@ pub mod multi_provider;
 mod native_slash;
 mod provider_common;
 pub mod provider_trait;
-pub mod run_graph;
+mod run_graph;
 
 pub use multi_provider::MultiProviderBridge;
 pub use provider_trait::{BridgeError, ProviderRuntime};
+
+#[cfg(test)]
+mod api_guard_tests;

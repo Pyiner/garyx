@@ -10,6 +10,7 @@ use garyx_models::provider::{
 };
 use garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID;
 use garyx_models::thread_logs::ThreadLogEvent;
+use garyx_models::{SERVER_OWNED_AGENT_METADATA_KEYS, strip_server_owned_agent_metadata};
 use garyx_router::{
     ChannelBinding, NATIVE_COMMAND_TEXT_METADATA_KEY, build_runtime_context_metadata,
     is_thread_key, normalize_workspace_dir, update_thread_record, workspace_dir_from_value,
@@ -117,22 +118,11 @@ async fn persist_thread_provider_type_if_missing(
         .await
 }
 
-/// Request-metadata keys reserved for server-side runtime resolution. Chat
-/// clients (HTTP `/api/chat/start`, WS `start`) must not be able to occupy
-/// them: the bridge backfill is existing-wins, so a client-supplied value
-/// would silently block the agent/thread runtime snapshot (`provider_env`
-/// is resolved exclusively from the thread snapshot). Internal dispatch
-/// builds `AgentRunRequest` metadata directly and keeps explicit override
-/// power; this guard only applies to the external chat boundary.
-const RESERVED_RUNTIME_METADATA_KEYS: &[&str] = &["provider_env"];
-
 pub(crate) async fn prepare_chat_request(
     state: &Arc<AppState>,
     mut req: ChatRequest,
 ) -> Result<PreparedChatRequest, ChatPreparationError> {
-    for key in RESERVED_RUNTIME_METADATA_KEYS {
-        req.metadata.remove(*key);
-    }
+    strip_server_owned_agent_metadata(&mut req.metadata);
     let config = state.config_snapshot();
     let resolved_message = resolve_chat_message(&config, &mut req);
     let ResolvedChatTarget {
@@ -195,7 +185,11 @@ pub(crate) async fn prepare_chat_request(
     };
     if let Some(reference) = agent_reference.as_ref() {
         for (key, value) in agent_runtime_metadata(reference) {
-            req.metadata.entry(key).or_insert(value);
+            if SERVER_OWNED_AGENT_METADATA_KEYS.contains(&key.as_str()) {
+                req.metadata.insert(key, value);
+            } else {
+                req.metadata.entry(key).or_insert(value);
+            }
         }
     }
     req.provider_type = thread_provider_type.or_else(|| {
@@ -526,6 +520,21 @@ async fn resolve_chat_target(
                 tracing::warn!(thread_id = trimmed, error = %error, "failed to check archived thread before chat start");
             }
         }
+        match state.threads.thread_store.get(trimmed).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Err(ChatPreparationError::InvalidRequest(
+                    StatusCode::NOT_FOUND,
+                    Json(json!({
+                        "runId": "",
+                        "threadId": trimmed,
+                        "response": Value::Null,
+                        "error": "thread not found",
+                    })),
+                ));
+            }
+            Err(error) => return Err(storage_error(trimmed)(error)),
+        }
         let thread_cache_maybe_stale = persist_explicit_api_thread_binding(
             state,
             trimmed,
@@ -592,15 +601,27 @@ async fn resolve_chat_target(
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            let metadata = endpoint_chat_metadata(&endpoint);
-            return Ok(ResolvedChatTarget {
-                thread_id: thread_id.to_owned(),
-                channel: endpoint.channel,
-                account_id: endpoint.account_id,
-                from_id: endpoint.binding_key,
-                metadata,
-                thread_cache_maybe_stale: false,
-            });
+            match state.threads.thread_store.get(thread_id).await {
+                Ok(Some(_)) => {
+                    let metadata = endpoint_chat_metadata(&endpoint);
+                    return Ok(ResolvedChatTarget {
+                        thread_id: thread_id.to_owned(),
+                        channel: endpoint.channel,
+                        account_id: endpoint.account_id,
+                        from_id: endpoint.binding_key,
+                        metadata,
+                        thread_cache_maybe_stale: false,
+                    });
+                }
+                Ok(None) => {
+                    tracing::debug!(
+                        thread_id,
+                        bot,
+                        "bot endpoint snapshot was stale; resolving as first contact"
+                    );
+                }
+                Err(error) => return Err(storage_error(thread_id)(error)),
+            }
         }
 
         let mut metadata = req.metadata.clone();
@@ -616,6 +637,17 @@ async fn resolve_chat_target(
                     &metadata,
                 )
                 .await
+                .map_err(|error| {
+                    ChatPreparationError::InvalidRequest(
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({
+                            "runId": "",
+                            "threadId": Value::Null,
+                            "response": Value::Null,
+                            "error": error,
+                        })),
+                    )
+                })?
         };
         return Ok(ResolvedChatTarget {
             thread_id,
@@ -632,6 +664,17 @@ async fn resolve_chat_target(
         router
             .resolve_or_create_inbound_thread("api", &req.account_id, &req.from_id, &req.metadata)
             .await
+            .map_err(|error| {
+                ChatPreparationError::InvalidRequest(
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "runId": "",
+                        "threadId": Value::Null,
+                        "response": Value::Null,
+                        "error": error,
+                    })),
+                )
+            })?
     };
     Ok(ResolvedChatTarget {
         thread_id,

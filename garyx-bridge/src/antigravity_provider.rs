@@ -20,11 +20,10 @@ use uuid::Uuid;
 use crate::gary_prompt::{compose_gary_instructions, prepend_initial_context_to_user_message};
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_common::{
-    metadata_bool, normalize_non_empty, resolve_uuid_run_id as resolve_run_id,
-    runtime_env_overlay,
+    metadata_bool, normalize_non_empty, resolve_uuid_run_id as resolve_run_id, runtime_env_overlay,
 };
 use crate::provider_trait::{
-    ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
+    BridgeError, ProviderModelDefaults, ProviderRuntime, ProviderRuntimeSelection, StreamCallback,
 };
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
@@ -118,10 +117,7 @@ fn run_log_path() -> PathBuf {
     dir.join(format!("run-{}.log", Uuid::new_v4()))
 }
 
-fn build_prompt_text(
-    options: &ProviderRunOptions,
-    include_instructions: bool,
-) -> String {
+fn build_prompt_text(options: &ProviderRunOptions, include_instructions: bool) -> String {
     let mut attachments = attachments_from_metadata(&options.metadata);
     if attachments.is_empty() {
         attachments.extend(stage_image_payloads_for_prompt(
@@ -1344,9 +1340,10 @@ mod tests {
         config
             .env
             .insert("TEST_AGENT_ENV_KEY".to_owned(), "test-value".to_owned());
-        config
-            .env
-            .insert("GARYX_THREAD_ID".to_owned(), "agent-should-not-win".to_owned());
+        config.env.insert(
+            "GARYX_THREAD_ID".to_owned(),
+            "agent-should-not-win".to_owned(),
+        );
         let metadata = HashMap::from([
             ("agent_id".to_owned(), serde_json::json!("antigravity")),
             (

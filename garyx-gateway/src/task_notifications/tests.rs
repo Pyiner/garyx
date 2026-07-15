@@ -203,7 +203,7 @@ fn telegram_owner_config() -> GaryxConfig {
                 token: "token".to_owned(),
                 enabled: true,
                 name: Some("Main".to_owned()),
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: Some(OwnerTargetConfig {
                     target_type: "chat_id".to_owned(),
@@ -615,6 +615,78 @@ async fn dispatches_ready_notification_to_bot_target() {
         Some(&json!("msg-task-review"))
     );
     assert_eq!(event.fields.get("thread_id"), Some(&json!(event.thread_id)));
+}
+
+#[tokio::test]
+async fn inherited_bot_config_saves_with_all_agents_disabled_but_first_thread_creation_fails() {
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let provider = Arc::new(RecordingProvider::default());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("recording-provider", provider.clone())
+        .await;
+    bridge
+        .set_route("telegram", "main", "recording-provider")
+        .await;
+    bridge.set_default_provider_key("recording-provider").await;
+    let mut config = telegram_owner_config();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .get_mut("main")
+        .expect("configured bot")
+        .agent_id = None;
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    for agent in custom_agents.list_agents().await {
+        custom_agents
+            .set_enabled(&agent.agent_id, false)
+            .await
+            .expect("disable agent");
+    }
+    let state = crate::app_bootstrap::AppStateBuilder::new(config)
+        .with_custom_agent_store(custom_agents)
+        .with_bridge(bridge.clone())
+        .with_channel_dispatcher(dispatcher.clone())
+        .build();
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::task-no-enabled-agent",
+            json!({
+                "thread_id": "thread::task-no-enabled-agent",
+                "task": task_for_notification(TaskNotificationTarget::Bot {
+                    channel: "telegram".to_owned(),
+                    account_id: "main".to_owned(),
+                }),
+            }),
+        )
+        .await
+        .unwrap();
+
+    let error = deliver_task_review_handoff(
+        &state,
+        TaskReadyForReviewEvent {
+            thread_id: "thread::task-no-enabled-agent".to_owned(),
+            task_id: "#TASK-42".to_owned(),
+            run_id: Some("run-no-enabled-agent".to_owned()),
+            handoff: Some("Ready for review.".to_owned()),
+        },
+    )
+    .await
+    .expect_err("first bot thread binding must fail closed");
+
+    assert!(
+        error
+            .message
+            .contains("no enabled standalone agent is available")
+    );
+    assert!(dispatcher.calls().is_empty());
+    assert!(provider.calls().is_empty());
 }
 
 #[test]

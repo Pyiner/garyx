@@ -1,4 +1,5 @@
 use super::*;
+use garyx_router::{AdmittedRun, AgentDispatcher};
 
 #[derive(Debug, Clone)]
 struct ImageGenerationCliResult {
@@ -70,10 +71,10 @@ async fn run_provider_tool(
         tool_name,
         metadata,
     )
-    .with_workspace_dir(Some(workspace_dir.to_string_lossy().into_owned()))
-    .with_requested_provider(Some(provider_type));
+    .with_workspace_dir(Some(workspace_dir.to_string_lossy().into_owned()));
 
-    if let Err(error) = bridge.start_agent_run(request, Some(callback)).await {
+    let admitted = AdmittedRun::provider_tool(request, provider_type)?;
+    if let Err(error) = bridge.dispatch(admitted, Some(callback)).await {
         bridge.shutdown().await;
         return Err(error.into());
     }

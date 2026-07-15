@@ -16,7 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::agent_identity::{resolve_agent_reference_from_stores, selected_agent_reference_id};
+use crate::agent_identity::resolve_new_agent_binding_from_store;
 use crate::cron::{CronJob, JobRunStatus, RunRecord};
 use crate::garyx_db::AutomationThreadRunRecord;
 use crate::server::AppState;
@@ -102,7 +102,9 @@ pub struct AutomationSummary {
     pub id: String,
     pub label: String,
     pub prompt: String,
-    pub agent_id: String,
+    pub agent_id: Option<String>,
+    pub agent_resolution: AutomationAgentResolution,
+    pub effective_agent_id: Option<String>,
     pub enabled: bool,
     pub workspace_dir: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -117,6 +119,24 @@ pub struct AutomationSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unread_hint_timestamp: Option<String>,
     pub schedule: AutomationScheduleView,
+    pub validation_state: AutomationValidationState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationAgentResolution {
+    Resolved,
+    FollowThread,
+    TargetMissing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationValidationState {
+    Valid,
+    Invalid,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -491,6 +511,7 @@ fn automation_prompt(job: &CronJob) -> String {
         .to_owned()
 }
 
+#[cfg(test)]
 pub(crate) fn automation_agent_id(job: &CronJob) -> String {
     job.agent_id
         .as_deref()
@@ -505,9 +526,13 @@ pub(crate) async fn resolve_automation_agent_id(
     requested: Option<&str>,
     current: Option<&str>,
 ) -> Result<String, String> {
-    let agent_id = selected_agent_reference_id(requested, current);
-    resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), &agent_id).await?;
-    Ok(agent_id)
+    garyx_models::resolve_agent_binding(
+        &state.ops.custom_agents.snapshot().await,
+        requested,
+        current,
+    )
+    .map(|binding| binding.agent_id)
+    .map_err(|error| error.to_string())
 }
 
 fn automation_workspace(job: &CronJob) -> Result<String, String> {
@@ -520,6 +545,9 @@ fn automation_workspace(job: &CronJob) -> Result<String, String> {
         return Ok(workspace_dir.to_owned());
     }
     if automation_target_thread(job).is_some() {
+        return Ok(String::new());
+    }
+    if job.validation_error.is_some() {
         return Ok(String::new());
     }
     Err(format!("automation {} is missing workspace_dir", job.id))
@@ -582,13 +610,58 @@ fn automation_next_run(job: &CronJob) -> String {
     }
 }
 
-fn to_summary(job: &CronJob, latest_run: Option<&RunRecord>) -> Result<AutomationSummary, String> {
+async fn to_summary(
+    state: &Arc<AppState>,
+    job: &CronJob,
+    latest_run: Option<&RunRecord>,
+) -> Result<AutomationSummary, String> {
     let target_thread_id = automation_target_thread(job);
+    let (agent_id, agent_resolution, effective_agent_id) =
+        if let Some(thread_id) = target_thread_id.as_deref() {
+            match state
+                .threads
+                .thread_store
+                .get(thread_id)
+                .await
+                .map_err(|error| error.to_string())?
+            {
+                Some(thread) => (
+                    None,
+                    AutomationAgentResolution::FollowThread,
+                    garyx_router::agent_id_from_value(&thread),
+                ),
+                None => (None, AutomationAgentResolution::TargetMissing, None),
+            }
+        } else {
+            // Valid generated jobs are normalized to an explicit agent. An
+            // invalid legacy thread-less row remains visible and repairable;
+            // do not manufacture a Claude identity into its typed wire state.
+            let agent_id = job
+                .agent_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    job.workspace_dir
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(|_| DEFAULT_AUTOMATION_AGENT_ID.to_owned())
+                });
+            (
+                agent_id.clone(),
+                AutomationAgentResolution::Resolved,
+                agent_id,
+            )
+        };
     Ok(AutomationSummary {
         id: job.id.clone(),
         label: automation_label(job),
         prompt: automation_prompt(job),
-        agent_id: automation_agent_id(job),
+        agent_id,
+        agent_resolution,
+        effective_agent_id,
         enabled: job.enabled,
         workspace_dir: automation_workspace(job)?,
         target_thread_id: target_thread_id.clone(),
@@ -599,6 +672,12 @@ fn to_summary(job: &CronJob, latest_run: Option<&RunRecord>) -> Result<Automatio
         last_status: job.last_status.clone(),
         unread_hint_timestamp: unread_hint_timestamp(job, latest_run),
         schedule: automation_schedule(job)?,
+        validation_state: if job.validation_error.is_some() {
+            AutomationValidationState::Invalid
+        } else {
+            AutomationValidationState::Valid
+        },
+        validation_error: job.validation_error.clone(),
     })
 }
 
@@ -662,17 +741,14 @@ fn is_automation_job(job: &CronJob) -> bool {
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
-        && (job
-            .workspace_dir
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-            || automation_target_thread(job).is_some())
 }
 
+#[derive(Clone)]
 struct AutomationTargetThread {
     thread_id: String,
     workspace_dir: Option<String>,
+    agent_id: Option<String>,
+    exists: bool,
 }
 
 async fn resolve_automation_target_thread(
@@ -685,12 +761,19 @@ async fn resolve_automation_target_thread(
     if !is_thread_key(thread_id) {
         return Err("targetThreadId must be an existing thread id".to_owned());
     }
-    let Some(thread_data) = state.threads.thread_store.get_logged(thread_id).await else {
-        return Err(format!("target thread not found: {thread_id}"));
-    };
+    let thread_data = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(Some(AutomationTargetThread {
         thread_id: thread_id.to_owned(),
-        workspace_dir: workspace_dir_from_value(&thread_data),
+        workspace_dir: thread_data.as_ref().and_then(workspace_dir_from_value),
+        agent_id: thread_data
+            .as_ref()
+            .and_then(garyx_router::agent_id_from_value),
+        exists: thread_data.is_some(),
     }))
 }
 
@@ -764,7 +847,7 @@ pub(crate) fn build_automation_job(
     automation_id: &str,
     label: &str,
     prompt: &str,
-    agent_id: &str,
+    agent_id: Option<&str>,
     workspace_dir: Option<&str>,
     target_thread_id: Option<&str>,
     schedule: AutomationScheduleView,
@@ -788,7 +871,10 @@ pub(crate) fn build_automation_job(
         target: None,
         message: Some(prompt.to_owned()),
         workspace_dir,
-        agent_id: Some(agent_id.to_owned()),
+        agent_id: agent_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
         thread_id: target_thread_id,
         delete_after_run: false,
         enabled,
@@ -807,7 +893,7 @@ pub async fn list_automations(State(state): State<Arc<AppState>>) -> impl IntoRe
     let mut summaries = Vec::new();
     for job in jobs.into_iter().filter(is_automation_job) {
         let latest_run = all_runs.iter().find(|run| run.job_id == job.id);
-        match to_summary(&job, latest_run) {
+        match to_summary(&state, &job, latest_run).await {
             Ok(summary) => summaries.push(summary),
             Err(error) => return internal(error),
         }
@@ -832,7 +918,7 @@ pub async fn get_automation(
         Err(error) => return error,
     };
     let latest_run = service.list_runs_for_job(&job.id, 1, 0).await;
-    match to_summary(&job, latest_run.first()) {
+    match to_summary(&state, &job, latest_run.first()).await {
         Ok(summary) => (StatusCode::OK, Json(json!(summary))),
         Err(error) => internal(error),
     }
@@ -860,15 +946,21 @@ pub async fn create_automation(
             Ok(value) => value,
             Err(error) => return invalid(error),
         };
+    if target_thread.as_ref().is_some_and(|target| !target.exists) {
+        return invalid(format!(
+            "target thread not found: {}",
+            target_thread.as_ref().unwrap().thread_id
+        ));
+    }
     // A thread-bound automation executes under the thread's own agent, so
     // the automation-level agent is not validated (and a stale/deleted one
     // must not block unrelated edits). Generated-thread automations still
     // require a resolvable agent.
     let agent_id = if target_thread.is_some() {
-        selected_agent_reference_id(body.agent_id.as_deref(), None)
+        None
     } else {
         match resolve_automation_agent_id(&state, body.agent_id.as_deref(), None).await {
-            Ok(value) => value,
+            Ok(value) => Some(value),
             Err(error) => return invalid(error),
         }
     };
@@ -896,7 +988,7 @@ pub async fn create_automation(
         &automation_id,
         &label,
         &prompt,
-        &agent_id,
+        agent_id.as_deref(),
         job_workspace_dir,
         target_thread
             .as_ref()
@@ -913,7 +1005,7 @@ pub async fn create_automation(
         Err(error) => return invalid(error.to_string()),
     };
 
-    let summary = match to_summary(&job, None) {
+    let summary = match to_summary(&state, &job, None).await {
         Ok(summary) => summary,
         Err(error) => return internal(error),
     };
@@ -945,6 +1037,12 @@ pub async fn update_automation(
         },
         None => automation_prompt(&current),
     };
+    let current_target_id = automation_target_thread(&current);
+    let current_target =
+        match resolve_automation_target_thread(&state, current_target_id.as_deref()).await {
+            Ok(value) => value,
+            Err(error) => return invalid(error),
+        };
     let target_thread = match &body.target_thread_id {
         Some(Some(thread_id)) => {
             match resolve_automation_target_thread(&state, Some(thread_id.as_str())).await {
@@ -953,16 +1051,56 @@ pub async fn update_automation(
             }
         }
         Some(None) => None,
-        None => automation_target_thread(&current).map(|thread_id| AutomationTargetThread {
-            thread_id,
-            workspace_dir: None,
-        }),
+        None => current_target.clone(),
     };
+    if body.target_thread_id.as_ref().is_some_and(Option::is_some)
+        && target_thread.as_ref().is_some_and(|target| !target.exists)
+    {
+        return invalid(format!(
+            "target thread not found: {}",
+            target_thread.as_ref().unwrap().thread_id
+        ));
+    }
     // A thread-bound automation executes under the thread's own agent: skip
     // job-agent validation so a stale/deleted automation agent cannot 400 an
     // unrelated edit (e.g. renaming the label).
     let agent_id = if target_thread.is_some() {
-        selected_agent_reference_id(body.agent_id.as_deref(), current.agent_id.as_deref())
+        None
+    } else if let Some(requested) = body
+        .agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        match resolve_new_agent_binding_from_store(
+            state.ops.custom_agents.as_ref(),
+            Some(requested),
+        )
+        .await
+        {
+            Ok(binding) => Some(binding.agent_id),
+            Err(error) => return invalid(error.to_string()),
+        }
+    } else if current_target_id.is_some() {
+        let Some(current_agent_id) = current_target
+            .as_ref()
+            .filter(|target| target.exists)
+            .and_then(|target| target.agent_id.as_deref())
+        else {
+            return invalid(
+                "target thread is missing or has no agent binding; select an enabled agent"
+                    .to_owned(),
+            );
+        };
+        match resolve_new_agent_binding_from_store(
+            state.ops.custom_agents.as_ref(),
+            Some(current_agent_id),
+        )
+        .await
+        {
+            Ok(binding) => Some(binding.agent_id),
+            Err(error) => return invalid(error.to_string()),
+        }
     } else {
         match resolve_automation_agent_id(
             &state,
@@ -971,7 +1109,7 @@ pub async fn update_automation(
         )
         .await
         {
-            Ok(value) => value,
+            Ok(value) => Some(value),
             Err(error) => return invalid(error),
         }
     };
@@ -985,6 +1123,11 @@ pub async fn update_automation(
         target_thread
             .as_ref()
             .and_then(|target| target.workspace_dir.as_deref())
+            .or_else(|| {
+                current_target
+                    .as_ref()
+                    .and_then(|target| target.workspace_dir.as_deref())
+            })
             .or(current.workspace_dir.as_deref())
     } else {
         current.workspace_dir.as_deref()
@@ -1015,7 +1158,7 @@ pub async fn update_automation(
         &id,
         &label,
         &prompt,
-        &agent_id,
+        agent_id.as_deref(),
         job_workspace_dir,
         target_thread
             .as_ref()
@@ -1035,7 +1178,7 @@ pub async fn update_automation(
     };
 
     let latest_run = service.list_runs_for_job(&job.id, 1, 0).await;
-    match to_summary(&job, latest_run.first()) {
+    match to_summary(&state, &job, latest_run.first()).await {
         Ok(summary) => (StatusCode::OK, Json(json!(summary))),
         Err(error) => internal(error),
     }

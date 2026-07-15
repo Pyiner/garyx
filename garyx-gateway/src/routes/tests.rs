@@ -20,8 +20,9 @@ use garyx_models::provider::{
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink};
 use garyx_models::{RenderDelta, apply_render_delta, render_rows_digest};
 use garyx_router::{
-    ChannelBinding, InMemoryThreadStore, MessageRouter, RunTranscriptRecordDraft,
-    ThreadHistoryRepository, ThreadStore, ThreadStoreError, ThreadTranscriptStore,
+    AdmittedRun, AgentDispatcher, ChannelBinding, InMemoryThreadStore, MessageRouter,
+    RunAdmissionError, RunTranscriptRecordDraft, ThreadHistoryRepository, ThreadStore,
+    ThreadStoreError, ThreadTranscriptStore,
 };
 use std::path::Path;
 use std::process::Command;
@@ -29,7 +30,7 @@ use tempfile::{TempDir, tempdir};
 use tower::ServiceExt;
 
 use crate::cron::CronService;
-use crate::garyx_db::{RecentThreadDraft, WorkspaceDraft};
+use crate::garyx_db::{RecentThreadDraft, TestDbFaultPoint, TestDbMutationPoint, WorkspaceDraft};
 use crate::route_graph::build_router;
 use crate::server::AppStateBuilder;
 use crate::thread_logs::ThreadFileLogger;
@@ -3093,6 +3094,7 @@ async fn create_thread_seeds_sdk_session_id() {
             origin_from_id: None,
             is_group: None,
         },
+        crate::agent_identity::AgentBindingIntent::RecoverExistingSession,
     )
     .await
     .expect("thread created");
@@ -3134,6 +3136,7 @@ async fn create_thread_forks_provider_session_without_importing_visible_history(
             origin_from_id: None,
             is_group: None,
         },
+        crate::agent_identity::AgentBindingIntent::Fresh,
     )
     .await
     .expect("parent thread created");
@@ -3233,6 +3236,7 @@ async fn create_thread_rejects_fork_source_without_provider_session_id() {
             origin_from_id: None,
             is_group: None,
         },
+        crate::agent_identity::AgentBindingIntent::Fresh,
     )
     .await
     .expect("parent thread created");
@@ -5154,6 +5158,7 @@ async fn thread_history_runtime_prefers_thread_snapshot_over_current_agent_profi
             agent_id: "test-agent".to_owned(),
             display_name: "Test Agent".to_owned(),
             provider_type: ProviderType::ClaudeCode,
+            enabled: None,
             model: Some("agent-model-v2".to_owned()),
             model_reasoning_effort: Some("max".to_owned()),
             model_service_tier: Some("auto".to_owned()),
@@ -5306,6 +5311,7 @@ async fn seed_imported_thread_history_persists_transcript_and_thread_state() {
             origin_from_id: None,
             is_group: None,
         },
+        crate::agent_identity::AgentBindingIntent::RecoverExistingSession,
     )
     .await
     .expect("thread created");
@@ -6059,7 +6065,7 @@ async fn delete_thread_rejects_enabled_channel_binding() {
                 token: "token-main".to_owned(),
                 enabled: true,
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 groups: std::collections::HashMap::new(),
@@ -6140,7 +6146,7 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
                 token: "${TOKEN}".to_owned(),
                 enabled: true,
                 name: Some("Test Telegram".to_owned()),
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: Some("/Users/test/project".to_owned()),
                 owner_target: None,
                 groups: std::collections::HashMap::new(),
@@ -6264,6 +6270,7 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
         router
             .resolve_or_create_inbound_thread("telegram", "main", "1000000001", &HashMap::new())
             .await
+            .expect("reconnect thread")
     };
     assert_ne!(reconnected_thread_id, thread_id);
     assert!(
@@ -6300,12 +6307,35 @@ async fn archive_thread_rejects_active_run_without_deleting() {
                 "label": "Active Archive",
                 "created_at": "2026-06-21T08:00:00.000Z",
                 "updated_at": "2026-06-21T08:01:00.000Z",
-                "messages": []
+                "messages": [],
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "binding_key": "1000000001",
+                    "chat_id": "1000000001",
+                    "delivery_target_type": DELIVERY_TARGET_TYPE_CHAT_ID,
+                    "delivery_target_id": "1000000001",
+                    "display_label": "Test User"
+                }]
             }),
         )
         .await
         .unwrap();
-    append_dangling_run_start(&state, thread_id, "run::archive-active").await;
+    let admitted = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        garyx_models::provider::AgentRunRequest::new(
+            thread_id,
+            "hold archive lease",
+            "run::archive-active",
+            "api",
+            "main",
+            HashMap::new(),
+        ),
+    )
+    .await
+    .unwrap();
+    let (_request, mut lease) = admitted.into_dispatch_parts();
+    lease.as_mut().unwrap().promote_to_active().unwrap();
 
     let router = build_router(state.clone());
     let request = authed_request()
@@ -6326,12 +6356,128 @@ async fn archive_thread_rejects_active_run_without_deleting() {
             .unwrap()
             .is_some()
     );
+    let preserved = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        bindings_from_value(&preserved).len(),
+        1,
+        "lease conflict must happen before any endpoint detach side effect"
+    );
     assert!(
         !state
             .ops
             .garyx_db
             .is_thread_archived(thread_id)
             .expect("archive tombstone check")
+    );
+}
+
+#[tokio::test]
+async fn archive_http_cancellation_does_not_release_started_db_mutation() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::archive-cancelled-handler";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Archive Cancellation",
+                "created_at": "2026-07-16T00:00:00.000Z",
+                "updated_at": "2026-07-16T00:00:00.000Z"
+            }),
+        )
+        .await
+        .unwrap();
+    let barrier = state
+        .ops
+        .garyx_db
+        .block_test_db_mutation(TestDbMutationPoint::ArchiveThreadRecord);
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("POST")
+        .uri(format!("/api/threads/{thread_id}/archive"))
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let handler = tokio::spawn(async move { router.oneshot(request).await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        barrier.wait_until_started(),
+    )
+    .await
+    .expect("archive blocking closure must start");
+
+    handler.abort();
+    assert!(
+        handler
+            .await
+            .expect_err("handler must be cancelled")
+            .is_cancelled()
+    );
+    assert!(
+        state
+            .threads
+            .thread_store
+            .run_coordinator()
+            .mutation_in_progress(thread_id),
+        "dropping the HTTP future must not release archiving"
+    );
+    let rejected = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        garyx_models::provider::AgentRunRequest::new(
+            thread_id,
+            "must remain blocked",
+            "run::archive-cancelled-handler",
+            "api",
+            "main",
+            HashMap::new(),
+        ),
+    )
+    .await;
+    assert!(matches!(rejected, Err(RunAdmissionError::Stale(id)) if id == thread_id));
+
+    barrier.release();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state
+            .threads
+            .thread_store
+            .run_coordinator()
+            .mutation_in_progress(thread_id)
+            || state
+                .integration
+                .bridge
+                .thread_affinity_for(thread_id)
+                .await
+                .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("coordinator-owned archive must reach a terminal state");
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .is_thread_archived(thread_id)
+            .expect("archive tombstone check")
+    );
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 
@@ -6569,7 +6715,7 @@ async fn delete_thread_allows_disabled_channel_binding() {
                 token: "token-main".to_owned(),
                 enabled: false,
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 groups: std::collections::HashMap::new(),
@@ -6665,6 +6811,86 @@ async fn delete_thread_allows_orphan_channel_binding() {
 }
 
 #[tokio::test]
+async fn delete_storage_failure_restores_live_admission_and_allows_retry() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delete-storage-failure";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Delete Failure Recovery"
+            }),
+        )
+        .await
+        .unwrap();
+    state
+        .ops
+        .garyx_db
+        .fail_test_db_call(TestDbFaultPoint::DeleteThreadRecord, 1);
+
+    let request = || {
+        authed_request()
+            .method("DELETE")
+            .uri(format!("/api/threads/{thread_id}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = build_router(state.clone())
+        .oneshot(request())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        !state
+            .threads
+            .thread_store
+            .run_coordinator()
+            .mutation_in_progress(thread_id)
+    );
+    let admitted = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        garyx_models::provider::AgentRunRequest::new(
+            thread_id,
+            "retry remains possible",
+            "run::delete-storage-failure",
+            "api",
+            "main",
+            HashMap::new(),
+        ),
+    )
+    .await
+    .expect("failed delete must restore live admission");
+    drop(admitted);
+
+    let response = build_router(state.clone())
+        .oneshot(request())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn delete_thread_aborts_active_run_and_prevents_recreation() {
     let mut config = test_config();
     config.channels.api.accounts.insert(
@@ -6672,13 +6898,16 @@ async fn delete_thread_aborts_active_run_and_prevents_recreation() {
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
     );
 
-    let provider = Arc::new(SlowDeleteProvider::new(250));
+    // The provider will not finish naturally within the test. DELETE must
+    // reach the coordinator-owned bridge aborter, await the JoinHandle, and
+    // only then remove the record.
+    let provider = Arc::new(SlowDeleteProvider::new(30_000));
     let bridge = Arc::new(MultiProviderBridge::new());
     bridge
         .register_provider("api-test-provider", provider.clone())
@@ -6715,20 +6944,20 @@ async fn delete_thread_aborts_active_run_and_prevents_recreation() {
     .await
     .unwrap();
 
-    bridge
-        .start_agent_run(
-            garyx_models::provider::AgentRunRequest::new(
-                &thread_id,
-                "delete me",
-                "run-delete-session",
-                "api",
-                "main",
-                HashMap::new(),
-            ),
-            None,
-        )
-        .await
-        .unwrap();
+    let admitted = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        garyx_models::provider::AgentRunRequest::new(
+            &thread_id,
+            "delete me",
+            "run-delete-session",
+            "api",
+            "main",
+            HashMap::new(),
+        ),
+    )
+    .await
+    .unwrap();
+    bridge.dispatch(admitted, None).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(bridge.is_run_active("run-delete-session").await);
 
@@ -6738,10 +6967,12 @@ async fn delete_thread_aborts_active_run_and_prevents_recreation() {
         .uri(format!("/api/threads/{thread_id}"))
         .body(Body::empty())
         .unwrap();
-    let response = router.oneshot(request).await.unwrap();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(2), router.oneshot(request))
+        .await
+        .expect("DELETE must abort and drain instead of waiting for provider completion")
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
     assert!(!bridge.is_run_active("run-delete-session").await);
     assert!(
         state
@@ -6756,6 +6987,116 @@ async fn delete_thread_aborts_active_run_and_prevents_recreation() {
 }
 
 #[tokio::test]
+async fn delete_http_cancellation_does_not_release_started_db_mutation() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delete-cancelled-handler";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Delete Cancellation",
+                "created_at": "2026-07-16T00:00:00.000Z",
+                "updated_at": "2026-07-16T00:00:00.000Z"
+            }),
+        )
+        .await
+        .unwrap();
+    let barrier = state
+        .ops
+        .garyx_db
+        .block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
+    state
+        .integration
+        .bridge
+        .set_thread_affinity(thread_id, "stale-provider")
+        .await;
+
+    let router = build_router(state.clone());
+    let request = authed_request()
+        .method("DELETE")
+        .uri(format!("/api/threads/{thread_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let handler = tokio::spawn(async move { router.oneshot(request).await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        barrier.wait_until_started(),
+    )
+    .await
+    .expect("delete blocking closure must start");
+
+    handler.abort();
+    assert!(
+        handler
+            .await
+            .expect_err("handler must be cancelled")
+            .is_cancelled()
+    );
+    assert!(
+        state
+            .threads
+            .thread_store
+            .run_coordinator()
+            .mutation_in_progress(thread_id),
+        "dropping the HTTP future must not release deleting"
+    );
+    let rejected = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        garyx_models::provider::AgentRunRequest::new(
+            thread_id,
+            "must remain blocked",
+            "run::delete-cancelled-handler",
+            "api",
+            "main",
+            HashMap::new(),
+        ),
+    )
+    .await;
+    assert!(matches!(rejected, Err(RunAdmissionError::Stale(id)) if id == thread_id));
+
+    barrier.release();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state
+            .threads
+            .thread_store
+            .run_coordinator()
+            .mutation_in_progress(thread_id)
+            || state
+                .integration
+                .bridge
+                .thread_affinity_for(thread_id)
+                .await
+                .is_some()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("coordinator-owned delete must reach a terminal state");
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        state
+            .integration
+            .bridge
+            .thread_affinity_for(thread_id)
+            .await
+            .is_none(),
+        "runtime cleanup must also outlive the cancelled HTTP handler"
+    );
+}
+
+#[tokio::test]
 async fn delete_thread_drops_local_state_even_when_provider_clear_fails() {
     let mut config = test_config();
     config.channels.api.accounts.insert(
@@ -6763,7 +7104,7 @@ async fn delete_thread_drops_local_state_even_when_provider_clear_fails() {
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -7026,7 +7367,7 @@ async fn configured_bots_route_returns_only_account_workspace_bindings() {
                     token: "token-a".to_owned(),
                     enabled: true,
                     name: None,
-                    agent_id: "claude".to_owned(),
+                    agent_id: Some("claude".to_owned()),
                     workspace_dir: Some("/tmp/bound-workspace".to_owned()),
                     owner_target: None,
                     groups: std::collections::HashMap::new(),
@@ -7044,7 +7385,7 @@ async fn configured_bots_route_returns_only_account_workspace_bindings() {
                     token: "token-b".to_owned(),
                     enabled: true,
                     name: None,
-                    agent_id: "claude".to_owned(),
+                    agent_id: None,
                     workspace_dir: None,
                     owner_target: None,
                     groups: std::collections::HashMap::new(),
@@ -7075,8 +7416,14 @@ async fn configured_bots_route_returns_only_account_workspace_bindings() {
 
     let log_dir = tempdir().unwrap();
     let logger = Arc::new(ThreadFileLogger::new(log_dir.path()));
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .set_default_agent("codex")
+        .await
+        .expect("set global default");
     let state = AppStateBuilder::new(config)
         .with_thread_log_sink(logger)
+        .with_custom_agent_store(custom_agents)
         .build();
     let router = build_router(state);
 
@@ -7106,7 +7453,11 @@ async fn configured_bots_route_returns_only_account_workspace_bindings() {
         .unwrap();
 
     assert_eq!(bound["workspace_dir"], "/tmp/bound-workspace");
+    assert_eq!(bound["agent_id"], "claude");
+    assert_eq!(bound["effective_agent_id"], "claude");
     assert!(unbound["workspace_dir"].is_null());
+    assert!(unbound["agent_id"].is_null());
+    assert_eq!(unbound["effective_agent_id"], "codex");
     assert_eq!(plugin_bot["workspace_dir"], "/tmp/plugin-workspace");
     assert_eq!(bound["main_endpoint_status"], "unresolved");
     assert_eq!(unbound["main_endpoint_status"], "unresolved");
@@ -7193,7 +7544,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
                     token: "token-telegram".to_owned(),
                     enabled: true,
                     name: Some("Telegram Owner".to_owned()),
-                    agent_id: "claude".to_owned(),
+                    agent_id: Some("claude".to_owned()),
                     workspace_dir: Some("/tmp/telegram-owner".to_owned()),
                     owner_target: Some(garyx_models::config::OwnerTargetConfig {
                         target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
@@ -7216,7 +7567,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
                     enabled: true,
                     domain: garyx_models::config::FeishuDomain::Feishu,
                     name: Some("Feishu Owner".to_owned()),
-                    agent_id: "claude".to_owned(),
+                    agent_id: Some("claude".to_owned()),
                     workspace_dir: Some("/tmp/feishu-owner".to_owned()),
                     owner_target: Some(garyx_models::config::OwnerTargetConfig {
                         target_type: DELIVERY_TARGET_TYPE_OPEN_ID.to_owned(),
@@ -7240,7 +7591,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
                     enabled: true,
                     base_url: "https://ilinkai.weixin.qq.com".to_owned(),
                     name: Some("Wechat".to_owned()),
-                    agent_id: "claude".to_owned(),
+                    agent_id: Some("claude".to_owned()),
                     workspace_dir: Some("/tmp/wechat-owner".to_owned()),
                     streaming_update: true,
                 },
@@ -7389,7 +7740,7 @@ async fn configured_bots_route_resolves_legacy_telegram_private_endpoint_without
                     token: "token-telegram-legacy".to_owned(),
                     enabled: true,
                     name: Some("Legacy Telegram".to_owned()),
-                    agent_id: "missing-agent".to_owned(),
+                    agent_id: Some("missing-agent".to_owned()),
                     workspace_dir: Some("/tmp/telegram-legacy".to_owned()),
                     owner_target: None,
                     groups: std::collections::HashMap::new(),
@@ -7467,7 +7818,7 @@ async fn bot_consoles_route_aggregates_configured_bots_and_endpoints() {
                     token: "token-main".to_owned(),
                     enabled: true,
                     name: Some("Main Bot".to_owned()),
-                    agent_id: "claude".to_owned(),
+                    agent_id: None,
                     workspace_dir: Some("/tmp/main-workspace".to_owned()),
                     owner_target: None,
                     groups: std::collections::HashMap::new(),
@@ -7522,6 +7873,8 @@ async fn bot_consoles_route_aggregates_configured_bots_and_endpoints() {
         .unwrap();
 
     assert_eq!(main["display_name"], "Main Bot");
+    assert!(main["agent_id"].is_null());
+    assert_eq!(main["effective_agent_id"], "claude");
     assert_eq!(main["workspace_dir"], "/tmp/main-workspace");
     assert_eq!(main["status"], "connected");
     assert_eq!(main["main_endpoint_status"], "resolved");
@@ -7553,7 +7906,7 @@ async fn bot_consoles_route_preserves_plugin_main_endpoint_resolution() {
                     token: "${TOKEN}".to_owned(),
                     enabled: true,
                     name: Some("Owner Bot".to_owned()),
-                    agent_id: "claude".to_owned(),
+                    agent_id: Some("claude".to_owned()),
                     workspace_dir: Some("/tmp/owner-workspace".to_owned()),
                     owner_target: Some(garyx_models::config::OwnerTargetConfig {
                         target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
@@ -7642,7 +7995,7 @@ async fn bot_consoles_route_uses_configured_bot_order_not_activity_order() {
                         token: format!("token-{account_id}"),
                         enabled: true,
                         name: Some(name.to_owned()),
-                        agent_id: "claude".to_owned(),
+                        agent_id: Some("claude".to_owned()),
                         workspace_dir: None,
                         owner_target: None,
                         groups: std::collections::HashMap::new(),
@@ -8169,6 +8522,7 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
             agent_id: "workspace-reviewer".to_owned(),
             display_name: "Workspace Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
+            enabled: None,
             model: Some("gpt-5".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
@@ -8200,7 +8554,7 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
         .with_bridge(bridge.clone())
         .build();
     bridge
-        .replace_agent_profiles(custom_agents.list_agents().await)
+        .replace_agent_profiles(custom_agents.snapshot().await)
         .await;
     bridge.set_event_tx(state.ops.events.sender()).await;
     bridge
@@ -8263,7 +8617,7 @@ async fn task_stop_aborts_active_backing_thread_run_and_releases_task() {
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -8309,20 +8663,20 @@ async fn task_stop_aborts_active_backing_thread_run_and_releases_task() {
     let thread_id = payload["thread_id"].as_str().unwrap().to_owned();
     assert_eq!(payload["status"], "in_progress");
 
-    bridge
-        .start_agent_run(
-            garyx_models::provider::AgentRunRequest::new(
-                &thread_id,
-                "run until stopped",
-                "run-task-stop",
-                "api",
-                "main",
-                HashMap::new(),
-            ),
-            None,
-        )
-        .await
-        .unwrap();
+    let admitted = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        garyx_models::provider::AgentRunRequest::new(
+            &thread_id,
+            "run until stopped",
+            "run-task-stop",
+            "api",
+            "main",
+            HashMap::new(),
+        ),
+    )
+    .await
+    .unwrap();
+    bridge.dispatch(admitted, None).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(bridge.is_run_active("run-task-stop").await);
 
@@ -8354,7 +8708,7 @@ async fn task_delete_aborts_run_and_removes_task_overlay_but_retains_thread() {
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -8404,20 +8758,20 @@ async fn task_delete_aborts_run_and_removes_task_overlay_but_retains_thread() {
     let task_id = payload["task_id"].as_str().unwrap().to_owned();
     let thread_id = payload["thread_id"].as_str().unwrap().to_owned();
 
-    bridge
-        .start_agent_run(
-            garyx_models::provider::AgentRunRequest::new(
-                &thread_id,
-                "delete while running",
-                "run-task-delete",
-                "api",
-                "main",
-                HashMap::new(),
-            ),
-            None,
-        )
-        .await
-        .unwrap();
+    let admitted = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        garyx_models::provider::AgentRunRequest::new(
+            &thread_id,
+            "delete while running",
+            "run-task-delete",
+            "api",
+            "main",
+            HashMap::new(),
+        ),
+    )
+    .await
+    .unwrap();
+    bridge.dispatch(admitted, None).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(bridge.is_run_active("run-task-delete").await);
 
@@ -8502,6 +8856,7 @@ async fn task_assign_queues_dispatch_with_original_body() {
             agent_id: "workspace-reviewer".to_owned(),
             display_name: "Workspace Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
+            enabled: None,
             model: Some("gpt-5".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
@@ -8533,7 +8888,7 @@ async fn task_assign_queues_dispatch_with_original_body() {
         .with_bridge(bridge.clone())
         .build();
     bridge
-        .replace_agent_profiles(custom_agents.list_agents().await)
+        .replace_agent_profiles(custom_agents.snapshot().await)
         .await;
     bridge.set_event_tx(state.ops.events.sender()).await;
     bridge
@@ -8640,7 +8995,7 @@ async fn task_assign_rejects_assignee_that_differs_from_bound_thread_agent() {
         .with_bridge(bridge.clone())
         .build();
     bridge
-        .replace_agent_profiles(custom_agents.list_agents().await)
+        .replace_agent_profiles(custom_agents.snapshot().await)
         .await;
     bridge.set_event_tx(state.ops.events.sender()).await;
     bridge
@@ -8736,6 +9091,7 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
             agent_id: "late-antigravity".to_owned(),
             display_name: "Late Antigravity".to_owned(),
             provider_type: ProviderType::AntigravityCli,
+            enabled: None,
             model: Some("antigravity-test".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
@@ -8763,7 +9119,7 @@ async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
         .with_bridge(bridge.clone())
         .build();
     bridge
-        .replace_agent_profiles(custom_agents.list_agents().await)
+        .replace_agent_profiles(custom_agents.snapshot().await)
         .await;
     bridge.set_event_tx(state.ops.events.sender()).await;
     bridge

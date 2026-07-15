@@ -96,7 +96,7 @@ async fn initialize_bridge_runtime(
     config: &GaryxConfig,
 ) -> Result<(), String> {
     bridge
-        .replace_agent_profiles(state.ops.custom_agents.list_agents().await)
+        .replace_agent_profiles(state.ops.custom_agents.snapshot().await)
         .await;
     bridge
         .reload_from_config(config)

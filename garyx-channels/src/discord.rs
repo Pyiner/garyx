@@ -1770,7 +1770,7 @@ mod tests {
             token: "discord-token".to_owned(),
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             owner_target: None,
             require_mention,

@@ -261,10 +261,6 @@ impl Default for AgentProviderConfig {
     }
 }
 
-fn default_channel_agent_id() -> String {
-    "claude".to_owned()
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct OwnerTargetConfig {
     #[serde(default)]
@@ -329,8 +325,8 @@ pub struct TelegramAccount {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default = "default_channel_agent_id")]
-    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -360,8 +356,8 @@ pub struct DiscordAccount {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default = "default_channel_agent_id")]
-    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -390,8 +386,8 @@ pub struct FeishuAccount {
     pub domain: FeishuDomain,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default = "default_channel_agent_id")]
-    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -423,8 +419,8 @@ pub struct WeixinAccount {
     pub base_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default = "default_channel_agent_id")]
-    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
     /// Enable in-place message updates for streamed assistant text.
@@ -445,8 +441,8 @@ pub struct ApiAccount {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default = "default_channel_agent_id")]
-    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -458,7 +454,7 @@ impl Default for ApiAccount {
         Self {
             enabled: true,
             name: None,
-            agent_id: default_channel_agent_id(),
+            agent_id: None,
             workspace_dir: None,
             workspace_mode: None,
         }
@@ -690,7 +686,7 @@ pub fn telegram_account_to_plugin_entry(account: &TelegramAccount) -> PluginAcco
     PluginAccountEntry {
         enabled: account.enabled,
         name: account.name.clone(),
-        agent_id: Some(account.agent_id.clone()),
+        agent_id: account.agent_id.clone(),
         workspace_dir: account.workspace_dir.clone(),
         workspace_mode: None,
         config,
@@ -710,7 +706,7 @@ pub fn discord_account_to_plugin_entry(account: &DiscordAccount) -> PluginAccoun
     PluginAccountEntry {
         enabled: account.enabled,
         name: account.name.clone(),
-        agent_id: Some(account.agent_id.clone()),
+        agent_id: account.agent_id.clone(),
         workspace_dir: account.workspace_dir.clone(),
         workspace_mode: None,
         config,
@@ -730,7 +726,7 @@ pub fn feishu_account_to_plugin_entry(account: &FeishuAccount) -> PluginAccountE
     PluginAccountEntry {
         enabled: account.enabled,
         name: account.name.clone(),
-        agent_id: Some(account.agent_id.clone()),
+        agent_id: account.agent_id.clone(),
         workspace_dir: account.workspace_dir.clone(),
         workspace_mode: None,
         config,
@@ -750,7 +746,7 @@ pub fn weixin_account_to_plugin_entry(account: &WeixinAccount) -> PluginAccountE
     PluginAccountEntry {
         enabled: account.enabled,
         name: account.name.clone(),
-        agent_id: Some(account.agent_id.clone()),
+        agent_id: account.agent_id.clone(),
         workspace_dir: account.workspace_dir.clone(),
         workspace_mode: None,
         config,

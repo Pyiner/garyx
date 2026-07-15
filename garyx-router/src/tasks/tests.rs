@@ -1,5 +1,195 @@
 use super::*;
-use crate::{InMemoryTaskCounterStore, InMemoryThreadStore, update_thread_record};
+use crate::{
+    InMemoryTaskCounterStore, InMemoryThreadStore, update_thread_record, workspace_dir_from_value,
+};
+
+struct AllowTestAgents;
+
+#[async_trait]
+impl NewTaskAgentGate for AllowTestAgents {
+    async fn resolve_new_task_agent(
+        &self,
+        requested_agent_id: Option<&str>,
+    ) -> Result<garyx_models::ResolvedAgentBinding, garyx_models::AgentBindingError> {
+        let agent_id = requested_agent_id.unwrap_or("claude").to_owned();
+        Ok(garyx_models::ResolvedAgentBinding {
+            agent_id: agent_id.clone(),
+            provider_type: garyx_models::ProviderType::ClaudeCode,
+            runtime_metadata: HashMap::from([
+                ("agent_id".to_owned(), Value::String(agent_id)),
+                (
+                    "requested_provider_type".to_owned(),
+                    Value::String("claude_code".to_owned()),
+                ),
+            ]),
+            default_workspace_dir: None,
+        })
+    }
+}
+
+struct RecordingTaskAgentGate {
+    requested: std::sync::Mutex<Vec<Option<String>>>,
+    reject: Option<garyx_models::AgentBindingError>,
+}
+
+impl RecordingTaskAgentGate {
+    fn allowing() -> Self {
+        Self {
+            requested: std::sync::Mutex::new(Vec::new()),
+            reject: None,
+        }
+    }
+}
+
+#[async_trait]
+impl NewTaskAgentGate for RecordingTaskAgentGate {
+    async fn resolve_new_task_agent(
+        &self,
+        requested_agent_id: Option<&str>,
+    ) -> Result<garyx_models::ResolvedAgentBinding, garyx_models::AgentBindingError> {
+        self.requested
+            .lock()
+            .unwrap()
+            .push(requested_agent_id.map(ToOwned::to_owned));
+        if let Some(error) = self.reject.clone() {
+            return Err(error);
+        }
+        let agent_id = requested_agent_id.unwrap_or("effective-default").to_owned();
+        Ok(garyx_models::ResolvedAgentBinding {
+            agent_id: agent_id.clone(),
+            provider_type: garyx_models::ProviderType::CodexAppServer,
+            runtime_metadata: HashMap::from([("agent_id".to_owned(), Value::String(agent_id))]),
+            default_workspace_dir: Some("/tmp/task-agent-default".to_owned()),
+        })
+    }
+}
+
+async fn create_with_recording_gate(
+    input: CreateTaskInput,
+) -> (Option<String>, Value, Vec<Option<String>>) {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let gate = Arc::new(RecordingTaskAgentGate::allowing());
+    let service = TaskService::new(
+        store.clone(),
+        Arc::new(InMemoryTaskCounterStore::new()),
+        gate.clone(),
+    );
+    let (thread_id, _) = service.create_task(input).await.expect("create task");
+    let record = store.get(&thread_id).await.unwrap().unwrap();
+    let requested = gate.requested.lock().unwrap().clone();
+    (garyx_router_agent_id(&record), record, requested)
+}
+
+fn garyx_router_agent_id(record: &Value) -> Option<String> {
+    crate::agent_id_from_value(record)
+}
+
+#[tokio::test]
+async fn new_task_gate_covers_all_five_agent_sources_and_applies_workspace_default() {
+    let base = || CreateTaskInput {
+        title: Some("Gate coverage".to_owned()),
+        body: None,
+        assignee: None,
+        notification_target: None,
+        source: None,
+        executor: None,
+        start: false,
+        actor: Some(Principal::Human {
+            user_id: "test-user".to_owned(),
+        }),
+        workspace_dir: None,
+        runtime: None,
+    };
+
+    let mut runtime = base();
+    runtime.runtime = Some(TaskRuntimeInput {
+        agent_id: Some("runtime-agent".to_owned()),
+        workspace_dir: None,
+        workspace_mode: WorkspaceMode::Local,
+        worktree_base_dir: None,
+    });
+    let (agent, record, requested) = create_with_recording_gate(runtime).await;
+    assert_eq!(agent.as_deref(), Some("runtime-agent"));
+    assert_eq!(requested, vec![Some("runtime-agent".to_owned())]);
+    assert_eq!(
+        workspace_dir_from_value(&record).as_deref(),
+        Some("/tmp/task-agent-default")
+    );
+
+    let mut executor = base();
+    executor.executor = Some(TaskExecutor::Agent {
+        agent_id: "executor-agent".to_owned(),
+    });
+    let (agent, _, requested) = create_with_recording_gate(executor).await;
+    assert_eq!(agent.as_deref(), Some("executor-agent"));
+    assert_eq!(requested, vec![Some("executor-agent".to_owned())]);
+
+    let mut assignee = base();
+    assignee.assignee = Some(Principal::Agent {
+        agent_id: "assignee-agent".to_owned(),
+    });
+    let (agent, _, requested) = create_with_recording_gate(assignee).await;
+    assert_eq!(agent.as_deref(), Some("assignee-agent"));
+    assert_eq!(requested, vec![Some("assignee-agent".to_owned())]);
+
+    let mut actor = base();
+    actor.actor = Some(Principal::Agent {
+        agent_id: "actor-agent".to_owned(),
+    });
+    actor.start = true;
+    let (agent, _, requested) = create_with_recording_gate(actor).await;
+    assert_eq!(agent.as_deref(), Some("actor-agent"));
+    assert_eq!(requested, vec![Some("actor-agent".to_owned())]);
+
+    let mut implicit = base();
+    implicit.start = true;
+    let (agent, _, requested) = create_with_recording_gate(implicit).await;
+    assert_eq!(agent.as_deref(), Some("effective-default"));
+    assert_eq!(requested, vec![None]);
+}
+
+#[tokio::test]
+async fn disabled_task_binding_is_rejected_before_a_thread_is_created() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    let gate = Arc::new(RecordingTaskAgentGate {
+        requested: std::sync::Mutex::new(Vec::new()),
+        reject: Some(garyx_models::AgentBindingError::AgentDisabled(
+            "disabled-agent".to_owned(),
+        )),
+    });
+    let service = TaskService::new(
+        store.clone(),
+        Arc::new(InMemoryTaskCounterStore::new()),
+        gate,
+    );
+    let error = service
+        .create_task(CreateTaskInput {
+            title: Some("Rejected".to_owned()),
+            body: None,
+            assignee: None,
+            notification_target: None,
+            source: None,
+            executor: None,
+            start: false,
+            actor: Some(Principal::Human {
+                user_id: "test-user".to_owned(),
+            }),
+            workspace_dir: None,
+            runtime: Some(TaskRuntimeInput {
+                agent_id: Some("disabled-agent".to_owned()),
+                workspace_dir: None,
+                workspace_mode: WorkspaceMode::Local,
+                worktree_base_dir: None,
+            }),
+        })
+        .await
+        .expect_err("disabled agent must fail closed");
+    assert!(matches!(
+        error,
+        TaskServiceError::AgentBinding(garyx_models::AgentBindingError::AgentDisabled(_))
+    ));
+    assert_eq!(store.size().await, 0);
+}
 
 struct StaticProjectionReader {
     running_subtask: bool,
@@ -51,6 +241,7 @@ fn service() -> TaskService {
     TaskService::new(
         Arc::new(InMemoryThreadStore::new()),
         Arc::new(InMemoryTaskCounterStore::new()),
+        Arc::new(AllowTestAgents),
     )
 }
 
@@ -132,6 +323,7 @@ async fn list_tasks_uses_current_projection_reader_without_file_scan() {
     let service = TaskService::new(
         Arc::new(InMemoryThreadStore::new()),
         Arc::new(InMemoryTaskCounterStore::new()),
+        Arc::new(AllowTestAgents),
     )
     .with_projection_reader(Arc::new(ListProjectionReader {
         summary: summary.clone(),

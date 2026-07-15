@@ -5,7 +5,7 @@ use garyx_models::agent::RunState;
 use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, StreamEvent};
 
 use crate::graph_engine::{Graph, GraphBuildError, GraphError, GraphTransition, NodeFuture};
-use crate::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
+use crate::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
 
 // ---------------------------------------------------------------------------
 // RunPhase — state machine phases
@@ -65,6 +65,7 @@ impl RunMetrics {
     }
 
     /// Time from start to first token.
+    #[cfg(test)]
     pub fn time_to_first_token_ms(&self) -> i64 {
         match (self.start_time, self.first_token_time) {
             (Some(start), Some(ftt)) => ftt.duration_since(start).as_millis() as i64,
@@ -78,7 +79,7 @@ impl RunMetrics {
 // ---------------------------------------------------------------------------
 
 /// Mutable state container for a single agent run execution.
-pub struct RunGraphState {
+pub(crate) struct RunGraphState {
     pub run_id: String,
     pub thread_id: String,
     pub provider_key: String,
@@ -92,7 +93,7 @@ pub struct RunGraphState {
 
 impl RunGraphState {
     /// Create a new state for an agent run.
-    pub fn new(
+    pub(crate) fn new(
         run_id: String,
         thread_id: String,
         provider_key: String,
@@ -368,7 +369,7 @@ fn map_graph_runtime_error(err: GraphError<RunGraphNode, BridgeError>) -> Bridge
 // ---------------------------------------------------------------------------
 
 /// Execute an agent run through the run graph.
-pub async fn execute_agent_run(
+pub(crate) async fn execute_agent_run(
     provider: &dyn ProviderRuntime,
     state: &mut RunGraphState,
     response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,

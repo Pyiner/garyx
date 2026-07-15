@@ -58,10 +58,18 @@ fn test_build_command_overlays_configured_env() {
         key == std::ffi::OsStr::new("TEST_AGENT_ENV_KEY")
             && value == Some(std::ffi::OsStr::new("test-value"))
     });
-    assert!(has_env, "configured agent env var must reach the spawn Command");
+    assert!(
+        has_env,
+        "configured agent env var must reach the spawn Command"
+    );
 
     // The env value must not leak into program/args (no-proactive-leak).
-    assert!(!std_cmd.get_program().to_string_lossy().contains("test-value"));
+    assert!(
+        !std_cmd
+            .get_program()
+            .to_string_lossy()
+            .contains("test-value")
+    );
     assert!(
         std_cmd
             .get_args()

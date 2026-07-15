@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use async_trait::async_trait;
 use chrono::Utc;
 use garyx_models::{
-    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskExecutor,
-    TaskNotificationTarget, TaskSource, TaskStatus, ThreadTask,
+    AgentBindingError, Principal, ResolvedAgentBinding, TASK_SCHEMA_VERSION_V1, TaskEvent,
+    TaskEventKind, TaskExecutor, TaskNotificationTarget, TaskSource, TaskStatus, ThreadTask,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,7 +16,6 @@ use crate::{ThreadEnsureOptions, ThreadStore, WorkspaceMode, create_thread_recor
 
 const DEFAULT_TASK_LIST_LIMIT: usize = 50;
 const MAX_TASK_LIST_LIMIT: usize = 200;
-const DEFAULT_TASK_AGENT_ID: &str = "claude";
 const TASK_THREAD_TITLE_SOURCE: &str = "task";
 type TaskThreadLock = Arc<tokio::sync::Mutex<()>>;
 
@@ -36,6 +35,8 @@ pub enum TaskServiceError {
     UnknownPrincipal(String),
     #[error("UnknownAgent: {0}")]
     UnknownAgent(String),
+    #[error(transparent)]
+    AgentBinding(#[from] AgentBindingError),
     #[error("store error: {0}")]
     Store(String),
     #[error(transparent)]
@@ -155,6 +156,17 @@ pub trait TaskProjectionReader: Send + Sync {
         &self,
         filter: &TaskListFilter,
     ) -> Result<(Vec<TaskSummary>, usize, bool), String>;
+}
+
+/// Mandatory fail-closed gate for every task thread that acquires a new agent
+/// binding. Gateway supplies the store-backed implementation; TaskService
+/// never resolves or defaults an agent on its own.
+#[async_trait]
+pub trait NewTaskAgentGate: Send + Sync {
+    async fn resolve_new_task_agent(
+        &self,
+        requested_agent_id: Option<&str>,
+    ) -> Result<ResolvedAgentBinding, AgentBindingError>;
 }
 
 /// Scan-backed task projection for stores without SQL projections.
@@ -371,17 +383,20 @@ pub struct TaskService {
     thread_store: Arc<dyn ThreadStore>,
     counter_store: Arc<dyn TaskCounterStore>,
     projection_reader: Option<Arc<dyn TaskProjectionReader>>,
+    new_task_agent_gate: Arc<dyn NewTaskAgentGate>,
 }
 
 impl TaskService {
     pub fn new(
         thread_store: Arc<dyn ThreadStore>,
         counter_store: Arc<dyn TaskCounterStore>,
+        new_task_agent_gate: Arc<dyn NewTaskAgentGate>,
     ) -> Self {
         Self {
             thread_store,
             counter_store,
             projection_reader: None,
+            new_task_agent_gate,
         }
     }
 
@@ -409,7 +424,7 @@ impl TaskService {
         let source = normalize_task_source(input.source);
         let runtime = input.runtime.clone();
         let auto_start = input.start || input.assignee.is_some() || input.executor.is_some();
-        let thread_agent_id = runtime
+        let requested_agent_id = runtime
             .as_ref()
             .and_then(|runtime| normalized_nonempty_string(runtime.agent_id.as_deref()))
             .or_else(|| match &input.executor {
@@ -422,13 +437,28 @@ impl TaskService {
             })
             .or_else(|| match (&actor, auto_start) {
                 (Principal::Agent { agent_id }, true) => Some(agent_id.clone()),
-                (Principal::Human { .. }, true) => Some(DEFAULT_TASK_AGENT_ID.to_owned()),
+                (Principal::Human { .. }, true) => None,
                 (_, false) => None,
             });
+        let should_bind_agent = auto_start || requested_agent_id.is_some();
+        let resolved_binding = if should_bind_agent {
+            Some(
+                self.new_task_agent_gate
+                    .resolve_new_task_agent(requested_agent_id.as_deref())
+                    .await?,
+            )
+        } else {
+            None
+        };
         let workspace_dir = runtime
             .as_ref()
             .and_then(|runtime| normalized_nonempty_string(runtime.workspace_dir.as_deref()))
-            .or_else(|| normalized_nonempty_string(input.workspace_dir.as_deref()));
+            .or_else(|| normalized_nonempty_string(input.workspace_dir.as_deref()))
+            .or_else(|| {
+                resolved_binding
+                    .as_ref()
+                    .and_then(|binding| binding.default_workspace_dir.clone())
+            });
         let workspace_mode = runtime
             .as_ref()
             .map(|runtime| runtime.workspace_mode)
@@ -444,7 +474,16 @@ impl TaskService {
                 workspace_dir,
                 workspace_mode,
                 worktree_base_dir,
-                agent_id: thread_agent_id,
+                agent_id: resolved_binding
+                    .as_ref()
+                    .map(|binding| binding.agent_id.clone()),
+                provider_type: resolved_binding
+                    .as_ref()
+                    .map(|binding| binding.provider_type.clone()),
+                metadata: resolved_binding
+                    .as_ref()
+                    .map(|binding| binding.runtime_metadata.clone())
+                    .unwrap_or_default(),
                 thread_kind: Some("task".to_owned()),
                 ..Default::default()
             },
