@@ -1,10 +1,19 @@
 # Pinned Thread Drag Reorder (Mobile-First)
 
-Status: v6 draft for design review (revised after review rounds 1-5, #TASK-2287)
+Status: v7 draft for design review (revised after review rounds 1-6, #TASK-2287)
 Scope: gateway + iOS (phase 1), Mac desktop (phase 2)
 
 Revision notes:
 
+- v6 → v7 (review round 6): the empty-`desiredOrder` shortcut is conditioned
+  (clears the outbox only when no membership intent is live, or the accepted
+  raw order is itself empty; projected-empty with live intents stays
+  `waitingForMembership` so failure rollbacks cannot lose the pending
+  reorder); wake/drain sequencing fixed (transport completion only sets
+  `wakeRequested`; the dispatch scheduler drains exactly once after that
+  response's revision acceptance, re-checking gate/settle/floor); the two
+  leftover unconditional immediate-resend passages removed; combo regression
+  (409 + full optimistic unpin + rollback) added at all three test layers.
 - v5 → v6 (review round 5): membership-gated reorder dispatch
   (`waitingForMembership`) so a reorder never spins against live optimistic
   pin/unpin intents; all settle comparisons use the server page's raw
@@ -370,15 +379,25 @@ Core concepts:
   values; if membership intents are live, the outbox instead enters an
   explicit **`waitingForMembership`** state — flight slot freed, no resend.
   Wake triggers: the last live membership intent resolves (success *or*
-  failure rollback), or any accepted page lands. On wake: re-reduce
-  `desiredOrder` over the merged membership; if it is **empty**, clear the
-  outbox (nothing left to order — the client never sends an empty
-  `thread_ids`); if the last accepted page's **raw canonical order** already
-  equals `desiredOrder`, settle without a write; otherwise dispatch with the
-  floor token. This bounds writes to at most one PUT per
-  membership-quiescent window: a reorder can no longer spin re-appending an
-  id whose unpin is still in flight, nor 400 itself into a permanently
-  paused outbox after a full unpin.
+  failure rollback), or any accepted page lands — in both cases the trigger
+  only sets `wakeRequested`; the actual **drain runs exactly once, after that
+  response has completed revision acceptance** (pipeline step 3), so a
+  drained PUT always carries the freshest floor and cannot be trivially
+  409'd by the very page that woke it (round-6 F2). The drain re-checks, in
+  order: live membership intents (any live ⇒ stay `waitingForMembership`);
+  the empty rule; settle-by-equality; then dispatches at most one PUT with
+  the floor token. The **empty rule** (round-6 F1): an empty re-reduced
+  `desiredOrder` clears the outbox **only if** no membership intent is live,
+  **or** the accepted page's raw canonical order is itself empty. A
+  projected-empty order while intents are still live and the raw membership
+  is non-empty keeps the outbox in `waitingForMembership` — the pending
+  intents may yet fail and roll back, restoring ids whose order the outbox
+  still owes; clearing early would let a later authoritative poll flip the
+  restored rows. The client never sends an empty `thread_ids`. This bounds
+  writes to at most one PUT per membership-quiescent window: a reorder can
+  no longer spin re-appending an id whose unpin is still in flight, nor 400
+  itself into a permanently paused outbox after a full unpin, nor drop a
+  reorder that a rollback later revives.
 
 **Page acceptance vs. flight completion (review round-3 F1).** Every response
 does two independent things: it always **completes its transport flight**
@@ -413,11 +432,14 @@ Completion semantics on a `discardedBelowFloor` page, per request kind:
 
 - **Reorder PUT (200 or 409) below floor** (a remote write raised the floor
   while our request was in flight): the flight ends, the intent does **not**
-  settle, and — because the outbox is still unsettled with an unchanged
-  `desiredOrder` — the single-flight **immediately resends** the current full
-  `desiredOrder` with `expected_revision = highestObservedRevision`. No
-  waiting for a further local mutation; the outbox can never hang settled-less
-  with no flight in progress. Convergence is last-writer-wins by design.
+  settle, and the completion sets `wakeRequested` — the resend is issued by
+  the post-acceptance drain (with the freshest floor as
+  `expected_revision`), subject to the membership gate; it is never
+  dispatched inline at transport completion (round-6 F2). The outbox can
+  still never hang settled-less with no flight *and no wake* in progress:
+  every unsettled completion requests a wake, and every wake either
+  dispatches, settles, clears, or parks in `waitingForMembership` with
+  defined wake triggers. Convergence is last-writer-wins by design.
 - **Pin/unpin write-back below floor**: the per-id intent retires at
   completion regardless of page acceptance, recording its completion
   revision. Overlays apply only while the intent is live or until an accepted
@@ -443,6 +465,13 @@ highest-revision accepted state — never raw pages latest-wins by arrival
 time. A delayed rev-11 page arriving after a rev-12 page during a drag is
 discarded at step 3 and can never overwrite the buffered rev-12 projection,
 so neither drop nor cancel replays it.
+
+Step 2 never dispatches work: intent resolution and unsettled completions
+only set `wakeRequested`. The dispatch scheduler drains **once, after steps
+3-4 for that response complete**, re-checking live intents, the empty rule,
+settle-by-equality, and the latest floor before issuing at most one PUT
+(round-6 F2 — a drain at step 2 would carry a stale floor and be 409'd by
+the very page accepted at step 3, producing a second PUT).
 
 **Gateway-scoped state domain (review round-3 F4).** The entire pinned-order
 state — revision floor, `desiredOrder`/baseline, drag preview and freeze
@@ -557,11 +586,21 @@ response write-back captures epoch/revision like any other response.
     unsettled while unpin in flight ⇒ `waitingForMembership`, no resend, no
     re-append spin; unpin resolves ⇒ single PUT with reduced order ⇒ settle);
     delayed pin (unknown-id PUT never dispatched while pin intent live);
-    membership-intent failure rollback wakes the gate; full unpin ⇒
-    `desiredOrder` empties ⇒ outbox cleared, no `[]` PUT, no 400; restart
-    with outbox while server already equals desired (or is empty) ⇒ settled
-    by accepted-page-equals-desired, no write. Each asserts **bounded PUT
-    count, zero 400s, no revision storm, outbox eventually empty**;
+    membership-intent failure rollback wakes the gate; full unpin with no
+    live intents ⇒ `desiredOrder` empties ⇒ outbox cleared, no `[]` PUT, no
+    400; restart with outbox while server already equals desired (or is
+    empty) ⇒ settled by accepted-page-equals-desired, no write. Each asserts
+    **bounded PUT count, zero 400s, no revision storm, outbox eventually
+    empty**;
+  - **round-6 exact regressions**: the combo — reorder PUT 409s with raw
+    `[A,B]@rev11` while a full optimistic unpin (all ids, intents live)
+    projects `desiredOrder=[]` ⇒ outbox **not** cleared
+    (`waitingForMembership`); both unpins fail and roll back ⇒ local order
+    restored, exactly one PUT dispatched, settles; a subsequent
+    authoritative GET does not flip the order (round-6 F1). Wake/drain
+    sequencing: an intent completion whose own response raises the floor ⇒
+    the drained PUT carries the *new* floor and succeeds — exactly one PUT,
+    no 409 second round (round-6 F2);
   - R5: durable outbox restart recovery; supersede-by-newer-drop; retry
     classification (429/5xx backoff vs 405 pause + pending-sync state);
     gateway-switch clear;
@@ -585,7 +624,10 @@ response write-back captures epoch/revision like any other response.
     real unpin request is still in flight ⇒ no second PUT until the unpin
     resolves, then exactly one PUT with the reduced order; full unpin ⇒ no
     `[]` PUT ever issued; assert total PUT count bounded and no 400
-    responses.
+    responses;
+  - **round-6 combo at real transport**: 409 + full optimistic unpin +
+    unpin failure rollback ⇒ outbox survives, exactly one post-rollback PUT,
+    subsequent GET does not flip the restored order.
 - Spike carries the quantified hitch gate (§5.1 point 7). Manual simulator
   pass only for gesture *feel*, never as ordering-logic acceptance.
 
@@ -640,7 +682,9 @@ response write-back captures epoch/revision like any other response.
 - Tests (`npm run test:unit`): main-store guard at the real overwrite site;
   the round-5 F1 set (delayed pin/unpin, failure rollback, full unpin,
   restart + server-already-equal/empty; bounded PUT count, no 400, no
-  revision storm, outbox drains);
+  revision storm, outbox drains); the round-6 combo (409 + full optimistic
+  unpin + rollback ⇒ outbox survives, one post-rollback PUT, no flip) and
+  wake-after-acceptance drain sequencing;
   the V2-3 race — refresh resolved and `nextState` captured, drop happens,
   deferred transition commits ⇒ committed state carries the local order;
   the round-3 F2 race — stale transition queued → drop → ack settle clears
@@ -667,7 +711,9 @@ response write-back captures epoch/revision like any other response.
 | Concurrent unpin on another device | Unknown id ignored server-side; drops out locally on membership merge |
 | Two devices reorder | CAS: stale writer 409s and resends; deterministic last-writer-wins |
 | Reorder completes unsettled while local pin/unpin still in flight | `waitingForMembership`: no resend until intents resolve; then ≤1 PUT with reduced order; no re-append spin (round-5 F1) |
-| All pinned threads unpinned while reorder outbox live | `desiredOrder` empties ⇒ outbox cleared; `[]` is never sent; no 400 (round-5 F1) |
+| All pinned threads unpinned, no live intents | `desiredOrder` empties ⇒ outbox cleared; `[]` is never sent; no 400 (round-5 F1) |
+| Projected-empty order while unpin intents live and raw membership non-empty | Outbox kept in `waitingForMembership`; rollback restores order and drains exactly one PUT; later poll cannot flip (round-6 F1) |
+| Wake triggered by a response that itself raises the floor | Drain runs after that response's acceptance ⇒ single PUT with fresh floor, no self-inflicted 409 (round-6 F2) |
 | Restart with outbox; server already equals desired (or empty) | Accepted-page-equals-desired settles without a write (round-5 F1) |
 | Remote write raises floor; our 200/409 completes below floor | Flight ends, page discarded, no settle; floor-token resend once membership-quiescent (round-3 F1, round-5 F1) |
 | Remote opposite pin/unpin at higher revision, local low-revision ack later | Per-id intent retires at completion; higher-revision page wins (LWW); nothing permanently hidden (round-3 F1) |
@@ -712,13 +758,16 @@ response write-back captures epoch/revision like any other response.
    settles, and triggers an immediate floor-token resend of the unsettled
    outbox; per-id intents retire at completion with revision-bounded
    overlays (LWW). Responses run a fixed pipeline — identity → transport
-   completion → revision acceptance → publication — and drag-freeze buffers
-   hold accepted projections only, never raw arrivals. Reorder dispatch is
-   **membership-gated** (`waitingForMembership` while per-id intents are
-   live), settle comparisons use raw canonical order, any accepted
-   page equal to `desiredOrder` settles the outbox, and an emptied
-   `desiredOrder` clears it (no `[]` writes). This is the corrected form of
-   the in-repo `GaryxCapsuleFavorites` pattern.
+   completion → revision acceptance → publication — where completions only
+   set `wakeRequested` and the dispatch scheduler **drains once after
+   acceptance** (fresh floor, gate re-checked; no inline resends at
+   completion time). Reorder dispatch is **membership-gated**
+   (`waitingForMembership` while per-id intents are live), settle comparisons
+   use raw canonical order, any accepted page equal to `desiredOrder` settles
+   the outbox, and an emptied `desiredOrder` clears it only when no intent is
+   live or the raw order is itself empty (projected-empty under live intents
+   parks, so rollbacks cannot lose the reorder; no `[]` writes ever). This is
+   the corrected form of the in-repo `GaryxCapsuleFavorites` pattern.
 4. Reorder failure does **not** roll back the UI; the unsettled order is a
    durable, gateway-scoped outbox. Retries are **classified**: CAS loop for
    409, capped jittered backoff for transient errors, and a paused,
