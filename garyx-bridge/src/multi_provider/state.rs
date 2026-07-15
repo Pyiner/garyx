@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, RwLock, Semaphore, broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 use super::persistence::ThreadPersistenceCommand;
-use crate::provider_trait::{ProviderRuntime, ProviderHealth};
+use crate::provider_trait::ProviderRuntime;
 
 #[derive(Clone)]
 pub(super) struct ActiveThreadPersistence {
@@ -82,8 +82,6 @@ pub(super) struct BridgeTopologyState {
     pub(super) route_cache: HashMap<(String, String), String>,
     /// Default provider key (set during initialize).
     pub(super) default_provider_key: Option<String>,
-    /// Per-provider health tracking.
-    pub(super) provider_health: HashMap<String, ProviderHealth>,
 }
 
 #[derive(Default)]

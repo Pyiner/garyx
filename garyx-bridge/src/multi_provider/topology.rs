@@ -1,13 +1,11 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use garyx_models::provider::ProviderType;
 
-use crate::provider_trait::{ProviderRuntime, ProviderHealth};
+use crate::provider_trait::ProviderRuntime;
 
 use super::MultiProviderBridge;
 use super::resolver::resolve_provider_impl;
-use super::state::Inner;
 
 impl MultiProviderBridge {
     /// Register a provider under the given key.
@@ -80,42 +78,6 @@ impl MultiProviderBridge {
             .keys()
             .cloned()
             .collect()
-    }
-
-    /// Get health status for a specific provider.
-    pub async fn get_provider_health(&self, provider_key: &str) -> Option<ProviderHealth> {
-        self.inner
-            .topology
-            .read()
-            .await
-            .provider_health
-            .get(provider_key)
-            .cloned()
-    }
-
-    /// Get health status for all providers.
-    pub async fn get_all_provider_health(&self) -> HashMap<String, ProviderHealth> {
-        self.inner.topology.read().await.provider_health.clone()
-    }
-
-    /// Record a successful run for health tracking.
-    pub(super) async fn record_health_success(inner: &Inner, provider_key: &str, latency_ms: f64) {
-        let mut topology = inner.topology.write().await;
-        let health = topology
-            .provider_health
-            .entry(provider_key.to_owned())
-            .or_insert_with(|| ProviderHealth::new(provider_key));
-        health.record_success(latency_ms);
-    }
-
-    /// Record a failed run for health tracking.
-    pub(super) async fn record_health_failure(inner: &Inner, provider_key: &str, error: &str) {
-        let mut topology = inner.topology.write().await;
-        let health = topology
-            .provider_health
-            .entry(provider_key.to_owned())
-            .or_insert_with(|| ProviderHealth::new(provider_key));
-        health.record_failure(error);
     }
 
     /// Bind a (channel, account_id) pair to a provider key.

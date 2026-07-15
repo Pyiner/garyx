@@ -11,4 +11,4 @@ pub mod provider_trait;
 pub mod run_graph;
 
 pub use multi_provider::MultiProviderBridge;
-pub use provider_trait::{BridgeError, HealthStatus, ProviderHealth, ProviderRuntime};
+pub use provider_trait::{BridgeError, ProviderRuntime};

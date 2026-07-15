@@ -901,23 +901,6 @@ impl MultiProviderBridge {
                         );
                     }
 
-                    // Record health metrics.
-                    if res.success {
-                        MultiProviderBridge::record_health_success(
-                            &inner,
-                            &provider_key_owned,
-                            graph_state.metrics.duration_ms() as f64,
-                        )
-                        .await;
-                    } else {
-                        MultiProviderBridge::record_health_failure(
-                            &inner,
-                            &provider_key_owned,
-                            res.error.as_deref().unwrap_or("unknown error"),
-                        )
-                        .await;
-                    }
-
                     // Persist user + assistant + tool messages to thread store.
                     let mut applied_thread_title: Option<String> = None;
                     if let (Some(store), Some(history)) = (
@@ -1077,14 +1060,6 @@ impl MultiProviderBridge {
                         phase = ?graph_state.phase,
                         "agent run failed via run graph",
                     );
-
-                    // Record health failure.
-                    MultiProviderBridge::record_health_failure(
-                        &inner,
-                        &provider_key_owned,
-                        &e.to_string(),
-                    )
-                    .await;
 
                     let failed_assistant_response = persistence_result
                         .as_ref()
@@ -1535,22 +1510,6 @@ impl MultiProviderBridge {
 
         let outcome = match &result {
             Ok(res) => {
-                if res.success {
-                    MultiProviderBridge::record_health_success(
-                        &self.inner,
-                        &provider_key,
-                        graph_state.metrics.duration_ms() as f64,
-                    )
-                    .await;
-                } else {
-                    MultiProviderBridge::record_health_failure(
-                        &self.inner,
-                        &provider_key,
-                        res.error.as_deref().unwrap_or("unknown error"),
-                    )
-                    .await;
-                }
-
                 let mut applied_thread_title: Option<String> = None;
                 if let (Some(store), Some(history)) = (
                     &*self.inner.thread_store.read().await,
@@ -1626,13 +1585,6 @@ impl MultiProviderBridge {
                 Ok(res.clone())
             }
             Err(error) => {
-                MultiProviderBridge::record_health_failure(
-                    &self.inner,
-                    &provider_key,
-                    &error.to_string(),
-                )
-                .await;
-
                 if let (Some(store), Some(history)) = (
                     &*self.inner.thread_store.read().await,
                     &*self.inner.thread_history.read().await,
