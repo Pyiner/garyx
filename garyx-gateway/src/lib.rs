@@ -21,6 +21,10 @@ pub mod gateway_auth;
 pub mod health;
 mod internal_inbound;
 mod legacy_boot_import;
+pub use legacy_boot_import::{
+    LegacyBootImportError, LegacyBootImportOutcome, ThreadRecordImportSummary,
+    run_legacy_boot_import,
+};
 mod managed_mcp_metadata;
 pub mod mcp;
 pub mod mcp_config;
