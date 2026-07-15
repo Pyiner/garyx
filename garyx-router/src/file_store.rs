@@ -81,6 +81,7 @@ impl FileThreadStore {
     }
 
     /// Create a new store with custom parameters.
+    #[cfg(test)]
     pub async fn with_options(
         data_dir: impl AsRef<Path>,
         cache_ttl: Duration,
@@ -291,41 +292,6 @@ impl FileThreadStore {
 
     fn storage_roots(&self) -> [&PathBuf; 2] {
         [&self.canonical_data_dir, &self.legacy_data_dir]
-    }
-
-    /// Remove all thread records and lock files.
-    pub async fn clear(&self) -> std::io::Result<usize> {
-        let mut count = 0usize;
-        for root in self.storage_roots() {
-            let mut entries = tokio::fs::read_dir(root).await?;
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-                if let Some(ext) = path.extension()
-                    && (ext == "json" || ext == "lock")
-                {
-                    if ext == "json" {
-                        count += 1;
-                    }
-                    let _ = tokio::fs::remove_file(&path).await;
-                }
-            }
-        }
-        self.cache.lock().await.clear();
-        Ok(count)
-    }
-
-    /// Return the number of thread files on disk.
-    pub async fn size(&self) -> std::io::Result<usize> {
-        let mut count = 0usize;
-        for root in self.storage_roots() {
-            let mut entries = tokio::fs::read_dir(root).await?;
-            while let Some(entry) = entries.next_entry().await? {
-                if entry.path().extension().is_some_and(|ext| ext == "json") {
-                    count += 1;
-                }
-            }
-        }
-        Ok(count)
     }
 }
 

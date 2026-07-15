@@ -16,15 +16,12 @@ async fn make_store() -> (FileThreadStore, TempDir) {
 async fn test_basic_crud() {
     let (store, _tmp) = make_store().await;
 
-    // Initially empty.
-    assert_eq!(store.size().await.unwrap(), 0);
     assert!(!store.exists("k1").await.unwrap());
     assert_eq!(store.get("k1").await.unwrap(), None);
 
     // Set and get.
     store.set("k1", json!({"hello": "world"})).await.unwrap();
     assert!(store.exists("k1").await.unwrap());
-    assert_eq!(store.size().await.unwrap(), 1);
     let v = store.get("k1").await.unwrap().unwrap();
     assert_eq!(v["hello"], "world");
 
@@ -37,7 +34,6 @@ async fn test_basic_crud() {
     // Delete.
     assert!(store.delete("k1").await.unwrap());
     assert!(!store.delete("k1").await.unwrap());
-    assert_eq!(store.size().await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -60,17 +56,6 @@ async fn test_update_missing_key() {
     let (store, _tmp) = make_store().await;
     let result = store.update("missing", json!({})).await;
     assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn test_clear() {
-    let (store, _tmp) = make_store().await;
-    store.set("a", json!(1)).await.unwrap();
-    store.set("b", json!(2)).await.unwrap();
-    assert_eq!(store.size().await.unwrap(), 2);
-    let cleared = store.clear().await.unwrap();
-    assert_eq!(cleared, 2);
-    assert_eq!(store.size().await.unwrap(), 0);
 }
 
 // ---------------------------------------------------------------
