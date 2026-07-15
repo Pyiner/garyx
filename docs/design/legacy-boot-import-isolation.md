@@ -423,11 +423,13 @@ let `E` = identities of parsed existing records, `L` = identities of
 | `E` strict prefix of `L` (incl. header-only `E = []` with non-empty `L`, and the recoverable torn-tail case) | complete: keep existing records verbatim (their `seq`/`run_id`/`timestamp` untouched), convert and append only the missing tail, atomic replace |
 | `E` diverged from `L` (neither equal nor prefix) | existing transcript wins — it can only have evolved at runtime, and transcripts are the content truth source; skip backfill, done |
 
-A crash mid-backfill leaves only a temp file — never a truncated target —
-and validation runs on every pass, so torn artifacts from pre-fix binaries
-are repaired, prefixes are completed idempotently across passes regardless
-of generated timestamps, and structural corruption fails loudly instead of
-being silently overwritten or misread as divergence. `exists()` keeps its
+A crash mid-backfill leaves the old target, a complete new target, or a
+stray temp file — never a partial target (per the stage postconditions
+above) — and validation runs on every pass, so torn artifacts from
+pre-fix binaries are repaired, prefixes are completed idempotently across
+passes regardless of generated timestamps, and structural corruption
+fails loudly instead of being silently overwritten or misread as
+divergence. `exists()` keeps its
 current semantics for other callers; the import never calls it.
 
 ### Concurrency
@@ -556,7 +558,8 @@ timestamps, all idempotency assertions across two passes):
 18. Absent / empty file → written atomically; second pass → no-op.
 19. Header-only + non-empty legacy → completed; second pass → no-op.
 20. Torn tail over an identity-prefix → repaired; crash mid-backfill
-    leaves only a temp file → retried cleanly.
+    leaves old target, complete new target, or a stray temp file (never a
+    partial target) → retried cleanly.
 21. Valid header + garbage middle line, wrong-thread_id record line,
     non-monotonic seq, duplicate header → each fails the key; nothing
     overwritten.
