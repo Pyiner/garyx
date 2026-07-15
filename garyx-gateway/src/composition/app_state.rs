@@ -19,7 +19,6 @@ use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
 use crate::api::RestartTracker;
-use crate::app_db::AppDbService;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::event_stream_hub::EventStreamHub;
@@ -56,7 +55,6 @@ pub struct OpsState {
     pub thread_logs: Arc<dyn ThreadLogSink>,
     pub skills: Arc<SkillsService>,
     pub custom_agents: Arc<CustomAgentStore>,
-    pub app_db: Arc<AppDbService>,
     pub garyx_db: Arc<GaryxDbService>,
     pub provider_auth_sessions: Arc<ClaudeAuthSessionStore>,
     pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
@@ -402,7 +400,6 @@ impl AppState {
                 thread_logs: self.ops.thread_logs.clone(),
                 skills: self.ops.skills.clone(),
                 custom_agents: self.ops.custom_agents.clone(),
-                app_db: self.ops.app_db.clone(),
                 garyx_db: self.ops.garyx_db.clone(),
                 provider_auth_sessions: self.ops.provider_auth_sessions.clone(),
                 channel_endpoint_snapshot: Mutex::new(None),

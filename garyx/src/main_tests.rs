@@ -5,9 +5,8 @@ use crate::{ThreadSendTarget, resolve_thread_send_destination};
 use clap::{CommandFactory, Parser};
 
 use crate::cli::{
-    AgentAction, AutomationAction, AutomationDataTriggerAction, AutomationTriggerAction, BotAction,
-    BotEndpointAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction, DbAction,
-    DbRecordAction, DbTableAction, GatewayAction, LogsAction, ProviderAction, TaskAction,
+    AgentAction, AutomationAction, BotAction, BotEndpointAction, ChannelsAction, Cli,
+    CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, ProviderAction, TaskAction,
     ThreadAction, ToolAction,
 };
 use crate::commands::{
@@ -931,128 +930,6 @@ fn parse_automation_has_no_legacy_aliases() {
         };
         assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
-}
-
-#[test]
-fn parse_db_table_create() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "db",
-        "table",
-        "create",
-        "contacts",
-        "--display-name",
-        "Contacts",
-        "--field",
-        "name:TEXT",
-        "--field",
-        "score:REAL",
-        "--json",
-    ]);
-    match cli.command {
-        Some(Commands::Db {
-            action:
-                DbAction::Table {
-                    action:
-                        DbTableAction::Create {
-                            table,
-                            display_name,
-                            fields,
-                            json,
-                        },
-                },
-        }) => {
-            assert_eq!(table, "contacts");
-            assert_eq!(display_name.as_deref(), Some("Contacts"));
-            assert_eq!(fields, vec!["name:TEXT", "score:REAL"]);
-            assert!(json);
-        }
-        _ => panic!("expected Db table create"),
-    }
-}
-
-#[test]
-fn parse_db_record_insert() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "db",
-        "record",
-        "insert",
-        "contacts",
-        "--data",
-        r#"{"name":"Test User"}"#,
-    ]);
-    match cli.command {
-        Some(Commands::Db {
-            action:
-                DbAction::Record {
-                    action: DbRecordAction::Insert { table, data, json },
-                },
-        }) => {
-            assert_eq!(table, "contacts");
-            assert_eq!(data, r#"{"name":"Test User"}"#);
-            assert!(!json);
-        }
-        _ => panic!("expected Db record insert"),
-    }
-}
-
-#[test]
-fn parse_automation_data_trigger_create() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "automation",
-        "trigger",
-        "data",
-        "create",
-        "contacts",
-        "record.created",
-        "--label",
-        "Contact review",
-        "--title",
-        "New record {record_id}",
-        "--body",
-        "Review {table_name}",
-        "--agent-id",
-        "codex",
-    ]);
-    match cli.command {
-        Some(Commands::Automation {
-            action:
-                AutomationAction::Trigger {
-                    action:
-                        AutomationTriggerAction::Data {
-                            action:
-                                AutomationDataTriggerAction::Create {
-                                    table,
-                                    event_type,
-                                    label,
-                                    title,
-                                    body,
-                                    agent_id,
-                                    ..
-                                },
-                        },
-                },
-        }) => {
-            assert_eq!(table, "contacts");
-            assert_eq!(event_type, "record.created");
-            assert_eq!(label, "Contact review");
-            assert_eq!(title, "New record {record_id}");
-            assert_eq!(body, "Review {table_name}");
-            assert_eq!(agent_id.as_deref(), Some("codex"));
-        }
-        _ => panic!("expected Automation data trigger create"),
-    }
-}
-
-#[test]
-fn parse_db_trigger_is_not_a_cli_domain() {
-    let error = match Cli::try_parse_from(["garyx", "db", "trigger", "list"]) {
-        Ok(_) => panic!("db trigger should not parse"),
-        Err(error) => error,
-    };
-    assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
 }
 
 #[test]

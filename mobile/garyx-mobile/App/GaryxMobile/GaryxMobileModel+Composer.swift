@@ -135,6 +135,7 @@ extension GaryxMobileModel {
     }
 
     func send(_ text: String, attachments: [GaryxMobileComposerAttachment] = []) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
         let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
         let clientIntentId = "mobile-\(UUID().uuidString)"
         let userMessage = GaryxMobileMessage(
@@ -185,6 +186,8 @@ extension GaryxMobileModel {
 
         do {
             let ensuredThread = try await ensureSelectedThreadForDraftCreation()
+            try Task.checkCancellation()
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             let thread = ensuredThread.thread
             if optimisticThreadId == nil {
                 optimisticThreadId = thread.id
@@ -229,6 +232,7 @@ extension GaryxMobileModel {
                 assistantMessageId: assistantId
             )
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             if let optimisticThreadId {
                 markLatestLocalUserFailed(for: optimisticThreadId, message: displayMessage(for: error))
                 forgetPendingDirectFollowUp(
@@ -292,6 +296,7 @@ extension GaryxMobileModel {
     }
 
     func submitQueuedInputViaGateway(_ queued: GaryxPendingQueuedInput) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
         pendingQueuedInputsByIntentId[queued.clientIntentId] = queued
         do {
             let result = try await client().streamInput(
@@ -302,6 +307,8 @@ extension GaryxMobileModel {
                     attachments: queued.attachments.map(\.promptAttachment)
                 )
             )
+            try Task.checkCancellation()
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             if Self.isSuccessfulStreamInputStatus(result.status) {
                 bindLocalPendingInput(
                     threadId: queued.threadId,
@@ -315,7 +322,7 @@ extension GaryxMobileModel {
                 )
             } else if Self.shouldFallbackStreamInputStatus(result.status) {
                 if let claimed = pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId) {
-                    await dispatchQueuedInputFallback(claimed)
+                    await dispatchQueuedInputFallback(claimed, runtimeGeneration: runtimeGeneration)
                 }
             } else {
                 pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId)
@@ -336,6 +343,7 @@ extension GaryxMobileModel {
                 }
             }
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             if pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId) != nil {
                 let message = displayMessage(for: error)
                 runTracker.failQueuedSteer(
@@ -354,7 +362,11 @@ extension GaryxMobileModel {
         }
     }
 
-    func dispatchQueuedInputFallback(_ queued: GaryxPendingQueuedInput) async {
+    func dispatchQueuedInputFallback(
+        _ queued: GaryxPendingQueuedInput,
+        runtimeGeneration: UUID
+    ) async {
+        guard runtimeGeneration == gatewayRuntimeGeneration else { return }
         let fallbackSelectedThread = selectedThread?.id == queued.threadId ? selectedThread : nil
         guard let thread = threads.first(where: { $0.id == queued.threadId }) ?? fallbackSelectedThread else {
             markLocalInputFailed(
@@ -412,6 +424,7 @@ extension GaryxMobileModel {
                 assistantMessageId: assistantId
             )
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             markLocalInputFailed(
                 threadId: queued.threadId,
                 clientIntentId: queued.clientIntentId,
@@ -438,6 +451,7 @@ extension GaryxMobileModel {
         workspacePath: String?,
         assistantMessageId: String
     ) async throws {
+        let runtimeGeneration = gatewayRuntimeGeneration
         let result = try await client().startChat(
             GaryxStartChatRequest(
                 threadId: threadId,
@@ -451,6 +465,10 @@ extension GaryxMobileModel {
                 ]
             )
         )
+        try Task.checkCancellation()
+        guard runtimeGeneration == gatewayRuntimeGeneration else {
+            throw CancellationError()
+        }
         guard Self.isSuccessfulStreamInputStatus(result.status) else {
             throw GaryxGatewayError.encodingFailed(
                 result.status.isEmpty ? "Chat start was not accepted." : result.status
@@ -554,6 +572,7 @@ extension GaryxMobileModel {
         if let selectedThread {
             return GaryxEnsuredThread(thread: selectedThread, adoptedSelection: true)
         }
+        let runtimeGeneration = gatewayRuntimeGeneration
         let draftGeneration = selectedThreadDraftGeneration
         let pendingBotDraft = currentPendingBotDraft()
         let pendingWorkspace = pendingBotDraft?.workspace ?? ""
@@ -582,6 +601,10 @@ extension GaryxMobileModel {
                 metadata: ["client": "garyx-mobile"]
             )
         )
+        try Task.checkCancellation()
+        guard runtimeGeneration == gatewayRuntimeGeneration else {
+            throw CancellationError()
+        }
         threads.insert(thread, at: 0)
         recentThreadFeeds.upsertChat(threadId: thread.id)
         threadHistoryLoadedIds.insert(thread.id)
@@ -596,6 +619,10 @@ extension GaryxMobileModel {
         }
         if !pendingBotIdForThread.isEmpty {
             _ = try await client().bindBot(botId: pendingBotIdForThread, threadId: thread.id)
+            try Task.checkCancellation()
+            guard runtimeGeneration == gatewayRuntimeGeneration else {
+                throw CancellationError()
+            }
             clearPendingBotDraftIfCurrent(
                 botId: pendingBotIdForThread,
                 workspace: pendingWorkspace,
@@ -603,6 +630,10 @@ extension GaryxMobileModel {
                 draftGeneration: draftGeneration
             )
             await refreshRemoteState()
+            try Task.checkCancellation()
+            guard runtimeGeneration == gatewayRuntimeGeneration else {
+                throw CancellationError()
+            }
         }
         return GaryxEnsuredThread(thread: thread, adoptedSelection: canAdoptSelection)
     }

@@ -13,7 +13,6 @@ import {
   transcriptWithResolvedActiveRun,
 } from "../../../shared/transcript-sync.ts";
 import { extractImageGenerationImageContent } from "../app-shell/image-generation-content.ts";
-import { isRunLoadingPlaceholderMessage } from "../app-shell/loading-labels.ts";
 import { ThreadTranscriptCache } from "./transcript-cache.ts";
 import {
   jsonValuesEqual,
@@ -177,10 +176,7 @@ function legacyMaterializeRemoteTranscript(transcript, existing, options = {}) {
 
   const materialized = [];
   for (const message of transcript) {
-    if (
-      isControlTranscriptMessage(message) ||
-      isRunLoadingPlaceholderMessage(message)
-    ) {
+    if (isControlTranscriptMessage(message)) {
       continue;
     }
     materialized.push(
@@ -757,7 +753,39 @@ test("all captured streams and render-state fixture sources match the frozen fol
   }
 });
 
-test("duplicate origin, optimistic echo, loading, generated image, and rewrite use exact legacy fallbacks", () => {
+test("assistant text matching former loading copy stays on the incremental path", () => {
+  const threadId = "thread::former-loading-copy";
+  const cache = new ThreadTranscriptCache();
+  cache.applyRemote(
+    {
+      threadId,
+      remoteFound: true,
+      messages: [wireMessage(threadId, 1, "user")],
+      pendingInputs: [],
+      threadInfo: null,
+      pageInfo: pageInfo(1),
+    },
+    { intentForId: () => null },
+  );
+  const event = eventForMessage(
+    threadId,
+    wireMessage(threadId, 2, "assistant", {
+      text: "Garyx is working through the run…",
+    }),
+  );
+
+  assert.equal(
+    cache.applyCommittedMessage(event, { intentForId: () => null }),
+    "applied",
+  );
+  assert.equal(cache.getUiMessages().at(-1)?.text, event.message.text);
+  assert.deepEqual(cache.getCommittedApplyStats(), {
+    incremental: 1,
+    fullFallback: 0,
+  });
+});
+
+test("duplicate origin, optimistic echo, former loading copy, generated image, and rewrite use exact reference behavior", () => {
   const threadId = "thread::incremental-edge-cases";
   const intent = {
     intentId: "intent-edge",
@@ -815,18 +843,17 @@ test("duplicate origin, optimistic echo, loading, generated image, and rewrite u
   legacy = result.state;
   assertCacheEqualsLegacy(cache, legacy, "duplicate origin fallback");
 
-  const loading = eventForMessage(
+  const formerLoadingCopy = eventForMessage(
     threadId,
     wireMessage(threadId, 4, "assistant", {
       text: "Garyx is working through the run…",
     }),
   );
-  result = legacyApplyCommitted(legacy, loading, intentForId);
-  const beforeLoadingArray = cache.getUiMessages();
-  cache.applyCommittedMessage(loading, { intentForId });
+  result = legacyApplyCommitted(legacy, formerLoadingCopy, intentForId);
+  cache.applyCommittedMessage(formerLoadingCopy, { intentForId });
   legacy = result.state;
-  assertCacheEqualsLegacy(cache, legacy, "loading fallback");
-  assert.equal(cache.getUiMessages(), beforeLoadingArray);
+  assertCacheEqualsLegacy(cache, legacy, "former loading copy");
+  assert.equal(cache.getUiMessages().at(-1)?.text, formerLoadingCopy.message.text);
 
   const generatedImage = eventForMessage(
     threadId,

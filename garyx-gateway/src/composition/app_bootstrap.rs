@@ -5,7 +5,6 @@ use garyx_channels::{
     SwappableDispatcher,
 };
 use garyx_models::config::GaryxConfig;
-use garyx_models::local_paths::default_app_database_path;
 use garyx_models::local_paths::default_custom_agents_state_path;
 use garyx_models::thread_logs::{NoopThreadLogSink, ThreadLogSink};
 use garyx_router::{
@@ -21,7 +20,6 @@ use tracing::warn;
 
 use crate::agent_identity::GatewayThreadCreator;
 use crate::api::RestartTracker;
-use crate::app_db::AppDbService;
 use crate::app_state::{AppState, IntegrationState, OpsState, RuntimeState, ThreadState};
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
@@ -82,7 +80,6 @@ pub struct AppStateBuilder {
     thread_logs: Arc<dyn ThreadLogSink>,
     skills: Arc<SkillsService>,
     custom_agents: Arc<CustomAgentStore>,
-    app_db: Arc<AppDbService>,
     garyx_db: Arc<GaryxDbService>,
     /// Optional override for the active-run probe. Production leaves this `None`
     /// and `build` wires a bridge-backed probe; tests inject a fake to control
@@ -143,10 +140,6 @@ impl AppStateBuilder {
             thread_logs: Arc::new(NoopThreadLogSink),
             skills,
             custom_agents: Arc::new(CustomAgentStore::new()),
-            app_db: Arc::new(
-                AppDbService::memory()
-                    .unwrap_or_else(|error| panic!("failed to open app database: {error}")),
-            ),
             garyx_db: garyx_db_default,
             active_run_probe: None,
             provider_runtime_ready: true,
@@ -154,7 +147,7 @@ impl AppStateBuilder {
     }
 
     /// Bind the real on-disk `~/.garyx` state: the persistent custom-agent
-    /// store, the app and garyx databases, and built-in skill seeding.
+    /// store, the garyx database, and built-in skill seeding.
     ///
     /// This is the production boot path's explicit opt-in. `new()`
     /// deliberately stays fully in-memory so that tests (unit *and*
@@ -175,10 +168,6 @@ impl AppStateBuilder {
             CustomAgentStore::file,
             CustomAgentStore::new,
         ));
-        self.app_db = Arc::new(
-            AppDbService::open(default_app_database_path())
-                .unwrap_or_else(|error| panic!("failed to open app database: {error}")),
-        );
         self.garyx_db = Arc::new(
             GaryxDbService::open(garyx_models::local_paths::default_garyx_database_path())
                 .unwrap_or_else(|error| panic!("failed to open garyx database: {error}")),
@@ -286,11 +275,6 @@ impl AppStateBuilder {
 
     pub fn with_custom_agent_store(mut self, custom_agents: Arc<CustomAgentStore>) -> Self {
         self.custom_agents = custom_agents;
-        self
-    }
-
-    pub fn with_app_db(mut self, app_db: Arc<AppDbService>) -> Self {
-        self.app_db = app_db;
         self
     }
 
@@ -421,7 +405,6 @@ impl AppStateBuilder {
                 thread_logs: self.thread_logs,
                 skills: self.skills,
                 custom_agents: self.custom_agents,
-                app_db: self.app_db,
                 garyx_db: self.garyx_db,
                 provider_auth_sessions: Arc::new(ClaudeAuthSessionStore::default()),
                 channel_endpoint_snapshot: Mutex::new(None),
@@ -465,7 +448,7 @@ mod tests {
     use super::*;
 
     /// Regression guard for the 2026-07-06 gary incident: the builder used to
-    /// bind the real `~/.garyx` stores (custom agents / app db) by default,
+    /// bind the real `~/.garyx` stores (custom agents / Garyx DB) by default,
     /// so every test constructing an `AppState` read and
     /// *wrote* live user data — a test's whole-file persist
     /// overwrote `custom-agents.json` and vaporized a real agent definition.

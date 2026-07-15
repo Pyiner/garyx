@@ -64,10 +64,9 @@ code-level claims:
   `Physical footprint (peak): 5.5G`, 41.6M input tokens of run traffic in one
   day, and a 230MB un-rotated `stderr.log`.
 - Confirmed, code side:
-  - Both SQLite services wrap `rusqlite::Connection` in `std::sync::Mutex`
-    (`garyx-gateway/src/garyx_db/mod.rs:490`, `garyx-gateway/src/app_db.rs:230`)
-    with synchronous methods called directly from async handlers; there is no
-    `spawn_blocking` around any SQLite access in the workspace.
+  - `GaryxDbService` wraps `rusqlite::Connection` in `std::sync::Mutex`, with
+    synchronous methods called directly from async handlers; there is no
+    `spawn_blocking` around its SQLite access.
   - The tasks list route runs projection backfill on the request thread
     (`garyx-gateway/src/tasks.rs:570-587`). The router task paths do the
     same through `TaskProjectionReader::ensure_current`
@@ -76,9 +75,9 @@ code-level claims:
     the exact lookup `garyx thread send task` issues — can absorb a full
     thread-store rescan when the persisted projection is stale (projection
     version bump, wipe, or missed writes).
-  - Neither database tunes SQLite at open: `initialize_connection` sets only
-    `foreign_keys ON` (`garyx_db/mod.rs:2998`, `app_db.rs:1027`). Default
-    DELETE journal + `synchronous=FULL` means every commit pays
+  - The database does not tune SQLite at open: `initialize_connection` sets
+    only `foreign_keys ON`. Default DELETE journal + `synchronous=FULL` means
+    every commit pays
     journal-file create/fsync/delete cost while the connection mutex is
     held, and there is no `busy_timeout`.
   - Thread-history inline images use synchronous `std::fs::read` + base64 on
@@ -164,14 +163,14 @@ Risk: low. This is the measurement baseline for Batches 3-5.
 
 ### Batch 3 — SQLite off the async workers (main fix)
 
-Scope: `garyx-gateway/src/garyx_db/mod.rs`, `garyx-gateway/src/app_db.rs`, and
-their async call sites (`routes.rs`, `tasks.rs`, `api.rs`, projection paths).
+Scope: `garyx-gateway/src/garyx_db/mod.rs` and its async call sites
+(`routes.rs`, `tasks.rs`, `api.rs`, projection paths).
 
-- Open both connections with `journal_mode=WAL`, `synchronous=NORMAL`, and
+- Open the connection with `journal_mode=WAL`, `synchronous=NORMAL`, and
   `busy_timeout=5000` (keep `foreign_keys=ON`). WAL removes the per-commit
   journal create/fsync/delete cycle, directly shortening every mutex hold.
   In-memory test databases treat the WAL pragma as a no-op.
-- Add async wrappers on the Arc-shared DB services:
+- Add async wrappers on the Arc-shared DB service:
   `pub async fn xxx(&self, ...)` = `tokio::task::spawn_blocking` around the
   existing synchronous method (services are already `Arc`, connections already
   `Mutex`-guarded; locking inside the blocking pool is fine — it no longer

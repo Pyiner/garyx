@@ -196,10 +196,13 @@ extension GaryxMobileModel {
             await createThread()
             return
         }
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             saveGatewaySettings()
             let existingThreadId = selectedThread?.id
             let thread = try await ensureSelectedThread()
+            try Task.checkCancellation()
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             activePanel = .chat
             draftThreadTitle = thread.title
             if existingThreadId == nil {
@@ -207,12 +210,14 @@ extension GaryxMobileModel {
             }
             setSidebarVisible(false)
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func createThread(workspaceOverride: String?, agentOverride: String? = nil) async {
         invalidatePendingThreadOpen()
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             saveGatewaySettings()
             let workspace = (workspaceOverride ?? newThreadWorkspace).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -234,6 +239,8 @@ extension GaryxMobileModel {
                     metadata: ["client": "garyx-mobile"]
                 )
             )
+            try Task.checkCancellation()
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             threads.insert(thread, at: 0)
             recentThreadFeeds.upsertChat(threadId: thread.id)
             threadHistoryLoadedIds.insert(thread.id)
@@ -247,6 +254,7 @@ extension GaryxMobileModel {
             clearMessages(for: thread.id)
             setSidebarVisible(false)
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }

@@ -474,27 +474,6 @@ on the selected calendar day in the selected timezone.
 
 The MCP surface intentionally does not expose automation management tools.
 
-## App Database
-
-Garyx includes a global SQLite-backed app database for agent-managed tables and
-records. It is stored under the configured sessions data directory as
-`app-database.sqlite3` (`~/.garyx/data/app-database.sqlite3` by default).
-
-Agents use the CLI:
-
-```bash
-garyx db table create contacts --field name:TEXT --field score:REAL
-garyx db record insert contacts --data '{"name":"Test User","score":9.5}'
-garyx db sql "select id, name, score from contacts"
-```
-
-Read queries use SQL and the gateway rejects write SQL. Schema and record
-writes go through the `garyx db table`, `garyx db field`, and `garyx db record`
-commands. Data-change triggers live under Automation and can be managed with
-`garyx automation trigger data ...`; a trigger creates a Garyx task when the
-configured table event fires. Scheduled automations and data-change
-automations are two trigger mechanisms under the same Automation domain.
-
 ## Agents
 
 Each channel account can set `agent_id`.

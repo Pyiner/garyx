@@ -28,6 +28,12 @@ struct GaryxEnsuredThread {
     var adoptedSelection: Bool
 }
 
+struct GaryxGatewayRuntimeIdentity: Equatable {
+    var gatewayURL: String
+    var authToken: String
+    var headers: String
+}
+
 struct GaryxGatewayConnectTimeoutError: LocalizedError {
     var errorDescription: String? {
         "Gateway did not respond within 5 seconds."
@@ -447,6 +453,7 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadHistoryRetryCount = 0
     var completedThreadHistoryHydrationTasks: [String: Task<Void, Never>] = [:]
     var activeGatewayScopeId = ""
+    var activeGatewayRuntimeIdentity: GaryxGatewayRuntimeIdentity?
     var catalogSnapshotRestored = false
     var connectRefreshRequestId: UUID?
     var remoteStateRefreshRequestId: UUID?

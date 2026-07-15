@@ -253,7 +253,6 @@ import {
   createTranslator,
   useResolvedLocale,
 } from "../i18n";
-import { isRunLoadingPlaceholderMessage } from "./loading-labels";
 import garyxIconUrl from "../assets/garyx-icon.png";
 import {
   contentViewForDesktopRoute,
@@ -1159,10 +1158,7 @@ export function AppShell() {
   const rawActiveMessages = activeThreadMirror?.messages ||
     EMPTY_UI_TRANSCRIPT_MESSAGES;
   const activeMessages = useMemo(
-    () =>
-      rawActiveMessages.filter(
-        (message) => !isRunLoadingPlaceholderMessage(message),
-      ),
+    () => [...rawActiveMessages],
     [rawActiveMessages],
   );
   const activeHistoryPagination = activeThreadMirror?.historyPagination || null;

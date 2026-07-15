@@ -490,147 +490,6 @@ pub(crate) async fn cmd_automation_activity(
     Ok(())
 }
 
-fn automation_print_data_triggers(payload: &Value) {
-    let triggers = payload["triggers"].as_array().cloned().unwrap_or_default();
-    if triggers.is_empty() {
-        println!("Triggers: (none)");
-        return;
-    }
-    println!(
-        "{:<38}  {:<7}  {:<20}  {:<15}  LABEL",
-        "ID", "ENABLED", "TABLE", "EVENT"
-    );
-    println!("{}", "-".repeat(110));
-    for trigger in triggers {
-        println!(
-            "{:<38}  {:<7}  {:<20}  {:<15}  {}",
-            trigger["id"].as_str().unwrap_or("-"),
-            trigger["enabled"].as_bool().unwrap_or(false),
-            trigger["tableName"].as_str().unwrap_or("-"),
-            trigger["eventType"].as_str().unwrap_or("-"),
-            trigger["label"]
-                .as_str()
-                .unwrap_or_else(|| { trigger["titleTemplate"].as_str().unwrap_or("-") }),
-        );
-    }
-}
-
-pub(crate) async fn cmd_automation_data_trigger_list(
-    config_path: &str,
-    table: Option<String>,
-    event_type: Option<String>,
-    json: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut query = Vec::new();
-    if let Some(table) = trim_optional_cli(table) {
-        query.push(format!("table={}", urlencoding::encode(&table)));
-    }
-    if let Some(event_type) = trim_optional_cli(event_type) {
-        query.push(format!("eventType={}", urlencoding::encode(&event_type)));
-    }
-    let path = if query.is_empty() {
-        "/api/automations/triggers/data".to_owned()
-    } else {
-        format!("/api/automations/triggers/data?{}", query.join("&"))
-    };
-    let gateway = gateway_endpoint(config_path)?;
-    let payload = fetch_gateway_json(&gateway, &path).await?;
-    if json {
-        return print_pretty_json(&payload);
-    }
-    automation_print_data_triggers(&payload);
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn cmd_automation_data_trigger_create(
-    config_path: &str,
-    table: &str,
-    event_type: &str,
-    label: &str,
-    title: &str,
-    body_text: &str,
-    agent_id: Option<String>,
-    workspace_dir: Option<String>,
-    disabled: bool,
-    json: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut body = json!({
-        "tableName": trim_required_cli(table, "table")?,
-        "eventType": trim_required_cli(event_type, "event_type")?,
-        "label": trim_required_cli(label, "label")?,
-        "titleTemplate": trim_required_cli(title, "title")?,
-        "bodyTemplate": trim_required_cli(body_text, "body")?,
-        "enabled": !disabled,
-    });
-    if let Some(agent_id) = trim_optional_cli(agent_id) {
-        body["agentId"] = json!(agent_id);
-    }
-    if let Some(workspace_dir) = trim_optional_cli(workspace_dir) {
-        body["workspaceDir"] = json!(workspace_dir);
-    }
-    let gateway = gateway_endpoint(config_path)?;
-    let payload = post_gateway_json(&gateway, "/api/automations/triggers/data", &body).await?;
-    if json {
-        return print_pretty_json(&payload);
-    }
-    println!(
-        "Created data trigger: {}",
-        payload["trigger"]["id"].as_str().unwrap_or("-")
-    );
-    Ok(())
-}
-
-pub(crate) async fn cmd_automation_data_trigger_set_enabled(
-    config_path: &str,
-    trigger_id: &str,
-    enabled: bool,
-    json: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let trigger_id = trim_required_cli(trigger_id, "trigger_id")?;
-    let gateway = gateway_endpoint(config_path)?;
-    let payload = patch_gateway_json(
-        &gateway,
-        &format!(
-            "/api/automations/triggers/data/{}",
-            urlencoding::encode(&trigger_id)
-        ),
-        &json!({ "enabled": enabled }),
-    )
-    .await?;
-    if json {
-        return print_pretty_json(&payload);
-    }
-    println!(
-        "{} data trigger: {}",
-        if enabled { "Enabled" } else { "Disabled" },
-        trigger_id
-    );
-    Ok(())
-}
-
-pub(crate) async fn cmd_automation_data_trigger_delete(
-    config_path: &str,
-    trigger_id: &str,
-    json: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let trigger_id = trim_required_cli(trigger_id, "trigger_id")?;
-    let gateway = gateway_endpoint(config_path)?;
-    let payload = delete_gateway_json(
-        &gateway,
-        &format!(
-            "/api/automations/triggers/data/{}",
-            urlencoding::encode(&trigger_id)
-        ),
-    )
-    .await?;
-    if json {
-        return print_pretty_json(&payload);
-    }
-    println!("Deleted data trigger: {trigger_id}");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::await_holding_lock)]
@@ -641,7 +500,7 @@ mod tests {
         Json, Router,
         extract::Path as AxumPath,
         http::StatusCode,
-        routing::{get, patch, post},
+        routing::{get, post},
     };
     use std::sync::{Arc as StdArc, Mutex};
     use tempfile::tempdir;
@@ -657,10 +516,6 @@ mod tests {
         let delete_requests = requests.clone();
         let run_requests = requests.clone();
         let activity_requests = requests.clone();
-        let trigger_list_requests = requests.clone();
-        let trigger_create_requests = requests.clone();
-        let trigger_patch_requests = requests.clone();
-        let trigger_delete_requests = requests.clone();
 
         let app = Router::new()
         .route(
@@ -846,109 +701,6 @@ mod tests {
                     )
                 }
             }),
-        )
-        .route(
-            "/api/automations/triggers/data",
-            get(move || {
-                let requests = trigger_list_requests.clone();
-                async move {
-                    requests
-                        .lock()
-                        .expect("request lock")
-                        .push(RecordedRequest {
-                            method: "GET".to_owned(),
-                            path: "/api/automations/triggers/data".to_owned(),
-                            body: Value::Null,
-                        });
-                    (
-                        StatusCode::OK,
-                        Json(json!({
-                            "triggers": []
-                        })),
-                    )
-                }
-            })
-            .post(move |Json(payload): Json<Value>| {
-                let requests = trigger_create_requests.clone();
-                async move {
-                    requests
-                        .lock()
-                        .expect("request lock")
-                        .push(RecordedRequest {
-                            method: "POST".to_owned(),
-                            path: "/api/automations/triggers/data".to_owned(),
-                            body: payload.clone(),
-                        });
-                    (
-                        StatusCode::CREATED,
-                        Json(json!({
-                                "trigger": {
-                                    "id": "autodata_test",
-                                    "label": payload["label"],
-                                    "tableName": payload["tableName"],
-                                    "eventType": payload["eventType"],
-                                "titleTemplate": payload["titleTemplate"],
-                                "bodyTemplate": payload["bodyTemplate"],
-                                "agentId": payload.get("agentId").cloned().unwrap_or(Value::Null),
-                                "workspaceDir": payload.get("workspaceDir").cloned().unwrap_or(Value::Null),
-                                "enabled": payload.get("enabled").and_then(Value::as_bool).unwrap_or(true),
-                                "createdAt": "2030-05-01T08:30:00Z",
-                                "updatedAt": "2030-05-01T08:30:00Z"
-                            }
-                        })),
-                    )
-                }
-            }),
-        )
-        .route(
-            "/api/automations/triggers/data/{trigger_id}",
-            patch(
-                move |AxumPath(trigger_id): AxumPath<String>, Json(payload): Json<Value>| {
-                    let requests = trigger_patch_requests.clone();
-                    async move {
-                        let path = format!("/api/automations/triggers/data/{trigger_id}");
-                        requests.lock().expect("request lock").push(RecordedRequest {
-                            method: "PATCH".to_owned(),
-                            path,
-                            body: payload.clone(),
-                        });
-                        (
-                            StatusCode::OK,
-                            Json(json!({
-                                "trigger": {
-                                    "id": trigger_id,
-                                    "tableName": "contacts",
-                                    "eventType": "record.created",
-                                    "label": "Contact review",
-                                    "titleTemplate": "New record {record_id}",
-                                    "bodyTemplate": "Review {table_name}",
-                                    "enabled": payload["enabled"],
-                                    "createdAt": "2030-05-01T08:30:00Z",
-                                    "updatedAt": "2030-05-01T08:31:00Z"
-                                }
-                            })),
-                        )
-                    }
-                },
-            )
-            .delete(move |AxumPath(trigger_id): AxumPath<String>| {
-                let requests = trigger_delete_requests.clone();
-                async move {
-                    let path = format!("/api/automations/triggers/data/{trigger_id}");
-                    requests.lock().expect("request lock").push(RecordedRequest {
-                        method: "DELETE".to_owned(),
-                        path,
-                        body: Value::Null,
-                    });
-                    (
-                        StatusCode::OK,
-                        Json(json!({
-                            "deleted": true,
-                            "id": trigger_id,
-                        })),
-                    )
-                }
-            }),
         );
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1081,44 +833,6 @@ mod tests {
         assert_eq!(records[0].body["enabled"], false);
         assert_eq!(records[0].body["schedule"]["kind"], "interval");
         assert_eq!(records[0].body["schedule"]["hours"], 6);
-    }
-
-    #[tokio::test]
-    async fn cmd_automation_data_trigger_create_posts_automation_payload() {
-        let requests = StdArc::new(Mutex::new(Vec::new()));
-        let (base_url, handle) = spawn_automation_http_test_server(requests.clone()).await;
-        let dir = tempdir().expect("tempdir");
-        let config_path = write_test_gateway_config(&dir, &base_url);
-
-        cmd_automation_data_trigger_create(
-            config_path.to_str().expect("config path"),
-            "contacts",
-            "record.created",
-            "Contact review",
-            "New record {record_id}",
-            "Review {table_name}",
-            Some("codex".to_owned()),
-            Some("/tmp/work".to_owned()),
-            true,
-            false,
-        )
-        .await
-        .expect("automation data trigger create should succeed");
-
-        handle.abort();
-
-        let records = requests.lock().expect("request lock");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].method, "POST");
-        assert_eq!(records[0].path, "/api/automations/triggers/data");
-        assert_eq!(records[0].body["tableName"], "contacts");
-        assert_eq!(records[0].body["eventType"], "record.created");
-        assert_eq!(records[0].body["label"], "Contact review");
-        assert_eq!(records[0].body["titleTemplate"], "New record {record_id}");
-        assert_eq!(records[0].body["bodyTemplate"], "Review {table_name}");
-        assert_eq!(records[0].body["agentId"], "codex");
-        assert_eq!(records[0].body["workspaceDir"], "/tmp/work");
-        assert_eq!(records[0].body["enabled"], false);
     }
 
     #[tokio::test]
