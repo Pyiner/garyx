@@ -72,6 +72,8 @@ function makeHarness() {
       mirror.applyRemoteTranscript(threadId, transcript),
     getTranscriptMapsSnapshot: () => mirror.getTranscriptMapsSnapshot(),
     getThreadSnapshot: (threadId) => mirror.getThreadSnapshot(threadId),
+    earliestLoadedCommittedBodySeq: (threadId) =>
+      mirror.earliestLoadedCommittedBodySeq(threadId),
     syncThreadUiMessages: (threadId, messages) =>
       mirror.syncThreadUiMessages(threadId, messages),
     persistTranscriptCache(transcript, renderState) {
@@ -170,6 +172,16 @@ function makeHarness() {
     getDesktopState: () => desktopState,
     liveStreamStateRef,
   };
+}
+
+function withoutOpaqueRequestIds(trace) {
+  return trace.map((entry) => {
+    if (entry[0] !== "startThreadStream") {
+      return entry;
+    }
+    const { requestId: _requestId, ...input } = entry[1];
+    return [entry[0], input];
+  });
 }
 
 // ---- Legacy-shaped bindings: the pre-6b-2a hook logic, verbatim shapes. ----
@@ -1175,8 +1187,8 @@ test("dual-run: lifecycle matches the legacy apply chain (6b-2b)", async () => {
     "the committed write is deferred, then cancelled before rewrite clear",
   );
   assert.deepEqual(
-    nextH.ipcTrace,
-    legacyH.ipcTrace,
+    withoutOpaqueRequestIds(nextH.ipcTrace),
+    withoutOpaqueRequestIds(legacyH.ipcTrace),
     "fetch/stream IPC traces must match",
   );
   assert.deepEqual(nextH.getDesktopState(), legacyH.getDesktopState());
@@ -1287,10 +1299,14 @@ async function replayLifecycleSequence(bindings, h) {
     threadInfo: { agentId: "agent-1" },
   };
   await bindings.loadSelectedThreadTranscript(THREAD);
+  const requestId = h.ipcTrace.find(
+    ([name]) => name === "startThreadStream",
+  )?.[1]?.requestId;
   // 2. Committed frame through the stream-listener entry.
   bindings.notifyStreamEvent({
     type: "thread_render_frame",
     threadId: THREAD,
+    ...(requestId ? { requestId } : {}),
     events: [
       {
         type: "committed_message",
@@ -1322,6 +1338,7 @@ async function replayLifecycleSequence(bindings, h) {
   bindings.notifyStreamEvent({
     type: "error",
     threadId: THREAD,
+    ...(requestId ? { requestId } : {}),
     runId: "run-5",
     error: "provider exploded",
     terminal: true,
@@ -1340,7 +1357,11 @@ test("dual-run: lifecycle matches the legacy fetch/stream lifecycle (6b-2c)", as
   const next = makeLifecycleBindings(nextH);
   await replayLifecycleSequence(next, nextH);
 
-  assert.deepEqual(nextH.ipcTrace, legacyH.ipcTrace, "IPC traces must match");
+  assert.deepEqual(
+    withoutOpaqueRequestIds(nextH.ipcTrace),
+    withoutOpaqueRequestIds(legacyH.ipcTrace),
+    "IPC traces must match",
+  );
   assert.deepEqual(
     nextH.seamTrace,
     legacyH.seamTrace,

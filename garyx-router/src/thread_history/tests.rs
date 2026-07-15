@@ -2250,6 +2250,97 @@ async fn transcript_cache_hot_paths_do_not_reread_file() {
 }
 
 #[tokio::test]
+async fn render_window_expansion_has_bounded_reads_rows_and_serialized_bytes() {
+    const RECORDS: u64 = 12_000;
+    const TAIL_CACHE_RECORDS: u64 = 4_096;
+    const MAX_PREPAY_RECORDS: u64 = 2_048;
+    const EXPANSIONS: usize = 4;
+
+    let dir = tempdir().unwrap();
+    let thread_id = "thread::render-window-perf-contract";
+    let store = ThreadTranscriptStore::file_for_tests(
+        dir.path(),
+        8 * 1024 * 1024,
+        TAIL_CACHE_RECORDS as usize,
+        64 * 1024 * 1024,
+    )
+    .await
+    .unwrap();
+    let fixed_body = "x".repeat(128);
+    let drafts = (0..RECORDS)
+        .map(|index| {
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            RunTranscriptRecordDraft::from_message(json!({
+                "role": role,
+                "content": fixed_body.clone(),
+            }))
+        })
+        .collect::<Vec<_>>();
+    store
+        .append_run_records(thread_id, Some("run-render-window-perf"), &drafts)
+        .await
+        .unwrap();
+
+    // The cache retains seq 7905..=12000. Every target below starts one
+    // record beneath that tail and then lowers by exactly one prepay-cap span.
+    let first_target = RECORDS - TAIL_CACHE_RECORDS;
+    let targets = (0..EXPANSIONS)
+        .map(|step| first_target - step as u64 * MAX_PREPAY_RECORDS)
+        .collect::<Vec<_>>();
+    let baseline_reads = store.full_file_reads.load(CacheTestOrdering::Relaxed);
+    let mut first_per_row_bound = None;
+    let mut previous_record_count = None;
+    let mut diagnostics = Vec::new();
+
+    for (step, target_floor) in targets.into_iter().enumerate() {
+        let started = std::time::Instant::now();
+        let snapshot = store
+            .render_snapshot_in_window(thread_id, target_floor, RECORDS)
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        let record_count = row_ref_ids(&snapshot).len();
+        let serialized_bytes = serde_json::to_vec(&snapshot).unwrap().len();
+        diagnostics.push((target_floor, record_count, serialized_bytes, elapsed));
+
+        assert_eq!(
+            store.full_file_reads.load(CacheTestOrdering::Relaxed) - baseline_reads,
+            step + 1,
+            "each below-tail derivation performs exactly one full-file read"
+        );
+        let inclusive_window_bound = (RECORDS - target_floor + 1) as usize;
+        assert!(
+            record_count <= inclusive_window_bound,
+            "window refs {record_count} exceed inclusive record bound {inclusive_window_bound}"
+        );
+        if let Some(previous) = previous_record_count {
+            assert!(
+                record_count.saturating_sub(previous) <= MAX_PREPAY_RECORDS as usize,
+                "one floor lowering grew by more than the capped prepay span"
+            );
+        }
+
+        let per_row_bound = *first_per_row_bound.get_or_insert_with(|| {
+            let divisor = record_count.max(1);
+            (serialized_bytes + divisor - 1) / divisor
+        });
+        let self_calibrated_bound = record_count
+            .max(1)
+            .saturating_mul(per_row_bound)
+            .saturating_mul(2);
+        assert!(
+            serialized_bytes <= self_calibrated_bound,
+            "snapshot bytes {serialized_bytes} exceed self-calibrated bound {self_calibrated_bound}"
+        );
+        previous_record_count = Some(record_count);
+    }
+
+    eprintln!(
+        "render-window expansion informational timings (floor, refs, bytes, duration): {diagnostics:?}"
+    );
+}
+
+#[tokio::test]
 async fn transcript_cache_survives_tail_roll_and_eviction() {
     let dir = tempdir().unwrap();
     // Tiny budgets: tail rolls constantly, global budget evicts other threads.

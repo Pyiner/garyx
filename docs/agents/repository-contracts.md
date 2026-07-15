@@ -117,6 +117,22 @@ reinterpreted in feature code.
 - `render_state.rows` may be narrowed by a client-declared `render_floor`.
   `render_state.based_on_seq` remains the committed window tail, and event
   delivery is still governed only by the SSE cursor and committed ledger.
+- The server may emit same-seq render-state overwrite frames. Clients reject a
+  full snapshot only when `based_on_seq` is below their accepted render
+  cursor; accepted snapshots are compared by full value, excluding
+  `rows_hash` (a delta-chain transport token), never by cursor equality alone.
+- Committed-event identity is `(seq, payload)`: an equal same-seq payload is a
+  silent duplicate, while a distinct same-seq payload is an overwrite whose
+  body or rewrite/reset semantics must apply exactly once for that payload.
+- A logical stream request id gates connection-scoped state only (render
+  snapshots, windowed-replay markers, errors, and expansion settles). It must
+  never filter committed ledger events, including events queued by a
+  superseded logical request.
+- A client that narrows structure with `render_floor` owns a demand-convergent
+  invariant: its effective render window covers the minimum seq among loaded
+  committed bodies (or is the full window). When demand extends loaded bodies
+  below the window, the client widens structure by resuming with a lower
+  `render_floor`; bounded retry may hold only until the next demand trigger.
 - A caught-up per-thread stream connection still sends a snapshot-only frame
   with `events: []`; its SSE id and replay cursor are
   `render_state.based_on_seq`, clamped to the actual committed ledger tail.

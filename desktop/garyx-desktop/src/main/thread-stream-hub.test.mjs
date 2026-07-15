@@ -197,6 +197,7 @@ test("gap-error reconnect cycles never leak stream sockets", async () => {
   try {
     let tail = 0;
     let gapErrors = 0;
+    let requestOrdinal = 0;
     const { hub } = makeHub(server.url, {
       onEvent: (payload) => {
         if (payload.type === "thread_render_frame") {
@@ -210,13 +211,21 @@ test("gap-error reconnect cycles never leak stream sockets", async () => {
           // The renderer reacts to a gap by refetching and restarting the
           // stream; emulate that restart.
           setTimeout(() => {
-            hub.start({ threadId: "t-gap", afterSeq: tail });
+            hub.start({
+              threadId: "t-gap",
+              requestId: `gap-request-${++requestOrdinal}`,
+              afterSeq: tail,
+            });
           }, 10);
         }
       },
     });
 
-    hub.start({ threadId: "t-gap", afterSeq: 0 });
+    hub.start({
+      threadId: "t-gap",
+      requestId: `gap-request-${++requestOrdinal}`,
+      afterSeq: 0,
+    });
     await until(() => gapErrors >= 3, 5000, "3 gap errors observed");
     await until(
       () => server.requests("t-gap") >= 4,
@@ -254,7 +263,7 @@ test("a silent stream is aborted and re-dialed by the idle watchdog", async () =
   });
   try {
     const { hub } = makeHub(server.url, { idleTimeoutMs: 250 });
-    hub.start({ threadId: "t-idle", afterSeq: 0 });
+    hub.start({ threadId: "t-idle", requestId: "idle-request", afterSeq: 0 });
 
     await until(
       () => server.requests("t-idle") >= 2,
@@ -299,7 +308,12 @@ test("a renderer reload drops every forwarder the old document owned", async () 
     // Incident recipe, 6 cycles: each document selects a different thread,
     // then reloads without any effect cleanup running.
     for (const threadId of ["t-1", "t-2", "t-3", "t-4", "t-5", "t-6"]) {
-      hub.start({ threadId, afterSeq: 0, consumerId: "selected-thread" });
+      hub.start({
+        threadId,
+        requestId: `reload-request-${threadId}`,
+        afterSeq: 0,
+        consumerId: "selected-thread",
+      });
       await until(
         () => server.requests(threadId) >= 1,
         5000,
@@ -309,6 +323,7 @@ test("a renderer reload drops every forwarder the old document owned", async () 
     }
     hub.start({
       threadId: "t-final",
+      requestId: "reload-request-final",
       afterSeq: 0,
       consumerId: "selected-thread",
     });
@@ -366,7 +381,11 @@ test("a crash-looping gateway keeps connections bounded and self-heals", async (
         }
       },
     });
-    hub.start({ threadId: "t-flap", afterSeq: 0 });
+    hub.start({
+      threadId: "t-flap",
+      requestId: "flap-request",
+      afterSeq: 0,
+    });
 
     await until(() => sawFrame, 5000, "stream recovered after crash loop");
     await settle(200);
@@ -381,4 +400,164 @@ test("a crash-looping gateway keeps connections bounded and self-heals", async (
   } finally {
     await server.close();
   }
+});
+
+test("logical request ids survive transport restarts while stale generations are fenced", async () => {
+  const attempts = [];
+  const forwarded = [];
+  const streamThreadEventsImpl = async (
+    _settings,
+    threadId,
+    onEvent,
+    signal,
+    options,
+  ) => {
+    attempts.push({ threadId, onEvent, signal, options });
+    await new Promise(() => {});
+  };
+  const hub = createThreadStreamHub({
+    resolveSettings: async () => ({ gatewayUrl: "http://gateway.test" }),
+    sendEvent: (event) => forwarded.push(event),
+    isSinkAlive: () => true,
+    streamThreadEventsImpl,
+  });
+
+  hub.start({
+    threadId: "t-generation",
+    requestId: "logical-a",
+    afterSeq: 0,
+    renderFloor: 3,
+  });
+  await until(() => attempts.length === 1, 1000, "first fake attempt");
+  hub.start({
+    threadId: "t-generation",
+    requestId: "logical-b",
+    afterSeq: 0,
+    renderFloor: 1,
+  });
+  await until(() => attempts.length === 2, 1000, "replacement fake attempt");
+
+  assert.equal(attempts[0].options.renderFloor, 3);
+  assert.equal(
+    attempts[1].options.renderFloor,
+    1,
+    "a renderer start may lower the floor; the hub must not max-pin it",
+  );
+  attempts[0].onEvent({
+    type: "thread_render_frame",
+    threadId: "t-generation",
+    events: [],
+    renderState: {
+      based_on_seq: 1,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      filtered_placeholders: [],
+    },
+  });
+  assert.equal(forwarded.length, 0, "post-abort callback must be discarded");
+
+  attempts[1].onEvent({
+    type: "thread_render_frame",
+    threadId: "t-generation",
+    events: [],
+    renderState: {
+      based_on_seq: 2,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      filtered_placeholders: [],
+    },
+  });
+  assert.equal(forwarded[0].requestId, "logical-b");
+
+  attempts[1].options.onCommittedSeq(8);
+  attempts[1].options.onWindowFloor(0);
+  attempts[0].options.onCommittedSeq(99);
+  attempts[0].options.onWindowFloor(99);
+  hub.restartAll();
+  await until(() => attempts.length === 3, 1000, "restartAll fake attempt");
+  assert.equal(attempts[2].options.afterSeq, 8);
+  assert.equal(attempts[2].options.renderFloor, 0);
+  attempts[2].onEvent({
+    type: "thread_render_frame",
+    threadId: "t-generation",
+    events: [],
+    renderState: {
+      based_on_seq: 8,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      filtered_placeholders: [],
+    },
+  });
+  assert.equal(
+    forwarded.at(-1).requestId,
+    "logical-b",
+    "restartAll must preserve the renderer's logical request id",
+  );
+  hub.stop();
+});
+
+test("callbacks from a completed retry attempt cannot bleed into the next attempt", async () => {
+  const attempts = [];
+  const forwarded = [];
+  const hub = createThreadStreamHub({
+    resolveSettings: async () => ({ gatewayUrl: "http://gateway.test" }),
+    sendEvent: (event) => forwarded.push(event),
+    isSinkAlive: () => true,
+    retryInitialDelayMs: 1,
+    retryMaxDelayMs: 1,
+    streamThreadEventsImpl: async (
+      _settings,
+      threadId,
+      onEvent,
+      _signal,
+      options,
+    ) => {
+      attempts.push({ threadId, onEvent, options });
+      if (attempts.length === 1) {
+        return;
+      }
+      await new Promise(() => {});
+    },
+  });
+  hub.start({
+    threadId: "t-retry-generation",
+    requestId: "logical-retry",
+    afterSeq: 0,
+  });
+  await until(() => attempts.length === 2, 1000, "second physical attempt");
+
+  const frame = {
+    type: "thread_render_frame",
+    threadId: "t-retry-generation",
+    events: [],
+    renderState: {
+      based_on_seq: 1,
+      rows: [],
+      tailActivity: "none",
+      activeToolGroupId: null,
+      progress_locus: "none",
+      filtered_placeholders: [],
+    },
+  };
+  attempts[0].onEvent(frame);
+  assert.equal(forwarded.length, 0, "completed-attempt straggler discarded");
+  attempts[1].onEvent(frame);
+  assert.equal(forwarded.length, 1);
+  assert.equal(forwarded[0].requestId, "logical-retry");
+
+  attempts[1].options.onCommittedSeq(7);
+  attempts[1].options.onWindowFloor(1);
+  attempts[0].options.onCommittedSeq(99);
+  attempts[0].options.onWindowFloor(99);
+  hub.restartAll();
+  await until(() => attempts.length === 3, 1000, "post-retry restart");
+  assert.equal(attempts[2].options.afterSeq, 7);
+  assert.equal(attempts[2].options.renderFloor, 1);
+  hub.stop();
 });

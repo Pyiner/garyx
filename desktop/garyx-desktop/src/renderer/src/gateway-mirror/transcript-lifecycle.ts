@@ -76,12 +76,40 @@ import {
 import { isTransientGatewayErrorMessage } from "../app-shell/gateway-errors.ts";
 import type { TranscriptMessage } from "@shared/contracts";
 import type { PendingAutomationRun } from "../app-shell/types";
-import type { TranscriptMapsSnapshot } from "./mirror.ts";
+import type {
+  ThreadStreamIngestOptions,
+  ThreadStreamIngestResult,
+  TranscriptMapsSnapshot,
+} from "./mirror.ts";
 import { TranscriptPersistScheduler } from "./transcript-persist-scheduler.ts";
 
 export const SELECTED_THREAD_STREAM_CONSUMER_ID = "selected-thread";
 
 const THREAD_HISTORY_FORWARD_PAGE_LIMIT = 50;
+export const RENDER_WINDOW_RETRY_BUDGET = 1;
+export const MAX_RENDER_WINDOW_PREPAY_RECORDS = 2048;
+
+interface PendingRenderWindowExpansion {
+  requestId: string;
+  targetFloor: number;
+}
+
+interface ThreadRenderWindowState {
+  effectiveFloor: number;
+  hasAcceptedLiveFrame: boolean;
+  pendingExpansion: PendingRenderWindowExpansion | null;
+  demandEpoch: number;
+  retryCount: number;
+  prepayMargin: number;
+  activeRequestId: string | null;
+  consumers: Set<string>;
+}
+
+interface ThreadStreamStartPlan {
+  afterSeq: number;
+  renderFloor: number;
+  requestId: string;
+}
 
 /**
  * The mirror-internal surface the lifecycle orchestrates over. The
@@ -111,6 +139,7 @@ export interface TranscriptLifecycleMirrorPort {
     messages: readonly UiTranscriptMessage[];
     renderState: RenderState | null;
   };
+  earliestLoadedCommittedBodySeq(threadId: string): number | null;
   syncThreadUiMessages(
     threadId: string,
     messages: readonly UiTranscriptMessage[],
@@ -122,12 +151,15 @@ export interface TranscriptLifecycleMirrorPort {
   // Slice 2c: the fetch/stream lifecycle's transport surface — commit-side
   // mirror entries plus the injected IPC services (all resolved by the
   // GatewayMirror; the lifecycle stays window-free).
-  ingest(event: DesktopChatStreamEvent): void;
+  ingest(
+    event: DesktopChatStreamEvent,
+    options?: ThreadStreamIngestOptions,
+  ): ThreadStreamIngestResult;
   clearThreadTranscript(threadId: string): void;
   fetchOlderThreadHistoryPage(
     threadId: string,
     options?: { onPageFetched?: (transcript: ThreadTranscript) => void },
-  ): Promise<void>;
+  ): Promise<boolean>;
   startThreadStream(input: StartThreadStreamInput): Promise<void>;
   stopThreadStream(input: StopThreadStreamInput): Promise<void>;
   loadThreadTranscriptCache(
@@ -211,6 +243,11 @@ export class TranscriptLifecycle {
   // de-dupe for the single-owner rewrite refetch.
   private selectedLoadGenerationByThread = new Map<string, number>();
   private refetchInFlightByThread = new Map<string, Promise<void>>();
+  private renderWindowStateByThread = new Map<
+    string,
+    ThreadRenderWindowState
+  >();
+  private nextStreamRequestOrdinal = 0;
   private persistScheduler: TranscriptPersistScheduler;
 
   constructor(port: TranscriptLifecycleMirrorPort) {
@@ -229,6 +266,234 @@ export class TranscriptLifecycle {
       throw new Error("TranscriptLifecycle deps not attached");
     }
     return this.deps;
+  }
+
+  private renderWindowState(threadId: string): ThreadRenderWindowState {
+    let state = this.renderWindowStateByThread.get(threadId);
+    if (!state) {
+      state = {
+        effectiveFloor: 0,
+        hasAcceptedLiveFrame: false,
+        pendingExpansion: null,
+        demandEpoch: 0,
+        retryCount: 0,
+        prepayMargin: THREAD_HISTORY_PAGE_SIZE,
+        activeRequestId: null,
+        consumers: new Set(),
+      };
+      this.renderWindowStateByThread.set(threadId, state);
+    }
+    return state;
+  }
+
+  clearThreadWindowState(threadId: string): void {
+    this.renderWindowStateByThread.delete(threadId);
+  }
+
+  private normalizeRenderFloor(value: number | null | undefined): number {
+    return typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.trunc(value)
+      : 0;
+  }
+
+  private freshStreamRequestId(): string {
+    this.nextStreamRequestOrdinal += 1;
+    return `desktop-stream-request-${this.nextStreamRequestOrdinal}`;
+  }
+
+  private seedEffectiveFloorIfCold(
+    threadId: string,
+    state: ThreadRenderWindowState,
+  ): void {
+    if (
+      state.hasAcceptedLiveFrame ||
+      state.activeRequestId !== null ||
+      state.pendingExpansion !== null
+    ) {
+      return;
+    }
+    state.effectiveFloor = this.normalizeRenderFloor(
+      this.port.getThreadSnapshot(threadId).renderState?.window?.floor_seq,
+    );
+  }
+
+  private neededRenderFloor(
+    threadId: string,
+    state: ThreadRenderWindowState,
+  ): number {
+    const earliest = this.port.earliestLoadedCommittedBodySeq(threadId);
+    return Math.min(earliest ?? Number.POSITIVE_INFINITY, state.effectiveFloor);
+  }
+
+  private expansionTarget(
+    threadId: string,
+    state: ThreadRenderWindowState,
+  ): number {
+    return Math.max(
+      0,
+      Math.trunc(this.neededRenderFloor(threadId, state) - state.prepayMargin),
+    );
+  }
+
+  private committedStreamCursor(
+    threadId: string,
+    fallbackTranscript?: ThreadTranscript | null,
+  ): number {
+    const transcript =
+      this.port.getThreadSnapshotTranscript(threadId) ??
+      fallbackTranscript ??
+      null;
+    return streamResumeCursor({
+      afterCursor: transcriptCommittedAfterCursor(transcript),
+      fallbackMaxIndex: null,
+    });
+  }
+
+  private reconcileRenderWindow(
+    threadId: string,
+    state: ThreadRenderWindowState,
+  ): ThreadStreamStartPlan | null {
+    if (state.pendingExpansion !== null || state.effectiveFloor === 0) {
+      return null;
+    }
+    if (this.neededRenderFloor(threadId, state) >= state.effectiveFloor) {
+      return null;
+    }
+    if (state.retryCount >= 1 + RENDER_WINDOW_RETRY_BUDGET) {
+      return null;
+    }
+
+    state.retryCount += 1;
+    const targetFloor = this.expansionTarget(threadId, state);
+    const requestId = this.freshStreamRequestId();
+    state.pendingExpansion = { requestId, targetFloor };
+    return {
+      afterSeq: this.committedStreamCursor(threadId),
+      renderFloor: targetFloor,
+      requestId,
+    };
+  }
+
+  /**
+   * The sole lifecycle gate that may call the stream-start IPC. A consumer
+   * start is an external demand trigger; settle retries enter with both
+   * flags false and only start when reconcile returns an expansion plan.
+   */
+  private async startThreadStreamThroughGate(input: {
+    threadId: string;
+    consumerId: string;
+    mustEstablishStream: boolean;
+    demandTrigger: boolean;
+    afterSeq?: number;
+  }): Promise<boolean> {
+    const state = this.renderWindowState(input.threadId);
+    this.seedEffectiveFloorIfCold(input.threadId, state);
+    if (input.demandTrigger) {
+      state.demandEpoch += 1;
+      state.retryCount = 0;
+    }
+
+    let plan = this.reconcileRenderWindow(input.threadId, state);
+    if (!plan && !input.mustEstablishStream) {
+      return false;
+    }
+    if (!plan) {
+      const requestId = this.freshStreamRequestId();
+      if (state.pendingExpansion) {
+        state.pendingExpansion = {
+          ...state.pendingExpansion,
+          requestId,
+        };
+        // A consumer join/restart is the first consumed attempt of its new
+        // demand epoch, leaving exactly one retry after a degrade.
+        state.retryCount = 1;
+      }
+      plan = {
+        afterSeq:
+          input.afterSeq ?? this.committedStreamCursor(input.threadId),
+        renderFloor:
+          state.pendingExpansion?.targetFloor ?? state.effectiveFloor,
+        requestId,
+      };
+    }
+
+    const wasConsumer = state.consumers.has(input.consumerId);
+    state.consumers.add(input.consumerId);
+    state.activeRequestId = plan.requestId;
+    try {
+      await this.port.startThreadStream({
+        threadId: input.threadId,
+        requestId: plan.requestId,
+        consumerId: input.consumerId,
+        afterSeq: plan.afterSeq,
+        ...(plan.renderFloor > 0 ? { renderFloor: plan.renderFloor } : {}),
+      });
+      return true;
+    } catch (error) {
+      if (state.activeRequestId === plan.requestId) {
+        state.activeRequestId = null;
+      }
+      if (state.pendingExpansion?.requestId === plan.requestId) {
+        state.pendingExpansion = null;
+      }
+      if (!wasConsumer) {
+        state.consumers.delete(input.consumerId);
+      }
+      throw error;
+    }
+  }
+
+  private streamEventIsCurrentRequest(
+    event: DesktopChatStreamEvent,
+    state: ThreadRenderWindowState | undefined,
+  ): boolean {
+    const requestId = event.requestId?.trim() || null;
+    if (!requestId) {
+      // Locally synthesized/cache frames use mirror.ingest directly. This
+      // compatibility branch keeps request-less test/direct events current
+      // only when no logical stream request exists.
+      return !state || state.activeRequestId === null;
+    }
+    return state?.activeRequestId === requestId;
+  }
+
+  private handleAcceptedRenderFrame(
+    event: Extract<DesktopChatStreamEvent, { type: "thread_render_frame" }>,
+    ingestResult: ThreadStreamIngestResult,
+  ): void {
+    if (!ingestResult.renderAccepted) {
+      return;
+    }
+    const state = this.renderWindowState(event.threadId);
+    state.effectiveFloor = this.normalizeRenderFloor(
+      event.renderState.window?.floor_seq,
+    );
+    state.hasAcceptedLiveFrame = true;
+
+    const pending = state.pendingExpansion;
+    if (pending && pending.requestId === event.requestId) {
+      const succeeded = state.effectiveFloor <= pending.targetFloor;
+      state.pendingExpansion = null;
+      if (succeeded) {
+        state.prepayMargin = Math.min(
+          MAX_RENDER_WINDOW_PREPAY_RECORDS,
+          state.prepayMargin * 2,
+        );
+      }
+    }
+
+    const consumerId = state.consumers.values().next().value as
+      | string
+      | undefined;
+    if (!consumerId) {
+      return;
+    }
+    void this.startThreadStreamThroughGate({
+      threadId: event.threadId,
+      consumerId,
+      mustEstablishStream: false,
+      demandTrigger: false,
+    }).catch(() => {});
   }
 
   /**
@@ -871,9 +1136,37 @@ export class TranscriptLifecycle {
    */
   notifyStreamEvent(event: DesktopChatStreamEvent): void {
     const { scheduleDesktopStateRefresh } = this.requireDeps();
-    this.port.ingest(event);
-    if (chatStreamEventHasRunLifecycle(event)) {
+    const windowState = this.renderWindowStateByThread.get(event.threadId);
+    const currentRequest = this.streamEventIsCurrentRequest(event, windowState);
+    const ingestResult = this.port.ingest(event, {
+      applyConnectionScoped: currentRequest,
+    });
+    if (
+      ingestResult.appliedEvents.some((committed) =>
+        chatStreamEventHasRunLifecycle(committed),
+      )
+    ) {
       scheduleDesktopStateRefresh();
+    }
+    for (const committed of ingestResult.appliedEvents) {
+      this.applyCommittedThreadMessage(committed);
+    }
+
+    if (event.type === "thread_render_frame") {
+      if (currentRequest) {
+        this.handleAcceptedRenderFrame(event, ingestResult);
+      }
+      return;
+    }
+    if (event.type !== "error" || !currentRequest) {
+      return;
+    }
+    if (event.terminal === true || isThreadStreamGapError(event)) {
+      const state = this.renderWindowStateByThread.get(event.threadId);
+      if (state) {
+        state.pendingExpansion = null;
+        state.activeRequestId = null;
+      }
     }
     this.handleChatStreamEvent(event);
   }
@@ -887,15 +1180,6 @@ export class TranscriptLifecycle {
       settingsDraft,
     } = this.requireDeps();
     const threadId = event.threadId;
-    if (event.type === "thread_render_frame") {
-      // The ingest above already committed the frame (events + render
-      // snapshot, monotonic guard included). This pass keeps the per-event
-      // machine/run-state/ack side effects.
-      for (const committed of event.events) {
-        this.applyCommittedThreadMessage(committed);
-      }
-      return;
-    }
     if (event.type !== "error") {
       return;
     }
@@ -1087,20 +1371,15 @@ export class TranscriptLifecycle {
     transcript: ThreadTranscript,
     consumerId: string,
   ): Promise<void> {
-    // Pin the render window floor this thread is already rendering with
-    // (live frames or a cache-restored snapshot ingested just before this
-    // call), so the stream keeps the gateway's windowed derivation instead
-    // of falling back to the full-transcript path on a caught-up resume.
-    const renderFloor =
-      this.port.getThreadSnapshot(threadId).renderState?.window?.floor_seq ?? 0;
-    await this.port.startThreadStream({
+    await this.startThreadStreamThroughGate({
       threadId,
       consumerId,
       afterSeq: streamResumeCursor({
         afterCursor: transcriptCommittedAfterCursor(transcript),
         fallbackMaxIndex: null,
       }),
-      ...(renderFloor > 0 ? { renderFloor } : {}),
+      mustEstablishStream: true,
+      demandTrigger: true,
     });
   }
 
@@ -1108,8 +1387,28 @@ export class TranscriptLifecycle {
     const threadId = input.threadId?.trim() || "";
     if (threadId) {
       this.flushTranscriptPersistence(threadId);
+      const state = this.renderWindowStateByThread.get(threadId);
+      if (state) {
+        const consumerId = input.consumerId?.trim() || "";
+        if (consumerId) {
+          state.consumers.delete(consumerId);
+        } else {
+          state.consumers.clear();
+        }
+        if (state.consumers.size === 0) {
+          state.pendingExpansion = null;
+          state.retryCount = 0;
+          state.activeRequestId = null;
+        }
+      }
     } else {
       this.flushAllTranscriptPersistence();
+      for (const state of this.renderWindowStateByThread.values()) {
+        state.consumers.clear();
+        state.pendingExpansion = null;
+        state.retryCount = 0;
+        state.activeRequestId = null;
+      }
     }
     await this.port.stopThreadStream(input);
   }
@@ -1127,7 +1426,7 @@ export class TranscriptLifecycle {
       setError,
     } = this.requireDeps();
     try {
-      await this.port.fetchOlderThreadHistoryPage(threadId, {
+      const pageApplied = await this.port.fetchOlderThreadHistoryPage(threadId, {
         onPageFetched: (transcript) => {
           const node = messagesRef.current;
           if (
@@ -1143,6 +1442,18 @@ export class TranscriptLifecycle {
           }
         },
       });
+      if (pageApplied) {
+        const state = this.renderWindowStateByThread.get(threadId);
+        const consumerId =
+          (state?.consumers.values().next().value as string | undefined) ??
+          SELECTED_THREAD_STREAM_CONSUMER_ID;
+        await this.startThreadStreamThroughGate({
+          threadId,
+          consumerId,
+          mustEstablishStream: false,
+          demandTrigger: true,
+        });
+      }
     } catch (historyError) {
       pendingMessagesPrependAnchorRef.current = null;
       setError(

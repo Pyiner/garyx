@@ -535,6 +535,28 @@ async fn resume_over_budget_degrades_to_window_by_default() {
         .and_then(Value::as_u64)
         .unwrap();
     assert!(first_seq > 1, "window starts above the ledger head");
+
+    // Render-window expansion asks for a lower floor, but replay safety stays
+    // authoritative: an over-budget committed gap still degrades instead of
+    // forcing the requested wide snapshot plus megabytes of events.
+    let lower_floor = build_thread_stream_replay(
+        &state,
+        &thread_id,
+        0,
+        ThreadStreamReplayOptions::resume(1),
+        None,
+    )
+    .await;
+    let lower_floor_frame: Value =
+        serde_json::from_str(&lower_floor.events[0].as_ref().unwrap().payload).unwrap();
+    assert_eq!(
+        lower_floor_frame.get("replay").and_then(Value::as_str),
+        Some("windowed")
+    );
+    assert!(
+        lower_floor.render_floor > 1,
+        "server degrade may override the requested lower floor"
+    );
 }
 
 #[tokio::test]
@@ -1217,6 +1239,142 @@ async fn thread_stream_replay_render_floor_windows_snapshot_only_frame() {
     );
 }
 
+async fn append_render_window_expansion_fixture(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    run_id: &str,
+) {
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_run_records(
+            thread_id,
+            Some(run_id),
+            &[
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "older question"}),
+                    "2026-06-18T12:00:00Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "older answer"}),
+                    "2026-06-18T12:00:01Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "user", "content": "new question"}),
+                    "2026-06-18T12:00:02Z",
+                ),
+                RunTranscriptRecordDraft::with_timestamp(
+                    json!({"role": "assistant", "content": "new answer"}),
+                    "2026-06-18T12:00:03Z",
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn caught_up_lower_render_floor_emits_same_seq_wider_snapshot_only_frame() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-window-caught-up-expansion";
+    append_render_window_expansion_fixture(
+        &state,
+        thread_id,
+        "run::render-window-caught-up-expansion",
+    )
+    .await;
+
+    let narrow = build_thread_stream_replay(
+        &state,
+        thread_id,
+        4,
+        ThreadStreamReplayOptions::resume(3),
+        None,
+    )
+    .await;
+    let narrow_frame: Value =
+        serde_json::from_str(&narrow.events[0].as_ref().unwrap().payload).unwrap();
+    let narrow_state = narrow_frame.get("render_state").unwrap();
+    assert_eq!(render_state_ref_ids(narrow_state), ["seq:3", "seq:4"]);
+
+    let expanded = build_thread_stream_replay(
+        &state,
+        thread_id,
+        4,
+        ThreadStreamReplayOptions::resume(1),
+        None,
+    )
+    .await;
+    assert!(expanded.sent_payloads.is_empty());
+    let expanded_frame: Value =
+        serde_json::from_str(&expanded.events[0].as_ref().unwrap().payload).unwrap();
+    assert!(expanded_frame.get("replay").is_none());
+    assert!(
+        expanded_frame
+            .get("events")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+    );
+    let expanded_state = expanded_frame.get("render_state").unwrap();
+    assert_eq!(
+        expanded_state.get("based_on_seq").and_then(Value::as_u64),
+        narrow_state.get("based_on_seq").and_then(Value::as_u64),
+    );
+    assert_eq!(
+        expanded_state
+            .get("window")
+            .and_then(|window| window.get("floor_seq"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        render_state_ref_ids(expanded_state),
+        ["seq:1", "seq:2", "seq:3", "seq:4"]
+    );
+}
+
+#[tokio::test]
+async fn within_budget_gap_with_lower_render_floor_keeps_verbatim_events() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::render-window-gap-expansion";
+    append_render_window_expansion_fixture(&state, thread_id, "run::render-window-gap-expansion")
+        .await;
+
+    let replay = build_thread_stream_replay(
+        &state,
+        thread_id,
+        2,
+        ThreadStreamReplayOptions::resume(1),
+        None,
+    )
+    .await;
+    let frame: Value = serde_json::from_str(&replay.events[0].as_ref().unwrap().payload).unwrap();
+    assert!(frame.get("replay").is_none());
+    assert_eq!(
+        frame
+            .get("events")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|event| event.get("seq").and_then(Value::as_u64).unwrap())
+            .collect::<Vec<_>>(),
+        vec![3, 4]
+    );
+    let render_state = frame.get("render_state").unwrap();
+    assert_eq!(
+        render_state
+            .get("window")
+            .and_then(|window| window.get("floor_seq"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        render_state_ref_ids(render_state),
+        ["seq:1", "seq:2", "seq:3", "seq:4"]
+    );
+}
+
 // ---- render_mode=delta (#TASK-1956 knife 1) ----
 
 fn new_delta_base() -> ThreadStreamDeltaBase {
@@ -1889,6 +2047,82 @@ async fn thread_stream_delta_floor_advance_replay_reseeds_windowed_base() {
     let reassembled = apply_render_delta(&held, &delta).unwrap();
     let expected = store
         .render_snapshot_in_window(thread_id, 3, live_seq)
+        .await
+        .unwrap();
+    assert_eq!(reassembled, delta_expected_snapshot(expected));
+}
+
+#[tokio::test]
+async fn thread_stream_delta_downward_expansion_reseeds_wide_base_and_continues() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delta-floor-downward-expansion";
+    let run_id = "run::delta-floor-downward-expansion";
+    append_render_window_expansion_fixture(&state, thread_id, run_id).await;
+
+    let delta_base = new_delta_base();
+    let narrow = build_thread_stream_replay(
+        &state,
+        thread_id,
+        4,
+        ThreadStreamReplayOptions::resume(3),
+        Some(&delta_base),
+    )
+    .await;
+    let narrow_frame: Value =
+        serde_json::from_str(&narrow.events[0].as_ref().unwrap().payload).unwrap();
+    assert_eq!(frame_render_state(&narrow_frame).rows.len(), 1);
+
+    // Same committed cursor, lower floor: a full frame must reseed the
+    // transport token onto the wider row set before any next live delta.
+    let expanded = build_thread_stream_replay(
+        &state,
+        thread_id,
+        4,
+        ThreadStreamReplayOptions::resume(1),
+        Some(&delta_base),
+    )
+    .await;
+    let expanded_frame: Value =
+        serde_json::from_str(&expanded.events[0].as_ref().unwrap().payload).unwrap();
+    assert!(expanded_frame.get("render_delta").is_none());
+    assert!(expanded_frame.get("replay").is_none());
+    let held = frame_render_state(&expanded_frame);
+    assert_eq!(held.based_on_seq, 4);
+    assert_eq!(held.rows.len(), 2);
+    assert_eq!(held.window.as_ref().map(|window| window.floor_seq), Some(1));
+    assert!(held.rows_hash.is_some());
+
+    let (live_seq, live_payload) = append_live_delta_record(
+        &state,
+        thread_id,
+        run_id,
+        json!({"role": "assistant", "content": "wide live continuation"}),
+        "2026-06-18T12:00:04Z",
+    )
+    .await;
+    let event = committed_thread_stream_live_event(
+        &state,
+        thread_id,
+        live_seq,
+        live_payload,
+        1,
+        Some(&delta_base),
+    )
+    .await
+    .unwrap();
+    let frame: Value = serde_json::from_str(&event.payload).unwrap();
+    let delta = frame_render_delta(&frame);
+    assert_eq!(delta.from_seq, 4);
+    assert_eq!(
+        Some(delta.from_rows_hash.clone()),
+        held.rows_hash.map(|hash| hash.to_string())
+    );
+    let reassembled = apply_render_delta(&held, &delta).unwrap();
+    let expected = state
+        .threads
+        .history
+        .transcript_store()
+        .render_snapshot_in_window(thread_id, 1, live_seq)
         .await
         .unwrap();
     assert_eq!(reassembled, delta_expected_snapshot(expected));

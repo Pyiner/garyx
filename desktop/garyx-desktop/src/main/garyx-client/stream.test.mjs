@@ -243,7 +243,11 @@ test("delta window and rateLimit scalars ride along whole", async () => {
     provider: "claude",
     willAutoResend: true,
   });
-  assert.deepEqual(floors, [4711]);
+  assert.deepEqual(
+    floors,
+    [0, 4711],
+    "every full frame reports its normalized floor, including clearing 0",
+  );
   // Absent-on-the-wire scalars stay absent after reassembly, mirroring the
   // full frame's serde skip_serializing_if shape.
   assert.equal("window" in events[0].renderState, false);

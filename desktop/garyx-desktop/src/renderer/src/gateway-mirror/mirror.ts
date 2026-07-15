@@ -49,6 +49,7 @@ import type {
   TranscriptLifecycleDeps,
 } from "./transcript-lifecycle.ts";
 import {
+  jsonValuesEqual,
   THREAD_HISTORY_PAGE_SIZE,
   THREAD_HISTORY_USER_QUERY_LIMIT,
 } from "./transcript-materialize.ts";
@@ -66,8 +67,19 @@ const EMPTY_PENDING_REMOTE_INPUTS: readonly PendingThreadInput[] = [];
 const EMPTY_THREAD_FRONTIER: ThreadFrontierSnapshot = {
   committedSeq: 0,
   renderBasedOnSeq: 0,
-  renderFloor: 0,
 };
+
+function renderStatesEqual(
+  left: RenderState | null,
+  right: RenderState,
+): boolean {
+  if (!left) {
+    return false;
+  }
+  const { rows_hash: _leftRowsHash, ...leftValue } = left;
+  const { rows_hash: _rightRowsHash, ...rightValue } = right;
+  return jsonValuesEqual(leftValue, rightValue);
+}
 
 function connectionEquals(
   a: ConnectionStatus | null,
@@ -195,6 +207,19 @@ export interface TranscriptMapsSnapshot {
     string,
     readonly PendingThreadInput[]
   >;
+}
+
+export interface ThreadStreamIngestOptions {
+  /** False for a superseded logical request: committed events still apply,
+   * while render/window/error ownership stays with the current request. */
+  readonly applyConnectionScoped?: boolean;
+}
+
+export interface ThreadStreamIngestResult {
+  readonly appliedEvents: readonly CommittedMessageEvent[];
+  readonly renderAccepted: boolean;
+  readonly renderChanged: boolean;
+  readonly connectionScopedApplied: boolean;
 }
 
 interface ThreadEntry {
@@ -911,6 +936,15 @@ export class GatewayMirror {
     return entry.cache.getSnapshotTranscript();
   }
 
+  earliestLoadedCommittedBodySeq(threadId: string): number | null {
+    const entry = this.threads.get(threadId);
+    if (!entry) {
+      return null;
+    }
+    this.touchThread(entry);
+    return entry.cache.earliestLoadedCommittedBodySeq();
+  }
+
   /**
    * Apply an authoritative (canonical) transcript for a thread as one
    * synchronous commit: the mirror-side counterpart of the hook's
@@ -982,6 +1016,7 @@ export class GatewayMirror {
     const entry = this.threadEntry(threadId);
     entry.cache = new ThreadTranscriptCache();
     entry.frontier = new ThreadFrontier();
+    this.transcriptLifecycle.clearThreadWindowState(threadId);
     this.commitThread(entry);
   }
 
@@ -1018,7 +1053,7 @@ export class GatewayMirror {
   async fetchOlderThreadHistoryPage(
     threadId: string,
     options?: { onPageFetched?: (transcript: ThreadTranscript) => void },
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!this.services) {
       throw new Error("GatewayMirror constructed without services");
     }
@@ -1031,7 +1066,7 @@ export class GatewayMirror {
         pagination.loadingBefore ||
         pagination.nextBeforeIndex === null
       ) {
-        return;
+        return false;
       }
 
       entry.cache.setHistoryPagination({
@@ -1050,6 +1085,7 @@ export class GatewayMirror {
         });
         options?.onPageFetched?.(transcript);
         entry.cache.applyOlderPage(transcript);
+        return true;
       } finally {
         const current = entry.cache.getHistoryPagination();
         entry.cache.setHistoryPagination(
@@ -1069,20 +1105,30 @@ export class GatewayMirror {
    * a frame. A bare `committed_message` is treated as a frame without a
    * render snapshot.
    */
-  ingest(event: DesktopChatStreamEvent): void {
+  ingest(
+    event: DesktopChatStreamEvent,
+    options?: ThreadStreamIngestOptions,
+  ): ThreadStreamIngestResult {
+    const applyConnectionScoped = options?.applyConnectionScoped !== false;
     if (event.type === "thread_render_frame") {
-      this.applyFrame(
+      return this.applyFrame(
         event.threadId,
         event.events,
-        event.renderState,
-        event.replay === "windowed",
+        applyConnectionScoped ? event.renderState : null,
+        applyConnectionScoped && event.replay === "windowed",
+        applyConnectionScoped,
       );
-      return;
     }
     if (event.type === "committed_message") {
-      this.applyFrame(event.threadId, [event], null);
+      return this.applyFrame(event.threadId, [event], null);
     }
     // "error" events carry no mirrored state in batch 0.
+    return {
+      appliedEvents: [],
+      renderAccepted: false,
+      renderChanged: false,
+      connectionScopedApplied: applyConnectionScoped,
+    };
   }
 
   private applyFrame(
@@ -1090,7 +1136,8 @@ export class GatewayMirror {
     events: readonly CommittedMessageEvent[],
     renderState: RenderState | null,
     windowedReplay = false,
-  ): void {
+    connectionScopedApplied = true,
+  ): ThreadStreamIngestResult {
     const entry = this.threadEntry(threadId);
     let changed = false;
 
@@ -1103,10 +1150,11 @@ export class GatewayMirror {
       }
     }
 
-    const appliedEvents = entry.cache.applyCommittedEvents(events);
-    if (appliedEvents.length > 0) {
+    const acceptedEvents = entry.cache.applyCommittedEvents(events);
+    const appliedEvents = acceptedEvents.map(({ event }) => event);
+    if (acceptedEvents.length > 0) {
       let highestApplied = 0;
-      for (const event of appliedEvents) {
+      for (const { event } of acceptedEvents) {
         if (event.seq > highestApplied) {
           highestApplied = event.seq;
         }
@@ -1116,10 +1164,12 @@ export class GatewayMirror {
       // applyCommittedThreadMessage loop. Only newly applied events map
       // (seq-idempotent redelivery stays a no-op). Rewrite/reset controls
       // skip the mapping and request an authoritative refetch instead.
-      for (const event of appliedEvents) {
-        const outcome = entry.cache.applyCommittedMessage(event, {
-          intentForId: this.intentLookup,
-        });
+      for (const { event, disposition } of acceptedEvents) {
+        const outcome = entry.cache.applyCommittedMessage(
+          event,
+          { intentForId: this.intentLookup },
+          disposition,
+        );
         if (outcome === "refetch_authoritative") {
           // Slice 6b-2c: the lifecycle is the single de-duplicated refetch
           // owner. The committed side-effect step triggers it too for the
@@ -1133,22 +1183,38 @@ export class GatewayMirror {
       changed = true;
     }
 
+    let renderAccepted = false;
+    let renderChanged = false;
     if (renderState) {
-      const verdict = entry.frontier.acceptRender(renderState.based_on_seq);
-      if (verdict.accepted && verdict.changed) {
+      renderAccepted = entry.frontier.acceptRender(renderState.based_on_seq);
+      if (
+        renderAccepted &&
+        !renderStatesEqual(entry.cache.getRenderState(), renderState)
+      ) {
         entry.cache.setRenderState(renderState);
         changed = true;
+        renderChanged = true;
       }
-      // Rejected (stale) or unchanged (same based_on_seq) snapshots neither
-      // bump the version nor notify: the server derives render_state
-      // deterministically from the committed ledger.
+      // Ordering-rejected or value-identical snapshots preserve the held
+      // reference. Cursor equality alone is never a change decision.
     }
 
     if (!changed) {
       this.pruneAndNotifyTranscriptMaps();
-      return;
+      return {
+        appliedEvents,
+        renderAccepted,
+        renderChanged,
+        connectionScopedApplied,
+      };
     }
     this.commitThread(entry);
+    return {
+      appliedEvents,
+      renderAccepted,
+      renderChanged,
+      connectionScopedApplied,
+    };
   }
 
   /**
@@ -1256,6 +1322,7 @@ export class GatewayMirror {
     for (const entry of evictable.slice(0, removeCount)) {
       if (this.threads.get(entry.threadId) === entry) {
         this.threads.delete(entry.threadId);
+        this.transcriptLifecycle.clearThreadWindowState(entry.threadId);
         removed = true;
       }
     }
