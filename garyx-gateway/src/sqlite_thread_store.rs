@@ -323,12 +323,12 @@ pub fn assemble_sqlite_thread_store(
     Ok(Arc::new(sqlite_store))
 }
 
-/// Contract suite run against every ThreadStore implementation
-/// (File / InMemory / Sqlite on memory and file databases): get/set/
-/// update/delete/list_keys/exists must agree (#TASK-1864 batch 2).
+/// Contract suite run against every read/write ThreadStore implementation
+/// (InMemory / Sqlite on memory and file databases): get/set/update/delete/
+/// list_keys/exists must agree (#TASK-1864 batch 2).
 #[cfg(test)]
 mod contract_tests {
-    use garyx_router::{FileThreadStore, InMemoryThreadStore};
+    use garyx_router::InMemoryThreadStore;
     use serde_json::json;
 
     use super::*;
@@ -439,13 +439,6 @@ mod contract_tests {
     #[tokio::test]
     async fn in_memory_store_satisfies_the_contract() {
         let store = InMemoryThreadStore::new();
-        run_contract(&store).await;
-    }
-
-    #[tokio::test]
-    async fn file_store_satisfies_the_contract() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = FileThreadStore::new(dir.path()).await.expect("file store");
         run_contract(&store).await;
     }
 
