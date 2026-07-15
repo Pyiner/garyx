@@ -12,7 +12,7 @@ PARTIAL claims are scheduled with their verified preconditions.
 | # | Claim | Verdict | Batch |
 |---|-------|---------|-------|
 | 1 | `garyx-core` keys/label/route_resolver test island (787 impl + 649 test lines, zero production consumers) | CONFIRMED | R1 |
-| 2 | `FileThreadStore` write half (set/delete/update/clear/size/lock/atomic-write) dead in production | PARTIAL — set/delete/update pinned by `ThreadStore` trait; needs import-source narrowing first | R2 |
+| 2 | `FileThreadStore` write half (set/delete/update/clear/size/lock/atomic-write) dead in production | PARTIAL — set/delete/update pinned by `ThreadStore` trait; write-half removal sequenced after legacy boot-import isolation v5 | R2 |
 | 3 | Bridge `ProviderHealth`: per-run write-lock updates, both getters zero callers | CONFIRMED | R3 |
 | 4 | Mobile `HomeProjectionActor` per-boundary full legacy-projection parity compare, parity outputs have zero production consumers | CONFIRMED | M1 |
 | 5 | Mobile 8 zero-consumer `GaryxGatewayClient` wrappers | CONFIRMED (all 8 mirror shipped Mac features — see Decision Point) | M2 |
@@ -31,11 +31,19 @@ Delete:
 - `garyx-core/src/keys.rs`, `garyx-core/src/keys/` (`parsing.rs`, `tests.rs`)
 - `garyx-core/src/label.rs`, `garyx-core/src/label/tests.rs`
 - `garyx-core/src/route_resolver.rs`, `garyx-core/src/route_resolver/tests.rs`
-- `garyx-core/src/lib.rs` re-exports for the three modules (lines 7–46 region)
+- `garyx-core/src/lib.rs` module declarations AND re-exports for the three
+  modules (the `mod` items plus the `pub use` block, lines 1–46 region)
 - Orphan fixtures: `tests/fixtures/keys_fixtures.json`,
-  `tests/fixtures/label_fixtures.json`, and the corresponding sections of
-  `tests/fixtures/generate_fixtures.py` (verify first whether the whole
-  script only serves these modules; if so delete the script).
+  `tests/fixtures/label_fixtures.json`,
+  `tests/fixtures/route_resolver_fixtures.json`, and the whole
+  `tests/fixtures/generate_fixtures.py` (it only serves these modules).
+  `tests/fixtures/stateful_routing_fixtures.json` showed zero content
+  references in pre-review probes — re-verify exhaustively during
+  implementation; delete only if confirmed orphan.
+- Now-unused `garyx-core/Cargo.toml` dependencies after the module removal:
+  `regex`, `tracing`, `thiserror`, `once_cell` (verified:
+  `slash_commands.rs` and `lib.rs` use none of them; keep `garyx-models`
+  and `serde_json`).
 
 Keep (production consumers exist):
 - `garyx-core/src/slash_commands.rs` + its tests + its `lib.rs` re-exports.
@@ -53,26 +61,35 @@ Validation: `cargo test -p garyx-core`; `cargo test -p garyx-router
 --all-targets`; exhaustive `rg` (no truncation, `--hidden`) proving zero
 remaining references to every deleted pub symbol.
 
-## Batch R2 — Narrow boot-import source, then delete `FileThreadStore` write half
+## Batch R2 — `FileThreadStore` dead write half (two phases; phase 2 blocked by legacy v5)
 
-Precondition refactor (verified: `set`/`delete`/`update` are required
-`ThreadStore` trait methods with no default bodies, so they cannot be
-deleted while `FileThreadStore` implements `ThreadStore`):
-- Narrow the legacy boot-import source from `Arc<dyn ThreadStore>` to a
-  read-only surface (small trait with `list_keys` + `get`, or the concrete
-  read-only type). Touch points: `garyx/src/runtime_assembler.rs:42-92`,
-  `garyx-gateway` `assemble_sqlite_thread_store` /
-  `import_thread_records_if_needed` signatures
-  (`sqlite_thread_store.rs:323/334/360-509`). Direction matches
-  `docs/design/legacy-boot-import-isolation.md`.
+Verified constraint: `set`/`delete`/`update` are required `ThreadStore`
+trait methods with no default bodies, so they cannot be deleted while
+`FileThreadStore` implements `ThreadStore`. The canonical narrowing is
+already specified by `docs/design/legacy-boot-import-isolation.md` (v5):
+`assemble_sqlite_thread_store` becomes a pure constructor (loses its
+`import_source` parameter) and the import moves to a dedicated
+`legacy_boot_import.rs` seam with an injectable source double for fallible
+`list_keys`/`get` coverage (v5 doc :116, :461). That refactor is designed
+but NOT yet implemented (no `legacy_boot_import.rs` in tree); inventing a
+competing narrowing here would conflict with it.
 
-Then delete from `garyx-router/src/file_store.rs`:
-- `impl ThreadStore for FileThreadStore` write methods (`set`/`delete`/
-  `update`) — replaced by the narrowed read-only impl
-- `clear()`, `size()`, `with_options()` (non-trait, test-only consumers)
-- Lock machinery: `acquire_lock`, `release_lock`, `check_stale_lock`,
-  `lock_file_for_path`, `resolve_write_lock_thread_file`
-- `atomic_write`
+Phase 1 (this cleanup round — safe now):
+- Delete `clear()`, `size()`, `with_options()` from
+  `garyx-router/src/file_store.rs` (non-trait, test-only consumers) plus
+  their tests in `file_store/tests.rs`.
+
+Phase 2 (sequenced AFTER the legacy v5 implementation lands; execute as
+its final step, not as an independent competing refactor):
+- Read-only seam per v5: `pub(crate) LegacyArchiveReader` exposing only
+  fallible `list_keys` + `get`, injectable double included. No
+  "concrete type" shortcut. The full archive walk stays legal ONLY inside
+  boot import (repository contract; no `list_keys`-scan condition queries
+  anywhere else, no runtime JSON backend resurrection).
+- Then delete from `file_store.rs`: the `ThreadStore` write impls
+  (`set`/`delete`/`update`), lock machinery (`acquire_lock`,
+  `release_lock`, `check_stale_lock`, `lock_file_for_path`,
+  `resolve_write_lock_thread_file`), and `atomic_write`.
 
 Keep (production boot import uses list+get only — verified at
 `sqlite_thread_store.rs:366/408`):
@@ -82,22 +99,32 @@ Keep (production boot import uses list+get only — verified at
   `deep_clone`, `storage_roots`, `CacheEntry`/cache,
   `encode_thread_storage_key`, `thread_storage_file_name`.
 
-Test migration:
-- Gateway `contract_tests` currently seed legacy data via `source.set(...)`
-  (`sqlite_thread_store.rs:847`, cfg(test)). Rework seeding to write legacy
-  JSON layout files directly on disk (more faithful to the real
-  pre-upgrade scenario). Do not keep a pub write path just for tests.
-- `garyx-router/src/file_store/tests.rs`: write-path tests are deleted with
+Test migration (phase 2; complete consumer list from design review):
+- Gateway full read/write `ThreadStore` contract case for `FileThreadStore`
+  (`sqlite_thread_store.rs:635` region) — delete that case; add a
+  disk-JSON-driven read-only archive-reader contract in its place.
+- Gateway import seeding via `source.set(...)`
+  (`sqlite_thread_store.rs:847`, cfg(test)) — rework to write legacy JSON
+  layout files directly on disk (more faithful to the real pre-upgrade
+  scenario). Do not keep a pub write path just for tests.
+- `garyx/src/main_tests.rs:2578` (`startup_runtime_assembles...` calls
+  `FileThreadStore.set`) — seed by writing legacy JSON files directly;
+  keep its startup-import assertions.
+- Gateway ordering regression test
+  (`assembly_migrates_task_kind_only_after_boot_import`,
+  `sqlite_thread_store.rs:813`) — keep, re-pointed at the new seam.
+- `garyx-router/src/file_store/tests.rs`: write-path tests deleted with
   the dead code; read-path tests (list/get/eviction/key codec) stay and
   switch to on-disk seeding.
 
 Contract check (verified): boot import (list+get) and backup-restore
 (archived JSON on disk + forced re-import) are both read-only over the
-archive; deleting the write half breaks neither. No runtime JSON backend
-may be (re)introduced.
+archive; deleting the write half breaks neither.
 
 Validation: `cargo test -p garyx-router --all-targets`; `cargo test -p
-garyx-gateway --lib`; `scripts/test/rust_tier1_fast.sh --changed`.
+garyx-gateway --all-targets`; `cargo test -p garyx` (the tier1 fast script
+does not cover the `garyx` crate); `scripts/test/rust_tier1_fast.sh
+--changed`.
 
 ## Batch R3 — Delete `ProviderHealth` dead-write cluster
 
@@ -109,9 +136,14 @@ Delete:
   906/913/1082/1539/1546/1629
 - `garyx-bridge/src/multi_provider/state.rs:86` `provider_health` field
 - `garyx-bridge/src/multi_provider/lifecycle.rs:230-232` retain block
-- `garyx-bridge/src/provider_trait.rs:222-` `ProviderHealth` struct + impl
-  (`record_success`/`record_failure`), `lib.rs:14` re-export,
-  `provider_trait/tests.rs:34-105`
+- `garyx-bridge/src/provider_trait.rs`: `ProviderHealth` struct + impl
+  (`record_success`/`record_failure`, :222-) AND the bridge-local
+  `HealthStatus` enum (:211) — once the cluster goes it has no consumer
+  outside the cluster and its tests. Remove both from the `lib.rs:14`
+  re-export, delete `provider_trait/tests.rs:34-105`, and drop imports
+  orphaned by the deletion (`Instant`, `HashMap`, …). The gateway's own
+  `HealthStatus` (`garyx-gateway/src/health.rs`) is a different type —
+  untouched.
 
 Keep: the `/health/detailed` chain (`route_graph.rs:39`, `routes.rs:622`,
 `health.rs:41` `HealthChecker`) — verified independent of topology.
@@ -151,6 +183,14 @@ Keep:
   still-shipping production paths (actor vs legacy fallback). Mark
   `legacyCheckpointInput()` with a doc comment stating it is test-oracle
   support.
+- Oracle gap fix (design-review finding): the runtime checkpoint also
+  compares `selectedRecentFilter` and `recentFeedPresentation`
+  (`HomeProjectionActor.swift:215` region) while the reducer oracle only
+  compares sections/isLoading/isHomeVisible. Extend
+  `assertCheckpointParity` to compare those two fields and add oracle
+  cases exercising a `.nonTask` recent filter and a non-default feed
+  presentation transition, so deleting runtime parity does not drop that
+  equivalence coverage.
 
 Test migration:
 - `HomeProjectionActorTests.swift:5-39`
@@ -210,9 +250,23 @@ block (incl. inline bodies) + runtime function.
 | activateTerminalSession | :392 | :484 | index.ts:1468 (+:254) | terminal-runtime.ts:235 |
 
 Constraints:
-- Delete functions, never files: `workspace-git-runtime.ts`, `tasks.ts`,
-  `catalog.ts`, `gateway.ts`, `terminal-runtime.ts`, `browser-runtime.ts`
-  all have consumed sibling exports.
+- `workspace-git-runtime.ts`: delete the WHOLE file — all four exports
+  (`getWorkspaceGitDetailsForPath` :79, `getWorkspaceGitDetails` :125,
+  `commitWorkspaceChanges` :132, `pushWorkspaceBranch` :157) belong
+  exclusively to these dead chains (verified; `getWorkspaceGitDetailsForPath`
+  is only called by the other three). The live `getWorkspaceGitStatus`
+  consumed by the renderer is a separate implementation in
+  `garyx-client/workspaces.ts:300` — do not touch it.
+- Everywhere else delete functions, not files: `tasks.ts`, `catalog.ts`,
+  `gateway.ts`, `terminal-runtime.ts`, `browser-runtime.ts` have consumed
+  sibling exports.
+- Go one layer deeper than the wrappers: `TerminalRuntime.activateSession`
+  (`terminal-runtime.ts:142`) has no caller left once the module-level
+  wrapper (:235-239) goes — delete the method too. Exported types orphaned
+  by the chains (`GatewayProbeResult`, the workspace git
+  detail/file/result types, and the listed `*Input` types) must be
+  rg-verified and deleted: the D3 unused gate does NOT report exported
+  orphans, so D1 must prove zero references itself.
 - `getTask` runtime is covered by `src/main/gary-client.test.mjs:11/328/359`
   — remove/adjust those test cases in the same commit.
 - `*Input` types in `src/shared/contracts/{task,workspace,browser-terminal,catalog}.ts`
@@ -247,8 +301,15 @@ Delete together (all under `desktop/garyx-desktop`):
 - Regenerate or prune corresponding `ds-bundle/` derived output per the
   design-sync tool's flow.
 
-Validation: `npx tsc --noEmit` + `npm run test:unit`; design-sync tool run
-(if locally runnable) must not fail on the barrel.
+Validation (mandatory — plain `tsc` does not cover `.design-sync`; the
+tsconfig includes only `src/**`):
+- `npx --no-install esbuild .design-sync/entry.tsx --bundle
+  --platform=browser --outfile=/dev/null --tsconfig=tsconfig.json` must
+  succeed after the deletions;
+- `rg --hidden` proof of zero remaining exact references to the two
+  components across `.design-sync/` (entry/config/previews/conventions)
+  and `ds-bundle/`;
+- `npx tsc --noEmit` + `npm run test:unit`.
 
 ## Batch D3 — Enable the unused gate and clear diagnostics (AFTER D1/D2)
 
@@ -271,7 +332,10 @@ packaged smoke folded into final acceptance.
 
 ## Ordering & Commits
 
-- R1 / R2 / R3 / M1 / M2 are mutually independent.
+- R1 / R2 phase 1 / R3 / M1 / M2 are mutually independent.
+- R2 phase 2 is blocked by the legacy boot-import isolation v5
+  implementation and ships as that work's final step — out of this round
+  unless v5 lands within it.
 - D1, D2 → D3 strictly ordered.
 - One commit per batch (or per coherent unit within a batch); never a
   single mixed mega-commit. Commit immediately after each unit — no
