@@ -1,6 +1,6 @@
 # Render Window Expansion: History Below the Windowed-Resume Floor
 
-Status: v5 (revised after design review #TASK-2299 v4 FAIL; re-review pending)
+Status: v5 approved (#TASK-2299 PASS 2026-07-15)
 Related: `thread-render-frame-incremental.md` (knife 2: over-budget degrade),
 `thread-open-replay-trim-design.md` (floor-windowed rows),
 `perf-thread-stream-replay-degrade.md`.
