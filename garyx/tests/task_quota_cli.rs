@@ -127,8 +127,13 @@ async fn quota_exhaustion_exits_one_and_never_posts_task() {
         "create failure prints nothing on stdout: {stdout}"
     );
     assert!(
-        stderr.contains("Error:"),
-        "one human-readable error line on stderr: {stderr}"
+        stderr.starts_with("Error: "),
+        "stderr starts with the error line: {stderr}"
+    );
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "exactly one stderr line: {stderr}"
     );
     assert!(
         stderr.contains("quota"),
