@@ -58,6 +58,30 @@ final class PinnedOrderStateTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(sends(update).first).expectedRevision, 7)
     }
 
+    func testHomeListStoreExposesNonBlockingPendingSyncStatus() throws {
+        let store = GaryxHomeThreadListStore()
+        _ = store.updatePinnedOrderState { state in
+            state.switchGateway(to: gateway)
+        }
+        _ = store.updatePinnedOrderState { state in
+            state.receivePage(page(["a", "b"], 7), stamp: state.requestStamp())
+        }
+        _ = store.updatePinnedOrderState { state in state.beginDrag() }
+        _ = store.updatePinnedOrderState { state in
+            state.previewDrag(order: ["b", "a"])
+        }
+        let drop = store.updatePinnedOrderState { state in state.acceptDrop() }
+        let request = try XCTUnwrap(sends(drop).first)
+
+        _ = store.updatePinnedOrderState { state in
+            state.failReorder(request, failure: .permanent(statusCode: 405))
+        }
+
+        XCTAssertEqual(store.pinnedOrderSyncStatusLabel, "Sync pending")
+        _ = store.updatePinnedOrderState { state in state.resumePausedSync() }
+        XCTAssertNil(store.pinnedOrderSyncStatusLabel)
+    }
+
     func testDragBufferKeepsHighestAcceptedProjectionForCancel() throws {
         var state = makeState(["a", "b"], revision: 10)
         _ = state.beginDrag()

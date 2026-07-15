@@ -11,11 +11,19 @@ enum GaryxPinnedThreadReorderRuntimeGate {
         return version.majorVersion == 26 && version.minorVersion == 5
     }
 
+    static var isFeatureEnabled: Bool {
+        guard isVerifiedRuntime else { return false }
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["GARYX_MOBILE_PIN_REORDER_DISABLED"] != "1"
+        #else
+        return true
+        #endif
+    }
+
     #if DEBUG
     static var isArchitectureSpikeEnabled: Bool {
-        isVerifiedRuntime
+        isFeatureEnabled
             && ProcessInfo.processInfo.environment["GARYX_MOBILE_PIN_REORDER_SPIKE"] == "1"
-            && ProcessInfo.processInfo.environment["GARYX_MOBILE_PIN_REORDER_DISABLED"] != "1"
     }
     #endif
 }

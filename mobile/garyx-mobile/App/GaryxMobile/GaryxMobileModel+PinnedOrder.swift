@@ -1,15 +1,6 @@
 import Foundation
 
 extension GaryxMobileModel {
-    var pinnedOrderSyncStatusLabel: String? {
-        switch homeThreadListStore.pinnedOrderState.pendingSync {
-        case .retryScheduled, .pausedPermanent:
-            return "Sync pending"
-        case .settled, .ready, .inFlight, .waitingForMembership, .coalescedBehindFlight:
-            return nil
-        }
-    }
-
     func reloadPinnedOrderDomainForCurrentGateway() {
         pinnedOrderReorderTask?.cancel()
         pinnedOrderReorderTask = nil

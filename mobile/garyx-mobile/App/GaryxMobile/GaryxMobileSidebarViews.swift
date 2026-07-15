@@ -25,6 +25,10 @@ struct GaryxRootNavigationView: View, Equatable {
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onUnpinThread: (String) -> Void
+    let onBeginPinnedOrderDrag: () -> Void
+    let onPreviewPinnedOrderDrag: ([String]) -> Void
+    let onAcceptPinnedOrderDrop: () -> Void
+    let onCancelPinnedOrderDrag: () -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
 
     static func == (lhs: GaryxRootNavigationView, rhs: GaryxRootNavigationView) -> Bool {
@@ -52,6 +56,10 @@ struct GaryxRootNavigationView: View, Equatable {
                 onOpenThread: onOpenThread,
                 onTogglePinnedThread: onTogglePinnedThread,
                 onUnpinThread: onUnpinThread,
+                onBeginPinnedOrderDrag: onBeginPinnedOrderDrag,
+                onPreviewPinnedOrderDrag: onPreviewPinnedOrderDrag,
+                onAcceptPinnedOrderDrop: onAcceptPinnedOrderDrop,
+                onCancelPinnedOrderDrag: onCancelPinnedOrderDrag,
                 onArchiveThread: onArchiveThread
             )
                 .equatable()
@@ -144,15 +152,15 @@ private enum GaryxSidebarMetrics {
 struct GaryxHomeThreadListView: View, Equatable {
     @ObservedObject var homeListStore: GaryxHomeThreadListStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var pinnedDragLifecycle = GaryxPinnedDragLifecycleController()
+    @State private var threadMenuDismissToken = 0
+    @State private var completedDropHapticTrigger = 0
     #if DEBUG
     @ObservedObject private var performanceProbe = GaryxHomeScrollPerformanceProbe.shared
-    @StateObject private var pinnedDragLifecycle = GaryxPinnedDragLifecycleController()
     @State private var dragBaselineOrder: [String] = []
     @State private var dragPreviewOrder: [String]?
     @State private var spikeCommittedOrder: [String]?
     @State private var debugInjectedServerOrder: [String]?
-    @State private var threadMenuDismissToken = 0
-    @State private var completedDropHapticTrigger = 0
     @State private var spikeCommitCount = 0
     @State private var spikeRemoteMutationCount = 0
     @State private var midLiftSnapshotStayedFrozen = false
@@ -169,6 +177,10 @@ struct GaryxHomeThreadListView: View, Equatable {
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onUnpinThread: (String) -> Void
+    let onBeginPinnedOrderDrag: () -> Void
+    let onPreviewPinnedOrderDrag: ([String]) -> Void
+    let onAcceptPinnedOrderDrop: () -> Void
+    let onCancelPinnedOrderDrag: () -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
     private let silentRefreshIntervalNanos: UInt64 = 10_000_000_000
 
@@ -200,19 +212,19 @@ struct GaryxHomeThreadListView: View, Equatable {
             .task(id: homeListStore.snapshot.isHomeVisible) {
                 await runSilentSidebarRefreshLoop()
             }
-            #if DEBUG
-            .overlay(alignment: .bottomLeading) {
-                debugPerformanceProbeControls
-            }
             .overlay {
-                debugPinnedDragLifecycleAdapter
-            }
-            .overlay(alignment: .topTrailing) {
-                debugPinnedReorderControls
+                pinnedDragLifecycleAdapter
             }
             .sensoryFeedback(.selection, trigger: completedDropHapticTrigger)
             .onAppear {
                 configurePinnedDragLifecycle()
+            }
+            #if DEBUG
+            .overlay(alignment: .bottomLeading) {
+                debugPerformanceProbeControls
+            }
+            .overlay(alignment: .topTrailing) {
+                debugPinnedReorderControls
             }
             #endif
             .garyxThreadActionMenuHost(bottomInset: 88)
@@ -276,7 +288,11 @@ struct GaryxHomeThreadListView: View, Equatable {
             Group {
                 switch item {
                 case .pinnedHeader:
-                    GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
+                    GaryxSidebarSectionHeader(
+                        title: "Pinned",
+                        systemImage: "pin.fill",
+                        statusLabel: homeListStore.pinnedOrderSyncStatusLabel
+                    )
                         .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                         .padding(.bottom, 4)
 
@@ -396,12 +412,13 @@ struct GaryxHomeThreadListView: View, Equatable {
         _ items: [GaryxHomeThreadListItem]
     ) -> [GaryxHomeThreadListItem] {
         #if DEBUG
-        guard GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled else { return items }
-        let serverItems = applyingPinnedOrder(debugInjectedServerOrder, to: items)
-        return applyingPinnedOrder(dragPreviewOrder ?? spikeCommittedOrder, to: serverItems)
-        #else
-        return items
+        if GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
+            let serverItems = applyingPinnedOrder(debugInjectedServerOrder, to: items)
+            return applyingPinnedOrder(dragPreviewOrder ?? spikeCommittedOrder, to: serverItems)
+        }
         #endif
+        guard GaryxPinnedThreadReorderRuntimeGate.isFeatureEnabled else { return items }
+        return applyingPinnedOrder(homeListStore.pinnedOrderState.presentedOrder, to: items)
     }
 
     private func applyingPinnedOrder(
@@ -429,43 +446,30 @@ struct GaryxHomeThreadListView: View, Equatable {
     }
 
     private func pinnedMoveIsDisabled(for item: GaryxHomeThreadListItem) -> Bool {
-        #if DEBUG
-        guard GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled else { return true }
+        guard GaryxPinnedThreadReorderRuntimeGate.isFeatureEnabled else { return true }
         if case let .thread(_, region) = item, region == .pinned { return false }
-        #endif
         return true
     }
 
     private var pinnedMoveAction: ((IndexSet, Int) -> Void)? {
-        #if DEBUG
-        guard GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled else { return nil }
+        guard GaryxPinnedThreadReorderRuntimeGate.isFeatureEnabled else { return nil }
         return handlePinnedMove
-        #else
-        return nil
-        #endif
     }
 
     private func pinnedMenuDismissToken(for region: GaryxHomeThreadListRegion) -> Int {
-        #if DEBUG
-        if region == .pinned, GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
+        if region == .pinned, GaryxPinnedThreadReorderRuntimeGate.isFeatureEnabled {
             return threadMenuDismissToken
         }
-        #endif
         return 0
     }
 
     private func pinnedMenuMovementSuppression(for region: GaryxHomeThreadListRegion) -> Bool {
-        #if DEBUG
         return region == .pinned
-            && GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled
-        #else
-        return false
-        #endif
+            && GaryxPinnedThreadReorderRuntimeGate.isFeatureEnabled
     }
 
-    #if DEBUG
     private func configurePinnedDragLifecycle() {
-        guard GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled else { return }
+        guard GaryxPinnedThreadReorderRuntimeGate.isFeatureEnabled else { return }
         pinnedDragLifecycle.configure(
             callbacks: .init(
                 began: beginPinnedDragSession,
@@ -477,20 +481,19 @@ struct GaryxHomeThreadListView: View, Equatable {
     }
 
     private func beginPinnedDragSession() {
-        let order = renderedPinnedOrder
-        dragBaselineOrder = order
-        dragPreviewOrder = order
-        midLiftSnapshotStayedFrozen = false
-
-        guard ProcessInfo.processInfo.environment["GARYX_MOBILE_PIN_REORDER_INJECT_MIDLIFT"] == "1"
-        else { return }
-        debugInjectedServerOrder = Array(order.reversed())
-        DispatchQueue.main.async {
-            midLiftSnapshotStayedFrozen = renderedPinnedOrder == order
+        #if DEBUG
+        if GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
+            beginArchitectureSpikePinnedDragSession()
+            return
         }
+        #endif
+        onBeginPinnedOrderDrag()
     }
 
     private func pinnedDragSessionDidMove() {
+        // The stationary menu recognizer and native reorder lift are armed
+        // together. Once movement establishes drag ownership, invalidate any
+        // menu that managed to present during the hold.
         threadMenuDismissToken &+= 1
     }
 
@@ -504,20 +507,65 @@ struct GaryxHomeThreadListView: View, Equatable {
             destination: destination
         ) else { return }
         pinnedDragLifecycle.notePreviewMove(move.order)
-        dragPreviewOrder = move.order
+        #if DEBUG
+        if GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
+            dragPreviewOrder = move.order
+            return
+        }
+        #endif
+        onPreviewPinnedOrderDrag(move.order)
     }
 
     private func acceptPinnedDragSession(previewOrder: [String]) {
-        spikeCommittedOrder = previewOrder
-        dragPreviewOrder = nil
-        dragBaselineOrder = []
-        spikeCommitCount += 1
+        #if DEBUG
+        if GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
+            spikeCommittedOrder = previewOrder
+            dragPreviewOrder = nil
+            dragBaselineOrder = []
+            spikeCommitCount += 1
+            completedDropHapticTrigger &+= 1
+            return
+        }
+        #endif
+        // Fold the controller's terminal preview before accepting in case the
+        // final SwiftUI onMove arrived on the deferred classification turn.
+        onPreviewPinnedOrderDrag(previewOrder)
+        onAcceptPinnedOrderDrop()
         completedDropHapticTrigger &+= 1
     }
 
     private func cancelPinnedDragSession() {
-        dragPreviewOrder = nil
-        dragBaselineOrder = []
+        #if DEBUG
+        if GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
+            dragPreviewOrder = nil
+            dragBaselineOrder = []
+            return
+        }
+        #endif
+        onCancelPinnedOrderDrag()
+    }
+
+    @ViewBuilder
+    private var pinnedDragLifecycleAdapter: some View {
+        if GaryxPinnedThreadReorderRuntimeGate.isFeatureEnabled {
+            GaryxPinnedDragLifecycleAdapter(controller: pinnedDragLifecycle)
+                .allowsHitTesting(false)
+        }
+    }
+
+    #if DEBUG
+    private func beginArchitectureSpikePinnedDragSession() {
+        let order = renderedPinnedOrder
+        dragBaselineOrder = order
+        dragPreviewOrder = order
+        midLiftSnapshotStayedFrozen = false
+
+        guard ProcessInfo.processInfo.environment["GARYX_MOBILE_PIN_REORDER_INJECT_MIDLIFT"] == "1"
+        else { return }
+        debugInjectedServerOrder = Array(order.reversed())
+        DispatchQueue.main.async {
+            midLiftSnapshotStayedFrozen = renderedPinnedOrder == order
+        }
     }
 
     private var renderedPinnedOrder: [String] {
@@ -526,14 +574,6 @@ struct GaryxHomeThreadListView: View, Equatable {
         ).compactMap { item in
             guard case let .thread(row, region) = item, region == .pinned else { return nil }
             return row.id
-        }
-    }
-
-    @ViewBuilder
-    private var debugPinnedDragLifecycleAdapter: some View {
-        if GaryxPinnedThreadReorderRuntimeGate.isArchitectureSpikeEnabled {
-            GaryxPinnedDragLifecycleAdapter(controller: pinnedDragLifecycle)
-                .allowsHitTesting(false)
         }
     }
 
@@ -1710,6 +1750,7 @@ private struct GaryxSidebarSectionHeader: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .layoutPriority(1)
+                    .accessibilityIdentifier("\(title.lowercased())-section-status")
             }
         }
         .accessibilityElement(children: .combine)

@@ -60,6 +60,18 @@ struct GaryxRootView: View {
                     onUnpinThread: { threadId in
                         model.unpinThread(threadId)
                     },
+                    onBeginPinnedOrderDrag: {
+                        model.beginPinnedOrderDrag()
+                    },
+                    onPreviewPinnedOrderDrag: { order in
+                        model.previewPinnedOrderDrag(order)
+                    },
+                    onAcceptPinnedOrderDrop: {
+                        model.acceptPinnedOrderDrop()
+                    },
+                    onCancelPinnedOrderDrag: {
+                        model.cancelPinnedOrderDrag()
+                    },
                     onArchiveThread: { thread in
                         await model.archiveThread(thread)
                     },
@@ -495,6 +507,10 @@ struct GaryxShellView: View, Equatable {
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onUnpinThread: (String) -> Void
+    let onBeginPinnedOrderDrag: () -> Void
+    let onPreviewPinnedOrderDrag: ([String]) -> Void
+    let onAcceptPinnedOrderDrop: () -> Void
+    let onCancelPinnedOrderDrag: () -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
     let onOpenPanel: (GaryxMobilePanel) -> Void
     let onOpenBotGroup: (GaryxMobileBotGroup) -> Void
@@ -619,6 +635,10 @@ struct GaryxShellView: View, Equatable {
                     onOpenThread: onOpenThread,
                     onTogglePinnedThread: onTogglePinnedThread,
                     onUnpinThread: onUnpinThread,
+                    onBeginPinnedOrderDrag: onBeginPinnedOrderDrag,
+                    onPreviewPinnedOrderDrag: onPreviewPinnedOrderDrag,
+                    onAcceptPinnedOrderDrop: onAcceptPinnedOrderDrop,
+                    onCancelPinnedOrderDrag: onCancelPinnedOrderDrag,
                     onArchiveThread: onArchiveThread
                 )
                 .equatable()

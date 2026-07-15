@@ -862,6 +862,15 @@ final class GaryxHomeThreadListStore: ObservableObject {
         transitionState.presentedPinnedThreadIds(from: baseIds)
     }
 
+    var pinnedOrderSyncStatusLabel: String? {
+        switch pinnedOrderState.pendingSync {
+        case .retryScheduled, .pausedPermanent:
+            return "Sync pending"
+        case .settled, .ready, .inFlight, .waitingForMembership, .coalescedBehindFlight:
+            return nil
+        }
+    }
+
     /// Runs one pure pinned-order reduction while keeping the authority state
     /// owned by the home-list store. App-layer transport code executes the
     /// returned effects, but cannot replace the reducer domain piecemeal.
