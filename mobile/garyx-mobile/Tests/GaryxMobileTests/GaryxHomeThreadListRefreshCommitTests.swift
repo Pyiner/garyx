@@ -960,6 +960,797 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertEqual(model.homeThreadListStore.presentationSnapshot.sections.recent.map(\.id), [chat.id])
     }
 
+    func testPinnedReorderLow200AfterHighGetResendsWithAcceptedFloor() async throws {
+        try await assertPinnedReorderBelowFloorCompletion(statusCode: 200)
+    }
+
+    func testPinnedReorderLow409AfterHighGetResendsWithAcceptedFloor() async throws {
+        try await assertPinnedReorderBelowFloorCompletion(statusCode: 409)
+    }
+
+    func testPinnedReorderPlainConflictMergesMembershipAndResendsOnce() async throws {
+        let puts = GaryxLockedPinsPutRecorder()
+        let conflict = try garyxPinsPageData(
+            ids: ["thread-c", "thread-a", "thread-b"],
+            revision: 11
+        )
+        let settledPage = try garyxPinsPageData(
+            ids: ["thread-c", "thread-b", "thread-a"],
+            revision: 12
+        )
+        let session = makeStubSession { request in
+            let path = try XCTUnwrap(request.url?.path)
+            if request.httpMethod == "PUT", path == "/api/thread-pins" {
+                let index = try puts.record(request)
+                return try garyxStubResponse(
+                    request,
+                    statusCode: index == 1 ? 409 : 200,
+                    data: index == 1 ? conflict : settledPage
+                )
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        primePinnedModel(model, ids: ["thread-a", "thread-b"], revision: 10)
+        model.beginPinnedOrderDrag()
+        model.previewPinnedOrderDrag(["thread-b", "thread-a"])
+        model.acceptPinnedOrderDrop()
+
+        let settled = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.outbox == nil
+        }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(
+            puts.values,
+            [
+                GaryxRecordedPinsPut(
+                    threadIds: ["thread-b", "thread-a"],
+                    expectedRevision: 10
+                ),
+                GaryxRecordedPinsPut(
+                    threadIds: ["thread-c", "thread-b", "thread-a"],
+                    expectedRevision: 11
+                ),
+            ]
+        )
+        XCTAssertEqual(model.pinnedThreadIds, ["thread-c", "thread-b", "thread-a"])
+    }
+
+    func testPinsGetIssuedAfterDropCannotRevertAfterHigherAck() async throws {
+        let putStarted = expectation(description: "reorder started")
+        let staleGetStarted = expectation(description: "stale pins get started")
+        let putGate = DispatchSemaphore(value: 0)
+        let getGate = DispatchSemaphore(value: 0)
+        let puts = GaryxLockedPinsPutRecorder()
+        let recent = try garyxRecentThreadsData(ids: ["thread-a", "thread-b"])
+        let ack = try garyxPinsPageData(ids: ["thread-b", "thread-a"], revision: 12)
+        let stale = try garyxPinsPageData(ids: ["thread-a", "thread-b"], revision: 11)
+        let session = makeStubSession { request in
+            let path = try XCTUnwrap(request.url?.path)
+            if request.httpMethod == "PUT", path == "/api/thread-pins" {
+                _ = try puts.record(request)
+                putStarted.fulfill()
+                guard putGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, data: ack)
+            }
+            if request.httpMethod == "GET", path == "/api/recent-threads" {
+                return try garyxStubResponse(request, data: recent)
+            }
+            if request.httpMethod == "GET", path == "/api/thread-pins" {
+                staleGetStarted.fulfill()
+                guard getGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, data: stale)
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            putGate.signal()
+            getGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        primePinnedModel(model, ids: ["thread-a", "thread-b"], revision: 10)
+        model.beginPinnedOrderDrag()
+        model.previewPinnedOrderDrag(["thread-b", "thread-a"])
+        model.acceptPinnedOrderDrop()
+        await fulfillment(of: [putStarted], timeout: 2)
+
+        let refresh = Task { @MainActor in
+            await model.refreshThreads(source: .backgroundLoop)
+        }
+        await fulfillment(of: [staleGetStarted], timeout: 2)
+        putGate.signal()
+        let ackSettled = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.outbox == nil
+                && model.homeThreadListStore.pinnedOrderState.highestObservedRevision == 12
+        }
+        XCTAssertTrue(ackSettled)
+        getGate.signal()
+        await refresh.value
+
+        XCTAssertEqual(model.pinnedThreadIds, ["thread-b", "thread-a"])
+        XCTAssertEqual(model.homeThreadListStore.pinnedOrderState.highestObservedRevision, 12)
+        XCTAssertEqual(puts.values.count, 1)
+    }
+
+    private func assertPinnedReorderBelowFloorCompletion(
+        statusCode: Int
+    ) async throws {
+        let firstPutStarted = expectation(description: "first reorder started")
+        let secondPutStarted = expectation(description: "floor-token reorder started")
+        let firstPutGate = DispatchSemaphore(value: 0)
+        let puts = GaryxLockedPinsPutRecorder()
+        let recentData = try garyxRecentThreadsData(ids: ["thread-a", "thread-b"])
+        let highPage = try garyxPinsPageData(ids: ["thread-a", "thread-b"], revision: 12)
+        let lowPageIds = statusCode == 200
+            ? ["thread-b", "thread-a"]
+            : ["thread-a", "thread-b"]
+        let lowPage = try garyxPinsPageData(ids: lowPageIds, revision: 11)
+        let settledPage = try garyxPinsPageData(ids: ["thread-b", "thread-a"], revision: 13)
+        let session = makeStubSession { request in
+            let path = try XCTUnwrap(request.url?.path)
+            if request.httpMethod == "GET", path == "/api/recent-threads" {
+                return try garyxStubResponse(request, data: recentData)
+            }
+            if request.httpMethod == "GET", path == "/api/thread-pins" {
+                return try garyxStubResponse(request, data: highPage)
+            }
+            if request.httpMethod == "PUT", path == "/api/thread-pins" {
+                let index = try puts.record(request)
+                if index == 1 {
+                    firstPutStarted.fulfill()
+                    guard firstPutGate.wait(timeout: .now() + 5) == .success else {
+                        throw GaryxRefreshStubError.timedOut
+                    }
+                    return try garyxStubResponse(
+                        request,
+                        statusCode: statusCode,
+                        data: lowPage
+                    )
+                }
+                secondPutStarted.fulfill()
+                return try garyxStubResponse(request, data: settledPage)
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            firstPutGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        primePinnedModel(model, ids: ["thread-a", "thread-b"], revision: 10)
+        model.beginPinnedOrderDrag()
+        model.previewPinnedOrderDrag(["thread-b", "thread-a"])
+        model.acceptPinnedOrderDrop()
+        await fulfillment(of: [firstPutStarted], timeout: 2)
+
+        await model.refreshThreads(source: .backgroundLoop)
+        XCTAssertEqual(model.homeThreadListStore.pinnedOrderState.highestObservedRevision, 12)
+        XCTAssertEqual(puts.values.count, 1, "the high page cannot dispatch beside the old flight")
+
+        firstPutGate.signal()
+        await fulfillment(of: [secondPutStarted], timeout: 2)
+        let settled = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.outbox == nil
+        }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(
+            puts.values,
+            [
+                GaryxRecordedPinsPut(threadIds: ["thread-b", "thread-a"], expectedRevision: 10),
+                GaryxRecordedPinsPut(threadIds: ["thread-b", "thread-a"], expectedRevision: 12),
+            ]
+        )
+    }
+
+    func testPinnedOrderGatewaySwitchDropsLateOldResponseAndAcceptsRevisionZero() async throws {
+        let oldPutStarted = expectation(description: "old gateway reorder started")
+        let oldResponseReleased = expectation(description: "old gateway response released")
+        let oldPutGate = DispatchSemaphore(value: 0)
+        let puts = GaryxLockedPinsPutRecorder()
+        let newRecent = try garyxRecentThreadsData(ids: ["thread-new"])
+        let newPins = try garyxPinsPageData(ids: ["thread-new"], revision: 0)
+        let oldAck = try garyxPinsPageData(ids: ["thread-b", "thread-a"], revision: 101)
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            if request.httpMethod == "PUT", url.path == "/api/thread-pins" {
+                _ = try puts.record(request)
+                oldPutStarted.fulfill()
+                guard oldPutGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                oldResponseReleased.fulfill()
+                return try garyxStubResponse(request, data: oldAck)
+            }
+            if url.host == "new-gateway.example.test",
+               request.httpMethod == "GET",
+               url.path == "/api/recent-threads" {
+                return try garyxStubResponse(request, data: newRecent)
+            }
+            if url.host == "new-gateway.example.test",
+               request.httpMethod == "GET",
+               url.path == "/api/thread-pins" {
+                return try garyxStubResponse(request, data: newPins)
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            oldPutGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        primePinnedModel(model, ids: ["thread-a", "thread-b"], revision: 100)
+        model.beginPinnedOrderDrag()
+        model.previewPinnedOrderDrag(["thread-b", "thread-a"])
+        model.acceptPinnedOrderDrop()
+        await fulfillment(of: [oldPutStarted], timeout: 2)
+
+        model.resetGatewayRuntimeState()
+        model.gatewayURL = "http://new-gateway.example.test"
+        model.loadGatewayScopedUserState(fallbackToLegacy: false)
+        await model.refreshThreads(source: .backgroundLoop)
+
+        XCTAssertEqual(model.homeThreadListStore.pinnedOrderState.highestObservedRevision, 0)
+        XCTAssertEqual(model.homeThreadListStore.pinnedOrderState.presentedOrder, ["thread-new"])
+        XCTAssertNil(model.homeThreadListStore.pinnedOrderState.outbox)
+
+        oldPutGate.signal()
+        await fulfillment(of: [oldResponseReleased], timeout: 2)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(puts.values.count, 1, "a late old-identity page must not retry")
+        XCTAssertEqual(model.homeThreadListStore.pinnedOrderState.highestObservedRevision, 0)
+        XCTAssertEqual(model.homeThreadListStore.pinnedOrderState.presentedOrder, ["thread-new"])
+    }
+
+    func testHighRevisionRemotePinIsShownAfterLowRevisionLocalUnpinAck() async throws {
+        let unpinStarted = expectation(description: "local unpin started")
+        let unpinGate = DispatchSemaphore(value: 0)
+        let collectionPuts = GaryxLockedCounter()
+        let recent = try garyxRecentThreadsData(ids: ["thread-a", "thread-b"])
+        let highRemotePin = try garyxPinsPageData(ids: ["thread-b", "thread-a"], revision: 12)
+        let lowLocalAck = try garyxPinsPageData(ids: ["thread-a"], revision: 11)
+        let session = makeStubSession { request in
+            let path = try XCTUnwrap(request.url?.path)
+            if request.httpMethod == "DELETE", path == "/api/thread-pins/thread-b" {
+                unpinStarted.fulfill()
+                guard unpinGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, data: lowLocalAck)
+            }
+            if request.httpMethod == "GET", path == "/api/recent-threads" {
+                return try garyxStubResponse(request, data: recent)
+            }
+            if request.httpMethod == "GET", path == "/api/thread-pins" {
+                return try garyxStubResponse(request, data: highRemotePin)
+            }
+            if request.httpMethod == "PUT", path == "/api/thread-pins" {
+                collectionPuts.increment()
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            unpinGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        primePinnedModel(model, ids: ["thread-a", "thread-b"], revision: 10)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        model.unpinThread("thread-b")
+        await fulfillment(of: [unpinStarted], timeout: 2)
+
+        await model.refreshThreads(source: .backgroundLoop)
+        XCTAssertEqual(model.homeThreadListStore.pinnedOrderState.presentedOrder, ["thread-a"])
+        XCTAssertEqual(model.homeThreadListStore.pinnedOrderState.highestObservedRevision, 12)
+
+        unpinGate.signal()
+        let resolved = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.liveMembershipIntentCount == 0
+                && model.pinnedThreadIds == ["thread-b", "thread-a"]
+        }
+        XCTAssertTrue(resolved)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        XCTAssertEqual(
+            model.homeThreadListStore.presentationSnapshot.sections.pinned.map(\.id),
+            ["thread-b", "thread-a"]
+        )
+        XCTAssertEqual(collectionPuts.value, 0)
+    }
+
+    func testReorderWaitsForRealUnpinThenSendsOneReducedFreshFloorPut() async throws {
+        let firstPutStarted = expectation(description: "initial reorder started")
+        let unpinStarted = expectation(description: "unpin started")
+        let followupPutStarted = expectation(description: "reduced reorder started")
+        let firstPutGate = DispatchSemaphore(value: 0)
+        let unpinGate = DispatchSemaphore(value: 0)
+        let puts = GaryxLockedPinsPutRecorder()
+        let conflict = try garyxPinsPageData(
+            ids: ["thread-a", "thread-b", "thread-c"],
+            revision: 11
+        )
+        let unpinAck = try garyxPinsPageData(ids: ["thread-b", "thread-c"], revision: 12)
+        let settle = try garyxPinsPageData(ids: ["thread-c", "thread-b"], revision: 13)
+        let session = makeStubSession { request in
+            let path = try XCTUnwrap(request.url?.path)
+            if request.httpMethod == "PUT", path == "/api/thread-pins" {
+                let index = try puts.record(request)
+                if index == 1 {
+                    firstPutStarted.fulfill()
+                    guard firstPutGate.wait(timeout: .now() + 5) == .success else {
+                        throw GaryxRefreshStubError.timedOut
+                    }
+                    return try garyxStubResponse(request, statusCode: 409, data: conflict)
+                }
+                followupPutStarted.fulfill()
+                return try garyxStubResponse(request, data: settle)
+            }
+            if request.httpMethod == "DELETE", path == "/api/thread-pins/thread-a" {
+                unpinStarted.fulfill()
+                guard unpinGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, data: unpinAck)
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            firstPutGate.signal()
+            unpinGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        primePinnedModel(
+            model,
+            ids: ["thread-a", "thread-b", "thread-c"],
+            revision: 10
+        )
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        model.beginPinnedOrderDrag()
+        model.previewPinnedOrderDrag(["thread-c", "thread-b", "thread-a"])
+        model.acceptPinnedOrderDrop()
+        await fulfillment(of: [firstPutStarted], timeout: 2)
+        model.unpinThread("thread-a")
+        await fulfillment(of: [unpinStarted], timeout: 2)
+
+        firstPutGate.signal()
+        let parked = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.pendingSync == .waitingForMembership
+        }
+        XCTAssertTrue(parked)
+        XCTAssertEqual(puts.values.count, 1)
+
+        unpinGate.signal()
+        await fulfillment(of: [followupPutStarted], timeout: 2)
+        let settled = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.outbox == nil
+        }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(
+            puts.values,
+            [
+                GaryxRecordedPinsPut(
+                    threadIds: ["thread-c", "thread-b", "thread-a"],
+                    expectedRevision: 10
+                ),
+                GaryxRecordedPinsPut(
+                    threadIds: ["thread-c", "thread-b"],
+                    expectedRevision: 12
+                ),
+            ]
+        )
+    }
+
+    func testFullUnpinClearsRealOutboxWithoutSendingEmptyCollectionPut() async throws {
+        let firstPutStarted = expectation(description: "initial reorder started")
+        let unpinsStarted = expectation(description: "both unpins started")
+        unpinsStarted.expectedFulfillmentCount = 2
+        let firstPutGate = DispatchSemaphore(value: 0)
+        let unpinAGate = DispatchSemaphore(value: 0)
+        let unpinBGate = DispatchSemaphore(value: 0)
+        let puts = GaryxLockedPinsPutRecorder()
+        let conflict = try garyxPinsPageData(ids: ["thread-a", "thread-b"], revision: 11)
+        let unpinA = try garyxPinsPageData(ids: ["thread-b"], revision: 12)
+        let unpinB = try garyxPinsPageData(ids: [], revision: 13)
+        let session = makeStubSession { request in
+            let path = try XCTUnwrap(request.url?.path)
+            if request.httpMethod == "PUT", path == "/api/thread-pins" {
+                _ = try puts.record(request)
+                firstPutStarted.fulfill()
+                guard firstPutGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, statusCode: 409, data: conflict)
+            }
+            if request.httpMethod == "DELETE", path == "/api/thread-pins/thread-a" {
+                unpinsStarted.fulfill()
+                guard unpinAGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, data: unpinA)
+            }
+            if request.httpMethod == "DELETE", path == "/api/thread-pins/thread-b" {
+                unpinsStarted.fulfill()
+                guard unpinBGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(request, data: unpinB)
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            firstPutGate.signal()
+            unpinAGate.signal()
+            unpinBGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        primePinnedModel(model, ids: ["thread-a", "thread-b"], revision: 10)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        model.beginPinnedOrderDrag()
+        model.previewPinnedOrderDrag(["thread-b", "thread-a"])
+        model.acceptPinnedOrderDrop()
+        await fulfillment(of: [firstPutStarted], timeout: 2)
+        model.unpinThread("thread-a")
+        model.unpinThread("thread-b")
+        await fulfillment(of: [unpinsStarted], timeout: 2)
+
+        firstPutGate.signal()
+        let parked = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.pendingSync == .waitingForMembership
+                && model.homeThreadListStore.pinnedOrderState.desiredOrder.isEmpty
+        }
+        XCTAssertTrue(parked)
+
+        unpinAGate.signal()
+        let oneIntent = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.liveMembershipIntentCount == 1
+        }
+        XCTAssertTrue(oneIntent)
+        unpinBGate.signal()
+        let settled = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.outbox == nil
+                && model.homeThreadListStore.pinnedOrderState.presentedOrder.isEmpty
+        }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(puts.values.count, 1)
+        XCTAssertTrue(puts.values.allSatisfy { !$0.threadIds.isEmpty })
+    }
+
+    func testConflictFullUnpinFailureRollbackDispatchesOneRecoveryPutAndDoesNotFlip() async throws {
+        let firstPutStarted = expectation(description: "initial reorder started")
+        let unpinsStarted = expectation(description: "both failing unpins started")
+        unpinsStarted.expectedFulfillmentCount = 2
+        let recoveryPutStarted = expectation(description: "rollback recovery reorder started")
+        let firstPutGate = DispatchSemaphore(value: 0)
+        let unpinGate = DispatchSemaphore(value: 0)
+        let puts = GaryxLockedPinsPutRecorder()
+        let conflict = try garyxPinsPageData(ids: ["thread-a", "thread-b"], revision: 11)
+        let recovered = try garyxPinsPageData(ids: ["thread-b", "thread-a"], revision: 12)
+        let recent = try garyxRecentThreadsData(ids: ["thread-a", "thread-b"])
+        let session = makeStubSession { request in
+            let path = try XCTUnwrap(request.url?.path)
+            if request.httpMethod == "PUT", path == "/api/thread-pins" {
+                let index = try puts.record(request)
+                if index == 1 {
+                    firstPutStarted.fulfill()
+                    guard firstPutGate.wait(timeout: .now() + 5) == .success else {
+                        throw GaryxRefreshStubError.timedOut
+                    }
+                    return try garyxStubResponse(request, statusCode: 409, data: conflict)
+                }
+                recoveryPutStarted.fulfill()
+                return try garyxStubResponse(request, data: recovered)
+            }
+            if request.httpMethod == "DELETE",
+               path == "/api/thread-pins/thread-a" || path == "/api/thread-pins/thread-b" {
+                unpinsStarted.fulfill()
+                guard unpinGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    statusCode: 500,
+                    data: Data(#"{"error":"synthetic unpin failure"}"#.utf8)
+                )
+            }
+            if request.httpMethod == "GET", path == "/api/recent-threads" {
+                return try garyxStubResponse(request, data: recent)
+            }
+            if request.httpMethod == "GET", path == "/api/thread-pins" {
+                return try garyxStubResponse(request, data: recovered)
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            firstPutGate.signal()
+            unpinGate.signal()
+            unpinGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        primePinnedModel(model, ids: ["thread-a", "thread-b"], revision: 10)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        model.beginPinnedOrderDrag()
+        model.previewPinnedOrderDrag(["thread-b", "thread-a"])
+        model.acceptPinnedOrderDrop()
+        await fulfillment(of: [firstPutStarted], timeout: 2)
+        model.unpinThread("thread-a")
+        model.unpinThread("thread-b")
+        await fulfillment(of: [unpinsStarted], timeout: 2)
+
+        firstPutGate.signal()
+        let parked = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.pendingSync == .waitingForMembership
+                && model.homeThreadListStore.pinnedOrderState.desiredOrder.isEmpty
+        }
+        XCTAssertTrue(parked)
+        unpinGate.signal()
+        unpinGate.signal()
+
+        await fulfillment(of: [recoveryPutStarted], timeout: 2)
+        let settled = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.outbox == nil
+                && model.pinnedThreadIds == ["thread-b", "thread-a"]
+        }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(puts.values.count, 2)
+        XCTAssertEqual(
+            puts.values.last,
+            GaryxRecordedPinsPut(
+                threadIds: ["thread-b", "thread-a"],
+                expectedRevision: 11
+            )
+        )
+
+        await model.refreshThreads(source: .backgroundLoop)
+        XCTAssertEqual(model.pinnedThreadIds, ["thread-b", "thread-a"])
+        XCTAssertEqual(puts.values.count, 2)
+    }
+
+    func testPinResponseBeforeOldReorderCoalescesUntilFlightThenFollowsUpOnce() async throws {
+        let firstPutStarted = expectation(description: "old reorder started")
+        let pinCompleted = expectation(description: "pin response returned")
+        let followupPutStarted = expectation(description: "coalesced reorder started")
+        let firstPutGate = DispatchSemaphore(value: 0)
+        let puts = GaryxLockedPinsPutRecorder()
+        let pinPage = try garyxPinsPageData(
+            ids: ["thread-c", "thread-a", "thread-b"],
+            revision: 12
+        )
+        let lowOldAck = try garyxPinsPageData(ids: ["thread-b", "thread-a"], revision: 11)
+        let settled = try garyxPinsPageData(
+            ids: ["thread-c", "thread-b", "thread-a"],
+            revision: 13
+        )
+        let session = makeStubSession { request in
+            let path = try XCTUnwrap(request.url?.path)
+            if request.httpMethod == "PUT", path == "/api/thread-pins" {
+                let index = try puts.record(request)
+                if index == 1 {
+                    firstPutStarted.fulfill()
+                    guard firstPutGate.wait(timeout: .now() + 5) == .success else {
+                        throw GaryxRefreshStubError.timedOut
+                    }
+                    return try garyxStubResponse(request, data: lowOldAck)
+                }
+                followupPutStarted.fulfill()
+                return try garyxStubResponse(request, data: settled)
+            }
+            if request.httpMethod == "PUT", path == "/api/thread-pins/thread-c" {
+                pinCompleted.fulfill()
+                return try garyxStubResponse(request, data: pinPage)
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            firstPutGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let ids = ["thread-a", "thread-b", "thread-c"]
+        model.threads = ids.map { makeThread(id: $0, title: $0) }
+        model.applyPinnedThreadIds(["thread-a", "thread-b"], revision: 10)
+        primeRecentFeed(model, ids: ids, filter: .all)
+        await model.homeProjectionGateway.waitForIdleForTesting()
+        model.beginPinnedOrderDrag()
+        model.previewPinnedOrderDrag(["thread-b", "thread-a"])
+        model.acceptPinnedOrderDrop()
+        await fulfillment(of: [firstPutStarted], timeout: 2)
+
+        model.togglePinnedThread("thread-c")
+        await fulfillment(of: [pinCompleted], timeout: 2)
+        let coalesced = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.liveMembershipIntentCount == 0
+                && model.homeThreadListStore.pinnedOrderState.pendingSync == .coalescedBehindFlight
+        }
+        XCTAssertTrue(coalesced)
+        XCTAssertEqual(puts.values.count, 1)
+
+        firstPutGate.signal()
+        await fulfillment(of: [followupPutStarted], timeout: 2)
+        let didSettle = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.outbox == nil
+        }
+        XCTAssertTrue(didSettle)
+        XCTAssertEqual(
+            puts.values,
+            [
+                GaryxRecordedPinsPut(
+                    threadIds: ["thread-b", "thread-a"],
+                    expectedRevision: 10
+                ),
+                GaryxRecordedPinsPut(
+                    threadIds: ["thread-c", "thread-b", "thread-a"],
+                    expectedRevision: 12
+                ),
+            ]
+        )
+    }
+
+    func testPermanentReorderFailurePausesUntilExplicitRefreshWithoutRollback() async throws {
+        let puts = GaryxLockedPinsPutRecorder()
+        let recent = try garyxRecentThreadsData(ids: ["thread-a", "thread-b"])
+        let oldPage = try garyxPinsPageData(ids: ["thread-a", "thread-b"], revision: 10)
+        let settledPage = try garyxPinsPageData(ids: ["thread-b", "thread-a"], revision: 11)
+        let session = makeStubSession { request in
+            let path = try XCTUnwrap(request.url?.path)
+            if request.httpMethod == "PUT", path == "/api/thread-pins" {
+                let index = try puts.record(request)
+                if index == 1 {
+                    return try garyxStubResponse(
+                        request,
+                        statusCode: 405,
+                        data: Data(#"{"error":"synthetic unsupported route"}"#.utf8)
+                    )
+                }
+                return try garyxStubResponse(request, data: settledPage)
+            }
+            if request.httpMethod == "GET", path == "/api/recent-threads" {
+                return try garyxStubResponse(request, data: recent)
+            }
+            if request.httpMethod == "GET", path == "/api/thread-pins" {
+                return try garyxStubResponse(request, data: oldPage)
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        primePinnedModel(model, ids: ["thread-a", "thread-b"], revision: 10)
+        model.beginPinnedOrderDrag()
+        model.previewPinnedOrderDrag(["thread-b", "thread-a"])
+        model.acceptPinnedOrderDrop()
+
+        let paused = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.pendingSync
+                == .pausedPermanent(statusCode: 405)
+        }
+        XCTAssertTrue(paused)
+        XCTAssertEqual(model.pinnedThreadIds, ["thread-b", "thread-a"])
+        XCTAssertEqual(model.homeThreadListStore.pinnedOrderSyncStatusLabel, "Sync pending")
+
+        await model.refreshThreads(source: .backgroundLoop)
+        XCTAssertEqual(puts.values.count, 1)
+        XCTAssertEqual(model.pinnedThreadIds, ["thread-b", "thread-a"])
+        XCTAssertNotNil(model.homeThreadListStore.pinnedOrderState.outbox)
+
+        await model.refreshThreads(source: .userPullToRefresh)
+        let settled = await waitUntil {
+            model.homeThreadListStore.pinnedOrderState.outbox == nil
+        }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(puts.values.count, 2)
+        XCTAssertEqual(model.pinnedThreadIds, ["thread-b", "thread-a"])
+        XCTAssertNil(model.homeThreadListStore.pinnedOrderSyncStatusLabel)
+    }
+
+    func testDurablePinnedOrderOutboxRestoresAcrossModelRestartAndDrains() async throws {
+        let suiteName = "GaryxPinnedOrderOutboxTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set("http://gateway.example.test", forKey: GaryxMobileSettingsKeys.gatewayUrl)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let puts = GaryxLockedPinsPutRecorder()
+        let recent = try garyxRecentThreadsData(ids: ["thread-a", "thread-b"])
+        let oldPage = try garyxPinsPageData(ids: ["thread-a", "thread-b"], revision: 10)
+        let settledPage = try garyxPinsPageData(ids: ["thread-b", "thread-a"], revision: 11)
+        let session = makeStubSession { request in
+            let path = try XCTUnwrap(request.url?.path)
+            if request.httpMethod == "PUT", path == "/api/thread-pins" {
+                let index = try puts.record(request)
+                if index == 1 {
+                    return try garyxStubResponse(
+                        request,
+                        statusCode: 405,
+                        data: Data(#"{"error":"synthetic old gateway"}"#.utf8)
+                    )
+                }
+                return try garyxStubResponse(request, data: settledPage)
+            }
+            if request.httpMethod == "GET", path == "/api/recent-threads" {
+                return try garyxStubResponse(request, data: recent)
+            }
+            if request.httpMethod == "GET", path == "/api/thread-pins" {
+                return try garyxStubResponse(request, data: oldPage)
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let firstModel = makeModel(defaults: defaults, session: session)
+        primePinnedModel(firstModel, ids: ["thread-a", "thread-b"], revision: 10)
+        firstModel.beginPinnedOrderDrag()
+        firstModel.previewPinnedOrderDrag(["thread-b", "thread-a"])
+        firstModel.acceptPinnedOrderDrop()
+        let paused = await waitUntil {
+            firstModel.homeThreadListStore.pinnedOrderState.pendingSync
+                == .pausedPermanent(statusCode: 405)
+        }
+        XCTAssertTrue(paused)
+        XCTAssertNotNil(
+            firstModel.pinnedOrderOutboxStore.loadPinnedOrderOutbox(
+                gatewayIdentity: firstModel.currentGatewayScopeId
+            )
+        )
+
+        let restoredModel = makeModel(defaults: defaults, session: session)
+        XCTAssertEqual(restoredModel.pinnedThreadIds, ["thread-b", "thread-a"])
+        XCTAssertEqual(restoredModel.homeThreadListStore.pinnedOrderState.pendingSync, .ready)
+        await restoredModel.refreshThreads(source: .backgroundLoop)
+        let settled = await waitUntil {
+            restoredModel.homeThreadListStore.pinnedOrderState.outbox == nil
+        }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(puts.values.count, 2)
+        XCTAssertNil(
+            restoredModel.pinnedOrderOutboxStore.loadPinnedOrderOutbox(
+                gatewayIdentity: restoredModel.currentGatewayScopeId
+            )
+        )
+    }
+
+    private func primePinnedModel(
+        _ model: GaryxMobileModel,
+        ids: [String],
+        revision: Int64
+    ) {
+        model.threads = ids.map { makeThread(id: $0, title: $0) }
+        model.applyPinnedThreadIds(ids, revision: revision)
+        primeRecentFeed(model, ids: ids, filter: .all)
+    }
+
     private func makeModel(
         defaults: UserDefaults? = nil,
         session: URLSession? = nil
@@ -1109,6 +1900,53 @@ private func garyxStubResponse(
     return (response, data)
 }
 
+private func garyxPinsPageData(ids: [String], revision: Int64) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: [
+            "thread_ids": ids,
+            "revision": revision,
+        ]
+    )
+}
+
+private func garyxRecentThreadsData(ids: [String]) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: [
+            "threads": ids.map { id in
+                [
+                    "thread_id": id,
+                    "title": id,
+                    "last_active_at": "2026-07-07T02:00:00Z",
+                    "last_message_preview": "",
+                ]
+            },
+            "count": ids.count,
+            "limit": 30,
+            "offset": 0,
+            "total": ids.count,
+            "has_more": false,
+        ]
+    )
+}
+
+private func garyxRequestBodyData(from request: URLRequest) -> Data? {
+    if let body = request.httpBody { return body }
+    guard let stream = request.httpBodyStream else { return nil }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while stream.hasBytesAvailable {
+        let count = stream.read(&buffer, maxLength: buffer.count)
+        if count > 0 {
+            data.append(buffer, count: count)
+        } else {
+            break
+        }
+    }
+    return data
+}
+
 private final class GaryxRecentThreadsURLProtocolStub: URLProtocol {
     static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
@@ -1155,5 +1993,38 @@ private final class GaryxLockedCounter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return count
+    }
+}
+
+private struct GaryxRecordedPinsPut: Equatable {
+    var threadIds: [String]
+    var expectedRevision: Int64
+}
+
+private final class GaryxLockedPinsPutRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [GaryxRecordedPinsPut] = []
+
+    @discardableResult
+    func record(_ request: URLRequest) throws -> Int {
+        let data = try XCTUnwrap(garyxRequestBodyData(from: request))
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let value = GaryxRecordedPinsPut(
+            threadIds: try XCTUnwrap(object["thread_ids"] as? [String]),
+            expectedRevision: try XCTUnwrap((object["expected_revision"] as? NSNumber)?.int64Value)
+        )
+        lock.lock()
+        recorded.append(value)
+        let count = recorded.count
+        lock.unlock()
+        return count
+    }
+
+    var values: [GaryxRecordedPinsPut] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
     }
 }

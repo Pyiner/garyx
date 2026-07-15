@@ -139,11 +139,10 @@ extension GaryxMobileModel {
         do {
             let page = try await client().setThreadPinned(threadId: normalizedId, pinned: pinned)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            let confirmedIds = Self.normalizedPinnedThreadIds(page.threadIds)
-            completePinnedOrderMembershipChange(membershipRequest, page: page)
+            _ = completePinnedOrderMembershipChange(membershipRequest, page: page)
             homeThreadListStore.resolvePinTransition(
                 threadId: normalizedId,
-                pinned: confirmedIds.contains(normalizedId)
+                pinned: homeThreadListStore.pinnedOrderState.presentedOrder.contains(normalizedId)
             )
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }

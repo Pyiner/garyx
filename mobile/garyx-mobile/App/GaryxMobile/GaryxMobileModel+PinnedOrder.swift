@@ -68,10 +68,11 @@ extension GaryxMobileModel {
         return update.membershipRequest
     }
 
+    @discardableResult
     func completePinnedOrderMembershipChange(
         _ request: GaryxPinnedOrderMembershipRequest,
         page: GaryxThreadPinsPage
-    ) {
+    ) -> GaryxPinnedOrderUpdate {
         let update = homeThreadListStore.updatePinnedOrderState { state in
             state.completeMembership(
                 request,
@@ -83,6 +84,7 @@ extension GaryxMobileModel {
             )
         }
         applyPinnedOrderUpdate(update, label: "pins-membership-complete")
+        return update
     }
 
     func failPinnedOrderMembershipChange(
