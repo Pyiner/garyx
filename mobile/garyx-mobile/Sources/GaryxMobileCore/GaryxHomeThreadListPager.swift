@@ -295,6 +295,13 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
         // about load-more; presentation is the caller's policy concern.
     }
 
+    /// Identity/scope interruption is not a network failure, but it must still
+    /// release the single-flight lane if the caller has not reset this epoch.
+    public mutating func interruptRefresh(_ ticket: GaryxThreadListRefreshTicket) {
+        guard ticket.epoch == epoch else { return }
+        isRefreshingHead = false
+    }
+
     /// Resolves a finished load-more into apply-or-abandon. Both abandon
     /// cases leave the cursor and gate untouched; `.abandonedLocalMutation`
     /// expects the caller to re-request the page.
@@ -320,6 +327,13 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
         isLoadingMore = false
         gate = .failed
         loadMoreFailureRevision += 1
+    }
+
+    /// Releases an identity-interrupted load-more without poisoning the retry
+    /// gate; the current domain will reissue from its own cursor or reset.
+    public mutating func interruptLoadMore(_ ticket: GaryxThreadListLoadMoreTicket) {
+        guard ticket.epoch == epoch else { return }
+        isLoadingMore = false
     }
 
     /// Gateway switch: everything back to initial; in-flight tickets from

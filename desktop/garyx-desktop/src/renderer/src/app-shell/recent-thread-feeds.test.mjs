@@ -107,6 +107,16 @@ test("Recent feeds default to All and map both filters to explicit wire values",
   assert.equal(state.feeds.all.loadMoreAfterMutation, false);
 });
 
+test("Favorites selection owns no paginated Recent feed", () => {
+  const state = selectRecentThreadFilter(
+    createRecentThreadFeedsState("https://gateway.test"),
+    "favorites",
+  );
+  assert.equal(state.selectedFilter, "favorites");
+  assert.deepEqual(selectedRecentThreadSummaries(state), []);
+  assert.deepEqual(Object.keys(state.feeds).sort(), ["all", "nonTask"]);
+});
+
 test("filter tickets own independent rows and accept late completion into their own cache", () => {
   let state = createRecentThreadFeedsState("https://gateway.test");
   const all = requestRecentThreadRefresh(state, "all");
@@ -549,6 +559,56 @@ test("K=5 overflow commits exactly the fetched window, drops old rows, and advan
   assert.equal(result.state.feeds.all.epoch, oldEpoch + 1);
 });
 
+test("K overflow composes with one moved-head fill and bounded re-verification", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  const oldEpoch = state.feeds.all.epoch;
+  const request = requestRecentThreadRefresh(state, "all");
+  const pages = Array.from({ length: RECENT_THREAD_MAX_CHAIN_PAGES }, (_, index) => {
+    const top = 200 - index * 2;
+    return seqPage(state.gatewayScope, [
+      [`new-${top}`, top],
+      [`new-${top - 1}`, top - 1],
+    ], {
+      hasMore: true,
+      nextCursor: `cursor-${top - 1}`,
+      total: 500,
+    });
+  });
+  const verification = seqPage(state.gatewayScope, [["moved-220", 220]], {
+    hasMore: true,
+  });
+  const immediate = seqPage(state.gatewayScope, [
+    ["moved-220", 220],
+    ["new-200", 200],
+  ], { hasMore: true, nextCursor: "cursor-200", total: 501 });
+  const movingAgain = seqPage(state.gatewayScope, [["moved-again-230", 230]], {
+    hasMore: true,
+  });
+
+  const result = completeRecentThreadRefresh(request.state, request.ticket, {
+    primaryPages: pages,
+    verificationPage: verification,
+    immediatePages: [immediate],
+    immediateVerificationPage: movingAgain,
+  });
+
+  assert.equal(result.action, "applied");
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds.slice(0, 3), [
+    "moved-220",
+    "new-200",
+    "new-199",
+  ]);
+  assert.equal(result.state.feeds.all.orderedThreadIds.includes("old"), false);
+  assert.equal(result.state.feeds.all.orderedThreadIds.length, 11);
+  assert.equal(result.state.feeds.all.nextCursor, "cursor-191");
+  assert.equal(result.state.feeds.all.epoch, oldEpoch + 1);
+  assert.equal(result.state.feeds.all.trailingDirty, true);
+  assert.equal(
+    result.state.feeds.all.orderedThreadIds.includes("moved-again-230"),
+    false,
+  );
+});
+
 test("has_more=false before the old anchor performs a ghost-removing replacement", () => {
   let state = primeSeqFeed([
     ["old-head", 100],
@@ -608,6 +668,32 @@ test("boot-id change discards a range page, then converges through the replaceme
   assert.equal(result.action, "applied");
   assert.deepEqual(result.state.feeds.all.orderedThreadIds, ["new"]);
   assert.equal(result.state.feeds.all.serverBootId, "boot-b");
+});
+
+test("incarnation change converges through the replacement path", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  const range = requestRecentThreadRefresh(state, "all");
+  const newStore = seqPage(state.gatewayScope, [["new", 110]], {
+    incarnation: "inc-b",
+    hasMore: false,
+    nextCursor: null,
+  });
+  let result = completeRecentThreadRefresh(range.state, range.ticket, {
+    primaryPages: [newStore],
+    verificationPage: newStore,
+  });
+  assert.equal(result.action, "forceReplacement");
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds, ["old"]);
+
+  const replacement = requestRecentThreadRefresh(result.state, "all");
+  assert.equal(replacement.ticket.mode, "replacement");
+  result = completeRecentThreadRefresh(replacement.state, replacement.ticket, {
+    primaryPages: [newStore],
+    verificationPage: newStore,
+  });
+  assert.equal(result.action, "applied");
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds, ["new"]);
+  assert.equal(result.state.feeds.all.storeIncarnationId, "inc-b");
 });
 
 test("head verification performs at most one immediate fill and defers continued motion", () => {

@@ -365,8 +365,13 @@ public final class GaryxGatewayClient {
         limit: Int = 30,
         cursor: String? = nil
     ) async throws -> GaryxRecentThreadsPage {
+        guard let tasksQueryValue = filter.tasksQueryValue else {
+            throw GaryxGatewayError.encodingFailed(
+                "Favorites is loaded from the thread-favorites snapshot."
+            )
+        }
         var queryItems = [
-            URLQueryItem(name: "tasks", value: filter.tasksQueryValue),
+            URLQueryItem(name: "tasks", value: tasksQueryValue),
             URLQueryItem(name: "limit", value: String(limit)),
         ]
         if let cursor {

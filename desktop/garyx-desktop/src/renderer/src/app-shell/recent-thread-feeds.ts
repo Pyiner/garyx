@@ -4,7 +4,11 @@ import type {
   RecentThreadTaskFilter,
 } from "@shared/contracts";
 
-export type RecentThreadFilter = "all" | "nonTask";
+export type RecentThreadFilter = "all" | "nonTask" | "favorites";
+export type PaginatedRecentThreadFilter = Exclude<
+  RecentThreadFilter,
+  "favorites"
+>;
 export type RecentThreadRequestKind = "refresh" | "loadMore";
 export type RecentThreadLoadGate = "ready" | "exhausted" | "failed";
 export type RecentThreadRefreshMode = "rangeFill" | "replacement";
@@ -41,7 +45,7 @@ export interface RecentThreadFeedsState {
   gatewayScope: string;
   runtimeEpoch: number;
   selectedFilter: RecentThreadFilter;
-  feeds: Record<RecentThreadFilter, RecentThreadFeedState>;
+  feeds: Record<PaginatedRecentThreadFilter, RecentThreadFeedState>;
   summariesById: Record<string, DesktopThreadSummary>;
   /** Session tombstones for successful or still-pending local archives. */
   removedThreadIds: Record<string, true>;
@@ -51,7 +55,7 @@ export interface RecentThreadFeedsState {
 interface RecentThreadRequestTicketBase {
   gatewayScope: string;
   runtimeEpoch: number;
-  filter: RecentThreadFilter;
+  filter: PaginatedRecentThreadFilter;
   feedEpoch: number;
   requestId: number;
   observedLocalMutationSequence: number;
@@ -94,7 +98,7 @@ export interface RecentThreadRequestDecision<T extends RecentThreadRequestTicket
 export interface RecentThreadRemovalRollback {
   gatewayScope: string;
   threadId: string;
-  positions: Record<RecentThreadFilter, number>;
+  positions: Record<PaginatedRecentThreadFilter, number>;
 }
 
 export type RecentThreadCompletionAction =
@@ -107,7 +111,16 @@ export interface RecentThreadCompletion {
   action: RecentThreadCompletionAction;
 }
 
-const FILTERS: RecentThreadFilter[] = ["all", "nonTask"];
+export const PAGINATED_RECENT_THREAD_FILTERS: PaginatedRecentThreadFilter[] = [
+  "all",
+  "nonTask",
+];
+
+export function isPaginatedRecentThreadFilter(
+  filter: RecentThreadFilter,
+): filter is PaginatedRecentThreadFilter {
+  return filter !== "favorites";
+}
 
 function createFeed(epoch = 0): RecentThreadFeedState {
   return {
@@ -153,13 +166,20 @@ export function createRecentThreadFeedsState(
 }
 
 export function recentThreadTasksQuery(
-  filter: RecentThreadFilter,
+  filter: PaginatedRecentThreadFilter,
 ): RecentThreadTaskFilter {
   return filter === "all" ? "include" : "exclude";
 }
 
 export function recentThreadFilterLabel(filter: RecentThreadFilter): string {
-  return filter === "all" ? "All" : "Chats";
+  switch (filter) {
+    case "all":
+      return "All";
+    case "nonTask":
+      return "Chats";
+    case "favorites":
+      return "Favorites";
+  }
 }
 
 export function resetRecentThreadFeedsScope(
@@ -237,7 +257,7 @@ function mergeRecentThreadSummary(
 
 export function requestRecentThreadRefresh(
   state: RecentThreadFeedsState,
-  filter: RecentThreadFilter,
+  filter: PaginatedRecentThreadFilter,
   options: { forceReplacement?: boolean } = {},
 ): RecentThreadRequestDecision<RecentThreadRefreshTicket> {
   const feed = state.feeds[filter];
@@ -290,7 +310,7 @@ export function requestRecentThreadRefresh(
 
 export function requestRecentThreadLoadMore(
   state: RecentThreadFeedsState,
-  filter: RecentThreadFilter,
+  filter: PaginatedRecentThreadFilter,
   retry = false,
 ): RecentThreadRequestDecision<RecentThreadLoadMoreTicket> {
   const feed = state.feeds[filter];
@@ -410,7 +430,8 @@ export function completeRecentThreadRefresh(
     !identity ||
     allPages.some((page) => page.gatewayScope !== ticket.gatewayScope) ||
     (feed.storeIncarnationId !== null &&
-      feed.storeIncarnationId !== identity.storeIncarnationId) ||
+      feed.storeIncarnationId !== identity.storeIncarnationId &&
+      ticket.mode !== "replacement") ||
     (feed.serverBootId !== null &&
       feed.serverBootId !== identity.serverBootId &&
       ticket.mode !== "replacement")
@@ -620,7 +641,7 @@ export function failRecentThreadRequest(
 
 export function markRecentThreadForceReplacement(
   state: RecentThreadFeedsState,
-  filters: RecentThreadFilter[] = FILTERS,
+  filters: PaginatedRecentThreadFilter[] = PAGINATED_RECENT_THREAD_FILTERS,
 ): RecentThreadFeedsState {
   const feeds = { ...state.feeds };
   for (const filter of filters) {
@@ -645,7 +666,7 @@ export function removeThreadFromRecentFeeds(
     nonTask: state.feeds.nonTask.orderedThreadIds.indexOf(normalizedId),
   };
   const feeds = { ...state.feeds };
-  for (const filter of FILTERS) {
+  for (const filter of PAGINATED_RECENT_THREAD_FILTERS) {
     const feed = state.feeds[filter];
     feeds[filter] = {
       ...feed,
@@ -682,7 +703,7 @@ export function rollbackRecentThreadRemoval(
     return state;
   }
   const feeds = { ...state.feeds };
-  for (const filter of FILTERS) {
+  for (const filter of PAGINATED_RECENT_THREAD_FILTERS) {
     const position = rollback.positions[filter];
     const feed = state.feeds[filter];
     const withoutThread = feed.orderedThreadIds.filter(
@@ -716,7 +737,7 @@ export function upsertChatInRecentFeeds(
   }
   const withSummary = ingestRecentThreadSummaries(state, [summary]);
   const feeds = { ...withSummary.feeds };
-  for (const filter of FILTERS) {
+  for (const filter of PAGINATED_RECENT_THREAD_FILTERS) {
     const feed = withSummary.feeds[filter];
     feeds[filter] = {
       ...feed,
@@ -733,7 +754,7 @@ export function upsertChatInRecentFeeds(
 export function noteRecentThreadLocalMutation(
   state: RecentThreadFeedsState,
 ): RecentThreadFeedsState {
-  return FILTERS.reduce(
+  return PAGINATED_RECENT_THREAD_FILTERS.reduce(
     (current, filter) =>
       noteRecentThreadFilterLocalMutation(current, filter),
     state,
@@ -742,7 +763,7 @@ export function noteRecentThreadLocalMutation(
 
 export function noteRecentThreadFilterLocalMutation(
   state: RecentThreadFeedsState,
-  filter: RecentThreadFilter,
+  filter: PaginatedRecentThreadFilter,
 ): RecentThreadFeedsState {
   return {
     ...state,
@@ -759,7 +780,7 @@ export function noteRecentThreadFilterLocalMutation(
 
 export function consumeRecentThreadMutationFollowUp(
   state: RecentThreadFeedsState,
-  filter: RecentThreadFilter,
+  filter: PaginatedRecentThreadFilter,
   kind: RecentThreadRequestKind,
 ): RecentThreadRequestDecision<RecentThreadRequestTicket> {
   const feed = state.feeds[filter];
@@ -796,14 +817,20 @@ export function consumeRecentThreadMutationFollowUp(
 
 export function selectedRecentThreadFeed(
   state: RecentThreadFeedsState,
-): RecentThreadFeedState {
-  return state.feeds[state.selectedFilter];
+): RecentThreadFeedState | null {
+  return isPaginatedRecentThreadFilter(state.selectedFilter)
+    ? state.feeds[state.selectedFilter]
+    : null;
 }
 
 export function selectedRecentThreadSummaries(
   state: RecentThreadFeedsState,
 ): DesktopThreadSummary[] {
-  return selectedRecentThreadFeed(state).orderedThreadIds.flatMap((id) => {
+  const feed = selectedRecentThreadFeed(state);
+  if (!feed) {
+    return [];
+  }
+  return feed.orderedThreadIds.flatMap((id) => {
     const summary = state.summariesById[id];
     return summary ? [summary] : [];
   });

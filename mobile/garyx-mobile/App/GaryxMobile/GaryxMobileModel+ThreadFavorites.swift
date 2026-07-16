@@ -2,7 +2,19 @@ import Foundation
 
 extension GaryxMobileModel {
     var favoriteThreads: [GaryxThreadSummary] {
-        threadFavoritesState.presentedRows
+        pendingThreadArchives.visibleThreads(threadFavoritesState.presentedRows)
+    }
+
+    var selectedRecentFeedPresentation: GaryxRecentThreadFeedPresentation {
+        guard recentThreadFeeds.selectedFilter == .favorites else {
+            return recentThreadFeeds.selectedPresentation
+        }
+        return GaryxRecentThreadFeedPresentation(
+            isPrimed: threadFavoritesState.rawRevision != nil,
+            isRefreshingHead: threadFavoritesState.activeSnapshotTicket != nil,
+            headFailure: threadFavoritesState.snapshotFailed,
+            footerState: .hidden
+        )
     }
 
     func threadIsFavorite(_ threadId: String) -> Bool {
@@ -12,7 +24,9 @@ extension GaryxMobileModel {
     func setThreadFavorite(_ threadId: String, desired: Bool) {
         ensureThreadFavoritesScope()
         runThreadFavoritesEffects(
-            threadFavoritesState.toggle(threadId: threadId, desired: desired)
+            applyThreadFavoritesStateTransition { state in
+                state.toggle(threadId: threadId, desired: desired)
+            }
         )
     }
 
@@ -23,7 +37,9 @@ extension GaryxMobileModel {
     func refreshThreadFavoritesSnapshot() {
         guard hasGatewaySettings else { return }
         ensureThreadFavoritesScope()
-        runThreadFavoritesEffects(threadFavoritesState.requestSnapshot())
+        runThreadFavoritesEffects(
+            applyThreadFavoritesStateTransition { $0.requestSnapshot() }
+        )
     }
 
     @discardableResult
@@ -33,18 +49,15 @@ extension GaryxMobileModel {
         owned: Bool,
         storeIncarnationId: String
     ) -> GaryxStoreIdentityDecision {
-        let result = threadFavoritesState.observeStoreIdentity(
-            stamp: GaryxStoreResponseStamp(
-                gatewayScope: gatewayScope,
-                runtimeEpoch: runtimeEpoch,
-                owned: owned
-            ),
-            responseStoreIncarnationId: storeIncarnationId
-        )
-        if result.decision == .scopeClear {
-            // The favorites runtime epoch invalidates every old response; the
-            // feed pager reset makes the same cut structural on All/Chats.
-            recentThreadFeeds.resetFeedData()
+        let result = applyThreadFavoritesStateTransition { state in
+            state.observeStoreIdentity(
+                stamp: GaryxStoreResponseStamp(
+                    gatewayScope: gatewayScope,
+                    runtimeEpoch: runtimeEpoch,
+                    owned: owned
+                ),
+                responseStoreIncarnationId: storeIncarnationId
+            )
         }
         runThreadFavoritesEffects(result.effects)
         return result.decision
@@ -52,7 +65,9 @@ extension GaryxMobileModel {
 
     func clearThreadFavoritesRuntime() {
         runThreadFavoritesEffects(
-            threadFavoritesState.replaceGatewayScope("", requestSnapshot: false)
+            applyThreadFavoritesStateTransition { state in
+                state.replaceGatewayScope("", requestSnapshot: false)
+            }
         )
     }
 
@@ -60,7 +75,9 @@ extension GaryxMobileModel {
         let scope = normalizedGatewayURL(gatewayURL)
         guard threadFavoritesState.gatewayScope != scope else { return }
         runThreadFavoritesEffects(
-            threadFavoritesState.replaceGatewayScope(scope, requestSnapshot: false)
+            applyThreadFavoritesStateTransition { state in
+                state.replaceGatewayScope(scope, requestSnapshot: false)
+            }
         )
     }
 
@@ -74,7 +91,9 @@ extension GaryxMobileModel {
                     try? await Task.sleep(nanoseconds: delayNanoseconds)
                     guard !Task.isCancelled, let self else { return }
                     self.runThreadFavoritesEffects(
-                        self.threadFavoritesState.fireBackoff(stamp)
+                        self.applyThreadFavoritesStateTransition { state in
+                            state.fireBackoff(stamp)
+                        }
                     )
                 }
             case .snapshot(let ticket):
@@ -82,21 +101,29 @@ extension GaryxMobileModel {
                     guard let self else { return }
                     do {
                         let snapshot = try await self.client().threadFavoritesSnapshot()
-                        let effects = self.threadFavoritesState.completeSnapshot(
-                            ticket: ticket,
-                            snapshot: GaryxFavoriteSnapshot(snapshot)
-                        )
+                        let effects = self.applyThreadFavoritesStateTransition { state in
+                            state.completeSnapshot(
+                                ticket: ticket,
+                                snapshot: GaryxFavoriteSnapshot(snapshot)
+                            )
+                        }
                         if self.threadFavoritesState.rawRevision == snapshot.revision,
                            self.threadFavoritesState.storeIncarnationId
                             == snapshot.storeIncarnationId {
+                            let visibleSnapshotRows = self.pendingThreadArchives.visibleThreads(
+                                snapshot.recent.threads
+                            )
                             self.threads = Self.mergedThreadSummaries(
-                                self.threads + snapshot.recent.threads
+                                self.pendingThreadArchives.visibleThreads(self.threads)
+                                    + visibleSnapshotRows
                             )
                         }
                         self.runThreadFavoritesEffects(effects)
                     } catch {
                         self.runThreadFavoritesEffects(
-                            self.threadFavoritesState.failSnapshot(ticket: ticket)
+                            self.applyThreadFavoritesStateTransition { state in
+                                state.failSnapshot(ticket: ticket)
+                            }
                         )
                     }
                 }
@@ -130,14 +157,30 @@ extension GaryxMobileModel {
                     case .notSent(let message):
                         settlement = .notSent(message: message)
                     }
-                    self.runThreadFavoritesEffects(
-                        self.threadFavoritesState.settle(
+                    let effects = self.applyThreadFavoritesStateTransition { state in
+                        state.settle(
                             ticket: ticket,
                             settlement: settlement
                         )
-                    )
+                    }
+                    self.runThreadFavoritesEffects(effects)
                 }
             }
         }
+    }
+
+    /// Every favorites reducer transition shares one epoch boundary. A domain
+    /// clear from a snapshot, mutation settlement, or Recent identity response
+    /// must invalidate both paginated feed lanes before any follow-up effect is
+    /// dispatched; otherwise an old incarnation can retain a live pager lane.
+    private func applyThreadFavoritesStateTransition<Result>(
+        _ transition: (inout GaryxFavoritesState) -> Result
+    ) -> Result {
+        let previousEpoch = threadFavoritesState.runtimeEpoch
+        let result = transition(&threadFavoritesState)
+        if threadFavoritesState.runtimeEpoch != previousEpoch {
+            recentThreadFeeds.resetFeedData()
+        }
+        return result
     }
 }

@@ -8,6 +8,7 @@ final class GaryxRecentThreadFilterStorageTests: XCTestCase {
     func testPersistenceValuesAreStableInternalLiterals() {
         XCTAssertEqual(GaryxRecentThreadFilterStorage.persistenceValue(for: .all), "all")
         XCTAssertEqual(GaryxRecentThreadFilterStorage.persistenceValue(for: .nonTask), "nonTask")
+        XCTAssertEqual(GaryxRecentThreadFilterStorage.persistenceValue(for: .favorites), "favorites")
         XCTAssertNotEqual(
             GaryxRecentThreadFilterStorage.persistenceValue(for: .nonTask),
             GaryxRecentThreadFilter.nonTask.displayName

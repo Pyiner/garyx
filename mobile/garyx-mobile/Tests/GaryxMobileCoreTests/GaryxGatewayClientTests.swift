@@ -755,6 +755,37 @@ final class GaryxGatewayClientTests: XCTestCase {
         _ = try await client.listRecentThreads(filter: .nonTask, limit: 80, cursor: "cursor-20")
     }
 
+    func testListRecentThreadsRejectsFavoritesBeforeTransport() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        let attempts = GaryxAtomicCounter()
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+        GaryxURLProtocolStub.requestHandler = { request in
+            _ = attempts.increment()
+            throw URLError(.badServerResponse)
+        }
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx"))
+            ),
+            session: session
+        )
+
+        do {
+            _ = try await client.listRecentThreads(filter: .favorites)
+            XCTFail("Favorites must use the snapshot endpoint")
+        } catch let error as GaryxGatewayError {
+            guard case .encodingFailed = error else {
+                return XCTFail("Expected a pre-dispatch encoding failure")
+            }
+        }
+        XCTAssertEqual(attempts.value(), 0)
+    }
+
     func testThreadFavoriteMutationClassificationMatrixUsesOneAttempt() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GaryxURLProtocolStub.self]

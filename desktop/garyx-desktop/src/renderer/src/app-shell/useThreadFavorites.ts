@@ -10,6 +10,7 @@ import {
   fireFavoriteBackoff,
   observeStoreIdentity,
   presentedFavoriteRows,
+  presentedFavoriteThreadIds,
   replaceFavoritesGatewayScope,
   requestFavoritesSnapshot,
   settleFavoriteMutation,
@@ -31,6 +32,7 @@ type ThreadFavoritesControllerOptions = {
 export type ThreadFavoritesController = {
   state: FavoritesIngressState;
   favoriteThreads: ReturnType<typeof presentedFavoriteRows>;
+  favoriteThreadIds: string[];
   isFavorite: (threadId: string) => boolean;
   setFavorite: (threadId: string, desired: boolean) => void;
   toggleFavorite: (threadId: string) => void;
@@ -89,8 +91,16 @@ export function useThreadFavorites({
               ),
             );
           })
-          .catch(() => {
-            apply(failFavoritesSnapshot(stateRef.current, effect.ticket));
+          .catch((error: unknown) => {
+            apply(
+              failFavoritesSnapshot(
+                stateRef.current,
+                effect.ticket,
+                error instanceof Error
+                  ? error.message
+                  : "Favorite threads are unavailable",
+              ),
+            );
           });
         return;
       }
@@ -217,6 +227,7 @@ export function useThreadFavorites({
   return {
     state: visibleState,
     favoriteThreads: presentedFavoriteRows(visibleState),
+    favoriteThreadIds: presentedFavoriteThreadIds(visibleState),
     isFavorite: (threadId) => favoriteIsPresented(visibleState, threadId),
     setFavorite,
     toggleFavorite,

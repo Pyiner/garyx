@@ -13,7 +13,11 @@ export type RecentFeedFooterKind =
   | "idle";
 
 export type RecentConversationPresentation = {
-  emptyLabelKey: "No recent threads" | "No recent chats" | null;
+  emptyLabelKey:
+    | "No recent threads"
+    | "No recent chats"
+    | "No favorite threads"
+    | null;
   footerKind: RecentFeedFooterKind;
 };
 
@@ -30,7 +34,9 @@ export function recentConversationPresentation(
     feed.isPrimed && rowCount === 0 && !feed.headFailure
       ? selectedFilter === "all"
         ? "No recent threads"
-        : "No recent chats"
+        : selectedFilter === "nonTask"
+          ? "No recent chats"
+          : "No favorite threads"
       : null;
 
   if (isInitialLoading) {
@@ -58,7 +64,10 @@ export function recentConversationPresentation(
 
 export function recentFilterForArrowKey(
   current: RecentThreadFilter,
-  _key: "ArrowLeft" | "ArrowRight",
+  key: "ArrowLeft" | "ArrowRight",
 ): RecentThreadFilter {
-  return current === "all" ? "nonTask" : "all";
+  const filters: RecentThreadFilter[] = ["all", "nonTask", "favorites"];
+  const currentIndex = filters.indexOf(current);
+  const delta = key === "ArrowRight" ? 1 : -1;
+  return filters[(currentIndex + delta + filters.length) % filters.length];
 }

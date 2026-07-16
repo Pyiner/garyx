@@ -70,6 +70,7 @@ export interface FavoritesIngressState {
   favoritesSnapshotTruncated: boolean;
   activeSnapshotTicket: FavoritesSnapshotTicket | null;
   snapshotTrailingDirty: boolean;
+  snapshotFailure: string | null;
   nextGeneration: number;
   nextRequestToken: number;
   nextEffectToken: number;
@@ -125,6 +126,7 @@ export function createFavoritesIngressState(
     favoritesSnapshotTruncated: false,
     activeSnapshotTicket: null,
     snapshotTrailingDirty: false,
+    snapshotFailure: null,
     nextGeneration: 1,
     nextRequestToken: 1,
     nextEffectToken: 1,
@@ -199,10 +201,45 @@ export function favoriteIsPresented(
 
 export function presentedFavoriteRows(
   state: FavoritesIngressState,
+  supplementalRows: DesktopThreadSummary[] = [],
 ): DesktopThreadSummary[] {
-  return state.favoriteRows.filter((row) =>
-    favoriteIsPresented(state, row.id),
-  );
+  const rowsById = new Map(state.favoriteRows.map((row) => [row.id, row]));
+  // Snapshot membership/order remains authoritative, while fresher shared
+  // entity summaries win field-by-field as whole rows until the next snapshot.
+  for (const row of supplementalRows) {
+    rowsById.set(row.id, row);
+  }
+  return presentedFavoriteThreadIds(state).flatMap((id) => {
+    const row = rowsById.get(id);
+    return row ? [row] : [];
+  });
+}
+
+/**
+ * Snapshot row order is authoritative. Optimistic additions lead until the
+ * next replacement snapshot supplies their row, while raw membership is a
+ * bounded fallback for summaries already cached by the host.
+ */
+export function presentedFavoriteThreadIds(
+  state: FavoritesIngressState,
+): string[] {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  const append = (rawId: string) => {
+    const id = rawId.trim();
+    if (id && !seen.has(id) && favoriteIsPresented(state, id)) {
+      seen.add(id);
+      ids.push(id);
+    }
+  };
+
+  Object.entries(state.intents)
+    .filter(([, intent]) => intent.desired)
+    .sort(([, left], [, right]) => right.generation - left.generation)
+    .forEach(([id]) => append(id));
+  state.favoriteRows.forEach((row) => append(row.id));
+  state.rawThreadIds.forEach(append);
+  return ids.slice(0, 500);
 }
 
 export function toggleFavoriteIntent(
@@ -251,6 +288,7 @@ export function requestFavoritesSnapshot(
       nextRequestToken: state.nextRequestToken + 1,
       activeSnapshotTicket: ticket,
       snapshotTrailingDirty: false,
+      snapshotFailure: null,
     },
     effects: [{ kind: "snapshot", ticket }],
   };
@@ -277,6 +315,7 @@ export function completeFavoritesSnapshot(
     ...next,
     activeSnapshotTicket: null,
     snapshotTrailingDirty: false,
+    snapshotFailure: null,
   };
   if (
     next.highestObservedRevision !== null &&
@@ -311,6 +350,7 @@ export function completeFavoritesSnapshot(
 export function failFavoritesSnapshot(
   state: FavoritesIngressState,
   ticket: FavoritesSnapshotTicket,
+  message = "Favorite threads are unavailable",
 ): FavoritesTransition {
   if (!snapshotTicketIsOwned(state, ticket)) {
     return { state, effects: [] };
@@ -320,6 +360,7 @@ export function failFavoritesSnapshot(
     ...state,
     activeSnapshotTicket: null,
     snapshotTrailingDirty: false,
+    snapshotFailure: message,
   };
   return trailing
     ? requestFavoritesSnapshot(next)
@@ -398,7 +439,7 @@ export function settleFavoriteMutation(
     // A valid page with a different id was handled by the three-step judgment
     // above. A same-id/malformed wrong-incarnation response is definitive that
     // this write did not apply, but cannot establish a fresh baseline.
-    transition = settleDeferred(state, ticket, "rejected");
+    transition = settleWrongIncarnation(state, ticket);
   } else if (settlement.status === 409 && settlement.page) {
     transition = settleConflictPage(state, ticket, settlement.page);
   } else if (settlement.status === 404) {
@@ -417,6 +458,17 @@ export function settleFavoriteMutation(
     );
   }
   return appendFavoritesBootReplacement(transition, bootChanged);
+}
+
+function settleWrongIncarnation(
+  state: FavoritesIngressState,
+  ticket: FavoriteMutationTicket,
+): FavoritesTransition {
+  let next = withoutFlight(state, ticket.threadId);
+  if (next.intents[ticket.threadId]) {
+    next = withIntentPhase(next, ticket.threadId, { kind: "active" });
+  }
+  return requestFavoritesSnapshot(next);
 }
 
 function appendFavoritesBootReplacement(

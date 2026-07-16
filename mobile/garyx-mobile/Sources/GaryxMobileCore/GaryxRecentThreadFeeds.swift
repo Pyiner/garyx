@@ -3,13 +3,16 @@ import Foundation
 public enum GaryxRecentThreadFilter: String, CaseIterable, Equatable, Hashable, Sendable {
     case all
     case nonTask
+    case favorites
 
-    public static let homeMenuOptions: [Self] = [.all, .nonTask]
+    public static let homeMenuOptions: [Self] = [.all, .nonTask, .favorites]
 
-    public var tasksQueryValue: String {
+    /// Favorites is snapshot-owned and must never be encoded as a Recent query.
+    public var tasksQueryValue: String? {
         switch self {
         case .all: return "include"
         case .nonTask: return "exclude"
+        case .favorites: return nil
         }
     }
 
@@ -17,6 +20,7 @@ public enum GaryxRecentThreadFilter: String, CaseIterable, Equatable, Hashable, 
         switch self {
         case .all: return "All"
         case .nonTask: return "Chats"
+        case .favorites: return "Favorites"
         }
     }
 
@@ -24,6 +28,7 @@ public enum GaryxRecentThreadFilter: String, CaseIterable, Equatable, Hashable, 
         switch self {
         case .all: return nil
         case .nonTask: return "Chats"
+        case .favorites: return "Favorites"
         }
     }
 }
@@ -257,7 +262,9 @@ public struct GaryxRecentThreadFeedState: Equatable, Sendable {
             markForceReplacement()
             return .forceReplacement
         }
-        if let storeIncarnationId, storeIncarnationId != identity.storeIncarnationId {
+        if let storeIncarnationId,
+           storeIncarnationId != identity.storeIncarnationId,
+           ticket.mode != .replacement {
             pager.failRefresh(ticket.pagerTicket)
             markForceReplacement()
             return .forceReplacement
@@ -351,6 +358,10 @@ public struct GaryxRecentThreadFeedState: Equatable, Sendable {
         if accepted { headFailure = true }
     }
 
+    fileprivate mutating func interruptRefresh(_ ticket: GaryxRecentThreadRefreshTicket) {
+        pager.interruptRefresh(ticket.pagerTicket)
+    }
+
     fileprivate mutating func requestLoadMore(
         trigger: GaryxThreadListLoadMoreTrigger,
         gatewayScope: String,
@@ -424,6 +435,10 @@ public struct GaryxRecentThreadFeedState: Equatable, Sendable {
 
     fileprivate mutating func failLoadMore(_ ticket: GaryxRecentThreadLoadMoreTicket) {
         pager.failLoadMore(ticket.pagerTicket)
+    }
+
+    fileprivate mutating func interruptLoadMore(_ ticket: GaryxRecentThreadLoadMoreTicket) {
+        pager.interruptLoadMore(ticket.pagerTicket)
     }
 
     fileprivate mutating func noteLocalMutation() { pager.noteLocalMutation() }
@@ -530,16 +545,19 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
     }
 
     public var allRecentThreadIds: [String] { allFeed.orderedThreadIds }
-    public var visibleRecentThreadIds: [String] { feed(for: selectedFilter).orderedThreadIds }
-    public var selectedPresentation: GaryxRecentThreadFeedPresentation {
-        feed(for: selectedFilter).presentation
+    public var visibleRecentThreadIds: [String] {
+        feed(for: selectedFilter)?.orderedThreadIds ?? []
     }
-    public var selectedPager: GaryxHomeThreadListPager { feed(for: selectedFilter).pager }
+    public var selectedPresentation: GaryxRecentThreadFeedPresentation {
+        feed(for: selectedFilter)?.presentation ?? .init(isPrimed: true)
+    }
+    public var selectedPager: GaryxHomeThreadListPager? { feed(for: selectedFilter)?.pager }
 
-    public func feed(for filter: GaryxRecentThreadFilter) -> GaryxRecentThreadFeedState {
+    public func feed(for filter: GaryxRecentThreadFilter) -> GaryxRecentThreadFeedState? {
         switch filter {
         case .all: return allFeed
         case .nonTask: return nonTaskFeed
+        case .favorites: return nil
         }
     }
 
@@ -583,6 +601,8 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
                 oldHeadActivitySeq: ticket.oldHeadActivitySeq,
                 forceReplacementGeneration: ticket.forceReplacementGeneration
             )
+        case .favorites:
+            return nil
         }
     }
 
@@ -594,6 +614,7 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
         switch ticket.filter {
         case .all: return allFeed.completeRefresh(ticket, bundle: bundle)
         case .nonTask: return nonTaskFeed.completeRefresh(ticket, bundle: bundle)
+        case .favorites: return .abandonedStaleEpoch
         }
     }
 
@@ -601,6 +622,15 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
         switch ticket.filter {
         case .all: allFeed.failRefresh(ticket)
         case .nonTask: nonTaskFeed.failRefresh(ticket)
+        case .favorites: break
+        }
+    }
+
+    public mutating func interruptRefresh(_ ticket: GaryxRecentThreadRefreshTicket) {
+        switch ticket.filter {
+        case .all: allFeed.interruptRefresh(ticket)
+        case .nonTask: nonTaskFeed.interruptRefresh(ticket)
+        case .favorites: break
         }
     }
 
@@ -636,6 +666,8 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
                 runtimeEpoch: ticket.runtimeEpoch,
                 cursor: ticket.cursor
             )
+        case .favorites:
+            return nil
         }
     }
 
@@ -668,6 +700,8 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
                 runtimeEpoch: ticket.runtimeEpoch,
                 cursor: ticket.cursor
             )
+        case .favorites:
+            return nil
         }
     }
 
@@ -679,6 +713,7 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
         switch ticket.filter {
         case .all: return allFeed.completeLoadMore(ticket, page: page)
         case .nonTask: return nonTaskFeed.completeLoadMore(ticket, page: page)
+        case .favorites: return .abandonedStaleEpoch
         }
     }
 
@@ -686,6 +721,15 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
         switch ticket.filter {
         case .all: allFeed.failLoadMore(ticket)
         case .nonTask: nonTaskFeed.failLoadMore(ticket)
+        case .favorites: break
+        }
+    }
+
+    public mutating func interruptLoadMore(_ ticket: GaryxRecentThreadLoadMoreTicket) {
+        switch ticket.filter {
+        case .all: allFeed.interruptLoadMore(ticket)
+        case .nonTask: nonTaskFeed.interruptLoadMore(ticket)
+        case .favorites: break
         }
     }
 

@@ -326,6 +326,22 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
 
     // MARK: 7. Reset + stale tickets
 
+    func testIdentityInterruptReleasesBothLanesWithoutCreatingFailureState() throws {
+        var pager = primedPager(cursor: 30)
+        let refresh = try XCTUnwrap(pager.requestRefresh())
+        let loadMore = try XCTUnwrap(pager.requestLoadMore(trigger: .footer))
+
+        pager.interruptRefresh(refresh)
+        pager.interruptLoadMore(loadMore)
+
+        XCTAssertFalse(pager.isRefreshingHead)
+        XCTAssertFalse(pager.isLoadingMore)
+        XCTAssertEqual(pager.gate, .ready)
+        XCTAssertEqual(pager.loadMoreFailureRevision, 0)
+        XCTAssertNotNil(pager.requestRefresh())
+        XCTAssertNotNil(pager.requestLoadMore(trigger: .footer))
+    }
+
     func testResetBumpsEpochAndStaleTicketsAreNoOps() throws {
         var pager = primedPager(cursor: 30)
         let refreshTicket = try XCTUnwrap(pager.requestRefresh())

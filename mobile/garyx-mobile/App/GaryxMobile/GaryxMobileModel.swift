@@ -153,9 +153,17 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
     }
-    @Published var threadFavoritesState = GaryxFavoritesState()
+    private var hasCompletedModelInitialization = false
+    @Published var threadFavoritesState = GaryxFavoritesState() {
+        didSet {
+            if hasCompletedModelInitialization, oldValue != threadFavoritesState {
+                refreshHomeObservationPaginationSnapshot()
+                emitHomeProjectionSnapshot()
+            }
+        }
+    }
     var isLoadingThreads: Bool {
-        recentThreadFeeds.selectedPresentation.showsInitialSkeleton
+        selectedRecentFeedPresentation.showsInitialSkeleton
     }
     /// Identity for the conversation scroll container (see
     /// GaryxMobileConversationViews). Refreshed on real selection changes,
@@ -226,7 +234,11 @@ final class GaryxMobileModel: ObservableObject {
         didSet { emitHomeProjectionSnapshot() }
     }
     var allRecentThreadIds: [String] { recentThreadFeeds.allRecentThreadIds }
-    var visibleRecentThreadIds: [String] { recentThreadFeeds.visibleRecentThreadIds }
+    var visibleRecentThreadIds: [String] {
+        recentThreadFeeds.selectedFilter == .favorites
+            ? pendingThreadArchives.visibleThreadIds(threadFavoritesState.presentedThreadIds)
+            : recentThreadFeeds.visibleRecentThreadIds
+    }
     @Published var agents: [GaryxAgentSummary] = [] {
         didSet {
             predecodeAgentAvatarImages()
@@ -563,6 +575,7 @@ final class GaryxMobileModel: ObservableObject {
         homeProjectionGateway.setResultHandler { [weak self] result in
             self?.applyHomeProjectionResult(result)
         }
+        hasCompletedModelInitialization = true
         refreshHomeObservationSnapshot()
         refreshShellChromeSnapshot()
         refreshNavigationDrawerSnapshot()

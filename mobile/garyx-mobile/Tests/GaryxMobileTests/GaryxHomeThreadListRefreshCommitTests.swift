@@ -784,6 +784,235 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         )
     }
 
+    func testSelectingFavoritesUsesSnapshotAndAuxiliaryAllWithoutFavoritesRecentRequest() async throws {
+        let suiteName = "GaryxHomeThreadListRefreshCommitTests.favorites.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults.set("http://gateway.example.test", forKey: GaryxMobileSettingsKeys.gatewayUrl)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let favoritesSnapshotStarted = expectation(description: "favorites snapshot started")
+        let allRecentStarted = expectation(description: "auxiliary All requests started")
+        allRecentStarted.expectedFulfillmentCount = 2
+        let pinsStarted = expectation(description: "pins request started")
+        let favoritesSnapshots = GaryxLockedCounter()
+        let allRecentRequests = GaryxLockedCounter()
+        let unexpectedRecentRequests = GaryxLockedCounter()
+        let allPage = try makeRecentThreadsPageData(rows: [
+            (id: "thread-favorite", title: "Favorite thread"),
+            (id: "thread-other", title: "Other thread"),
+        ])
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "GET", components.path == "/api/thread-favorites/snapshot" {
+                if favoritesSnapshots.increment() == 1 {
+                    favoritesSnapshotStarted.fulfill()
+                }
+                return try garyxStubResponse(
+                    request,
+                    data: try garyxFavoritesSnapshotData(ids: ["thread-favorite"])
+                )
+            }
+            if request.httpMethod == "GET", components.path == "/api/thread-pins" {
+                pinsStarted.fulfill()
+                return try garyxStubResponse(
+                    request,
+                    data: try garyxPinsPageData(ids: ["thread-favorite"], revision: 3)
+                )
+            }
+            guard components.path == "/api/recent-threads" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            let tasks = components.queryItems?.first(where: { $0.name == "tasks" })?.value
+            guard tasks == GaryxRecentThreadFilter.all.tasksQueryValue else {
+                unexpectedRecentRequests.increment()
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            if allRecentRequests.increment() <= 2 {
+                allRecentStarted.fulfill()
+            }
+            return try garyxStubResponse(request, data: allPage)
+        }
+        defer {
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(defaults: defaults, session: session)
+        model.selectRecentThreadFilter(.favorites)
+
+        await fulfillment(
+            of: [favoritesSnapshotStarted, allRecentStarted, pinsStarted],
+            timeout: 2
+        )
+        if let auxiliaryTask = model.auxiliaryAllRecentThreadsRefreshTask {
+            await auxiliaryTask.value
+        }
+        let favoritesSettled = await waitUntil {
+            model.threadFavoritesState.rawThreadIds == ["thread-favorite"]
+        }
+        XCTAssertTrue(favoritesSettled)
+
+        XCTAssertEqual(model.recentThreadFeeds.selectedFilter, .favorites)
+        XCTAssertEqual(
+            defaults.string(forKey: GaryxMobileSettingsKeys.recentThreadFilter),
+            "favorites"
+        )
+        XCTAssertEqual(unexpectedRecentRequests.value, 0)
+        XCTAssertGreaterThanOrEqual(favoritesSnapshots.value, 1)
+        XCTAssertGreaterThanOrEqual(allRecentRequests.value, 2)
+        XCTAssertEqual(model.visibleRecentThreadIds, ["thread-favorite"])
+        XCTAssertEqual(model.allRecentThreadIds, ["thread-favorite", "thread-other"])
+        XCTAssertEqual(model.pinnedThreadIds, ["thread-favorite"])
+    }
+
+    func testFavoritesSnapshotFailureSurfacesUnavailableAndManualRetryRecovers() async throws {
+        let requests = GaryxLockedCounter()
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            guard request.httpMethod == "GET",
+                  url.path == "/api/thread-favorites/snapshot" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            if requests.increment() == 1 {
+                return try garyxStubResponse(
+                    request,
+                    statusCode: 500,
+                    data: Data(#"{"error":"snapshot unavailable"}"#.utf8)
+                )
+            }
+            return try garyxStubResponse(
+                request,
+                data: try garyxFavoritesSnapshotData(ids: [])
+            )
+        }
+        defer {
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.recentThreadFeeds.select(.favorites)
+        model.refreshThreadFavoritesSnapshot()
+        let failed = await waitUntil {
+            model.threadFavoritesState.snapshotFailed
+        }
+        XCTAssertTrue(failed)
+        XCTAssertFalse(model.selectedRecentFeedPresentation.isPrimed)
+        XCTAssertTrue(model.selectedRecentFeedPresentation.headFailure)
+
+        model.refreshThreadFavoritesSnapshot()
+        let recovered = await waitUntil {
+            model.threadFavoritesState.rawRevision == 1
+                && !model.threadFavoritesState.snapshotFailed
+        }
+        XCTAssertTrue(recovered)
+        XCTAssertTrue(model.selectedRecentFeedPresentation.isPrimed)
+        XCTAssertFalse(model.selectedRecentFeedPresentation.headFailure)
+        XCTAssertEqual(requests.value, 2)
+    }
+
+    func testFavoritesIncarnationChangeResetsAnInFlightRecentLane() async throws {
+        let firstIncarnation = "11111111-1111-4111-8111-111111111111"
+        let secondIncarnation = "33333333-3333-4333-8333-333333333333"
+        let snapshots = GaryxLockedCounter()
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            guard request.httpMethod == "GET",
+                  url.path == "/api/thread-favorites/snapshot" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            let incarnation = snapshots.increment() == 1
+                ? firstIncarnation
+                : secondIncarnation
+            return try garyxStubResponse(
+                request,
+                data: try garyxFavoritesSnapshotData(
+                    ids: [],
+                    storeIncarnationId: incarnation
+                )
+            )
+        }
+        defer {
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.refreshThreadFavoritesSnapshot()
+        let firstSnapshotSettled = await waitUntil {
+            model.threadFavoritesState.storeIncarnationId == firstIncarnation
+        }
+        XCTAssertTrue(firstSnapshotSettled)
+        primeRecentFeed(model, ids: ["old-thread"], filter: .all)
+        let oldEpoch = model.threadFavoritesState.runtimeEpoch
+        let interrupted = try XCTUnwrap(model.recentThreadFeeds.requestRefresh(
+            filter: .all,
+            gatewayScope: model.threadFavoritesState.gatewayScope,
+            runtimeEpoch: oldEpoch
+        ))
+        XCTAssertTrue(model.recentThreadFeeds.allFeed.pager.isRefreshingHead)
+
+        model.refreshThreadFavoritesSnapshot()
+        let replacementSnapshotSettled = await waitUntil {
+            model.threadFavoritesState.runtimeEpoch == oldEpoch + 1
+                && model.threadFavoritesState.storeIncarnationId == secondIncarnation
+        }
+        XCTAssertTrue(replacementSnapshotSettled)
+
+        XCTAssertFalse(model.recentThreadFeeds.allFeed.pager.isRefreshingHead)
+        XCTAssertTrue(model.recentThreadFeeds.allFeed.orderedThreadIds.isEmpty)
+        XCTAssertEqual(
+            model.recentThreadFeeds.completeRefresh(
+                interrupted,
+                bundle: makeGaryxTestRecentRefreshBundle(threadIds: ["stale-thread"])
+            ),
+            .abandonedStaleEpoch
+        )
+        XCTAssertNotNil(model.recentThreadFeeds.requestRefresh(
+            filter: .all,
+            gatewayScope: model.threadFavoritesState.gatewayScope,
+            runtimeEpoch: model.threadFavoritesState.runtimeEpoch
+        ))
+    }
+
+    func testCommittedArchiveFiltersALateFavoritesSnapshotEverywhere() async throws {
+        let archivedId = "thread-archived-favorite"
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            guard request.httpMethod == "GET",
+                  url.path == "/api/thread-favorites/snapshot" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            return try garyxStubResponse(
+                request,
+                data: try garyxFavoritesSnapshotData(
+                    ids: [archivedId],
+                    rows: [(id: archivedId, title: "Archived favorite")]
+                )
+            )
+        }
+        defer {
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.pendingThreadArchives.commitArchive(threadId: archivedId)
+        model.recentThreadFeeds.select(.favorites)
+        model.refreshThreadFavoritesSnapshot()
+        let snapshotSettled = await waitUntil {
+            model.threadFavoritesState.rawThreadIds == [archivedId]
+        }
+        XCTAssertTrue(snapshotSettled)
+
+        XCTAssertTrue(model.favoriteThreads.isEmpty)
+        XCTAssertFalse(model.visibleRecentThreadIds.contains(archivedId))
+        XCTAssertFalse(model.threads.contains { $0.id == archivedId })
+    }
+
     func testGlobalSelectionPersistsAcrossModelAndGatewayReset() throws {
         let suiteName = "GaryxHomeThreadListRefreshCommitTests.persistence.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -2407,10 +2636,14 @@ private func garyxRecentThreadsData(ids: [String]) throws -> Data {
     )
 }
 
-private func garyxFavoritesSnapshotData(ids: [String]) throws -> Data {
+private func garyxFavoritesSnapshotData(
+    ids: [String],
+    rows: [(id: String, title: String)] = [],
+    storeIncarnationId: String = "11111111-1111-4111-8111-111111111111"
+) throws -> Data {
     try JSONSerialization.data(
         withJSONObject: [
-            "store_incarnation_id": "11111111-1111-4111-8111-111111111111",
+            "store_incarnation_id": storeIncarnationId,
             "server_boot_id": "22222222-2222-4222-8222-222222222222",
             "revision": 1,
             "thread_ids": ids,
@@ -2421,8 +2654,16 @@ private func garyxFavoritesSnapshotData(ids: [String]) throws -> Data {
                 ]
             },
             "recent": [
-                "threads": [],
-                "total": 0,
+                "threads": rows.enumerated().map { index, row in
+                    [
+                        "thread_id": row.id,
+                        "title": row.title,
+                        "last_active_at": "2026-07-16T08:00:00Z",
+                        "last_message_preview": "",
+                        "activity_seq": rows.count - index,
+                    ]
+                },
+                "total": rows.count,
                 "truncated": false,
             ],
         ]

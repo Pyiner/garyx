@@ -69,12 +69,15 @@ final class GaryxFavoritesStateTests: XCTestCase {
         XCTAssertNil(mutation(in: state.toggle(threadId: "thread::queued", desired: true)))
         _ = state.failSnapshot(ticket: first)
         XCTAssertNotNil(state.intents["thread::queued"])
+        XCTAssertTrue(state.snapshotFailed)
 
         let second = try XCTUnwrap(snapshotTicket(in: state.requestSnapshot()))
+        XCTAssertFalse(state.snapshotFailed)
         let effects = state.completeSnapshot(
             ticket: second,
             snapshot: snapshot(revision: 7)
         )
+        XCTAssertFalse(state.snapshotFailed)
         let ticket = try XCTUnwrap(mutation(in: effects))
         XCTAssertTrue(ticket.target)
         XCTAssertEqual(ticket.expectedRevision, 7)
@@ -240,6 +243,46 @@ final class GaryxFavoritesStateTests: XCTestCase {
         XCTAssertNotNil(snapshotTicket(in: effects))
     }
 
+    func testUndecodableWrongIncarnationQueuesReadWithoutRetryingStaleCAS() throws {
+        var state = prime()
+        let ticket = try XCTUnwrap(mutation(in: state.toggle(
+            threadId: "thread::a",
+            desired: true
+        )))
+        let effects = state.settle(
+            ticket: ticket,
+            settlement: .definitive(
+                status: 409,
+                code: "wrong_incarnation",
+                message: nil,
+                page: nil
+            )
+        )
+
+        XCTAssertNil(state.inFlight["thread::a"])
+        XCTAssertEqual(state.intents["thread::a"]?.phase, .active)
+        XCTAssertNotNil(snapshotTicket(in: effects))
+        XCTAssertNil(backoff(in: effects))
+        XCTAssertNil(mutation(in: effects))
+    }
+
+    func testFavoritesGetEstablishesWriteReadinessAndDrainsQueuedIntent() throws {
+        var state = GaryxFavoritesState(gatewayScope: scope)
+        XCTAssertNil(mutation(in: state.toggle(
+            threadId: "thread::queued",
+            desired: true
+        )))
+
+        let effects = state.acceptReadPage(
+            stamp: stamp(state),
+            page: page(revision: 9)
+        )
+        let ticket = try XCTUnwrap(mutation(in: effects))
+        XCTAssertEqual(ticket.expectedRevision, 9)
+        XCTAssertEqual(ticket.expectedStoreIncarnation, "inc-a")
+        XCTAssertTrue(ticket.target)
+    }
+
     func testSnapshotIsAtomicAtRevisionHighWaterAndCoalescesTrailingTriggers() throws {
         var state = prime(revision: 2, ids: ["thread::a"])
         let mutationTicket = try XCTUnwrap(mutation(in: state.toggle(
@@ -277,6 +320,29 @@ final class GaryxFavoritesStateTests: XCTestCase {
             )
         )
         XCTAssertEqual(state.presentedRows.map(\.id), ["thread::a", "thread::b"])
+    }
+
+    func testPresentedThreadIdsLeadWithOptimisticAdditions() {
+        var state = prime(revision: 1, ids: ["thread::a", "thread::b"])
+        _ = state.toggle(threadId: "thread::new", desired: true)
+        XCTAssertEqual(
+            state.presentedThreadIds,
+            ["thread::new", "thread::a", "thread::b"]
+        )
+
+        _ = state.toggle(threadId: "thread::a", desired: false)
+        XCTAssertEqual(state.presentedThreadIds, ["thread::new", "thread::b"])
+    }
+
+    func testPresentedThreadIdsAreCappedAtFiveHundredAfterOptimisticOrdering() {
+        let ids = (0..<500).map { "thread::\($0)" }
+        var state = prime(revision: 1, ids: ids)
+        _ = state.toggle(threadId: "thread::new", desired: true)
+
+        XCTAssertEqual(state.presentedThreadIds.count, 500)
+        XCTAssertEqual(state.presentedThreadIds.first, "thread::new")
+        XCTAssertEqual(state.presentedThreadIds.last, "thread::498")
+        XCTAssertFalse(state.presentedThreadIds.contains("thread::499"))
     }
 
     func testRetryableRejectionSchedulesAndTerminalSameGenerationSurfacesError() throws {

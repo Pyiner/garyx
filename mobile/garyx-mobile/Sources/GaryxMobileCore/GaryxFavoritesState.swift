@@ -162,6 +162,7 @@ public struct GaryxFavoritesState: Equatable, Sendable {
     public private(set) var favoritesSnapshotTruncated: Bool
     public private(set) var activeSnapshotTicket: GaryxFavoritesSnapshotTicket?
     public private(set) var snapshotTrailingDirty: Bool
+    public private(set) var snapshotFailed: Bool
 
     private var nextGeneration: UInt64
     private var nextRequestToken: UInt64
@@ -182,6 +183,7 @@ public struct GaryxFavoritesState: Equatable, Sendable {
         favoritesSnapshotTruncated = false
         activeSnapshotTicket = nil
         snapshotTrailingDirty = false
+        snapshotFailed = false
         nextGeneration = 1
         nextRequestToken = 1
         nextEffectToken = 1
@@ -194,6 +196,30 @@ public struct GaryxFavoritesState: Equatable, Sendable {
 
     public var presentedRows: [GaryxThreadSummary] {
         favoriteRows.filter { isPresented(threadId: $0.id) }
+    }
+
+    /// Snapshot row order is authoritative. Optimistic additions lead until
+    /// the next snapshot supplies their row; raw ids are a bounded fallback
+    /// for summaries already cached by the App host.
+    public var presentedThreadIds: [String] {
+        var seen = Set<String>()
+        var ids: [String] = []
+        func append(_ rawId: String) {
+            let id = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty,
+                  !seen.contains(id),
+                  isPresented(threadId: id) else { return }
+            seen.insert(id)
+            ids.append(id)
+        }
+
+        intents
+            .filter { $0.value.desired }
+            .sorted { $0.value.generation > $1.value.generation }
+            .forEach { append($0.key) }
+        favoriteRows.forEach { append($0.id) }
+        rawThreadIds.forEach(append)
+        return Array(ids.prefix(500))
     }
 
     @discardableResult
@@ -262,6 +288,7 @@ public struct GaryxFavoritesState: Equatable, Sendable {
         nextRequestToken &+= 1
         activeSnapshotTicket = ticket
         snapshotTrailingDirty = false
+        snapshotFailed = false
         return [.snapshot(ticket)]
     }
 
@@ -282,6 +309,7 @@ public struct GaryxFavoritesState: Equatable, Sendable {
         let trailing = snapshotTrailingDirty
         activeSnapshotTicket = nil
         snapshotTrailingDirty = false
+        snapshotFailed = false
         if let highestObservedRevision,
            snapshot.page.revision < highestObservedRevision {
             snapshotTrailingDirty = true
@@ -306,6 +334,7 @@ public struct GaryxFavoritesState: Equatable, Sendable {
         let trailing = snapshotTrailingDirty
         activeSnapshotTicket = nil
         snapshotTrailingDirty = false
+        snapshotFailed = true
         return trailing ? requestSnapshot() : []
     }
 
@@ -368,7 +397,7 @@ public struct GaryxFavoritesState: Equatable, Sendable {
             effects = settleDeferred(ticket: ticket, cause: .notSent)
         case .definitive(let status, let code, let message, let page):
             if code == "wrong_incarnation" {
-                effects = settleDeferred(ticket: ticket, cause: .rejected)
+                effects = settleWrongIncarnation(ticket: ticket)
             } else if status == 409, let page {
                 effects = settleConflict(ticket: ticket, page: page)
             } else if status == 404 {
@@ -384,6 +413,20 @@ public struct GaryxFavoritesState: Equatable, Sendable {
         }
         guard bootChanged else { return effects }
         return effects + requestSnapshot()
+    }
+
+    /// A wrong-incarnation response is definitive that this CAS did not
+    /// apply, but a missing or same-domain page cannot establish the new
+    /// baseline. Keep the user's latest intent queued and rebuild from a read;
+    /// never retry the stale expected-incarnation tuple on a timer.
+    private mutating func settleWrongIncarnation(
+        ticket: GaryxFavoriteMutationTicket
+    ) -> [GaryxFavoritesEffect] {
+        inFlight[ticket.threadId] = nil
+        if intents[ticket.threadId] != nil {
+            intents[ticket.threadId]?.phase = .active
+        }
+        return requestSnapshot()
     }
 
     @discardableResult

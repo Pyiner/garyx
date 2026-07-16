@@ -48,8 +48,10 @@ type ConversationTitleRootProps = {
   isAutomationView: boolean;
   isBotsView: boolean;
   isSkillsView: boolean;
+  isThreadFavorite: boolean;
   isThreadPinned: boolean;
   onArchiveThread: () => void;
+  onToggleFavoriteThread: () => void;
   onTogglePinnedThread: () => void;
   setDesktopState: (value: DesktopState) => void;
   setError: (value: string | null) => void;
@@ -70,8 +72,10 @@ export const ConversationTitleRoot = forwardRef<
     isAutomationView,
     isBotsView,
     isSkillsView,
+    isThreadFavorite,
     isThreadPinned,
     onArchiveThread,
+    onToggleFavoriteThread,
     onTogglePinnedThread,
     setDesktopState,
     setError,
@@ -168,6 +172,7 @@ export const ConversationTitleRoot = forwardRef<
       isAutomationView={isAutomationView}
       isBotsView={isBotsView}
       isSkillsView={isSkillsView}
+      isThreadFavorite={isThreadFavorite}
       isThreadPinned={isThreadPinned}
       archiveThreadDisabled={archiveThreadDisabled}
       onBeginEdit={beginThreadTitleEdit}
@@ -176,6 +181,7 @@ export const ConversationTitleRoot = forwardRef<
       onSaveTitle={() => {
         void handleSaveTitle({ closeEditor: true });
       }}
+      onToggleFavoriteThread={onToggleFavoriteThread}
       onTogglePinnedThread={onTogglePinnedThread}
       onTitleDraftChange={setTitleDraft}
       savingTitle={savingTitle}

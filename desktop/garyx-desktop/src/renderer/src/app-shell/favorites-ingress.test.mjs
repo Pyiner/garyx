@@ -10,6 +10,7 @@ import {
   fireFavoriteBackoff,
   observeStoreIdentity,
   presentedFavoriteRows,
+  presentedFavoriteThreadIds,
   replaceFavoritesGatewayScope,
   requestFavoritesSnapshot,
   settleFavoriteMutation,
@@ -164,8 +165,10 @@ test("first snapshot failure retains queued intent and next success drains it", 
   assert.equal(effect(transition, "mutate"), undefined);
   transition = failFavoritesSnapshot(transition.state, firstTicket);
   assert.ok(transition.state.intents["thread::queued"]);
+  assert.equal(transition.state.snapshotFailure, "Favorite threads are unavailable");
 
   transition = requestFavoritesSnapshot(transition.state);
+  assert.equal(transition.state.snapshotFailure, null);
   const secondTicket = transition.state.activeSnapshotTicket;
   assert.ok(secondTicket);
   transition = completeFavoritesSnapshot(
@@ -178,6 +181,7 @@ test("first snapshot failure retains queued intent and next success drains it", 
   assert.equal(mutation.ticket.target, true);
   assert.equal(mutation.ticket.expectedRevision, 7);
   assert.equal(mutation.ticket.expectedStoreIncarnation, "inc-a");
+  assert.equal(transition.state.snapshotFailure, null);
 });
 
 test("ok settlement retires its generation while a newer reverse intent drains", () => {
@@ -363,6 +367,43 @@ test("wrong_incarnation settlement uses the shared three-step judgment", () => {
   assert.ok(effect(transition, "snapshot"));
 });
 
+test("undecodable wrong_incarnation queues a read without retrying stale CAS", () => {
+  let transition = toggleFavoriteIntent(prime(1), "thread::a", true);
+  const ticket = effect(transition, "mutate").ticket;
+  transition = settleFavoriteMutation(transition.state, ticket, {
+    kind: "definitiveEndpointResponse",
+    status: 409,
+    code: "wrong_incarnation",
+    page: null,
+  });
+
+  assert.equal(transition.state.inFlight["thread::a"], undefined);
+  assert.equal(transition.state.intents["thread::a"].phase.kind, "active");
+  assert.ok(effect(transition, "snapshot"));
+  assert.equal(effect(transition, "backoff"), undefined);
+  assert.equal(effect(transition, "mutate"), undefined);
+});
+
+test("favorites GET establishes write readiness and drains queued intent", () => {
+  let transition = toggleFavoriteIntent(
+    createFavoritesIngressState(scope),
+    "thread::queued",
+    true,
+  );
+  assert.equal(effect(transition, "mutate"), undefined);
+
+  transition = acceptFavoritesReadPage(
+    transition.state,
+    { gatewayScope: scope, runtimeEpoch: 0, owned: true },
+    page(9),
+  );
+  const mutation = effect(transition, "mutate");
+  assert.ok(mutation);
+  assert.equal(mutation.ticket.expectedRevision, 9);
+  assert.equal(mutation.ticket.expectedStoreIncarnation, "inc-a");
+  assert.equal(mutation.ticket.target, true);
+});
+
 test("snapshot membership and rows are atomic under the revision high-water", () => {
   let state = prime(2, ["thread::a"]);
   let transition = toggleFavoriteIntent(state, "thread::b", true);
@@ -422,6 +463,52 @@ test("presented filtering is applied after cached snapshot rows", () => {
     presentedFavoriteRows(transition.state).map((row) => row.id),
     ["thread::a", "thread::b"],
   );
+});
+
+test("presented favorite ids lead with optimistic additions and stay capped", () => {
+  let transition = toggleFavoriteIntent(
+    prime(1, ["thread::a", "thread::b"]),
+    "thread::new",
+    true,
+  );
+  assert.deepEqual(presentedFavoriteThreadIds(transition.state), [
+    "thread::new",
+    "thread::a",
+    "thread::b",
+  ]);
+
+  transition = toggleFavoriteIntent(
+    transition.state,
+    "thread::a",
+    false,
+  );
+  assert.deepEqual(presentedFavoriteThreadIds(transition.state), [
+    "thread::new",
+    "thread::b",
+  ]);
+
+  const ids = Array.from({ length: 500 }, (_, index) => `thread::${index}`);
+  transition = toggleFavoriteIntent(prime(2, ids), "thread::new", true);
+  const presented = presentedFavoriteThreadIds(transition.state);
+  assert.equal(presented.length, 500);
+  assert.equal(presented[0], "thread::new");
+  assert.equal(presented.at(-1), "thread::498");
+  assert.equal(presented.includes("thread::499"), false);
+});
+
+test("presented rows keep snapshot order while shared live summaries win", () => {
+  const state = prime(1, ["thread::a", "thread::snapshot-only"]);
+  const rows = presentedFavoriteRows(state, [
+    { ...summary("thread::a"), title: "Live title" },
+    { ...summary("thread::not-favorite"), title: "Ignored" },
+  ]);
+
+  assert.deepEqual(rows.map((row) => row.id), [
+    "thread::a",
+    "thread::snapshot-only",
+  ]);
+  assert.equal(rows[0].title, "Live title");
+  assert.equal(rows[1].title, "thread::snapshot-only");
 });
 
 test("retryable rejection schedules while terminal same-generation rejection surfaces", () => {

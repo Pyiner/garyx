@@ -5,6 +5,7 @@ public enum GaryxRecentThreadFilterStorage {
         switch filter {
         case .all: return "all"
         case .nonTask: return "nonTask"
+        case .favorites: return "favorites"
         }
     }
 
@@ -12,6 +13,7 @@ public enum GaryxRecentThreadFilterStorage {
         switch rawValue {
         case "all": return .all
         case "nonTask": return .nonTask
+        case "favorites": return .favorites
         default: return .all
         }
     }

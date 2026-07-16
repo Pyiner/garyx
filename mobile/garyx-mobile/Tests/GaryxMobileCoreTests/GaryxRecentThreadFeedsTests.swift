@@ -5,16 +5,32 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
     func testFilterWireMappingAndDefaults() {
         XCTAssertEqual(GaryxRecentThreadFilter.all.tasksQueryValue, "include")
         XCTAssertEqual(GaryxRecentThreadFilter.nonTask.tasksQueryValue, "exclude")
+        XCTAssertNil(GaryxRecentThreadFilter.favorites.tasksQueryValue)
         XCTAssertEqual(GaryxRecentThreadFilter.all.displayName, "All")
         XCTAssertEqual(GaryxRecentThreadFilter.nonTask.displayName, "Chats")
-        XCTAssertEqual(GaryxRecentThreadFilter.homeMenuOptions, [.all, .nonTask])
+        XCTAssertEqual(GaryxRecentThreadFilter.favorites.displayName, "Favorites")
+        XCTAssertEqual(GaryxRecentThreadFilter.homeMenuOptions, [.all, .nonTask, .favorites])
         XCTAssertNil(GaryxRecentThreadFilter.all.activeStatusLabel)
         XCTAssertEqual(GaryxRecentThreadFilter.nonTask.activeStatusLabel, "Chats")
+        XCTAssertEqual(GaryxRecentThreadFilter.favorites.activeStatusLabel, "Favorites")
 
         let feeds = makeFeeds()
         XCTAssertEqual(feeds.selectedFilter, .all)
         XCTAssertFalse(feeds.allFeed.isPrimed)
         XCTAssertFalse(feeds.nonTaskFeed.isPrimed)
+    }
+
+    func testFavoritesSelectionHasNoRecentPagerOrTransportTicket() {
+        var feeds = makeFeeds()
+        feeds.select(.favorites)
+
+        XCTAssertEqual(feeds.selectedFilter, .favorites)
+        XCTAssertNil(feeds.selectedPager)
+        XCTAssertNil(feeds.feed(for: .favorites))
+        XCTAssertNil(feeds.requestRefresh())
+        XCTAssertNil(feeds.requestLoadMore(trigger: .footer))
+        XCTAssertNil(feeds.retryLoadMore())
+        XCTAssertTrue(feeds.visibleRecentThreadIds.isEmpty)
     }
 
     func testLateCompletionWritesTicketFilterNotCurrentSelection() throws {
@@ -202,6 +218,50 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
         XCTAssertEqual(feeds.allFeed.pager.epoch, oldEpoch + 1)
     }
 
+    func testKOverflowComposesWithOneMovedHeadFillAndBoundedReverification() throws {
+        var feeds = makeFeeds()
+        adoptHead(&feeds, filter: .all, rows: [("old", 100)], hasMore: true)
+        let oldEpoch = feeds.allFeed.pager.epoch
+        let ticket = try XCTUnwrap(feeds.requestRefresh(filter: .all))
+        let pages = (0..<GaryxRecentThreadRangeFill.maxChainPages).map { index in
+            let top = Int64(200 - index * 2)
+            return page(
+                [("new-\(top)", top), ("new-\(top - 1)", top - 1)],
+                hasMore: true,
+                cursor: "cursor-\(top - 1)"
+            )
+        }
+        let verification = page([("moved-220", 220)], hasMore: true)
+        let immediate = page(
+            [("moved-220", 220), ("new-200", 200)],
+            hasMore: true,
+            cursor: "cursor-200"
+        )
+        let movingAgain = page([("moved-again-230", 230)], hasMore: true)
+
+        XCTAssertEqual(
+            feeds.completeRefresh(
+                ticket,
+                bundle: GaryxRecentThreadRefreshBundle(
+                    primaryPages: pages,
+                    verificationPage: verification,
+                    immediatePages: [immediate],
+                    immediateVerificationPage: movingAgain
+                )
+            ),
+            .applied
+        )
+        XCTAssertEqual(Array(feeds.allFeed.orderedThreadIds.prefix(3)), [
+            "moved-220", "new-200", "new-199",
+        ])
+        XCTAssertFalse(feeds.allFeed.orderedThreadIds.contains("old"))
+        XCTAssertEqual(feeds.allFeed.orderedThreadIds.count, 11)
+        XCTAssertEqual(feeds.allFeed.nextCursor, "cursor-191")
+        XCTAssertEqual(feeds.allFeed.pager.epoch, oldEpoch + 1)
+        XCTAssertTrue(feeds.allFeed.trailingDirty)
+        XCTAssertFalse(feeds.allFeed.orderedThreadIds.contains("moved-again-230"))
+    }
+
     func testExhaustionBeforeAnchorReplacesAndRemovesGhostTail() throws {
         var feeds = makeFeeds()
         adoptHead(
@@ -246,6 +306,32 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
         )
         XCTAssertEqual(feeds.allFeed.orderedThreadIds, ["new"])
         XCTAssertEqual(feeds.allFeed.serverBootId, "boot-b")
+    }
+
+    func testIncarnationMismatchForcesReplacementThenAcceptsNewStore() throws {
+        var feeds = makeFeeds()
+        adoptHead(&feeds, filter: .all, rows: [("old", 100)], hasMore: true)
+        let range = try XCTUnwrap(feeds.requestRefresh(filter: .all))
+        let newStore = page(
+            [("new", 110)],
+            hasMore: false,
+            cursor: nil,
+            incarnation: "inc-b"
+        )
+        XCTAssertEqual(
+            feeds.completeRefresh(range, bundle: bundle(newStore)),
+            .forceReplacement
+        )
+        XCTAssertEqual(feeds.allFeed.orderedThreadIds, ["old"])
+
+        let replacement = try XCTUnwrap(feeds.requestRefresh(filter: .all))
+        XCTAssertEqual(replacement.mode, .replacement)
+        XCTAssertEqual(
+            feeds.completeRefresh(replacement, bundle: bundle(newStore)),
+            .applied
+        )
+        XCTAssertEqual(feeds.allFeed.orderedThreadIds, ["new"])
+        XCTAssertEqual(feeds.allFeed.storeIncarnationId, "inc-b")
     }
 
     func testHeadVerificationAllowsOneImmediateRoundThenDefersMotion() throws {

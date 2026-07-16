@@ -9,9 +9,11 @@ import { threadRailIsNearListEnd } from "./thread-conversation-sidebar-model.ts"
 
 test("Recent segmented tabs switch with both arrow keys", () => {
   assert.equal(recentFilterForArrowKey("all", "ArrowRight"), "nonTask");
+  assert.equal(recentFilterForArrowKey("nonTask", "ArrowRight"), "favorites");
+  assert.equal(recentFilterForArrowKey("favorites", "ArrowRight"), "all");
+  assert.equal(recentFilterForArrowKey("all", "ArrowLeft"), "favorites");
+  assert.equal(recentFilterForArrowKey("favorites", "ArrowLeft"), "nonTask");
   assert.equal(recentFilterForArrowKey("nonTask", "ArrowLeft"), "all");
-  assert.equal(recentFilterForArrowKey("all", "ArrowLeft"), "nonTask");
-  assert.equal(recentFilterForArrowKey("nonTask", "ArrowRight"), "all");
 });
 
 test("shared rail near-tail seam triggers only inside the threshold", () => {
@@ -73,6 +75,10 @@ test("Recent presentation distinguishes initial, empty, and cached refresh state
   assert.deepEqual(
     recentConversationPresentation(feed({ isPrimed: true }), 0, "nonTask"),
     { emptyLabelKey: "No recent chats", footerKind: "hidden" },
+  );
+  assert.deepEqual(
+    recentConversationPresentation(feed({ isPrimed: true }), 0, "favorites"),
+    { emptyLabelKey: "No favorite threads", footerKind: "hidden" },
   );
   assert.deepEqual(
     recentConversationPresentation(

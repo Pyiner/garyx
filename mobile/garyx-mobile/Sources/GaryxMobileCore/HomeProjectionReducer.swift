@@ -27,6 +27,7 @@ enum HomeProjectionEvent: Sendable {
         recentRunStateEpoch: Int
     )
     case pinsChanged(pinnedThreadIds: [String])
+    case favoritesChanged(favoritedThreadIds: [String])
     case runStateDelta(
         source: HomeProjectionRunStateSource,
         threadId: String,
@@ -68,6 +69,7 @@ struct HomeProjectionState: Equatable, Sendable {
     var agents: [GaryxAgentSummary] = []
     var automations: [GaryxAutomationSummary] = []
     var pinnedThreadIds: [String] = []
+    var favoritedThreadIds: [String] = []
     var recentThreadIds: [String] = []
     var selectedThreadId: String?
     var isLoadingThreads = false
@@ -119,6 +121,7 @@ struct HomeProjectionState: Equatable, Sendable {
             agents: agents,
             automations: automations,
             pinnedThreadIds: pinnedThreadIds,
+            favoritedThreadIds: favoritedThreadIds,
             recentThreadIds: recentThreadIds,
             selectedThreadId: selectedThreadId
         )
@@ -174,6 +177,12 @@ enum HomeProjectionReducer {
 
         case let .pinsChanged(pinnedThreadIds):
             next.pinnedThreadIds = normalizedThreadIds(pinnedThreadIds)
+            rebuildBaseSectionsIfNeeded(&next)
+            rebuildSnapshotFromBase(&next)
+            evaluatesRowDifference = true
+
+        case let .favoritesChanged(favoritedThreadIds):
+            next.favoritedThreadIds = normalizedThreadIds(favoritedThreadIds)
             rebuildBaseSectionsIfNeeded(&next)
             rebuildSnapshotFromBase(&next)
             evaluatesRowDifference = true
@@ -414,6 +423,7 @@ private struct HomeProjectionDisplaySignature: Equatable, Sendable {
     var agents: [GaryxAgentSummary]
     var automationThreadIds: Set<String>
     var pinnedThreadIds: [String]
+    var favoritedThreadIds: [String]
     var recentThreadIds: [String]
     var selectedThreadId: String?
 
@@ -422,6 +432,9 @@ private struct HomeProjectionDisplaySignature: Equatable, Sendable {
         agents = input.agents
         automationThreadIds = GaryxHomeThreadSectionsBuilder.automationThreadIds(input.automations)
         pinnedThreadIds = GaryxHomeThreadSectionsBuilder.normalizedPinnedThreadIds(input.pinnedThreadIds)
+        favoritedThreadIds = GaryxHomeThreadSectionsBuilder.normalizedPinnedThreadIds(
+            input.favoritedThreadIds
+        )
         recentThreadIds = input.recentThreadIds
         selectedThreadId = input.selectedThreadId?.trimmingCharacters(in: .whitespacesAndNewlines)
     }

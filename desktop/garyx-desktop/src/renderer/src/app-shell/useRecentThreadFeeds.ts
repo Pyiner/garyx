@@ -12,6 +12,7 @@ import {
   createRecentThreadFeedsState,
   failRecentThreadRequest,
   ingestRecentThreadSummaries,
+  isPaginatedRecentThreadFilter,
   markRecentThreadForceReplacement,
   noteRecentThreadFilterLocalMutation,
   noteRecentThreadLocalMutation,
@@ -28,6 +29,8 @@ import {
   selectedRecentThreadSummaries,
   upsertChatInRecentFeeds,
   verificationObservedNewerHead,
+  PAGINATED_RECENT_THREAD_FILTERS,
+  type PaginatedRecentThreadFilter,
   type RecentThreadFilter,
   type RecentThreadFeedsState,
   type RecentThreadLoadMoreTicket,
@@ -68,8 +71,6 @@ export type RecentThreadFeedsController = {
   noteAllLocalMutation: () => void;
   noteLocalMutation: () => void;
 };
-
-const FILTERS: RecentThreadFilter[] = ["all", "nonTask"];
 
 class RecentIdentityInterrupted extends Error {
   constructor(readonly decision: StoreIdentityDecision) {
@@ -267,7 +268,7 @@ export function useRecentThreadFeeds({
   );
 
   const issueRefresh = useCallback(
-    (filter: RecentThreadFilter, forceReplacement = false) => {
+    (filter: PaginatedRecentThreadFilter, forceReplacement = false) => {
       const decision = requestRecentThreadRefresh(
         stateRef.current,
         filter,
@@ -286,6 +287,9 @@ export function useRecentThreadFeeds({
   const issueLoadMore = useCallback(
     (retry: boolean) => {
       const current = stateRef.current;
+      if (!isPaginatedRecentThreadFilter(current.selectedFilter)) {
+        return;
+      }
       const decision = requestRecentThreadLoadMore(
         current,
         current.selectedFilter,
@@ -318,7 +322,10 @@ export function useRecentThreadFeeds({
     if (!enabled || !gatewayScope) {
       return;
     }
-    issueRefresh(stateRef.current.selectedFilter);
+    const filter = stateRef.current.selectedFilter;
+    if (isPaginatedRecentThreadFilter(filter)) {
+      issueRefresh(filter);
+    }
   }, [enabled, gatewayScope, issueRefresh, runtimeEpoch]);
 
   useEffect(() => {
@@ -326,7 +333,10 @@ export function useRecentThreadFeeds({
       return;
     }
     const interval = window.setInterval(() => {
-      issueRefresh(stateRef.current.selectedFilter);
+      const filter = stateRef.current.selectedFilter;
+      if (isPaginatedRecentThreadFilter(filter)) {
+        issueRefresh(filter);
+      }
     }, 10_000);
     return () => window.clearInterval(interval);
   }, [enabled, gatewayScope, issueRefresh]);
@@ -334,7 +344,10 @@ export function useRecentThreadFeeds({
   useEffect(() => {
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible" && enabled && gatewayScope) {
-        issueRefresh(stateRef.current.selectedFilter, true);
+        const filter = stateRef.current.selectedFilter;
+        if (isPaginatedRecentThreadFilter(filter)) {
+          issueRefresh(filter, true);
+        }
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -342,7 +355,7 @@ export function useRecentThreadFeeds({
   }, [enabled, gatewayScope, issueRefresh]);
 
   useEffect(() => {
-    for (const filter of FILTERS) {
+    for (const filter of PAGINATED_RECENT_THREAD_FILTERS) {
       if (
         queuedRefreshesRef.current.has(filter) &&
         !state.feeds[filter].isRefreshingHead &&
@@ -357,7 +370,7 @@ export function useRecentThreadFeeds({
   useEffect(() => {
     let next = stateRef.current;
     const tickets: RecentThreadRequestTicket[] = [];
-    for (const filter of FILTERS) {
+    for (const filter of PAGINATED_RECENT_THREAD_FILTERS) {
       for (const kind of ["refresh", "loadMore"] as const) {
         const decision = consumeRecentThreadMutationFollowUp(
           next,
@@ -382,13 +395,18 @@ export function useRecentThreadFeeds({
   const selectFilter = useCallback(
     (filter: RecentThreadFilter) => {
       commit((current) => selectRecentThreadFilter(current, filter));
-      issueRefresh(filter);
+      if (isPaginatedRecentThreadFilter(filter)) {
+        issueRefresh(filter);
+      }
     },
     [commit, issueRefresh],
   );
 
   const refreshSelected = useCallback(() => {
-    issueRefresh(stateRef.current.selectedFilter, true);
+    const filter = stateRef.current.selectedFilter;
+    if (isPaginatedRecentThreadFilter(filter)) {
+      issueRefresh(filter, true);
+    }
   }, [issueRefresh]);
 
   const refreshAll = useCallback(() => {
@@ -404,7 +422,7 @@ export function useRecentThreadFeeds({
 
   const forceReplacement = useCallback(() => {
     commit(markRecentThreadForceReplacement);
-    for (const filter of FILTERS) {
+    for (const filter of PAGINATED_RECENT_THREAD_FILTERS) {
       if (
         stateRef.current.feeds[filter].isRefreshingHead ||
         stateRef.current.feeds[filter].isLoadingMore
@@ -421,6 +439,9 @@ export function useRecentThreadFeeds({
   const retry = useCallback(() => {
     const current = stateRef.current;
     const feed = selectedRecentThreadFeed(current);
+    if (!feed || !isPaginatedRecentThreadFilter(current.selectedFilter)) {
+      return;
+    }
     if (feed.headFailure || feed.forceReplacementPending) {
       issueRefresh(current.selectedFilter, feed.forceReplacementPending);
       return;

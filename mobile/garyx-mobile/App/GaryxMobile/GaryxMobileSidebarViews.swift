@@ -24,6 +24,7 @@ struct GaryxRootNavigationView: View, Equatable {
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
+    let onToggleFavoriteThread: (String) -> Void
     let onUnpinThread: (String) -> Void
     let onBeginPinnedOrderDrag: () -> Void
     let onPreviewPinnedOrderDrag: ([String]) -> Void
@@ -55,6 +56,7 @@ struct GaryxRootNavigationView: View, Equatable {
                 onStartNewChat: onStartNewChat,
                 onOpenThread: onOpenThread,
                 onTogglePinnedThread: onTogglePinnedThread,
+                onToggleFavoriteThread: onToggleFavoriteThread,
                 onUnpinThread: onUnpinThread,
                 onBeginPinnedOrderDrag: onBeginPinnedOrderDrag,
                 onPreviewPinnedOrderDrag: onPreviewPinnedOrderDrag,
@@ -176,6 +178,7 @@ struct GaryxHomeThreadListView: View, Equatable {
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
+    let onToggleFavoriteThread: (String) -> Void
     let onUnpinThread: (String) -> Void
     let onBeginPinnedOrderDrag: () -> Void
     let onPreviewPinnedOrderDrag: ([String]) -> Void
@@ -304,6 +307,7 @@ struct GaryxHomeThreadListView: View, Equatable {
                         menuMovementSuppression: pinnedMenuMovementSuppression(for: region),
                         onOpenThread: onOpenThread,
                         onTogglePinnedThread: onTogglePinnedThread,
+                        onToggleFavoriteThread: onToggleFavoriteThread,
                         onUnpinThread: onUnpinThread,
                         onArchiveThread: onArchiveThread
                     )
@@ -362,7 +366,13 @@ struct GaryxHomeThreadListView: View, Equatable {
             GaryxSidebarSkeletonRows(rowCount: rowCount)
         case .empty:
             GaryxSidebarEmptyRow(
-                title: selectedFilter == .all ? "No recent threads" : "No recent chats"
+                title: {
+                    switch selectedFilter {
+                    case .all: return "No recent threads"
+                    case .nonTask: return "No recent chats"
+                    case .favorites: return "No favorite threads"
+                    }
+                }()
             )
         case .unavailable:
             Button {
@@ -699,6 +709,7 @@ private struct GaryxHomeThreadButton: View, Equatable {
     let menuMovementSuppression: Bool
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
+    let onToggleFavoriteThread: (String) -> Void
     let onUnpinThread: (String) -> Void
     let onArchiveThread: (GaryxThreadSummary) async -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -770,6 +781,18 @@ private struct GaryxHomeThreadButton: View, Equatable {
                         onTogglePinnedThread(row.id)
                     }
                 ]
+                items.append(
+                    GaryxThreadActionMenuItem(
+                        title: row.presentation.isFavorite
+                            ? "Unfavorite thread"
+                            : "Favorite thread",
+                        systemImage: row.presentation.isFavorite ? "star.slash" : "star",
+                        isEnabled: motion != .pinning
+                    ) {
+                        guard motion != .pinning else { return }
+                        onToggleFavoriteThread(row.id)
+                    }
+                )
                 if row.canArchive {
                     items.append(
                         GaryxThreadActionMenuItem(
