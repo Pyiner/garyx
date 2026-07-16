@@ -98,8 +98,43 @@ where
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct FeishuMeetingActor {
-    #[serde(deserialize_with = "deserialize_string_or_integer")]
+    #[serde(deserialize_with = "deserialize_actor_id")]
     pub id: String,
+}
+
+/// Real `vc.bot.meeting_invited_v1` payloads wrap actor ids in an object
+/// (`{"id": {"open_id": "ou_…"}}`), matching the `speaker.id.open_id`
+/// shape of activity items, while fixtures derived from mino_server tests
+/// use a bare string. Accept string, integer, and object forms
+/// (`open_id` > `user_id` > `union_id` > `id`).
+fn deserialize_actor_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::String(value) => Ok(value),
+        Value::Number(value) if value.is_i64() || value.is_u64() => Ok(value.to_string()),
+        Value::Object(map) => {
+            for key in ["open_id", "user_id", "union_id", "id"] {
+                match map.get(key) {
+                    Some(Value::String(value)) if !value.is_empty() => {
+                        return Ok(value.clone());
+                    }
+                    Some(Value::Number(value)) if value.is_i64() || value.is_u64() => {
+                        return Ok(value.to_string());
+                    }
+                    _ => {}
+                }
+            }
+            Err(de::Error::custom(
+                "actor id object carries no open_id/user_id/union_id/id string",
+            ))
+        }
+        _ => Err(de::Error::custom(
+            "expected a string, JSON integer, or actor id object",
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

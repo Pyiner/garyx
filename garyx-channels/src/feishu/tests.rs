@@ -5415,3 +5415,29 @@ mod policy_tests {
         assert_eq!(history.len(), 2);
     }
 }
+
+#[test]
+fn meeting_invited_event_parses_object_actor_ids() {
+    // Real platform payloads wrap actor ids in objects (open_id form),
+    // unlike the bare-string fixtures derived from mino_server tests.
+    let event: super::MeetingInvitedEvent = serde_json::from_value(serde_json::json!({
+        "meeting": {"id": 1234567890123_i64, "meeting_no": "9876543210", "topic": "t"},
+        "bot": {"id": {"open_id": "ou_bot"}},
+        "inviter": {"id": {"open_id": "ou_inviter", "union_id": "on_x"}}
+    }))
+    .expect("object actor ids parse");
+    assert_eq!(event.meeting.id, "1234567890123");
+    assert_eq!(event.bot.id, "ou_bot");
+    assert_eq!(event.inviter.id, "ou_inviter");
+}
+
+#[test]
+fn meeting_invited_event_still_parses_bare_string_actor_ids() {
+    let event: super::MeetingInvitedEvent = serde_json::from_value(serde_json::json!({
+        "meeting": {"id": "mid-100", "meeting_no": "9876543210", "topic": "t"},
+        "bot": {"id": "bot-1"},
+        "inviter": {"id": "ou_inviter"}
+    }))
+    .expect("bare string actor ids parse");
+    assert_eq!(event.inviter.id, "ou_inviter");
+}

@@ -976,6 +976,18 @@ async fn ws_connect_and_listen(
     Ok(())
 }
 
+fn truncate_for_log(value: &Value, max_bytes: usize) -> String {
+    let raw = value.to_string();
+    if raw.len() <= max_bytes {
+        return raw;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !raw.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…[truncated {} bytes]", &raw[..end], raw.len() - end)
+}
+
 /// Parse an event JSON payload (either from protobuf frame payload or raw text).
 pub(super) async fn handle_ws_event_payload(text: &str, runtime: FeishuRuntimeContext<'_>) {
     handle_ws_event_payload_on_path(text, runtime, WsEventPath::Protobuf).await;
@@ -1075,6 +1087,7 @@ async fn handle_ws_event_payload_on_path(
                 account_id = %runtime.account_id,
                 event_id = %header.event_id,
                 error = %err,
+                payload = %truncate_for_log(event_value, 2048),
                 "failed to parse vc.bot.meeting_invited_v1 event"
             ),
         }
@@ -1098,6 +1111,7 @@ async fn handle_ws_event_payload_on_path(
                 account_id = %runtime.account_id,
                 event_id = %header.event_id,
                 error = %err,
+                payload = %truncate_for_log(event_value, 2048),
                 "failed to parse vc.bot.meeting_activity_v1 event"
             ),
         }
@@ -1112,6 +1126,7 @@ async fn handle_ws_event_payload_on_path(
             Err(err) => warn!(
                 account_id = %runtime.account_id,
                 error = %err,
+                payload = %truncate_for_log(event_value, 2048),
                 "failed to parse vc.bot.meeting_ended_v1 event"
             ),
         }
