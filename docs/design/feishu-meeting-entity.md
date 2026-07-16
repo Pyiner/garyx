@@ -121,8 +121,10 @@ Product sign-off items (explicit, owner-revocable):
 External platform facts (lark-cli 1.0.70 + internal onboarding manual;
 scopes granted and live-verified on the production app):
 
-- `POST /open-apis/vc/v1/bots/join`: 9-digit `meeting_no` + optional
-  `call_id` → long numeric `meeting.id`. Tenant token only.
+- `POST /open-apis/vc/v1/bots/join`: body
+  `{join_identify:{meeting_no}, join_type:1, password?}` → long numeric
+  `data.meeting.id`. Tenant token only. No `call_id` parameter exists
+  (rev21, production evidence).
 - `POST /open-apis/vc/v1/bots/leave`: leave by long meeting id (used
   only as best-effort abort compensation, 5.2).
 - **In-meeting content arrives by push, not pull** (sample gate,
@@ -160,10 +162,11 @@ scopes granted and live-verified on the production app):
   subscriptions silently receive nothing).
 
 Typed platform errors:
-`MeetingApiError = NotInMeeting | GraceExpired | AuthFailed |
-RetriableTransport | Other(code, msg)`. `AuthFailed` via a fixed mapping
-table from Feishu auth-class codes (populated at implementation from the
-official error table; unknown codes default to `Other`).
+`MeetingApiError = NotInMeeting | AuthFailed | RetriableTransport |
+Other(code, msg)` (rev21: `GraceExpired` retired with the pull API —
+join/leave are the only platform calls). `AuthFailed` via a fixed
+mapping table from Feishu auth-class codes (unknown codes default to
+`Other`).
 
 ### 3.1 Sample-pinning gate
 
@@ -195,7 +198,6 @@ CREATE TABLE IF NOT EXISTS meetings (
   meeting_no           TEXT NOT NULL,
   feishu_meeting_id    TEXT NOT NULL DEFAULT '',
   invite_event_id      TEXT NOT NULL,
-  call_id              TEXT NOT NULL DEFAULT '',
   topic                TEXT NOT NULL DEFAULT '',        -- normalized: ≤256 bytes, UTF-8 boundary
   invited_by           TEXT NOT NULL DEFAULT '',        -- ≤128 bytes
   status               TEXT NOT NULL CHECK (status IN
@@ -210,7 +212,7 @@ CREATE TABLE IF NOT EXISTS meetings (
   log_epoch            INTEGER NOT NULL DEFAULT 0 CHECK (log_epoch >= 0),
   cache_generation     INTEGER NOT NULL DEFAULT 0 CHECK (cache_generation >= 0),
   end_source           TEXT NOT NULL DEFAULT '' CHECK (end_source IN
-    ('','push','poll_ended','grace_expired')),
+    ('','push','participant_left')),
   join_deadline_at     TEXT NOT NULL,
   grace_deadline_at    TEXT,
   poll_cursor          TEXT NOT NULL DEFAULT '',        -- cache; log ckpt chain is truth
@@ -281,7 +283,7 @@ kinds:
 ```
 {"t":"seg","seq":12,"kind":"transcript","speaker":"张三","start":"…","end":"…",
  "text":"…","sources":["sent_8813"],"cont":false}
-{"t":"ckpt","epoch":1,"cursor_out":"pt_x9y8…","at":"2026-07-16T02:35:12.123Z"}
+{"t":"ckpt","epoch":1,"event_id":"evt_a1b2…","at":"2026-07-16T02:35:12.123Z"}
 ```
 
 **Log epoch (RR8-02, RR9-01):** a log file's lifetime is one epoch. When
@@ -296,8 +298,8 @@ logged loudly):
   set `log_epoch = new epoch, confirmed_seq = 0, pending_from/to = NULL,
   receipt = NULL` (recognition survives; positions do not — old seqs
   name content that no longer exists);
-- at runtime additionally reset the coordinator's in-memory poll cursor,
-  next-seq counter, coalescing state, and offset index.
+- at runtime additionally reset the coordinator's in-memory next-seq
+  counter, coalescing state, and offset index.
 
 Every cache update and repair is guarded by
 `WHERE id=:id AND log_epoch = :epoch AND cache_generation < :gen`.
@@ -335,7 +337,7 @@ metadata endpoints surface both columns.
 | `text` | split so the **final encoded JSON line** ≤ 32 KiB (escape inflation counted) |
 | `sources` | array of item ids; each stored id ≤**71 bytes** — raw ids ≤64 bytes pass through; longer ids are replaced by `sha256:<hex>` (7-byte prefix + 64 hex = exactly 71 bytes; deterministic, domain-separated, collision-safe for dedup); array bounded by page item count. Property tests assert the normalized field's own byte length, not merely the whole-line bound |
 | `cont` | boolean |
-| `cursor_out` | opaque token, ≤1 KiB (longer is a platform-contract violation → tick fails as `Other`) |
+| `event_id` (ckpt lines) | the WS event's delivery id, ≤256 bytes (batch ledger + redelivery dedup key) |
 | `epoch` (ckpt lines, tokens, spans) | non-negative 64-bit integer (`0..=i64::MAX`), starts at 0, +1 per content-loss rollover |
 | share titles / URLs (inside `text` for share kinds) | title ≤256 bytes UTF-8-boundary truncated; URL ≤1 KiB |
 
@@ -440,7 +442,7 @@ pub trait MeetingEventSink: Send + Sync {
   `register_client` (initial or replace) immediately nudges every
   non-terminal entity of that account; coordinators also re-check every
   60 s while lacking a client, and **fetch the current client from the
-  registry at each poll** (no caching across polls).
+  registry at each platform call** (no caching across calls).
 - **Failure bookkeeping** (persisted; R7-05): on a failed platform call,
   if the error's kind (`auth`/`transport`) differs from the persisted
   `failure_kind`, set `failure_kind = new kind, failure_since = now`
@@ -463,10 +465,11 @@ pub trait MeetingEventSink: Send + Sync {
 `MeetingService` (gateway; CronService shape B5: `Arc` on AppState, stop
 channel, `Weak<AppState>`): one coordinator task per non-terminal entity
 consuming a command queue (`Nudge`, `EndedSignal(source)`,
-`AbortRequest`, `Shutdown`, self-scheduled `PollTick`).
+`AbortRequest`, `Shutdown`, `ActivityBatch` — pushed batches enter the
+same queue; there is no self-scheduled poll).
 
 **Command scheduling:** commands are processed immediately whenever no
-page fetch/commit is executing; a command arriving during one is handled
+batch commit is executing; a command arriving during one is handled
 right after that page's commit (bound: 10 s fetch timeout + one
 durability flush). A joining or stalled entity (no polls running) handles
 admin aborts instantly.
@@ -519,12 +522,12 @@ as follows:
 
 - A timed-out/cancelled/crash-interrupted attempt leaves the entity in
   `joining`; the next attempt (or boot recovery) simply calls `join`
-  again. The sample gate (3.1) **pins duplicate-join behavior**: the
-  expected platform semantics (re-joining an already-joined meeting
-  returns the same `meeting.id` idempotently) must be confirmed from
-  captured fixtures; if the platform instead errors on duplicate join,
-  the mapped error is treated as success-equivalent iff it carries the
-  meeting identity, else slice 2 halts for an amendment.
+  again. Duplicate-join semantics are **not yet pinned** (3.1):
+  production evidence shows unconditional re-join with no error branch
+  (suggesting benign idempotence), so retries assume it; a join error
+  carrying the meeting identity is treated as success-equivalent; any
+  other duplicate-join error observed during slice-2 verification stops
+  rollout for an amendment.
 - **Leave compensation applies only to `live → aborting`** with a
   registered client and a non-empty `feishu_meeting_id`: one
   best-effort `bots/leave` under a **20 s timeout** (RR14-04 — timeout
@@ -542,7 +545,8 @@ On success — CAS `joining→live`, backfill `feishu_meeting_id`
 (normalized) and `topic` (normalized per 4.1 bounds); on deadline →
 abort path. The deadline applies **even while stalled** (it models invite
 validity). Join succeeding during the grace window is legal; polls then
-return data until `GraceExpired` finalizes.
+push trailing activity until the ended signal arrives; the normal dual
+end detection then applies.
 
 **Live capture (push, rev21):** activity batches commit per 4.2 as they
 arrive; between events the coordinator is idle (no polling loop). End
@@ -590,9 +594,9 @@ TOCTOU):
   enqueued command is owned by the service; HTTP disconnects cancel
   nothing after visibility, and before visibility the domain's
   rollback rule above applies.
-- Timing, honestly: admission may wait for the current page commit —
-  fetch is bounded at 10 s but the durability phase (`fdatasync` +
-  SQLite with up to 5 s busy wait) is additional — so a first request
+- Timing, honestly: admission may wait for the current batch commit —
+  whose durability phase (`fdatasync` + SQLite with up to 5 s busy
+  wait) is unbounded-input-free but not instant — so a first request
   may exceed the shared 10 s POST budget. `garyx meeting abort`
   performs **one automatic retry on timeout only** (typed transport
   cause, §6.6): the retry re-enters the abort domain, where it either
@@ -621,17 +625,16 @@ resumes the countdown to the persisted deadline.
 ```
  invite ─admission insert─> JOINING ─join ok─> LIVE ─batch commits (push)─┐
    │      (unique keys, S1/S2)  │(absolute        │                      │ commands: immediate
-   │                            │ deadline,       │ EndedSignal/         │ when idle; after the
-   │                            │ even stalled)   │ GraceExpired         │ current page commit
+   │                            │ deadline,       │ ended push /         │ when idle; after the
+   │                            │ even stalled)   │ own participant_left │ current batch commit
    │                            v                 v                      │ when executing
    │                        ABORTING ─flush+barrier─> ABORTED            │ (end > abort)
    │                            ^                                        │
    │                            └────10005 while live────────────────────┤
    │                                                                     v
-   │                                                    FINALIZING ─drain to deadline;
-   │                                                     │ GraceExpired/10005 ⇒ complete
-   │                                                     │ early; abort refused; stalled ⇒
-   │                                                     │ finalize at deadline;
+   │                                                    FINALIZING ─trailing capture to
+   │                                                     │ deadline; abort refused;
+   │                                                     │ stalled ⇒ finalize at deadline;
    │                                                     │ cache/index barrier here
    │                                                     v
    │                                                FINALIZED
@@ -1052,8 +1055,8 @@ bot's own open id triggers the end path; trailing activity during
 finalizing is captured, after finalized is dropped; command executed
 immediately when idle vs after the current batch commit.
 
-**Lifecycle:** end>abort arbitration; GraceExpired live/finalizing
-(accelerates); 10005 live (abort) / finalizing (complete early);
+**Lifecycle:** end>abort arbitration; dual end detection (ended push;
+own participant_left); 10005 from join/leave calls (abort semantics);
 AbortRequest refused in finalizing; abort intent crash-resume; drain
 runs to deadline (no quiescence: transcript arriving after two empty
 pulls before the deadline is captured); joining deadline while stalled
@@ -1144,9 +1147,10 @@ same-epoch stale receipt → idempotent no-op (distinct assertions);
 epoch>0 ordinary fetch/confirm round-trip; header-printed
 `--range … --epoch E` command re-executed verbatim after rollover
 returns content-loss, not new-epoch content; token/range epoch
-consistency. **S4(b) tail loss:** 3-page backlog, crash before P1
-commit, recovery at GraceExpired → all three pages lost, no corruption,
-loss logged. **ACK/dedup (RR10-04, RR11-04):** ACK send failure → processing
+consistency. **S4 push loss:** activity events arriving while the process is down
+are absent after recovery (no replay); crash before a batch commit
+loses exactly that batch; no corruption, boot repair truncates
+cleanly. **ACK/dedup (RR10-04, RR11-04):** ACK send failure → processing
 continues; invite/ended bypass the in-memory dedup cache; immediate
 redelivery after a failed admission insert is admitted by the durable
 key (not swallowed by the cache); redelivery after successful admission
