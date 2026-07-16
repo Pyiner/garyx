@@ -149,8 +149,8 @@ export class DesktopRouteStore {
       return;
     }
     // Commit the CANONICAL route before writing the hash: the write's own
-    // hashchange echo parses to exactly the canonical form (hash builds
-    // drop default/empty params, e.g. the new-thread 'claude' agent), so
+    // hashchange echo parses to exactly the canonical form (hash builds drop
+    // empty params while preserving every explicit agent identity), so
     // onExternalChange's equality dedupe holds for every navigable route.
     this.commit(canonicalDesktopRoute(route), "navigate");
     if (options?.replace) {

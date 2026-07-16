@@ -8,7 +8,7 @@ import type {
   GaryxDesktopApi,
 } from "@shared/contracts";
 
-import { pickPreferredWorkspace } from "./thread-model";
+import { pickPreferredWorkspace } from "./thread-model.ts";
 
 type DesktopStateSetter = (
   value:
@@ -45,10 +45,10 @@ export function startNewThreadDraft(input: {
   setError: (value: string | null) => void;
   /**
    * The shared draft-entry COMMAND (review #TASK-1621): runs the full
-   * entry (view flip, selection clear, pendings including the 'claude'
-   * agent reset this helper used to write, composer clear + focus) even
-   * when the draft route equals the current one; the hash syncs from the
-   * state fold.
+   * entry (view flip, selection clear, pending workspace, composer clear +
+   * focus) even when the draft route equals the current one; the hash syncs
+   * from the state fold. Agent selection is owned by the shared draft command
+   * and its effective-default resolution.
    */
   enterDraft: (workspacePath: string | null) => void;
   syncComposerPhase: (value: string) => void;
@@ -381,7 +381,7 @@ export async function ensureThread(input: {
   setPendingWorkspacePath: (value: string | null) => void;
   setPendingWorkspaceMode: (value: DesktopWorkspaceMode) => void;
   setPendingBotId: (value: string | null) => void;
-  setPendingAgentId: (value: string) => void;
+  setPendingAgentId: (value: string | null) => void;
   setPendingModel?: (value: string | null) => void;
   setPendingModelReasoningEffort?: (value: string | null) => void;
   setPendingModelServiceTier?: (value: string | null) => void;
@@ -427,7 +427,10 @@ export async function ensureThread(input: {
     input.setPendingWorkspacePath(null);
     input.setPendingWorkspaceMode("local");
     input.setPendingBotId(null);
-    input.setPendingAgentId("claude");
+    // No explicit selection carries across thread creation. The next draft
+    // resolves the then-current server effective default instead of pinning a
+    // stale or disabled agent.
+    input.setPendingAgentId(null);
     input.setPendingModel?.(null);
     input.setPendingModelReasoningEffort?.(null);
     input.setPendingModelServiceTier?.(null);

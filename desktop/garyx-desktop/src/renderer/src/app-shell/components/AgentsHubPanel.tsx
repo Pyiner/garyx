@@ -645,7 +645,10 @@ export function AgentsHubPanel({
                           <div className="agents-hub-cell-name">
                             {agent.displayName}
                             {defaultBadge ? (
-                              <Badge className="agents-hub-default-badge" variant="outline">
+                              <Badge
+                                className={`agents-hub-default-badge${defaultBadge === 'default' ? '' : ' is-muted'}`}
+                                variant="outline"
+                              >
                                 {defaultBadge === 'default'
                                   ? t('Default')
                                   : defaultBadge === 'default-inactive'
