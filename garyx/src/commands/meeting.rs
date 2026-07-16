@@ -5,8 +5,9 @@ use garyx_gateway::meetings::{MeetingReadMode, MeetingReadResponse, continuation
 use serde::Deserialize;
 
 use super::gateway_client::{
-    GatewayCliError, GatewayEndpoint, GatewayErrorKind, RawGatewayResponse, delete_gateway_raw,
-    fetch_gateway_json, gateway_endpoint, post_gateway_raw,
+    GatewayCliError, GatewayEndpoint, GatewayErrorKind, RawGatewayError, RawGatewayResponse,
+    TransportCause, delete_gateway_raw, fetch_gateway_json, gateway_endpoint, post_gateway_raw,
+    post_gateway_raw_once,
 };
 use super::{env_nonempty, format_local_timestamp};
 
@@ -200,6 +201,38 @@ pub(crate) async fn cmd_meeting_delete(
     }
     println!("Deleted meeting {id}");
     Ok(())
+}
+
+pub(crate) async fn cmd_meeting_abort(
+    config_path: &str,
+    id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let id = id.trim();
+    uuid::Uuid::parse_str(id).map_err(|_| "meeting id must be a UUID")?;
+    let gateway = gateway_endpoint(config_path)?;
+    let path = format!("/api/meetings/{id}/abort");
+    let payload = serde_json::json!({});
+    let raw = abort_request_with_timeout_retry(|| post_gateway_raw_once(&gateway, &path, &payload))
+        .await
+        .map_err(|error| error.into_cli_error())?;
+    if !is_success(raw.status) {
+        return Err(meeting_http_error(raw).into());
+    }
+    println!("Aborting meeting {id}");
+    Ok(())
+}
+
+async fn abort_request_with_timeout_retry<F, Fut>(
+    mut send: F,
+) -> Result<RawGatewayResponse, RawGatewayError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<RawGatewayResponse, RawGatewayError>>,
+{
+    match send().await {
+        Err(error) if error.cause == TransportCause::Timeout => send().await,
+        result => result,
+    }
 }
 
 fn resolve_read_mode(
@@ -671,6 +704,7 @@ fn meeting_http_error(response: RawGatewayResponse) -> GatewayCliError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -985,6 +1019,49 @@ mod tests {
         assert!(error.message.contains("garyx meeting read"));
     }
 
+    #[tokio::test]
+    async fn abort_transport_retries_once_only_for_timeout() {
+        let timeout_error = || RawGatewayError {
+            cause: TransportCause::Timeout,
+            cli_error: GatewayCliError {
+                kind: GatewayErrorKind::Unreachable,
+                message: "synthetic timeout".to_owned(),
+            },
+        };
+        let success = RawGatewayResponse {
+            status: 200,
+            raw_body: br#"{"status":"aborting"}"#.to_vec(),
+            body_len: 21,
+        };
+        let timeout_attempts = Arc::new(AtomicUsize::new(0));
+        let mut timeout_results = VecDeque::from([Err(timeout_error()), Ok(success.clone())]);
+        let observed = timeout_attempts.clone();
+        let response = abort_request_with_timeout_retry(|| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(timeout_results.pop_front().expect("timeout result"))
+        })
+        .await
+        .expect("timeout retry succeeds");
+        assert_eq!(response, success);
+        assert_eq!(timeout_attempts.load(Ordering::SeqCst), 2);
+
+        let connect_attempts = Arc::new(AtomicUsize::new(0));
+        let observed = connect_attempts.clone();
+        let result = abort_request_with_timeout_retry(|| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Err(RawGatewayError {
+                cause: TransportCause::Connect,
+                cli_error: GatewayCliError {
+                    kind: GatewayErrorKind::Unreachable,
+                    message: "synthetic connect error".to_owned(),
+                },
+            }))
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(connect_attempts.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn wire_payloads_cover_all_modes_and_token_only_continue() {
         assert_eq!(
@@ -1222,7 +1299,6 @@ mod tests {
             meeting_no: "123456789".to_owned(),
             feishu_meeting_id: String::new(),
             invite_event_id: "invite-cli-gate".to_owned(),
-            call_id: String::new(),
             topic: "Synthetic CLI gate".to_owned(),
             invited_by: "Test User".to_owned(),
             status: MeetingStatus::Live,
@@ -1238,7 +1314,7 @@ mod tests {
         state
             .ops
             .meetings
-            .append_page(
+            .append_batch(
                 &id,
                 vec![
                     SegmentDraft {

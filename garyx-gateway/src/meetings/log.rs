@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -9,7 +10,7 @@ use sha2::{Digest, Sha256};
 use super::MeetingError;
 
 pub(crate) const MAX_SEGMENT_LINE_BYTES: usize = 32 * 1024;
-pub(crate) const MAX_PAGE_ITEMS: usize = 100;
+pub(crate) const MAX_BATCH_ITEMS: usize = 100;
 pub(crate) const INDEX_STRIDE: i64 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,7 +57,7 @@ struct SegmentLine {
 struct CheckpointLine {
     t: String,
     epoch: i64,
-    cursor_out: String,
+    event_id: String,
     at: String,
 }
 
@@ -70,7 +71,8 @@ pub(crate) struct SparseOffset {
 pub(crate) struct LogScan {
     pub epoch: i64,
     pub generation: i64,
-    pub cursor: String,
+    pub event_ids: HashSet<String>,
+    pub source_ids: HashSet<String>,
     pub latest_seq: i64,
     pub byte_len: u64,
     pub offsets: Vec<SparseOffset>,
@@ -83,7 +85,8 @@ impl LogScan {
         Self {
             epoch,
             generation: 0,
-            cursor: String::new(),
+            event_ids: HashSet::new(),
+            source_ids: HashSet::new(),
             latest_seq: 0,
             byte_len: 0,
             offsets: Vec::new(),
@@ -103,12 +106,38 @@ struct Candidate {
     sources: Vec<String>,
 }
 
-pub(crate) fn normalize_page(
+pub(crate) fn deduplicate_batch_items(
+    drafts: Vec<SegmentDraft>,
+    committed_source_ids: &HashSet<String>,
+) -> Result<Vec<SegmentDraft>, MeetingError> {
+    if drafts.len() > MAX_BATCH_ITEMS {
+        return Err(MeetingError::bad_request(
+            "activity batch exceeds 100 items",
+        ));
+    }
+    let mut seen = committed_source_ids.clone();
+    let mut unique = Vec::with_capacity(drafts.len());
+    for draft in drafts {
+        if draft.source_id.is_empty() {
+            return Err(MeetingError::bad_request(
+                "meeting event source id must not be empty",
+            ));
+        }
+        if seen.insert(normalize_source_id(&draft.source_id)) {
+            unique.push(draft);
+        }
+    }
+    Ok(unique)
+}
+
+pub(crate) fn normalize_batch(
     drafts: Vec<SegmentDraft>,
     first_seq: i64,
 ) -> Result<Vec<MeetingSegment>, MeetingError> {
-    if drafts.len() > MAX_PAGE_ITEMS {
-        return Err(MeetingError::bad_request("events page exceeds 100 items"));
+    if drafts.len() > MAX_BATCH_ITEMS {
+        return Err(MeetingError::bad_request(
+            "activity batch exceeds 100 items",
+        ));
     }
     if first_seq <= 0 {
         return Err(MeetingError::storage(
@@ -116,7 +145,9 @@ pub(crate) fn normalize_page(
         ));
     }
 
-    let mut candidates = Vec::<Candidate>::with_capacity(drafts.len());
+    let mut segments = Vec::new();
+    let mut pending = None::<Candidate>;
+    let mut seq = first_seq;
     for draft in drafts {
         if draft.source_id.is_empty() {
             return Err(MeetingError::bad_request(
@@ -139,16 +170,8 @@ pub(crate) fn normalize_page(
             sources: vec![normalize_source_id(&draft.source_id)],
         };
 
-        let prospective_seq = first_seq
-            .checked_add(
-                i64::try_from(candidates.len()).map_err(|_| {
-                    MeetingError::storage("meeting page item count exceeds i64 range")
-                })?,
-            )
-            .and_then(|seq| seq.checked_sub(1))
-            .ok_or_else(|| MeetingError::storage("meeting segment sequence exhausted i64 range"))?;
-        if let Some(previous) = candidates.last_mut()
-            && can_coalesce(previous, &candidate, prospective_seq)?
+        if let Some(previous) = pending.as_mut()
+            && can_coalesce(previous, &candidate, seq)?
         {
             previous.text.push('\n');
             previous.text.push_str(&candidate.text);
@@ -156,38 +179,52 @@ pub(crate) fn normalize_page(
             previous.sources.extend(candidate.sources);
             continue;
         }
-        candidates.push(candidate);
+        if let Some(previous) = pending.take() {
+            append_candidate_segments(previous, &mut seq, &mut segments)?;
+        }
+        pending = Some(candidate);
     }
-
-    let mut segments = Vec::new();
-    let mut seq = first_seq;
-    for candidate in candidates {
-        let unsplit = candidate_as_segment(&candidate, seq, false, candidate.text.clone());
-        if encoded_segment_line_len(&unsplit)? <= MAX_SEGMENT_LINE_BYTES {
-            segments.push(unsplit);
-            seq = seq.checked_add(1).ok_or_else(|| {
-                MeetingError::storage("meeting segment sequence exhausted i64 range")
-            })?;
-            continue;
-        }
-
-        let mut remaining = candidate.text.as_str();
-        while !remaining.is_empty() {
-            let take = largest_fitting_prefix(&candidate, seq, remaining)?;
-            if take == 0 {
-                return Err(MeetingError::bad_request(
-                    "segment metadata leaves no room for text within the 32 KiB line bound",
-                ));
-            }
-            let chunk = remaining[..take].to_owned();
-            segments.push(candidate_as_segment(&candidate, seq, true, chunk));
-            remaining = &remaining[take..];
-            seq = seq.checked_add(1).ok_or_else(|| {
-                MeetingError::storage("meeting segment sequence exhausted i64 range")
-            })?;
-        }
+    if let Some(previous) = pending {
+        append_candidate_segments(previous, &mut seq, &mut segments)?;
     }
     Ok(segments)
+}
+
+fn append_candidate_segments(
+    candidate: Candidate,
+    seq: &mut i64,
+    segments: &mut Vec<MeetingSegment>,
+) -> Result<(), MeetingError> {
+    let unsplit = candidate_as_segment(&candidate, *seq, false, candidate.text.clone());
+    if encoded_segment_line_len(&unsplit)? <= MAX_SEGMENT_LINE_BYTES {
+        segments.push(unsplit);
+        *seq = seq
+            .checked_add(1)
+            .ok_or_else(|| MeetingError::storage("meeting segment sequence exhausted i64 range"))?;
+        return Ok(());
+    }
+    if candidate.sources.len() != 1 {
+        return Err(MeetingError::storage(
+            "coalesced meeting candidate unexpectedly requires continuation splitting",
+        ));
+    }
+
+    let mut remaining = candidate.text.as_str();
+    while !remaining.is_empty() {
+        let take = largest_fitting_prefix(&candidate, *seq, remaining)?;
+        if take == 0 {
+            return Err(MeetingError::bad_request(
+                "segment metadata leaves no room for text within the 32 KiB line bound",
+            ));
+        }
+        let chunk = remaining[..take].to_owned();
+        segments.push(candidate_as_segment(&candidate, *seq, true, chunk));
+        remaining = &remaining[take..];
+        *seq = seq
+            .checked_add(1)
+            .ok_or_else(|| MeetingError::storage("meeting segment sequence exhausted i64 range"))?;
+    }
+    Ok(())
 }
 
 fn can_coalesce(
@@ -280,7 +317,7 @@ fn encoded_segment_line_len(segment: &MeetingSegment) -> Result<usize, MeetingEr
 
 pub(crate) fn checkpoint_line(
     epoch: i64,
-    cursor_out: &str,
+    event_id: &str,
     at: &str,
 ) -> Result<Vec<u8>, MeetingError> {
     if epoch < 0 {
@@ -288,14 +325,16 @@ pub(crate) fn checkpoint_line(
             "checkpoint epoch must be non-negative",
         ));
     }
-    if cursor_out.len() > 1_024 {
-        return Err(MeetingError::bad_request("cursor_out exceeds 1024 bytes"));
+    if event_id.is_empty() || event_id.len() > 256 {
+        return Err(MeetingError::bad_request(
+            "event_id must be between 1 and 256 bytes",
+        ));
     }
     let at = normalize_timestamp("at", at)?;
     serde_json::to_vec(&CheckpointLine {
         t: "ckpt".to_owned(),
         epoch,
-        cursor_out: cursor_out.to_owned(),
+        event_id: event_id.to_owned(),
         at,
     })
     .map_err(MeetingError::from)
@@ -322,7 +361,7 @@ pub(crate) fn append_lines_and_sync(
             .map_err(|error| MeetingError::io("append meeting segment", error))?;
         if stop_after_segments == Some(index + 1) {
             file.flush()
-                .map_err(|error| MeetingError::io("flush uncommitted meeting page", error))?;
+                .map_err(|error| MeetingError::io("flush uncommitted meeting batch", error))?;
             return Err(MeetingError::injected(
                 "crash after segment before checkpoint",
             ));
@@ -339,9 +378,20 @@ pub(crate) fn append_lines_and_sync(
         ));
     }
     file.sync_data()
-        .map_err(|error| MeetingError::io("fdatasync meeting page", error))?;
+        .map_err(|error| MeetingError::io("fdatasync meeting batch", error))?;
     file.seek(SeekFrom::End(0))
         .map_err(|error| MeetingError::io("measure meeting log", error))
+}
+
+pub(crate) fn truncate_to_committed_len(path: &Path, byte_len: u64) -> Result<(), MeetingError> {
+    let file = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|error| MeetingError::io("open meeting log for append rollback", error))?;
+    file.set_len(byte_len)
+        .map_err(|error| MeetingError::io("rollback uncommitted meeting batch", error))?;
+    file.sync_data()
+        .map_err(|error| MeetingError::io("fdatasync meeting batch rollback", error))
 }
 
 pub(crate) fn scan_log(
@@ -369,7 +419,9 @@ pub(crate) fn scan_log(
     let mut next_seq = 1i64;
     let mut committed_latest = 0i64;
     let mut generation = 0i64;
-    let mut cursor = String::new();
+    let mut committed_event_ids = HashSet::new();
+    let mut committed_source_ids = HashSet::new();
+    let mut pending_source_ids = HashSet::new();
     let mut committed_offsets = Vec::new();
     let mut pending_offsets = Vec::new();
     let mut pending_segments = false;
@@ -423,6 +475,7 @@ pub(crate) fn scan_log(
                     invalid = true;
                     break;
                 }
+                pending_source_ids.extend(line.segment.sources.iter().cloned());
                 if line.segment.seq % INDEX_STRIDE == 0 {
                     pending_offsets.push(SparseOffset {
                         seq: line.segment.seq,
@@ -439,7 +492,7 @@ pub(crate) fn scan_log(
                 pending_segments = true;
             }
             Some("ckpt") => {
-                if !has_exact_keys(&value, &["t", "epoch", "cursor_out", "at"]) {
+                if !has_exact_keys(&value, &["t", "epoch", "event_id", "at"]) {
                     invalid = true;
                     break;
                 }
@@ -451,7 +504,9 @@ pub(crate) fn scan_log(
                     }
                 };
                 if line.epoch != epoch
-                    || line.cursor_out.len() > 1_024
+                    || line.event_id.is_empty()
+                    || line.event_id.len() > 256
+                    || committed_event_ids.contains(&line.event_id)
                     || !normalize_timestamp("at", &line.at)
                         .is_ok_and(|canonical| canonical == line.at)
                 {
@@ -466,7 +521,8 @@ pub(crate) fn scan_log(
                     }
                 };
                 committed_latest = next_seq - 1;
-                cursor = line.cursor_out;
+                committed_event_ids.insert(line.event_id);
+                committed_source_ids.extend(pending_source_ids.drain());
                 committed_offsets.append(&mut pending_offsets);
                 pending_segments = false;
                 valid_end = position;
@@ -494,7 +550,8 @@ pub(crate) fn scan_log(
     Ok(LogScan {
         epoch,
         generation,
-        cursor,
+        event_ids: committed_event_ids,
+        source_ids: committed_source_ids,
         latest_seq: committed_latest,
         byte_len: valid_end,
         offsets: committed_offsets,
@@ -569,10 +626,11 @@ pub(crate) fn read_segments(
                 }
                 segments.push(line.segment);
             }
-            Some("ckpt") if has_exact_keys(&value, &["t", "epoch", "cursor_out", "at"]) => {
+            Some("ckpt") if has_exact_keys(&value, &["t", "epoch", "event_id", "at"]) => {
                 let line: CheckpointLine = serde_json::from_value(value)?;
                 if line.epoch != epoch
-                    || line.cursor_out.len() > 1_024
+                    || line.event_id.is_empty()
+                    || line.event_id.len() > 256
                     || !normalize_timestamp("at", &line.at)
                         .is_ok_and(|canonical| canonical == line.at)
                 {
@@ -619,7 +677,7 @@ fn validate_segment(
     if parse_timestamp(&end)? < parse_timestamp(&start)? {
         return Err(MeetingError::storage("meeting segment end precedes start"));
     }
-    if segment.sources.len() > MAX_PAGE_ITEMS
+    if segment.sources.len() > MAX_BATCH_ITEMS
         || segment
             .sources
             .iter()
@@ -734,7 +792,7 @@ mod tests {
 
     #[test]
     fn normalization_enforces_line_and_source_bounds_with_escape_inflation() {
-        let segments = normalize_page(
+        let segments = normalize_batch(
             vec![transcript("\"\\\n".repeat(30_000), "source".repeat(40))],
             1,
         )
@@ -776,14 +834,14 @@ mod tests {
         let mut second = transcript("b".repeat(20_000), "second".to_owned());
         second.start = timestamp(2);
         second.end = timestamp(3);
-        let segments = normalize_page(vec![first, second], 1).expect("normalize");
+        let segments = normalize_batch(vec![first, second], 1).expect("normalize");
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].sources, vec!["first"]);
         assert_eq!(segments[1].sources, vec!["second"]);
         assert!(!segments[0].cont);
         assert!(!segments[1].cont);
 
-        let small = normalize_page(
+        let small = normalize_batch(
             vec![transcript("one".to_owned(), "one".to_owned()), {
                 let mut draft = transcript("two".to_owned(), "two".to_owned());
                 draft.start = timestamp(2);
@@ -799,6 +857,72 @@ mod tests {
     }
 
     #[test]
+    fn coalescing_uses_the_actual_seq_after_prior_continuation_chunks() {
+        let previous = Candidate {
+            kind: SegmentKind::Transcript,
+            speaker: "Test Speaker".to_owned(),
+            start: timestamp(0),
+            end: timestamp(1),
+            text: "a".to_owned(),
+            sources: vec!["merge-first".to_owned()],
+        };
+        let mut next = Candidate {
+            kind: SegmentKind::Transcript,
+            speaker: "Test Speaker".to_owned(),
+            start: timestamp(2),
+            end: timestamp(3),
+            text: String::new(),
+            sources: vec!["merge-second".to_owned()],
+        };
+        let mut merged = previous.clone();
+        merged.text.push('\n');
+        merged.end.clone_from(&next.end);
+        merged.sources.extend(next.sources.iter().cloned());
+        let base_len = encoded_segment_line_len(&candidate_as_segment(
+            &merged,
+            99,
+            false,
+            merged.text.clone(),
+        ))
+        .expect("base merged line");
+        next.text = "b".repeat(MAX_SEGMENT_LINE_BYTES - base_len);
+        assert!(can_coalesce(&previous, &next, 99).expect("seq 99 merge"));
+        assert!(!can_coalesce(&previous, &next, 100).expect("seq 100 merge"));
+
+        let mut prefix = transcript("x".repeat(40_000), "prefix".to_owned());
+        prefix.kind = SegmentKind::Chat;
+        let mut second = transcript(next.text, "merge-second".to_owned());
+        second.start = timestamp(2);
+        second.end = timestamp(3);
+        let segments = normalize_batch(
+            vec![
+                prefix,
+                transcript("a".to_owned(), "merge-first".to_owned()),
+                second,
+            ],
+            98,
+        )
+        .expect("normalize across seq width boundary");
+
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| segment.seq)
+                .collect::<Vec<_>>(),
+            vec![98, 99, 100, 101]
+        );
+        assert!(
+            segments[..2]
+                .iter()
+                .all(|segment| segment.cont && segment.sources == ["prefix"])
+        );
+        assert_eq!(segments[2].sources, vec!["merge-first"]);
+        assert_eq!(segments[3].sources, vec!["merge-second"]);
+        assert!(!segments[2].cont);
+        assert!(!segments[3].cont);
+    }
+
+    #[test]
     fn every_truncated_field_stops_on_a_utf8_boundary() {
         let title = "😀".repeat(100);
         let url = "界".repeat(500);
@@ -811,14 +935,14 @@ mod tests {
 
         let mut draft = transcript("body".to_owned(), "source".to_owned());
         draft.speaker = "😀".repeat(100);
-        let segment = normalize_page(vec![draft], 1).expect("normalize")[0].clone();
+        let segment = normalize_batch(vec![draft], 1).expect("normalize")[0].clone();
         assert!(segment.speaker.len() <= 256);
         assert!(std::str::from_utf8(segment.speaker.as_bytes()).is_ok());
     }
 
     #[test]
-    fn maximum_page_member_count_stays_bounded_in_one_coalesced_record() {
-        let drafts = (0..MAX_PAGE_ITEMS)
+    fn maximum_batch_member_count_stays_bounded_in_one_coalesced_record() {
+        let drafts = (0..MAX_BATCH_ITEMS)
             .map(|index| {
                 let mut draft = transcript("x".to_owned(), format!("source-{index}"));
                 draft.start = timestamp(1);
@@ -826,9 +950,9 @@ mod tests {
                 draft
             })
             .collect();
-        let segments = normalize_page(drafts, 1).expect("normalize");
+        let segments = normalize_batch(drafts, 1).expect("normalize");
         assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].sources.len(), MAX_PAGE_ITEMS);
+        assert_eq!(segments[0].sources.len(), MAX_BATCH_ITEMS);
         assert!(encoded_segment_line(&segments[0]).expect("line").len() <= MAX_SEGMENT_LINE_BYTES);
     }
 
@@ -849,7 +973,7 @@ mod tests {
             source in bounded_unicode(150).prop_filter("source id is non-empty", |value| !value.is_empty()),
             first_seq in 1i64..1_000_000i64,
         ) {
-            let segments = normalize_page(
+            let segments = normalize_batch(
                 vec![SegmentDraft {
                     kind: SegmentKind::Transcript,
                     speaker,

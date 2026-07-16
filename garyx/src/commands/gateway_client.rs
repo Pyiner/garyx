@@ -27,7 +27,7 @@ pub(super) enum TransportCause {
 pub(super) struct RawGatewayError {
     #[allow(dead_code)] // consumed by timeout-only meeting abort retry in delivery slice 2
     pub(super) cause: TransportCause,
-    cli_error: GatewayCliError,
+    pub(super) cli_error: GatewayCliError,
 }
 
 impl RawGatewayError {

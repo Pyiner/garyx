@@ -1252,6 +1252,7 @@ fn upsert_channel_account(
                 owner_target: None,
                 require_mention: true,
                 topic_session_mode: Default::default(),
+                meeting_entities: true,
             });
             entry.workspace_mode = workspace_mode;
             cfg.channels

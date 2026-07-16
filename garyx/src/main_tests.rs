@@ -2219,6 +2219,7 @@ fn plugin_discovery_with_valid_config() {
                 owner_target: None,
                 require_mention: true,
                 topic_session_mode: Default::default(),
+                meeting_entities: true,
             }),
         );
 
@@ -2279,6 +2280,7 @@ fn routing_rebuild_channels_prefers_enabled_accounts() {
                 owner_target: None,
                 require_mention: true,
                 topic_session_mode: Default::default(),
+                meeting_entities: true,
             }),
         );
 
@@ -2326,6 +2328,7 @@ fn routing_rebuild_channels_includes_all_enabled_channels() {
                 owner_target: None,
                 require_mention: true,
                 topic_session_mode: Default::default(),
+                meeting_entities: true,
             }),
         );
     config.channels.api.accounts.insert(

@@ -3217,6 +3217,7 @@ pub struct BuiltInPluginDiscoverer {
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
     dispatcher: Arc<dyn ChannelDispatcher>,
+    meeting_sink: Arc<dyn crate::meeting_sink::MeetingEventSink>,
     public_url: String,
 }
 
@@ -3239,11 +3240,30 @@ impl BuiltInPluginDiscoverer {
         dispatcher: Arc<dyn ChannelDispatcher>,
         public_url: String,
     ) -> Self {
+        Self::with_dispatcher_and_meeting_sink(
+            channels,
+            router,
+            bridge,
+            dispatcher,
+            public_url,
+            crate::meeting_sink::noop_meeting_event_sink(),
+        )
+    }
+
+    pub fn with_dispatcher_and_meeting_sink(
+        channels: ChannelsConfig,
+        router: Arc<Mutex<MessageRouter>>,
+        bridge: Arc<MultiProviderBridge>,
+        dispatcher: Arc<dyn ChannelDispatcher>,
+        public_url: String,
+        meeting_sink: Arc<dyn crate::meeting_sink::MeetingEventSink>,
+    ) -> Self {
         Self {
             channels,
             router,
             bridge,
             dispatcher,
+            meeting_sink,
             public_url,
         }
     }
@@ -3326,6 +3346,7 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                 self.bridge.clone(),
                 self.dispatcher.clone(),
                 self.public_url.clone(),
+                self.meeting_sink.clone(),
             );
             let descriptor = crate::builtin_catalog::builtin_channel_descriptor("feishu")
                 .expect("builtin feishu descriptor");

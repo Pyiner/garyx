@@ -1,5 +1,7 @@
 use serde::Deserialize;
+use serde::de::{self, Deserializer, Visitor};
 use serde_json::Value;
+use std::fmt;
 
 /// Top-level event envelope pushed over WebSocket.
 #[derive(Debug, Clone, Deserialize)]
@@ -24,6 +26,98 @@ pub struct FeishuEventHeader {
     pub app_id: String,
     #[serde(default)]
     pub tenant_key: String,
+}
+
+fn deserialize_string_or_integer<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringOrInteger;
+
+    impl<'de> Visitor<'de> for StringOrInteger {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string or JSON integer")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_owned())
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrInteger)
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct FeishuMeetingRef {
+    #[serde(deserialize_with = "deserialize_string_or_integer")]
+    pub id: String,
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_integer")]
+    pub meeting_no: Option<String>,
+    #[serde(default)]
+    pub topic: String,
+}
+
+fn deserialize_optional_string_or_integer<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<Value>::deserialize(deserializer)?.map_or(Ok(None), |value| match value {
+        Value::String(value) => Ok(Some(value)),
+        Value::Number(value) if value.is_i64() || value.is_u64() => Ok(Some(value.to_string())),
+        _ => Err(de::Error::custom("expected a string or JSON integer")),
+    })
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct FeishuMeetingActor {
+    #[serde(deserialize_with = "deserialize_string_or_integer")]
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct MeetingInvitedEvent {
+    pub meeting: FeishuMeetingRef,
+    pub bot: FeishuMeetingActor,
+    pub inviter: FeishuMeetingActor,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MeetingActivityEvent {
+    #[serde(default)]
+    pub meeting_activity_items: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct MeetingEndedEvent {
+    pub meeting: FeishuMeetingRef,
 }
 
 /// Parsed im.message.receive_v1 event body.

@@ -1266,6 +1266,7 @@ async fn test_auth_flow_start_routes_feishu_alias_end_to_end() {
             owner_target: None,
             require_mention: true,
             topic_session_mode: Default::default(),
+            meeting_entities: true,
         }),
     );
 

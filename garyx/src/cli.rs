@@ -257,6 +257,11 @@ pub(crate) enum MeetingAction {
         #[arg(long, value_name = "N")]
         max_bytes: Option<usize>,
     },
+    /// Abort a joining or live meeting entity
+    Abort {
+        /// Meeting entity UUID
+        id: String,
+    },
     /// Permanently delete a terminal meeting entity
     Delete {
         /// Meeting entity UUID
@@ -1388,6 +1393,14 @@ mod tests {
                 .is_err()
         );
         assert!(Cli::try_parse_from(["garyx", "meeting", "read", id, "--epoch", "7"]).is_err());
+
+        let abort = Cli::try_parse_from(["garyx", "meeting", "abort", id]).expect("abort command");
+        assert!(matches!(
+            abort.command,
+            Some(Commands::Meeting {
+                action: MeetingAction::Abort { id: parsed }
+            }) if parsed == id
+        ));
     }
 }
 

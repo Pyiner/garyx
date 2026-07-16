@@ -7,6 +7,7 @@ pub mod discord;
 pub mod dispatcher;
 pub mod feishu;
 pub mod generated_images;
+pub mod meeting_sink;
 pub mod plugin;
 pub mod plugin_host;
 pub mod plugin_tools;
@@ -51,6 +52,10 @@ pub use dispatcher::{
 };
 pub use feishu::FeishuChannel;
 pub use garyx_models::ChannelOutboundContent;
+pub use meeting_sink::{
+    JoinedMeeting, MeetingApiError, MeetingEventSink, MeetingInvite, MeetingPlatformClient,
+    NoopMeetingEventSink, noop_meeting_event_sink,
+};
 pub use plugin::{
     BuiltInPluginDiscoverer, ChannelPluginManager, PluginMetadata, PluginState, PluginStatus,
     SubprocessPluginCatalogEntry, SubprocessPluginError, builtin_plugin_metadata,

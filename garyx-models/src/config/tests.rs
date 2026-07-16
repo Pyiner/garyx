@@ -12,10 +12,9 @@ fn test_gateway_defaults() {
     let gw = GatewayConfig::default();
     assert_eq!(gw.port, 31337);
     assert_eq!(gw.host, "0.0.0.0");
-    assert_eq!(gw.meetings.poll_interval_secs, 30);
     assert_eq!(gw.meetings.join_retry_window_secs, 300);
     assert_eq!(gw.meetings.read_page_bytes, 65_536);
-    assert_eq!(gw.meetings.effective_poll_interval_secs(), 30);
+    assert_eq!(gw.meetings.effective_join_retry_window_secs(), 300);
     assert_eq!(gw.meetings.effective_read_page_bytes(), 65_536);
 }
 
@@ -24,14 +23,17 @@ fn meeting_config_is_serde_defaulted_and_clamps_runtime_floors() {
     let config: GaryxConfig = serde_json::from_value(serde_json::json!({
         "gateway": {
             "meetings": {
-                "poll_interval_secs": 1,
+                "join_retry_window_secs": 0,
                 "read_page_bytes": 1
             }
         }
     }))
     .expect("config");
-    assert_eq!(config.gateway.meetings.join_retry_window_secs, 300);
-    assert_eq!(config.gateway.meetings.effective_poll_interval_secs(), 10);
+    assert_eq!(config.gateway.meetings.join_retry_window_secs, 0);
+    assert_eq!(
+        config.gateway.meetings.effective_join_retry_window_secs(),
+        1
+    );
     assert_eq!(config.gateway.meetings.effective_read_page_bytes(), 4_096);
 }
 
@@ -284,6 +286,7 @@ fn test_feishu_legacy_secret_fields_are_ignored_on_load_and_serialize() {
     let account = resolved.accounts.get("work").unwrap();
     assert_eq!(account.app_id, "cli_app");
     assert_eq!(account.app_secret, "top-secret");
+    assert!(account.meeting_entities);
 
     let serialized = serde_json::to_value(account).unwrap();
     assert!(serialized.get("verification_token").is_none());

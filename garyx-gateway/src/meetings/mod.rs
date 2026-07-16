@@ -1,4 +1,5 @@
 mod index;
+mod ingest;
 mod log;
 mod read;
 
@@ -25,6 +26,7 @@ use crate::garyx_db::{
 };
 use crate::server::AppState;
 
+pub use ingest::AbortMeetingOutcome;
 pub use log::{MeetingSegment, SegmentDraft, SegmentKind, share_text};
 pub use read::{
     ConfirmMeetingReadRequest, MeetingReadMeta, MeetingReadMode, MeetingReadRequest,
@@ -32,7 +34,10 @@ pub use read::{
 };
 
 use index::{OffsetIndex, load_index, persist_index};
-use log::{LogScan, append_lines_and_sync, checkpoint_line, normalize_page, scan_log};
+use log::{
+    LogScan, append_lines_and_sync, checkpoint_line, deduplicate_batch_items, normalize_batch,
+    scan_log, truncate_to_committed_len,
+};
 
 pub const DEFAULT_READ_PAGE_BYTES: usize = 65_536;
 pub const MIN_READ_PAGE_BYTES: usize = 4_096;
@@ -195,7 +200,7 @@ impl Default for EntityIo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AppendPageOutcome {
+pub struct AppendBatchOutcome {
     pub log_epoch: i64,
     pub generation: i64,
     pub latest_seq: i64,
@@ -222,6 +227,7 @@ pub struct MeetingService {
     root: PathBuf,
     read_page_bytes: AtomicUsize,
     entities: Mutex<HashMap<String, Arc<EntityIo>>>,
+    pub(super) ingestion: ingest::IngestionState,
 }
 
 impl MeetingService {
@@ -235,6 +241,7 @@ impl MeetingService {
             root,
             read_page_bytes: AtomicUsize::new(read_page_bytes.max(MIN_READ_PAGE_BYTES)),
             entities: Mutex::new(HashMap::new()),
+            ingestion: ingest::IngestionState::new(),
         };
         service.boot_repair()?;
         Ok(service)
@@ -318,7 +325,6 @@ impl MeetingService {
                 &record.id,
                 record.log_epoch,
                 scan.generation,
-                &scan.cursor,
                 scan.latest_seq,
                 i64::try_from(scan.byte_len)
                     .map_err(|_| MeetingError::storage("meeting log exceeds i64 byte range"))?,
@@ -402,38 +408,40 @@ impl MeetingService {
         Ok(())
     }
 
-    pub async fn append_page(
+    pub async fn append_batch(
         self: &Arc<Self>,
         id: &str,
         drafts: Vec<SegmentDraft>,
-        cursor_out: &str,
-    ) -> Result<AppendPageOutcome, MeetingError> {
-        self.append_page_inner(id, drafts, cursor_out, None).await
+        event_id: &str,
+    ) -> Result<AppendBatchOutcome, MeetingError> {
+        self.append_batch_inner(id, drafts, event_id, None).await
     }
 
-    async fn append_page_inner(
+    async fn append_batch_inner(
         self: &Arc<Self>,
         id: &str,
         drafts: Vec<SegmentDraft>,
-        cursor_out: &str,
+        event_id: &str,
         #[cfg(test)] fault: Option<AppendTestFault>,
         #[cfg(not(test))] _fault: Option<()>,
-    ) -> Result<AppendPageOutcome, MeetingError> {
+    ) -> Result<AppendBatchOutcome, MeetingError> {
         let id = normalize_meeting_id(id)?;
-        if cursor_out.len() > 1_024 {
-            return Err(MeetingError::bad_request("cursor_out exceeds 1024 bytes"));
+        if event_id.is_empty() || event_id.len() > 256 {
+            return Err(MeetingError::bad_request(
+                "event_id must be between 1 and 256 bytes",
+            ));
         }
         let state = self.entity_state(&id);
         let guard = state.lock.clone().write_owned().await;
         let service = self.clone();
-        let cursor_out = cursor_out.to_owned();
+        let event_id = event_id.to_owned();
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
-            service.append_page_blocking(
+            service.append_batch_blocking(
                 &id,
                 &state,
                 drafts,
-                &cursor_out,
+                &event_id,
                 #[cfg(test)]
                 fault,
             )
@@ -442,14 +450,14 @@ impl MeetingService {
         .map_err(|error| MeetingError::storage(format!("meeting append task failed: {error}")))?
     }
 
-    fn append_page_blocking(
+    fn append_batch_blocking(
         &self,
         id: &str,
         state: &EntityIo,
         drafts: Vec<SegmentDraft>,
-        cursor_out: &str,
+        event_id: &str,
         #[cfg(test)] fault: Option<AppendTestFault>,
-    ) -> Result<AppendPageOutcome, MeetingError> {
+    ) -> Result<AppendBatchOutcome, MeetingError> {
         let mut record = self
             .db
             .get_meeting(id)?
@@ -487,12 +495,35 @@ impl MeetingService {
                 "meeting log has an uncommitted tail outside boot repair",
             ));
         }
+        if before.event_ids.contains(event_id) {
+            let byte_len = i64::try_from(before.byte_len)
+                .map_err(|_| MeetingError::storage("meeting log exceeds i64 byte range"))?;
+            self.db.update_meeting_cache_guarded(
+                id,
+                record.log_epoch,
+                before.generation,
+                before.latest_seq,
+                byte_len,
+            )?;
+            state
+                .index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .index = Some(OffsetIndex::from_scan(&before));
+            return Ok(AppendBatchOutcome {
+                log_epoch: record.log_epoch,
+                generation: before.generation,
+                latest_seq: before.latest_seq,
+                byte_len: before.byte_len,
+            });
+        }
         let first_seq = before
             .latest_seq
             .checked_add(1)
             .ok_or_else(|| MeetingError::storage("meeting segment sequence exhausted i64 range"))?;
-        let segments = normalize_page(drafts, first_seq)?;
-        let checkpoint = checkpoint_line(record.log_epoch, cursor_out, &log::now_timestamp())?;
+        let drafts = deduplicate_batch_items(drafts, &before.source_ids)?;
+        let segments = normalize_batch(drafts, first_seq)?;
+        let checkpoint = checkpoint_line(record.log_epoch, event_id, &log::now_timestamp())?;
         #[cfg(test)]
         let stop_after_segments = fault.and_then(|fault| match fault {
             AppendTestFault::Segment(count) => Some(count),
@@ -504,17 +535,27 @@ impl MeetingService {
         let skip_sync = fault == Some(AppendTestFault::CheckpointBeforeSync);
         #[cfg(not(test))]
         let skip_sync = false;
-        append_lines_and_sync(
+        let append_result = append_lines_and_sync(
             &path,
             &segments,
             &checkpoint,
             stop_after_segments,
             skip_sync,
-        )?;
+        );
+        if let Err(error) = append_result {
+            #[cfg(test)]
+            let injected_crash = fault.is_some();
+            #[cfg(not(test))]
+            let injected_crash = false;
+            if !injected_crash {
+                truncate_to_committed_len(&path, before.byte_len)?;
+            }
+            return Err(error);
+        }
         let committed = scan_log(&path, record.log_epoch, false)?;
         if committed.had_invalid_tail {
             return Err(MeetingError::storage(
-                "meeting page did not end at a valid checkpoint",
+                "meeting batch did not end at a valid checkpoint",
             ));
         }
         {
@@ -536,7 +577,6 @@ impl MeetingService {
             id,
             record.log_epoch,
             committed.generation,
-            &committed.cursor,
             committed.latest_seq,
             byte_len,
         )?;
@@ -550,11 +590,11 @@ impl MeetingService {
             }
             if latest.cache_generation < committed.generation {
                 return Err(MeetingError::storage(
-                    "meeting page committed but SQLite cache repair is pending",
+                    "meeting batch committed but SQLite cache repair is pending",
                 ));
             }
         }
-        Ok(AppendPageOutcome {
+        Ok(AppendBatchOutcome {
             log_epoch: record.log_epoch,
             generation: committed.generation,
             latest_seq: committed.latest_seq,
@@ -565,7 +605,7 @@ impl MeetingService {
     pub async fn repair_log_cache(
         self: &Arc<Self>,
         id: &str,
-    ) -> Result<AppendPageOutcome, MeetingError> {
+    ) -> Result<AppendBatchOutcome, MeetingError> {
         let id = normalize_meeting_id(id)?;
         let state = self.entity_state(&id);
         let guard = state.lock.clone().write_owned().await;
@@ -578,7 +618,6 @@ impl MeetingService {
                 &id,
                 record.log_epoch,
                 scan.generation,
-                &scan.cursor,
                 scan.latest_seq,
                 i64::try_from(scan.byte_len)
                     .map_err(|_| MeetingError::storage("meeting log exceeds i64 byte range"))?,
@@ -588,7 +627,7 @@ impl MeetingService {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .index = Some(OffsetIndex::from_scan(&scan));
-            Ok(AppendPageOutcome {
+            Ok(AppendBatchOutcome {
                 log_epoch: record.log_epoch,
                 generation: scan.generation,
                 latest_seq: scan.latest_seq,
@@ -614,7 +653,6 @@ impl MeetingService {
                 &id,
                 record.log_epoch,
                 scan.generation,
-                &scan.cursor,
                 scan.latest_seq,
                 i64::try_from(scan.byte_len)
                     .map_err(|_| MeetingError::storage("meeting log exceeds i64 byte range"))?,
@@ -843,6 +881,7 @@ pub async fn list_meetings(
         None => None,
     };
     let db = state.ops.garyx_db.clone();
+    let meetings_service = state.ops.meetings.clone();
     let result = db
         .run_blocking(move |db| db.list_meetings_page(limit + 1, after))
         .await;
@@ -863,7 +902,10 @@ pub async fn list_meetings(
     } else {
         None
     };
-    let meetings = records.into_iter().map(meeting_view).collect::<Vec<_>>();
+    let meetings = records
+        .into_iter()
+        .map(|record| meetings_service.meeting_view(record))
+        .collect::<Vec<_>>();
     json_response(
         StatusCode::OK,
         &json!({
@@ -878,8 +920,32 @@ pub async fn get_meeting(
     State(state): State<Arc<AppState>>,
 ) -> Response {
     match state.ops.meetings.get_record(&id).await {
-        Ok(record) => json_response(StatusCode::OK, &json!({ "meeting": meeting_view(record) })),
+        Ok(record) => json_response(
+            StatusCode::OK,
+            &json!({ "meeting": state.ops.meetings.meeting_view(record) }),
+        ),
         Err(error) => error.into_response(),
+    }
+}
+
+pub async fn abort_meeting(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    match state.ops.meetings.abort_meeting(&id).await {
+        AbortMeetingOutcome::Aborting => {
+            json_response(StatusCode::OK, &json!({ "status": "aborting" }))
+        }
+        AbortMeetingOutcome::RefusedFinalizing => MeetingError::conflict(
+            "abort_refused_finalizing",
+            "meeting is finalizing or finalized",
+        )
+        .into_response(),
+        AbortMeetingOutcome::Deleted => MeetingError::not_found().into_response(),
+        AbortMeetingOutcome::Retryable(message) => {
+            MeetingError::new(StatusCode::SERVICE_UNAVAILABLE, "abort_retryable", message)
+                .into_response()
+        }
     }
 }
 
@@ -895,12 +961,15 @@ pub async fn delete_meeting(
 
 pub use read::{confirm_meeting_read, read_meeting};
 
-pub(crate) fn meeting_view(record: MeetingRecord) -> Value {
-    let mut value = serde_json::to_value(record).unwrap_or_else(|_| json!({}));
-    if let Some(object) = value.as_object_mut() {
-        object.insert("stalled_reason".to_owned(), Value::String(String::new()));
+impl MeetingService {
+    pub(crate) fn meeting_view(&self, record: MeetingRecord) -> Value {
+        let stalled_reason = self.stalled_reason(&record);
+        let mut value = serde_json::to_value(record).unwrap_or_else(|_| json!({}));
+        if let Some(object) = value.as_object_mut() {
+            object.insert("stalled_reason".to_owned(), Value::String(stalled_reason));
+        }
+        value
     }
-    value
 }
 
 fn encode_list_token(token: &ListPageToken) -> Result<String, MeetingError> {

@@ -282,7 +282,13 @@ impl MeetingService {
                         tokio::task::yield_now().await;
                         break;
                     }
-                    return pending_response(&preflight, cursor, requested_budget, first_read);
+                    return pending_response(
+                        self,
+                        &preflight,
+                        cursor,
+                        requested_budget,
+                        first_read,
+                    );
                 }
 
                 if cursor.confirmed_seq >= preflight.snapshot.closed_latest {
@@ -293,6 +299,7 @@ impl MeetingService {
                     notes.push(format!("no new segments since {}", cursor.confirmed_seq));
                     return Ok(MeetingReadResponse {
                         meta: response_meta(
+                            self,
                             MeetingReadMode::Incremental,
                             &preflight.record,
                             preflight.snapshot.closed_latest,
@@ -325,6 +332,7 @@ impl MeetingService {
                 }
                 let receipt = Uuid::new_v4().to_string();
                 let (segments, notes) = select_incremental_segments(
+                    self,
                     &preflight.record,
                     preflight.snapshot.closed_latest,
                     all,
@@ -358,6 +366,7 @@ impl MeetingService {
                     MeetingCursorClaimOutcome::Claimed(_claimed) => {
                         return Ok(MeetingReadResponse {
                             meta: response_meta(
+                                self,
                                 MeetingReadMode::Incremental,
                                 &preflight.record,
                                 preflight.snapshot.closed_latest,
@@ -401,6 +410,7 @@ impl MeetingService {
             MeetingReadMode::Incremental => unreachable!("validated stateless mode"),
         };
         stateless_page(
+            self,
             id,
             mode,
             &preflight,
@@ -432,6 +442,7 @@ impl MeetingService {
             log_path: preflight.log_path,
         };
         stateless_page(
+            self,
             id,
             mode,
             &token_preflight,
@@ -810,6 +821,7 @@ fn normalize_reader(reader_id: &str) -> Result<String, MeetingError> {
 }
 
 fn pending_response(
+    service: &MeetingService,
     preflight: &ReadPreflight,
     cursor: MeetingReadCursor,
     requested_budget: usize,
@@ -846,6 +858,7 @@ fn pending_response(
     notes.push("pending span replay; confirmation still pending".to_owned());
     let mut response = MeetingReadResponse {
         meta: response_meta(
+            service,
             MeetingReadMode::Incremental,
             &preflight.record,
             preflight.snapshot.closed_latest,
@@ -867,6 +880,7 @@ fn pending_response(
 }
 
 fn select_incremental_segments(
+    service: &MeetingService,
     record: &MeetingRecord,
     closed_total: i64,
     all: Vec<MeetingSegment>,
@@ -885,6 +899,7 @@ fn select_incremental_segments(
         selected.push(segment);
         let candidate = MeetingReadResponse {
             meta: response_meta(
+                service,
                 MeetingReadMode::Incremental,
                 record,
                 closed_total,
@@ -915,6 +930,7 @@ fn select_incremental_segments(
 
 #[allow(clippy::too_many_arguments)]
 fn stateless_page(
+    service: &MeetingService,
     id: &str,
     mode: MeetingReadMode,
     preflight: &ReadPreflight,
@@ -927,6 +943,7 @@ fn stateless_page(
     if next_seq > range_end {
         return Ok(MeetingReadResponse {
             meta: response_meta(
+                service,
                 mode,
                 &preflight.record,
                 preflight.snapshot.closed_latest,
@@ -951,6 +968,7 @@ fn stateless_page(
         preflight.record.log_epoch,
     )?;
     select_stateless_page(
+        service,
         id,
         mode,
         preflight,
@@ -962,6 +980,7 @@ fn stateless_page(
 }
 
 fn select_stateless_page(
+    service: &MeetingService,
     id: &str,
     mode: MeetingReadMode,
     preflight: &ReadPreflight,
@@ -1005,6 +1024,7 @@ fn select_stateless_page(
         };
         let candidate = MeetingReadResponse {
             meta: response_meta(
+                service,
                 mode,
                 &preflight.record,
                 preflight.snapshot.closed_latest,
@@ -1048,6 +1068,7 @@ fn select_stateless_page(
     };
     Ok(MeetingReadResponse {
         meta: response_meta(
+            service,
             mode,
             &preflight.record,
             preflight.snapshot.closed_latest,
@@ -1063,6 +1084,7 @@ fn select_stateless_page(
 
 #[allow(clippy::too_many_arguments)]
 fn response_meta(
+    service: &MeetingService,
     mode: MeetingReadMode,
     record: &MeetingRecord,
     closed_total: i64,
@@ -1079,7 +1101,7 @@ fn response_meta(
         status: record.status.clone(),
         status_detail: record.status_detail.clone(),
         end_source: record.end_source.clone(),
-        stalled_reason: String::new(),
+        stalled_reason: service.stalled_reason(record),
         content_state: record.content_state.clone(),
         topic: record.topic.clone(),
         started_at: record.started_at.clone(),
@@ -1452,7 +1474,6 @@ mod tests {
             meeting_no: "123456789".to_owned(),
             feishu_meeting_id: String::new(),
             invite_event_id: "invite-sliding-token".to_owned(),
-            call_id: String::new(),
             topic: "Sliding token".to_owned(),
             invited_by: "Test User".to_owned(),
             status: MeetingStatus::Live,
@@ -1466,7 +1487,7 @@ mod tests {
         })
         .expect("meeting");
         service
-            .append_page(
+            .append_batch(
                 &entity,
                 (0..4)
                     .map(|index| SegmentDraft {

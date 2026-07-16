@@ -47,7 +47,6 @@ curl http://127.0.0.1:31337/health
     "public_url": "",
     "auth_token": "",
     "meetings": {
-      "poll_interval_secs": 30,
       "join_retry_window_secs": 300,
       "read_page_bytes": 65536
     }
@@ -63,7 +62,6 @@ Fields:
 | `port` | `31337` | HTTP, WebSocket, and MCP port. |
 | `public_url` | `""` | Optional public URL used in channel message links. |
 | `auth_token` | `""` | Required bearer token for all protected gateway APIs. Create one on the gateway host with `garyx gateway token`; `/health` remains public. |
-| `meetings.poll_interval_secs` | `30` | Meeting event polling cadence in seconds; effective values are clamped to 10–120. |
 | `meetings.join_retry_window_secs` | `300` | Absolute retry window for joining an invited meeting. |
 | `meetings.read_page_bytes` | `65536` | Hard cap for each newly produced structured meeting-read page; effective values have a 4096-byte floor. |
 
@@ -201,7 +199,8 @@ downloaded to local temp files before the agent run. Outbound messages use safe
             "app_secret": "${FEISHU_APP_SECRET}",
             "domain": "feishu",
             "require_mention": true,
-            "topic_session_mode": "disabled"
+            "topic_session_mode": "disabled",
+            "meeting_entities": true
           }
         }
       }
@@ -215,6 +214,9 @@ Direct messages and group chats are accepted by default. `require_mention`
 controls whether group messages need to mention the bot before dispatch, and
 `topic_session_mode` controls whether a group uses one shared session
 (`"disabled"`) or splits sessions by Feishu topic/thread (`"enabled"`).
+`meeting_entities` enables push capture for invited Feishu meetings; it
+defaults to `true`. Disabling it unregisters the account from meeting capture
+without stopping ordinary chat handling.
 
 You can also use the interactive login flow:
 

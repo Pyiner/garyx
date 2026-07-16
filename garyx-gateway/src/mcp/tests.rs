@@ -180,6 +180,7 @@ async fn test_status_reports_current_and_other_bots() {
             owner_target: None,
             require_mention: true,
             topic_session_mode: Default::default(),
+            meeting_entities: true,
         },
     );
     config.channels.api.accounts.insert(

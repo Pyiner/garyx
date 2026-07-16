@@ -156,6 +156,7 @@ fn feishu_catalog(channels: &ChannelsConfig) -> SubprocessPluginCatalogEntry {
                 "domain": account.domain,
                 "require_mention": account.require_mention,
                 "topic_session_mode": account.topic_session_mode,
+                "meeting_entities": account.meeting_entities,
             }),
         })
         .collect();

@@ -362,18 +362,33 @@ impl AppStateBuilder {
         }
 
         let router = Arc::new(Mutex::new(router));
+        let meetings = Arc::new(
+            MeetingService::new(
+                self.garyx_db.clone(),
+                self.meetings_dir,
+                self.config.gateway.meetings.effective_read_page_bytes(),
+            )
+            .unwrap_or_else(|error| panic!("failed to initialize meeting service: {error}")),
+        );
+        meetings.start_ingestion(
+            self.config
+                .gateway
+                .meetings
+                .effective_join_retry_window_secs(),
+        );
         {
             let mut manager = self
                 .channel_plugin_manager
                 .try_lock()
                 .expect("channel plugin manager lock must be uncontended during build");
             manager.attach_dispatcher(self.channel_swap.clone());
-            let discoverer = BuiltInPluginDiscoverer::with_dispatcher(
+            let discoverer = BuiltInPluginDiscoverer::with_dispatcher_and_meeting_sink(
                 self.config.channels.clone(),
                 router.clone(),
                 self.bridge.clone(),
                 self.channel_swap.clone(),
                 String::new(),
+                meetings.clone(),
             );
             let discovered = discoverer.discover().unwrap_or_else(|error| {
                 panic!("failed to discover built-in channel plugins during build: {error}")
@@ -393,14 +408,6 @@ impl AppStateBuilder {
 
         let live_config = Arc::new(LiveConfigCell::new(self.config.clone()));
         let events = EventStreamHub::new(self.event_tx);
-        let meetings = Arc::new(
-            MeetingService::new(
-                self.garyx_db.clone(),
-                self.meetings_dir,
-                self.config.gateway.meetings.effective_read_page_bytes(),
-            )
-            .unwrap_or_else(|error| panic!("failed to initialize meeting service: {error}")),
-        );
         let state = Arc::new(AppState {
             runtime: RuntimeState {
                 start_time,

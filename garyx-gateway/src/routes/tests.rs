@@ -8290,6 +8290,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
                     }),
                     require_mention: true,
                     topic_session_mode: garyx_models::config::TopicSessionMode::Disabled,
+                    meeting_entities: true,
                 },
             ),
         );

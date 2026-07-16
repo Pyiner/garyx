@@ -205,6 +205,10 @@ fn feishu_enum_schema_matches_rust_serialization() {
         schema_topic, expected_topic,
         "feishu topic_session_mode mismatch"
     );
+    assert_eq!(
+        feishu.schema["properties"]["meeting_entities"]["default"], true,
+        "Feishu meeting entity capture must default on"
+    );
 }
 
 #[test]
@@ -316,6 +320,7 @@ fn feishu_accounts_omit_hidden_owner_target_and_group_topology_from_catalog_conf
                 }),
                 require_mention: true,
                 topic_session_mode: Default::default(),
+                meeting_entities: true,
             }),
         );
 

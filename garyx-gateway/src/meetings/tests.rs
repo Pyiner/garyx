@@ -1,6 +1,13 @@
+use std::collections::VecDeque;
 use std::fs;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
+use garyx_channels::{
+    JoinedMeeting, MeetingApiError, MeetingEventSink, MeetingInvite, MeetingPlatformClient,
+};
 use tempfile::TempDir;
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -27,7 +34,6 @@ fn create_meeting(
         meeting_no: "123456789".to_owned(),
         feishu_meeting_id: String::new(),
         invite_event_id: format!("invite-{}", Uuid::new_v4()),
-        call_id: String::new(),
         topic: topic.to_owned(),
         invited_by: "Test User".to_owned(),
         status,
@@ -95,6 +101,133 @@ struct Fixture {
     service: Arc<MeetingService>,
 }
 
+#[derive(Clone)]
+struct FakeMeetingClient {
+    joins: Arc<Mutex<VecDeque<Result<JoinedMeeting, MeetingApiError>>>>,
+    default_join: Result<JoinedMeeting, MeetingApiError>,
+    join_calls: Arc<AtomicUsize>,
+    leave_calls: Arc<AtomicUsize>,
+    hang_join: Arc<AtomicBool>,
+    hang_leave: Arc<AtomicBool>,
+    leave_result: Result<(), MeetingApiError>,
+    bot_open_id: String,
+}
+
+impl FakeMeetingClient {
+    fn successful(feishu_meeting_id: &str, bot_open_id: &str) -> Self {
+        Self {
+            joins: Arc::new(Mutex::new(VecDeque::new())),
+            default_join: Ok(JoinedMeeting {
+                feishu_meeting_id: feishu_meeting_id.to_owned(),
+            }),
+            join_calls: Arc::new(AtomicUsize::new(0)),
+            leave_calls: Arc::new(AtomicUsize::new(0)),
+            hang_join: Arc::new(AtomicBool::new(false)),
+            hang_leave: Arc::new(AtomicBool::new(false)),
+            leave_result: Ok(()),
+            bot_open_id: bot_open_id.to_owned(),
+        }
+    }
+
+    fn failing(error: MeetingApiError, bot_open_id: &str) -> Self {
+        Self {
+            joins: Arc::new(Mutex::new(VecDeque::new())),
+            default_join: Err(error),
+            join_calls: Arc::new(AtomicUsize::new(0)),
+            leave_calls: Arc::new(AtomicUsize::new(0)),
+            hang_join: Arc::new(AtomicBool::new(false)),
+            hang_leave: Arc::new(AtomicBool::new(false)),
+            leave_result: Ok(()),
+            bot_open_id: bot_open_id.to_owned(),
+        }
+    }
+}
+
+#[async_trait]
+impl MeetingPlatformClient for FakeMeetingClient {
+    async fn join(
+        &self,
+        _meeting_no: &str,
+        _password: Option<&str>,
+    ) -> Result<JoinedMeeting, MeetingApiError> {
+        self.join_calls.fetch_add(1, Ordering::AcqRel);
+        if self.hang_join.load(Ordering::Acquire) {
+            return std::future::pending().await;
+        }
+        self.joins
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop_front()
+            .unwrap_or_else(|| self.default_join.clone())
+    }
+
+    async fn leave(&self, _feishu_meeting_id: &str) -> Result<(), MeetingApiError> {
+        self.leave_calls.fetch_add(1, Ordering::AcqRel);
+        if self.hang_leave.load(Ordering::Acquire) {
+            std::future::pending().await
+        } else {
+            self.leave_result.clone()
+        }
+    }
+
+    fn bot_open_id(&self) -> Option<String> {
+        Some(self.bot_open_id.clone())
+    }
+}
+
+fn start_test_ingestion(service: &Arc<MeetingService>, finalizing_grace: Duration) {
+    service.start_ingestion(1);
+    service.set_test_ingestion_timing(
+        Duration::from_millis(20),
+        Duration::from_millis(300),
+        finalizing_grace,
+        Duration::from_millis(20),
+    );
+}
+
+fn synthetic_invite(account_id: &str, event_id: &str) -> MeetingInvite {
+    MeetingInvite {
+        account_id: account_id.to_owned(),
+        event_id: event_id.to_owned(),
+        meeting_reference_id: "9007199254740993001".to_owned(),
+        meeting_no: "123456789".to_owned(),
+        topic: "Synthetic push meeting".to_owned(),
+        bot_id: "bot_1000000001".to_owned(),
+        inviter_id: "user_1000000001".to_owned(),
+    }
+}
+
+async fn wait_for_record(
+    db: &GaryxDbService,
+    predicate: impl Fn(&MeetingRecord) -> bool,
+) -> MeetingRecord {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if let Some(record) = db
+                .list_all_meetings()
+                .expect("list meeting records")
+                .into_iter()
+                .find(&predicate)
+            {
+                return record;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("meeting state convergence")
+}
+
+async fn wait_for_counter(counter: &AtomicUsize, minimum: usize) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while counter.load(Ordering::Acquire) < minimum {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("meeting platform call convergence");
+}
+
 impl Fixture {
     fn new(read_page_bytes: usize) -> Self {
         let temp = tempfile::tempdir().expect("temp");
@@ -112,23 +245,23 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn storage_fault_before_checkpoint_truncates_whole_page_and_repulls_without_duplicates() {
+async fn storage_fault_before_checkpoint_truncates_whole_batch_and_retry_deduplicates() {
     let fixture = Fixture::new(65_536);
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Storage", "");
     fixture
         .service
-        .append_page(&meeting.id, vec![segment("one", "committed")], "cursor-1")
+        .append_batch(&meeting.id, vec![segment("one", "committed")], "event-1")
         .await
-        .expect("first page");
+        .expect("first batch");
     fixture
         .service
-        .append_page_inner(
+        .append_batch_inner(
             &meeting.id,
             vec![
                 segment("two", "uncommitted-a"),
                 segment("three", "uncommitted-b"),
             ],
-            "cursor-2",
+            "event-2",
             Some(AppendTestFault::Segment(2)),
         )
         .await
@@ -155,16 +288,16 @@ async fn storage_fault_before_checkpoint_truncates_whole_page_and_repulls_withou
         vec!["committed"]
     );
     repaired
-        .append_page(
+        .append_batch(
             &meeting.id,
             vec![
                 segment("two", "uncommitted-a"),
                 segment("three", "uncommitted-b"),
             ],
-            "cursor-2",
+            "event-2",
         )
         .await
-        .expect("repull");
+        .expect("redelivered batch");
     let scan = scan_log(&repaired.log_path(&meeting.id), 0, false).expect("scan");
     assert_eq!(scan.latest_seq, 3);
     assert_eq!(scan.generation, 2);
@@ -176,10 +309,10 @@ async fn checkpoint_before_sqlite_repairs_forward_and_delayed_generation_cannot_
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Repair", "");
     fixture
         .service
-        .append_page_inner(
+        .append_batch_inner(
             &meeting.id,
-            vec![segment("one", "page-one")],
-            "cursor-1",
+            vec![segment("one", "batch-one")],
+            "event-1",
             Some(AppendTestFault::SyncBeforeCache),
         )
         .await
@@ -202,13 +335,13 @@ async fn checkpoint_before_sqlite_repairs_forward_and_delayed_generation_cannot_
         .expect("repair"),
     );
     repaired
-        .append_page(&meeting.id, vec![segment("two", "page-two")], "cursor-2")
+        .append_batch(&meeting.id, vec![segment("two", "batch-two")], "event-2")
         .await
-        .expect("second page");
+        .expect("second batch");
     assert!(
         !fixture
             .db
-            .update_meeting_cache_guarded(&meeting.id, 0, 1, "cursor-1", 1, 1)
+            .update_meeting_cache_guarded(&meeting.id, 0, 1, 1, 1)
             .expect("delayed repair")
     );
     let record = fixture
@@ -217,11 +350,9 @@ async fn checkpoint_before_sqlite_repairs_forward_and_delayed_generation_cannot_
         .expect("row")
         .expect("meeting");
     assert_eq!(record.cache_generation, 2);
-    assert_eq!(record.poll_cursor, "cursor-2");
     assert_eq!(record.closed_segment_count, 2);
     let scan = scan_log(&repaired.log_path(&meeting.id), 0, false).expect("canonical scan");
     assert_eq!(record.cache_generation, scan.generation);
-    assert_eq!(record.poll_cursor, scan.cursor);
     assert_eq!(record.closed_segment_count, scan.latest_seq);
     assert_eq!(record.byte_size, scan.byte_len as i64);
 }
@@ -232,10 +363,10 @@ async fn checkpoint_is_never_cached_before_fdatasync_and_torn_tail_is_discarded(
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Sync order", "");
     fixture
         .service
-        .append_page_inner(
+        .append_batch_inner(
             &meeting.id,
             vec![segment("one", "not durable yet")],
-            "cursor-1",
+            "event-1",
             Some(AppendTestFault::CheckpointBeforeSync),
         )
         .await
@@ -270,14 +401,14 @@ async fn checkpoint_is_never_cached_before_fdatasync_and_torn_tail_is_discarded(
     );
     assert_eq!(fs::metadata(&path).expect("repaired log").len(), 0);
     repaired
-        .append_page(
+        .append_batch(
             &meeting.id,
             vec![segment("one", "not durable yet")],
-            "cursor-1",
+            "event-1",
         )
         .await
-        .expect("repull page");
-    let scan = scan_log(&path, 0, false).expect("scan repull");
+        .expect("redelivered batch");
+    let scan = scan_log(&path, 0, false).expect("scan redelivery");
     assert_eq!(scan.generation, 1);
     assert_eq!(scan.latest_seq, 1);
 }
@@ -285,7 +416,7 @@ async fn checkpoint_is_never_cached_before_fdatasync_and_torn_tail_is_discarded(
 #[tokio::test]
 async fn split_chunk_crash_is_uncommitted_and_terminal_barrier_repairs_fsynced_cache_gap() {
     let split_text = "\"\\\n".repeat(30_000);
-    let normalized = normalize_page(vec![segment("split-source", split_text.clone())], 1)
+    let normalized = normalize_batch(vec![segment("split-source", split_text.clone())], 1)
         .expect("split normalization");
     assert!(normalized.len() > 1);
     assert!(
@@ -298,7 +429,7 @@ async fn split_chunk_crash_is_uncommitted_and_terminal_barrier_repairs_fsynced_c
         let split = create_meeting(&fixture.db, MeetingStatus::Live, "Split", "");
         fixture
             .service
-            .append_page_inner(
+            .append_batch_inner(
                 &split.id,
                 vec![segment("split-source", split_text.clone())],
                 "cursor",
@@ -336,7 +467,7 @@ async fn split_chunk_crash_is_uncommitted_and_terminal_barrier_repairs_fsynced_c
     let repaired = fixture.service.clone();
     let barrier = create_meeting(&fixture.db, MeetingStatus::Live, "Barrier", "");
     repaired
-        .append_page_inner(
+        .append_batch_inner(
             &barrier.id,
             vec![segment("one", "committed before cache")],
             "cursor",
@@ -370,7 +501,7 @@ async fn empty_checkpoint_and_foreign_epoch_tail_are_repaired_at_boot() {
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Epoch", "");
     fixture
         .service
-        .append_page(&meeting.id, Vec::new(), "empty-cursor")
+        .append_batch(&meeting.id, Vec::new(), "empty-cursor")
         .await
         .expect("empty checkpoint");
     let valid_len = fs::metadata(fixture.service.log_path(&meeting.id))
@@ -405,7 +536,6 @@ async fn empty_checkpoint_and_foreign_epoch_tail_are_repaired_at_boot() {
         .expect("meeting");
     assert_eq!(record.cache_generation, 1);
     assert_eq!(record.closed_segment_count, 0);
-    assert_eq!(record.poll_cursor, "empty-cursor");
 }
 
 #[tokio::test]
@@ -414,7 +544,7 @@ async fn concurrent_first_fetches_share_one_cursor_span_and_receipt() {
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Concurrent", "");
     fixture
         .service
-        .append_page(
+        .append_batch(
             &meeting.id,
             vec![segment("one", "one"), segment("two", "two")],
             "cursor",
@@ -458,7 +588,7 @@ async fn concurrent_fetches_with_different_budgets_replay_the_winners_indivisibl
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Budgets", "");
     fixture
         .service
-        .append_page(
+        .append_batch(
             &meeting.id,
             vec![
                 segment("one", "a".repeat(3_000)),
@@ -503,7 +633,7 @@ async fn two_readers_confirm_independently_and_lost_response_replays_exact_span(
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Readers", "");
     fixture
         .service
-        .append_page(
+        .append_batch(
             &meeting.id,
             vec![segment("one", "one"), segment("two", "two")],
             "cursor",
@@ -579,7 +709,7 @@ async fn confirm_committed_with_a_lost_response_advances_without_regression() {
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Confirm loss", "");
     fixture
         .service
-        .append_page(
+        .append_batch(
             &meeting.id,
             vec![
                 segment("one", "a".repeat(3_000)),
@@ -649,7 +779,7 @@ async fn epoch_rollover_resets_confirmed_and_pending_domains_and_distinguishes_s
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Rollover", "");
     fixture
         .service
-        .append_page(&meeting.id, vec![segment("old-one", "old one")], "old-1")
+        .append_batch(&meeting.id, vec![segment("old-one", "old one")], "old-1")
         .await
         .expect("old page");
     let first = fixture
@@ -671,7 +801,7 @@ async fn epoch_rollover_resets_confirmed_and_pending_domains_and_distinguishes_s
         .expect("confirm");
     fixture
         .service
-        .append_page(&meeting.id, vec![segment("old-two", "old two")], "old-2")
+        .append_batch(&meeting.id, vec![segment("old-two", "old two")], "old-2")
         .await
         .expect("second page");
     let pending = fixture
@@ -722,7 +852,7 @@ async fn epoch_rollover_resets_confirmed_and_pending_domains_and_distinguishes_s
 
     fixture
         .service
-        .append_page(&meeting.id, vec![segment("new-one", "new one")], "new-1")
+        .append_batch(&meeting.id, vec![segment("new-one", "new one")], "new-1")
         .await
         .expect("new epoch page");
     let epoch_one_reader = fixture
@@ -842,7 +972,7 @@ async fn old_snapshot_token_is_invalidated_by_missing_log_epoch_rollover() {
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Old token", "");
     fixture
         .service
-        .append_page(
+        .append_batch(
             &meeting.id,
             vec![
                 segment("one", "a".repeat(2_000)),
@@ -902,7 +1032,7 @@ async fn missing_log_rolls_epoch_inside_terminal_barrier_and_empty_finalize_read
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Barrier rollover", "");
     fixture
         .service
-        .append_page(&meeting.id, vec![segment("old", "lost content")], "cursor")
+        .append_batch(&meeting.id, vec![segment("old", "lost content")], "cursor")
         .await
         .expect("old page");
     fs::remove_dir_all(fixture.service.entity_dir(&meeting.id)).expect("remove content");
@@ -927,7 +1057,7 @@ async fn missing_log_rolls_epoch_inside_terminal_barrier_and_empty_finalize_read
             MeetingStatus::Live,
             MeetingStatus::Finalized,
             "finalized after content-loss rollover",
-            "grace_expired",
+            "push",
             Some(&timestamp(2)),
             Some(&timestamp(3)),
         )
@@ -956,7 +1086,7 @@ async fn stateless_snapshot_stays_pinned_across_appends_and_never_creates_cursor
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Snapshot", "");
     fixture
         .service
-        .append_page(
+        .append_batch(
             &meeting.id,
             vec![
                 segment("one", "a".repeat(2_000)),
@@ -976,7 +1106,7 @@ async fn stateless_snapshot_stays_pinned_across_appends_and_never_creates_cursor
     let pinned_total = first.meta.closed_total;
     fixture
         .service
-        .append_page(&meeting.id, vec![segment("four", "new append")], "cursor-2")
+        .append_batch(&meeting.id, vec![segment("four", "new append")], "cursor-2")
         .await
         .expect("append");
     let mode = continuation_mode_unverified(&token).expect("mode");
@@ -1018,7 +1148,7 @@ async fn range_snapshot_pages_exact_closed_interval_without_recognition_state() 
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Range", "");
     fixture
         .service
-        .append_page(
+        .append_batch(
             &meeting.id,
             (1..=6)
                 .map(|seq| {
@@ -1073,7 +1203,7 @@ async fn json_budget_serves_one_large_segment_and_pending_replay_is_indivisible(
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Budget", "");
     fixture
         .service
-        .append_page(
+        .append_batch(
             &meeting.id,
             vec![
                 segment("large", "\"\\\n".repeat(4_000)),
@@ -1119,7 +1249,7 @@ async fn server_page_cap_applies_even_to_gigabyte_stateless_request() {
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Hard cap", "");
     fixture
         .service
-        .append_page(
+        .append_batch(
             &meeting.id,
             (0..20)
                 .map(|index| segment(&format!("source-{index}"), "x".repeat(400)))
@@ -1143,7 +1273,7 @@ async fn cold_terminal_index_build_is_preflight_and_single_flight() {
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Index", "");
     fixture
         .service
-        .append_page(
+        .append_batch(
             &meeting.id,
             (0..100)
                 .map(|index| segment(&format!("source-{index}"), format!("segment-{index}")))
@@ -1225,7 +1355,7 @@ async fn terminal_missing_log_marks_content_lost_without_overwriting_status_deta
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Lost", "");
     fixture
         .service
-        .append_page(&meeting.id, vec![segment("one", "body")], "cursor")
+        .append_batch(&meeting.id, vec![segment("one", "body")], "cursor")
         .await
         .expect("page");
     fixture
@@ -1268,7 +1398,7 @@ async fn concurrent_content_loss_detection_and_delete_are_idempotent_and_seriali
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Loss race", "");
     fixture
         .service
-        .append_page(&meeting.id, vec![segment("one", "body")], "cursor")
+        .append_batch(&meeting.id, vec![segment("one", "body")], "cursor")
         .await
         .expect("page");
     fixture
@@ -1458,7 +1588,7 @@ async fn fetch_confirm_delete_tripartite_race_has_only_linearized_outcomes() {
     let meeting = create_meeting(&fixture.db, MeetingStatus::Live, "Tripartite", "");
     fixture
         .service
-        .append_page(&meeting.id, vec![segment("one", "body")], "cursor")
+        .append_batch(&meeting.id, vec![segment("one", "body")], "cursor")
         .await
         .expect("content");
     fixture
@@ -1546,7 +1676,6 @@ fn keyset_list_has_weak_insert_semantics_and_updates_never_move_rows() {
             meeting_no: "123456789".to_owned(),
             feishu_meeting_id: String::new(),
             invite_event_id: format!("invite-{id}"),
-            call_id: String::new(),
             topic: topic.to_owned(),
             invited_by: "Test User".to_owned(),
             status: MeetingStatus::Aborted,
@@ -1570,7 +1699,6 @@ fn keyset_list_has_weak_insert_semantics_and_updates_never_move_rows() {
         meeting_no: "123456789".to_owned(),
         feishu_meeting_id: String::new(),
         invite_event_id: "invite-low".to_owned(),
-        call_id: String::new(),
         topic: "low".to_owned(),
         invited_by: "Test User".to_owned(),
         status: MeetingStatus::Aborted,
@@ -1613,7 +1741,6 @@ fn keyset_list_has_weak_insert_semantics_and_updates_never_move_rows() {
         meeting_no: "123456789".to_owned(),
         feishu_meeting_id: String::new(),
         invite_event_id: "invite-skew".to_owned(),
-        call_id: String::new(),
         topic: "skew".to_owned(),
         invited_by: "Test User".to_owned(),
         status: MeetingStatus::Aborted,
@@ -1658,7 +1785,7 @@ async fn real_http_routes_enforce_wire_schema_confirm_and_terminal_delete() {
     state
         .ops
         .meetings
-        .append_page(&meeting.id, vec![segment("one", "body")], "cursor")
+        .append_batch(&meeting.id, vec![segment("one", "body")], "cursor")
         .await
         .expect("page");
     let other = create_meeting(&db, MeetingStatus::Aborted, "Other", "");
@@ -1843,4 +1970,727 @@ async fn real_http_routes_enforce_wire_schema_confirm_and_terminal_delete() {
         .expect("body");
     let error: Value = serde_json::from_slice(&body).expect("error");
     assert_eq!(error["error"]["code"], "entity_deleted");
+}
+
+#[tokio::test]
+async fn real_http_abort_route_covers_durable_state_table() {
+    use axum::body::{Body, to_bytes};
+    use tower::ServiceExt;
+
+    use crate::route_graph::build_router;
+    use crate::server::AppStateBuilder;
+
+    let temp = tempfile::tempdir().expect("temp");
+    let db = Arc::new(GaryxDbService::memory().expect("db"));
+    let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
+        garyx_models::config::GaryxConfig::default(),
+    ))
+    .with_garyx_db(db.clone())
+    .with_meetings_dir(temp.path().join("meetings"))
+    .build();
+    let joining = create_meeting(&db, MeetingStatus::Joining, "Joining", "");
+    let finalizing = create_meeting(&db, MeetingStatus::Finalizing, "Finalizing", "");
+    let aborted = create_meeting(&db, MeetingStatus::Aborted, "Aborted", "");
+    let router = build_router(state);
+
+    let post_abort = |id: &str| {
+        crate::test_support::authed_request()
+            .method("POST")
+            .uri(format!("/api/meetings/{id}/abort"))
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .expect("request")
+    };
+    let response = router
+        .clone()
+        .oneshot(post_abort(&joining.id))
+        .await
+        .expect("joining abort");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 1024).await.expect("body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["status"],
+        "aborting"
+    );
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(post_abort(&joining.id))
+            .await
+            .expect("idempotent abort")
+            .status(),
+        StatusCode::OK
+    );
+
+    let response = router
+        .clone()
+        .oneshot(post_abort(&finalizing.id))
+        .await
+        .expect("finalizing refusal");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = to_bytes(response.into_body(), 1024).await.expect("body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["error"]["code"],
+        "abort_refused_finalizing"
+    );
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(post_abort(&aborted.id))
+            .await
+            .expect("aborted no-op")
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        router
+            .oneshot(post_abort("00000000-0000-7000-8000-000000000099"))
+            .await
+            .expect("deleted")
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn push_capture_is_batch_atomic_deduplicated_exact_and_trails_to_finalize() {
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(150));
+    let account_id = "synthetic-push-account";
+    let bot_open_id = "ou_bot_1000000001";
+    let exact_meeting_id = "9007199254740993123";
+    let client = Arc::new(FakeMeetingClient::successful(exact_meeting_id, bot_open_id));
+    fixture.service.register_client(account_id, client.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-invite-1"));
+    let live = wait_for_record(&fixture.db, |record| record.status == "live").await;
+    assert_eq!(live.feishu_meeting_id, exact_meeting_id);
+
+    let first_event = json!({
+        "meeting_activity_items": [
+            {
+                "activity_event_type": "transcript_received",
+                "meeting": { "id": 9007199254740993123u64 },
+                "transcript_received_items": [
+                    {
+                        "text": "exact transcript",
+                        "language": "en",
+                        "sentence_id": 9007199254740993u64,
+                        "start_time_ms": 1000,
+                        "end_time_ms": 2000,
+                        "speaker": {
+                            "id": { "open_id": "ou_user_1000000001" },
+                            "user_name": "Test Speaker"
+                        }
+                    },
+                    {
+                        "text": "bot output must not loop back",
+                        "language": "en",
+                        "sentence_id": "sentence-from-bot",
+                        "start_time_ms": 2000,
+                        "end_time_ms": 3000,
+                        "speaker": {
+                            "id": { "open_id": bot_open_id },
+                            "user_name": "Meeting Bot"
+                        }
+                    }
+                ]
+            },
+            {
+                "activity_event_type": "chat_received",
+                "meeting": { "id": 9007199254740993123u64 },
+                "chat_received_items": [{
+                    "message_id": "om_synthetic_1",
+                    "content": "exact chat",
+                    "sent_timestamp": 3000,
+                    "operator": {
+                        "id": { "open_id": "ou_user_1000000002" },
+                        "name": "Test Operator"
+                    }
+                }]
+            },
+            {
+                "activity_event_type": "participant_left",
+                "meeting": { "id": 9007199254740993123u64 },
+                "participant_left_items": [{
+                    "participant": { "id": { "open_id": "ou_user_1000000003" } }
+                }]
+            }
+        ]
+    });
+    fixture
+        .service
+        .on_meeting_activity(account_id, "evt-activity-1", first_event.clone());
+    let committed = wait_for_record(&fixture.db, |record| {
+        record.id == live.id && record.cache_generation == 1
+    })
+    .await;
+    assert_eq!(committed.closed_segment_count, 2);
+    let first_scan = scan_log(&fixture.service.log_path(&live.id), 0, false).expect("scan");
+    assert!(first_scan.source_ids.contains("9007199254740993"));
+    assert!(!first_scan.source_ids.contains("sentence-from-bot"));
+
+    fixture
+        .service
+        .on_meeting_activity(account_id, "evt-activity-1", first_event);
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    let whole_redelivery = fixture
+        .db
+        .get_meeting(&live.id)
+        .expect("record")
+        .expect("meeting");
+    assert_eq!(whole_redelivery.cache_generation, 1);
+    assert_eq!(whole_redelivery.closed_segment_count, 2);
+
+    fixture.service.on_meeting_activity(
+        account_id,
+        "evt-activity-2",
+        json!({
+            "meeting_activity_items": [{
+                "activity_event_type": "chat_received",
+                "meeting": { "id": 9007199254740993123u64 },
+                "chat_received_items": [
+                    {
+                        "message_id": "om_synthetic_1",
+                        "content": "duplicate source",
+                        "sent_timestamp": 4000,
+                        "operator": { "id": { "open_id": "ou_user_1000000002" } }
+                    },
+                    {
+                        "message_id": "om_synthetic_2",
+                        "content": "new source",
+                        "sent_timestamp": 5000,
+                        "operator": { "id": { "open_id": "ou_user_1000000002" } }
+                    }
+                ]
+            }]
+        }),
+    );
+    let item_dedup = wait_for_record(&fixture.db, |record| {
+        record.id == live.id && record.cache_generation == 2
+    })
+    .await;
+    assert_eq!(item_dedup.closed_segment_count, 3);
+
+    fixture.service.on_meeting_activity(
+        account_id,
+        "evt-activity-left",
+        json!({
+            "meeting_activity_items": [{
+                "activity_event_type": "participant_left",
+                "meeting": { "id": 9007199254740993123u64 },
+                "participant_left_items": [{
+                    "participant": { "id": { "open_id": bot_open_id } }
+                }]
+            }]
+        }),
+    );
+    wait_for_record(&fixture.db, |record| {
+        record.id == live.id && record.status == "finalizing"
+    })
+    .await;
+    fixture.service.on_meeting_activity(
+        account_id,
+        "evt-activity-trailing",
+        json!({
+            "meeting_activity_items": [{
+                "activity_event_type": "transcript_received",
+                "meeting": { "id": 9007199254740993123u64 },
+                "transcript_received_items": [{
+                    "text": "trailing transcript",
+                    "language": "en",
+                    "sentence_id": "sentence-trailing",
+                    "start_time_ms": 6000,
+                    "end_time_ms": 7000,
+                    "speaker": {
+                        "id": { "open_id": "ou_user_1000000001" },
+                        "user_name": "Test Speaker"
+                    }
+                }]
+            }]
+        }),
+    );
+    let finalized = wait_for_record(&fixture.db, |record| {
+        record.id == live.id && record.status == "finalized"
+    })
+    .await;
+    assert_eq!(finalized.end_source, "participant_left");
+    assert_eq!(finalized.closed_segment_count, 4);
+    assert_eq!(finalized.cache_generation, 4);
+
+    fixture.service.on_meeting_activity(
+        account_id,
+        "evt-after-finalized",
+        json!({ "meeting_activity_items": [] }),
+    );
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert_eq!(
+        fixture
+            .db
+            .get_meeting(&live.id)
+            .expect("record")
+            .expect("meeting")
+            .cache_generation,
+        4
+    );
+}
+
+#[tokio::test]
+async fn end_signal_wins_same_scheduling_point_over_abort_domain() {
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(60));
+    let account_id = "end-wins-account";
+    let client = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993222",
+        "ou_bot_end_wins",
+    ));
+    fixture.service.register_client(account_id, client.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-end-wins"));
+    let live = wait_for_record(&fixture.db, |record| record.status == "live").await;
+
+    // No await occurs between these two sends on the current-thread runtime,
+    // so both terminal inputs are present at one coordinator scheduling point.
+    let abort = fixture
+        .service
+        .linearize_abort_for_test(&live.id)
+        .expect("abort operation");
+    fixture.service.enqueue_end_for_test(&live.id);
+    assert_eq!(
+        abort.await.expect("abort outcome"),
+        AbortMeetingOutcome::RefusedFinalizing
+    );
+    let finalizing = wait_for_record(&fixture.db, |record| {
+        record.id == live.id && record.status == "finalizing"
+    })
+    .await;
+    assert_eq!(finalizing.end_source, "push");
+    assert_eq!(client.leave_calls.load(Ordering::Acquire), 0);
+    wait_for_record(&fixture.db, |record| {
+        record.id == live.id && record.status == "finalized"
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn ended_push_uses_join_identity_and_drives_the_second_end_path() {
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(50));
+    let account_id = "ended-push-account";
+    let feishu_meeting_id = "9007199254740993555";
+    let client = Arc::new(FakeMeetingClient::successful(
+        feishu_meeting_id,
+        "ou_bot_ended_push",
+    ));
+    fixture.service.register_client(account_id, client);
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-ended-push"));
+    let live = wait_for_record(&fixture.db, |record| record.status == "live").await;
+
+    fixture
+        .service
+        .on_meeting_ended(account_id, feishu_meeting_id);
+    let finalized = wait_for_record(&fixture.db, |record| {
+        record.id == live.id && record.status == "finalized"
+    })
+    .await;
+    assert_eq!(finalized.end_source, "push");
+}
+
+#[tokio::test]
+async fn hanging_join_is_cancelled_by_abort_deadline_and_registry_replacement() {
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(50));
+
+    let abort_account = "hanging-join-abort-account";
+    let abort_client = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993666",
+        "ou_bot_hanging_abort",
+    ));
+    abort_client.hang_join.store(true, Ordering::Release);
+    fixture
+        .service
+        .register_client(abort_account, abort_client.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(abort_account, "evt-hanging-abort"));
+    let joining = wait_for_record(&fixture.db, |record| {
+        record.account_id == abort_account && record.status == "joining"
+    })
+    .await;
+    wait_for_counter(&abort_client.join_calls, 1).await;
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            fixture.service.abort_meeting(&joining.id),
+        )
+        .await
+        .expect("admin abort cancels hanging join"),
+        AbortMeetingOutcome::Aborting
+    );
+    wait_for_record(&fixture.db, |record| {
+        record.id == joining.id && record.status == "aborted"
+    })
+    .await;
+    assert_eq!(abort_client.leave_calls.load(Ordering::Acquire), 0);
+
+    let paced_account = "hanging-join-paced-nudge-account";
+    let paced = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993667",
+        "ou_bot_hanging_paced",
+    ));
+    paced.hang_join.store(true, Ordering::Release);
+    fixture
+        .service
+        .register_client(paced_account, paced.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(paced_account, "evt-paced-initial"));
+    let paced_joining = wait_for_record(&fixture.db, |record| {
+        record.account_id == paced_account && record.status == "joining"
+    })
+    .await;
+    wait_for_counter(&paced.join_calls, 1).await;
+    for index in 0..8 {
+        fixture.service.on_meeting_invited(synthetic_invite(
+            paced_account,
+            &format!("evt-paced-redelivery-{index}"),
+        ));
+    }
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if fixture
+                .db
+                .count_meeting_invite_keys(&paced_joining.id)
+                .expect("paced invite keys")
+                == 9
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("all paced nudges admitted");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(
+        paced.join_calls.load(Ordering::Acquire),
+        1,
+        "same-generation admission nudges must not cancel or hot-loop join"
+    );
+    assert_eq!(
+        fixture.service.abort_meeting(&paced_joining.id).await,
+        AbortMeetingOutcome::Aborting
+    );
+
+    let replacement_account = "hanging-join-replacement-account";
+    let stale = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993777",
+        "ou_bot_stale",
+    ));
+    stale.hang_join.store(true, Ordering::Release);
+    fixture
+        .service
+        .register_client(replacement_account, stale.clone());
+    fixture.service.on_meeting_invited(synthetic_invite(
+        replacement_account,
+        "evt-hanging-replacement",
+    ));
+    wait_for_counter(&stale.join_calls, 1).await;
+    let replacement = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993888",
+        "ou_bot_replacement",
+    ));
+    fixture
+        .service
+        .register_client(replacement_account, replacement.clone());
+    let live = wait_for_record(&fixture.db, |record| {
+        record.account_id == replacement_account && record.status == "live"
+    })
+    .await;
+    assert_eq!(live.feishu_meeting_id, "9007199254740993888");
+    assert_eq!(replacement.join_calls.load(Ordering::Acquire), 1);
+
+    let deadline_account = "hanging-join-deadline-account";
+    let deadline_client = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993999",
+        "ou_bot_hanging_deadline",
+    ));
+    deadline_client.hang_join.store(true, Ordering::Release);
+    fixture
+        .service
+        .register_client(deadline_account, deadline_client.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(deadline_account, "evt-hanging-deadline"));
+    wait_for_counter(&deadline_client.join_calls, 1).await;
+    let aborted = wait_for_record(&fixture.db, |record| {
+        record.account_id == deadline_account && record.status == "aborted"
+    })
+    .await;
+    assert_eq!(aborted.status_detail, "join deadline exceeded");
+}
+
+#[tokio::test]
+async fn platform_identity_error_converges_join_and_not_in_meeting_aborts_calls() {
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(50));
+
+    let identity_account = "identity-error-account";
+    let identity_client = Arc::new(FakeMeetingClient::failing(
+        MeetingApiError::Other {
+            code: 20002,
+            message: "synthetic already joined".to_owned(),
+            meeting_id: Some("9007199254740994001".to_owned()),
+        },
+        "ou_bot_identity",
+    ));
+    fixture
+        .service
+        .register_client(identity_account, identity_client);
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(identity_account, "evt-identity-success"));
+    let live = wait_for_record(&fixture.db, |record| {
+        record.account_id == identity_account && record.status == "live"
+    })
+    .await;
+    assert_eq!(live.feishu_meeting_id, "9007199254740994001");
+
+    let join_10005_account = "join-10005-account";
+    let join_10005 = Arc::new(FakeMeetingClient::failing(
+        MeetingApiError::NotInMeeting,
+        "ou_bot_join_10005",
+    ));
+    fixture
+        .service
+        .register_client(join_10005_account, join_10005);
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(join_10005_account, "evt-join-10005"));
+    let aborted = wait_for_record(&fixture.db, |record| {
+        record.account_id == join_10005_account && record.status == "aborted"
+    })
+    .await;
+    assert_eq!(aborted.status_detail, "platform reports bot not in meeting");
+
+    let leave_10005_account = "leave-10005-account";
+    let mut leave_10005_client =
+        FakeMeetingClient::successful("9007199254740994002", "ou_bot_leave_10005");
+    leave_10005_client.leave_result = Err(MeetingApiError::NotInMeeting);
+    let leave_10005_client = Arc::new(leave_10005_client);
+    fixture
+        .service
+        .register_client(leave_10005_account, leave_10005_client.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(leave_10005_account, "evt-leave-10005"));
+    let live = wait_for_record(&fixture.db, |record| {
+        record.account_id == leave_10005_account && record.status == "live"
+    })
+    .await;
+    assert_eq!(
+        fixture.service.abort_meeting(&live.id).await,
+        AbortMeetingOutcome::Aborting
+    );
+    wait_for_record(&fixture.db, |record| {
+        record.id == live.id && record.status == "aborted"
+    })
+    .await;
+    assert_eq!(leave_10005_client.leave_calls.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn abort_domain_answers_duplicates_before_one_bounded_leave_finishes() {
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(80));
+    let account_id = "abort-domain-account";
+    let client = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993333",
+        "ou_bot_abort",
+    ));
+    client.hang_leave.store(true, Ordering::Release);
+    fixture.service.register_client(account_id, client.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-abort-domain"));
+    let live = wait_for_record(&fixture.db, |record| record.status == "live").await;
+
+    let started = Instant::now();
+    let first = tokio::time::timeout(
+        Duration::from_millis(150),
+        fixture.service.abort_meeting(&live.id),
+    )
+    .await
+    .expect("abort response precedes leave timeout");
+    assert_eq!(first, AbortMeetingOutcome::Aborting);
+    assert!(started.elapsed() < Duration::from_millis(300));
+
+    let mut duplicates = JoinSet::new();
+    for _ in 0..8 {
+        let service = fixture.service.clone();
+        let id = live.id.clone();
+        duplicates.spawn(async move { service.abort_meeting(&id).await });
+    }
+    while let Some(outcome) = duplicates.join_next().await {
+        assert_eq!(
+            outcome.expect("duplicate task"),
+            AbortMeetingOutcome::Aborting
+        );
+    }
+    wait_for_record(&fixture.db, |record| {
+        record.id == live.id && record.status == "aborted"
+    })
+    .await;
+    assert_eq!(client.leave_calls.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn registry_replacement_resets_failure_and_no_client_deadline_recovers_or_aborts() {
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(60));
+
+    let boot_gap = create_meeting(&fixture.db, MeetingStatus::Live, "Boot gap", "");
+    fixture
+        .db
+        .record_meeting_failure(&boot_gap.id, "auth")
+        .expect("persist pre-register failure");
+    fixture.service.register_client(
+        &boot_gap.account_id,
+        Arc::new(FakeMeetingClient::successful(
+            "9007199254740993443",
+            "ou_bot_boot_gap",
+        )),
+    );
+    let reset_after_boot_gap = fixture
+        .db
+        .get_meeting(&boot_gap.id)
+        .expect("record")
+        .expect("boot-gap meeting");
+    assert_eq!(reset_after_boot_gap.failure_kind, "");
+    assert!(reset_after_boot_gap.failure_since.is_none());
+
+    let account_id = "registry-account";
+    let failing = Arc::new(FakeMeetingClient::failing(
+        MeetingApiError::RetriableTransport("synthetic transport".to_owned()),
+        "ou_bot_registry",
+    ));
+    fixture.service.register_client(account_id, failing.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-registry"));
+    let failed = wait_for_record(&fixture.db, |record| {
+        record.account_id == account_id && record.failure_kind == "transport"
+    })
+    .await;
+    fixture.service.unregister_client(account_id);
+    let no_client = fixture
+        .db
+        .get_meeting(&failed.id)
+        .expect("record")
+        .expect("meeting");
+    assert_eq!(fixture.service.stalled_reason(&no_client), "no_client");
+    assert_eq!(no_client.failure_kind, "");
+    assert!(no_client.failure_since.is_none());
+
+    let replacement = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993444",
+        "ou_bot_registry",
+    ));
+    fixture
+        .service
+        .register_client(account_id, replacement.clone());
+    let live = wait_for_record(&fixture.db, |record| {
+        record.id == failed.id && record.status == "live"
+    })
+    .await;
+    assert_eq!(live.failure_kind, "");
+    assert!(failing.join_calls.load(Ordering::Acquire) >= 1);
+    assert_eq!(replacement.join_calls.load(Ordering::Acquire), 1);
+
+    let no_client_account = "deadline-no-client-account";
+    fixture.service.on_meeting_invited(synthetic_invite(
+        no_client_account,
+        "evt-no-client-deadline",
+    ));
+    let aborted = wait_for_record(&fixture.db, |record| {
+        record.account_id == no_client_account && record.status == "aborted"
+    })
+    .await;
+    assert_eq!(aborted.status_detail, "join deadline exceeded");
+    assert!(aborted.feishu_meeting_id.is_empty());
+}
+
+#[tokio::test]
+async fn boot_resumes_every_persisted_intent_stage_without_remote_leave_replay() {
+    let fixture = Fixture::new(65_536);
+    let joining = create_meeting(&fixture.db, MeetingStatus::Joining, "Boot joining", "");
+    let aborting = create_meeting(
+        &fixture.db,
+        MeetingStatus::Aborting,
+        "Boot aborting",
+        "boot abort",
+    );
+    let finalizing_live = create_meeting(&fixture.db, MeetingStatus::Live, "Boot finalizing", "");
+    let now = chrono::Utc::now();
+    fixture
+        .db
+        .begin_meeting_finalizing(
+            &finalizing_live.id,
+            "push",
+            &now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            &(now - chrono::Duration::milliseconds(1))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        )
+        .expect("persist finalizing")
+        .expect("live CAS");
+
+    let recovered = Arc::new(
+        MeetingService::new(
+            fixture.db.clone(),
+            fixture.service.root().to_path_buf(),
+            65_536,
+        )
+        .expect("recovered service"),
+    );
+    start_test_ingestion(&recovered, Duration::from_millis(50));
+    for id in [&joining.id, &aborting.id] {
+        wait_for_record(&fixture.db, |record| {
+            record.id == *id && record.status == "aborted"
+        })
+        .await;
+    }
+    wait_for_record(&fixture.db, |record| {
+        record.id == finalizing_live.id && record.status == "finalized"
+    })
+    .await;
+    assert!(index::index_path(&recovered.entity_dir(&joining.id)).exists());
+    assert!(index::index_path(&recovered.entity_dir(&aborting.id)).exists());
+    assert!(index::index_path(&recovered.entity_dir(&finalizing_live.id)).exists());
+}
+
+#[test]
+fn activity_normalization_rejects_f64_ids_and_timestamps() {
+    let error = ingest::normalize_activity(
+        json!({
+            "meeting_activity_items": [{
+                "activity_event_type": "transcript_received",
+                "meeting": { "id": "meeting" },
+                "transcript_received_items": [{
+                    "text": "float precision is forbidden",
+                    "language": "en",
+                    "sentence_id": 9007199254740992.0,
+                    "start_time_ms": 1000.5,
+                    "end_time_ms": 2000,
+                    "speaker": { "id": { "open_id": "ou_test" } }
+                }]
+            }]
+        }),
+        None,
+    )
+    .expect_err("floating point identifiers and timestamps must be rejected");
+    assert!(error.to_string().contains("sentence_id") || error.to_string().contains("integer"));
 }

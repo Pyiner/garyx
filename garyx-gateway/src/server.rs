@@ -71,9 +71,11 @@ impl Gateway {
         on_listening();
 
         let shutdown_state = self.state.clone();
+        let meeting_shutdown_state = self.state.clone();
         let (drain_started_tx, drain_started_rx) = tokio::sync::oneshot::channel();
         let shutdown = async move {
             shutdown_signal().await;
+            meeting_shutdown_state.ops.meetings.shutdown_ingestion();
             on_shutdown_started();
             let _ = drain_started_tx.send(());
         };

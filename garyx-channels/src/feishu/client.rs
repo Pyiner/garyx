@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 use std::time::Duration;
 
 use reqwest::Client as HttpClient;
@@ -16,6 +16,7 @@ use super::{
     DEFAULT_TOKEN_LIFETIME, FEISHU_API_BASE, FeishuError, LARK_API_BASE, TOKEN_REFRESH_MARGIN,
     WS_RECONNECT_DELAY, extract_message_text,
 };
+use crate::meeting_sink::{JoinedMeeting, MeetingApiError, MeetingPlatformClient};
 
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
@@ -176,6 +177,101 @@ impl FeishuClient {
             FeishuDomain::Lark => LARK_API_BASE,
             FeishuDomain::Feishu => FEISHU_API_BASE,
         }
+    }
+
+    async fn meeting_post(&self, path: &str, body: Value) -> Result<Value, MeetingApiError> {
+        let token = self.get_access_token().await.map_err(map_meeting_error)?;
+        let response = self
+            .http
+            .post(format!("{}{}", self.api_base(), path))
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| MeetingApiError::RetriableTransport(error.to_string()))?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| MeetingApiError::RetriableTransport(error.to_string()))?;
+        let value: Value =
+            serde_json::from_slice(&bytes).map_err(|error| MeetingApiError::Other {
+                code: i64::from(status.as_u16()),
+                message: format!("invalid meeting API JSON response: {error}"),
+                meeting_id: None,
+            })?;
+        let code = value
+            .get("code")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| {
+                if status.is_success() {
+                    0
+                } else {
+                    i64::from(status.as_u16())
+                }
+            });
+        if code == 0 && status.is_success() {
+            return Ok(value);
+        }
+        let message = value
+            .get("msg")
+            .or_else(|| value.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown meeting API error")
+            .to_owned();
+        let meeting_id = nested_json_id(&value, &["data", "meeting", "id"])
+            .or_else(|| nested_json_id(&value, &["meeting", "id"]));
+        Err(classify_meeting_api_error(code, message, meeting_id))
+    }
+
+    pub(crate) async fn bots_join(
+        &self,
+        meeting_no: &str,
+        password: Option<&str>,
+    ) -> Result<JoinedMeeting, MeetingApiError> {
+        let meeting_no = meeting_no.trim();
+        if meeting_no.is_empty() {
+            return Err(MeetingApiError::Other {
+                code: -1,
+                message: "meeting_no must not be empty".to_owned(),
+                meeting_id: None,
+            });
+        }
+        let mut body = serde_json::json!({
+            "join_identify": { "meeting_no": meeting_no },
+            "join_type": 1,
+        });
+        if let Some(password) = password.map(str::trim).filter(|value| !value.is_empty()) {
+            body.as_object_mut()
+                .expect("join body is an object")
+                .insert("password".to_owned(), Value::String(password.to_owned()));
+        }
+        let value = self.meeting_post("/vc/v1/bots/join", body).await?;
+        let feishu_meeting_id = nested_json_id(&value, &["data", "meeting", "id"])
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| MeetingApiError::Other {
+                code: -1,
+                message: "empty meeting.id from bots/join".to_owned(),
+                meeting_id: None,
+            })?;
+        Ok(JoinedMeeting { feishu_meeting_id })
+    }
+
+    pub(crate) async fn bots_leave(&self, feishu_meeting_id: &str) -> Result<(), MeetingApiError> {
+        let meeting_id = feishu_meeting_id.trim();
+        if meeting_id.is_empty() {
+            return Err(MeetingApiError::Other {
+                code: -1,
+                message: "meeting_id must not be empty".to_owned(),
+                meeting_id: None,
+            });
+        }
+        self.meeting_post(
+            "/vc/v1/bots/leave",
+            serde_json::json!({ "meeting_id": meeting_id }),
+        )
+        .await?;
+        Ok(())
     }
 
     /// Obtain a tenant access token from Feishu Open API.
@@ -1074,6 +1170,94 @@ impl FeishuClient {
         }
 
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct FeishuMeetingPlatformClient {
+    client: FeishuClient,
+    bot_open_id: Arc<StdRwLock<String>>,
+}
+
+impl FeishuMeetingPlatformClient {
+    pub(crate) fn new(client: FeishuClient) -> Self {
+        Self {
+            client,
+            bot_open_id: Arc::new(StdRwLock::new(String::new())),
+        }
+    }
+
+    pub(crate) fn set_bot_open_id(&self, value: impl Into<String>) {
+        *self
+            .bot_open_id
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = value.into();
+    }
+}
+
+#[async_trait::async_trait]
+impl MeetingPlatformClient for FeishuMeetingPlatformClient {
+    async fn join(
+        &self,
+        meeting_no: &str,
+        password: Option<&str>,
+    ) -> Result<JoinedMeeting, MeetingApiError> {
+        self.client.bots_join(meeting_no, password).await
+    }
+
+    async fn leave(&self, feishu_meeting_id: &str) -> Result<(), MeetingApiError> {
+        self.client.bots_leave(feishu_meeting_id).await
+    }
+
+    fn bot_open_id(&self) -> Option<String> {
+        let value = self
+            .bot_open_id
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        (!value.is_empty()).then_some(value)
+    }
+}
+
+fn map_meeting_error(error: FeishuError) -> MeetingApiError {
+    match error {
+        FeishuError::Http(message) | FeishuError::WebSocket(message) => {
+            MeetingApiError::RetriableTransport(message)
+        }
+        FeishuError::Api { code, msg } => classify_meeting_api_error(code, msg, None),
+    }
+}
+
+fn classify_meeting_api_error(
+    code: i64,
+    message: String,
+    meeting_id: Option<String>,
+) -> MeetingApiError {
+    if code == 10005 {
+        MeetingApiError::NotInMeeting
+    } else if matches!(
+        code,
+        99991661 | 99991663 | 99991664 | 99991668 | 99991671 | 99991672 | 99991679 | 99991680
+    ) {
+        MeetingApiError::AuthFailed { code, message }
+    } else {
+        MeetingApiError::Other {
+            code,
+            message,
+            meeting_id,
+        }
+    }
+}
+
+fn nested_json_id(value: &Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    match current {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) if value.is_i64() || value.is_u64() => Some(value.to_string()),
+        _ => None,
     }
 }
 

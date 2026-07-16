@@ -2,6 +2,7 @@
 
 use super::ws::FeishuRuntimeContext;
 use super::*;
+use serde_json::json;
 
 async fn dispatch_im_message_event(
     account_id: &str,
@@ -15,6 +16,7 @@ async fn dispatch_im_message_event(
 ) {
     let dispatcher: Arc<dyn crate::dispatcher::ChannelDispatcher> =
         Arc::new(crate::dispatcher::ChannelDispatcherImpl::new());
+    let meeting_sink = crate::meeting_sink::noop_meeting_event_sink();
     let runtime = FeishuRuntimeContext::new(
         account_id,
         router,
@@ -23,6 +25,7 @@ async fn dispatch_im_message_event(
         client,
         account,
         bot_open_id,
+        &meeting_sink,
     );
     super::ws::handle_im_message_event(event, runtime).await;
 }
@@ -187,6 +190,98 @@ fn test_parse_event_with_minimal_fields() {
     let envelope: FeishuEventEnvelope = serde_json::from_str(json).unwrap();
     let event: ImMessageReceiveEvent = serde_json::from_value(envelope.event.unwrap()).unwrap();
     assert_eq!(event.message.as_ref().unwrap().chat_id, "oc_test");
+}
+
+#[test]
+fn meeting_event_integer_fields_reject_floating_point_values() {
+    let result = serde_json::from_value::<MeetingInvitedEvent>(json!({
+        "meeting": { "id": 9007199254740992.0, "meeting_no": "123456789" },
+        "bot": { "id": "bot" },
+        "inviter": { "id": "inviter" }
+    }));
+    assert!(result.is_err(), "meeting ids must never pass through f64");
+}
+
+#[tokio::test]
+async fn meeting_api_join_leave_use_pinned_body_and_preserve_integer_identity() {
+    use wiremock::matchers::{body_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/vc/v1/bots/join"))
+        .and(body_json(json!({
+            "join_identify": { "meeting_no": "123456789" },
+            "join_type": 1,
+            "password": "synthetic-password"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "code": 0,
+            "data": { "meeting": { "id": 9007199254740993123u64 } }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/vc/v1/bots/leave"))
+        .and(body_json(json!({ "meeting_id": "9007199254740993123" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "code": 0 })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = FeishuClient {
+        app_id: "test_app".to_owned(),
+        app_secret: "test_secret".to_owned(),
+        domain: FeishuDomain::Feishu,
+        http: HttpClient::new(),
+        token_state: Arc::new(RwLock::new(Some((
+            "synthetic-token".to_owned(),
+            Instant::now() + Duration::from_secs(3600),
+        )))),
+        refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+        api_base_override: Some(server.uri()),
+    };
+    let joined = client
+        .bots_join("123456789", Some("synthetic-password"))
+        .await
+        .expect("join");
+    assert_eq!(joined.feishu_meeting_id, "9007199254740993123");
+    client
+        .bots_leave(&joined.feishu_meeting_id)
+        .await
+        .expect("leave");
+}
+
+#[tokio::test]
+async fn meeting_api_maps_not_in_meeting_without_float_fallback() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/vc/v1/bots/join"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "code": 10005,
+            "msg": "synthetic not in meeting"
+        })))
+        .mount(&server)
+        .await;
+    let client = FeishuClient {
+        app_id: "test_app".to_owned(),
+        app_secret: "test_secret".to_owned(),
+        domain: FeishuDomain::Feishu,
+        http: HttpClient::new(),
+        token_state: Arc::new(RwLock::new(Some((
+            "synthetic-token".to_owned(),
+            Instant::now() + Duration::from_secs(3600),
+        )))),
+        refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+        api_base_override: Some(server.uri()),
+    };
+    assert_eq!(
+        client.bots_join("123456789", None).await,
+        Err(crate::meeting_sink::MeetingApiError::NotInMeeting)
+    );
 }
 
 // -- Card content building --
@@ -599,6 +694,154 @@ mod dispatch_tests {
         (bridge, provider)
     }
 
+    #[derive(Default)]
+    struct RecordingMeetingSink {
+        invites: std::sync::Mutex<Vec<crate::meeting_sink::MeetingInvite>>,
+        activities: std::sync::Mutex<Vec<(String, String, Value)>>,
+        ended: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl crate::meeting_sink::MeetingEventSink for RecordingMeetingSink {
+        fn register_client(
+            &self,
+            _account_id: &str,
+            _client: Arc<dyn crate::meeting_sink::MeetingPlatformClient>,
+        ) {
+        }
+
+        fn unregister_client(&self, _account_id: &str) {}
+
+        fn on_meeting_invited(&self, invite: crate::meeting_sink::MeetingInvite) {
+            self.invites.lock().unwrap().push(invite);
+        }
+
+        fn on_meeting_activity(&self, account_id: &str, event_id: &str, payload: Value) {
+            self.activities.lock().unwrap().push((
+                account_id.to_owned(),
+                event_id.to_owned(),
+                payload,
+            ));
+        }
+
+        fn on_meeting_ended(&self, account_id: &str, feishu_meeting_id: &str) {
+            self.ended
+                .lock()
+                .unwrap()
+                .push((account_id.to_owned(), feishu_meeting_id.to_owned()));
+        }
+    }
+
+    #[tokio::test]
+    async fn meeting_push_events_bypass_memory_dedup_preserve_integers_and_reject_raw_path() {
+        let router = make_router();
+        let (bridge, _) = make_bridge().await;
+        let dispatcher: Arc<dyn crate::dispatcher::ChannelDispatcher> =
+            Arc::new(crate::dispatcher::ChannelDispatcherImpl::new());
+        let client = FeishuClient {
+            app_id: "test_app".to_owned(),
+            app_secret: "test_secret".to_owned(),
+            domain: FeishuDomain::Feishu,
+            http: HttpClient::new(),
+            token_state: Arc::new(RwLock::new(None)),
+            refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+            api_base_override: Some("http://127.0.0.1:1".to_owned()),
+        };
+        let account = FeishuAccount {
+            app_id: "test_app".to_owned(),
+            app_secret: "test_secret".to_owned(),
+            enabled: true,
+            domain: FeishuDomain::Feishu,
+            name: None,
+            agent_id: None,
+            workspace_dir: None,
+            owner_target: None,
+            require_mention: true,
+            topic_session_mode: TopicSessionMode::Disabled,
+            meeting_entities: true,
+        };
+        let sink = Arc::new(RecordingMeetingSink::default());
+        let meeting_sink: Arc<dyn crate::meeting_sink::MeetingEventSink> = sink.clone();
+        let runtime = FeishuRuntimeContext::new(
+            "meeting-account",
+            &router,
+            &bridge,
+            &dispatcher,
+            &client,
+            &account,
+            "ou_bot_1000000001",
+            &meeting_sink,
+        );
+
+        let invite = serde_json::to_string(&json!({
+            "schema": "2.0",
+            "header": {
+                "event_id": "evt-shared-dedup-key",
+                "event_type": "vc.bot.meeting_invited_v1"
+            },
+            "event": {
+                "meeting": {
+                    "id": 9007199254740993123u64,
+                    "meeting_no": 123456789,
+                    "topic": "Synthetic meeting"
+                },
+                "bot": { "id": 9007199254740993001u64 },
+                "inviter": { "id": 9007199254740993002u64 }
+            }
+        }))
+        .unwrap();
+        super::super::ws::handle_ws_event_payload(&invite, runtime.clone()).await;
+        super::super::ws::handle_ws_event_payload(&invite, runtime.clone()).await;
+        let invites = sink.invites.lock().unwrap();
+        assert_eq!(invites.len(), 2, "durable admission owns invitation dedup");
+        assert_eq!(invites[0].meeting_reference_id, "9007199254740993123");
+        assert_eq!(invites[0].meeting_no, "123456789");
+        assert_eq!(invites[0].bot_id, "9007199254740993001");
+        drop(invites);
+
+        let activity = serde_json::to_string(&json!({
+            "schema": "2.0",
+            "header": {
+                "event_id": "evt-activity-redelivery",
+                "event_type": "vc.bot.meeting_activity_v1"
+            },
+            "event": {
+                "meeting_activity_items": [{
+                    "activity_event_type": "participant_left",
+                    "meeting": { "id": 9007199254740993123u64 },
+                    "participant_left_items": []
+                }]
+            }
+        }))
+        .unwrap();
+        super::super::ws::handle_ws_event_payload(&activity, runtime.clone()).await;
+        super::super::ws::handle_ws_event_payload(&activity, runtime.clone()).await;
+        assert_eq!(sink.activities.lock().unwrap().len(), 2);
+
+        let ended = serde_json::to_string(&json!({
+            "schema": "2.0",
+            "header": {
+                "event_id": "evt-shared-dedup-key",
+                "event_type": "vc.bot.meeting_ended_v1"
+            },
+            "event": { "meeting": { "id": 9007199254740993123u64 } }
+        }))
+        .unwrap();
+        super::super::ws::handle_ws_event_payload(&ended, runtime.clone()).await;
+        assert_eq!(
+            sink.ended.lock().unwrap().as_slice(),
+            &[(
+                "meeting-account".to_owned(),
+                "9007199254740993123".to_owned()
+            )]
+        );
+        super::super::ws::handle_ws_event_payload_raw_text(&ended, runtime).await;
+        assert_eq!(
+            sink.ended.lock().unwrap().len(),
+            1,
+            "raw-text meeting carriage is a rollout halt, never silently processed"
+        );
+    }
+
     async fn admit_test_run(request: garyx_models::provider::AgentRunRequest) -> AdmittedRun {
         let thread_id = request.thread_id.clone();
         let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
@@ -802,6 +1045,7 @@ mod dispatch_tests {
             owner_target: None,
             require_mention: true,
             topic_session_mode: TopicSessionMode::Disabled,
+            meeting_entities: true,
         };
 
         let client = FeishuClient {
@@ -896,6 +1140,7 @@ mod dispatch_tests {
             owner_target: None,
             require_mention: true,
             topic_session_mode: TopicSessionMode::Disabled,
+            meeting_entities: true,
         };
 
         let client = FeishuClient {
@@ -958,6 +1203,7 @@ mod dispatch_tests {
             owner_target: None,
             require_mention: true,
             topic_session_mode: TopicSessionMode::Disabled,
+            meeting_entities: true,
         };
 
         let client = FeishuClient {
@@ -1011,6 +1257,7 @@ mod dispatch_tests {
             owner_target: None,
             require_mention: false,
             topic_session_mode: TopicSessionMode::Disabled,
+            meeting_entities: true,
         };
         let client = FeishuClient {
             app_id: "test_app".to_owned(),
@@ -1076,6 +1323,7 @@ mod dispatch_tests {
             owner_target: None,
             require_mention: false,
             topic_session_mode: TopicSessionMode::Disabled,
+            meeting_entities: true,
         };
         let client = FeishuClient {
             app_id: "test_app".to_owned(),
@@ -1127,6 +1375,7 @@ mod dispatch_tests {
             owner_target: None,
             require_mention: false,
             topic_session_mode: TopicSessionMode::Disabled,
+            meeting_entities: true,
         };
         let client = FeishuClient {
             app_id: "test_app".to_owned(),
@@ -1888,6 +2137,7 @@ mod e2e_tests {
             owner_target: None,
             require_mention: false,
             topic_session_mode: TopicSessionMode::Disabled,
+            meeting_entities: true,
         }
     }
 
@@ -5020,6 +5270,7 @@ mod policy_tests {
             owner_target: None,
             require_mention: true,
             topic_session_mode: TopicSessionMode::Disabled,
+            meeting_entities: true,
         }
     }
 

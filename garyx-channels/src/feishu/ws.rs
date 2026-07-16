@@ -24,8 +24,9 @@ use super::mentions::{build_mention_prefix, extract_mention_targets, is_mention_
 use super::message::{extract_image_keys, merge_stream_text};
 use super::pbbp2::{self, Frame};
 use super::{
-    FeishuClient, FeishuError, FeishuEventEnvelope, FeishuResponseStreamState,
-    ImMessageReceiveEvent, MENTION_CONTEXT_LIMIT, PROCESSING_REACTION_EMOJI, SENDER_NAME_CACHE_TTL,
+    FeishuClient, FeishuError, FeishuEventEnvelope, FeishuMeetingPlatformClient,
+    FeishuResponseStreamState, ImMessageReceiveEvent, MENTION_CONTEXT_LIMIT, MeetingActivityEvent,
+    MeetingEndedEvent, MeetingInvitedEvent, PROCESSING_REACTION_EMOJI, SENDER_NAME_CACHE_TTL,
     TopicSessionMode, WS_MAX_RECONNECT_DELAY, WS_RECONNECT_DELAY, append_pending_history,
     build_card_content, clear_pending_history, extract_message_text, get_pending_history,
     is_duplicate_event, is_mentioned, notify_permission_error_if_needed,
@@ -34,6 +35,11 @@ use super::{
 };
 use crate::dispatcher::ChannelDispatcher;
 use crate::generated_images::{extract_image_generation_result, write_generated_image_temp};
+use crate::meeting_sink::{MeetingEventSink, MeetingInvite};
+
+const MEETING_INVITED_EVENT: &str = "vc.bot.meeting_invited_v1";
+const MEETING_ACTIVITY_EVENT: &str = "vc.bot.meeting_activity_v1";
+const MEETING_ENDED_EVENT: &str = "vc.bot.meeting_ended_v1";
 
 #[derive(Clone)]
 pub(super) struct FeishuRuntimeContext<'a> {
@@ -44,6 +50,7 @@ pub(super) struct FeishuRuntimeContext<'a> {
     pub(super) client: &'a FeishuClient,
     pub(super) account: &'a FeishuAccount,
     pub(super) bot_open_id: &'a str,
+    pub(super) meeting_sink: &'a Arc<dyn MeetingEventSink>,
 }
 
 impl<'a> FeishuRuntimeContext<'a> {
@@ -55,6 +62,7 @@ impl<'a> FeishuRuntimeContext<'a> {
         client: &'a FeishuClient,
         account: &'a FeishuAccount,
         bot_open_id: &'a str,
+        meeting_sink: &'a Arc<dyn MeetingEventSink>,
     ) -> Self {
         Self {
             account_id,
@@ -64,6 +72,7 @@ impl<'a> FeishuRuntimeContext<'a> {
             client,
             account,
             bot_open_id,
+            meeting_sink,
         }
     }
 }
@@ -742,6 +751,8 @@ pub(super) async fn ws_listen_loop(
     bridge: Arc<MultiProviderBridge>,
     dispatcher: Arc<dyn ChannelDispatcher>,
     _public_url: &str,
+    meeting_sink: Arc<dyn MeetingEventSink>,
+    meeting_client: FeishuMeetingPlatformClient,
 ) {
     let mut reconnect_delay = WS_RECONNECT_DELAY;
     let mut bot_open_id = String::new();
@@ -749,6 +760,7 @@ pub(super) async fn ws_listen_loop(
     match client.fetch_bot_open_id().await {
         Ok(Some(open_id)) => {
             bot_open_id = open_id;
+            meeting_client.set_bot_open_id(bot_open_id.clone());
             info!(
                 account_id = %account_id,
                 bot_open_id = %bot_open_id,
@@ -815,6 +827,7 @@ pub(super) async fn ws_listen_loop(
             client,
             account,
             &bot_open_id,
+            &meeting_sink,
         );
 
         match ws_connect_and_listen(&connect_info, &running, runtime).await {
@@ -942,7 +955,7 @@ async fn ws_connect_and_listen(
             }
             tokio_tungstenite::tungstenite::Message::Text(text) => {
                 // Fallback: some versions may send JSON text
-                handle_ws_event_payload(&text, runtime.clone()).await;
+                handle_ws_event_payload_on_path(&text, runtime.clone(), WsEventPath::RawText).await;
             }
             tokio_tungstenite::tungstenite::Message::Ping(data) => {
                 if let Err(e) = ws_write
@@ -964,7 +977,29 @@ async fn ws_connect_and_listen(
 }
 
 /// Parse an event JSON payload (either from protobuf frame payload or raw text).
-async fn handle_ws_event_payload(text: &str, runtime: FeishuRuntimeContext<'_>) {
+pub(super) async fn handle_ws_event_payload(text: &str, runtime: FeishuRuntimeContext<'_>) {
+    handle_ws_event_payload_on_path(text, runtime, WsEventPath::Protobuf).await;
+}
+
+#[cfg(test)]
+pub(super) async fn handle_ws_event_payload_raw_text(
+    text: &str,
+    runtime: FeishuRuntimeContext<'_>,
+) {
+    handle_ws_event_payload_on_path(text, runtime, WsEventPath::RawText).await;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WsEventPath {
+    Protobuf,
+    RawText,
+}
+
+async fn handle_ws_event_payload_on_path(
+    text: &str,
+    runtime: FeishuRuntimeContext<'_>,
+    path: WsEventPath,
+) {
     let envelope: FeishuEventEnvelope = match serde_json::from_str(text) {
         Ok(e) => e,
         Err(e) => {
@@ -983,7 +1018,26 @@ async fn handle_ws_event_payload(text: &str, runtime: FeishuRuntimeContext<'_>) 
         None => return,
     };
 
-    if !header.event_id.is_empty() && is_duplicate_event(&header.event_id) {
+    let event_type = header.event_type.as_str();
+    let is_meeting_event = matches!(
+        event_type,
+        MEETING_INVITED_EVENT | MEETING_ACTIVITY_EVENT | MEETING_ENDED_EVENT
+    );
+
+    if is_meeting_event && path == WsEventPath::RawText {
+        error!(
+            account_id = %runtime.account_id,
+            event_type,
+            event_id = %header.event_id,
+            "meeting event arrived on raw-text WebSocket fallback; capture rollout must stop until an ACK-capable protobuf path is verified"
+        );
+        return;
+    }
+
+    // Meeting delivery has its own durable event-id ledger. It must bypass the
+    // process-local message deduper so a redelivery can finish an interrupted
+    // batch commit.
+    if !is_meeting_event && !header.event_id.is_empty() && is_duplicate_event(&header.event_id) {
         debug!(
             account_id = %runtime.account_id,
             event_id = %header.event_id,
@@ -992,9 +1046,76 @@ async fn handle_ws_event_payload(text: &str, runtime: FeishuRuntimeContext<'_>) 
         return;
     }
 
-    let event_type = &header.event_type;
-
-    if event_type == "im.message.receive_v1" {
+    if event_type == MEETING_INVITED_EVENT {
+        let Some(event_value) = &envelope.event else {
+            return;
+        };
+        if header.event_id.is_empty() {
+            warn!(account_id = %runtime.account_id, "meeting invitation missing event_id");
+            return;
+        }
+        match serde_json::from_value::<MeetingInvitedEvent>(event_value.clone()) {
+            Ok(event) => {
+                let Some(meeting_no) = event.meeting.meeting_no.filter(|value| !value.is_empty())
+                else {
+                    warn!(account_id = %runtime.account_id, event_id = %header.event_id, "meeting invitation missing meeting_no");
+                    return;
+                };
+                runtime.meeting_sink.on_meeting_invited(MeetingInvite {
+                    account_id: runtime.account_id.to_owned(),
+                    event_id: header.event_id.clone(),
+                    meeting_reference_id: event.meeting.id,
+                    meeting_no,
+                    topic: event.meeting.topic,
+                    bot_id: event.bot.id,
+                    inviter_id: event.inviter.id,
+                });
+            }
+            Err(err) => warn!(
+                account_id = %runtime.account_id,
+                event_id = %header.event_id,
+                error = %err,
+                "failed to parse vc.bot.meeting_invited_v1 event"
+            ),
+        }
+    } else if event_type == MEETING_ACTIVITY_EVENT {
+        let Some(event_value) = &envelope.event else {
+            return;
+        };
+        if header.event_id.is_empty() {
+            warn!(account_id = %runtime.account_id, "meeting activity missing event_id");
+            return;
+        }
+        match serde_json::from_value::<MeetingActivityEvent>(event_value.clone()) {
+            Ok(_) => {
+                runtime.meeting_sink.on_meeting_activity(
+                    runtime.account_id,
+                    &header.event_id,
+                    event_value.clone(),
+                );
+            }
+            Err(err) => warn!(
+                account_id = %runtime.account_id,
+                event_id = %header.event_id,
+                error = %err,
+                "failed to parse vc.bot.meeting_activity_v1 event"
+            ),
+        }
+    } else if event_type == MEETING_ENDED_EVENT {
+        let Some(event_value) = &envelope.event else {
+            return;
+        };
+        match serde_json::from_value::<MeetingEndedEvent>(event_value.clone()) {
+            Ok(event) => runtime
+                .meeting_sink
+                .on_meeting_ended(runtime.account_id, &event.meeting.id),
+            Err(err) => warn!(
+                account_id = %runtime.account_id,
+                error = %err,
+                "failed to parse vc.bot.meeting_ended_v1 event"
+            ),
+        }
+    } else if event_type == "im.message.receive_v1" {
         if let Some(event_value) = &envelope.event {
             match serde_json::from_value::<ImMessageReceiveEvent>(event_value.clone()) {
                 Ok(event) => {
@@ -1012,7 +1133,7 @@ async fn handle_ws_event_payload(text: &str, runtime: FeishuRuntimeContext<'_>) 
     } else {
         debug!(
             account_id = %runtime.account_id,
-            event_type = %event_type,
+            event_type,
             "Ignoring unhandled Feishu event type"
         );
     }

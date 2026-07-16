@@ -224,6 +224,11 @@ pub fn feishu_schema() -> Value {
                 "enum": ["disabled", "enabled"],
                 "default": "disabled",
                 "description": "When enabled, group replies are scoped by Feishu topic/thread instead of the whole group."
+            },
+            "meeting_entities": {
+                "type": "boolean",
+                "default": true,
+                "description": "Capture invited Feishu meetings as durable meeting entities."
             }
         }
     })

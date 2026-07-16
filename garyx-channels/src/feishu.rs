@@ -32,6 +32,7 @@ use garyx_router::MessageRouter;
 
 use crate::channel_trait::{Channel, ChannelError};
 use crate::dispatcher::ChannelDispatcher;
+use crate::meeting_sink::{MeetingEventSink, MeetingPlatformClient};
 
 mod auth_flow_executor;
 mod client;
@@ -44,7 +45,7 @@ mod policy;
 mod types;
 mod ws;
 
-pub(crate) use client::FeishuClient;
+pub(crate) use client::{FeishuClient, FeishuMeetingPlatformClient};
 use types::{FeishuResponseStreamState, MentionTarget};
 
 pub use auth_flow_executor::FeishuAuthExecutor;
@@ -61,8 +62,9 @@ pub use policy::{
     requires_group_mention, resolve_topic_session_mode,
 };
 pub use types::{
-    FeishuEventEnvelope, FeishuEventHeader, ImMention, ImMentionId, ImMessage,
-    ImMessageReceiveEvent, ImSender, ImSenderId,
+    FeishuEventEnvelope, FeishuEventHeader, FeishuMeetingActor, FeishuMeetingRef, ImMention,
+    ImMentionId, ImMessage, ImMessageReceiveEvent, ImSender, ImSenderId, MeetingActivityEvent,
+    MeetingEndedEvent, MeetingInvitedEvent,
 };
 pub(crate) use ws::{FeishuStreamingCallbackConfig, build_feishu_response_callback};
 
@@ -357,6 +359,8 @@ async fn notify_permission_error_if_needed(
 pub struct FeishuChannel {
     config: FeishuConfig,
     clients: HashMap<String, FeishuClient>,
+    meeting_clients: HashMap<String, FeishuMeetingPlatformClient>,
+    meeting_sink: Arc<dyn MeetingEventSink>,
     running: Arc<AtomicBool>,
     ws_tasks: Vec<JoinHandle<()>>,
     router: Arc<Mutex<MessageRouter>>,
@@ -373,17 +377,24 @@ impl FeishuChannel {
         bridge: Arc<MultiProviderBridge>,
         dispatcher: Arc<dyn ChannelDispatcher>,
         public_url: String,
+        meeting_sink: Arc<dyn MeetingEventSink>,
     ) -> Self {
         let mut clients = HashMap::new();
+        let mut meeting_clients = HashMap::new();
         for (id, account) in &config.accounts {
             if account.enabled {
-                clients.insert(id.clone(), FeishuClient::new(account));
+                let client = FeishuClient::new(account);
+                meeting_clients
+                    .insert(id.clone(), FeishuMeetingPlatformClient::new(client.clone()));
+                clients.insert(id.clone(), client);
             }
         }
 
         Self {
             config,
             clients,
+            meeting_clients,
+            meeting_sink,
             running: Arc::new(AtomicBool::new(false)),
             ws_tasks: Vec::new(),
             router,
@@ -420,8 +431,21 @@ impl FeishuChannel {
                 );
                 continue;
             };
+            let Some(meeting_client) = self.meeting_clients.get(account_id).cloned() else {
+                warn!(account_id = %account_id, "missing Feishu meeting client adapter");
+                continue;
+            };
+            if account_cfg.meeting_entities {
+                let client: Arc<dyn MeetingPlatformClient> = Arc::new(meeting_client.clone());
+                self.meeting_sink.register_client(account_id, client);
+            }
 
             let public_url = self.public_url.clone();
+            let meeting_sink = if account_cfg.meeting_entities {
+                self.meeting_sink.clone()
+            } else {
+                crate::meeting_sink::noop_meeting_event_sink()
+            };
             let handle = tokio::spawn(async move {
                 ws_listen_loop(
                     &aid,
@@ -432,6 +456,8 @@ impl FeishuChannel {
                     bridge,
                     dispatcher,
                     &public_url,
+                    meeting_sink,
+                    meeting_client,
                 )
                 .await;
             });
@@ -444,6 +470,12 @@ impl FeishuChannel {
     /// Stop all WebSocket listeners and clean up.
     async fn stop_inner(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+
+        for (account_id, account) in &self.config.accounts {
+            if account.enabled && account.meeting_entities {
+                self.meeting_sink.unregister_client(account_id);
+            }
+        }
 
         for handle in self.ws_tasks.drain(..) {
             handle.abort();
@@ -545,9 +577,20 @@ async fn ws_listen_loop(
     bridge: Arc<MultiProviderBridge>,
     dispatcher: Arc<dyn ChannelDispatcher>,
     public_url: &str,
+    meeting_sink: Arc<dyn MeetingEventSink>,
+    meeting_client: FeishuMeetingPlatformClient,
 ) {
     ws::ws_listen_loop(
-        account_id, client, account, running, router, bridge, dispatcher, public_url,
+        account_id,
+        client,
+        account,
+        running,
+        router,
+        bridge,
+        dispatcher,
+        public_url,
+        meeting_sink,
+        meeting_client,
     )
     .await;
 }

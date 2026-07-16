@@ -14,7 +14,6 @@ CREATE TABLE IF NOT EXISTS meetings (
   meeting_no           TEXT NOT NULL,
   feishu_meeting_id    TEXT NOT NULL DEFAULT '',
   invite_event_id      TEXT NOT NULL,
-  call_id              TEXT NOT NULL DEFAULT '',
   topic                TEXT NOT NULL DEFAULT '',        -- normalized: ≤256 bytes, UTF-8 boundary
   invited_by           TEXT NOT NULL DEFAULT '',        -- ≤128 bytes
   status               TEXT NOT NULL CHECK (status IN
@@ -29,10 +28,9 @@ CREATE TABLE IF NOT EXISTS meetings (
   log_epoch            INTEGER NOT NULL DEFAULT 0 CHECK (log_epoch >= 0),
   cache_generation     INTEGER NOT NULL DEFAULT 0 CHECK (cache_generation >= 0),
   end_source           TEXT NOT NULL DEFAULT '' CHECK (end_source IN
-    ('','push','poll_ended','grace_expired')),
+    ('','push','participant_left')),
   join_deadline_at     TEXT NOT NULL,
   grace_deadline_at    TEXT,
-  poll_cursor          TEXT NOT NULL DEFAULT '',        -- cache; log ckpt chain is truth
   closed_segment_count INTEGER NOT NULL DEFAULT 0 CHECK (closed_segment_count >= 0),
   byte_size            INTEGER NOT NULL DEFAULT 0 CHECK (byte_size >= 0),
   started_at           TEXT NOT NULL,
@@ -79,10 +77,10 @@ CREATE TABLE IF NOT EXISTS meeting_read_cursors (
 "#;
 
 const MEETING_COLUMNS: &str = "
-    id, account_id, meeting_no, feishu_meeting_id, invite_event_id, call_id,
+    id, account_id, meeting_no, feishu_meeting_id, invite_event_id,
     topic, invited_by, status, status_detail, content_state, content_lost_at,
     failure_kind, failure_since, log_epoch, cache_generation, end_source,
-    join_deadline_at, grace_deadline_at, poll_cursor, closed_segment_count,
+    join_deadline_at, grace_deadline_at, closed_segment_count,
     byte_size, started_at, ended_at, finalized_at, created_at, updated_at";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,7 +136,6 @@ pub struct MeetingRecord {
     pub meeting_no: String,
     pub feishu_meeting_id: String,
     pub invite_event_id: String,
-    pub call_id: String,
     pub topic: String,
     pub invited_by: String,
     pub status: String,
@@ -152,7 +149,6 @@ pub struct MeetingRecord {
     pub end_source: String,
     pub join_deadline_at: String,
     pub grace_deadline_at: Option<String>,
-    pub poll_cursor: String,
     pub closed_segment_count: i64,
     pub byte_size: i64,
     pub started_at: String,
@@ -175,7 +171,6 @@ pub struct MeetingCreateDraft {
     pub meeting_no: String,
     pub feishu_meeting_id: String,
     pub invite_event_id: String,
-    pub call_id: String,
     pub topic: String,
     pub invited_by: String,
     pub status: MeetingStatus,
@@ -232,6 +227,23 @@ pub enum DeleteMeetingRowOutcome {
     NotTerminal,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeetingAdmissionDraft {
+    pub account_id: String,
+    pub meeting_no: String,
+    pub invite_event_id: String,
+    pub topic: String,
+    pub invited_by: String,
+    pub join_deadline_at: String,
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MeetingAdmissionOutcome {
+    Existing(MeetingRecord),
+    Created(MeetingRecord),
+}
+
 impl GaryxDbService {
     pub fn create_meeting(&self, draft: MeetingCreateDraft) -> GaryxDbResult<MeetingRecord> {
         let id = match draft.id.as_deref() {
@@ -242,7 +254,6 @@ impl GaryxDbService {
         let meeting_no = normalize_required("meeting_no", &draft.meeting_no)?;
         let invite_event_id = normalize_required("invite_event_id", &draft.invite_event_id)?;
         let feishu_meeting_id = draft.feishu_meeting_id.trim().to_owned();
-        let call_id = draft.call_id.trim().to_owned();
         let topic = truncate_utf8(draft.topic.trim(), 256);
         let invited_by = truncate_utf8(draft.invited_by.trim(), 128);
         let status_detail = truncate_utf8(draft.status_detail.trim(), 256);
@@ -260,12 +271,12 @@ impl GaryxDbService {
         tx.execute(
             "INSERT INTO meetings (
                 id, account_id, meeting_no, feishu_meeting_id, invite_event_id,
-                call_id, topic, invited_by, status, status_detail,
+                topic, invited_by, status, status_detail,
                 join_deadline_at, grace_deadline_at, started_at, ended_at,
                 finalized_at, created_at, updated_at
              ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12, ?13, ?14, ?15, ?16, ?16
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                ?10, ?11, ?12, ?13, ?14, ?15, ?15
              )",
             params![
                 id,
@@ -273,7 +284,6 @@ impl GaryxDbService {
                 meeting_no,
                 feishu_meeting_id,
                 invite_event_id,
-                call_id,
                 topic,
                 invited_by,
                 draft.status.as_str(),
@@ -296,6 +306,79 @@ impl GaryxDbService {
         })?;
         tx.commit()?;
         Ok(record)
+    }
+
+    /// Atomically records one invitation delivery and either links it to an
+    /// already-active entity or creates a new joining entity.
+    pub fn admit_meeting_invite(
+        &self,
+        draft: MeetingAdmissionDraft,
+    ) -> GaryxDbResult<MeetingAdmissionOutcome> {
+        let account_id = normalize_required("account_id", &draft.account_id)?;
+        let meeting_no = normalize_required("meeting_no", &draft.meeting_no)?;
+        let invite_event_id = normalize_required("invite_event_id", &draft.invite_event_id)?;
+        let topic = truncate_utf8(draft.topic.trim(), 256);
+        let invited_by = truncate_utf8(draft.invited_by.trim(), 128);
+        let join_deadline_at = normalize_timestamp("join_deadline_at", &draft.join_deadline_at)?;
+        let observed_at = normalize_timestamp("observed_at", &draft.observed_at)?;
+
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        if let Some(record) = meeting_by_invite_key_tx(&tx, &invite_event_id)? {
+            tx.commit()?;
+            return Ok(MeetingAdmissionOutcome::Existing(record));
+        }
+
+        let active_sql = format!(
+            "SELECT {MEETING_COLUMNS} FROM meetings
+             WHERE account_id = ?1 AND meeting_no = ?2
+               AND status IN ('joining','live','finalizing','aborting')
+             LIMIT 1"
+        );
+        if let Some(record) = tx
+            .query_row(
+                &active_sql,
+                params![account_id, meeting_no],
+                meeting_from_row,
+            )
+            .optional()?
+        {
+            tx.execute(
+                "INSERT INTO meeting_invite_keys (invite_event_id, meeting_id, observed_at)
+                 VALUES (?1, ?2, ?3)",
+                params![invite_event_id, record.id, observed_at],
+            )?;
+            tx.commit()?;
+            return Ok(MeetingAdmissionOutcome::Existing(record));
+        }
+
+        let id = Uuid::now_v7().to_string();
+        tx.execute(
+            "INSERT INTO meetings (
+                id, account_id, meeting_no, invite_event_id, topic, invited_by,
+                status, join_deadline_at, started_at, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'joining', ?7, ?8, ?8, ?8)",
+            params![
+                id,
+                account_id,
+                meeting_no,
+                invite_event_id,
+                topic,
+                invited_by,
+                join_deadline_at,
+                observed_at,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO meeting_invite_keys (invite_event_id, meeting_id, observed_at)
+             VALUES (?1, ?2, ?3)",
+            params![invite_event_id, id, observed_at],
+        )?;
+        let record = meeting_by_id_tx(&tx, &id)?.ok_or_else(|| {
+            GaryxDbError::Configuration("meeting admission insert produced no row".to_owned())
+        })?;
+        tx.commit()?;
+        Ok(MeetingAdmissionOutcome::Created(record))
     }
 
     pub fn insert_meeting_invite_key(
@@ -363,6 +446,46 @@ impl GaryxDbService {
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([], meeting_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn list_non_terminal_meetings_for_account(
+        &self,
+        account_id: &str,
+    ) -> GaryxDbResult<Vec<MeetingRecord>> {
+        let account_id = normalize_required("account_id", account_id)?;
+        let conn = self.read_conn()?;
+        let sql = format!(
+            "SELECT {MEETING_COLUMNS} FROM meetings
+             WHERE account_id = ?1
+               AND status IN ('joining','live','finalizing','aborting')
+             ORDER BY created_at DESC, id DESC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![account_id], meeting_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_active_meeting_by_feishu_id(
+        &self,
+        account_id: &str,
+        feishu_meeting_id: &str,
+    ) -> GaryxDbResult<Option<MeetingRecord>> {
+        let account_id = normalize_required("account_id", account_id)?;
+        let feishu_meeting_id = normalize_required("feishu_meeting_id", feishu_meeting_id)?;
+        let conn = self.read_conn()?;
+        let sql = format!(
+            "SELECT {MEETING_COLUMNS} FROM meetings
+             WHERE account_id = ?1 AND feishu_meeting_id = ?2
+               AND status IN ('joining','live','finalizing','aborting')
+             LIMIT 1"
+        );
+        conn.query_row(
+            &sql,
+            params![account_id, feishu_meeting_id],
+            meeting_from_row,
+        )
+        .optional()
+        .map_err(Into::into)
     }
 
     pub fn list_meetings_page(
@@ -449,12 +572,170 @@ impl GaryxDbService {
         meeting_by_id_conn(&conn, &id)
     }
 
+    pub fn mark_meeting_live(
+        &self,
+        id: &str,
+        feishu_meeting_id: &str,
+        topic: &str,
+    ) -> GaryxDbResult<Option<MeetingRecord>> {
+        let id = normalize_meeting_id(id)?;
+        let feishu_meeting_id = normalize_required("feishu_meeting_id", feishu_meeting_id)?;
+        let topic = truncate_utf8(topic.trim(), 256);
+        let conn = self.conn()?;
+        let updated = conn.execute(
+            "UPDATE meetings
+                SET status = 'live',
+                    feishu_meeting_id = ?2,
+                    topic = CASE WHEN ?3 = '' THEN topic ELSE ?3 END,
+                    failure_kind = '',
+                    failure_since = NULL,
+                    updated_at = ?4
+              WHERE id = ?1 AND status = 'joining'",
+            params![id, feishu_meeting_id, topic, now_string()],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        meeting_by_id_conn(&conn, &id)
+    }
+
+    pub fn begin_meeting_finalizing(
+        &self,
+        id: &str,
+        source: &str,
+        ended_at: &str,
+        grace_deadline_at: &str,
+    ) -> GaryxDbResult<Option<MeetingRecord>> {
+        let id = normalize_meeting_id(id)?;
+        let source = normalize_end_source(source)?;
+        if source.is_empty() {
+            return Err(GaryxDbError::BadRequest(
+                "finalizing requires an end source".to_owned(),
+            ));
+        }
+        let ended_at = normalize_timestamp("ended_at", ended_at)?;
+        let grace_deadline_at = normalize_timestamp("grace_deadline_at", grace_deadline_at)?;
+        let conn = self.conn()?;
+        let updated = conn.execute(
+            "UPDATE meetings
+                SET status = 'finalizing',
+                    end_source = ?2,
+                    ended_at = ?3,
+                    grace_deadline_at = ?4,
+                    updated_at = ?3
+              WHERE id = ?1 AND status = 'live'",
+            params![id, source, ended_at, grace_deadline_at],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        meeting_by_id_conn(&conn, &id)
+    }
+
+    pub fn begin_meeting_abort(
+        &self,
+        id: &str,
+        expected: MeetingStatus,
+        detail: &str,
+    ) -> GaryxDbResult<Option<MeetingRecord>> {
+        if !matches!(expected, MeetingStatus::Joining | MeetingStatus::Live) {
+            return Err(GaryxDbError::BadRequest(
+                "abort may start only from joining or live".to_owned(),
+            ));
+        }
+        self.transition_meeting_status(
+            id,
+            expected,
+            MeetingStatus::Aborting,
+            detail,
+            "",
+            None,
+            None,
+        )
+    }
+
+    pub fn complete_meeting_terminal(
+        &self,
+        id: &str,
+        expected: MeetingStatus,
+        terminal: MeetingStatus,
+        finalized_at: &str,
+    ) -> GaryxDbResult<Option<MeetingRecord>> {
+        if !matches!(
+            (expected, terminal),
+            (MeetingStatus::Finalizing, MeetingStatus::Finalized)
+                | (MeetingStatus::Aborting, MeetingStatus::Aborted)
+        ) {
+            return Err(GaryxDbError::BadRequest(
+                "invalid terminal meeting transition".to_owned(),
+            ));
+        }
+        let current = self
+            .get_meeting(id)?
+            .ok_or_else(|| GaryxDbError::BadRequest("meeting entity was deleted".to_owned()))?;
+        self.transition_meeting_status(
+            id,
+            expected,
+            terminal,
+            &current.status_detail,
+            &current.end_source,
+            current.ended_at.as_deref(),
+            Some(finalized_at),
+        )
+    }
+
+    pub fn record_meeting_failure(&self, id: &str, kind: &str) -> GaryxDbResult<()> {
+        let id = normalize_meeting_id(id)?;
+        if !matches!(kind, "auth" | "transport") {
+            return Err(GaryxDbError::BadRequest(
+                "failure kind must be auth or transport".to_owned(),
+            ));
+        }
+        let now = now_string();
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE meetings
+                SET failure_since = CASE WHEN failure_kind = ?2 THEN failure_since ELSE ?3 END,
+                    failure_kind = ?2,
+                    updated_at = ?3
+              WHERE id = ?1
+                AND status IN ('joining','live','finalizing')",
+            params![id, kind, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_meeting_failure(&self, id: &str) -> GaryxDbResult<()> {
+        let id = normalize_meeting_id(id)?;
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE meetings
+                SET failure_kind = '', failure_since = NULL, updated_at = ?2
+              WHERE id = ?1 AND (failure_kind <> '' OR failure_since IS NOT NULL)",
+            params![id, now_string()],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_meeting_failures_for_account(&self, account_id: &str) -> GaryxDbResult<()> {
+        let account_id = normalize_required("account_id", account_id)?;
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE meetings
+                SET failure_kind = '', failure_since = NULL, updated_at = ?2
+              WHERE account_id = ?1
+                AND status IN ('joining','live','finalizing')
+                AND (failure_kind <> '' OR failure_since IS NOT NULL)",
+            params![account_id, now_string()],
+        )?;
+        Ok(())
+    }
+
     pub fn update_meeting_cache_guarded(
         &self,
         id: &str,
         epoch: i64,
         generation: i64,
-        poll_cursor: &str,
         closed_segment_count: i64,
         byte_size: i64,
     ) -> GaryxDbResult<bool> {
@@ -463,19 +744,13 @@ impl GaryxDbService {
         validate_non_negative("cache_generation", generation)?;
         validate_non_negative("closed_segment_count", closed_segment_count)?;
         validate_non_negative("byte_size", byte_size)?;
-        if poll_cursor.len() > 1_024 {
-            return Err(GaryxDbError::BadRequest(
-                "poll_cursor exceeds 1024 bytes".to_owned(),
-            ));
-        }
         let conn = self.conn()?;
         let updated = conn.execute(
             "UPDATE meetings
-                SET poll_cursor = ?4,
-                    closed_segment_count = ?5,
-                    byte_size = ?6,
+                SET closed_segment_count = ?4,
+                    byte_size = ?5,
                     cache_generation = ?3,
-                    updated_at = ?7
+                    updated_at = ?6
               WHERE id = ?1
                 AND log_epoch = ?2
                 AND cache_generation < ?3",
@@ -483,7 +758,6 @@ impl GaryxDbService {
                 id,
                 epoch,
                 generation,
-                poll_cursor,
                 closed_segment_count,
                 byte_size,
                 now_string(),
@@ -516,7 +790,6 @@ impl GaryxDbService {
             "UPDATE meetings
                 SET log_epoch = ?3,
                     cache_generation = 0,
-                    poll_cursor = '',
                     closed_segment_count = 0,
                     byte_size = 0,
                     updated_at = ?4
@@ -816,6 +1089,19 @@ fn meeting_by_id_tx(tx: &Transaction<'_>, id: &str) -> GaryxDbResult<Option<Meet
         .map_err(Into::into)
 }
 
+fn meeting_by_invite_key_tx(
+    tx: &Transaction<'_>,
+    invite_event_id: &str,
+) -> GaryxDbResult<Option<MeetingRecord>> {
+    let sql = format!(
+        "SELECT {MEETING_COLUMNS} FROM meetings
+         WHERE id = (SELECT meeting_id FROM meeting_invite_keys WHERE invite_event_id = ?1)"
+    );
+    tx.query_row(&sql, params![invite_event_id], meeting_from_row)
+        .optional()
+        .map_err(Into::into)
+}
+
 fn meeting_epoch_tx(tx: &Transaction<'_>, id: &str) -> GaryxDbResult<Option<i64>> {
     tx.query_row(
         "SELECT log_epoch FROM meetings WHERE id = ?1",
@@ -833,28 +1119,26 @@ fn meeting_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MeetingRecord> 
         meeting_no: row.get(2)?,
         feishu_meeting_id: row.get(3)?,
         invite_event_id: row.get(4)?,
-        call_id: row.get(5)?,
-        topic: row.get(6)?,
-        invited_by: row.get(7)?,
-        status: row.get(8)?,
-        status_detail: row.get(9)?,
-        content_state: row.get(10)?,
-        content_lost_at: row.get(11)?,
-        failure_kind: row.get(12)?,
-        failure_since: row.get(13)?,
-        log_epoch: row.get(14)?,
-        cache_generation: row.get(15)?,
-        end_source: row.get(16)?,
-        join_deadline_at: row.get(17)?,
-        grace_deadline_at: row.get(18)?,
-        poll_cursor: row.get(19)?,
-        closed_segment_count: row.get(20)?,
-        byte_size: row.get(21)?,
-        started_at: row.get(22)?,
-        ended_at: row.get(23)?,
-        finalized_at: row.get(24)?,
-        created_at: row.get(25)?,
-        updated_at: row.get(26)?,
+        topic: row.get(5)?,
+        invited_by: row.get(6)?,
+        status: row.get(7)?,
+        status_detail: row.get(8)?,
+        content_state: row.get(9)?,
+        content_lost_at: row.get(10)?,
+        failure_kind: row.get(11)?,
+        failure_since: row.get(12)?,
+        log_epoch: row.get(13)?,
+        cache_generation: row.get(14)?,
+        end_source: row.get(15)?,
+        join_deadline_at: row.get(16)?,
+        grace_deadline_at: row.get(17)?,
+        closed_segment_count: row.get(18)?,
+        byte_size: row.get(19)?,
+        started_at: row.get(20)?,
+        ended_at: row.get(21)?,
+        finalized_at: row.get(22)?,
+        created_at: row.get(23)?,
+        updated_at: row.get(24)?,
     })
 }
 
@@ -957,9 +1241,9 @@ fn normalize_optional_timestamp(field: &str, value: Option<&str>) -> GaryxDbResu
 
 fn normalize_end_source(value: &str) -> GaryxDbResult<String> {
     match value.trim() {
-        "" | "push" | "poll_ended" | "grace_expired" => Ok(value.trim().to_owned()),
+        "" | "push" | "participant_left" => Ok(value.trim().to_owned()),
         _ => Err(GaryxDbError::BadRequest(
-            "end_source must be empty, push, poll_ended, or grace_expired".to_owned(),
+            "end_source must be empty, push, or participant_left".to_owned(),
         )),
     }
 }
@@ -1004,7 +1288,6 @@ mod tests {
             meeting_no: "123456789".to_owned(),
             feishu_meeting_id: String::new(),
             invite_event_id: invite.to_owned(),
-            call_id: String::new(),
             topic: "Synthetic meeting".to_owned(),
             invited_by: "Test User".to_owned(),
             status: MeetingStatus::Joining,
@@ -1015,6 +1298,18 @@ mod tests {
             ended_at: None,
             finalized_at: None,
             created_at: timestamp(0),
+        }
+    }
+
+    fn admission(event_id: &str) -> MeetingAdmissionDraft {
+        MeetingAdmissionDraft {
+            account_id: "admission-account".to_owned(),
+            meeting_no: "123456789".to_owned(),
+            invite_event_id: event_id.to_owned(),
+            topic: "Synthetic admission".to_owned(),
+            invited_by: "Test User".to_owned(),
+            join_deadline_at: timestamp(59),
+            observed_at: timestamp(0),
         }
     }
 
@@ -1189,7 +1484,7 @@ mod tests {
         let meeting = db
             .create_meeting(draft(None, "invite-epoch-race"))
             .expect("meeting");
-        db.update_meeting_cache_guarded(&meeting.id, 0, 1, "cursor", 1, 100)
+        db.update_meeting_cache_guarded(&meeting.id, 0, 1, 1, 100)
             .expect("cache");
         db.prepare_meeting_cursor(&meeting.id, "reader", 0)
             .expect("prepare")
@@ -1238,5 +1533,121 @@ mod tests {
             .create_meeting(duplicate)
             .expect("terminal rows release both partial unique indexes");
         assert_ne!(replacement.id, first.id);
+    }
+
+    #[test]
+    fn platform_failure_clock_resets_on_kind_change_and_abort_clears_the_pair() {
+        let db = GaryxDbService::memory().expect("db");
+        let meeting = db
+            .create_meeting(draft(None, "invite-failure-clock"))
+            .expect("meeting");
+
+        db.record_meeting_failure(&meeting.id, "transport")
+            .expect("transport failure");
+        let transport = db
+            .get_meeting(&meeting.id)
+            .expect("record")
+            .expect("meeting");
+        let transport_since = transport.failure_since.expect("transport clock");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+
+        db.record_meeting_failure(&meeting.id, "auth")
+            .expect("auth failure");
+        let auth = db
+            .get_meeting(&meeting.id)
+            .expect("record")
+            .expect("meeting");
+        assert_eq!(auth.failure_kind, "auth");
+        assert!(
+            auth.failure_since
+                .as_deref()
+                .is_some_and(|since| since > transport_since.as_str())
+        );
+
+        db.begin_meeting_abort(&meeting.id, MeetingStatus::Joining, "synthetic abort")
+            .expect("abort CAS")
+            .expect("aborting row");
+        let aborting = db
+            .get_meeting(&meeting.id)
+            .expect("record")
+            .expect("meeting");
+        assert_eq!(aborting.failure_kind, "");
+        assert!(aborting.failure_since.is_none());
+    }
+
+    #[test]
+    fn admission_transaction_links_distinct_active_keys_and_delete_resets_idempotency() {
+        let db = GaryxDbService::memory().expect("db");
+        let first = match db
+            .admit_meeting_invite(admission("invite-admission-one"))
+            .expect("first admission")
+        {
+            MeetingAdmissionOutcome::Created(record) => record,
+            MeetingAdmissionOutcome::Existing(_) => panic!("first invite must create"),
+        };
+        let exact = db
+            .admit_meeting_invite(admission("invite-admission-one"))
+            .expect("exact redelivery");
+        assert!(
+            matches!(exact, MeetingAdmissionOutcome::Existing(ref record) if record.id == first.id)
+        );
+        let distinct = db
+            .admit_meeting_invite(admission("invite-admission-two"))
+            .expect("distinct delivery for active meeting");
+        assert!(
+            matches!(distinct, MeetingAdmissionOutcome::Existing(ref record) if record.id == first.id)
+        );
+        assert_eq!(db.count_meeting_invite_keys(&first.id).expect("keys"), 2);
+
+        db.transition_meeting_status(
+            &first.id,
+            MeetingStatus::Joining,
+            MeetingStatus::Aborted,
+            "synthetic terminal",
+            "",
+            None,
+            Some(&timestamp(3)),
+        )
+        .expect("terminal first");
+        let terminal_redelivery = db
+            .admit_meeting_invite(admission("invite-admission-one"))
+            .expect("terminal redelivery");
+        assert!(
+            matches!(terminal_redelivery, MeetingAdmissionOutcome::Existing(ref record) if record.id == first.id)
+        );
+
+        let second = match db
+            .admit_meeting_invite(admission("invite-admission-three"))
+            .expect("reinvite after terminal")
+        {
+            MeetingAdmissionOutcome::Created(record) => record,
+            MeetingAdmissionOutcome::Existing(_) => {
+                panic!("terminal row must not collapse reinvite")
+            }
+        };
+        db.transition_meeting_status(
+            &second.id,
+            MeetingStatus::Joining,
+            MeetingStatus::Aborted,
+            "synthetic terminal",
+            "",
+            None,
+            Some(&timestamp(3)),
+        )
+        .expect("terminal second");
+        assert_eq!(
+            db.delete_terminal_meeting_row(&second.id)
+                .expect("delete second"),
+            DeleteMeetingRowOutcome::Deleted
+        );
+        assert_eq!(
+            db.delete_terminal_meeting_row(&first.id)
+                .expect("delete first"),
+            DeleteMeetingRowOutcome::Deleted
+        );
+        let reset = db
+            .admit_meeting_invite(admission("invite-admission-one"))
+            .expect("same delivery after delete");
+        assert!(matches!(reset, MeetingAdmissionOutcome::Created(_)));
     }
 }

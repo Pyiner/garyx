@@ -195,6 +195,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::post(meetings::confirm_meeting_read),
         )
         .route(
+            "/api/meetings/{id}/abort",
+            axum::routing::post(meetings::abort_meeting),
+        )
+        .route(
             "/api/configured-bots",
             axum::routing::get(routes::list_configured_bots),
         )

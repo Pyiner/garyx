@@ -539,6 +539,7 @@ async fn builtin_discoverer_discovers_enabled_channels() {
             owner_target: None,
             require_mention: true,
             topic_session_mode: Default::default(),
+            meeting_entities: true,
         },
     );
     insert_weixin_plugin_account(
@@ -670,6 +671,7 @@ async fn builtin_discoverer_sets_config_methods_per_channel() {
             owner_target: None,
             require_mention: true,
             topic_session_mode: Default::default(),
+            meeting_entities: true,
         },
     );
     insert_weixin_plugin_account(
