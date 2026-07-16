@@ -58,6 +58,13 @@ reinterpreted in feature code.
   tombstones always win over restored records and transcripts, so recovery
   cannot resurrect their record, projections, or conversation. False-success
   markers written by older binaries are not repaired automatically.
+- A full `<data_dir>` backup restore or clone is a different operation: stop
+  every gateway using that directory, restore it, then run
+  `garyx gateway rotate-store-incarnation` with the restored configuration
+  before the first serving boot. The command takes the same per-data-dir lock
+  as the gateway and rotates the favorites CAS identity. Normal reopen/restart
+  never rotates it. Legacy-import recovery rotates the identity atomically in
+  the import-marker transaction and does not need this extra command.
 
 ## Recent Threads And Active Runs
 

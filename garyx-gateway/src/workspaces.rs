@@ -190,6 +190,8 @@ fn workspace_error_response(error: GaryxDbError) -> (StatusCode, Json<serde_json
         GaryxDbError::LockPoisoned
         | GaryxDbError::Join(_)
         | GaryxDbError::Configuration(_)
+        | GaryxDbError::DataDirLocked { .. }
+        | GaryxDbError::ParentHandoffTimedOut { .. }
         | GaryxDbError::Io(_)
         | GaryxDbError::Sqlite(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };

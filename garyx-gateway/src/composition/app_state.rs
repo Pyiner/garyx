@@ -31,6 +31,7 @@ use crate::skills::SkillsService;
 
 pub struct RuntimeState {
     pub start_time: Instant,
+    pub server_boot_id: String,
     pub health_checker: HealthChecker,
     pub live_config: Arc<LiveConfigCell>,
     pub provider_runtime_ready: Arc<AtomicBool>,
@@ -93,6 +94,10 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn server_boot_id(&self) -> &str {
+        &self.runtime.server_boot_id
+    }
+
     pub fn config_snapshot(&self) -> Arc<GaryxConfig> {
         self.runtime.live_config.snapshot()
     }
@@ -247,18 +252,9 @@ impl AppState {
             // SQL endpoint projection, and projections derive inside the
             // same transaction as every record write, so a repair pass has
             // nothing left to repair (#TASK-2099).
-            // Crash recovery: settle orphaned running rows left by the
-            // previous process in one SQL pass (the bridge run index is
-            // empty at boot, so every projected active run is stale).
-            let cleared_orphan_runs =
-                state
-                    .ops
-                    .garyx_db
-                    .clear_stale_active_runs()
-                    .unwrap_or_else(|error| {
-                        warn!(error = %error, "failed to clear stale active runs at startup");
-                        0
-                    });
+            // RuntimeAssembler already settled orphaned running rows while
+            // holding the data-dir lock and before listener bind. A read-side
+            // warmup must never repeat destructive startup work.
             let threads = state.thread_record_count().await.unwrap_or_else(|error| {
                 warn!(error = %error, "failed to count thread records at startup");
                 0
@@ -274,7 +270,6 @@ impl AppState {
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 thread_count = threads,
                 endpoint_count = endpoints,
-                cleared_orphan_runs,
                 "gateway sync snapshots warmed"
             );
         });
@@ -378,6 +373,7 @@ impl AppState {
         Self {
             runtime: RuntimeState {
                 start_time: self.runtime.start_time,
+                server_boot_id: self.runtime.server_boot_id.clone(),
                 health_checker: HealthChecker::new(self.runtime.start_time),
                 live_config: self.runtime.live_config.clone(),
                 provider_runtime_ready: self.runtime.provider_runtime_ready.clone(),

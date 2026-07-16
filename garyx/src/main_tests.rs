@@ -74,6 +74,17 @@ fn parse_gateway_reload_config() {
 }
 
 #[test]
+fn parse_gateway_rotate_store_incarnation() {
+    let cli = Cli::parse_from(["garyx", "gateway", "rotate-store-incarnation"]);
+    assert!(matches!(
+        cli.command,
+        Some(Commands::Gateway {
+            action: GatewayAction::RotateStoreIncarnation
+        })
+    ));
+}
+
+#[test]
 fn parse_gateway_start() {
     let cli = Cli::parse_from(["garyx", "gateway", "start"]);
     match cli.command {
@@ -2414,6 +2425,56 @@ async fn startup_runtime_wiring_enables_operational_handlers() {
         .await
         .into_response();
     assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn runtime_assembler_clears_stale_runs_before_returning_for_listener_bind() {
+    use crate::runtime_assembler::RuntimeAssembler;
+    use garyx_gateway::garyx_db::{GaryxDbService, RecentThreadDraft};
+    use garyx_models::config::GaryxConfig;
+    use garyx_models::local_paths::garyx_database_path_for_data_dir;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let session_dir = tmp.path().join("custom-data");
+    let database_path = garyx_database_path_for_data_dir(&session_dir);
+    let database = GaryxDbService::open(&database_path).expect("seed database");
+    database
+        .upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::startup-orphan".to_owned(),
+            title: "Startup orphan".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 1,
+            last_message_preview: "stale".to_owned(),
+            recent_run_id: Some("run::startup-orphan".to_owned()),
+            active_run_id: Some("run::startup-orphan".to_owned()),
+            run_state: "running".to_owned(),
+            updated_at: None,
+            last_active_at: "2026-07-16T00:00:00Z".to_owned(),
+        })
+        .unwrap();
+    drop(database);
+
+    let mut config = GaryxConfig::default();
+    config.sessions.data_dir = Some(session_dir.display().to_string());
+    let assembly = RuntimeAssembler::new(tmp.path().join("garyx.json"), config)
+        .assemble()
+        .await
+        .expect("runtime assembly");
+    let row = assembly
+        .state
+        .ops
+        .garyx_db
+        .list_recent_threads(10, 0)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.thread_id == "thread::startup-orphan")
+        .expect("orphan row");
+    assert_eq!(row.active_run_id, None);
+    assert_eq!(row.run_state, "completed");
+    assert!(session_dir.join("garyx.lock").exists());
 }
 
 #[tokio::test]

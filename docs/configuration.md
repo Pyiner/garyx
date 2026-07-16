@@ -59,6 +59,12 @@ Fields:
 | `public_url` | `""` | Optional public URL used in channel message links. |
 | `auth_token` | `""` | Required bearer token for all protected gateway APIs. Create one on the gateway host with `garyx gateway token`; `/health` remains public. |
 
+Only one gateway process may own a configured session data directory at a
+time. Startup waits up to 30 seconds for the existing owner to release the
+directory lock, then exits without opening the database if ownership cannot be
+acquired. Set `GARYX_DATA_LOCK_WAIT_SECS` to a non-negative number of seconds
+to change that bounded wait for supervised handoffs.
+
 ## Channels
 
 Garyx stores user-facing channel accounts directly under `channels.<channel_id>`.

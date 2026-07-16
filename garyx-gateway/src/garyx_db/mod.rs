@@ -1,11 +1,15 @@
 use std::collections::BTreeSet;
 #[cfg(any(test, feature = "test-seams"))]
 use std::collections::{HashMap, HashSet};
-use std::io;
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 #[cfg(any(test, feature = "test-seams"))]
 use std::sync::{Condvar, atomic::AtomicBool, atomic::Ordering};
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use chrono::{SecondsFormat, Utc};
 use garyx_router::{KnownChannelEndpoint, is_thread_key};
@@ -38,6 +42,7 @@ const LEGACY_IMPORT_GENERATION_VERSION: i64 = 1;
 pub(crate) enum TestDbFaultPoint {
     LegacyMarkerPairRead,
     LegacyImportCommit,
+    LegacyImportAfterIncarnationRotation,
     LegacyRetirementMarkerWrite,
     ArchivedThreadRead,
     LegacyGenerationSeedWrite,
@@ -147,6 +152,14 @@ pub enum GaryxDbError {
     Join(String),
     #[error("database configuration failed: {0}")]
     Configuration(String),
+    #[error(
+        "data dir is occupied by another Garyx gateway: {path} (waited {wait_secs}s); stop the running gateway or choose a different sessions.data_dir"
+    )]
+    DataDirLocked { path: PathBuf, wait_secs: u64 },
+    #[error(
+        "pre-lock Garyx parent process {parent_pid} did not exit within {wait_secs}s; refusing destructive database initialization"
+    )]
+    ParentHandoffTimedOut { parent_pid: u32, wait_secs: u64 },
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -179,6 +192,11 @@ pub struct PinnedThreadRecord {
 pub struct ThreadPinsPage {
     pub pins: Vec<PinnedThreadRecord>,
     pub revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct StoreIncarnation {
+    pub store_incarnation_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -424,6 +442,10 @@ pub struct CapsuleUpdateDraft {
 }
 
 pub struct GaryxDbService {
+    /// Process-lifetime ownership of this database's data directory. The lock
+    /// is acquired before SQLite is opened, so schema initialization, imports,
+    /// startup purges, and orphan-run cleanup cannot overlap another gateway.
+    _data_dir_lock: Option<DataDirLock>,
     conn: Mutex<Connection>,
     /// Independent read connections (WAL snapshot reads) so point reads
     /// never queue behind the writer — or behind each other: WAL supports
@@ -447,6 +469,9 @@ pub(crate) struct ReadOnlyGaryxDb {
 }
 
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5_000);
+const DEFAULT_DATA_LOCK_WAIT: Duration = Duration::from_secs(30);
+const PRE_R5_PARENT_HANDOFF_WAIT: Duration = Duration::from_secs(60);
+const STARTUP_WAIT_POLL: Duration = Duration::from_millis(50);
 /// Read-pool size: enough to keep the common concurrent readers (desktop,
 /// mobile, a handful of agents) off each other's locks without holding a
 /// meaningful number of file handles.
@@ -468,12 +493,258 @@ fn configure_file_connection(conn: &Connection) -> GaryxDbResult<()> {
     Ok(())
 }
 
+struct DataDirLock {
+    file: File,
+    _path: PathBuf,
+}
+
+impl DataDirLock {
+    fn acquire(database_path: &Path, wait: Duration) -> GaryxDbResult<Self> {
+        let data_dir = database_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(data_dir)?;
+        let lock_path = data_dir.join("garyx.lock");
+        let mut file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        set_close_on_exec(&file)?;
+        acquire_exclusive_flock(&file, &lock_path, wait)?;
+
+        // The advisory lock is the authority; the PID is diagnostic data for
+        // operators and deterministic restart tests only.
+        file.set_len(0)?;
+        file.write_all(std::process::id().to_string().as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_data()?;
+        Ok(Self {
+            file,
+            _path: lock_path,
+        })
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    fn close_on_exec(&self) -> GaryxDbResult<bool> {
+        close_on_exec_is_set(&self.file)
+    }
+}
+
+impl Drop for DataDirLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        // Closing the file would release flock as well; the explicit unlock
+        // makes the ownership boundary clear and lets a waiter proceed before
+        // any later field-drop work.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_close_on_exec(file: &File) -> GaryxDbResult<()> {
+    let fd = file.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_close_on_exec(_file: &File) -> GaryxDbResult<()> {
+    Err(GaryxDbError::Configuration(
+        "per-data-dir flock is only supported on Unix".to_owned(),
+    ))
+}
+
+#[cfg(all(unix, any(test, feature = "test-seams")))]
+fn close_on_exec_is_set(file: &File) -> GaryxDbResult<bool> {
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    Ok(flags & libc::FD_CLOEXEC != 0)
+}
+
+#[cfg(all(not(unix), any(test, feature = "test-seams")))]
+fn close_on_exec_is_set(_file: &File) -> GaryxDbResult<bool> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn acquire_exclusive_flock(file: &File, lock_path: &Path, wait: Duration) -> GaryxDbResult<()> {
+    let started = Instant::now();
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(code) if code == libc::EINTR => continue,
+            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => {
+                let elapsed = started.elapsed();
+                if elapsed >= wait {
+                    return Err(GaryxDbError::DataDirLocked {
+                        path: lock_path.to_path_buf(),
+                        wait_secs: wait.as_secs(),
+                    });
+                }
+                std::thread::sleep(STARTUP_WAIT_POLL.min(wait.saturating_sub(elapsed)));
+            }
+            _ => return Err(error.into()),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn acquire_exclusive_flock(_file: &File, _lock_path: &Path, _wait: Duration) -> GaryxDbResult<()> {
+    Err(GaryxDbError::Configuration(
+        "per-data-dir flock is only supported on Unix".to_owned(),
+    ))
+}
+
+fn configured_data_lock_wait() -> GaryxDbResult<Duration> {
+    let Some(raw) = std::env::var_os("GARYX_DATA_LOCK_WAIT_SECS") else {
+        return Ok(DEFAULT_DATA_LOCK_WAIT);
+    };
+    let raw = raw.to_string_lossy();
+    let seconds = raw.trim().parse::<u64>().map_err(|_| {
+        GaryxDbError::Configuration(
+            "GARYX_DATA_LOCK_WAIT_SECS must be a non-negative integer".to_owned(),
+        )
+    })?;
+    Ok(Duration::from_secs(seconds))
+}
+
+#[cfg(unix)]
+fn wait_for_pre_r5_parent_handoff() -> GaryxDbResult<()> {
+    let parent_pid = unsafe { libc::getppid() };
+    if parent_pid <= 1 || !parent_has_same_executable_name(parent_pid as u32)? {
+        return Ok(());
+    }
+    wait_for_parent_exit(parent_pid as u32, PRE_R5_PARENT_HANDOFF_WAIT, || {
+        process_is_alive(parent_pid as u32)
+    })
+}
+
+#[cfg(not(unix))]
+fn wait_for_pre_r5_parent_handoff() -> GaryxDbResult<()> {
+    Ok(())
+}
+
+fn wait_for_parent_exit(
+    parent_pid: u32,
+    wait: Duration,
+    mut is_alive: impl FnMut() -> bool,
+) -> GaryxDbResult<()> {
+    let started = Instant::now();
+    loop {
+        if !is_alive() {
+            return Ok(());
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= wait {
+            return Err(GaryxDbError::ParentHandoffTimedOut {
+                parent_pid,
+                wait_secs: wait.as_secs(),
+            });
+        }
+        std::thread::sleep(STARTUP_WAIT_POLL.min(wait.saturating_sub(elapsed)));
+    }
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+        return true;
+    }
+    // EPERM still proves the process exists. Unknown errors are treated as
+    // alive so the handoff barrier fails closed.
+    !matches!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH))
+}
+
+#[cfg(unix)]
+fn parent_has_same_executable_name(parent_pid: u32) -> GaryxDbResult<bool> {
+    parent_has_same_executable_name_with(parent_pid, parent_executable_path)
+}
+
+#[cfg(unix)]
+fn parent_has_same_executable_name_with(
+    parent_pid: u32,
+    resolve_parent: impl FnOnce(u32) -> GaryxDbResult<PathBuf>,
+) -> GaryxDbResult<bool> {
+    let current = std::env::current_exe()?;
+    let current_name = current.file_name().ok_or_else(|| {
+        GaryxDbError::Configuration(format!(
+            "current executable path has no file name: {}",
+            current.display()
+        ))
+    })?;
+    let parent = resolve_parent(parent_pid)?;
+    let parent_name = parent.file_name().ok_or_else(|| {
+        GaryxDbError::Configuration(format!(
+            "parent executable path has no file name: {}",
+            parent.display()
+        ))
+    })?;
+    Ok(parent_name == current_name)
+}
+
+#[cfg(target_os = "linux")]
+fn parent_executable_path(parent_pid: u32) -> GaryxDbResult<PathBuf> {
+    Ok(std::fs::read_link(format!("/proc/{parent_pid}/exe"))?)
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn parent_executable_path(parent_pid: u32) -> GaryxDbResult<PathBuf> {
+    let output = std::process::Command::new("ps")
+        .args(["-p", &parent_pid.to_string(), "-o", "comm="])
+        .output()
+        .map_err(|error| {
+            GaryxDbError::Configuration(format!(
+                "failed to resolve parent executable with ps for pid {parent_pid}: {error}"
+            ))
+        })?;
+    if !output.status.success() {
+        return Err(GaryxDbError::Configuration(format!(
+            "ps failed while resolving parent executable for pid {parent_pid}: {}",
+            output.status
+        )));
+    }
+    let path = String::from_utf8(output.stdout).map_err(|error| {
+        GaryxDbError::Configuration(format!(
+            "ps returned non-UTF-8 parent executable for pid {parent_pid}: {error}"
+        ))
+    })?;
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(GaryxDbError::Configuration(format!(
+            "ps returned an empty parent executable for pid {parent_pid}"
+        )));
+    }
+    Ok(PathBuf::from(path))
+}
+
 impl GaryxDbService {
     pub fn open(path: impl AsRef<Path>) -> GaryxDbResult<Self> {
+        Self::open_with_lock_wait(path, configured_data_lock_wait()?)
+    }
+
+    fn open_with_lock_wait(path: impl AsRef<Path>, lock_wait: Duration) -> GaryxDbResult<Self> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        // This must stay before Connection::open and every schema/import/
+        // purge action. It is also the pre-R5 fallback cutover boundary:
+        // once we own the new lock, a still-live same-executable parent must
+        // exit before this binary may touch the database.
+        let data_dir_lock = DataDirLock::acquire(path, lock_wait)?;
+        wait_for_pre_r5_parent_handoff()?;
         let conn = Connection::open(path)?;
         configure_file_connection(&conn)?;
         initialize_connection(&conn)?;
@@ -488,6 +759,7 @@ impl GaryxDbService {
             readers.push(Mutex::new(reader));
         }
         Ok(Self {
+            _data_dir_lock: Some(data_dir_lock),
             conn: Mutex::new(conn),
             readers,
             next_reader: std::sync::atomic::AtomicUsize::new(0),
@@ -501,11 +773,29 @@ impl GaryxDbService {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         initialize_connection(&conn)?;
         Ok(Self {
+            _data_dir_lock: None,
             conn: Mutex::new(conn),
             readers: Vec::new(),
             next_reader: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(any(test, feature = "test-seams"))]
             test_faults: Mutex::new(TestDbFaults::default()),
+        })
+    }
+
+    pub fn store_incarnation_id(&self) -> GaryxDbResult<String> {
+        let conn = self.read_conn()?;
+        read_store_incarnation_id(&conn)
+    }
+
+    /// Rotate the persistent CAS identity for an offline full-data-dir
+    /// restore/clone. Normal opens and process restarts never call this.
+    pub fn rotate_store_incarnation(&self) -> GaryxDbResult<StoreIncarnation> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let store_incarnation_id = rotate_store_incarnation_tx(&tx)?;
+        tx.commit()?;
+        Ok(StoreIncarnation {
+            store_incarnation_id,
         })
     }
 
@@ -1191,6 +1481,9 @@ impl GaryxDbService {
             None,
         )?;
         if recovery {
+            rotate_store_incarnation_tx(&tx)?;
+            #[cfg(any(test, feature = "test-seams"))]
+            self.maybe_fail_test_db_call(TestDbFaultPoint::LegacyImportAfterIncarnationRotation)?;
             tx.execute(
                 "DELETE FROM projection_states WHERE projection_name = ?1",
                 params![crate::legacy_boot_import::LEGACY_ARCHIVE_RETIREMENT_NAME],
@@ -1273,6 +1566,13 @@ impl GaryxDbService {
     /// Run every versioned thread-data migration that must complete after
     /// the one-shot archive import and before the gateway starts serving.
     pub(crate) fn run_thread_data_startup_migrations(&self) -> GaryxDbResult<()> {
+        // Destructive cleanup belongs after the boot import, not in schema
+        // initialization. GaryxDbService's process-lifetime data-dir lock is
+        // already held, and RuntimeAssembler runs this before listener bind.
+        {
+            let conn = self.conn()?;
+            purge_retired_workflow_state(&conn)?;
+        }
         self.drop_thread_message_routes_v1()?;
         self.migrate_thread_pin_sort_order_v1()?;
         self.migrate_recent_task_thread_kind_v1()?;
@@ -2543,6 +2843,11 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             pins_revision INTEGER NOT NULL DEFAULT 0 CHECK (pins_revision >= 0)
         ) STRICT;
 
+        CREATE TABLE IF NOT EXISTS garyx_store_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            store_incarnation_id TEXT NOT NULL
+        ) STRICT;
+
         -- Thread-record truth source (#TASK-1864 batch 2): canonical record
         -- bodies for thread::*/meta::*/cron::*/tool::* keys. Bodies never
         -- contain the retired `messages` snapshot; projections derive from
@@ -2781,6 +3086,7 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     )?;
     ensure_thread_pins_sort_order_column(conn)?;
     ensure_thread_pins_meta_row(conn)?;
+    ensure_store_incarnation_row(conn)?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_thread_pins_sort_order
              ON thread_pins(sort_order ASC, pinned_at DESC, thread_id ASC);",
@@ -2809,7 +3115,6 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             ON workspaces(deleted_at, lower(COALESCE(NULLIF(name, ''), path)), lower(path));
         "#,
     )?;
-    purge_retired_workflow_state(conn)?;
     Ok(())
 }
 
@@ -3604,6 +3909,50 @@ fn ensure_thread_pins_meta_row(conn: &Connection) -> GaryxDbResult<()> {
     Ok(())
 }
 
+fn ensure_store_incarnation_row(conn: &Connection) -> GaryxDbResult<()> {
+    conn.execute(
+        "INSERT INTO garyx_store_meta (id, store_incarnation_id)
+         VALUES (1, ?1)
+         ON CONFLICT(id) DO NOTHING",
+        params![Uuid::new_v4().to_string()],
+    )?;
+    // Treat corruption as a startup failure rather than silently rotating the
+    // CAS domain during an ordinary reopen.
+    read_store_incarnation_id(conn).map(|_| ())
+}
+
+fn read_store_incarnation_id(conn: &Connection) -> GaryxDbResult<String> {
+    let raw: String = conn
+        .query_row(
+            "SELECT store_incarnation_id FROM garyx_store_meta WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            GaryxDbError::Configuration("garyx_store_meta singleton is missing".to_owned())
+        })?;
+    Uuid::parse_str(&raw)
+        .map(|uuid| uuid.to_string())
+        .map_err(|_| {
+            GaryxDbError::Configuration("store_incarnation_id is not a valid UUID".to_owned())
+        })
+}
+
+fn rotate_store_incarnation_tx(conn: &Connection) -> GaryxDbResult<String> {
+    let next = Uuid::new_v4().to_string();
+    let updated = conn.execute(
+        "UPDATE garyx_store_meta SET store_incarnation_id = ?1 WHERE id = 1",
+        params![next],
+    )?;
+    if updated != 1 {
+        return Err(GaryxDbError::Configuration(
+            "garyx_store_meta singleton is missing".to_owned(),
+        ));
+    }
+    Ok(next)
+}
+
 fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbResult<()> {
     let mut stmt = conn.prepare("PRAGMA table_info(workspaces)")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -4039,6 +4388,162 @@ mod tests {
     }
 
     #[test]
+    fn file_store_incarnation_is_uuid_stable_on_reopen_and_rotates_only_explicitly() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let service = GaryxDbService::open(&path).expect("first open");
+        let first = service.store_incarnation_id().expect("first identity");
+        assert_eq!(Uuid::parse_str(&first).unwrap().to_string(), first);
+        drop(service);
+
+        let reopened = GaryxDbService::open(&path).expect("ordinary reopen");
+        assert_eq!(reopened.store_incarnation_id().unwrap(), first);
+        let rotated = reopened
+            .rotate_store_incarnation()
+            .expect("explicit offline rotation")
+            .store_incarnation_id;
+        assert_ne!(rotated, first);
+        drop(reopened);
+
+        let after_rotation = GaryxDbService::open(&path).expect("reopen after rotation");
+        assert_eq!(after_rotation.store_incarnation_id().unwrap(), rotated);
+    }
+
+    #[test]
+    fn data_dir_lock_precedes_schema_initialization_is_cloexec_and_times_out_boundedly() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        Connection::open(&path)
+            .expect("seed raw database")
+            .execute("CREATE TABLE untouched(value INTEGER)", [])
+            .expect("seed sentinel schema");
+
+        let owner = DataDirLock::acquire(&path, Duration::ZERO).expect("own data dir");
+        assert!(owner.close_on_exec().expect("CLOEXEC query"));
+        let started = Instant::now();
+        let error = GaryxDbService::open_with_lock_wait(&path, Duration::from_millis(80))
+            .err()
+            .expect("second gateway must time out");
+        assert!(matches!(error, GaryxDbError::DataDirLocked { .. }));
+        assert!(
+            started.elapsed() >= Duration::from_millis(70),
+            "lock wait returned before its bounded deadline"
+        );
+
+        let raw = Connection::open(&path).expect("inspect untouched database");
+        assert!(!sqlite_table_exists(&raw, "garyx_store_meta").unwrap());
+        assert!(sqlite_table_exists(&raw, "untouched").unwrap());
+        drop(raw);
+        drop(owner);
+
+        let service = GaryxDbService::open_with_lock_wait(&path, Duration::ZERO)
+            .expect("lock release permits startup");
+        assert!(service.store_incarnation_id().is_ok());
+    }
+
+    #[test]
+    fn data_dir_lock_waiter_continues_after_old_gateway_releases_for_restart_fallback() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let old_gateway = GaryxDbService::open(&path).expect("old gateway owns lock");
+        let waiter_path = path.clone();
+        let waiter = std::thread::spawn(move || {
+            GaryxDbService::open_with_lock_wait(waiter_path, Duration::from_secs(2))
+        });
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!waiter.is_finished(), "new gateway skipped the held lock");
+        drop(old_gateway);
+        let new_gateway = waiter
+            .join()
+            .expect("waiter thread")
+            .expect("new gateway takes released lock");
+        assert!(new_gateway.store_incarnation_id().is_ok());
+    }
+
+    #[test]
+    fn pre_r5_parent_handoff_has_continue_and_fail_closed_branches() {
+        let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let release = alive.clone();
+        let exiting_parent = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            release.store(false, std::sync::atomic::Ordering::Release);
+        });
+        wait_for_parent_exit(4242, Duration::from_secs(1), || {
+            alive.load(std::sync::atomic::Ordering::Acquire)
+        })
+        .expect("startup continues after parent exits");
+        exiting_parent.join().unwrap();
+
+        let error = wait_for_parent_exit(4243, Duration::from_millis(70), || true)
+            .expect_err("live parent at cap must fail closed");
+        assert!(matches!(
+            error,
+            GaryxDbError::ParentHandoffTimedOut {
+                parent_pid: 4243,
+                ..
+            }
+        ));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let raw = Connection::open(&path).expect("raw pre-R5 database");
+        raw.execute("CREATE TABLE untouched(value INTEGER)", [])
+            .unwrap();
+        drop(raw);
+        let lock = DataDirLock::acquire(&path, Duration::ZERO).expect("new binary lock");
+        let barrier = wait_for_parent_exit(4244, Duration::from_millis(60), || true);
+        assert!(barrier.is_err());
+        drop(lock);
+        let raw = Connection::open(&path).expect("inspect after failed handoff");
+        assert!(sqlite_table_exists(&raw, "untouched").unwrap());
+        assert!(
+            !sqlite_table_exists(&raw, "garyx_store_meta").unwrap(),
+            "fail-closed parent timeout must precede destructive/schema initialization"
+        );
+        drop(raw);
+        DataDirLock::acquire(&path, Duration::ZERO)
+            .expect("failed child released the data-dir lock");
+    }
+
+    #[test]
+    fn open_path_wires_parent_handoff_between_data_lock_and_database_open() {
+        let source = include_str!("mod.rs");
+        let open_path = source
+            .split_once("fn open_with_lock_wait(")
+            .expect("open_with_lock_wait definition")
+            .1
+            .split_once("pub fn memory()")
+            .expect("memory constructor follows open path")
+            .0;
+        let lock = open_path
+            .find("DataDirLock::acquire(path, lock_wait)?")
+            .expect("open path acquires data lock");
+        let handoff = open_path
+            .find("wait_for_pre_r5_parent_handoff()?")
+            .expect("open path invokes pre-R5 handoff barrier");
+        let connection = open_path
+            .find("Connection::open(path)?")
+            .expect("open path opens SQLite connection");
+        assert!(
+            lock < handoff && handoff < connection,
+            "startup ordering must remain lock -> parent handoff -> SQLite open"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_executable_resolution_failure_is_fail_closed() {
+        let error = parent_has_same_executable_name_with(4242, |_| {
+            Err(GaryxDbError::Configuration(
+                "synthetic ps failure".to_owned(),
+            ))
+        })
+        .expect_err("an unknown parent executable must abort startup");
+        assert!(matches!(error, GaryxDbError::Configuration(_)));
+    }
+
+    #[test]
     fn read_only_handle_queries_during_a_writer_lock_and_rejects_writes() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("garyx-db.sqlite3");
@@ -4283,6 +4788,7 @@ mod tests {
     #[test]
     fn legacy_import_generation_commit_is_atomic_monotonic_and_recovery_clears_retirement() {
         let service = GaryxDbService::memory().expect("memory db");
+        let fresh_incarnation = service.store_incarnation_id().unwrap();
         service.fail_test_db_call(TestDbFaultPoint::LegacyImportCommit, 1);
         assert!(service.commit_legacy_import(0, false).is_err());
         assert_eq!(service.legacy_import_marker_pair().unwrap(), (false, false));
@@ -4291,8 +4797,10 @@ mod tests {
         assert_eq!(service.commit_legacy_import(0, false).unwrap(), 1);
         assert_eq!(service.legacy_import_marker_pair().unwrap(), (true, false));
         assert_eq!(raw_legacy_import_generation(&service), Some(1));
+        assert_eq!(service.store_incarnation_id().unwrap(), fresh_incarnation);
         service.record_legacy_archive_retirement().unwrap();
         assert_eq!(service.legacy_import_marker_pair().unwrap(), (true, true));
+        let generation_one_incarnation = service.store_incarnation_id().unwrap();
 
         assert!(
             service
@@ -4300,9 +4808,23 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(service.legacy_import_marker_pair().unwrap(), (false, true));
+        service.fail_test_db_call(TestDbFaultPoint::LegacyImportAfterIncarnationRotation, 1);
+        assert!(service.commit_legacy_import(3, true).is_err());
+        assert_eq!(
+            service.store_incarnation_id().unwrap(),
+            generation_one_incarnation,
+            "a crash after rotation but before commit must roll the identity back"
+        );
+        assert_eq!(service.legacy_import_marker_pair().unwrap(), (false, true));
+        assert_eq!(raw_legacy_import_generation(&service), Some(1));
         assert_eq!(service.commit_legacy_import(3, true).unwrap(), 2);
         assert_eq!(service.legacy_import_marker_pair().unwrap(), (true, false));
         assert_eq!(raw_legacy_import_generation(&service), Some(2));
+        assert_ne!(
+            service.store_incarnation_id().unwrap(),
+            generation_one_incarnation,
+            "a committed recovery must rotate exactly with its marker transaction"
+        );
         assert!(
             service
                 .clear_projection_state(LEGACY_IMPORT_GENERATION_NAME)
@@ -5076,31 +5598,6 @@ mod tests {
     }
 
     #[test]
-    fn open_succeeds_while_another_connection_holds_a_write_lock() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("garyx-db.sqlite3");
-        // First open creates the schema and flips the database to WAL.
-        let _first = GaryxDbService::open(&path).expect("first open");
-
-        // A separate connection holds a write transaction while a second
-        // service runs the full pragma/init order — the cross-process
-        // contention case busy_timeout exists for (WAL keeps schema reads
-        // from blocking on the writer).
-        let blocker = Connection::open(&path).expect("blocker connection");
-        blocker
-            .execute_batch("BEGIN IMMEDIATE;")
-            .expect("hold write lock");
-        let second = GaryxDbService::open(&path).expect("second open under held write lock");
-        blocker
-            .execute_batch("COMMIT;")
-            .expect("release write lock");
-
-        second
-            .pin_thread("thread::contended-open")
-            .expect("write after release");
-    }
-
-    #[test]
     fn memory_db_still_works_without_wal() {
         let service = GaryxDbService::memory().expect("memory db");
         service.pin_thread("thread::mem-check").expect("pin");
@@ -5110,7 +5607,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_legacy_workflow_db_purges_tables_records_and_projections() {
+    fn startup_migrations_purge_legacy_workflow_tables_records_and_projections() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("garyx-db.sqlite3");
         drop(GaryxDbService::open(&path).expect("create current schema"));
@@ -5206,6 +5703,8 @@ mod tests {
         }
 
         let db = GaryxDbService::open(&path).expect("open migrated db");
+        db.run_thread_data_startup_migrations()
+            .expect("run destructive startup migrations");
         assert_eq!(
             db.list_pinned_threads()
                 .expect("pins after cleanup")
@@ -5263,6 +5762,9 @@ mod tests {
         drop(db);
 
         let reopened = GaryxDbService::open(&path).expect("cleanup is idempotent");
+        reopened
+            .run_thread_data_startup_migrations()
+            .expect("rerun startup migrations");
         assert_eq!(
             reopened
                 .list_pinned_threads()
@@ -5604,11 +6106,20 @@ mod tests {
         let path = dir.path().join("garyx-db.sqlite3");
         let reader = GaryxDbService::open(&path).expect("reader opens");
         reader.pin_thread("thread::first").expect("first pin");
-        let writer = GaryxDbService::open(&path).expect("writer opens");
+        // A raw SQLite connection is intentional: the production invariant
+        // forbids a second GaryxDbService for the same data dir, while this
+        // test still needs a commit between the page's two snapshot reads.
+        let writer = Connection::open(&path).expect("test-only raw writer");
 
         let snapshot = reader
             .list_pinned_threads_inner(|| {
-                writer.pin_thread("thread::second")?;
+                writer.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     INSERT INTO thread_pins (thread_id, pinned_at, sort_order)
+                     VALUES ('thread::second', '2026-07-16T00:00:00Z', -2);
+                     UPDATE thread_pins_meta SET pins_revision = pins_revision + 1 WHERE id = 1;
+                     COMMIT;",
+                )?;
                 Ok(())
             })
             .expect("snapshot page");

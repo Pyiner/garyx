@@ -38,7 +38,9 @@ pub async fn request_restart(reason: String) -> Result<(), String> {
             // Let HTTP handlers return before potentially replacing the process.
             tokio::time::sleep(Duration::from_millis(150)).await;
 
-            if try_launchd_restart().await {
+            let force_subprocess = cfg!(debug_assertions)
+                && std::env::var_os("GARYX_TEST_FORCE_SUBPROCESS_RESTART").is_some();
+            if !force_subprocess && try_launchd_restart().await {
                 tracing::info!("restart delegated to launchd; exiting current process");
                 // Even though launchd should kill us via kickstart -k, the
                 // current process might not be the one launchd is tracking

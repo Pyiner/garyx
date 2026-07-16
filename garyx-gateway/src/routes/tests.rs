@@ -43,6 +43,41 @@ fn authed_request() -> axum::http::request::Builder {
     crate::test_support::authed_request()
 }
 
+#[tokio::test]
+async fn store_identity_endpoint_returns_persistent_incarnation_and_process_boot_uuid() {
+    let db = Arc::new(crate::garyx_db::GaryxDbService::memory().expect("memory database"));
+    let state = AppStateBuilder::new(test_config())
+        .with_garyx_db(db.clone())
+        .build();
+    let expected_incarnation = db.store_incarnation_id().unwrap();
+    let expected_boot = state.server_boot_id().to_owned();
+    let response = build_router(state)
+        .oneshot(
+            authed_request()
+                .uri("/api/store-identity")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(payload["store_incarnation_id"], expected_incarnation);
+    assert_eq!(payload["server_boot_id"], expected_boot);
+    uuid::Uuid::parse_str(payload["store_incarnation_id"].as_str().unwrap()).unwrap();
+    uuid::Uuid::parse_str(payload["server_boot_id"].as_str().unwrap()).unwrap();
+
+    let next_boot = AppStateBuilder::new(test_config())
+        .with_garyx_db(db)
+        .build();
+    assert_ne!(next_boot.server_boot_id(), expected_boot);
+}
+
 struct RouteStoreProbe {
     inner: Arc<dyn ThreadStore>,
     list_calls: AtomicUsize,

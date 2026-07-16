@@ -42,7 +42,12 @@ fn public_runtime_routes() -> Router<Arc<AppState>> {
 }
 
 fn protected_runtime_routes() -> Router<Arc<AppState>> {
-    Router::new().route("/runtime", axum::routing::get(routes::runtime_info))
+    Router::new()
+        .route("/runtime", axum::routing::get(routes::runtime_info))
+        .route(
+            "/api/store-identity",
+            axum::routing::get(routes::store_identity),
+        )
 }
 
 fn usage_routes() -> Router<Arc<AppState>> {

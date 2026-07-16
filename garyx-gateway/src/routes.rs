@@ -641,6 +641,18 @@ pub async fn runtime_info(State(state): State<Arc<AppState>>) -> impl IntoRespon
     }))
 }
 
+/// GET /api/store-identity - bootstrap identity for the favorites CAS domain.
+pub async fn store_identity(State(state): State<Arc<AppState>>) -> axum::response::Response {
+    match state.ops.garyx_db.store_incarnation_id() {
+        Ok(store_incarnation_id) => Json(json!({
+            "store_incarnation_id": store_incarnation_id,
+            "server_boot_id": state.server_boot_id(),
+        }))
+        .into_response(),
+        Err(error) => garyx_db_error_response(error).into_response(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/threads - list threads with pagination/filtering
 // ---------------------------------------------------------------------------
@@ -1516,6 +1528,8 @@ fn garyx_db_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {
         GaryxDbError::LockPoisoned
         | GaryxDbError::Join(_)
         | GaryxDbError::Configuration(_)
+        | GaryxDbError::DataDirLocked { .. }
+        | GaryxDbError::ParentHandoffTimedOut { .. }
         | GaryxDbError::Io(_)
         | GaryxDbError::Sqlite(_) => (StatusCode::INTERNAL_SERVER_ERROR, "InternalError"),
     };
