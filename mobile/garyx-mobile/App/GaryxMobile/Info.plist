@@ -57,6 +57,8 @@
 	<string>Garyx connects to your local Garyx gateway on this network.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Garyx uses the camera to attach photos to your messages.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Garyx saves images you choose to your photo library.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
