@@ -18,11 +18,12 @@ flows — that is normal conversation, not a subsystem write.
 ## 1. Summary
 
 When someone invites the Garyx bot into an ongoing Feishu meeting, the bot
-joins, polls in-meeting events, and materializes a **meeting entity** in a
-self-contained subsystem: its own SQLite tables, on-disk segment log,
-gateway routes, and CLI. Capture commits **one platform page at a time**,
-atomically with its checkpoint. When the meeting ends, capture drains the
-platform grace window and the entity becomes immutable.
+joins, receives pushed in-meeting activity, and materializes a **meeting
+entity** in a self-contained subsystem: its own SQLite tables, on-disk
+segment log, gateway routes, and CLI. Capture commits **one pushed
+activity batch at a time**, atomically with its checkpoint. When the
+meeting ends, capture stays open for a short trailing window and the
+entity becomes immutable.
 
 Agents read entities exclusively through `garyx meeting read`: per-reader
 server cursors, linearized fetch/confirm, at-least-once delivery,
@@ -215,7 +216,6 @@ CREATE TABLE IF NOT EXISTS meetings (
     ('','push','participant_left')),
   join_deadline_at     TEXT NOT NULL,
   grace_deadline_at    TEXT,
-  poll_cursor          TEXT NOT NULL DEFAULT '',        -- cache; log ckpt chain is truth
   closed_segment_count INTEGER NOT NULL DEFAULT 0 CHECK (closed_segment_count >= 0),
   byte_size            INTEGER NOT NULL DEFAULT 0 CHECK (byte_size >= 0),
   started_at           TEXT NOT NULL,
@@ -274,7 +274,7 @@ Notes:
   `thread_records`; no thread-lifecycle hooks; rows die with the entity.
 - There is no refs table; recognition is the cursor row.
 
-### 4.2 Content log: page-atomic commits (normative)
+### 4.2 Content log: batch-atomic commits (normative)
 
 `~/.garyx/meetings/{entity_id}/segments.jsonl`
 (`default_meetings_dir()` beside `default_capsules_dir()`), two line
@@ -293,7 +293,7 @@ transaction (boot-exclusive, or under the entity write lock at runtime;
 logged loudly):
 
 - increment `meetings.log_epoch`; reset `cache_generation = 0`,
-  `poll_cursor = ''`, `closed_segment_count = 0`, `byte_size = 0`;
+  `closed_segment_count = 0`, `byte_size = 0`;
 - **invalidate the read domain**: for every cursor row of the entity,
   set `log_epoch = new epoch, confirmed_seq = 0, pending_from/to = NULL,
   receipt = NULL` (recognition survives; positions do not — old seqs
@@ -335,7 +335,7 @@ metadata endpoints surface both columns.
 | `speaker` | ≤256 bytes, truncated at UTF-8 character boundary |
 | `start`/`end`/`at` | fixed-width RFC3339 ms `Z` (24 bytes) |
 | `text` | split so the **final encoded JSON line** ≤ 32 KiB (escape inflation counted) |
-| `sources` | array of item ids; each stored id ≤**71 bytes** — raw ids ≤64 bytes pass through; longer ids are replaced by `sha256:<hex>` (7-byte prefix + 64 hex = exactly 71 bytes; deterministic, domain-separated, collision-safe for dedup); array bounded by page item count. Property tests assert the normalized field's own byte length, not merely the whole-line bound |
+| `sources` | array of item ids; each stored id ≤**71 bytes** — raw ids ≤64 bytes pass through; longer ids are replaced by `sha256:<hex>` (7-byte prefix + 64 hex = exactly 71 bytes; deterministic, domain-separated, collision-safe for dedup); array bounded by batch item count. Property tests assert the normalized field's own byte length, not merely the whole-line bound |
 | `cont` | boolean |
 | `event_id` (ckpt lines) | the WS event's delivery id, ≤256 bytes (batch ledger + redelivery dedup key) |
 | `epoch` (ckpt lines, tokens, spans) | non-negative 64-bit integer (`0..=i64::MAX`), starts at 0, +1 per content-loss rollover |
@@ -350,7 +350,7 @@ Oversized `text` is split at UTF-8 boundaries into consecutive seqs with
 `"cont":true`; each continuation carries the same single originating item
 id (splitting applies only to 1:1 candidates — a merge that would need
 splitting is simply not merged, so continuation source mapping is always
-unique). Segments never span pages.
+unique). Segments never span batches.
 
 **Batch-atomic commit (the durability core; push model, rev21):** the
 commit unit is one received `vc.bot.meeting_activity_v1` event (one
@@ -366,8 +366,8 @@ atomically under the entity I/O write lock:
    (R7-04, RR8-02): `UPDATE meetings SET closed_segment_count=…,
    byte_size=…, cache_generation=:gen, updated_at=… WHERE id=:id AND
    log_epoch = :epoch AND cache_generation < :gen` — `:gen` is the
-   checkpoint ordinal within the current epoch. (`poll_cursor` is
-   retired; the ckpt's `event_id` chain is the batch ledger.)
+   checkpoint ordinal within the current epoch. (The ckpt's `event_id`
+   chain is the batch ledger; there is no platform cursor column.)
 
 Once the `ckpt` is fsynced the batch is committed; a failed cache
 transaction puts the entity in retryable `cache-repair` (backoff; each
@@ -470,15 +470,16 @@ same queue; there is no self-scheduled poll).
 
 **Command scheduling:** commands are processed immediately whenever no
 batch commit is executing; a command arriving during one is handled
-right after that page's commit (bound: 10 s fetch timeout + one
-durability flush). A joining or stalled entity (no polls running) handles
-admin aborts instantly.
+right after that batch's commit (bound: one durability flush —
+`fdatasync` + SQLite; batch input is already in memory, there is no
+fetch phase). A joining or idle entity handles admin aborts
+instantly.
 
 **Durable CAS:** every transition is
 `UPDATE meetings SET status=:to … WHERE id=:id AND status=:from`; losers
 are no-ops. Intent stages make terminals crash-resumable:
 
-- finalize: `live → finalizing` (drain runs here) → **cache/index
+- finalize: `live → finalizing` (trailing capture runs here) → **cache/index
   barrier** (R7-04, RR8-02): derive the final cache values from the
   canonical log under the I/O lock, write them, then **read back and
   verify** that the row's `(log_epoch, cache_generation, counts)` match
@@ -487,15 +488,17 @@ are no-ops. Intent stages make terminals crash-resumable:
   must also succeed (an entity whose log is legally empty — e.g. a
   joining-deadline abort — persists a valid empty index). Only then
   `finalizing → finalized`.
-- abort: `joining|live → aborting` (`status_detail` set) → final `ckpt`
-  if a page commit was interrupted → same read-back-verified barrier →
-  `aborting → aborted`.
+- abort: `joining|live → aborting` (`status_detail` set) → any
+  in-flight batch commit finishes or is discarded whole (batch
+  atomicity per 4.2 — never a partial ckpt) → same read-back-verified
+  barrier → `aborting → aborted`.
 - Terminal-affecting inputs (`EndedSignal`, `AbortRequest`,
   `NotInMeeting`) queued together resolve at the next scheduling point
   with priority **end > abort**.
 - `finalized`/`aborted` refuse appends (checked under the I/O lock).
-- Boot resumes each persisted stage (joining retries; live polls;
-  finalizing drains to its deadline; aborting finishes its flush).
+- Boot resumes each persisted stage (joining retries; live awaits the
+  next pushed batch; finalizing counts down to its deadline; aborting
+  finishes its flush).
 
 **Admission → joining (one atomic transaction, RR14-02):**
 ① if `invite_event_id` exists in `meeting_invite_keys` → no-op (exact
@@ -544,9 +547,9 @@ as follows:
 On success — CAS `joining→live`, backfill `feishu_meeting_id`
 (normalized) and `topic` (normalized per 4.1 bounds); on deadline →
 abort path. The deadline applies **even while stalled** (it models invite
-validity). Join succeeding during the grace window is legal; polls then
-push trailing activity until the ended signal arrives; the normal dual
-end detection then applies.
+validity). Join succeeding shortly before or after the meeting ends is legal: the
+platform keeps pushing whatever trailing activity exists until the
+ended signal arrives; the normal dual end detection then applies.
 
 **Live capture (push, rev21):** activity batches commit per 4.2 as they
 arrive; between events the coordinator is idle (no polling loop). End
@@ -605,7 +608,7 @@ TOCTOU):
   leave attempt. Its result follows the table (200/409/404), and a
   second timeout is reported to the caller.
 
-### 5.3 End path and grace drain
+### 5.3 End path and trailing capture window
 
 On the end signal (either path above): CAS `live→finalizing`,
 `ended_at=now`, `grace_deadline_at = now + 4 min`, `end_source`
@@ -630,7 +633,7 @@ resumes the countdown to the persisted deadline.
    │                            v                 v                      │ when executing
    │                        ABORTING ─flush+barrier─> ABORTED            │ (end > abort)
    │                            ^                                        │
-   │                            └────10005 while live────────────────────┤
+   │                            └──10005 from join/leave calls───────────┤
    │                                                                     v
    │                                                    FINALIZING ─trailing capture to
    │                                                     │ deadline; abort refused;
@@ -984,9 +987,9 @@ reference: `garyx meeting list`. A deleted entity fails the command with
   stops new admissions and unregisters the client; existing entities
   follow 5.1/5.2 rules (joining aborts at its deadline; live shows
   `no_client`; finalizing finalizes at its deadline).
-- `GatewayConfig.meetings: MeetingConfig` — `poll_interval_secs` (30,
-  clamp 10–120), `join_retry_window_secs` (300), `read_page_bytes`
-  (65536).
+- `GatewayConfig.meetings: MeetingConfig` — `join_retry_window_secs`
+  (default 300), `read_page_bytes` (default 65536). (`poll_interval`
+  retired with the pull model, rev22.)
 - Developer console (blocks slice 2): subscribe the two `vc.bot.*`
   events; publish app version. Scopes already granted, live-verified.
 - Public-repo hygiene: all fixtures sanitized/synthetic.
@@ -1027,14 +1030,14 @@ paths.
 
 ## 12. Test plan (complete matrix)
 
-**Storage/page commits:** crash after `seg` lines before `ckpt` (whole
-page truncated at boot, re-pulled — no dupes, no loss); crash after
-`ckpt` before SQLite (cache-repair, forward-only, no re-pull); delayed
-repair vs newer commit (generation guard blocks regression: P1-fail →
-P2-success → P1-delayed-repair); cache-fail → immediate finalize
-attempt (terminal barrier forces cache+index success first); in-flight
-page timeout consumes no cursor; `has_more` immediate rescheduling;
-empty-poll ckpt; torn-line truncation; escape-inflation splits; crash
+**Storage/batch commits (push, rev22):** crash after `seg` lines before
+`ckpt` → boot truncates the whole uncommitted batch (lost per S4, no
+partial batch, no corruption); crash after `ckpt` before SQLite
+(cache-repair, forward-only); delayed repair vs newer commit
+(generation guard blocks regression: B1-fail → B2-success →
+B1-delayed-repair); cache-fail → immediate finalize attempt (terminal
+barrier forces cache+index success first); redelivered event_id is a
+whole-batch dedup no-op; torn-line truncation; escape-inflation splits; crash
 after each split chunk with no ckpt; `fdatasync` ordering fault
 injection; cache rebuild equals log.
 
@@ -1058,10 +1061,10 @@ immediately when idle vs after the current batch commit.
 **Lifecycle:** end>abort arbitration; dual end detection (ended push;
 own participant_left); 10005 from join/leave calls (abort semantics);
 AbortRequest refused in finalizing; abort intent crash-resume; drain
-runs to deadline (no quiescence: transcript arriving after two empty
-pulls before the deadline is captured); joining deadline while stalled
-aborts; finalizing stalled finalizes at deadline; join succeeding during
-grace; end-during-joining via join-then-first-poll fixtures; duplicate
+runs to deadline (no quiescence shortcut: a trailing batch arriving
+just before the deadline is captured); joining deadline while stalled
+aborts; finalizing stalled finalizes at deadline; join succeeding near
+meeting end; end-during-joining via join-then-trailing-push fixtures; duplicate
 invites (same event id; distinct event ids) collapse; reinvite after
 terminal and after delete creates fresh entities (S2); admission insert
 failure path (S1); restarts in every non-terminal state resume.
@@ -1071,7 +1074,7 @@ clock resets and reason switches (no 16-min auth claim); auth →
 unregister → register → auth (clock does not span the gap); register
 success clears synthesized `no_client` immediately (derived, not
 stored); register/replace nudges stalled entities without timers;
-disable→enable; per-poll registry fetch observes replaced clients;
+disable→enable; per-call registry fetch observes replaced clients;
 finalizing with no client finalizes at deadline; `(failure_kind,
 failure_since)` pair CHECK.
 
@@ -1285,7 +1288,7 @@ Scope: `cargo test --all-targets` for `garyx-channels`, `garyx-gateway`,
    forced-failure re-serves.
 2. **Ingestion:** sample capture gate (3.1) → event structs, sink +
    registry lifecycle, coordinator with intent CAS + barriers,
-   page-atomic polling, grace drain, recovery, admin abort, console
+   batch-atomic push capture, trailing-window finalize, recovery, admin abort, console
    subscriptions. Gate: real meeting live→finalizing→finalized with
    correct segments; restarts in every non-terminal state resume;
    lifecycle + registry/failure suites green.
