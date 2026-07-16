@@ -839,6 +839,73 @@ mod tests {
     }
 
     #[test]
+    fn codex_native_image_generation_projects_prompt_and_saved_image_path() {
+        let call = object(json!({
+            "role": "tool_use",
+            "tool_name": "imageGeneration",
+            "metadata": {
+                "item_type": "imageGeneration",
+                "source": "codex_app_server"
+            },
+            "content": {
+                "id": "exec-00000000-0000-0000-0000-000000000001",
+                "result": "",
+                "revisedPrompt": null,
+                "status": "in_progress",
+                "type": "imageGeneration"
+            }
+        }));
+        let result = object(json!({
+            "role": "tool_result",
+            "tool_name": "imageGeneration",
+            "metadata": {
+                "item_type": "imageGeneration",
+                "source": "codex_app_server"
+            },
+            "content": {
+                "id": "exec-00000000-0000-0000-0000-000000000001",
+                "result": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                "revisedPrompt": "A synthetic lighthouse beneath a violet evening sky.",
+                "savedPath": "/Users/test/.codex/generated_images/00000000-0000-0000-0000-000000000001/exec-00000000-0000-0000-0000-000000000001.png",
+                "status": "completed",
+                "type": "imageGeneration"
+            }
+        }));
+
+        let mut projection = RenderToolFieldProjection::from_message(&call, false).unwrap();
+        let started_call = projection.call.clone();
+        projection.absorb_result(RenderToolFieldProjection::from_message(&result, true).unwrap());
+
+        assert_eq!(
+            (
+                started_call,
+                projection.call.clone(),
+                projection.result.clone()
+            ),
+            (
+                None,
+                Some(RenderToolFieldSelector {
+                    root: RenderToolFieldRoot::Content,
+                    path: vec!["revisedPrompt".to_owned()],
+                    format: RenderToolFieldFormat::Text,
+                    label: RenderToolFieldLabel::Prompt,
+                }),
+                Some(RenderToolFieldSelector {
+                    root: RenderToolFieldRoot::Content,
+                    path: vec!["savedPath".to_owned()],
+                    format: RenderToolFieldFormat::Image,
+                    label: RenderToolFieldLabel::Image,
+                }),
+            )
+        );
+        assert_eq!(projection.status.as_deref(), Some("completed"));
+        let wire = serde_json::to_string(&projection).unwrap();
+        assert!(!wire.contains("iVBORw0KGgo"));
+        assert!(!wire.contains("A synthetic lighthouse"));
+        assert!(!wire.contains("/Users/test"));
+    }
+
+    #[test]
     fn mcp_projection_uses_inner_tool_name_and_primary_argument() {
         let call = object(json!({
             "role": "tool_use",
