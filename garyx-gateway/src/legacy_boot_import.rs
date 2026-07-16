@@ -88,7 +88,7 @@ impl LegacyArchiveReader for FileThreadStore {
 }
 
 trait ArchiveLockHandle: Send + Sync {
-    fn try_lock_exclusive(&self) -> std::io::Result<()>;
+    fn try_lock_exclusive(&mut self) -> std::io::Result<()>;
 }
 
 #[async_trait]
@@ -103,11 +103,26 @@ struct RealArchiveFs;
 
 struct RealArchiveLockHandle {
     file: std::fs::File,
+    locked: bool,
 }
 
 impl ArchiveLockHandle for RealArchiveLockHandle {
-    fn try_lock_exclusive(&self) -> std::io::Result<()> {
-        Ok(self.file.try_lock()?)
+    fn try_lock_exclusive(&mut self) -> std::io::Result<()> {
+        self.file.try_lock()?;
+        self.locked = true;
+        Ok(())
+    }
+}
+
+impl Drop for RealArchiveLockHandle {
+    fn drop(&mut self) {
+        // Closing this `File` alone cannot release a lock while a descriptor
+        // inherited by a concurrently spawned child still refers to it.
+        if self.locked
+            && let Err(error) = self.file.unlock()
+        {
+            tracing::warn!(error = %error, "failed to release legacy boot import lock");
+        }
     }
 }
 
@@ -122,7 +137,10 @@ impl ArchiveFs for RealArchiveFs {
             .await?
             .into_std()
             .await;
-        Ok(Box::new(RealArchiveLockHandle { file }))
+        Ok(Box::new(RealArchiveLockHandle {
+            file,
+            locked: false,
+        }))
     }
 
     async fn exists(&self, path: &Path) -> std::io::Result<bool> {
@@ -187,7 +205,7 @@ async fn run_legacy_boot_import_with(
     }
 
     let lock_path = data_dir.join(LIFECYCLE_LOCK_FILE);
-    let lifecycle_lock = archive_fs.open_lock(&lock_path).await.map_err(|source| {
+    let mut lifecycle_lock = archive_fs.open_lock(&lock_path).await.map_err(|source| {
         LegacyBootImportError::ArchiveIo {
             operation: "lock open",
             path: lock_path.clone(),
@@ -591,7 +609,7 @@ mod tests {
     }
 
     impl ArchiveLockHandle for RecordingArchiveLock {
-        fn try_lock_exclusive(&self) -> std::io::Result<()> {
+        fn try_lock_exclusive(&mut self) -> std::io::Result<()> {
             self.calls
                 .lock()
                 .expect("archive calls")
@@ -1350,6 +1368,47 @@ mod tests {
             assert_eq!(factory.open_calls(), 0);
             assert_markers_and_generation(&db, (false, false), 0);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_lock_drop_unlocks_descriptor_inherited_by_child_process() {
+        use std::os::fd::{AsRawFd, FromRawFd};
+
+        let data_dir = TempDir::new().expect("temp data dir");
+        let lock_path = data_dir.path().join(LIFECYCLE_LOCK_FILE);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .expect("open lock");
+        let mut lock = RealArchiveLockHandle {
+            file,
+            locked: false,
+        };
+        lock.try_lock_exclusive().expect("acquire lock");
+
+        // `dup` retains the same open file description just as `fork` does.
+        // SAFETY: `lock.file` owns a valid descriptor at this point.
+        let inherited_fd = unsafe { libc::dup(lock.file.as_raw_fd()) };
+        assert!(
+            inherited_fd >= 0,
+            "duplicate lock descriptor: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: `dup` returned a new owned descriptor above.
+        let _inherited_file = unsafe { std::fs::File::from_raw_fd(inherited_fd) };
+
+        drop(lock);
+        let contender = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .expect("open contender");
+        contender
+            .try_lock()
+            .expect("dropping the lifecycle guard must explicitly unlock");
     }
 
     #[tokio::test]
