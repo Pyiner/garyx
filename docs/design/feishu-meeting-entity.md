@@ -591,7 +591,7 @@ TOCTOU):
   enters after (sees `completed`/the new durable status; it can never
   miss the notification or spawn a second command). Outcomes are
   answered **by actual result**: abort won → `200 {status:"aborting"}`;
-  end won the page-boundary arbitration → `409
+  end won the next-scheduling-point arbitration → `409
   abort_refused_finalizing`; entity deleted meanwhile → `404`.
   Answering precedes the (up to 20 s) leave attempt. A successfully
   enqueued command is owned by the service; HTTP disconnects cancel
