@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 12 — complete self-contained specification (no references
+Status: revision 13 — complete self-contained specification (no references
 to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–11.
+rounds 1–12.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -43,17 +43,30 @@ Product sign-off items (explicit, owner-revocable):
   owned by the durable `invite_event_id` unique key and end-path CAS,
   which absorb platform redelivery correctly even after an admission
   failure — the in-memory cache would wrongly swallow a redelivery that
-  arrives after a failed admission insert). Loss bounds by case: ACK
-  succeeded → the invite is lost iff the admission insert exhausts 3
-  bounded retries (100 ms / 1 s backoff, error-logged); ACK send failed
-  → the platform may redeliver and the durable key dedups, so the
-  invite is lost only if the process additionally dies before any
-  redelivery is admitted. The raw-text
+  arrives after a failed admission insert). Loss matrix (all four
+  quadrants stated honestly): ① ACK succeeded + process exits before the
+  durable insert → **lost** (platform will not redeliver an ACKed
+  event); ② ACK succeeded + admission insert exhausts 3 bounded retries
+  (100 ms / 1 s backoff, error-logged) → **lost**; ③ ACK send failed +
+  admission also failed → lost **unless** the platform happens to
+  redeliver (redelivery is a platform courtesy, not a guarantee) and the
+  redelivered event is admitted by the durable key; ④ all other
+  combinations → admitted (redelivery after successful admission is a
+  unique-key no-op). The raw-text
   fallback path has no equivalent ACK evidence; the sample gate (3.1)
   pins which path carries invite/ended events; if the raw-text path can
   carry them, slice 2 halts for a design amendment.
 - **S2** One entity per admission: re-invites after terminal state or
-  deletion create new entities capturing from that point.
+  deletion create new entities capturing from that point. **Physical
+  deletion also deletes the admission idempotency key** (RR12-03): a
+  platform redelivery of the *same old* invite event arriving after the
+  entity was deleted will be admitted as a fresh entity — accepted (the
+  realistic window is minutes; manual deletion of a meeting whose stale
+  invite is still in flight is an owner action on their own data) rather
+  than adding a tombstone key table. Residual risk from best-effort
+  leave compensation (bot lingering in a meeting without capture after
+  an abort raced a late remote join, until removed manually) is likewise
+  accepted.
 - **S3** The final ~30 s of speech becomes readable during the grace
   drain, not instantly.
 - **S4** Two distinct loss bounds (both only when the platform becomes
@@ -90,7 +103,7 @@ Product sign-off items (explicit, owner-revocable):
 
 | # | Fact | Evidence |
 |---|---|---|
-| B1 | Feishu WS protobuf data-event path **attempts** an ACK send before processing (a failed send is logged and processing continues); a raw-text fallback path processes without that ACK evidence. Only `im.message.receive_v1` is handled today; other event types fall to an ignore branch; 30 min in-memory event-id dedup | `garyx-channels/src/feishu/ws.rs:914,925,997,1049-1072`, `feishu.rs:95` (line refs re-pinned at review round 10) |
+| B1 | Feishu WS protobuf data-event path **attempts** an ACK send before processing (a failed send is logged and processing continues); a raw-text fallback path processes without that ACK evidence. Only `im.message.receive_v1` is handled today; other event types fall to an ignore branch; 30 min in-memory event-id dedup | `garyx-channels/src/feishu/ws.rs:914,925,997,1049-1072`, `feishu.rs:95` (line refs approximate — all B-row refs re-pinned against HEAD at implementation start) |
 | B2 | `FeishuChannel::new(config, router, bridge, dispatcher, public_url)`; per-account deps flow into `FeishuRuntimeContext`; constructor injection threads through `BuiltInPluginDiscoverer::with_dispatcher` | `feishu.rs:370`, `ws.rs:38-69`, `plugin.rs:3235,3322` |
 | B3 | gateway depends on channels (never reverse); a channels-defined, gateway-implemented trait compiles; first such **production service seam** | `garyx-gateway/Cargo.toml:20` |
 | B4 | `FeishuClient` owns tenant-token refresh (double-checked, single-flight, 5 min margin) and is `Clone`, but `pub(crate)` — gateway cannot name it; cross-crate use requires a public trait object | `client.rs:127,226,243` |
@@ -104,6 +117,8 @@ scopes granted and live-verified on the production app):
 
 - `POST /open-apis/vc/v1/bots/join`: 9-digit `meeting_no` + optional
   `call_id` → long numeric `meeting.id`. Tenant token only.
+- `POST /open-apis/vc/v1/bots/leave`: leave by long meeting id (used
+  only as best-effort abort compensation, 5.2).
 - `GET /open-apis/vc/v1/bots/events`: pull; `page_token` continuation —
   **opaque**: stored and resumed from, never compared or ordered;
   page_size 20–100.
@@ -133,8 +148,11 @@ including grace-window reads and the `20001` response, and the maximum
 observed single-page byte size (validates S4 phrasing). Pinned facts:
 invite payload fields; joining-stage identity; existence or absence of an
 in-band ended item (if absent, end sources are exactly `push` and
-`grace_expired`); grace-window read behavior. Any mismatch stops slice 2
-for a design amendment. Slice 1 has no Feishu dependency.
+`grace_expired`); grace-window read behavior; **duplicate-join and
+lost-response behavior** (join twice, join with dropped response —
+expected: idempotent same `meeting.id`, RR12-02); leave semantics. Any
+mismatch stops slice 2 for a design amendment. Slice 1 has no Feishu
+dependency.
 
 ## 4. Entity model and storage
 
@@ -359,6 +377,8 @@ pub trait MeetingPlatformClient: Send + Sync {
         -> Result<JoinedMeeting, MeetingApiError>;
     async fn poll_events(&self, feishu_meeting_id: &str, page_token: &str)
         -> Result<EventsPage, MeetingApiError>;   // exactly one page per call
+    async fn leave(&self, feishu_meeting_id: &str)
+        -> Result<(), MeetingApiError>;           // best-effort abort compensation
 }
 pub trait MeetingEventSink: Send + Sync {
     fn register_client(&self, account_id: &str, client: Arc<dyn MeetingPlatformClient>);
@@ -438,13 +458,36 @@ are no-ops. Intent stages make terminals crash-resumable:
 make duplicate invites no-ops (S2). Content dir is created lazily by the
 writer (`ensure_dir` before first append). Join attempts run inside the
 coordinator's `tokio::select!` alongside the command queue and the
-absolute deadline (RR11-03): each attempt carries its own timeout of
-`min(20 s, remaining window)`; a deadline expiry, `AbortRequest`,
-`Shutdown`, or registry replacement wins the select and **cancels the
-in-flight join future** — a hanging platform call can never wedge the
-coordinator past its deadline or block admin commands. On success — CAS
-`joining→live`, backfill `feishu_meeting_id` (normalized) and `topic`
-(normalized per 4.1 bounds); on deadline → abort path. The deadline applies **even while stalled** (it models invite
+absolute deadline (RR11-03): attempts are paced at 20 s intervals
+(RR12-02: an immediately failing attempt waits out the remainder of its
+20 s slot — no hot loop), each carries a timeout of `min(20 s, remaining
+window)`, and a deadline expiry, `AbortRequest`, `Shutdown`, or registry
+replacement wins the select and cancels the in-flight join **future**.
+
+**Remote join is a side-effecting request whose cancellation is local
+only** (RR12-02): the platform may complete the join after our timeout,
+cancellation, or crash. The design handles the unknown-outcome window
+as follows:
+
+- A timed-out/cancelled/crash-interrupted attempt leaves the entity in
+  `joining`; the next attempt (or boot recovery) simply calls `join`
+  again. The sample gate (3.1) **pins duplicate-join behavior**: the
+  expected platform semantics (re-joining an already-joined meeting
+  returns the same `meeting.id` idempotently) must be confirmed from
+  captured fixtures; if the platform instead errors on duplicate join,
+  the mapped error is treated as success-equivalent iff it carries the
+  meeting identity, else slice 2 halts for an amendment.
+- If the entity leaves `joining` for `aborting` (deadline/admin) while
+  a remote join later succeeds, the bot may linger in the meeting with
+  no capture. The abort path therefore makes one **best-effort
+  `bots/leave` call** (the platform API exists; failure is logged, not
+  retried — the meeting owner can always remove the bot manually).
+  Residual risk (bot present without capture until removed) is a
+  product sign-off note under S2.
+
+On success — CAS `joining→live`, backfill `feishu_meeting_id`
+(normalized) and `topic` (normalized per 4.1 bounds); on deadline →
+abort path. The deadline applies **even while stalled** (it models invite
 validity). Join succeeding during the grace window is legal; polls then
 return data until `GraceExpired` finalizes.
 
@@ -748,7 +791,7 @@ at debug.
 | `garyx-channels/src/plugin.rs`, `feishu.rs` | 1 constructor dependency | additive |
 | `garyx-gateway/src/meetings/` (new) | service, coordinators, log writer/repair, locks, index, routes | new module |
 | `garyx-gateway/src/garyx_db/mod.rs` | 2 tables + CRUD | additive |
-| `garyx-gateway/src/route_graph.rs` | 7 routes | additive |
+| `garyx-gateway/src/route_graph.rs` | 6 routes | additive |
 | `garyx-gateway/src/composition/*` | service wiring + sink injection | additive |
 | `garyx/src/commands/meeting.rs`, `cli.rs`, `main.rs` | CLI subcommand | additive |
 | Desktop / iOS (slice 3) | gallery + prefill action | additive |
@@ -899,8 +942,21 @@ read).
 joining/finalizing/aborting statuses render correctly in read/list
 output.
 
-**WS path (S1):** fixture records which path carries invite/ended;
-raw-text carriage asserts the slice-2 halt condition.
+**WS path / loss matrix (S1, RR12-01):** fixture records which path
+carries invite/ended; raw-text carriage asserts the slice-2 halt
+condition; ACK-success → crash-before-insert (lost, logged);
+ACK-failure → insert-failure → no redelivery (lost) vs redelivery
+admitted; redelivery after successful admission (no-op).
+
+**Remote join (RR12-02):** delayed-success-after-cancel (second attempt
+converges on the same meeting id per pinned fixture);
+crash-after-remote-success-before-CAS → boot re-join converges; abort
+racing late join fires best-effort leave (failure logged, not
+retried); attempt pacing has no hot loop on immediate failure.
+
+**Delete idempotency reset (RR12-03):** same event id redelivered after
+terminal → unique-key no-op; after delete → fresh entity (documented S2
+behavior); distinct new event after delete → fresh entity.
 
 Scope: `cargo test --all-targets` for `garyx-channels`, `garyx-gateway`,
 `garyx-models`, `garyx`; tier1 fast loop; slice 3 adds SwiftPM +
