@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { FileText } from "lucide-react";
+import { Download, FileText } from "lucide-react";
 
 import {
   Dialog,
@@ -29,6 +29,7 @@ import {
   type LocalMessageImageRenderer,
 } from "./message-rich-text";
 import { useI18n, type Translate } from "./i18n";
+import { useToastActions } from "./toast-provider";
 import {
   parseTaskNotificationText,
   type ParsedTaskNotification,
@@ -366,14 +367,38 @@ function MessageFileAttachmentCard({
 
 export function ImageZoomDialog({
   alt,
+  suggestedName,
   src,
   trigger,
 }: {
   alt: string;
+  suggestedName?: string;
   src: string;
   trigger: ReactNode;
 }) {
   const { t } = useI18n();
+  const { pushToast } = useToastActions();
+  const [saving, setSaving] = useState(false);
+  const handleSaveImage = useCallback(async () => {
+    if (saving) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const result = await window.garyxDesktop.saveImage({
+        dataUrl: src,
+        suggestedName,
+      });
+      if (!result.canceled) {
+        pushToast(t("Image saved."), "success");
+      }
+    } catch {
+      pushToast(t("Could not save image."), "error");
+    } finally {
+      setSaving(false);
+    }
+  }, [pushToast, saving, src, suggestedName, t]);
+
   return (
     <Dialog>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
@@ -388,6 +413,20 @@ export function ImageZoomDialog({
         <div className="message-image-preview-stage">
           <img alt={alt} className="message-image-preview" src={src} />
         </div>
+        <button
+          aria-busy={saving}
+          aria-label={t("Download image")}
+          className="message-image-preview-download"
+          disabled={saving}
+          onClick={() => {
+            void handleSaveImage();
+          }}
+          title={t("Download image")}
+          type="button"
+        >
+          <Download aria-hidden size={15} strokeWidth={1.9} />
+          <span>{saving ? t("Saving…") : t("Download image")}</span>
+        </button>
       </DialogContent>
     </Dialog>
   );
@@ -396,9 +435,11 @@ export function ImageZoomDialog({
 export function MessageImageAttachmentFrame({
   compact,
   segment,
+  suggestedName,
 }: {
   compact: boolean;
   segment: Extract<TranscriptSegment, { kind: "image" }>;
+  suggestedName?: string;
 }) {
   const { t } = useI18n();
   const frameClassName = `message-image-frame ${
@@ -408,6 +449,7 @@ export function MessageImageAttachmentFrame({
   return (
     <ImageZoomDialog
       alt={segment.alt}
+      suggestedName={suggestedName}
       src={segment.src}
       trigger={
         <button
@@ -491,6 +533,7 @@ export function MessagePathImageAttachmentFrame({
   return (
     <MessageImageAttachmentFrame
       compact={compact}
+      suggestedName={preview.alt || alt}
       segment={{
         kind: "image",
         key: imageKey,

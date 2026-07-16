@@ -1069,6 +1069,7 @@ export function ComposerForm({
               </AttachmentMedia>
               <ImageZoomDialog
                 alt={image.name}
+                suggestedName={image.name}
                 src={buildMessageImageDataUrl(image.mediaType, image.data || '')}
                 trigger={
                   <AttachmentTrigger

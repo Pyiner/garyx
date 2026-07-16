@@ -90,6 +90,10 @@ import type {
   ListProviderRecentSessionsInput,
 } from "./provider.ts";
 import type {
+  SaveImageInput,
+  SaveImageResult,
+} from "./image.ts";
+import type {
   ConnectionStatus,
   DesktopSettings,
   GatewayConfigDocument,
@@ -333,6 +337,7 @@ export interface GaryxDesktopApi {
   previewWorkspaceFile: (
     input: PreviewWorkspaceFileInput,
   ) => Promise<DesktopWorkspaceFilePreview>;
+  saveImage: (input: SaveImageInput) => Promise<SaveImageResult>;
   revealWorkspaceFile: (
     input: RevealWorkspaceFileInput,
   ) => Promise<void>;

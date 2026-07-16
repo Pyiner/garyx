@@ -178,6 +178,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:list-workspace-files", input),
   previewWorkspaceFile: (input) =>
     ipcRenderer.invoke("garyx:preview-workspace-file", input),
+  saveImage: (input) =>
+    ipcRenderer.invoke("garyx:save-image", input),
   revealWorkspaceFile: (input) =>
     ipcRenderer.invoke("garyx:reveal-workspace-file", input),
   uploadChatAttachments: (input) =>
