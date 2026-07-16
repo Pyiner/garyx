@@ -434,6 +434,42 @@ final class HomeProjectionReducerTests: XCTestCase {
         XCTAssertEqual(transitions.motion(for: "thread-0"), .stable)
     }
 
+    func testHomeArchiveReferencePathUsesHubAmbiguousBarrierWithoutRemovingOldRow() throws {
+        let input = GaryxHomeListFixture.makeInputs(threadCount: 6, pinnedCount: 1, runningCount: 0)
+        let sections = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state.snapshot.sections
+        let store = GaryxHomeThreadListStore(snapshot: snapshot(sections: sections))
+        let oldIds = store.presentationSnapshot.sections.allRows.map(\.id)
+
+        XCTAssertTrue(store.beginArchiveTransition(threadId: "thread-0"))
+        XCTAssertEqual(store.rowMotion(threadId: "thread-0"), .archiving)
+        XCTAssertEqual(
+            store.mutationHubResidentState?.pending.values.first?.ambiguous,
+            false
+        )
+
+        let ticket = try XCTUnwrap(
+            store.markArchiveTransitionAmbiguous(threadId: "thread-0").first
+        )
+        XCTAssertEqual(store.rowMotion(threadId: "thread-0"), .stable)
+        XCTAssertEqual(store.presentationSnapshot.sections.allRows.map(\.id), oldIds)
+        let pending = try XCTUnwrap(store.mutationHubResidentState?.pending.values.first)
+        XCTAssertTrue(pending.ambiguous)
+        XCTAssertFalse(pending.showsMotion)
+
+        XCTAssertEqual(
+            store.completeHomeReconstruction(
+                ticket,
+                outcome: .authoritative(
+                    orderedThreadIds: oldIds.filter { $0 != "thread-0" }
+                )
+            ),
+            .accepted
+        )
+        XCTAssertFalse(store.mutationHubResidentState?.orderedThreadIds.contains("thread-0") == true)
+        XCTAssertTrue(store.mutationHubResidentState?.pending.isEmpty == true)
+        XCTAssertNil(store.mutationHubResidentState?.barrier)
+    }
+
     func testPinFailureMovesBackImmediatelyWithoutWaitingForCanonicalRollback() {
         let input = GaryxHomeListFixture.makeInputs(threadCount: 8, pinnedCount: 0, runningCount: 0)
         let baseState = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state

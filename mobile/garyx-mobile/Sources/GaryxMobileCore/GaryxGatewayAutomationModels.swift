@@ -423,7 +423,9 @@ public struct GaryxAutomationThreadEntry: Decodable, Identifiable, Equatable, Se
         status = try container.garyxDecodeFirstString(.status) ?? "success"
         startedAt = try container.garyxDecodeFirstString(.startedAt, .startedAtCamel) ?? ""
         finishedAt = try container.garyxDecodeFirstString(.finishedAt, .finishedAtCamel)
-        thread = try container.decodeIfPresent(GaryxThreadSummary.self, forKey: .thread)
+        thread = try container
+            .decodeIfPresent(GaryxAutomationThreadSummaryDTO.self, forKey: .thread)
+            .map(GaryxThreadSummaryAdapter.summary)
     }
 }
 

@@ -68,6 +68,64 @@ public struct GaryxRecentThreadsPage: Decodable, Equatable, Sendable {
 }
 
 
+public enum GaryxThreadSummaryTaskFilter: String, Equatable, Hashable, Sendable {
+    case include
+    case exclude
+    case only
+}
+
+
+public struct GaryxThreadSummariesPage: Decodable, Equatable, Sendable {
+    public var storeIncarnationId: String
+    public var serverBootId: String
+    public var threads: [GaryxThreadSummary]
+    public var hasMore: Bool
+    public var nextCursor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case storeIncarnationId = "store_incarnation_id"
+        case serverBootId = "server_boot_id"
+        case threads
+        case hasMore = "has_more"
+        case nextCursor = "next_cursor"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        storeIncarnationId = try container.decode(String.self, forKey: .storeIncarnationId)
+        serverBootId = try container.decode(String.self, forKey: .serverBootId)
+        let rows = try container.decode([GaryxThreadSummaryRowDTO].self, forKey: .threads)
+        threads = rows.map(GaryxThreadSummaryAdapter.summary)
+        hasMore = try container.decode(Bool.self, forKey: .hasMore)
+        guard container.contains(.nextCursor) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.nextCursor,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "next_cursor is required"
+                )
+            )
+        }
+        nextCursor = try container.decodeIfPresent(String.self, forKey: .nextCursor)
+        let normalizedIds = threads.map {
+            $0.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !storeIncarnationId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !serverBootId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              normalizedIds.allSatisfy({ !$0.isEmpty }),
+              Set(normalizedIds).count == normalizedIds.count,
+              hasMore == (nextCursor != nil),
+              nextCursor?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .threads,
+                in: container,
+                debugDescription: "Thread summaries page violates the cursor/identity contract"
+            )
+        }
+    }
+}
+
+
 public struct GaryxThreadFavoriteRecord: Decodable, Equatable, Sendable {
     public var threadId: String
     public var favoritedAt: String
@@ -180,6 +238,9 @@ public struct GaryxThreadFavoritesSnapshot: Decodable, Equatable, Sendable {
     public var threadIds: [String]
     public var favorites: [GaryxThreadFavoriteRecord]
     public var recent: Recent
+    /// Present only on the enhanced `include_summaries=true` envelope.
+    public var summaries: [GaryxThreadSummary]?
+    public var summariesTruncated: Bool?
 
     enum CodingKeys: String, CodingKey {
         case storeIncarnationId = "store_incarnation_id"
@@ -188,6 +249,8 @@ public struct GaryxThreadFavoritesSnapshot: Decodable, Equatable, Sendable {
         case threadIds = "thread_ids"
         case favorites
         case recent
+        case summaries
+        case summariesTruncated = "summaries_truncated"
     }
 
     public init(from decoder: Decoder) throws {
@@ -198,6 +261,21 @@ public struct GaryxThreadFavoritesSnapshot: Decodable, Equatable, Sendable {
         threadIds = try container.decode([String].self, forKey: .threadIds)
         favorites = try container.decode([GaryxThreadFavoriteRecord].self, forKey: .favorites)
         recent = try container.decode(Recent.self, forKey: .recent)
+        if container.contains(.summaries) || container.contains(.summariesTruncated) {
+            guard container.contains(.summaries), container.contains(.summariesTruncated) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .summaries,
+                    in: container,
+                    debugDescription: "Enhanced favorites summaries fields must be present together"
+                )
+            }
+            let rows = try container.decode([GaryxThreadSummaryRowDTO].self, forKey: .summaries)
+            summaries = rows.map(GaryxThreadSummaryAdapter.summary)
+            summariesTruncated = try container.decode(Bool.self, forKey: .summariesTruncated)
+        } else {
+            summaries = nil
+            summariesTruncated = nil
+        }
         try GaryxThreadFavoritesPage.validate(
             storeIncarnationId: storeIncarnationId,
             serverBootId: serverBootId,
@@ -206,6 +284,17 @@ public struct GaryxThreadFavoritesSnapshot: Decodable, Equatable, Sendable {
             favorites: favorites,
             codingPath: container.codingPath
         )
+        if let summaries {
+            let summaryIds = summaries.map(\.id)
+            guard Set(summaryIds).count == summaryIds.count,
+                  summaryIds.allSatisfy(threadIds.contains) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .summaries,
+                    in: container,
+                    debugDescription: "Favorites summaries must be unique snapshot members"
+                )
+            }
+        }
     }
 }
 

@@ -383,8 +383,51 @@ public final class GaryxGatewayClient {
         )
     }
 
+    public func listThreadSummaries(
+        workspaceDir: String? = nil,
+        tasks: GaryxThreadSummaryTaskFilter = .include,
+        query: String? = nil,
+        limit: Int = 30,
+        cursor: String? = nil
+    ) async throws -> GaryxThreadSummariesPage {
+        var queryItems = [
+            URLQueryItem(name: "tasks", value: tasks.rawValue),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        if let workspaceDir {
+            queryItems.append(URLQueryItem(name: "workspace_dir", value: workspaceDir))
+        }
+        if let query {
+            queryItems.append(URLQueryItem(name: "q", value: query))
+        }
+        if let cursor {
+            queryItems.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        return try await get("/api/thread-summaries", queryItems: queryItems)
+    }
+
+    /// Version-skew probe deliberately sends only the design-contract
+    /// `limit=1` query. A successful decode proves the capability; only an
+    /// exact 404 is classified as an old gateway by the caller.
+    public func probeThreadSummariesCapability() async -> GaryxThreadSummaryCapabilityProbeResult {
+        do {
+            let _: GaryxThreadSummariesPage = try await get(
+                "/api/thread-summaries",
+                queryItems: [URLQueryItem(name: "limit", value: "1")]
+            )
+            return .httpStatus(200)
+        } catch GaryxGatewayError.httpStatus(let status, _, _) {
+            return .httpStatus(status)
+        } catch {
+            return .failed
+        }
+    }
+
     public func getThread(threadId: String) async throws -> GaryxThreadSummary {
-        try await get("/api/threads/\(threadId.urlPathEncoded)")
+        let record: GaryxLegacyThreadRecordDTO = try await get(
+            "/api/threads/\(threadId.urlPathEncoded)"
+        )
+        return GaryxThreadSummaryAdapter.summary(record)
     }
 
     public func listThreadPins() async throws -> GaryxThreadPinsPage {
@@ -395,8 +438,15 @@ public final class GaryxGatewayClient {
         try await get("/api/thread-favorites")
     }
 
-    public func threadFavoritesSnapshot() async throws -> GaryxThreadFavoritesSnapshot {
-        try await get("/api/thread-favorites/snapshot")
+    public func threadFavoritesSnapshot(
+        includeSummaries: Bool = false
+    ) async throws -> GaryxThreadFavoritesSnapshot {
+        try await get(
+            "/api/thread-favorites/snapshot",
+            queryItems: includeSummaries
+                ? [URLQueryItem(name: "include_summaries", value: "true")]
+                : []
+        )
     }
 
     public func setThreadFavorite(
