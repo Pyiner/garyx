@@ -224,6 +224,7 @@ export async function listCustomAgents(
   const payload = await requestJson<CustomAgentsPayload>(
     settings,
     "/api/custom-agents",
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -256,6 +257,7 @@ export async function createCustomAgent(
   const payload = await requestJson<CustomAgentPayload>(
     settings,
     "/api/custom-agents",
+    "mutationSingleAttempt",
     {
       method: "POST",
       signal: AbortSignal.timeout(8000),
@@ -284,6 +286,7 @@ export async function updateCustomAgent(
   const payload = await requestJson<CustomAgentPayload>(
     settings,
     `/api/custom-agents/${encodeURIComponent(input.currentAgentId)}`,
+    "mutationSingleAttempt",
     {
       method: "PUT",
       signal: AbortSignal.timeout(8000),
@@ -313,6 +316,7 @@ export async function deleteCustomAgent(
   await requestJson<unknown>(
     settings,
     `/api/custom-agents/${encodeURIComponent(input.agentId)}`,
+    "mutationSingleAttempt",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
@@ -327,6 +331,7 @@ export async function toggleCustomAgent(
   const payload = await requestJson<CustomAgentPayload>(
     settings,
     `/api/custom-agents/${encodeURIComponent(input.agentId)}/toggle`,
+    "mutationSingleAttempt",
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),
@@ -343,6 +348,7 @@ export async function setDefaultCustomAgent(
   const payload = await requestJson<CustomAgentPayload>(
     settings,
     `/api/custom-agents/${encodeURIComponent(input.agentId)}/default`,
+    "mutationSingleAttempt",
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),

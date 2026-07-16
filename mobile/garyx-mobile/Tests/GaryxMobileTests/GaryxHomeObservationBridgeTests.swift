@@ -47,9 +47,9 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         feeds.completeRefresh(
             ticket,
             pageIds: [],
-            pageOffset: 0,
             pageCount: 30,
-            hasMore: true
+            hasMore: true,
+            nextCursor: "cursor-30"
         )
         model.recentThreadFeeds = feeds
 
@@ -136,9 +136,9 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         feeds.completeRefresh(
             ticket,
             pageIds: ids,
-            pageOffset: 0,
             pageCount: ids.count,
-            hasMore: false
+            hasMore: false,
+            nextCursor: nil
         )
         model.recentThreadFeeds = feeds
     }

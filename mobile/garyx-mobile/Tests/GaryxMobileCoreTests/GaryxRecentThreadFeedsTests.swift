@@ -35,9 +35,9 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
             feeds.completeRefresh(
                 chatsTicket,
                 pageIds: ["chat-a", "chat-b"],
-                pageOffset: 0,
                 pageCount: 2,
-                hasMore: false
+                hasMore: false,
+                nextCursor: nil
             ),
             .apply(.replaceHead)
         )
@@ -47,9 +47,9 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
         _ = feeds.completeRefresh(
             allTicket,
             pageIds: ["task", "chat-a"],
-            pageOffset: 0,
             pageCount: 2,
-            hasMore: false
+            hasMore: false,
+            nextCursor: nil
         )
         XCTAssertEqual(feeds.allFeed.orderedThreadIds, ["task", "chat-a"])
     }
@@ -64,9 +64,9 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
             feeds.completeRefresh(
                 ticket,
                 pageIds: ["old"],
-                pageOffset: 0,
                 pageCount: 1,
-                hasMore: false
+                hasMore: false,
+                nextCursor: nil
             ),
             .abandonedStaleEpoch
         )
@@ -93,9 +93,9 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
         _ = feeds.completeRefresh(
             emptyTicket,
             pageIds: [],
-            pageOffset: 0,
             pageCount: 0,
-            hasMore: false
+            hasMore: false,
+            nextCursor: nil
         )
         XCTAssertTrue(feeds.allFeed.isPrimed)
         XCTAssertFalse(feeds.allFeed.headFailure)
@@ -134,9 +134,9 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
             feeds.completeRefresh(
                 auxiliaryTicket,
                 pageIds: ["task", "chat"],
-                pageOffset: 0,
                 pageCount: 2,
-                hasMore: false
+                hasMore: false,
+                nextCursor: nil
             ),
             .apply(.replaceHead)
         )
@@ -150,33 +150,33 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
         adoptHead(&feeds, filter: .all, ids: ["a", "b", "c"], hasMore: true)
         let firstLoad = try XCTUnwrap(feeds.requestLoadMore(trigger: .footer))
         XCTAssertEqual(firstLoad.filter, .all)
-        XCTAssertEqual(firstLoad.offset, 0)
+        XCTAssertEqual(firstLoad.cursor, "cursor-head")
         _ = feeds.completeLoadMore(
             firstLoad,
             pageIds: ["a", "b", "c", "d", "e", "f"],
-            pageOffset: 0,
             pageCount: 6,
-            hasMore: true
+            hasMore: true,
+            nextCursor: "cursor-tail"
         )
 
         let head = try XCTUnwrap(feeds.requestRefresh(filter: .all))
         _ = feeds.completeRefresh(
             head,
             pageIds: ["new", "a", "b"],
-            pageOffset: 0,
             pageCount: 3,
-            hasMore: true
+            hasMore: true,
+            nextCursor: "cursor-new-head"
         )
         XCTAssertEqual(feeds.allFeed.orderedThreadIds, ["new", "a", "b", "c", "d", "e", "f"])
 
         let secondLoad = try XCTUnwrap(feeds.requestLoadMore(trigger: .nearTail))
-        XCTAssertEqual(secondLoad.offset, 1)
+        XCTAssertEqual(secondLoad.cursor, "cursor-tail")
         _ = feeds.completeLoadMore(
             secondLoad,
             pageIds: ["a", "b", "c", "d", "e", "f", "g"],
-            pageOffset: 1,
             pageCount: 7,
-            hasMore: false
+            hasMore: false,
+            nextCursor: nil
         )
         XCTAssertEqual(feeds.allFeed.orderedThreadIds, ["new", "a", "b", "c", "d", "e", "f", "g"])
         XCTAssertEqual(feeds.allFeed.pager.footerState, .hidden)
@@ -212,9 +212,9 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
             feeds.completeRefresh(
                 stale,
                 pageIds: ["task", "chat", "tail"],
-                pageOffset: 0,
                 pageCount: 3,
-                hasMore: false
+                hasMore: false,
+                nextCursor: nil
             ),
             .abandonedLocalMutation
         )
@@ -268,9 +268,9 @@ final class GaryxRecentThreadFeedsTests: XCTestCase {
         _ = feeds.completeRefresh(
             ticket,
             pageIds: ids,
-            pageOffset: 0,
             pageCount: ids.count,
-            hasMore: hasMore
+            hasMore: hasMore,
+            nextCursor: hasMore ? "cursor-head" : nil
         )
     }
 }

@@ -119,9 +119,12 @@ function stripNullObjectFields(value: unknown): unknown {
 async function readGatewaySettingsFromApi(
   settings: DesktopSettings,
 ): Promise<GatewaySettingsPayload> {
-  const payload = await requestJson<unknown>(settings, "/api/settings", {
-    signal: AbortSignal.timeout(8000),
-  });
+  const payload = await requestJson<unknown>(
+    settings,
+    "/api/settings",
+    "readRetryable",
+    { signal: AbortSignal.timeout(8000) },
+  );
   return normalizeGatewaySettingsPayload(payload, {
     source: "gateway_api",
     secretsMasked: true,
@@ -133,13 +136,16 @@ export async function checkConnection(
 ): Promise<ConnectionStatus> {
   try {
     const [health, status, runtime] = await Promise.all([
-      requestJson<{ bridge_ready?: boolean }>(settings, "/api/chat/health", {
+      requestJson<{ bridge_ready?: boolean }>(
+        settings,
+        "/api/chat/health",
+        "readRetryable",
+        { signal: AbortSignal.timeout(5000) },
+      ),
+      requestJson<StatusPayload>(settings, "/api/status", "readRetryable", {
         signal: AbortSignal.timeout(5000),
       }),
-      requestJson<StatusPayload>(settings, "/api/status", {
-        signal: AbortSignal.timeout(5000),
-      }),
-      requestJson<RuntimePayload>(settings, "/runtime", {
+      requestJson<RuntimePayload>(settings, "/runtime", "readRetryable", {
         signal: AbortSignal.timeout(5000),
       }),
     ]);
@@ -186,11 +192,16 @@ export async function saveGatewaySettings(
     ok?: boolean;
     message?: string;
     errors?: string[];
-  }>(settings, `/api/settings?merge=${merge ? "true" : "false"}`, {
-    method: "PUT",
-    signal: AbortSignal.timeout(12000),
-    body: JSON.stringify(normalizedConfig),
-  });
+  }>(
+    settings,
+    `/api/settings?merge=${merge ? "true" : "false"}`,
+    "mutationSingleAttempt",
+    {
+      method: "PUT",
+      signal: AbortSignal.timeout(12000),
+      body: JSON.stringify(normalizedConfig),
+    },
+  );
 
   return {
     ok: Boolean(result.ok),

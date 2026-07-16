@@ -70,9 +70,9 @@ extension GaryxMobileModel {
             switch recentThreadFeeds.completeRefresh(
                 ticket,
                 pageIds: visiblePageThreads.map(\.id),
-                pageOffset: page.offset,
                 pageCount: page.count,
-                hasMore: page.hasMore
+                hasMore: page.hasMore,
+                nextCursor: page.nextCursor
             ) {
             case .abandonedStaleEpoch:
                 // The pager was reset mid-flight: the page belongs to the
@@ -154,9 +154,9 @@ extension GaryxMobileModel {
             switch recentThreadFeeds.completeRefresh(
                 ticket,
                 pageIds: pageThreads.map(\.id),
-                pageOffset: page.offset,
                 pageCount: page.count,
-                hasMore: page.hasMore
+                hasMore: page.hasMore,
+                nextCursor: page.nextCursor
             ) {
             case .apply:
                 threads = Self.mergedThreadSummaries(
@@ -377,7 +377,7 @@ extension GaryxMobileModel {
             let page = try await client().listRecentThreads(
                 filter: ticket.filter,
                 limit: ticket.limit,
-                offset: ticket.offset
+                cursor: ticket.cursor
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else {
                 recentThreadFeeds.failLoadMore(ticket)
@@ -387,9 +387,9 @@ extension GaryxMobileModel {
             switch recentThreadFeeds.completeLoadMore(
                 ticket,
                 pageIds: pageThreads.map(\.id),
-                pageOffset: page.offset,
                 pageCount: page.count,
-                hasMore: page.hasMore
+                hasMore: page.hasMore,
+                nextCursor: page.nextCursor
             ) {
             case .abandonedStaleEpoch:
                 // Pager reset mid-flight: the page belongs to the previous

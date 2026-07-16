@@ -76,7 +76,7 @@ export async function fetchChannelPlugins(
   const result = await requestJson<{
     ok?: boolean;
     plugins?: ChannelPluginCatalogEntry[];
-  }>(settings, "/api/channels/plugins", {
+  }>(settings, "/api/channels/plugins", "readRetryable", {
     method: "GET",
     signal: AbortSignal.timeout(5000),
   });
@@ -110,12 +110,17 @@ export async function startChannelAuthFlow(
     display?: Array<{ kind: string; value?: string }>;
     expires_in_secs?: number;
     poll_interval_secs?: number;
-  }>(settings, `/api/channels/plugins/${encodeURIComponent(pluginId)}/auth_flow/start`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ form_state: formState }),
-    signal: AbortSignal.timeout(15_000),
-  });
+  }>(
+    settings,
+    `/api/channels/plugins/${encodeURIComponent(pluginId)}/auth_flow/start`,
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ form_state: formState }),
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
   if (!payload.session_id) {
     throw new Error("auth_flow/start response missing session_id");
   }
@@ -150,6 +155,7 @@ export async function pollChannelAuthFlow(
   return requestJson(
     settings,
     `/api/channels/plugins/${encodeURIComponent(pluginId)}/auth_flow/poll`,
+    "mutationSingleAttempt",
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -175,6 +181,7 @@ export async function validateChannelAccount(
   }>(
     settings,
     `/api/channels/plugins/${encodeURIComponent(pluginId)}/validate_account`,
+    "mutationSingleAttempt",
     {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -198,6 +205,7 @@ export async function fetchChannelEndpoints(
   const payload = await requestJson<ChannelEndpointsPayload>(
     settings,
     "/api/channel-endpoints",
+    "readRetryable",
     {
       signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
     },
@@ -215,11 +223,16 @@ export async function bindRemoteChannelEndpoint(
     threadId: string;
   },
 ): Promise<void> {
-  await requestJson<unknown>(settings, "/api/channel-bindings/bind", {
-    method: "POST",
-    signal: AbortSignal.timeout(8000),
-    body: JSON.stringify(input),
-  });
+  await requestJson<unknown>(
+    settings,
+    "/api/channel-bindings/bind",
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export async function detachRemoteChannelEndpoint(
@@ -228,9 +241,14 @@ export async function detachRemoteChannelEndpoint(
     endpointKey: string;
   },
 ): Promise<void> {
-  await requestJson<unknown>(settings, "/api/channel-bindings/detach", {
-    method: "POST",
-    signal: AbortSignal.timeout(8000),
-    body: JSON.stringify(input),
-  });
+  await requestJson<unknown>(
+    settings,
+    "/api/channel-bindings/detach",
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify(input),
+    },
+  );
 }

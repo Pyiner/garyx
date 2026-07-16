@@ -31,14 +31,21 @@ function summary(id, title = id, threadType = "chat") {
 }
 
 function page(scope, ids, options = {}) {
+  const hasMore = options.hasMore ?? false;
   return {
     gatewayScope: scope,
+    storeIncarnationId: options.storeIncarnationId ?? "incarnation-a",
+    serverBootId: options.serverBootId ?? "boot-a",
     threads: ids.map((id) => summary(id)),
     count: options.count ?? ids.length,
     total: options.total ?? ids.length,
     limit: options.limit ?? 100,
-    offset: options.offset ?? 0,
-    hasMore: options.hasMore ?? false,
+    hasMore,
+    nextCursor: Object.hasOwn(options, "nextCursor")
+      ? options.nextCursor
+      : hasMore
+        ? `cursor-${ids.at(-1) || "empty"}`
+        : null,
   };
 }
 
@@ -126,7 +133,7 @@ test("successful empty pages are primed while first failures remain unavailable"
   assert.equal(failed.feeds.nonTask.headFailure, "offline");
 });
 
-test("head refresh merges loaded tails and overlap load-more advances by server cursor", () => {
+test("cursor pages replace the head and append load-more rows", () => {
   let state = createRecentThreadFeedsState("https://gateway.test");
   state = refresh(state, "all", ["a", "b", "c"], {
     count: 3,
@@ -135,18 +142,18 @@ test("head refresh merges loaded tails and overlap load-more advances by server 
   });
 
   let load = requestRecentThreadLoadMore(state, "all");
-  assert.equal(load.ticket.offset, 0);
+  assert.equal(load.ticket.cursor, "cursor-c");
   state = completeRecentThreadRequest(
     load.state,
     load.ticket,
-    page(state.gatewayScope, ["a", "b", "c", "d", "e", "f"], {
-      count: 6,
+    page(state.gatewayScope, ["d", "e", "f"], {
+      count: 3,
       total: 9,
       hasMore: true,
     }),
   );
   assert.deepEqual(state.feeds.all.orderedThreadIds, ["a", "b", "c", "d", "e", "f"]);
-  assert.equal(state.feeds.all.nextOffset, 6);
+  assert.equal(state.feeds.all.nextCursor, "cursor-f");
 
   const head = requestRecentThreadRefresh(state, "all");
   state = completeRecentThreadRequest(
@@ -158,27 +165,26 @@ test("head refresh merges loaded tails and overlap load-more advances by server 
       hasMore: true,
     }),
   );
-  assert.deepEqual(state.feeds.all.orderedThreadIds, ["new", "a", "b", "c", "d", "e", "f"]);
-  assert.equal(state.feeds.all.nextOffset, 6);
+  assert.deepEqual(state.feeds.all.orderedThreadIds, ["new", "a", "b"]);
+  assert.equal(state.feeds.all.nextCursor, "cursor-b");
 
   load = requestRecentThreadLoadMore(state, "all");
-  assert.equal(load.ticket.offset, 1);
+  assert.equal(load.ticket.cursor, "cursor-b");
   state = completeRecentThreadRequest(
     load.state,
     load.ticket,
     page(state.gatewayScope, ["a", "b", "c", "d", "e", "f", "g"], {
-      offset: 1,
-      count: 7,
+      count: 5,
       total: 8,
       hasMore: false,
     }),
   );
   assert.deepEqual(state.feeds.all.orderedThreadIds, ["new", "a", "b", "c", "d", "e", "f", "g"]);
-  assert.equal(state.feeds.all.nextOffset, 8);
+  assert.equal(state.feeds.all.nextCursor, null);
   assert.equal(state.feeds.all.loadGate, "exhausted");
 });
 
-test("each filter owns its offset and coalesces duplicate load-more triggers", () => {
+test("each filter owns its cursor and coalesces duplicate load-more triggers", () => {
   let state = createRecentThreadFeedsState("https://gateway.test");
   state = refresh(state, "all", ["task", "chat-a", "chat-b"], {
     count: 3,
@@ -196,14 +202,14 @@ test("each filter owns its offset and coalesces duplicate load-more triggers", (
   assert.equal(requestRecentThreadLoadMore(allLoad.state, "all").ticket, null);
   const chatsLoad = requestRecentThreadLoadMore(allLoad.state, "nonTask");
   assert.ok(chatsLoad.ticket);
-  assert.equal(allLoad.ticket.offset, 0);
-  assert.equal(chatsLoad.ticket.offset, 0);
+  assert.equal(allLoad.ticket.cursor, "cursor-chat-b");
+  assert.equal(chatsLoad.ticket.cursor, "cursor-chat-a");
 
   state = completeRecentThreadRequest(
     chatsLoad.state,
     chatsLoad.ticket,
-    page(state.gatewayScope, ["chat-a", "chat-b", "chat-c", "chat-d"], {
-      count: 4,
+    page(state.gatewayScope, ["chat-b", "chat-c", "chat-d"], {
+      count: 3,
       total: 10,
       hasMore: true,
     }),
@@ -211,14 +217,14 @@ test("each filter owns its offset and coalesces duplicate load-more triggers", (
   state = completeRecentThreadRequest(
     state,
     allLoad.ticket,
-    page(state.gatewayScope, ["task", "chat-a", "chat-b", "tail-a", "tail-b", "tail-c"], {
-      count: 6,
+    page(state.gatewayScope, ["tail-a", "tail-b", "tail-c"], {
+      count: 3,
       total: 20,
       hasMore: true,
     }),
   );
-  assert.equal(state.feeds.all.nextOffset, 6);
-  assert.equal(state.feeds.nonTask.nextOffset, 4);
+  assert.equal(state.feeds.all.nextCursor, "cursor-tail-c");
+  assert.equal(state.feeds.nonTask.nextCursor, "cursor-chat-d");
 });
 
 test("load-more failures require explicit retry and do not contaminate the other feed", () => {
@@ -355,7 +361,7 @@ test("a load-more abandoned by local mutation reissues its owned filter window",
     }),
   );
   assert.equal(state.feeds.nonTask.loadMoreAfterMutation, true);
-  assert.equal(state.feeds.nonTask.nextOffset, 2);
+  assert.equal(state.feeds.nonTask.nextCursor, "cursor-chat-b");
 
   const followUp = consumeRecentThreadMutationFollowUp(
     state,
@@ -364,7 +370,7 @@ test("a load-more abandoned by local mutation reissues its owned filter window",
   );
   assert.ok(followUp.ticket);
   assert.equal(followUp.ticket.filter, "nonTask");
-  assert.equal(followUp.ticket.offset, 0);
+  assert.equal(followUp.ticket.cursor, "cursor-chat-b");
   assert.equal(followUp.state.feeds.nonTask.loadMoreAfterMutation, false);
 });
 

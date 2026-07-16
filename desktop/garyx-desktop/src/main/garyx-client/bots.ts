@@ -122,6 +122,7 @@ export async function fetchConfiguredBots(
   const payload = await requestJson<{ bots?: ConfiguredBotPayload[] }>(
     settings,
     "/api/configured-bots",
+    "readRetryable",
     { signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS) },
   );
   return Array.isArray(payload.bots) ? payload.bots : [];
@@ -133,6 +134,7 @@ export async function fetchBotConsoles(
   const payload = await requestJson<{ bots?: BotConsoleSummaryPayload[] }>(
     settings,
     "/api/bot-consoles",
+    "readRetryable",
     { signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS) },
   );
   return Array.isArray(payload.bots)

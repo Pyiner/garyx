@@ -68,14 +68,19 @@ export async function generateCustomAgentAvatar(
     async ({ signal, userSignal, timeoutSignal }) => {
       try {
         const prompt = buildAgentAvatarPrompt(input);
-        const payload = await requestJson<ToolImagePayload>(settings, "/api/tools/image", {
-          method: "POST",
-          signal,
-          body: JSON.stringify({
-            prompt,
-            timeout_secs: TOOL_IMAGE_TIMEOUT_SECS,
-          }),
-        });
+        const payload = await requestJson<ToolImagePayload>(
+          settings,
+          "/api/tools/image",
+          "mutationSingleAttempt",
+          {
+            method: "POST",
+            signal,
+            body: JSON.stringify({
+              prompt,
+              timeout_secs: TOOL_IMAGE_TIMEOUT_SECS,
+            }),
+          },
+        );
         const encoded = (payload.data_base64 || payload.dataBase64 || "").trim();
         if (!encoded) {
           return avatarFailure(

@@ -309,9 +309,12 @@ function mapMcpServer(value: unknown, index?: number): DesktopMcpServer {
 export async function listSkills(
   settings: DesktopSettings,
 ): Promise<DesktopSkillInfo[]> {
-  const payload = await requestJson<SkillsPayload>(settings, "/api/skills", {
-    signal: AbortSignal.timeout(8000),
-  });
+  const payload = await requestJson<SkillsPayload>(
+    settings,
+    "/api/skills",
+    "readRetryable",
+    { signal: AbortSignal.timeout(8000) },
+  );
 
   const record = requireContractRecord(payload, "skill list");
   return requireContractArray(
@@ -324,11 +327,16 @@ export async function createSkill(
   settings: DesktopSettings,
   input: CreateSkillInput,
 ): Promise<DesktopSkillInfo> {
-  const payload = await requestJson<SkillPayload>(settings, "/api/skills", {
-    method: "POST",
-    signal: AbortSignal.timeout(8000),
-    body: JSON.stringify(input),
-  });
+  const payload = await requestJson<SkillPayload>(
+    settings,
+    "/api/skills",
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify(input),
+    },
+  );
 
   return mapSkill(payload);
 }
@@ -340,6 +348,7 @@ export async function toggleSkill(
   const payload = await requestJson<SkillPayload>(
     settings,
     `/api/skills/${encodeURIComponent(skillId)}/toggle`,
+    "mutationSingleAttempt",
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),
@@ -356,6 +365,7 @@ export async function deleteSkill(
   await requestJson<unknown>(
     settings,
     `/api/skills/${encodeURIComponent(skillId)}`,
+    "mutationSingleAttempt",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
@@ -370,6 +380,7 @@ export async function getSkillEditor(
   const payload = await requestJson<SkillEditorPayload>(
     settings,
     `/api/skills/${encodeURIComponent(skillId)}/tree`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -386,6 +397,7 @@ export async function readSkillFile(
   const payload = await requestJson<SkillFileDocumentPayload>(
     settings,
     `/api/skills/${encodeURIComponent(skillId)}/file?path=${encodeURIComponent(path)}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -401,6 +413,7 @@ export async function saveSkillFile(
   const payload = await requestJson<SkillFileDocumentPayload>(
     settings,
     `/api/skills/${encodeURIComponent(input.skillId)}/file`,
+    "mutationSingleAttempt",
     {
       method: "PUT",
       signal: AbortSignal.timeout(8000),
@@ -421,6 +434,7 @@ export async function createSkillEntry(
   const payload = await requestJson<SkillEditorPayload>(
     settings,
     `/api/skills/${encodeURIComponent(input.skillId)}/entries`,
+    "mutationSingleAttempt",
     {
       method: "POST",
       signal: AbortSignal.timeout(8000),
@@ -441,6 +455,7 @@ export async function deleteSkillEntry(
   const payload = await requestJson<SkillEditorPayload>(
     settings,
     `/api/skills/${encodeURIComponent(input.skillId)}/entries?path=${encodeURIComponent(input.path)}`,
+    "mutationSingleAttempt",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
@@ -456,6 +471,7 @@ export async function listSlashCommands(
   const payload = await requestJson<SlashCommandsPayload>(
     settings,
     "/api/commands/shortcuts",
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -477,6 +493,7 @@ export async function createSlashCommand(
   const payload = await requestJson<SlashCommandPayload>(
     settings,
     "/api/commands/shortcuts",
+    "mutationSingleAttempt",
     {
       method: "POST",
       signal: AbortSignal.timeout(8000),
@@ -498,6 +515,7 @@ export async function updateSlashCommand(
   const payload = await requestJson<SlashCommandPayload>(
     settings,
     `/api/commands/shortcuts/${encodeURIComponent(input.currentName)}`,
+    "mutationSingleAttempt",
     {
       method: "PUT",
       signal: AbortSignal.timeout(8000),
@@ -519,6 +537,7 @@ export async function deleteSlashCommand(
   await requestJson<unknown>(
     settings,
     `/api/commands/shortcuts/${encodeURIComponent(input.name)}`,
+    "mutationSingleAttempt",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
@@ -532,6 +551,7 @@ export async function listMcpServers(
   const payload = await requestJson<McpServersPayload>(
     settings,
     "/api/mcp-servers",
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -551,6 +571,7 @@ export async function createMcpServer(
   const payload = await requestJson<McpServerPayload>(
     settings,
     "/api/mcp-servers",
+    "mutationSingleAttempt",
     {
       method: "POST",
       signal: AbortSignal.timeout(8000),
@@ -578,6 +599,7 @@ export async function updateMcpServer(
   const payload = await requestJson<McpServerPayload>(
     settings,
     `/api/mcp-servers/${encodeURIComponent(input.currentName)}`,
+    "mutationSingleAttempt",
     {
       method: "PUT",
       signal: AbortSignal.timeout(8000),
@@ -605,6 +627,7 @@ export async function deleteMcpServer(
   await requestJson<unknown>(
     settings,
     `/api/mcp-servers/${encodeURIComponent(input.name)}`,
+    "mutationSingleAttempt",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
@@ -619,6 +642,7 @@ export async function toggleMcpServer(
   const payload = await requestJson<McpServerPayload>(
     settings,
     `/api/mcp-servers/${encodeURIComponent(input.name)}/toggle`,
+    "mutationSingleAttempt",
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),

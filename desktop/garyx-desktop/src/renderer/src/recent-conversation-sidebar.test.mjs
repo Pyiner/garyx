@@ -49,7 +49,7 @@ function feed(overrides = {}) {
     isLoadingMore: false,
     headFailure: null,
     loadGate: "ready",
-    nextOffset: 0,
+    nextCursor: null,
     epoch: 0,
     localMutationSequence: 0,
     loadMoreFailureRevision: 0,
@@ -119,7 +119,7 @@ test("Recent presentation maps every load-more footer gate", () => {
   );
   assert.equal(
     recentConversationPresentation(
-      feed({ isPrimed: true, nextOffset: 100 }),
+      feed({ isPrimed: true, nextCursor: "cursor-next" }),
       3,
       "all",
     ).footerKind,
@@ -127,7 +127,11 @@ test("Recent presentation maps every load-more footer gate", () => {
   );
   assert.equal(
     recentConversationPresentation(
-      feed({ isPrimed: true, loadGate: "exhausted", nextOffset: 100 }),
+      feed({
+        isPrimed: true,
+        loadGate: "exhausted",
+        nextCursor: "cursor-next",
+      }),
       3,
       "all",
     ).footerKind,

@@ -78,7 +78,7 @@ export function useRecentThreadFeeds({
           gatewayScope: ticket.gatewayScope,
           tasks: recentThreadTasksQuery(ticket.filter),
           limit: ticket.limit,
-          offset: ticket.offset,
+          cursor: ticket.cursor,
         });
         commit((current) =>
           completeRecentThreadRequest(current, ticket, page),

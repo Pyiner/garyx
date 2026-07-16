@@ -2,6 +2,8 @@ import type {
   DesktopSettings,
   DesktopRecentThreadsPage,
   DesktopThreadProviderType,
+  DesktopThreadFavoritesPage,
+  DesktopThreadFavoritesSnapshot,
   DesktopThreadPinsPage,
   DesktopThreadSummary,
   GetThreadHistoryInput,
@@ -24,6 +26,7 @@ import {
   normalizeGatewayUrl,
   parseRecord,
   requestJson,
+  requestMutationJson,
   requireContractArray,
   requireContractBoolean,
   requireContractField,
@@ -32,6 +35,7 @@ import {
   requireContractRecord,
   requireContractString,
   tryParseJson,
+  type GatewayMutationResult,
 } from "./http.ts";
 
 const DEFAULT_THREAD_HISTORY_PAGE_SIZE = 100;
@@ -573,6 +577,10 @@ function mapRecentThreadSummary(
     requireContractField(record, "recorded_at", context),
     `${context}.recorded_at`,
   );
+  const activitySeq = requireContractNonNegativeInteger(
+    requireContractField(record, "activity_seq", context),
+    `${context}.activity_seq`,
+  );
 
   return {
     id,
@@ -586,6 +594,7 @@ function mapRecentThreadSummary(
     agentId,
     recentRunId,
     runState,
+    activitySeq,
     worktree: null,
   };
 }
@@ -841,6 +850,7 @@ export async function fetchThreadHistory(
     requestJson<unknown>(
       settings,
       `/api/threads/history?${query.toString()}`,
+      "readRetryable",
       {
         signal: AbortSignal.timeout(8000),
       },
@@ -849,6 +859,7 @@ export async function fetchThreadHistory(
       ? requestJson<unknown>(
           settings,
           `/api/threads/${encodeURIComponent(threadId)}`,
+          "readRetryable",
           {
             signal: AbortSignal.timeout(8000),
           },
@@ -922,6 +933,7 @@ export async function fetchThreadLogs(
   const payloadValue = await requestJson<unknown>(
     settings,
     `/api/threads/${encodeURIComponent(threadId)}/logs${suffix}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -960,6 +972,7 @@ export async function fetchThreads(
   const payloadValue = await requestJson<unknown>(
     settings,
     `/api/threads?limit=${limit}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
     },
@@ -1005,15 +1018,11 @@ export function validateListRecentThreadsInput(
   ) {
     throw new Error("limit must be an integer between 1 and 200");
   }
-  const offset = input.offset;
-  if (
-    typeof offset !== "number" ||
-    !Number.isSafeInteger(offset) ||
-    offset < 0
-  ) {
-    throw new Error("offset must be a non-negative integer");
+  const cursor = input.cursor;
+  if (cursor !== null && (typeof cursor !== "string" || !cursor.trim())) {
+    throw new Error("cursor must be null or a non-empty opaque string");
   }
-  return { gatewayScope, tasks, limit, offset };
+  return { gatewayScope, tasks, limit, cursor };
 }
 
 export function assertRecentThreadGatewayScope(
@@ -1029,16 +1038,19 @@ export function assertRecentThreadGatewayScope(
 
 export async function fetchRecentThreads(
   settings: DesktopSettings,
-  options: Pick<ListRecentThreadsInput, "tasks" | "limit" | "offset">,
+  options: Pick<ListRecentThreadsInput, "tasks" | "limit" | "cursor">,
 ): Promise<DesktopRecentThreadsPage> {
   const query = new URLSearchParams({
     tasks: options.tasks,
     limit: String(options.limit),
-    offset: String(options.offset),
   });
+  if (options.cursor !== null) {
+    query.set("cursor", options.cursor);
+  }
   const payloadValue = await requestJson<unknown>(
     settings,
     `/api/recent-threads?${query.toString()}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
     },
@@ -1062,10 +1074,6 @@ export async function fetchRecentThreads(
     requireContractField(payload, "limit", "recent thread page"),
     "recent thread page.limit",
   );
-  const offset = requireContractNonNegativeInteger(
-    requireContractField(payload, "offset", "recent thread page"),
-    "recent thread page.offset",
-  );
   const total = requireContractNonNegativeInteger(
     requireContractField(payload, "total", "recent thread page"),
     "recent thread page.total",
@@ -1074,15 +1082,205 @@ export async function fetchRecentThreads(
     requireContractField(payload, "has_more", "recent thread page"),
     "recent thread page.has_more",
   );
+  const nextCursorValue = requireContractField(
+    payload,
+    "next_cursor",
+    "recent thread page",
+  );
+  const nextCursor = nextCursorValue === null
+    ? null
+    : requireContractNonEmptyString(
+        nextCursorValue,
+        "recent thread page.next_cursor",
+      );
+  if (
+    count !== threads.length ||
+    limit < 1 ||
+    limit > 200 ||
+    total < count ||
+    hasMore !== (nextCursor !== null)
+  ) {
+    throw new GatewayContractError(
+      "recent thread page",
+      "violates the cursor/count contract",
+    );
+  }
   return {
     gatewayScope: normalizeGatewayUrl(settings.gatewayUrl),
+    storeIncarnationId: requireContractNonEmptyString(
+      requireContractField(
+        payload,
+        "store_incarnation_id",
+        "recent thread page",
+      ),
+      "recent thread page.store_incarnation_id",
+    ),
+    serverBootId: requireContractNonEmptyString(
+      requireContractField(payload, "server_boot_id", "recent thread page"),
+      "recent thread page.server_boot_id",
+    ),
     threads,
     count,
     total,
     limit,
-    offset,
     hasMore,
+    nextCursor,
   };
+}
+
+function mapThreadFavoritesPage(
+  value: unknown,
+  context = "thread favorites",
+): DesktopThreadFavoritesPage {
+  const payload = requireContractRecord(value, context);
+  const rawFavorites = requireContractArray(
+    requireContractField(payload, "favorites", context),
+    `${context}.favorites`,
+  );
+  const favorites = rawFavorites.map((favorite, index) => {
+    const path = `${context}.favorites[${index}]`;
+    const record = requireContractRecord(favorite, path);
+    return {
+      threadId: requireContractNonEmptyString(
+        requireContractField(record, "thread_id", path),
+        `${path}.thread_id`,
+      ),
+      favoritedAt: requireContractNonEmptyString(
+        requireContractField(record, "favorited_at", path),
+        `${path}.favorited_at`,
+      ),
+    };
+  });
+  const rawThreadIds = requireContractArray(
+    requireContractField(payload, "thread_ids", context),
+    `${context}.thread_ids`,
+  );
+  const threadIds = rawThreadIds.map((threadId, index) =>
+    requireContractNonEmptyString(threadId, `${context}.thread_ids[${index}]`),
+  );
+  if (
+    new Set(threadIds).size !== threadIds.length ||
+    threadIds.length !== favorites.length ||
+    threadIds.some((threadId, index) => favorites[index]?.threadId !== threadId)
+  ) {
+    throw new GatewayContractError(
+      context,
+      "must expose the same unique ordered membership in thread_ids and favorites",
+    );
+  }
+  return {
+    storeIncarnationId: requireContractNonEmptyString(
+      requireContractField(payload, "store_incarnation_id", context),
+      `${context}.store_incarnation_id`,
+    ),
+    serverBootId: requireContractNonEmptyString(
+      requireContractField(payload, "server_boot_id", context),
+      `${context}.server_boot_id`,
+    ),
+    revision: requireContractNonNegativeInteger(
+      requireContractField(payload, "revision", context),
+      `${context}.revision`,
+    ),
+    threadIds,
+    favorites,
+  };
+}
+
+export async function fetchThreadFavorites(
+  settings: DesktopSettings,
+): Promise<DesktopThreadFavoritesPage> {
+  const payload = await requestJson<unknown>(
+    settings,
+    "/api/thread-favorites",
+    "readRetryable",
+    { signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS) },
+  );
+  return mapThreadFavoritesPage(payload);
+}
+
+export async function fetchThreadFavoritesSnapshot(
+  settings: DesktopSettings,
+): Promise<DesktopThreadFavoritesSnapshot> {
+  const payloadValue = await requestJson<unknown>(
+    settings,
+    "/api/thread-favorites/snapshot",
+    "readRetryable",
+    { signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS) },
+  );
+  const payload = requireContractRecord(payloadValue, "thread favorites snapshot");
+  const page = mapThreadFavoritesPage(payload, "thread favorites snapshot");
+  const recent = requireContractRecord(
+    requireContractField(payload, "recent", "thread favorites snapshot"),
+    "thread favorites snapshot.recent",
+  );
+  const rawThreads = requireContractArray(
+    requireContractField(recent, "threads", "thread favorites snapshot.recent"),
+    "thread favorites snapshot.recent.threads",
+  );
+  const recentThreads = rawThreads.map((thread, index) =>
+    mapRecentThreadSummary(
+      thread,
+      `thread favorites snapshot.recent.threads[${index}]`,
+    ),
+  );
+  const recentTotal = requireContractNonNegativeInteger(
+    requireContractField(recent, "total", "thread favorites snapshot.recent"),
+    "thread favorites snapshot.recent.total",
+  );
+  const recentTruncated = requireContractBoolean(
+    requireContractField(
+      recent,
+      "truncated",
+      "thread favorites snapshot.recent",
+    ),
+    "thread favorites snapshot.recent.truncated",
+  );
+  if (
+    recentTotal < recentThreads.length ||
+    (!recentTruncated && recentTotal !== recentThreads.length)
+  ) {
+    throw new GatewayContractError(
+      "thread favorites snapshot.recent",
+      "violates the total/truncated contract",
+    );
+  }
+  return {
+    ...page,
+    recent: {
+      threads: recentThreads,
+      total: recentTotal,
+      truncated: recentTruncated,
+    },
+  };
+}
+
+export async function setRemoteThreadFavorite(
+  settings: DesktopSettings,
+  input: {
+    threadId: string;
+    favorited: boolean;
+    expectedRevision: number;
+    expectedStoreIncarnation: string;
+  },
+): Promise<GatewayMutationResult<DesktopThreadFavoritesPage>> {
+  const query = new URLSearchParams({
+    expected_revision: String(input.expectedRevision),
+    expected_store_incarnation: input.expectedStoreIncarnation,
+  });
+  const operation = input.favorited
+    ? "thread_favorites_put"
+    : "thread_favorites_delete";
+  return requestMutationJson<DesktopThreadFavoritesPage>(
+    settings,
+    `/api/thread-favorites/${encodeURIComponent(input.threadId)}?${query.toString()}`,
+    "mutationSingleAttempt",
+    operation,
+    {
+      method: input.favorited ? "PUT" : "DELETE",
+      signal: AbortSignal.timeout(8000),
+    },
+    (payload) => mapThreadFavoritesPage(payload, "thread favorites mutation"),
+  );
 }
 
 /**
@@ -1098,6 +1296,7 @@ export async function fetchThreadSummary(
     const payload = await requestJson<unknown>(
       settings,
       `/api/threads/${encodeURIComponent(threadId)}`,
+      "readRetryable",
       {
         signal: AbortSignal.timeout(8000),
       },
@@ -1142,9 +1341,14 @@ export function mapThreadPinsPage(value: unknown): DesktopThreadPinsPage {
 export async function fetchThreadPins(
   settings: DesktopSettings,
 ): Promise<DesktopThreadPinsPage> {
-  const payload = await requestJson<unknown>(settings, "/api/thread-pins", {
-    signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
-  });
+  const payload = await requestJson<unknown>(
+    settings,
+    "/api/thread-pins",
+    "readRetryable",
+    {
+      signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
+    },
+  );
   return mapThreadPinsPage(payload);
 }
 
@@ -1156,6 +1360,7 @@ export async function setRemoteThreadPinned(
   const payload = await requestJson<unknown>(
     settings,
     `/api/thread-pins/${encodeURIComponent(threadId)}`,
+    "mutationSingleAttempt",
     {
       method: pinned ? "PUT" : "DELETE",
       signal: AbortSignal.timeout(8000),
@@ -1170,14 +1375,19 @@ export async function reorderRemoteThreadPins(
   expectedRevision: number,
 ): Promise<{ kind: "accepted" | "conflict"; page: DesktopThreadPinsPage }> {
   try {
-    const payload = await requestJson<unknown>(settings, "/api/thread-pins", {
-      method: "PUT",
-      signal: AbortSignal.timeout(8000),
-      body: JSON.stringify({
-        thread_ids: threadIds,
-        expected_revision: expectedRevision,
-      }),
-    });
+    const payload = await requestJson<unknown>(
+      settings,
+      "/api/thread-pins",
+      "mutationSingleAttempt",
+      {
+        method: "PUT",
+        signal: AbortSignal.timeout(8000),
+        body: JSON.stringify({
+          thread_ids: threadIds,
+          expected_revision: expectedRevision,
+        }),
+      },
+    );
     return { kind: "accepted", page: mapThreadPinsPage(payload) };
   } catch (error) {
     if (error instanceof GatewayRequestError && error.status === 409) {
@@ -1209,6 +1419,7 @@ export async function createRemoteThread(
   const payload = await requestJson<unknown>(
     settings,
     "/api/threads",
+    "mutationSingleAttempt",
     {
       method: "POST",
       // Creating a thread can wait behind gateway thread-store write locks
@@ -1260,6 +1471,7 @@ export async function updateRemoteThread(
   const payload = await requestJson<unknown>(
     settings,
     `/api/threads/${encodeURIComponent(threadId)}`,
+    "mutationSingleAttempt",
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),
@@ -1276,6 +1488,7 @@ export async function deleteRemoteThread(
   await requestJson<unknown>(
     settings,
     `/api/threads/${encodeURIComponent(threadId)}`,
+    "mutationSingleAttempt",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
@@ -1291,6 +1504,7 @@ export async function archiveRemoteThread(
   await requestJson<unknown>(
     settings,
     `/api/threads/${encodeURIComponent(threadId)}/archive`,
+    "mutationSingleAttempt",
     {
       method: "POST",
       signal: AbortSignal.timeout(8000),

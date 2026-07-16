@@ -244,7 +244,7 @@ extension GaryxMobileModel {
         let attempt = homeThreadListStore.pinnedOrderState.nextRetryAttempt
         let policyDelay = GaryxGatewayRetryPolicy.default.delay(forAttempt: attempt)
         if case GaryxGatewayError.httpStatus(let status, _, let retryAfter) = error {
-            if GaryxGatewayRetryClassifier.isRetryableStatus(status, idempotent: true) {
+            if GaryxGatewayRetryClassifier.isTransientStatus(status) {
                 return .retryable(delay: max(policyDelay, retryAfter ?? 0))
             }
             return .permanent(statusCode: status)

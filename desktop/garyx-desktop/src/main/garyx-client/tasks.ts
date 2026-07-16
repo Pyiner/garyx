@@ -493,6 +493,7 @@ export async function listTasks(
   const payload = await requestJson<TasksPayload>(
     settings,
     `/api/tasks?${query.toString()}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -543,6 +544,7 @@ export async function listTaskForest(
   const payload = await requestJson<TaskForestPayload>(
     settings,
     `/api/tasks/forest${suffix ? `?${suffix}` : ""}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -590,10 +592,14 @@ export async function createTask(
       : null;
   const workspaceDir = input.workspaceDir?.trim() || "";
   const source = taskSourcePayload(input.source);
-  const payload = await requestJson<TaskSummaryPayload>(settings, "/api/tasks", {
-    method: "POST",
-    signal: AbortSignal.timeout(8000),
-    body: JSON.stringify({
+  const payload = await requestJson<TaskSummaryPayload>(
+    settings,
+    "/api/tasks",
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({
       title: input.title?.trim() || null,
       body: input.body?.trim() || null,
       ...(source ? { source } : {}),
@@ -607,8 +613,9 @@ export async function createTask(
         workspace_mode: input.workspaceMode || "local",
       },
       notification_target: taskNotificationTargetPayload(input.notificationTarget),
-    }),
-  });
+      }),
+    },
+  );
   return mapCreatedTaskEnvelope(payload, "create task response");
 }
 
@@ -666,6 +673,7 @@ export async function updateTaskStatus(
   await requestJson<unknown>(
     settings,
     `/api/tasks/${encodeURIComponent(input.taskId)}/status`,
+    "mutationSingleAttempt",
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),
@@ -685,6 +693,7 @@ export async function assignTask(
   await requestJson<unknown>(
     settings,
     `/api/tasks/${encodeURIComponent(input.taskId)}/assign`,
+    "mutationSingleAttempt",
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),
@@ -702,6 +711,7 @@ export async function stopTask(
   await requestJson<unknown>(
     settings,
     `/api/tasks/${encodeURIComponent(input.taskId)}/stop`,
+    "mutationSingleAttempt",
     {
       method: "POST",
       signal: AbortSignal.timeout(8000),
@@ -716,6 +726,7 @@ export async function deleteTask(
   await requestJson<unknown>(
     settings,
     `/api/tasks/${encodeURIComponent(input.taskId)}`,
+    "mutationSingleAttempt",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),

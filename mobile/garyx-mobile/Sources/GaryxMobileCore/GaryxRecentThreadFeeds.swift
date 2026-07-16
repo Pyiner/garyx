@@ -63,8 +63,8 @@ public struct GaryxRecentThreadRefreshTicket: Equatable, Sendable {
 public struct GaryxRecentThreadLoadMoreTicket: Equatable, Sendable {
     public let filter: GaryxRecentThreadFilter
     public let pagerTicket: GaryxThreadListLoadMoreTicket
+    public let cursor: String
 
-    public var offset: Int { pagerTicket.offset }
     public var limit: Int { pagerTicket.limit }
 }
 
@@ -73,12 +73,14 @@ public struct GaryxRecentThreadFeedState: Equatable, Sendable {
     public private(set) var isPrimed: Bool
     public private(set) var headFailure: Bool
     public private(set) var pager: GaryxHomeThreadListPager
+    public private(set) var nextCursor: String?
 
     public init(pageLimit: Int, overlap: Int) {
         orderedThreadIds = []
         isPrimed = false
         headFailure = false
         pager = GaryxHomeThreadListPager(pageLimit: pageLimit, overlap: overlap)
+        nextCursor = nil
     }
 
     public var presentation: GaryxRecentThreadFeedPresentation {
@@ -99,13 +101,14 @@ public struct GaryxRecentThreadFeedState: Equatable, Sendable {
     fileprivate mutating func completeRefresh(
         _ ticket: GaryxThreadListRefreshTicket,
         pageIds: [String],
-        pageOffset: Int,
         pageCount: Int,
-        hasMore: Bool
+        hasMore: Bool,
+        nextCursor responseCursor: String?
     ) -> GaryxThreadListRefreshCompletion {
+        let previousCursor = nextCursor
         let completion = pager.completeRefresh(
             ticket,
-            pageOffset: pageOffset,
+            pageOffset: 0,
             pageCount: pageCount,
             hasMore: hasMore
         )
@@ -113,11 +116,13 @@ public struct GaryxRecentThreadFeedState: Equatable, Sendable {
         switch application {
         case .replaceHead:
             orderedThreadIds = Self.normalizedIds(pageIds)
+            nextCursor = responseCursor
         case .mergeBeyondHead:
             orderedThreadIds = GaryxThreadListPageMerge.mergeHead(
                 pageIds: Self.normalizedIds(pageIds),
                 existingIds: orderedThreadIds
             )
+            nextCursor = previousCursor
         }
         isPrimed = true
         headFailure = false
@@ -135,20 +140,23 @@ public struct GaryxRecentThreadFeedState: Equatable, Sendable {
     fileprivate mutating func requestLoadMore(
         trigger: GaryxThreadListLoadMoreTrigger
     ) -> GaryxThreadListLoadMoreTicket? {
-        pager.requestLoadMore(trigger: trigger)
+        guard nextCursor != nil else { return nil }
+        return pager.requestLoadMore(trigger: trigger)
     }
 
     fileprivate mutating func retryLoadMore() -> GaryxThreadListLoadMoreTicket? {
-        pager.retryLoadMore()
+        guard nextCursor != nil else { return nil }
+        return pager.retryLoadMore()
     }
 
     fileprivate mutating func completeLoadMore(
         _ ticket: GaryxThreadListLoadMoreTicket,
         pageIds: [String],
-        pageOffset: Int,
         pageCount: Int,
-        hasMore: Bool
+        hasMore: Bool,
+        nextCursor responseCursor: String?
     ) -> GaryxThreadListLoadMoreCompletion {
+        let pageOffset = pager.nextOffset
         let completion = pager.completeLoadMore(
             ticket,
             pageOffset: pageOffset,
@@ -156,6 +164,7 @@ public struct GaryxRecentThreadFeedState: Equatable, Sendable {
             hasMore: hasMore
         )
         guard completion == .apply else { return completion }
+        nextCursor = responseCursor
         orderedThreadIds = GaryxThreadListPageMerge.appendPage(
             pageIds: Self.normalizedIds(pageIds),
             existingIds: orderedThreadIds
@@ -187,6 +196,7 @@ public struct GaryxRecentThreadFeedState: Equatable, Sendable {
         orderedThreadIds = []
         isPrimed = false
         headFailure = false
+        nextCursor = nil
     }
 
     private static func normalizedIds(_ ids: [String]) -> [String] {
@@ -257,26 +267,26 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
     public mutating func completeRefresh(
         _ ticket: GaryxRecentThreadRefreshTicket,
         pageIds: [String],
-        pageOffset: Int,
         pageCount: Int,
-        hasMore: Bool
+        hasMore: Bool,
+        nextCursor: String?
     ) -> GaryxThreadListRefreshCompletion {
         switch ticket.filter {
         case .all:
             return allFeed.completeRefresh(
                 ticket.pagerTicket,
                 pageIds: pageIds,
-                pageOffset: pageOffset,
                 pageCount: pageCount,
-                hasMore: hasMore
+                hasMore: hasMore,
+                nextCursor: nextCursor
             )
         case .nonTask:
             return nonTaskFeed.completeRefresh(
                 ticket.pagerTicket,
                 pageIds: pageIds,
-                pageOffset: pageOffset,
                 pageCount: pageCount,
-                hasMore: hasMore
+                hasMore: hasMore,
+                nextCursor: nextCursor
             )
         }
     }
@@ -293,22 +303,26 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
     ) -> GaryxRecentThreadLoadMoreTicket? {
         switch selectedFilter {
         case .all:
+            guard let cursor = allFeed.nextCursor else { return nil }
             guard let ticket = allFeed.requestLoadMore(trigger: trigger) else { return nil }
-            return GaryxRecentThreadLoadMoreTicket(filter: .all, pagerTicket: ticket)
+            return GaryxRecentThreadLoadMoreTicket(filter: .all, pagerTicket: ticket, cursor: cursor)
         case .nonTask:
+            guard let cursor = nonTaskFeed.nextCursor else { return nil }
             guard let ticket = nonTaskFeed.requestLoadMore(trigger: trigger) else { return nil }
-            return GaryxRecentThreadLoadMoreTicket(filter: .nonTask, pagerTicket: ticket)
+            return GaryxRecentThreadLoadMoreTicket(filter: .nonTask, pagerTicket: ticket, cursor: cursor)
         }
     }
 
     public mutating func retryLoadMore() -> GaryxRecentThreadLoadMoreTicket? {
         switch selectedFilter {
         case .all:
+            guard let cursor = allFeed.nextCursor else { return nil }
             guard let ticket = allFeed.retryLoadMore() else { return nil }
-            return GaryxRecentThreadLoadMoreTicket(filter: .all, pagerTicket: ticket)
+            return GaryxRecentThreadLoadMoreTicket(filter: .all, pagerTicket: ticket, cursor: cursor)
         case .nonTask:
+            guard let cursor = nonTaskFeed.nextCursor else { return nil }
             guard let ticket = nonTaskFeed.retryLoadMore() else { return nil }
-            return GaryxRecentThreadLoadMoreTicket(filter: .nonTask, pagerTicket: ticket)
+            return GaryxRecentThreadLoadMoreTicket(filter: .nonTask, pagerTicket: ticket, cursor: cursor)
         }
     }
 
@@ -316,26 +330,26 @@ public struct GaryxRecentThreadFeeds: Equatable, Sendable {
     public mutating func completeLoadMore(
         _ ticket: GaryxRecentThreadLoadMoreTicket,
         pageIds: [String],
-        pageOffset: Int,
         pageCount: Int,
-        hasMore: Bool
+        hasMore: Bool,
+        nextCursor: String?
     ) -> GaryxThreadListLoadMoreCompletion {
         switch ticket.filter {
         case .all:
             return allFeed.completeLoadMore(
                 ticket.pagerTicket,
                 pageIds: pageIds,
-                pageOffset: pageOffset,
                 pageCount: pageCount,
-                hasMore: hasMore
+                hasMore: hasMore,
+                nextCursor: nextCursor
             )
         case .nonTask:
             return nonTaskFeed.completeLoadMore(
                 ticket.pagerTicket,
                 pageIds: pageIds,
-                pageOffset: pageOffset,
                 pageCount: pageCount,
-                hasMore: hasMore
+                hasMore: hasMore,
+                nextCursor: nextCursor
             )
         }
     }

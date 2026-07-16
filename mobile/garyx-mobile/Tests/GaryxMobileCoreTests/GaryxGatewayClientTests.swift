@@ -620,14 +620,17 @@ final class GaryxGatewayClientTests: XCTestCase {
                       "last_message_preview": "latest user message",
                       "active_run_id": "run::active",
                       "run_state": "running",
-                      "last_active_at": "2026-05-23T10:00:00.000Z"
+                      "last_active_at": "2026-05-23T10:00:00.000Z",
+                      "activity_seq": 42
                     }
                   ],
                   "count": 1,
                   "limit": 80,
-                  "offset": 20,
                   "total": 42,
-                  "has_more": true
+                  "has_more": true,
+                  "next_cursor": "cursor-42",
+                  "store_incarnation_id": "11111111-1111-4111-8111-111111111111",
+                  "server_boot_id": "22222222-2222-4222-8222-222222222222"
                 }
                 """.utf8
             )
@@ -635,9 +638,12 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         XCTAssertEqual(page.count, 1)
         XCTAssertEqual(page.limit, 80)
-        XCTAssertEqual(page.offset, 20)
         XCTAssertEqual(page.total, 42)
         XCTAssertTrue(page.hasMore)
+        XCTAssertEqual(page.nextCursor, "cursor-42")
+        XCTAssertEqual(page.storeIncarnationId, "11111111-1111-4111-8111-111111111111")
+        XCTAssertEqual(page.serverBootId, "22222222-2222-4222-8222-222222222222")
+        XCTAssertEqual(page.threads.first?.activitySeq, 42)
         XCTAssertEqual(page.threads.first?.id, "thread::recent")
         XCTAssertEqual(page.threads.first?.title, "Recent Thread")
         XCTAssertEqual(page.threads.first?.workspacePath, "/workspace/project")
@@ -668,7 +674,7 @@ final class GaryxGatewayClientTests: XCTestCase {
             )?.queryItems ?? []
             XCTAssertEqual(queryItems.first(where: { $0.name == "tasks" })?.value, "include")
             XCTAssertEqual(queryItems.first(where: { $0.name == "limit" })?.value, "30")
-            XCTAssertEqual(queryItems.first(where: { $0.name == "offset" })?.value, "0")
+            XCTAssertNil(queryItems.first(where: { $0.name == "cursor" }))
             let response = try XCTUnwrap(
                 HTTPURLResponse(
                     url: try XCTUnwrap(request.url),
@@ -685,9 +691,11 @@ final class GaryxGatewayClientTests: XCTestCase {
                       "threads": [],
                       "count": 0,
                       "limit": 30,
-                      "offset": 0,
                       "total": 0,
-                      "has_more": false
+                      "has_more": false,
+                      "next_cursor": null,
+                      "store_incarnation_id": "11111111-1111-4111-8111-111111111111",
+                      "server_boot_id": "22222222-2222-4222-8222-222222222222"
                     }
                     """.utf8
                 )
@@ -724,7 +732,7 @@ final class GaryxGatewayClientTests: XCTestCase {
             )?.queryItems ?? []
             XCTAssertEqual(queryItems.first(where: { $0.name == "tasks" })?.value, "exclude")
             XCTAssertEqual(queryItems.first(where: { $0.name == "limit" })?.value, "80")
-            XCTAssertEqual(queryItems.first(where: { $0.name == "offset" })?.value, "20")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "cursor" })?.value, "cursor-20")
             let response = try XCTUnwrap(HTTPURLResponse(
                 url: try XCTUnwrap(request.url),
                 statusCode: 200,
@@ -733,7 +741,7 @@ final class GaryxGatewayClientTests: XCTestCase {
             ))
             return (
                 response,
-                Data(#"{"threads":[],"count":0,"limit":80,"offset":20,"total":0,"has_more":false}"#.utf8)
+                Data(#"{"threads":[],"count":0,"limit":80,"total":0,"has_more":false,"next_cursor":null,"store_incarnation_id":"11111111-1111-4111-8111-111111111111","server_boot_id":"22222222-2222-4222-8222-222222222222"}"#.utf8)
             )
         }
 
@@ -744,7 +752,284 @@ final class GaryxGatewayClientTests: XCTestCase {
             session: session
         )
 
-        _ = try await client.listRecentThreads(filter: .nonTask, limit: 80, offset: 20)
+        _ = try await client.listRecentThreads(filter: .nonTask, limit: 80, cursor: "cursor-20")
+    }
+
+    func testThreadFavoriteMutationClassificationMatrixUsesOneAttempt() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(maxAttempts: 4, initialDelay: 0, jitter: 0)
+        )
+        let pageFields = """
+        "store_incarnation_id":"11111111-1111-4111-8111-111111111111",
+        "server_boot_id":"22222222-2222-4222-8222-222222222222",
+        "revision":2,
+        "thread_ids":["thread::test"],
+        "favorites":[{"thread_id":"thread::test","favorited_at":"2026-07-16T00:00:00Z"}]
+        """
+        let cases: [(String, Int, String, String)] = [
+            ("ok", 200, "{\(pageFields)}", "ok"),
+            (
+                "endpoint tagged",
+                409,
+                "{\(pageFields),\"kind\":\"garyx_api_error\",\"operation\":\"thread_favorites_put\",\"code\":\"conflict\"}",
+                "definitive"
+            ),
+            (
+                "gateway auth tagged",
+                401,
+                "{\"kind\":\"garyx_api_error\",\"operation\":\"gateway_auth\",\"code\":\"unauthorized\"}",
+                "definitive"
+            ),
+            (
+                "wrong operation",
+                409,
+                "{\(pageFields),\"kind\":\"garyx_api_error\",\"operation\":\"thread_favorites_delete\",\"code\":\"conflict\"}",
+                "ambiguous"
+            ),
+            ("proxy json", 502, #"{"error":"bad gateway"}"#, "ambiguous"),
+            ("success decode failure", 200, "{truncated", "ambiguous"),
+            ("success contract decode failure", 200, #"{"revision":2}"#, "ambiguous"),
+        ]
+
+        for (name, status, body, expected) in cases {
+            let attempts = GaryxAtomicCounter()
+            GaryxURLProtocolStub.requestHandler = { request in
+                _ = attempts.increment()
+                XCTAssertEqual(request.httpMethod, "PUT", name)
+                let query = URLComponents(
+                    url: try XCTUnwrap(request.url),
+                    resolvingAgainstBaseURL: false
+                )?.queryItems ?? []
+                XCTAssertEqual(
+                    query.first(where: { $0.name == "expected_revision" })?.value,
+                    "1",
+                    name
+                )
+                XCTAssertEqual(
+                    query.first(where: { $0.name == "expected_store_incarnation" })?.value,
+                    "11111111-1111-4111-8111-111111111111",
+                    name
+                )
+                let response = try XCTUnwrap(
+                    HTTPURLResponse(
+                        url: try XCTUnwrap(request.url),
+                        statusCode: status,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )
+                )
+                return (response, Data(body.utf8))
+            }
+            let result = await client.setThreadFavorite(
+                threadId: "thread::test",
+                favorited: true,
+                expectedRevision: 1,
+                expectedStoreIncarnation: "11111111-1111-4111-8111-111111111111"
+            )
+            switch (expected, result) {
+            case ("ok", .ok(let page)):
+                XCTAssertEqual(page.revision, 2, name)
+            case ("definitive", .definitiveEndpointResponse(let response)):
+                XCTAssertEqual(response.status, status, name)
+                XCTAssertEqual(response.error.kind, "garyx_api_error", name)
+            case ("ambiguous", .ambiguous(let response)):
+                XCTAssertEqual(response.status, status, name)
+            default:
+                XCTFail("Unexpected mutation result for \(name): \(result)")
+            }
+            XCTAssertEqual(attempts.value(), 1, name)
+        }
+    }
+
+    func testThreadFavoritesReadsDecodeIdentityMembershipAndSnapshotAtomically() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        let requestCounter = GaryxAtomicCounter()
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+        let pageFields = """
+        "store_incarnation_id":"11111111-1111-4111-8111-111111111111",
+        "server_boot_id":"22222222-2222-4222-8222-222222222222",
+        "revision":7,
+        "thread_ids":["thread::favorite"],
+        "favorites":[{"thread_id":"thread::favorite","favorited_at":"2026-07-16T08:00:00Z"}]
+        """
+        GaryxURLProtocolStub.requestHandler = { request in
+            let requestIndex = requestCounter.increment()
+            XCTAssertEqual(request.httpMethod, "GET")
+            let path = try XCTUnwrap(
+                URLComponents(
+                    url: try XCTUnwrap(request.url),
+                    resolvingAgainstBaseURL: false
+                )?.percentEncodedPath
+            )
+            let body: String
+            switch requestIndex {
+            case 1:
+                XCTAssertEqual(path, "/garyx/api/thread-favorites")
+                body = "{\(pageFields)}"
+            case 2:
+                XCTAssertEqual(path, "/garyx/api/thread-favorites/snapshot")
+                body = """
+                {
+                  \(pageFields),
+                  "recent": {
+                    "threads": [{
+                      "thread_id": "thread::favorite",
+                      "title": "Favorite thread",
+                      "last_active_at": "2026-07-16T08:00:00Z",
+                      "last_message_preview": "Latest message",
+                      "activity_seq": 51
+                    }],
+                    "total": 1,
+                    "truncated": false
+                  }
+                }
+                """
+            default:
+                XCTFail("Unexpected favorites request \(requestIndex)")
+                throw URLError(.badServerResponse)
+            }
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Data(body.utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+
+        let page = try await client.listThreadFavorites()
+        let snapshot = try await client.threadFavoritesSnapshot()
+
+        XCTAssertEqual(page.revision, 7)
+        XCTAssertEqual(page.threadIds, ["thread::favorite"])
+        XCTAssertEqual(page.favorites.first?.favoritedAt, "2026-07-16T08:00:00Z")
+        XCTAssertEqual(snapshot.storeIncarnationId, page.storeIncarnationId)
+        XCTAssertEqual(snapshot.serverBootId, page.serverBootId)
+        XCTAssertEqual(snapshot.recent.threads.first?.activitySeq, 51)
+        XCTAssertFalse(snapshot.recent.truncated)
+        XCTAssertEqual(requestCounter.value(), 2)
+    }
+
+    func testThreadFavoritesPageRejectsTornMembership() throws {
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                GaryxThreadFavoritesPage.self,
+                from: Data(
+                    """
+                    {
+                      "store_incarnation_id": "11111111-1111-4111-8111-111111111111",
+                      "server_boot_id": "22222222-2222-4222-8222-222222222222",
+                      "revision": 3,
+                      "thread_ids": ["thread::one"],
+                      "favorites": [{
+                        "thread_id": "thread::other",
+                        "favorited_at": "2026-07-16T08:00:00Z"
+                      }]
+                    }
+                    """.utf8
+                )
+            )
+        )
+    }
+
+    func testThreadFavoriteMutationDistinguishesNotSentFromAmbiguous() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+        let attempts = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { _ in
+            _ = attempts.increment()
+            throw URLError(.networkConnectionLost)
+        }
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(maxAttempts: 4, initialDelay: 0, jitter: 0)
+        )
+
+        let notSent = await client.setThreadFavorite(
+            threadId: "thread::test",
+            favorited: true,
+            expectedRevision: -1,
+            expectedStoreIncarnation: "11111111-1111-4111-8111-111111111111"
+        )
+        guard case .notSent = notSent else {
+            return XCTFail("Invalid precondition must be notSent")
+        }
+        XCTAssertEqual(attempts.value(), 0)
+
+        let ambiguous = await client.setThreadFavorite(
+            threadId: "thread::test",
+            favorited: true,
+            expectedRevision: 1,
+            expectedStoreIncarnation: "11111111-1111-4111-8111-111111111111"
+        )
+        guard case .ambiguous = ambiguous else {
+            return XCTFail("Post-dispatch network loss must be ambiguous")
+        }
+        XCTAssertEqual(attempts.value(), 1)
+    }
+
+    func testPatchArchiveAndDeleteEachUseOneMutationAttempt() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+        let attempts = GaryxAtomicCounter()
+        GaryxURLProtocolStub.requestHandler = { request in
+            _ = attempts.increment()
+            XCTAssertTrue(["PATCH", "POST", "DELETE"].contains(request.httpMethod ?? ""))
+            throw URLError(.networkConnectionLost)
+        }
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: GaryxGatewayRetryPolicy(maxAttempts: 4, initialDelay: 0, jitter: 0)
+        )
+
+        do { _ = try await client.updateThread(threadId: "thread::patch", label: "Next") } catch {}
+        XCTAssertEqual(attempts.value(), 1)
+        do { _ = try await client.archiveThread(threadId: "thread::archive") } catch {}
+        XCTAssertEqual(attempts.value(), 2)
+        do { _ = try await client.deleteThread(threadId: "thread::delete") } catch {}
+        XCTAssertEqual(attempts.value(), 3)
     }
 
     func testArchiveThreadPostsArchiveRoute() async throws {
@@ -940,10 +1225,11 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(requestCounter.value(), 3)
     }
 
-    func testRecentThreadsPageDecodesLegacyPreviewAndPaginationDefaults() throws {
-        let page = try JSONDecoder().decode(
-            GaryxRecentThreadsPage.self,
-            from: Data(
+    func testRecentThreadsPageRejectsLegacyOffsetShapeWithoutCursorIdentity() throws {
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                GaryxRecentThreadsPage.self,
+                from: Data(
                 """
                 {
                   "threads": [
@@ -957,13 +1243,9 @@ final class GaryxGatewayClientTests: XCTestCase {
                   "limit": 80
                 }
                 """.utf8
+                )
             )
         )
-
-        XCTAssertEqual(page.offset, 0)
-        XCTAssertEqual(page.total, 1)
-        XCTAssertFalse(page.hasMore)
-        XCTAssertEqual(page.threads.first?.lastMessagePreview, "legacy preview")
     }
 
     func testMobileDashboardPayloadsDecodeGatewayShapes() throws {
@@ -2267,7 +2549,7 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(attemptCount.value(), 3)
     }
 
-    func testGatewayClientRetriesNetworkConnectionLostOnPost() async throws {
+    func testGatewayClientDoesNotRetryNetworkConnectionLostOnMutation() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GaryxURLProtocolStub.self]
         let session = URLSession(configuration: configuration)
@@ -2316,16 +2598,20 @@ final class GaryxGatewayClientTests: XCTestCase {
             )
         )
 
-        let result = try await client.streamInput(
-            GaryxStreamInputRequest(
-                threadId: "thread::test",
-                clientIntentId: "intent-1",
-                message: "hello",
-                attachments: []
+        do {
+            _ = try await client.streamInput(
+                GaryxStreamInputRequest(
+                    threadId: "thread::test",
+                    clientIntentId: "intent-1",
+                    message: "hello",
+                    attachments: []
+                )
             )
-        )
-        XCTAssertEqual(result.status, "queued")
-        XCTAssertEqual(attemptCount.value(), 2)
+            XCTFail("Expected the first post-dispatch transport error to surface")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .networkConnectionLost)
+            XCTAssertEqual(attemptCount.value(), 1)
+        }
     }
 
     func testGatewayClientDoesNotRetry503OnNonIdempotentPost() async throws {
@@ -2388,7 +2674,7 @@ final class GaryxGatewayClientTests: XCTestCase {
         }
     }
 
-    func testGatewayClientRetries502OnNonIdempotentPost() async throws {
+    func testGatewayClientDoesNotRetry502OnMutation() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GaryxURLProtocolStub.self]
         let session = URLSession(configuration: configuration)
@@ -2399,9 +2685,8 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         let attemptCount = GaryxAtomicCounter()
         GaryxURLProtocolStub.requestHandler = { request in
-            let attempt = attemptCount.increment()
-            // 502 means the proxy did not reach the upstream — safe to retry even on POST.
-            let statusCode = attempt < 2 ? 502 : 200
+            _ = attemptCount.increment()
+            let statusCode = 502
             let response = try XCTUnwrap(
                 HTTPURLResponse(
                     url: try XCTUnwrap(request.url),
@@ -2410,20 +2695,7 @@ final class GaryxGatewayClientTests: XCTestCase {
                     headerFields: ["Content-Type": "application/json"]
                 )
             )
-            let body: String
-            if statusCode == 200 {
-                body = """
-                {
-                  "status": "queued",
-                  "thread_status": "queued",
-                  "client_intent_id": "intent-1",
-                  "pending_input_id": "pending-1",
-                  "thread_id": "thread::test"
-                }
-                """
-            } else {
-                body = #"{"error":"bad gateway"}"#
-            }
+            let body = #"{"error":"bad gateway"}"#
             return (response, Data(body.utf8))
         }
 
@@ -2441,16 +2713,23 @@ final class GaryxGatewayClientTests: XCTestCase {
             )
         )
 
-        let result = try await client.streamInput(
-            GaryxStreamInputRequest(
-                threadId: "thread::test",
-                clientIntentId: "intent-1",
-                message: "hello",
-                attachments: []
+        do {
+            _ = try await client.streamInput(
+                GaryxStreamInputRequest(
+                    threadId: "thread::test",
+                    clientIntentId: "intent-1",
+                    message: "hello",
+                    attachments: []
+                )
             )
-        )
-        XCTAssertEqual(result.status, "queued")
-        XCTAssertEqual(attemptCount.value(), 2)
+            XCTFail("Expected 502 to surface after one mutation attempt")
+        } catch let error as GaryxGatewayError {
+            guard case .httpStatus(let status, _, _) = error else {
+                return XCTFail("Expected HTTP status, got \(error)")
+            }
+            XCTAssertEqual(status, 502)
+            XCTAssertEqual(attemptCount.value(), 1)
+        }
     }
 
     func testRetryClassifierIdentifiesConnectionEstablishmentErrors() {
@@ -2472,18 +2751,51 @@ final class GaryxGatewayClientTests: XCTestCase {
     }
 
     func testRetryClassifierMatchesGatewayErrorStatuses() {
-        // 502 retries on any method — proxy did not reach the upstream.
-        XCTAssertTrue(GaryxGatewayRetryClassifier.isRetryableStatus(502, idempotent: false))
-        XCTAssertTrue(GaryxGatewayRetryClassifier.isRetryableStatus(502, idempotent: true))
-        // 503 / 504 / 408 / 429 require idempotency.
-        XCTAssertFalse(GaryxGatewayRetryClassifier.isRetryableStatus(503, idempotent: false))
-        XCTAssertTrue(GaryxGatewayRetryClassifier.isRetryableStatus(503, idempotent: true))
-        XCTAssertFalse(GaryxGatewayRetryClassifier.isRetryableStatus(504, idempotent: false))
-        XCTAssertTrue(GaryxGatewayRetryClassifier.isRetryableStatus(504, idempotent: true))
-        XCTAssertFalse(GaryxGatewayRetryClassifier.isRetryableStatus(429, idempotent: false))
-        XCTAssertTrue(GaryxGatewayRetryClassifier.isRetryableStatus(429, idempotent: true))
-        XCTAssertFalse(GaryxGatewayRetryClassifier.isRetryableStatus(400, idempotent: true))
-        XCTAssertFalse(GaryxGatewayRetryClassifier.isRetryableStatus(404, idempotent: true))
+        for status in [408, 425, 429, 502, 503, 504] {
+            XCTAssertTrue(
+                GaryxGatewayRetryClassifier.isRetryableStatus(
+                    status,
+                    semantics: .readRetryable
+                )
+            )
+            XCTAssertFalse(
+                GaryxGatewayRetryClassifier.isRetryableStatus(
+                    status,
+                    semantics: .mutationSingleAttempt
+                )
+            )
+        }
+        XCTAssertFalse(
+            GaryxGatewayRetryClassifier.isRetryableStatus(
+                400,
+                semantics: .readRetryable
+            )
+        )
+        XCTAssertFalse(
+            GaryxGatewayRetryClassifier.isRetryableStatus(
+                404,
+                semantics: .readRetryable
+            )
+        )
+    }
+
+    func testGatewayTransportHelpersHaveNoDefaultSemanticMode() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: packageRoot
+                .appendingPathComponent("Sources")
+                .appendingPathComponent("GaryxMobileCore")
+                .appendingPathComponent("GaryxGatewayClient.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("semantics: GaryxGatewayRequestSemantics,"))
+        XCTAssertFalse(source.contains("semantics: GaryxGatewayRequestSemantics ="))
+        XCTAssertFalse(source.contains("idempotent: Bool"))
+        XCTAssertTrue(source.contains("semantics: .readRetryable"))
+        XCTAssertTrue(source.contains("semantics: .mutationSingleAttempt"))
     }
 
     func testCapsuleHTMLFetchUsesAuthenticatedServeRouteAndReturnsUTF8Text() async throws {

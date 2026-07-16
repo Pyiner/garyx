@@ -400,9 +400,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let completion = model.recentThreadFeeds.completeRefresh(
             ticket,
             pageIds: page.threads.map(\.id),
-            pageOffset: page.offset,
             pageCount: page.count,
-            hasMore: page.hasMore
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor
         )
         XCTAssertEqual(completion, .abandonedLocalMutation)
 
@@ -432,9 +432,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let completion = model.recentThreadFeeds.completeRefresh(
             ticket,
             pageIds: page.threads.map(\.id),
-            pageOffset: page.offset,
             pageCount: page.count,
-            hasMore: page.hasMore
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor
         )
         XCTAssertEqual(completion, .apply(.replaceHead))
 
@@ -806,9 +806,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
             model.recentThreadFeeds.completeRefresh(
                 staleTicket,
                 pageIds: ["stale-thread"],
-                pageOffset: 0,
                 pageCount: 1,
-                hasMore: false
+                hasMore: false,
+                nextCursor: nil
             ),
             .abandonedStaleEpoch
         )
@@ -872,9 +872,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
             model.recentThreadFeeds.completeRefresh(
                 concurrentRefresh,
                 pageIds: [archived.id, survivor.id],
-                pageOffset: 0,
                 pageCount: 2,
-                hasMore: false
+                hasMore: false,
+                nextCursor: nil
             ),
             .apply(.replaceHead)
         )
@@ -985,9 +985,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let completion = model.recentThreadFeeds.completeRefresh(
             staleTicket,
             pageIds: [archived.id, survivor.id],
-            pageOffset: 0,
             pageCount: 2,
-            hasMore: false
+            hasMore: false,
+            nextCursor: nil
         )
         XCTAssertEqual(completion, .abandonedLocalMutation)
         XCTAssertEqual(model.allRecentThreadIds, [survivor.id])
@@ -2174,9 +2174,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         feeds.completeRefresh(
             ticket,
             pageIds: ids,
-            pageOffset: 0,
             pageCount: ids.count,
-            hasMore: false
+            hasMore: false,
+            nextCursor: nil
         )
         model.recentThreadFeeds = feeds
     }
@@ -2184,17 +2184,20 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
     /// Decodes the same wire shape the gateway returns so the commit sees a
     /// real page, not a hand-built lookalike.
     private func makeRecentThreadsPage(threads: [GaryxThreadSummary]) throws -> GaryxRecentThreadsPage {
-        let rows = threads.map { thread in
+        let rows = threads.enumerated().map { index, thread in
             """
             {"thread_id": "\(thread.id)", "title": "\(thread.title)",
-             "last_active_at": "2026-07-07T02:00:00Z", "last_message_preview": ""}
+             "last_active_at": "2026-07-07T02:00:00Z", "last_message_preview": "",
+             "activity_seq": \(threads.count - index)}
             """
         }
         let json = """
         {
           "threads": [\(rows.joined(separator: ","))],
-          "count": \(threads.count), "limit": 30, "offset": 0,
-          "total": \(threads.count), "has_more": false
+          "count": \(threads.count), "limit": 30,
+          "total": \(threads.count), "has_more": false, "next_cursor": null,
+          "store_incarnation_id": "11111111-1111-4111-8111-111111111111",
+          "server_boot_id": "22222222-2222-4222-8222-222222222222"
         }
         """
         return try JSONDecoder().decode(GaryxRecentThreadsPage.self, from: Data(json.utf8))
@@ -2203,19 +2206,22 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
     private func makeRecentThreadsPageData(rows: [(id: String, title: String)]) throws -> Data {
         try JSONSerialization.data(
             withJSONObject: [
-                "threads": rows.map { row in
+                "threads": rows.enumerated().map { index, row in
                     [
                         "thread_id": row.id,
                         "title": row.title,
                         "last_active_at": "2026-07-07T02:00:00Z",
                         "last_message_preview": "",
+                        "activity_seq": rows.count - index,
                     ]
                 },
                 "count": rows.count,
                 "limit": 30,
-                "offset": 0,
                 "total": rows.count,
                 "has_more": false,
+                "next_cursor": NSNull(),
+                "store_incarnation_id": "11111111-1111-4111-8111-111111111111",
+                "server_boot_id": "22222222-2222-4222-8222-222222222222",
             ]
         )
     }
@@ -2277,19 +2283,22 @@ private func garyxPinsPageData(ids: [String], revision: Int64) throws -> Data {
 private func garyxRecentThreadsData(ids: [String]) throws -> Data {
     try JSONSerialization.data(
         withJSONObject: [
-            "threads": ids.map { id in
+            "threads": ids.enumerated().map { index, id in
                 [
                     "thread_id": id,
                     "title": id,
                     "last_active_at": "2026-07-07T02:00:00Z",
                     "last_message_preview": "",
+                    "activity_seq": ids.count - index,
                 ]
             },
             "count": ids.count,
             "limit": 30,
-            "offset": 0,
             "total": ids.count,
             "has_more": false,
+            "next_cursor": NSNull(),
+            "store_incarnation_id": "11111111-1111-4111-8111-111111111111",
+            "server_boot_id": "22222222-2222-4222-8222-222222222222",
         ]
     )
 }

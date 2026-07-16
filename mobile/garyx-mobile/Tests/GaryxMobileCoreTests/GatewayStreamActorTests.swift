@@ -146,8 +146,9 @@ final class GatewayStreamActorTests: XCTestCase {
         )
         let actor = GatewayStreamActor(
             endpoint: endpoint(),
-            transport: GatewayStreamTransport { request in
-                await recorder.connect(request)
+            transport: GatewayStreamTransport { request, semantics in
+                XCTAssertEqual(semantics, .readRetryable)
+                return await recorder.connect(request)
             },
             reconnectDelayNanos: { _ in 0 }
         )
@@ -182,8 +183,9 @@ final class GatewayStreamActorTests: XCTestCase {
         )
         let actor = GatewayStreamActor(
             endpoint: endpoint(),
-            transport: GatewayStreamTransport { request in
-                await recorder.connect(request)
+            transport: GatewayStreamTransport { request, semantics in
+                XCTAssertEqual(semantics, .readRetryable)
+                return await recorder.connect(request)
             },
             reconnectDelayNanos: { _ in 0 }
         )
@@ -207,8 +209,9 @@ final class GatewayStreamActorTests: XCTestCase {
         let recorder = GatewayStreamFailureRecorder()
         let actor = GatewayStreamActor(
             endpoint: endpoint(),
-            transport: GatewayStreamTransport { request in
-                try await recorder.connect(request)
+            transport: GatewayStreamTransport { request, semantics in
+                XCTAssertEqual(semantics, .readRetryable)
+                return try await recorder.connect(request)
             },
             reconnectDelayNanos: { _ in 0 }
         )
@@ -259,8 +262,9 @@ final class GatewayStreamActorTests: XCTestCase {
         )
         let actor = GatewayStreamActor(
             endpoint: endpoint(),
-            transport: GatewayStreamTransport { request in
-                await recorder.connect(request)
+            transport: GatewayStreamTransport { request, semantics in
+                XCTAssertEqual(semantics, .readRetryable)
+                return await recorder.connect(request)
             },
             reconnectDelayNanos: { _ in 0 }
         )

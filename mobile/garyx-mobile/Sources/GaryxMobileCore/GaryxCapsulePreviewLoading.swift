@@ -112,7 +112,10 @@ public struct GaryxCapsulePreviewFailure: Equatable, Sendable {
                 )
             }
             let kind: GaryxCapsulePreviewFailureKind =
-                GaryxGatewayRetryClassifier.isRetryableStatus(status, idempotent: true)
+                GaryxGatewayRetryClassifier.isRetryableStatus(
+                    status,
+                    semantics: .readRetryable
+                )
                 ? .retryable
                 : .terminal
             return GaryxCapsulePreviewFailure(

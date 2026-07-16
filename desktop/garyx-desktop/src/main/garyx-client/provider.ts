@@ -353,6 +353,7 @@ export async function listProviderModels(
   const payload = await requestJson<ProviderModelsPayload>(
     settings,
     `/api/provider-models/${encodeURIComponent(providerType)}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(30000),
     },
@@ -367,6 +368,7 @@ export async function getCodingUsage(
   const payload = await requestJson<CodingUsagePayload>(
     settings,
     "/api/usage/coding",
+    "readRetryable",
     {
       signal: AbortSignal.timeout(15000),
     },
@@ -432,6 +434,7 @@ export async function listProviderRecentSessions(
   const payload = await requestJson<ProviderRecentSessionsPayload>(
     settings,
     `/api/provider-sessions/recent?${query.toString()}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },

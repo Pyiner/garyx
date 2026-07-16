@@ -9,7 +9,6 @@ export type RecentThreadRequestKind = "refresh" | "loadMore";
 export type RecentThreadLoadGate = "ready" | "exhausted" | "failed";
 
 export const RECENT_THREAD_PAGE_LIMIT = 100;
-export const RECENT_THREAD_PAGE_OVERLAP = 5;
 
 export interface RecentThreadFeedState {
   orderedThreadIds: string[];
@@ -18,7 +17,7 @@ export interface RecentThreadFeedState {
   isLoadingMore: boolean;
   headFailure: string | null;
   loadGate: RecentThreadLoadGate;
-  nextOffset: number;
+  nextCursor: string | null;
   epoch: number;
   localMutationSequence: number;
   loadMoreFailureRevision: number;
@@ -46,7 +45,7 @@ interface RecentThreadRequestTicketBase {
   observedLocalMutationSequence: number;
   kind: RecentThreadRequestKind;
   limit: number;
-  offset: number;
+  cursor: string | null;
 }
 
 export interface RecentThreadRefreshTicket
@@ -85,7 +84,7 @@ function createFeed(epoch = 0): RecentThreadFeedState {
     isLoadingMore: false,
     headFailure: null,
     loadGate: "ready",
-    nextOffset: 0,
+    nextCursor: null,
     epoch,
     localMutationSequence: 0,
     loadMoreFailureRevision: 0,
@@ -208,7 +207,7 @@ export function requestRecentThreadRefresh(
     observedLoadMoreFailureRevision: feed.loadMoreFailureRevision,
     kind: "refresh",
     limit: RECENT_THREAD_PAGE_LIMIT,
-    offset: 0,
+    cursor: null,
   };
   return {
     state: {
@@ -241,7 +240,7 @@ export function requestRecentThreadLoadMore(
   if (
     !state.gatewayScope ||
     feed.isLoadingMore ||
-    feed.nextOffset <= 0 ||
+    feed.nextCursor === null ||
     !gateAllowsRequest
   ) {
     return { state, ticket: null };
@@ -255,7 +254,7 @@ export function requestRecentThreadLoadMore(
     observedLocalMutationSequence: feed.localMutationSequence,
     kind: "loadMore",
     limit: RECENT_THREAD_PAGE_LIMIT,
-    offset: Math.max(0, feed.nextOffset - RECENT_THREAD_PAGE_OVERLAP),
+    cursor: feed.nextCursor,
   };
   return {
     state: {
@@ -312,28 +311,16 @@ export function completeRecentThreadRequest(
     visiblePageThreads,
   );
   const currentFeed = withSummaries.feeds[ticket.filter];
-  const returnedEnd = page.offset + page.count;
-
   if (ticket.kind === "refresh") {
-    const beyondHead = currentFeed.nextOffset > returnedEnd;
-    const orderedThreadIds = beyondHead
-      ? mergeHead(pageIds, currentFeed.orderedThreadIds)
-      : pageIds;
     const forgivesLoadFailure =
       currentFeed.loadGate === "failed" &&
       currentFeed.loadMoreFailureRevision ===
         ticket.observedLoadMoreFailureRevision;
     let loadGate = currentFeed.loadGate;
-    let nextOffset = currentFeed.nextOffset;
     if (currentFeed.loadGate === "failed" && !forgivesLoadFailure) {
       // A load-more that failed after this head request started owns the gate.
-    } else if (beyondHead) {
-      if (forgivesLoadFailure) {
-        loadGate = "ready";
-      }
     } else {
       loadGate = page.hasMore ? "ready" : "exhausted";
-      nextOffset = returnedEnd;
     }
     return {
       ...withSummaries,
@@ -341,12 +328,12 @@ export function completeRecentThreadRequest(
         ...withSummaries.feeds,
         [ticket.filter]: {
           ...currentFeed,
-          orderedThreadIds,
+          orderedThreadIds: pageIds,
           isPrimed: true,
           isRefreshingHead: false,
           headFailure: null,
           loadGate,
-          nextOffset,
+          nextCursor: page.nextCursor,
           activeRefreshRequestId: null,
         },
       },
@@ -365,7 +352,7 @@ export function completeRecentThreadRequest(
         ),
         isLoadingMore: false,
         loadGate: page.hasMore ? "ready" : "exhausted",
-        nextOffset: returnedEnd,
+        nextCursor: page.nextCursor,
         activeLoadMoreRequestId: null,
       },
     },
@@ -645,14 +632,6 @@ function uniqueThreadIds(ids: string[]): string[] {
       ? [normalized]
       : [];
   });
-}
-
-function mergeHead(pageIds: string[], existingIds: string[]): string[] {
-  const pageIdSet = new Set(pageIds);
-  return [
-    ...pageIds,
-    ...existingIds.filter((id) => !pageIdSet.has(id)),
-  ];
 }
 
 function appendPage(pageIds: string[], existingIds: string[]): string[] {

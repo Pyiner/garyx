@@ -50,7 +50,7 @@ export function recentConversationPresentation(
   if (feed.loadGate === "failed") {
     return { emptyLabelKey, footerKind: "loadMoreFailure" };
   }
-  if (feed.loadGate === "ready" && feed.nextOffset > 0) {
+  if (feed.loadGate === "ready" && feed.nextCursor !== null) {
     return { emptyLabelKey, footerKind: "idle" };
   }
   return { emptyLabelKey, footerKind: "hidden" };

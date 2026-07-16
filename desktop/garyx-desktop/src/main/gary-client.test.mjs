@@ -5,17 +5,23 @@ import {
   assertRecentThreadGatewayScope,
   ThreadStreamGapError,
   createTask,
+  archiveRemoteThread,
+  deleteRemoteThread,
   updateCustomAgent,
   fetchRecentThreads,
+  fetchThreadFavorites,
+  fetchThreadFavoritesSnapshot,
   fetchAutomations,
   fetchThreadHistory,
   listCapsules,
   listTaskForest,
   listProviderModels,
   requestJson,
+  requestMutationJson,
   setGatewayFetch,
   setGatewayStreamFetch,
   setCapsuleFavorite,
+  setRemoteThreadFavorite,
   streamThreadEvents,
   validateListRecentThreadsInput,
 } from "./gary-client.ts";
@@ -625,6 +631,7 @@ test("streamThreadEvents rides the stream transport, control requests the defaul
     await requestJson(
       { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
       "/api/threads/history?thread_id=thread%3A%3Atransport",
+      "readRetryable",
     );
 
     assert.equal(streamUrls.length, 1);
@@ -1156,6 +1163,7 @@ test("setGatewayFetch routes gateway requests through the injected transport", a
     const result = await requestJson(
       { gatewayUrl: "https://garyx.example.test", gatewayAuthToken: "" },
       "/api/thing",
+      "readRetryable",
     );
     assert.deepEqual(result, { ok: true, via: "injected" });
     assert.equal(injectedUrls.length, 1);
@@ -1184,12 +1192,280 @@ test("gatewayFetch falls back to globalThis.fetch when no transport is injected"
     const result = await requestJson(
       { gatewayUrl: "http://127.0.0.1:31337", gatewayAuthToken: "" },
       "/api/thing",
+      "readRetryable",
     );
     assert.deepEqual(result, { ok: true, via: "global" });
     assert.equal(seen.length, 1);
     assert.equal(seen[0], "http://127.0.0.1:31337/api/thing");
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("classified mutations use one attempt and accept only matching tagged errors", async () => {
+  const settings = {
+    gatewayUrl: "https://garyx.example.test",
+    gatewayAuthToken: "",
+  };
+  const cases = [
+    {
+      name: "ok",
+      response: new Response(JSON.stringify({ revision: 2 }), { status: 200 }),
+      expected: "ok",
+    },
+    {
+      name: "endpoint tag",
+      response: new Response(
+        JSON.stringify({
+          kind: "garyx_api_error",
+          operation: "thread_favorites_put",
+          code: "conflict",
+        }),
+        { status: 409 },
+      ),
+      expected: "definitiveEndpointResponse",
+    },
+    {
+      name: "gateway auth tag",
+      response: new Response(
+        JSON.stringify({
+          kind: "garyx_api_error",
+          operation: "gateway_auth",
+          code: "unauthorized",
+        }),
+        { status: 401 },
+      ),
+      expected: "definitiveEndpointResponse",
+    },
+    {
+      name: "wrong operation",
+      response: new Response(
+        JSON.stringify({
+          kind: "garyx_api_error",
+          operation: "thread_favorites_delete",
+          code: "conflict",
+        }),
+        { status: 409 },
+      ),
+      expected: "ambiguous",
+    },
+    {
+      name: "proxy json",
+      response: new Response(JSON.stringify({ error: "upstream failed" }), {
+        status: 502,
+      }),
+      expected: "ambiguous",
+    },
+    {
+      name: "2xx decode failure",
+      response: new Response("truncated {", { status: 200 }),
+      expected: "ambiguous",
+    },
+    {
+      name: "2xx contract decode failure",
+      response: new Response(JSON.stringify({}), { status: 200 }),
+      decode: () => {
+        throw new Error("missing required page fields");
+      },
+      expected: "ambiguous",
+    },
+    {
+      name: "body truncation",
+      response: {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => {
+          throw new TypeError("response body truncated");
+        },
+      },
+      expected: "ambiguous",
+    },
+  ];
+
+  try {
+    for (const entry of cases) {
+      let attempts = 0;
+      setGatewayFetch(async () => {
+        attempts += 1;
+        return entry.response;
+      });
+      const result = await requestMutationJson(
+        settings,
+        "/api/thread-favorites/thread%3A%3Atest?expected_revision=1&expected_store_incarnation=incarnation",
+        "mutationSingleAttempt",
+        "thread_favorites_put",
+        { method: "PATCH" },
+        entry.decode || ((payload) => payload),
+      );
+      assert.equal(result.kind, entry.expected, entry.name);
+      assert.equal(attempts, 1, `${entry.name} must use one attempt`);
+    }
+  } finally {
+    setGatewayFetch(null);
+  }
+});
+
+test("classified mutation distinguishes provable notSent from post-dispatch ambiguity", async () => {
+  const settings = {
+    gatewayUrl: "https://garyx.example.test",
+    gatewayAuthToken: "",
+  };
+  const controller = new AbortController();
+  controller.abort();
+  let attempts = 0;
+  setGatewayFetch(async () => {
+    attempts += 1;
+    throw new TypeError("connection lost");
+  });
+  try {
+    const notSent = await requestMutationJson(
+      settings,
+      "/api/thread-favorites/thread%3A%3Atest",
+      "mutationSingleAttempt",
+      "thread_favorites_put",
+      { method: "PUT", signal: controller.signal },
+      (payload) => payload,
+    );
+    assert.equal(notSent.kind, "notSent");
+    assert.equal(attempts, 0);
+
+    const ambiguous = await requestMutationJson(
+      settings,
+      "/api/thread-favorites/thread%3A%3Atest",
+      "mutationSingleAttempt",
+      "thread_favorites_put",
+      { method: "PUT" },
+      (payload) => payload,
+    );
+    assert.equal(ambiguous.kind, "ambiguous");
+    assert.equal(attempts, 1);
+
+    setGatewayFetch(() => {
+      throw new TypeError("synchronous transport failure");
+    });
+    const synchronousFailure = await requestMutationJson(
+      settings,
+      "/api/thread-favorites/thread%3A%3Atest",
+      "mutationSingleAttempt",
+      "thread_favorites_put",
+      { method: "PUT" },
+      (payload) => payload,
+    );
+    assert.equal(synchronousFailure.kind, "ambiguous");
+  } finally {
+    setGatewayFetch(null);
+  }
+});
+
+test("favorites reads, snapshot, and mutation decode the strict identity page", async () => {
+  const settings = {
+    gatewayUrl: "https://garyx.example.test",
+    gatewayAuthToken: "",
+  };
+  const favoriteFields = {
+    store_incarnation_id: "11111111-1111-4111-8111-111111111111",
+    server_boot_id: "22222222-2222-4222-8222-222222222222",
+    revision: 7,
+    thread_ids: ["thread::favorite"],
+    favorites: [
+      {
+        thread_id: "thread::favorite",
+        favorited_at: "2026-07-16T08:00:00Z",
+      },
+    ],
+  };
+  const recent = {
+    thread_id: "thread::favorite",
+    title: "Favorite thread",
+    workspace_dir: null,
+    thread_type: "chat",
+    provider_type: null,
+    agent_id: null,
+    message_count: 2,
+    last_message_preview: "Latest message",
+    recent_run_id: null,
+    active_run_id: null,
+    run_state: "idle",
+    updated_at: null,
+    last_active_at: "2026-07-16T08:00:00Z",
+    recorded_at: "2026-07-16T08:00:00Z",
+    activity_seq: 51,
+  };
+  const seen = [];
+  setGatewayFetch(async (url, init) => {
+    seen.push({ url: String(url), method: init?.method || "GET" });
+    if (String(url).endsWith("/snapshot")) {
+      return new Response(
+        JSON.stringify({
+          ...favoriteFields,
+          recent: { threads: [recent], total: 1, truncated: false },
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify(favoriteFields), { status: 200 });
+  });
+  try {
+    const page = await fetchThreadFavorites(settings);
+    const snapshot = await fetchThreadFavoritesSnapshot(settings);
+    const mutation = await setRemoteThreadFavorite(settings, {
+      threadId: "thread::favorite",
+      favorited: true,
+      expectedRevision: 6,
+      expectedStoreIncarnation: favoriteFields.store_incarnation_id,
+    });
+
+    assert.equal(page.revision, 7);
+    assert.deepEqual(page.threadIds, ["thread::favorite"]);
+    assert.equal(snapshot.recent.threads[0].activitySeq, 51);
+    assert.equal(snapshot.recent.truncated, false);
+    assert.equal(mutation.kind, "ok");
+    assert.equal(mutation.value.storeIncarnationId, favoriteFields.store_incarnation_id);
+    assert.equal(seen[2].method, "PUT");
+    assert.match(seen[2].url, /expected_revision=6/);
+    assert.match(seen[2].url, /expected_store_incarnation=/);
+  } finally {
+    setGatewayFetch(null);
+  }
+});
+
+test("favorites mutation treats a malformed 2xx page as ambiguous", async () => {
+  setGatewayFetch(async () => new Response(JSON.stringify({ revision: 8 }), { status: 200 }));
+  try {
+    const result = await setRemoteThreadFavorite(
+      { gatewayUrl: "https://garyx.example.test", gatewayAuthToken: "" },
+      {
+        threadId: "thread::favorite",
+        favorited: false,
+        expectedRevision: 7,
+        expectedStoreIncarnation: "11111111-1111-4111-8111-111111111111",
+      },
+    );
+    assert.equal(result.kind, "ambiguous");
+  } finally {
+    setGatewayFetch(null);
+  }
+});
+
+test("archive and delete transport errors are never retried", async () => {
+  const settings = {
+    gatewayUrl: "https://garyx.example.test",
+    gatewayAuthToken: "",
+  };
+  const attemptsByMethod = new Map();
+  setGatewayFetch(async (_url, init) => {
+    const method = init?.method || "GET";
+    attemptsByMethod.set(method, (attemptsByMethod.get(method) || 0) + 1);
+    throw new TypeError("network connection lost");
+  });
+  try {
+    await assert.rejects(() => archiveRemoteThread(settings, "thread::archive"));
+    await assert.rejects(() => deleteRemoteThread(settings, "thread::delete"));
+    assert.equal(attemptsByMethod.get("POST"), 1);
+    assert.equal(attemptsByMethod.get("DELETE"), 1);
+  } finally {
+    setGatewayFetch(null);
   }
 });
 
@@ -1253,6 +1529,7 @@ test("fetchRecentThreads sends an explicit task filter and maps the filtered pag
             recorded_at: "2026-07-11T12:00:00Z",
             updated_at: null,
             run_state: "running",
+            activity_seq: 42,
             thread_runtime: canonicalThreadRuntime({
               provider_type: "codex_app_server",
               provider_label: "Codex",
@@ -1262,8 +1539,10 @@ test("fetchRecentThreads sends an explicit task filter and maps the filtered pag
         count: 1,
         total: 101,
         limit: 100,
-        offset: 5,
         has_more: true,
+        next_cursor: "cursor-next",
+        store_incarnation_id: "11111111-1111-4111-8111-111111111111",
+        server_boot_id: "22222222-2222-4222-8222-222222222222",
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
@@ -1276,26 +1555,30 @@ test("fetchRecentThreads sends an explicit task filter and maps the filtered pag
     const all = await fetchRecentThreads(settings, {
       tasks: "include",
       limit: 100,
-      offset: 5,
+      cursor: "cursor-5",
     });
     const chats = await fetchRecentThreads(settings, {
       tasks: "exclude",
       limit: 30,
-      offset: 0,
+      cursor: null,
     });
 
     assert.equal(
       urls[0],
-      "https://garyx.example.test/api/recent-threads?tasks=include&limit=100&offset=5",
+      "https://garyx.example.test/api/recent-threads?tasks=include&limit=100&cursor=cursor-5",
     );
     assert.equal(
       urls[1],
-      "https://garyx.example.test/api/recent-threads?tasks=exclude&limit=30&offset=0",
+      "https://garyx.example.test/api/recent-threads?tasks=exclude&limit=30",
     );
     assert.equal(all.gatewayScope, "https://garyx.example.test");
     assert.equal(all.threads[0].id, "thread::chat-page");
     assert.equal(all.threads[0].title, "Chat page");
     assert.equal(all.threads[0].createdAt, "2026-07-11T12:00:00Z");
+    assert.equal(all.threads[0].activitySeq, 42);
+    assert.equal(all.storeIncarnationId, "11111111-1111-4111-8111-111111111111");
+    assert.equal(all.serverBootId, "22222222-2222-4222-8222-222222222222");
+    assert.equal(all.nextCursor, "cursor-next");
     assert.equal(all.hasMore, true);
     assert.equal(chats.count, 1);
   } finally {
@@ -1309,13 +1592,13 @@ test("validateListRecentThreadsInput rejects renderer-selected URLs and invalid 
       gatewayScope: "https://garyx.example.test///",
       tasks: "exclude",
       limit: 100,
-      offset: 0,
+      cursor: null,
     }),
     {
       gatewayScope: "https://garyx.example.test",
       tasks: "exclude",
       limit: 100,
-      offset: 0,
+      cursor: null,
     },
   );
   assert.throws(
@@ -1324,7 +1607,7 @@ test("validateListRecentThreadsInput rejects renderer-selected URLs and invalid 
         gatewayScope: "",
         tasks: "include",
         limit: 100,
-        offset: 0,
+        cursor: null,
       }),
     /gatewayScope is required/,
   );
@@ -1334,7 +1617,7 @@ test("validateListRecentThreadsInput rejects renderer-selected URLs and invalid 
         gatewayScope: "https://garyx.example.test",
         tasks: "only",
         limit: 100,
-        offset: 0,
+        cursor: null,
       }),
     /tasks must be include or exclude/,
   );
@@ -1344,9 +1627,19 @@ test("validateListRecentThreadsInput rejects renderer-selected URLs and invalid 
         gatewayScope: "https://garyx.example.test",
         tasks: "include",
         limit: 201,
-        offset: -1,
+        cursor: null,
       }),
     /limit must be an integer between 1 and 200/,
+  );
+  assert.throws(
+    () =>
+      validateListRecentThreadsInput({
+        gatewayScope: "https://garyx.example.test",
+        tasks: "include",
+        limit: 100,
+        cursor: "",
+      }),
+    /cursor must be null or a non-empty opaque string/,
   );
 });
 
