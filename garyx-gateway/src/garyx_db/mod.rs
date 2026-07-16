@@ -199,6 +199,38 @@ pub struct StoreIncarnation {
     pub store_incarnation_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FavoriteThreadRecord {
+    pub thread_id: String,
+    pub favorited_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ThreadFavoritesPage {
+    pub favorites: Vec<FavoriteThreadRecord>,
+    pub revision: i64,
+    pub store_incarnation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FavoriteThreadResult {
+    Updated {
+        changed: bool,
+        page: ThreadFavoritesPage,
+    },
+    Conflict(ThreadFavoritesPage),
+    WrongIncarnation(ThreadFavoritesPage),
+    NotFound(ThreadFavoritesPage),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadFavoritesSnapshot {
+    pub page: ThreadFavoritesPage,
+    pub recent_threads: Vec<RecentThreadRecord>,
+    pub recent_total: usize,
+    pub recent_truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReorderThreadPinsResult {
     Updated(ThreadPinsPage),
@@ -472,6 +504,7 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5_000
 const DEFAULT_DATA_LOCK_WAIT: Duration = Duration::from_secs(30);
 const PRE_R5_PARENT_HANDOFF_WAIT: Duration = Duration::from_secs(60);
 const STARTUP_WAIT_POLL: Duration = Duration::from_millis(50);
+pub const THREAD_FAVORITES_SNAPSHOT_CAP: usize = 500;
 /// Read-pool size: enough to keep the common concurrent readers (desktop,
 /// mobile, a handful of agents) off each other's locks without holding a
 /// meaningful number of file handles.
@@ -1021,8 +1054,162 @@ impl GaryxDbService {
         Ok(ReorderThreadPinsResult::Updated(page))
     }
 
+    pub fn list_thread_favorites(&self) -> GaryxDbResult<ThreadFavoritesPage> {
+        self.list_thread_favorites_inner(|| Ok(()))
+    }
+
+    fn list_thread_favorites_inner<F>(
+        &self,
+        after_favorites: F,
+    ) -> GaryxDbResult<ThreadFavoritesPage>
+    where
+        F: FnOnce() -> GaryxDbResult<()>,
+    {
+        let mut conn = self.read_conn()?;
+        let tx = conn.transaction()?;
+        let favorites = read_thread_favorites_tx(&tx)?;
+
+        // Deterministic WAL seam: the identity and revision below must stay
+        // on the same snapshot even if another writer commits here.
+        after_favorites()?;
+
+        let page = read_thread_favorites_page_with_rows_tx(&tx, favorites)?;
+        tx.commit()?;
+        Ok(page)
+    }
+
+    pub fn set_thread_favorite(
+        &self,
+        thread_id: &str,
+        favorited: bool,
+        expected_revision: i64,
+        expected_store_incarnation: &str,
+    ) -> GaryxDbResult<FavoriteThreadResult> {
+        let thread_id = normalize_thread_id(thread_id)?;
+        if expected_revision < 0 {
+            return Err(GaryxDbError::BadRequest(
+                "expected_revision must be a non-negative integer".to_owned(),
+            ));
+        }
+        let expected_store_incarnation = Uuid::parse_str(expected_store_incarnation)
+            .map(|uuid| uuid.to_string())
+            .map_err(|_| {
+                GaryxDbError::BadRequest("expected_store_incarnation must be a UUID".to_owned())
+            })?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+
+        // Identity is the outer CAS fence: an old revision must never become
+        // usable merely because a restored store happens to reuse its value.
+        let current_incarnation = read_store_incarnation_id(&tx)?;
+        if current_incarnation != expected_store_incarnation {
+            let page = read_thread_favorites_page_tx(&tx)?;
+            tx.commit()?;
+            return Ok(FavoriteThreadResult::WrongIncarnation(page));
+        }
+        let current_revision = read_thread_favorites_revision_tx(&tx)?;
+        if current_revision != expected_revision {
+            let page = read_thread_favorites_page_tx(&tx)?;
+            tx.commit()?;
+            return Ok(FavoriteThreadResult::Conflict(page));
+        }
+
+        let changed = if favorited {
+            let favorited_at = now_string();
+            let inserted = tx.execute(
+                "INSERT INTO thread_favorites (thread_id, favorited_at)
+                 SELECT ?1, ?2
+                  WHERE EXISTS (SELECT 1 FROM thread_records WHERE key = ?1)
+                 ON CONFLICT(thread_id) DO NOTHING",
+                params![thread_id, favorited_at],
+            )? > 0;
+            if !inserted && !thread_record_exists_tx(&tx, &thread_id)? {
+                let page = read_thread_favorites_page_tx(&tx)?;
+                tx.commit()?;
+                return Ok(FavoriteThreadResult::NotFound(page));
+            }
+            inserted
+        } else {
+            if !thread_record_exists_tx(&tx, &thread_id)? {
+                let page = read_thread_favorites_page_tx(&tx)?;
+                tx.commit()?;
+                return Ok(FavoriteThreadResult::NotFound(page));
+            }
+            tx.execute(
+                "DELETE FROM thread_favorites WHERE thread_id = ?1",
+                params![thread_id],
+            )? > 0
+        };
+
+        // Every accepted conditional write advances the fence, including an
+        // idempotent repeated PUT or no-op DELETE.
+        bump_thread_favorites_revision_tx(&tx)?;
+        let page = read_thread_favorites_page_tx(&tx)?;
+        tx.commit()?;
+        Ok(FavoriteThreadResult::Updated { changed, page })
+    }
+
+    pub fn thread_favorites_snapshot(&self) -> GaryxDbResult<ThreadFavoritesSnapshot> {
+        self.thread_favorites_snapshot_inner(|| Ok(()))
+    }
+
+    fn thread_favorites_snapshot_inner<F>(
+        &self,
+        after_favorites: F,
+    ) -> GaryxDbResult<ThreadFavoritesSnapshot>
+    where
+        F: FnOnce() -> GaryxDbResult<()>,
+    {
+        let mut conn = self.read_conn()?;
+        let tx = conn.transaction()?;
+        let favorites = read_thread_favorites_tx(&tx)?;
+        let page = read_thread_favorites_page_with_rows_tx(&tx, favorites)?;
+
+        // The joined recent rows and membership page are one atomic read
+        // unit. A commit here must be invisible until the next snapshot.
+        after_favorites()?;
+
+        let recent_total: i64 = tx.query_row(
+            "SELECT COUNT(*)
+               FROM recent_threads AS recent
+               JOIN thread_favorites AS favorite
+                 ON favorite.thread_id = recent.thread_id",
+            [],
+            |row| row.get(0),
+        )?;
+        let recent_total = usize::try_from(recent_total).unwrap_or(usize::MAX);
+        let mut stmt = tx.prepare(
+            "SELECT recent.thread_id, recent.title, recent.workspace_dir,
+                    recent.thread_type, recent.provider_type, recent.agent_id,
+                    recent.message_count, recent.last_message_preview,
+                    recent.recent_run_id, recent.active_run_id, recent.run_state,
+                    recent.updated_at, recent.last_active_at, recent.recorded_at
+               FROM recent_threads AS recent
+               JOIN thread_favorites AS favorite
+                 ON favorite.thread_id = recent.thread_id
+              ORDER BY recent.last_active_at DESC, recent.thread_id ASC
+              LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(
+            params![i64::try_from(THREAD_FAVORITES_SNAPSHOT_CAP).unwrap_or(i64::MAX)],
+            recent_thread_record_from_row,
+        )?;
+        let mut recent_threads = Vec::new();
+        for row in rows {
+            recent_threads.push(row?);
+        }
+        drop(stmt);
+        tx.commit()?;
+        Ok(ThreadFavoritesSnapshot {
+            page,
+            recent_truncated: recent_total > recent_threads.len(),
+            recent_total,
+            recent_threads,
+        })
+    }
+
     /// Product archive semantics in one transaction: write the tombstone
-    /// and delete the record, its projection rows, and its pin together.
+    /// and delete the record, its projection rows, pin, and favorite together.
     /// Returns whether a record existed. Nothing is left to repair on any
     /// other path — a write racing this transaction either lands before
     /// the tombstone (and is deleted here) or is rejected by the in-tx
@@ -1052,6 +1239,13 @@ impl GaryxDbService {
             params![thread_id],
         )? > 0;
         bump_thread_pins_revision_if_changed_tx(&tx, removed_pin)?;
+        let removed_favorite = tx.execute(
+            "DELETE FROM thread_favorites WHERE thread_id = ?1",
+            params![thread_id],
+        )? > 0;
+        // Archive tombstones prevent record resurrection, so a missing
+        // favorite needs no extra fence; only a changed collection bumps.
+        bump_thread_favorites_revision_if_changed_tx(&tx, removed_favorite)?;
         tx.commit()?;
         Ok(removed)
     }
@@ -2456,7 +2650,7 @@ impl GaryxDbService {
     }
 
     /// Single-transaction delete of a thread record, all its projection
-    /// rows, and its pin. Returns whether the record existed.
+    /// rows, pin, and favorite. Returns whether the record existed.
     pub(crate) fn delete_thread_record_with_projections(&self, key: &str) -> GaryxDbResult<bool> {
         #[cfg(any(test, feature = "test-seams"))]
         self.maybe_block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
@@ -2472,6 +2666,16 @@ impl GaryxDbService {
         let removed_pin =
             tx.execute("DELETE FROM thread_pins WHERE thread_id = ?1", params![key])? > 0;
         bump_thread_pins_revision_if_changed_tx(&tx, removed_pin)?;
+        tx.execute(
+            "DELETE FROM thread_favorites WHERE thread_id = ?1",
+            params![key],
+        )?;
+        // Ordinary delete has no durable tombstone. Every successful thread
+        // deletion advances the fence even when there was no favorite row,
+        // so a pre-delete orphan write cannot land after record recreation.
+        if removed && is_thread_key(&key) {
+            bump_thread_favorites_revision_tx(&tx)?;
+        }
         tx.commit()?;
         Ok(removed)
     }
@@ -2843,6 +3047,16 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             pins_revision INTEGER NOT NULL DEFAULT 0 CHECK (pins_revision >= 0)
         ) STRICT;
 
+        CREATE TABLE IF NOT EXISTS thread_favorites (
+            thread_id TEXT PRIMARY KEY,
+            favorited_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS thread_favorites_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            favorites_revision INTEGER NOT NULL DEFAULT 0 CHECK (favorites_revision >= 0)
+        ) STRICT;
+
         CREATE TABLE IF NOT EXISTS garyx_store_meta (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             store_incarnation_id TEXT NOT NULL
@@ -3086,6 +3300,7 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
     )?;
     ensure_thread_pins_sort_order_column(conn)?;
     ensure_thread_pins_meta_row(conn)?;
+    ensure_thread_favorites_meta_row(conn)?;
     ensure_store_incarnation_row(conn)?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_thread_pins_sort_order
@@ -3125,6 +3340,7 @@ fn purge_retired_workflow_state(conn: &Connection) -> GaryxDbResult<()> {
     let tx = conn.unchecked_transaction()?;
     let mut retired_thread_ids = BTreeSet::new();
     let mut removed_any_pin = false;
+    let mut removed_any_favorite = false;
 
     if sqlite_table_exists(&tx, "workflow_runs")? {
         // `task_thread_id` was added after the first Workflow schema. Read
@@ -3204,6 +3420,10 @@ fn purge_retired_workflow_state(conn: &Connection) -> GaryxDbResult<()> {
             "DELETE FROM thread_pins WHERE thread_id = ?1",
             params![thread_id],
         )? > 0;
+        removed_any_favorite |= tx.execute(
+            "DELETE FROM thread_favorites WHERE thread_id = ?1",
+            params![thread_id],
+        )? > 0;
         tx.execute(
             "DELETE FROM archived_threads WHERE thread_id = ?1",
             params![thread_id],
@@ -3226,6 +3446,10 @@ fn purge_retired_workflow_state(conn: &Connection) -> GaryxDbResult<()> {
         "#,
     )?;
     bump_thread_pins_revision_if_changed_tx(&tx, removed_any_pin)?;
+    // This runs under the process-lifetime data-dir lock and before listener
+    // bind, so there can be no in-flight HTTP writer to fence when no row was
+    // removed. Preserve the collection revision on a no-op purge.
+    bump_thread_favorites_revision_if_changed_tx(&tx, removed_any_favorite)?;
     tx.commit()?;
     Ok(())
 }
@@ -3356,6 +3580,84 @@ fn bump_thread_pins_revision_if_changed_tx(conn: &Connection, changed: bool) -> 
         ));
     }
     Ok(())
+}
+
+fn read_thread_favorites_tx(conn: &Connection) -> GaryxDbResult<Vec<FavoriteThreadRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT thread_id, favorited_at
+           FROM thread_favorites
+          ORDER BY favorited_at DESC, thread_id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(FavoriteThreadRecord {
+            thread_id: row.get(0)?,
+            favorited_at: row.get(1)?,
+        })
+    })?;
+    let mut favorites = Vec::new();
+    for row in rows {
+        favorites.push(row?);
+    }
+    Ok(favorites)
+}
+
+fn read_thread_favorites_revision_tx(conn: &Connection) -> GaryxDbResult<i64> {
+    Ok(conn.query_row(
+        "SELECT favorites_revision FROM thread_favorites_meta WHERE id = 1",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+fn read_thread_favorites_page_with_rows_tx(
+    conn: &Connection,
+    favorites: Vec<FavoriteThreadRecord>,
+) -> GaryxDbResult<ThreadFavoritesPage> {
+    Ok(ThreadFavoritesPage {
+        favorites,
+        revision: read_thread_favorites_revision_tx(conn)?,
+        store_incarnation_id: read_store_incarnation_id(conn)?,
+    })
+}
+
+fn read_thread_favorites_page_tx(conn: &Connection) -> GaryxDbResult<ThreadFavoritesPage> {
+    read_thread_favorites_page_with_rows_tx(conn, read_thread_favorites_tx(conn)?)
+}
+
+fn bump_thread_favorites_revision_tx(conn: &Connection) -> GaryxDbResult<()> {
+    let updated = conn.execute(
+        "UPDATE thread_favorites_meta
+            SET favorites_revision = favorites_revision + 1
+          WHERE id = 1",
+        [],
+    )?;
+    if updated != 1 {
+        return Err(GaryxDbError::Configuration(
+            "thread_favorites_meta singleton is missing".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn bump_thread_favorites_revision_if_changed_tx(
+    conn: &Connection,
+    changed: bool,
+) -> GaryxDbResult<()> {
+    if changed {
+        bump_thread_favorites_revision_tx(conn)?;
+    }
+    Ok(())
+}
+
+fn thread_record_exists_tx(conn: &Connection, thread_id: &str) -> GaryxDbResult<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM thread_records WHERE key = ?1",
+            params![thread_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 fn normalize_thread_id(thread_id: &str) -> GaryxDbResult<String> {
@@ -3906,6 +4208,16 @@ fn ensure_thread_pins_meta_row(conn: &Connection) -> GaryxDbResult<()> {
             [],
         )?;
     }
+    Ok(())
+}
+
+fn ensure_thread_favorites_meta_row(conn: &Connection) -> GaryxDbResult<()> {
+    conn.execute(
+        "INSERT INTO thread_favorites_meta (id, favorites_revision)
+         VALUES (1, 0)
+         ON CONFLICT(id) DO NOTHING",
+        [],
+    )?;
     Ok(())
 }
 
@@ -4612,6 +4924,22 @@ mod tests {
         }
     }
 
+    fn seed_favorite_thread(service: &GaryxDbService, thread_id: &str, recent: bool) {
+        service
+            .write_thread_record_with_projections(
+                thread_id,
+                &json!({"thread_id": thread_id}).to_string(),
+                Some("2026-07-16T00:00:00Z"),
+                None,
+            )
+            .expect("seed favorite thread record");
+        if recent {
+            service
+                .upsert_recent_thread(sample_recent_draft(thread_id))
+                .expect("seed favorite recent projection");
+        }
+    }
+
     fn seed_task_kind_migration_row(
         service: &GaryxDbService,
         thread_id: &str,
@@ -4825,6 +5153,19 @@ mod tests {
             generation_one_incarnation,
             "a committed recovery must rotate exactly with its marker transaction"
         );
+        seed_favorite_thread(&service, "thread::recovered-store", false);
+        assert!(matches!(
+            service
+                .set_thread_favorite(
+                    "thread::recovered-store",
+                    true,
+                    0,
+                    &generation_one_incarnation,
+                )
+                .expect("old incarnation write is classified"),
+            FavoriteThreadResult::WrongIncarnation(ref page)
+                if page.revision == 0 && page.favorites.is_empty()
+        ));
         assert!(
             service
                 .clear_projection_state(LEGACY_IMPORT_GENERATION_NAME)
@@ -5674,6 +6015,8 @@ mod tests {
                 );
                 INSERT INTO thread_pins (thread_id, pinned_at)
                 VALUES ('thread::legacy-workflow-task', '2026-07-01T00:00:00.000Z');
+                INSERT INTO thread_favorites (thread_id, favorited_at)
+                VALUES ('thread::legacy-workflow-task', '2026-07-01T00:00:00.000Z');
                 INSERT INTO archived_threads (thread_id, archived_at)
                 VALUES ('thread::legacy-workflow-child', '2026-07-01T00:00:00.000Z');
                 INSERT INTO thread_channel_endpoints (
@@ -5712,6 +6055,13 @@ mod tests {
             1,
             "startup cleanup must bump the collection exactly once"
         );
+        assert_eq!(
+            db.list_thread_favorites()
+                .expect("favorites after cleanup")
+                .revision,
+            1,
+            "startup cleanup must bump favorites exactly once when changed"
+        );
         for table in ["workflow_runs", "workflow_child_runs", "workflow_events"] {
             assert!(!sqlite_table_exists(&db.conn().expect("conn"), table).expect("table check"));
         }
@@ -5740,6 +6090,7 @@ mod tests {
             ("thread_meta", "thread_id"),
             ("recent_threads", "thread_id"),
             ("thread_pins", "thread_id"),
+            ("thread_favorites", "thread_id"),
             ("archived_threads", "thread_id"),
             ("thread_channel_endpoints", "thread_id"),
             ("automation_thread_runs", "thread_id"),
@@ -5772,6 +6123,14 @@ mod tests {
                 .revision,
             1,
             "a second startup cleanup must not bump an unchanged collection"
+        );
+        assert_eq!(
+            reopened
+                .list_thread_favorites()
+                .expect("favorites after idempotent cleanup")
+                .revision,
+            1,
+            "a no-op startup purge must preserve favorites revision"
         );
         assert!(
             reopened
@@ -6192,6 +6551,327 @@ mod tests {
                 .0
         );
         assert_eq!(db.list_pinned_threads().expect("final page").revision, 3);
+    }
+
+    #[test]
+    fn thread_favorites_schema_initializes_singleton_before_startup_cleanup_and_reopens_stably() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let db = GaryxDbService::open(&path).expect("database");
+        assert_eq!(db.list_thread_favorites().unwrap().revision, 0);
+        let conn = db.conn().expect("writer");
+        assert!(sqlite_table_exists(&conn, "thread_favorites").unwrap());
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM thread_favorites_meta WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
+        );
+        drop(conn);
+        seed_favorite_thread(&db, "thread::reopen-favorite", false);
+        let incarnation = db.store_incarnation_id().unwrap();
+        db.set_thread_favorite("thread::reopen-favorite", true, 0, &incarnation)
+            .expect("favorite");
+        drop(db);
+
+        let reopened = GaryxDbService::open(&path).expect("reopen");
+        let page = reopened.list_thread_favorites().expect("reopened page");
+        assert_eq!(page.revision, 1);
+        assert_eq!(page.favorites.len(), 1);
+        assert_eq!(page.store_incarnation_id, incarnation);
+    }
+
+    #[test]
+    fn thread_favorites_cas_fences_identity_revision_and_bumps_every_accepted_noop() {
+        let db = GaryxDbService::memory().expect("database");
+        seed_favorite_thread(&db, "thread::favorite-cas", false);
+        let incarnation = db.store_incarnation_id().unwrap();
+        let initial = db.list_thread_favorites().expect("initial page");
+        assert_eq!(initial.revision, 0);
+        assert!(initial.favorites.is_empty());
+
+        let wrong = db
+            .set_thread_favorite("thread::favorite-cas", true, 0, &Uuid::new_v4().to_string())
+            .expect("wrong incarnation response");
+        assert!(matches!(
+            wrong,
+            FavoriteThreadResult::WrongIncarnation(ref page) if page.revision == 0
+        ));
+
+        let first = db
+            .set_thread_favorite("thread::favorite-cas", true, 0, &incarnation)
+            .expect("favorite");
+        let FavoriteThreadResult::Updated {
+            changed: true,
+            page: first,
+        } = first
+        else {
+            panic!("expected changed favorite")
+        };
+        assert_eq!(first.revision, 1);
+        assert_eq!(first.favorites.len(), 1);
+        let favorited_at = first.favorites[0].favorited_at.clone();
+
+        let repeated = db
+            .set_thread_favorite("thread::favorite-cas", true, 1, &incarnation)
+            .expect("repeat favorite");
+        let FavoriteThreadResult::Updated {
+            changed: false,
+            page: repeated,
+        } = repeated
+        else {
+            panic!("expected accepted no-op favorite")
+        };
+        assert_eq!(repeated.revision, 2);
+        assert_eq!(repeated.favorites[0].favorited_at, favorited_at);
+
+        let conflict = db
+            .set_thread_favorite("thread::favorite-cas", false, 1, &incarnation)
+            .expect("stale conflict");
+        assert!(matches!(
+            conflict,
+            FavoriteThreadResult::Conflict(ref page)
+                if page.revision == 2 && page.favorites.len() == 1
+        ));
+
+        let removed = db
+            .set_thread_favorite("thread::favorite-cas", false, 2, &incarnation)
+            .expect("unfavorite");
+        assert!(matches!(
+            removed,
+            FavoriteThreadResult::Updated {
+                changed: true,
+                ref page,
+            } if page.revision == 3 && page.favorites.is_empty()
+        ));
+        let repeated_delete = db
+            .set_thread_favorite("thread::favorite-cas", false, 3, &incarnation)
+            .expect("repeat unfavorite");
+        assert!(matches!(
+            repeated_delete,
+            FavoriteThreadResult::Updated {
+                changed: false,
+                ref page,
+            } if page.revision == 4 && page.favorites.is_empty()
+        ));
+
+        let missing = db
+            .set_thread_favorite("thread::missing", true, 4, &incarnation)
+            .expect("missing page");
+        assert!(matches!(
+            missing,
+            FavoriteThreadResult::NotFound(ref page)
+                if page.revision == 4 && page.favorites.is_empty()
+        ));
+    }
+
+    #[test]
+    fn thread_favorites_get_page_is_one_wal_snapshot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let db = GaryxDbService::open(&path).expect("database");
+        seed_favorite_thread(&db, "thread::first-favorite", false);
+        seed_favorite_thread(&db, "thread::second-favorite", false);
+        let incarnation = db.store_incarnation_id().unwrap();
+        db.set_thread_favorite("thread::first-favorite", true, 0, &incarnation)
+            .expect("first favorite");
+        let writer = Connection::open(&path).expect("test-only raw writer");
+
+        let snapshot = db
+            .list_thread_favorites_inner(|| {
+                writer.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     INSERT INTO thread_favorites (thread_id, favorited_at)
+                     VALUES ('thread::second-favorite', '2026-07-16T00:00:01Z');
+                     UPDATE thread_favorites_meta
+                        SET favorites_revision = favorites_revision + 1 WHERE id = 1;
+                     COMMIT;",
+                )?;
+                Ok(())
+            })
+            .expect("snapshot page");
+        assert_eq!(snapshot.revision, 1);
+        assert_eq!(
+            snapshot
+                .favorites
+                .iter()
+                .map(|favorite| favorite.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::first-favorite"]
+        );
+        let current = db.list_thread_favorites().expect("current page");
+        assert_eq!(current.revision, 2);
+        assert_eq!(current.favorites.len(), 2);
+    }
+
+    #[test]
+    fn favorites_snapshot_membership_revision_and_recent_rows_share_one_wal_snapshot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let db = GaryxDbService::open(&path).expect("database");
+        seed_favorite_thread(&db, "thread::snapshot-first", true);
+        seed_favorite_thread(&db, "thread::snapshot-second", true);
+        let incarnation = db.store_incarnation_id().unwrap();
+        db.set_thread_favorite("thread::snapshot-first", true, 0, &incarnation)
+            .expect("first favorite");
+        let writer = Connection::open(&path).expect("test-only raw writer");
+
+        let snapshot = db
+            .thread_favorites_snapshot_inner(|| {
+                writer.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     INSERT INTO thread_favorites (thread_id, favorited_at)
+                     VALUES ('thread::snapshot-second', '2026-07-16T00:00:01Z');
+                     UPDATE thread_favorites_meta
+                        SET favorites_revision = favorites_revision + 1 WHERE id = 1;
+                     COMMIT;",
+                )?;
+                Ok(())
+            })
+            .expect("atomic snapshot");
+        assert_eq!(snapshot.page.revision, 1);
+        assert_eq!(snapshot.page.favorites.len(), 1);
+        assert_eq!(snapshot.recent_total, 1);
+        assert_eq!(snapshot.recent_threads.len(), 1);
+        assert_eq!(
+            snapshot.recent_threads[0].thread_id,
+            "thread::snapshot-first"
+        );
+
+        let current = db.thread_favorites_snapshot().expect("next snapshot");
+        assert_eq!(current.page.revision, 2);
+        assert_eq!(current.page.favorites.len(), 2);
+        assert_eq!(current.recent_total, 2);
+    }
+
+    #[test]
+    fn favorite_cleanup_interleavings_and_unconditional_plain_delete_bump_close_orphan_writes() {
+        let archived = GaryxDbService::memory().expect("archive database");
+        seed_favorite_thread(&archived, "thread::archive-first", false);
+        let incarnation = archived.store_incarnation_id().unwrap();
+        assert!(
+            archived
+                .archive_thread_record("thread::archive-first")
+                .expect("archive first")
+        );
+        assert!(matches!(
+            archived
+                .set_thread_favorite("thread::archive-first", true, 0, &incarnation)
+                .expect("post-archive write"),
+            FavoriteThreadResult::NotFound(ref page) if page.revision == 0
+        ));
+
+        let favorite_first = GaryxDbService::memory().expect("favorite-first database");
+        seed_favorite_thread(&favorite_first, "thread::favorite-first", false);
+        let incarnation = favorite_first.store_incarnation_id().unwrap();
+        favorite_first
+            .set_thread_favorite("thread::favorite-first", true, 0, &incarnation)
+            .expect("favorite first");
+        favorite_first
+            .archive_thread_record("thread::favorite-first")
+            .expect("archive cleans favorite");
+        assert_eq!(
+            favorite_first
+                .list_thread_favorites()
+                .expect("post archive")
+                .revision,
+            2
+        );
+        favorite_first
+            .archive_thread_record("thread::favorite-first")
+            .expect("repeat archive");
+        assert_eq!(
+            favorite_first
+                .list_thread_favorites()
+                .expect("repeat archive")
+                .revision,
+            2,
+            "archive tombstone permits bump-on-change"
+        );
+
+        let deleted = GaryxDbService::memory().expect("delete database");
+        seed_favorite_thread(&deleted, "thread::delete-recreate", false);
+        let incarnation = deleted.store_incarnation_id().unwrap();
+        assert!(
+            deleted
+                .delete_thread_record_with_projections("thread::delete-recreate")
+                .expect("plain delete without favorite")
+        );
+        assert_eq!(deleted.list_thread_favorites().unwrap().revision, 1);
+        seed_favorite_thread(&deleted, "thread::delete-recreate", false);
+        assert!(matches!(
+            deleted
+                .set_thread_favorite("thread::delete-recreate", true, 0, &incarnation)
+                .expect("orphan pre-delete write"),
+            FavoriteThreadResult::Conflict(ref page) if page.revision == 1
+        ));
+        assert!(
+            deleted
+                .list_thread_favorites()
+                .unwrap()
+                .favorites
+                .is_empty()
+        );
+
+        deleted
+            .set_thread_favorite("thread::delete-recreate", true, 1, &incarnation)
+            .expect("fresh favorite");
+        assert!(
+            deleted
+                .delete_thread_record_with_projections("thread::delete-recreate")
+                .expect("delete with favorite")
+        );
+        let page = deleted.list_thread_favorites().unwrap();
+        assert_eq!(page.revision, 3, "plain delete bumps exactly once");
+        assert!(page.favorites.is_empty());
+    }
+
+    #[test]
+    fn favorites_snapshot_is_atomic_empty_and_capped_with_truncation() {
+        let db = GaryxDbService::memory().expect("database");
+        let empty = db.thread_favorites_snapshot().expect("empty snapshot");
+        assert!(empty.page.favorites.is_empty());
+        assert!(empty.recent_threads.is_empty());
+        assert_eq!(empty.recent_total, 0);
+        assert!(!empty.recent_truncated);
+
+        let conn = db.conn().expect("writer");
+        conn.execute_batch(
+            "WITH RECURSIVE seq(x) AS (
+                 VALUES(0) UNION ALL SELECT x + 1 FROM seq WHERE x < 500
+             )
+             INSERT INTO thread_records (key, body, updated_at, recorded_at)
+             SELECT printf('thread::snapshot-%03d', x), '{}', NULL,
+                    '2026-07-16T00:00:00Z' FROM seq;
+             WITH RECURSIVE seq(x) AS (
+                 VALUES(0) UNION ALL SELECT x + 1 FROM seq WHERE x < 500
+             )
+             INSERT INTO thread_favorites (thread_id, favorited_at)
+             SELECT printf('thread::snapshot-%03d', x),
+                    printf('2026-07-16T00:%02d:%02dZ', x / 60, x % 60) FROM seq;
+             WITH RECURSIVE seq(x) AS (
+                 VALUES(0) UNION ALL SELECT x + 1 FROM seq WHERE x < 500
+             )
+             INSERT INTO recent_threads (
+                 thread_id, title, thread_type, message_count,
+                 last_message_preview, run_state, last_active_at, recorded_at
+             )
+             SELECT printf('thread::snapshot-%03d', x), printf('Favorite %03d', x),
+                    'chat', 1, '', 'idle',
+                    printf('2026-07-16T00:%02d:%02dZ', x / 60, x % 60),
+                    '2026-07-16T00:00:00Z' FROM seq;",
+        )
+        .expect("seed 501 joined favorites");
+        drop(conn);
+
+        let snapshot = db.thread_favorites_snapshot().expect("capped snapshot");
+        assert_eq!(snapshot.page.favorites.len(), 501);
+        assert_eq!(snapshot.recent_total, 501);
+        assert_eq!(snapshot.recent_threads.len(), 500);
+        assert!(snapshot.recent_truncated);
     }
 
     #[test]

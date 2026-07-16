@@ -40,8 +40,8 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::agent_identity::create_thread_for_agent_reference;
 use crate::garyx_db::{
-    GaryxDbError, RecentThreadRecord, RecentThreadTaskFilter, ReorderThreadPinsResult,
-    ThreadMetaRecord, ThreadPinsPage,
+    FavoriteThreadResult, GaryxDbError, RecentThreadRecord, RecentThreadTaskFilter,
+    ReorderThreadPinsResult, ThreadFavoritesPage, ThreadMetaRecord, ThreadPinsPage,
 };
 use crate::provider_session_locator::{
     list_recent_local_provider_sessions, recover_local_provider_session,
@@ -692,6 +692,14 @@ pub struct ListRecentThreadsParams {
 }
 
 #[derive(Deserialize)]
+pub struct ThreadFavoritesMutationQuery {
+    #[serde(default)]
+    pub expected_revision: Option<String>,
+    #[serde(default)]
+    pub expected_store_incarnation: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct ThreadLogParams {
     #[serde(default)]
     pub cursor: Option<u64>,
@@ -1175,7 +1183,7 @@ async fn hard_delete_thread_record(
         }
     }
 
-    // Projection rows and the pin were removed in the same transaction as
+    // Projection rows, pin, and favorite were removed in the same transaction as
     // the record delete (delete_thread_record_with_projections).
     clear_deleted_thread_runtime_state(state, thread_id, provider_key.as_deref()).await;
     purge_thread_from_indexes(state, thread_id).await;
@@ -1455,6 +1463,113 @@ fn thread_pins_payload(page: &ThreadPinsPage) -> Value {
     })
 }
 
+const THREAD_FAVORITES_GET_OPERATION: &str = "thread_favorites_get";
+const THREAD_FAVORITES_PUT_OPERATION: &str = "thread_favorites_put";
+const THREAD_FAVORITES_DELETE_OPERATION: &str = "thread_favorites_delete";
+const THREAD_FAVORITES_SNAPSHOT_OPERATION: &str = "thread_favorites_snapshot";
+
+fn thread_favorite_ids(page: &ThreadFavoritesPage) -> Vec<String> {
+    page.favorites
+        .iter()
+        .map(|favorite| favorite.thread_id.clone())
+        .collect()
+}
+
+fn thread_favorites_payload(page: &ThreadFavoritesPage, server_boot_id: &str) -> Value {
+    json!({
+        "store_incarnation_id": page.store_incarnation_id,
+        "server_boot_id": server_boot_id,
+        "revision": page.revision,
+        "thread_ids": thread_favorite_ids(page),
+        "favorites": page.favorites,
+    })
+}
+
+fn extend_json_object(payload: &mut Value, fields: Value) {
+    let Some(payload) = payload.as_object_mut() else {
+        return;
+    };
+    let Some(fields) = fields.as_object() else {
+        return;
+    };
+    payload.extend(fields.clone());
+}
+
+fn thread_favorites_tagged_error(
+    status: StatusCode,
+    operation: &'static str,
+    code: &'static str,
+    message: impl Into<String>,
+    page: Option<&ThreadFavoritesPage>,
+    server_boot_id: &str,
+    fields: Value,
+) -> axum::response::Response {
+    let mut payload = page.map_or_else(
+        || {
+            json!({
+                "server_boot_id": server_boot_id,
+            })
+        },
+        |page| thread_favorites_payload(page, server_boot_id),
+    );
+    extend_json_object(
+        &mut payload,
+        json!({
+            "kind": "garyx_api_error",
+            "operation": operation,
+            "code": code,
+            "message": message.into(),
+        }),
+    );
+    extend_json_object(&mut payload, fields);
+    (status, Json(payload)).into_response()
+}
+
+fn parse_thread_favorites_mutation_query(
+    query: Result<Query<ThreadFavoritesMutationQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<(i64, String), String> {
+    let Query(query) = query.map_err(|error| error.to_string())?;
+    let expected_revision = query
+        .expected_revision
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|revision| *revision >= 0)
+        .ok_or_else(|| "expected_revision must be a non-negative integer".to_owned())?;
+    let expected_store_incarnation = query
+        .expected_store_incarnation
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .map(|uuid| uuid.to_string())
+        .ok_or_else(|| "expected_store_incarnation must be a UUID".to_owned())?;
+    Ok((expected_revision, expected_store_incarnation))
+}
+
+async fn tagged_favorites_invalid_request(
+    state: &Arc<AppState>,
+    operation: &'static str,
+    message: String,
+) -> axum::response::Response {
+    let page = state
+        .ops
+        .garyx_db
+        .run_blocking(|db| db.list_thread_favorites())
+        .await
+        .ok();
+    thread_favorites_tagged_error(
+        StatusCode::BAD_REQUEST,
+        operation,
+        "invalid_request",
+        message,
+        page.as_ref(),
+        state.server_boot_id(),
+        json!({}),
+    )
+}
+
 fn parse_reorder_thread_pins_request(payload: &Value) -> Result<(Vec<String>, i64), GaryxDbError> {
     let object = payload
         .as_object()
@@ -1503,14 +1618,7 @@ async fn recent_threads_payload(
     total: usize,
     has_more: bool,
 ) -> Value {
-    let mut threads = Vec::with_capacity(records.len());
-    let catalog = AgentCatalogSnapshot::load(state).await;
-    for record in records {
-        let mut thread = serde_json::to_value(record).unwrap_or(Value::Null);
-        attach_thread_runtime_summary_with_catalog(state, &record.thread_id, &mut thread, &catalog)
-            .await;
-        threads.push(thread);
-    }
+    let threads = recent_thread_values(state, records).await;
     json!({
         "threads": threads,
         "count": records.len(),
@@ -1519,6 +1627,18 @@ async fn recent_threads_payload(
         "total": total,
         "has_more": has_more,
     })
+}
+
+async fn recent_thread_values(state: &Arc<AppState>, records: &[RecentThreadRecord]) -> Vec<Value> {
+    let mut threads = Vec::with_capacity(records.len());
+    let catalog = AgentCatalogSnapshot::load(state).await;
+    for record in records {
+        let mut thread = serde_json::to_value(record).unwrap_or(Value::Null);
+        attach_thread_runtime_summary_with_catalog(state, &record.thread_id, &mut thread, &catalog)
+            .await;
+        threads.push(thread);
+    }
+    threads
 }
 
 fn garyx_db_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {
@@ -1707,6 +1827,201 @@ pub async fn list_thread_pins(State(state): State<Arc<AppState>>) -> impl IntoRe
     {
         Ok(page) => (StatusCode::OK, Json(thread_pins_payload(&page))).into_response(),
         Err(error) => garyx_db_error_response(error).into_response(),
+    }
+}
+
+/// GET /api/thread-favorites - one atomic membership/revision/identity page.
+pub async fn list_thread_favorites(State(state): State<Arc<AppState>>) -> axum::response::Response {
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(|db| db.list_thread_favorites())
+        .await
+    {
+        Ok(page) => (
+            StatusCode::OK,
+            Json(thread_favorites_payload(&page, state.server_boot_id())),
+        )
+            .into_response(),
+        Err(error) => thread_favorites_tagged_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            THREAD_FAVORITES_GET_OPERATION,
+            "unavailable",
+            error.to_string(),
+            None,
+            state.server_boot_id(),
+            json!({}),
+        ),
+    }
+}
+
+/// GET /api/thread-favorites/snapshot - membership and joined recent rows
+/// from one SQLite read transaction.
+pub async fn thread_favorites_snapshot(
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    match state
+        .ops
+        .garyx_db
+        .run_blocking(|db| db.thread_favorites_snapshot())
+        .await
+    {
+        Ok(snapshot) => {
+            let threads = recent_thread_values(&state, &snapshot.recent_threads).await;
+            let mut payload = thread_favorites_payload(&snapshot.page, state.server_boot_id());
+            extend_json_object(
+                &mut payload,
+                json!({
+                    "recent": {
+                        "threads": threads,
+                        "total": snapshot.recent_total,
+                        "truncated": snapshot.recent_truncated,
+                    }
+                }),
+            );
+            (StatusCode::OK, Json(payload)).into_response()
+        }
+        Err(error) => thread_favorites_tagged_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            THREAD_FAVORITES_SNAPSHOT_OPERATION,
+            "unavailable",
+            error.to_string(),
+            None,
+            state.server_boot_id(),
+            json!({}),
+        ),
+    }
+}
+
+/// PUT /api/thread-favorites/:key - conditionally favorite one thread.
+pub async fn favorite_thread(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    query: Result<Query<ThreadFavoritesMutationQuery>, axum::extract::rejection::QueryRejection>,
+) -> axum::response::Response {
+    mutate_thread_favorite(state, key, query, true, THREAD_FAVORITES_PUT_OPERATION).await
+}
+
+/// DELETE /api/thread-favorites/:key - conditionally unfavorite one thread.
+pub async fn unfavorite_thread(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    query: Result<Query<ThreadFavoritesMutationQuery>, axum::extract::rejection::QueryRejection>,
+) -> axum::response::Response {
+    mutate_thread_favorite(state, key, query, false, THREAD_FAVORITES_DELETE_OPERATION).await
+}
+
+async fn mutate_thread_favorite(
+    state: Arc<AppState>,
+    key: String,
+    query: Result<Query<ThreadFavoritesMutationQuery>, axum::extract::rejection::QueryRejection>,
+    favorited: bool,
+    operation: &'static str,
+) -> axum::response::Response {
+    let (expected_revision, expected_store_incarnation) =
+        match parse_thread_favorites_mutation_query(query) {
+            Ok(expected) => expected,
+            Err(message) => {
+                return tagged_favorites_invalid_request(&state, operation, message).await;
+            }
+        };
+    let thread_id = key.trim().to_owned();
+    if !is_thread_key(&thread_id) {
+        return tagged_favorites_invalid_request(
+            &state,
+            operation,
+            "thread key must use the thread:: prefix".to_owned(),
+        )
+        .await;
+    }
+    let mutation_thread_id = thread_id.clone();
+    let mutation_expected_store_incarnation = expected_store_incarnation.clone();
+    let result = state
+        .ops
+        .garyx_db
+        .run_blocking(move |db| {
+            db.set_thread_favorite(
+                &mutation_thread_id,
+                favorited,
+                expected_revision,
+                &mutation_expected_store_incarnation,
+            )
+        })
+        .await;
+    match result {
+        Ok(FavoriteThreadResult::Updated { changed, page }) => {
+            let mut payload = thread_favorites_payload(&page, state.server_boot_id());
+            extend_json_object(
+                &mut payload,
+                if favorited {
+                    json!({
+                        "favorited": true,
+                        "changed": changed,
+                        "thread_id": thread_id,
+                    })
+                } else {
+                    json!({
+                        "favorited": false,
+                        "removed": changed,
+                        "thread_id": thread_id,
+                    })
+                },
+            );
+            (StatusCode::OK, Json(payload)).into_response()
+        }
+        Ok(FavoriteThreadResult::Conflict(page)) => thread_favorites_tagged_error(
+            StatusCode::CONFLICT,
+            operation,
+            "conflict",
+            "favorites revision does not match",
+            Some(&page),
+            state.server_boot_id(),
+            json!({
+                "conflict": true,
+                "expected_revision": expected_revision,
+                "favorited": page.favorites.iter().any(|item| item.thread_id == thread_id),
+            }),
+        ),
+        Ok(FavoriteThreadResult::WrongIncarnation(page)) => thread_favorites_tagged_error(
+            StatusCode::CONFLICT,
+            operation,
+            "wrong_incarnation",
+            "store incarnation does not match",
+            Some(&page),
+            state.server_boot_id(),
+            json!({
+                "expected_store_incarnation": expected_store_incarnation,
+                "favorited": page.favorites.iter().any(|item| item.thread_id == thread_id),
+            }),
+        ),
+        Ok(FavoriteThreadResult::NotFound(page)) => thread_favorites_tagged_error(
+            StatusCode::NOT_FOUND,
+            operation,
+            "not_found",
+            format!("thread not found: {thread_id}"),
+            Some(&page),
+            state.server_boot_id(),
+            json!({
+                "favorited": false,
+                "thread_id": thread_id,
+            }),
+        ),
+        Err(error) => {
+            let (status, code) = if matches!(error, GaryxDbError::BadRequest(_)) {
+                (StatusCode::BAD_REQUEST, "invalid_request")
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, "unavailable")
+            };
+            thread_favorites_tagged_error(
+                status,
+                operation,
+                code,
+                error.to_string(),
+                None,
+                state.server_boot_id(),
+                json!({}),
+            )
+        }
     }
 }
 

@@ -3475,6 +3475,375 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
 }
 
 #[tokio::test]
+async fn thread_favorite_routes_enforce_dual_cas_and_return_tagged_atomic_pages() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::favorite-route";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Favorite Route",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+            }),
+        )
+        .await
+        .unwrap();
+    let incarnation = state.ops.garyx_db.store_incarnation_id().unwrap();
+    let boot_id = state.server_boot_id().to_owned();
+    let router = build_router(state.clone());
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri("/api/thread-favorites")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let initial: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(initial["store_incarnation_id"], incarnation);
+    assert_eq!(initial["server_boot_id"], boot_id);
+    assert_eq!(initial["revision"], 0);
+    assert_eq!(initial["thread_ids"], json!([]));
+
+    for uri in [
+        format!("/api/thread-favorites/{thread_id}"),
+        format!(
+            "/api/thread-favorites/{thread_id}?expected_revision=nope&expected_store_incarnation={incarnation}"
+        ),
+        format!(
+            "/api/thread-favorites/{thread_id}?expected_revision=0&expected_store_incarnation=nope"
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                authed_request()
+                    .method("PUT")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["kind"], "garyx_api_error");
+        assert_eq!(payload["operation"], "thread_favorites_put");
+        assert_eq!(payload["code"], "invalid_request");
+        assert_eq!(payload["store_incarnation_id"], incarnation);
+        assert_eq!(payload["server_boot_id"], boot_id);
+        assert_eq!(payload["revision"], 0);
+    }
+
+    let put_uri = format!(
+        "/api/thread-favorites/{thread_id}?expected_revision=0&expected_store_incarnation={incarnation}"
+    );
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("PUT")
+                .uri(put_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first["favorited"], true);
+    assert_eq!(first["changed"], true);
+    assert_eq!(first["revision"], 1);
+    assert_eq!(first["thread_ids"], json!([thread_id]));
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("PUT")
+                .uri(format!(
+                    "/api/thread-favorites/{thread_id}?expected_revision=1&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let repeated: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(repeated["changed"], false);
+    assert_eq!(repeated["revision"], 2);
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/thread-favorites/{thread_id}?expected_revision=1&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let conflict: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(conflict["kind"], "garyx_api_error");
+    assert_eq!(conflict["operation"], "thread_favorites_delete");
+    assert_eq!(conflict["code"], "conflict");
+    assert_eq!(conflict["revision"], 2);
+    assert_eq!(conflict["thread_ids"], json!([thread_id]));
+
+    let wrong_incarnation = uuid::Uuid::new_v4();
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/thread-favorites/{thread_id}?expected_revision=0&expected_store_incarnation={wrong_incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let wrong: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(wrong["code"], "wrong_incarnation");
+    assert_eq!(wrong["revision"], 2);
+    assert_eq!(wrong["thread_ids"], json!([thread_id]));
+    assert_eq!(wrong["store_incarnation_id"], incarnation);
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("PUT")
+                .uri(format!(
+                    "/api/thread-favorites/thread::missing?expected_revision=2&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let missing: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(missing["operation"], "thread_favorites_put");
+    assert_eq!(missing["code"], "not_found");
+    assert_eq!(missing["revision"], 2);
+    assert_eq!(missing["thread_ids"], json!([thread_id]));
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/thread-favorites/thread::missing?expected_revision=2&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let missing_delete: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(missing_delete["operation"], "thread_favorites_delete");
+    assert_eq!(missing_delete["code"], "not_found");
+    assert_eq!(missing_delete["revision"], 2);
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/thread-favorites/{thread_id}?expected_revision=2&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let removed: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(removed["removed"], true);
+    assert_eq!(removed["revision"], 3);
+    assert_eq!(removed["thread_ids"], json!([]));
+
+    let response = router
+        .oneshot(
+            authed_request()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/thread-favorites/{thread_id}?expected_revision=3&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let no_op: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(no_op["removed"], false);
+    assert_eq!(no_op["revision"], 4);
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_thread_favorites()
+            .unwrap()
+            .favorites
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows() {
+    let state = AppStateBuilder::new(test_config()).build();
+    for thread_id in ["thread::snapshot-recent", "thread::snapshot-without-recent"] {
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": thread_id,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z"
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    state
+        .ops
+        .garyx_db
+        .upsert_recent_thread(crate::garyx_db::RecentThreadDraft {
+            thread_id: "thread::snapshot-recent".to_owned(),
+            title: "Snapshot Recent".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 1,
+            last_message_preview: "preview".to_owned(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: None,
+            last_active_at: "2026-07-16T00:00:00Z".to_owned(),
+        })
+        .unwrap();
+    state
+        .ops
+        .garyx_db
+        .remove_recent_thread("thread::snapshot-without-recent")
+        .unwrap();
+    let incarnation = state.ops.garyx_db.store_incarnation_id().unwrap();
+    state
+        .ops
+        .garyx_db
+        .set_thread_favorite("thread::snapshot-recent", true, 0, &incarnation)
+        .unwrap();
+    state
+        .ops
+        .garyx_db
+        .set_thread_favorite("thread::snapshot-without-recent", true, 1, &incarnation)
+        .unwrap();
+    let router = build_router(state.clone());
+    let response = router
+        .oneshot(
+            authed_request()
+                .uri("/api/thread-favorites/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(payload["store_incarnation_id"], incarnation);
+    assert_eq!(payload["server_boot_id"], state.server_boot_id());
+    assert_eq!(payload["revision"], 2);
+    assert_eq!(payload["thread_ids"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["favorites"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["recent"]["total"], 1);
+    assert_eq!(payload["recent"]["truncated"], false);
+    assert_eq!(payload["recent"]["threads"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        payload["recent"]["threads"][0]["thread_id"],
+        "thread::snapshot-recent"
+    );
+}
+
+#[tokio::test]
 async fn reorder_thread_pins_route_enforces_cas_and_returns_canonical_pages() {
     let state = AppStateBuilder::new(test_config()).build();
     state.ops.garyx_db.pin_thread("thread::a").expect("pin a");
@@ -3591,7 +3960,7 @@ async fn reorder_thread_pins_route_enforces_cas_and_returns_canonical_pages() {
 }
 
 #[tokio::test]
-async fn delete_thread_removes_garyx_db_pin() {
+async fn delete_thread_removes_pin_and_favorite_with_unconditional_favorite_bump() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::delete-pinned-route";
     state
@@ -3613,6 +3982,12 @@ async fn delete_thread_removes_garyx_db_pin() {
         .garyx_db
         .pin_thread(thread_id)
         .expect("pin test thread");
+    let incarnation = state.ops.garyx_db.store_incarnation_id().unwrap();
+    state
+        .ops
+        .garyx_db
+        .set_thread_favorite(thread_id, true, 0, &incarnation)
+        .expect("favorite test thread");
     let router = build_router(state.clone());
 
     let request = authed_request()
@@ -3630,6 +4005,16 @@ async fn delete_thread_removes_garyx_db_pin() {
             .expect("list pins")
             .pins
             .is_empty()
+    );
+    let favorites = state
+        .ops
+        .garyx_db
+        .list_thread_favorites()
+        .expect("list favorites");
+    assert!(favorites.favorites.is_empty());
+    assert_eq!(
+        favorites.revision, 2,
+        "successful ordinary delete bumps once regardless of removed membership"
     );
 }
 
@@ -6309,6 +6694,12 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
         .garyx_db
         .pin_thread(thread_id)
         .expect("pin archived candidate");
+    let incarnation = state.ops.garyx_db.store_incarnation_id().unwrap();
+    state
+        .ops
+        .garyx_db
+        .set_thread_favorite(thread_id, true, 0, &incarnation)
+        .expect("favorite archived candidate");
     assert_eq!(
         state
             .ops
@@ -6385,6 +6776,9 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
             .pins
             .is_empty()
     );
+    let favorites = state.ops.garyx_db.list_thread_favorites().unwrap();
+    assert!(favorites.favorites.is_empty());
+    assert_eq!(favorites.revision, 2);
 
     let reconnected_thread_id = {
         let mut router = state.threads.router.lock().await;
