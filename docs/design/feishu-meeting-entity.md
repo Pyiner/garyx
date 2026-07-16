@@ -40,7 +40,7 @@ Product sign-off items (explicit, owner-revocable):
   **attempted** before processing; a send failure is logged and
   processing continues. Meeting invite/ended events **bypass the
   generic 30-minute in-memory event dedup cache** (their idempotence is
-  owned by the durable `invite_event_id` unique key and end-path CAS,
+  owned by the durable `meeting_invite_keys` table and end-path CAS,
   which absorb platform redelivery correctly even after an admission
   failure — the in-memory cache would wrongly swallow a redelivery that
   arrives after a failed admission insert). The loss rule is stated on
@@ -64,8 +64,9 @@ Product sign-off items (explicit, owner-revocable):
   platform redelivery of the *same old* invite event arriving after the
   entity was deleted will be admitted as a fresh entity — accepted (the
   realistic window is minutes; manual deletion of a meeting whose stale
-  invite is still in flight is an owner action on their own data) rather
-  than adding a tombstone key table. Three leave-related residual risks are likewise
+  invite is still in flight is an owner action on their own data) — the
+  `meeting_invite_keys` rows cascade-delete with the entity by design,
+  and no independent tombstone-key store is kept. Three leave-related residual risks are likewise
   accepted (RR14-04): ① a **joining** abort never attempts leave (no
   meeting id exists locally), so a late remote join can leave the bot
   in the meeting without capture until removed manually; ② a
