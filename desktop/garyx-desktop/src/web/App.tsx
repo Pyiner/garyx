@@ -130,6 +130,7 @@ function WebSettingsView({ route }: { route: Extract<WebRoute, { view: 'settings
     <WebSettingsPage
       focusedBotId={route.botId}
       focusedBotSummary={settingsState.focusedBotSummary}
+      effectiveDefaultAgentId={settingsState.effectiveDefaultAgentId}
       error={settingsState.error}
       jsonDraft={settingsState.jsonDraft}
       loading={settingsState.loading}

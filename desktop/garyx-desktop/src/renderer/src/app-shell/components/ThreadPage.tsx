@@ -482,7 +482,7 @@ type ThreadPageProps = {
   isActiveSendingThread: boolean;
   canSteerQueuedPrompt: boolean;
   messagesRef: RefObject<HTMLDivElement | null>;
-  newThreadSelectedAgentId: string;
+  newThreadSelectedAgentId: string | null;
   newThreadProviderModels?: DesktopProviderModels | null;
   newThreadAgentConfiguredModel?: string | null;
   newThreadSelectedModel?: string | null;
@@ -765,7 +765,7 @@ export function ThreadPage({
   );
   const composerSelectedAgentId = selectedThreadId
     ? activeThreadSummary?.agentId?.trim() || undefined
-    : newThreadSelectedAgentId;
+    : newThreadSelectedAgentId || undefined;
   const emptyNewThread =
     !selectedThreadId &&
     !activeMessages.length &&
@@ -1073,7 +1073,9 @@ export function ThreadPage({
               agentOptions={composerAgentOptions}
               selectedAgentId={composerSelectedAgentId}
               onSelectAgent={
-                !selectedThreadId ? onSelectNewThreadAgent : undefined
+                !selectedThreadId && (composerAgentOptions?.length ?? 0) > 0
+                  ? onSelectNewThreadAgent
+                  : undefined
               }
               newThreadProviderModels={
                 !selectedThreadId ? newThreadProviderModels : null

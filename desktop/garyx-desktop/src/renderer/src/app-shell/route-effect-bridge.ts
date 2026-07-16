@@ -67,7 +67,7 @@ type RouteEffectBridgeArgs = {
   selectThreadRequestSequenceRef: React.MutableRefObject<number>;
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
   setNewThreadDraftActive: React.Dispatch<React.SetStateAction<boolean>>;
-  setPendingAgentId: React.Dispatch<React.SetStateAction<string>>;
+  setPendingAgentId: React.Dispatch<React.SetStateAction<string | null>>;
   setPendingBotId: React.Dispatch<React.SetStateAction<string | null>>;
   setPendingWorkspaceMode: React.Dispatch<
     React.SetStateAction<DesktopWorkspaceMode>

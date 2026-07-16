@@ -1114,6 +1114,8 @@ async function mergeRemoteDesktopState(
         accountId: bot.account_id,
         displayName: bot.display_name.trim(),
         enabled: bot.enabled,
+        agentId: bot.agent_id?.trim() || null,
+        effectiveAgentId: bot.effective_agent_id?.trim() || null,
         workspaceDir: bot.workspace_dir?.trim() || null,
         rootBehavior: bot.root_behavior === 'expand_only' ? 'expand_only' as const : 'open_default' as const,
         mainEndpointStatus: bot.main_endpoint_status === 'resolved' ? 'resolved' as const : 'unresolved' as const,
@@ -1809,7 +1811,9 @@ export async function updateDesktopAutomation(input: {
     state,
     automation: state.automations.find((entry) => entry.id === updated.id) || {
       ...updated,
-      agentId: input.agentId?.trim() || existing.agentId,
+      agentId: targetThreadId
+        ? updated.agentId
+        : input.agentId?.trim() || updated.agentId || existing.agentId,
       workspacePath,
       targetThreadId,
     },

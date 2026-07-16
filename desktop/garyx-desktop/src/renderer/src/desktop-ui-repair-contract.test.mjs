@@ -172,5 +172,9 @@ test('settings colors and provider labels remain on shared presentation paths', 
   );
 
   const appShellSource = read('app-shell/AppShell.tsx');
-  assert.match(appShellSource, /label: providerLabel\("claude_code"\)/);
+  assert.doesNotMatch(
+    appShellSource,
+    /label: providerLabel\("claude_code"\)/,
+    'an empty agent catalog must not materialize Claude',
+  );
 });

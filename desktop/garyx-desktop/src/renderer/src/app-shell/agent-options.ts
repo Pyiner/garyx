@@ -78,6 +78,7 @@ export function buildAgentPickerOptions(
   const { excludeAgentIds, labelStyle = "display", standaloneOnly = false } = options;
   const sortedAgents = standaloneOnly ? sortStandaloneAgents(agents) : sortAgents(agents);
   return sortedAgents
+    .filter((agent) => agent.enabled)
     .filter((agent) => !excludeAgentIds?.has(agent.agentId))
     .map((agent) => toAgentPickerOption(agent, labelStyle));
 }

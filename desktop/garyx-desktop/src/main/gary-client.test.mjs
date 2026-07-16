@@ -1106,6 +1106,7 @@ test("updateCustomAgent carries the optimistic concurrency token", async () => {
         system_prompt: "",
         built_in: false,
         standalone: false,
+        enabled: true,
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-01-02T00:00:00Z",
       }),

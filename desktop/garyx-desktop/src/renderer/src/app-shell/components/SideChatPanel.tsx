@@ -118,7 +118,7 @@ export interface SideChatPanelProps {
   slashCommandsLoading: boolean;
   loadSlashCommands: () => Promise<void> | void;
   composerProviderType: DesktopApiProviderType;
-  pendingAgentId: string;
+  pendingAgentId: string | null;
   settingsDraft: DesktopSettings;
   desktopAgents: DesktopCustomAgent[];
   desktopAgentMap: Map<string, DesktopCustomAgent>;
@@ -554,7 +554,6 @@ export function SideChatPanel({
       sourceThreadId: sideChatSourceThreadId,
       activeThread,
       threadSummaryById,
-      pendingAgentId,
       setDesktopState,
       setError,
     };

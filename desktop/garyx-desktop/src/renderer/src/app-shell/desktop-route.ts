@@ -191,7 +191,7 @@ export function buildDesktopRouteHash(route: DesktopRoute): string {
     case 'new-thread': {
       const params = new URLSearchParams();
       appendParam(params, 'workspace', route.workspacePath);
-      appendParam(params, 'agent', route.agentId && route.agentId !== 'claude' ? route.agentId : null);
+      appendParam(params, 'agent', route.agentId);
       const query = params.toString();
       return query ? `#/new?${query}` : '#/new';
     }
@@ -215,7 +215,7 @@ export function buildDesktopRouteHash(route: DesktopRoute): string {
  * Normalize a route to its hash round-trip form (batch 4a):
  * `parseDesktopRoute(buildDesktopRouteHash(route))` without the string
  * detour. buildDesktopRouteHash drops empty/default params — notably the
- * `new-thread` agent param when it is the 'claude' default — so a
+ * empty `new-thread` params — so a
  * state-derived route and its parsed echo only compare
  * equal in canonical form. The route store commits canonical routes and
  * desktopRoutesEqual canonicalizes both sides.
@@ -227,8 +227,7 @@ export function canonicalDesktopRoute(route: DesktopRoute): DesktopRoute {
       return { kind: 'thread', threadId: route.threadId.trim() };
     case 'new-thread': {
       const workspacePath = trimmed(route.workspacePath);
-      const rawAgentId = trimmed(route.agentId);
-      const agentId = !rawAgentId || rawAgentId === 'claude' ? null : rawAgentId;
+      const agentId = trimmed(route.agentId);
       return { kind: 'new-thread', workspacePath, agentId };
     }
     case 'automation':

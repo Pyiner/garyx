@@ -5,6 +5,10 @@ export interface ConfiguredBot {
   accountId: string;
   displayName: string;
   enabled: boolean;
+  /** Persisted account override. Null means follow the global default. */
+  agentId: string | null;
+  /** Current resolved account agent, or null when no enabled agent exists. */
+  effectiveAgentId: string | null;
   workspaceDir: string | null;
   rootBehavior: "open_default" | "expand_only";
   mainEndpointStatus: "resolved" | "unresolved";
@@ -37,6 +41,10 @@ export interface DesktopBotConsoleSummary {
   latestActivity: string | null;
   endpointCount: number;
   boundEndpointCount: number;
+  /** Persisted account override. Null means follow the global default. */
+  agentId: string | null;
+  /** Current resolved account agent, or null when no enabled agent exists. */
+  effectiveAgentId: string | null;
   workspaceDir: string | null;
   mainEndpointStatus: "resolved" | "unresolved";
   mainEndpoint: DesktopChannelEndpoint | null;

@@ -21,6 +21,11 @@ import type {
   ContentView,
   PendingAutomationRun,
 } from './types';
+import {
+  automationAgentIdForMutation,
+  generatedAutomationAgentError,
+  initialAutomationAgentId,
+} from './automation-agent-contract';
 
 function isValidOnceScheduleInput(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value.trim());
@@ -35,21 +40,26 @@ function defaultAutomationSchedule(): DesktopAutomationSchedule {
   };
 }
 
-function buildAutomationDraft(
+export function buildAutomationDraft(
   workspaces: DesktopState['workspaces'],
-  agents: DesktopCustomAgent[],
+  effectiveDefaultAgentId: string | null,
   automation?: DesktopAutomationSummary | null,
 ): AutomationDraft {
-  const standaloneAgents = agents.filter((agent) => agent.standalone);
-  const defaultAgentId = standaloneAgents.find((agent) => agent.agentId === 'claude')?.agentId
-    || standaloneAgents[0]?.agentId
-    || 'claude';
   const targetThreadId = automation?.targetThreadId?.trim() || '';
+  const targetMode = targetThreadId ? 'existing_thread' : 'new_thread';
   return {
     label: automation?.label || '',
     prompt: automation?.prompt || '',
-    agentId: automation?.agentId || defaultAgentId,
-    targetMode: targetThreadId ? 'existing_thread' : 'new_thread',
+    agentId: initialAutomationAgentId({
+      targetMode,
+      configuredAgentId: automation?.agentId,
+      targetEffectiveAgentId: automation?.effectiveAgentId,
+      effectiveDefaultAgentId,
+    }),
+    agentChanged: false,
+    initialTargetMode: targetMode,
+    targetEffectiveAgentId: automation?.effectiveAgentId?.trim() || '',
+    targetMode,
     targetThreadId,
     workspacePath: automation?.workspacePath || workspaces[0]?.path || '',
     schedule: automation?.schedule || defaultAutomationSchedule(),
@@ -64,6 +74,7 @@ type UseAutomationControllerArgs = {
   contentView: ContentView;
   desktopState: DesktopState | null;
   desktopAgents: DesktopCustomAgent[];
+  effectiveDefaultAgentId: string | null;
   /**
    * Route-store version probe for the async guard (6c-2a): selections
    * capture it before awaiting the IPC and drop the landing when a newer
@@ -93,6 +104,7 @@ export function useAutomationController({
   contentView,
   desktopState,
   desktopAgents,
+  effectiveDefaultAgentId,
   getRouteVersion,
   navigateRoute,
   syncAutomationRoute,
@@ -172,16 +184,15 @@ export function useAutomationController({
     mode: 'create' | 'edit',
     automation?: DesktopAutomationSummary | null,
   ) {
-    if (!automationAgentOptions.length && mode === 'create') {
-      setError('Add or restore an agent before creating an automation.');
-      return;
-    }
-
     setError(null);
     setAutomationDialog({
       mode,
       automationId: automation?.id,
-      draft: buildAutomationDraft(automationWorkspaces, desktopAgents, automation),
+      draft: buildAutomationDraft(
+        automationWorkspaces,
+        effectiveDefaultAgentId,
+        automation,
+      ),
     });
   }
 
@@ -218,10 +229,19 @@ export function useAutomationController({
       : '';
     // A thread-bound automation runs under the thread's own agent; the agent
     // picker only applies to generated-thread automations.
-    if (!targetThreadId && !automationDialog.draft.agentId.trim()) {
-      setError('Choose an agent for this automation.');
+    const agentSelectionError = generatedAutomationAgentError(
+      automationDialog.mode,
+      automationDialog.draft,
+      new Set(automationAgentOptions.map((option) => option.id)),
+    );
+    if (agentSelectionError) {
+      setError(agentSelectionError);
       return;
     }
+    const mutationAgentId = automationAgentIdForMutation(
+      automationDialog.mode,
+      automationDialog.draft,
+    );
     const workspacePath = automationDialog.draft.workspacePath.trim();
     if (automationDialog.draft.targetMode === 'existing_thread' && !targetThreadId) {
       setError('Choose the thread this automation should post into.');
@@ -257,7 +277,7 @@ export function useAutomationController({
         ? await requestDesktopStateResult(() => window.garyxDesktop.createAutomation({
             label,
             prompt,
-            agentId: targetThreadId ? undefined : automationDialog.draft.agentId,
+            agentId: mutationAgentId,
             workspacePath: targetThreadId ? undefined : workspacePath || undefined,
             targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,
@@ -266,7 +286,7 @@ export function useAutomationController({
             automationId: automationDialog.automationId || '',
             label,
             prompt,
-            agentId: targetThreadId ? undefined : automationDialog.draft.agentId,
+            agentId: mutationAgentId,
             workspacePath: targetThreadId ? undefined : workspacePath || undefined,
             targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,

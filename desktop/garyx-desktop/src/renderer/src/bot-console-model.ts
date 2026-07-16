@@ -255,6 +255,8 @@ export function buildBotGroups(
       latestActivity: existing?.latestActivity || null,
       endpointCount: existing?.endpointCount || 0,
       boundEndpointCount: existing?.boundEndpointCount || 0,
+      agentId: existing?.agentId ?? bot.agentId,
+      effectiveAgentId: existing?.effectiveAgentId ?? bot.effectiveAgentId,
       mainEndpointStatus: existing?.mainEndpointStatus || bot.mainEndpointStatus,
       mainEndpoint: existing?.mainEndpoint ?? bot.mainEndpoint ?? null,
       mainThreadId:
@@ -299,6 +301,8 @@ export function buildBotGroups(
       latestActivity: null,
       endpointCount: 0,
       boundEndpointCount: 0,
+      agentId: null,
+      effectiveAgentId: null,
       mainEndpointStatus: 'unresolved' as const,
       mainEndpoint: null,
       mainThreadId: botMainThreads[id] || null,

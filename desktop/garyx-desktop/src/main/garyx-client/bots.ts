@@ -18,6 +18,8 @@ export interface BotConsoleSummaryPayload {
   latest_activity?: string | null;
   endpoint_count?: number;
   bound_endpoint_count?: number;
+  agent_id?: string | null;
+  effective_agent_id?: string | null;
   workspace_dir?: string | null;
   main_endpoint_status?: "resolved" | "unresolved" | string;
   main_endpoint?: NonNullable<ChannelEndpointsPayload["endpoints"]>[number] | null;
@@ -78,6 +80,8 @@ function mapBotConsoleSummary(
     latestActivity: value.latest_activity?.trim() || null,
     endpointCount: value.endpoint_count || 0,
     boundEndpointCount: value.bound_endpoint_count || 0,
+    agentId: value.agent_id?.trim() || null,
+    effectiveAgentId: value.effective_agent_id?.trim() || null,
     workspaceDir: value.workspace_dir?.trim() || null,
     mainEndpointStatus:
       value.main_endpoint_status === "resolved" ? "resolved" : "unresolved",
@@ -97,6 +101,8 @@ export interface ConfiguredBotPayload {
   account_id: string;
   display_name: string;
   enabled: boolean;
+  agent_id?: string | null;
+  effective_agent_id?: string | null;
   workspace_dir?: string | null;
   root_behavior?: "open_default" | "expand_only" | string;
   main_endpoint_status?: "resolved" | "unresolved" | string;

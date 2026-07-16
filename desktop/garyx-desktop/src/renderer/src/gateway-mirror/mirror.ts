@@ -17,6 +17,7 @@ import type {
   CachedThreadTranscript,
   CommittedMessageEvent,
   ConnectionStatus,
+  DesktopAgentCatalog,
   DesktopChatStreamEvent,
   DesktopCustomAgent,
   DesktopState,
@@ -64,6 +65,11 @@ export const GATEWAY_MIRROR_INACTIVE_THREAD_LIMIT = 32;
 const EMPTY_COMMITTED_RECORDS: readonly CommittedMessageEvent[] = [];
 const EMPTY_UI_MESSAGES: readonly UiTranscriptMessage[] = [];
 const EMPTY_PENDING_REMOTE_INPUTS: readonly PendingThreadInput[] = [];
+const EMPTY_AGENT_CATALOG: DesktopAgentCatalog = {
+  agents: [],
+  defaultAgentId: null,
+  effectiveDefaultAgentId: null,
+};
 const EMPTY_THREAD_FRONTIER: ThreadFrontierSnapshot = {
   committedSeq: 0,
   renderBasedOnSeq: 0,
@@ -105,7 +111,7 @@ function connectionEquals(
  */
 export interface GatewayMirrorServices {
   getState(): Promise<DesktopState>;
-  listCustomAgents(): Promise<DesktopCustomAgent[]>;
+  listCustomAgents(): Promise<DesktopAgentCatalog>;
   /** Paged history fetch (older pages and the forward incremental fetch). */
   getThreadHistory(input: GetThreadHistoryInput): Promise<ThreadTranscript>;
   /**
@@ -145,6 +151,8 @@ export interface GatewayRootSnapshot {
 export interface CatalogSnapshot {
   readonly version: number;
   readonly agents: readonly DesktopCustomAgent[];
+  readonly defaultAgentId: string | null;
+  readonly effectiveDefaultAgentId: string | null;
 }
 
 export interface ThreadMirrorSnapshot {
@@ -252,6 +260,8 @@ export class GatewayMirror {
 
   // Catalog domain: agents.
   private agents: readonly DesktopCustomAgent[] = [];
+  private defaultAgentId: string | null = null;
+  private effectiveDefaultAgentId: string | null = null;
   private catalogVersion = 0;
   private catalogSnapshot: CatalogSnapshot | null = null;
   private catalogListeners = new Set<() => void>();
@@ -322,6 +332,8 @@ export class GatewayMirror {
       this.catalogSnapshot = {
         version: this.catalogVersion,
         agents: this.agents,
+        defaultAgentId: this.defaultAgentId,
+        effectiveDefaultAgentId: this.effectiveDefaultAgentId,
       };
     }
     return this.catalogSnapshot;
@@ -371,11 +383,13 @@ export class GatewayMirror {
       Promise.resolve().then(() => services.getState()),
       Promise.resolve()
         .then(() => services.listCustomAgents())
-        .catch(() => [] as DesktopCustomAgent[]),
-    ]).then(([nextState, nextAgents]) => {
+        .catch(() => EMPTY_AGENT_CATALOG),
+    ]).then(([nextState, nextCatalog]) => {
       this.desktopState = nextState;
       this.bumpRoot();
-      this.agents = nextAgents;
+      this.agents = nextCatalog.agents;
+      this.defaultAgentId = nextCatalog.defaultAgentId;
+      this.effectiveDefaultAgentId = nextCatalog.effectiveDefaultAgentId;
       this.bumpCatalog();
       return nextState;
     });

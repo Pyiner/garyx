@@ -56,17 +56,6 @@ function configuredChannelAccountsFromDraft(
     });
 }
 
-function sortedStandaloneAgents(agents: DesktopCustomAgent[]): DesktopCustomAgent[] {
-  return [...agents]
-    .filter((agent) => agent.standalone)
-    .sort((left, right) => {
-      if (left.builtIn !== right.builtIn) {
-        return left.builtIn ? -1 : 1;
-      }
-      return left.displayName.localeCompare(right.displayName) || left.agentId.localeCompare(right.agentId);
-    });
-}
-
 function sortedAgentTargets(
   agents: DesktopCustomAgent[],
 ): AgentTargetOption[] {
@@ -74,16 +63,12 @@ function sortedAgentTargets(
 }
 
 function resolveChannelAgentId(
-  _config: any,
-  _channel: string,
-  _accountId: string,
   provider: any,
-  agents: DesktopCustomAgent[],
-): string {
+): string | null {
   const explicitAgentId = typeof provider?.agent_id === 'string'
     ? provider.agent_id.trim()
     : '';
-  return explicitAgentId || preferredStandaloneAgentId(agents, 'claude_code');
+  return explicitAgentId || null;
 }
 
 function compactAgentTargetLabel(target: AgentTargetOption | null, fallback: string): string {
@@ -96,44 +81,13 @@ function compactAgentTargetLabel(target: AgentTargetOption | null, fallback: str
     || withoutProvider;
 }
 
-function preferredStandaloneAgentId(
-  agents: DesktopCustomAgent[],
-  providerType?: DesktopCustomAgent['providerType'] | string | null,
-): string {
-  if (!agents.length) {
-    return '';
-  }
-
-  let normalizedProviderType: DesktopCustomAgent['providerType'] = 'claude_code';
-  if (providerType === 'codex_app_server') {
-    normalizedProviderType = 'codex_app_server';
-  } else if (providerType === 'antigravity' || providerType === 'agy' || providerType === 'antigravity_cli') {
-    normalizedProviderType = 'antigravity';
-  } else if (providerType === 'traex') {
-    normalizedProviderType = 'traex';
-  }
-
-  let builtInId = 'claude';
-  if (normalizedProviderType === 'codex_app_server') {
-    builtInId = 'codex';
-  } else if (normalizedProviderType === 'antigravity') {
-    builtInId = 'antigravity';
-  } else if (normalizedProviderType === 'traex') {
-    builtInId = 'traex';
-  }
-
-  return agents.find((agent) => agent.agentId === builtInId)?.agentId
-    || agents.find((agent) => agent.providerType === normalizedProviderType)?.agentId
-    || agents[0]?.agentId
-    || '';
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 type ChannelsSettingsPanelProps = {
   agents?: DesktopCustomAgent[];
+  effectiveDefaultAgentId?: string | null;
   workspaces?: DesktopWorkspace[];
   gatewayDraft?: any;
   gatewaySaving?: boolean;
@@ -160,6 +114,7 @@ type ChannelsSettingsPanelProps = {
 
 export function ChannelsSettingsPanel({
   agents = [],
+  effectiveDefaultAgentId = null,
   workspaces = [],
   gatewayDraft,
   gatewaySaving = false,
@@ -174,7 +129,6 @@ export function ChannelsSettingsPanel({
   const pluginAccounts = configuredChannelAccountsFromDraft(gatewayDraft?.channels);
   const [isAddingChannel, setIsAddingChannel] = useState(false);
   const [editingBot, setEditingBot] = useState<EditBotDialogContext | null>(null);
-  const standaloneAgents = sortedStandaloneAgents(agents);
   const agentTargets = sortedAgentTargets(agents);
   // channel. Degrades gracefully to an empty list before the first
   // fetch returns (all hardcoded logic still works).
@@ -247,21 +201,20 @@ export function ChannelsSettingsPanel({
               <span className="bot-table-col bot-table-col-actions">{t('Actions')}</span>
             </div>
             {configuredChannels.map(({ kind, accountId, account }) => {
-              const accountAgentId = resolveChannelAgentId(
-                gatewayDraft,
-                kind,
-                accountId,
-                account,
-                standaloneAgents,
-              );
+              const accountAgentId = resolveChannelAgentId(account);
               const selectedTarget = agentTargets.find((target) => target.value === accountAgentId) || null;
+              const effectiveTarget = agentTargets.find(
+                (target) => target.value === effectiveDefaultAgentId,
+              ) || null;
               const selectedAgentMissing = Boolean(accountAgentId && !selectedTarget);
-              const agentLabel = selectedTarget
-                ? selectedTarget.label
-                : (accountAgentId || t('Default route'));
+              const agentLabel = accountAgentId
+                ? (selectedTarget?.label || accountAgentId)
+                : effectiveTarget
+                  ? t('Follow global default (currently {agent})', { agent: effectiveTarget.label })
+                  : t('Follow global default (currently no enabled agent)');
               const agentDisplayName = compactAgentTargetLabel(
-                selectedTarget,
-                accountAgentId || t('Default route'),
+                selectedTarget || effectiveTarget,
+                accountAgentId || t('Follow global default'),
               );
               const displayName = String(account?.name || accountId);
               const enabled = Boolean(account?.enabled);
@@ -278,7 +231,7 @@ export function ChannelsSettingsPanel({
                   kind,
                   accountId,
                   account,
-                  resolvedAgentId: accountAgentId,
+                  agentId: accountAgentId,
                 });
               };
               const toggleEnabled = (nextEnabled: boolean) => {
@@ -335,19 +288,19 @@ export function ChannelsSettingsPanel({
                   >
                     <span className="bot-table-agent">
                       <AgentOptionAvatar
-                        agentId={selectedTarget?.value || accountAgentId}
-                        avatarDataUrl={selectedTarget?.avatarDataUrl}
+                        agentId={selectedTarget?.value || effectiveTarget?.value || accountAgentId}
+                        avatarDataUrl={selectedTarget?.avatarDataUrl || effectiveTarget?.avatarDataUrl}
                         className={selectedAgentMissing ? 'agent-option-avatar--missing' : undefined}
-                        kind={selectedTarget?.kind || 'agent'}
+                        kind={selectedTarget?.kind || effectiveTarget?.kind || 'agent'}
                         label={agentDisplayName}
-                        providerIcon={selectedTarget?.providerIcon}
-                        providerType={selectedTarget?.providerType}
+                        providerIcon={selectedTarget?.providerIcon || effectiveTarget?.providerIcon}
+                        providerType={selectedTarget?.providerType || effectiveTarget?.providerType}
                       />
                       <span className="bot-table-agent-copy">
                         <span className="bot-table-agent-name">{agentDisplayName}</span>
-                        {accountAgentId ? (
-                          <span className="bot-table-agent-id">{accountAgentId}</span>
-                        ) : null}
+                        <span className="bot-table-agent-id">
+                          {accountAgentId || t('Follow global')}
+                        </span>
                       </span>
                     </span>
                   </span>
@@ -407,6 +360,7 @@ export function ChannelsSettingsPanel({
       </section>
       <EditBotDialog
         agentTargets={agentTargets}
+        effectiveDefaultAgentId={effectiveDefaultAgentId}
         context={editingBot}
         onAddWorkspace={onAddWorkspace}
         onClose={() => setEditingBot(null)}
@@ -436,6 +390,7 @@ export function ChannelsSettingsPanel({
       />
       <AddBotDialog
         agentTargets={agentTargets}
+        effectiveDefaultAgentId={effectiveDefaultAgentId}
         onAddWorkspace={onAddWorkspace}
         onClose={() => {
           setIsAddingChannel(false);

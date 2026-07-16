@@ -1,6 +1,5 @@
 const DEFAULT_GATEWAY_HOST = '0.0.0.0';
 const DEFAULT_GATEWAY_PORT = 31337;
-const DEFAULT_CHANNEL_AGENT_ID = 'claude';
 
 export type GatewaySettingsMode = 'form' | 'json';
 
@@ -144,7 +143,7 @@ function stripLegacyChannelAccountFields(config: Record<string, any>): void {
         delete (account as Record<string, unknown>).workspace_dir;
       }
       const agentId = coerceOptionalString((account as Record<string, unknown>).agent_id);
-      if (agentId && agentId !== DEFAULT_CHANNEL_AGENT_ID) {
+      if (agentId) {
         (account as Record<string, unknown>).agent_id = agentId;
       } else {
         delete (account as Record<string, unknown>).agent_id;
@@ -177,7 +176,7 @@ function stripLegacyChannelAccountFields(config: Record<string, any>): void {
         delete (account as Record<string, unknown>).workspace_dir;
       }
       const agentId = coerceOptionalString((account as Record<string, unknown>).agent_id);
-      if (agentId && agentId !== DEFAULT_CHANNEL_AGENT_ID) {
+      if (agentId) {
         (account as Record<string, unknown>).agent_id = agentId;
       } else {
         delete (account as Record<string, unknown>).agent_id;
@@ -217,15 +216,15 @@ function stripLegacyAccountAgentBindings(config: Record<string, any>): void {
   config.agents = agents;
 }
 
-export function defaultChannelAgentId(): string {
-  return DEFAULT_CHANNEL_AGENT_ID;
+export function defaultChannelAgentId(): string | null {
+  return null;
 }
 
 export function defaultApiAccount() {
   return {
     enabled: true,
     name: null as string | null,
-    agent_id: DEFAULT_CHANNEL_AGENT_ID,
+    agent_id: null as string | null,
     workspace_dir: null as string | null,
   };
 }
@@ -235,7 +234,7 @@ export function defaultTelegramAccount() {
     token: '',
     enabled: true,
     name: null as string | null,
-    agent_id: DEFAULT_CHANNEL_AGENT_ID,
+    agent_id: null as string | null,
     workspace_dir: null as string | null,
     owner_target: null as null | { target_type: string; target_id: string },
     groups: {},
@@ -249,16 +248,15 @@ export function defaultFeishuAccount() {
     enabled: true,
     domain: 'feishu',
     name: null as string | null,
-    agent_id: DEFAULT_CHANNEL_AGENT_ID,
+    agent_id: null as string | null,
     workspace_dir: null as string | null,
     require_mention: true,
     topic_session_mode: 'disabled',
   };
 }
 
-function ensureChannelAgentId(value: unknown): string {
-  const normalized = coerceOptionalString(value);
-  return normalized || DEFAULT_CHANNEL_AGENT_ID;
+function ensureChannelAgentId(value: unknown): string | null {
+  return coerceOptionalString(value);
 }
 
 function ensureOwnerTarget(value: unknown) {

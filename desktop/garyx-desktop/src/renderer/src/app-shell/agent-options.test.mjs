@@ -13,6 +13,7 @@ function agent(overrides) {
     providerType: 'claude_code',
     builtIn: false,
     standalone: true,
+    enabled: true,
     model: '',
     systemPrompt: '',
     defaultWorkspaceDir: '',
@@ -65,4 +66,14 @@ test('composer agent options omit provider detail', () => {
   const composerOptions = buildAgentOptions(agents);
 
   assert(composerOptions.every((option) => option.detail === undefined));
+});
+
+test('new-binding agent options exclude disabled and non-standalone agents', () => {
+  const options = buildAgentTargetOptions([
+    agent({ agentId: 'enabled', displayName: 'Enabled' }),
+    agent({ agentId: 'disabled', displayName: 'Disabled', enabled: false }),
+    agent({ agentId: 'embedded', displayName: 'Embedded', standalone: false }),
+  ]);
+
+  assert.deepEqual(options.map((option) => option.value), ['enabled']);
 });

@@ -81,6 +81,7 @@ import type {
   SaveMemoryDocumentInput,
   SelectAutomationInput,
   SelectWorkspaceInput,
+  SetDefaultCustomAgentInput,
   SetCapsuleFavoriteInput,
   RenderState,
   SendMessageInput,
@@ -91,6 +92,7 @@ import type {
   StopTaskInput,
   ToggleSkillInput,
   ToggleMcpServerInput,
+  ToggleCustomAgentInput,
   UploadChatAttachmentsInput,
   UploadWorkspaceFilesInput,
   UpdateAutomationInput,
@@ -154,9 +156,11 @@ import {
   readSkillFile,
   saveGatewaySettings,
   saveSkillFile,
+  setDefaultCustomAgent,
   sendStreamingInput,
   stopTask,
   toggleMcpServer,
+  toggleCustomAgent,
   toggleSkill,
   uploadWorkspaceFiles,
   uploadChatAttachments,
@@ -899,6 +903,22 @@ function registerIpcHandlers(): void {
     async (_event, input: DeleteCustomAgentInput) => {
       const settings = await resolveSettings();
       return deleteCustomAgent(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:toggle-custom-agent",
+    async (_event, input: ToggleCustomAgentInput) => {
+      const settings = await resolveSettings();
+      return toggleCustomAgent(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:set-default-custom-agent",
+    async (_event, input: SetDefaultCustomAgentInput) => {
+      const settings = await resolveSettings();
+      return setDefaultCustomAgent(settings, input);
     },
   );
 

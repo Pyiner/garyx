@@ -1,10 +1,13 @@
 import type {
   CreateCustomAgentInput,
   DeleteCustomAgentInput,
+  DesktopAgentCatalog,
   DesktopCustomAgent,
   DesktopProviderIconDescriptor,
   DesktopProviderIconKey,
   DesktopSettings,
+  SetDefaultCustomAgentInput,
+  ToggleCustomAgentInput,
   UpdateCustomAgentInput,
 } from "@shared/contracts";
 import {
@@ -34,6 +37,7 @@ interface CustomAgentPayload {
   system_prompt?: string | null;
   built_in?: boolean;
   standalone?: boolean;
+  enabled?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -46,6 +50,8 @@ interface ProviderIconDescriptorPayload {
 
 interface CustomAgentsPayload {
   agents?: CustomAgentPayload[];
+  default_agent_id?: string | null;
+  effective_default_agent_id?: string | null;
 }
 
 function normalizeProviderIconKey(
@@ -117,6 +123,17 @@ function requiredNullableAgentString(
     : requireContractString(value, `${path}.${field}`);
 }
 
+function requiredNullableAgentId(
+  record: Record<string, unknown>,
+  field: string,
+  path: string,
+): string | null {
+  const value = requireContractField(record, field, path);
+  return value === null
+    ? null
+    : requireContractNonEmptyString(value, `${path}.${field}`);
+}
+
 function mapProviderEnv(value: unknown, path: string): Record<string, string> {
   const record = requireContractRecord(value, path);
   return Object.fromEntries(
@@ -186,6 +203,10 @@ function mapCustomAgent(value: unknown, index?: number): DesktopCustomAgent {
       requireContractField(record, "standalone", path),
       `${path}.standalone`,
     ),
+    enabled: requireContractBoolean(
+      requireContractField(record, "enabled", path),
+      `${path}.enabled`,
+    ),
     createdAt: requireContractNonEmptyString(
       requireContractField(record, "created_at", path),
       `${path}.created_at`,
@@ -199,7 +220,7 @@ function mapCustomAgent(value: unknown, index?: number): DesktopCustomAgent {
 
 export async function listCustomAgents(
   settings: DesktopSettings,
-): Promise<DesktopCustomAgent[]> {
+): Promise<DesktopAgentCatalog> {
   const payload = await requestJson<CustomAgentsPayload>(
     settings,
     "/api/custom-agents",
@@ -209,10 +230,23 @@ export async function listCustomAgents(
   );
 
   const record = requireContractRecord(payload, "custom agent list");
-  return requireContractArray(
+  const agents = requireContractArray(
     requireContractField(record, "agents", "custom agent list"),
     "custom agent list.agents",
   ).map(mapCustomAgent);
+  return {
+    agents,
+    defaultAgentId: requiredNullableAgentId(
+      record,
+      "default_agent_id",
+      "custom agent list",
+    ),
+    effectiveDefaultAgentId: requiredNullableAgentId(
+      record,
+      "effective_default_agent_id",
+      "custom agent list",
+    ),
+  };
 }
 
 export async function createCustomAgent(
@@ -284,4 +318,35 @@ export async function deleteCustomAgent(
       signal: AbortSignal.timeout(8000),
     },
   );
+}
+
+export async function toggleCustomAgent(
+  settings: DesktopSettings,
+  input: ToggleCustomAgentInput,
+): Promise<DesktopCustomAgent> {
+  const payload = await requestJson<CustomAgentPayload>(
+    settings,
+    `/api/custom-agents/${encodeURIComponent(input.agentId)}/toggle`,
+    {
+      method: "PATCH",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({ enabled: input.enabled }),
+    },
+  );
+  return mapCustomAgent(payload);
+}
+
+export async function setDefaultCustomAgent(
+  settings: DesktopSettings,
+  input: SetDefaultCustomAgentInput,
+): Promise<DesktopCustomAgent> {
+  const payload = await requestJson<CustomAgentPayload>(
+    settings,
+    `/api/custom-agents/${encodeURIComponent(input.agentId)}/default`,
+    {
+      method: "PATCH",
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  return mapCustomAgent(payload);
 }

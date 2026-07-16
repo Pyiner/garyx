@@ -29,6 +29,7 @@ import type {
 type WebSettingsPageProps = {
   focusedBotId?: string | null;
   focusedBotSummary?: DesktopBotConsoleSummary | null;
+  effectiveDefaultAgentId?: string | null;
   payload: GatewaySettingsPayload | null;
   jsonDraft: string;
   loading: boolean;
@@ -50,7 +51,7 @@ type WebSettingsPageProps = {
     enabled?: boolean;
     token?: string;
     name?: string;
-    agentId?: string;
+    agentId?: string | null;
     workspaceDir?: string;
   }) => void;
   onAddFeishuAccount: (accountId: string) => void;
@@ -63,7 +64,7 @@ type WebSettingsPageProps = {
     requireMention?: boolean;
     topicSessionMode?: string;
     name?: string;
-    agentId?: string;
+    agentId?: string | null;
     workspaceDir?: string;
   }) => void;
   onRefresh?: () => void;
@@ -105,6 +106,7 @@ function channelAccountsMap(
 export function WebSettingsPage({
   focusedBotId,
   focusedBotSummary,
+  effectiveDefaultAgentId = null,
   payload,
   jsonDraft,
   loading,
@@ -151,6 +153,11 @@ export function WebSettingsPage({
       && focusedAccountId === focusedBotSummary.accountId,
   );
   const runtimeBotSummary = hasRuntimeBotSummary ? focusedBotSummary : null;
+  const currentDefaultAgentId = runtimeBotSummary?.effectiveAgentId
+    || effectiveDefaultAgentId;
+  const followGlobalPlaceholder = currentDefaultAgentId
+    ? `Follow global default (currently ${currentDefaultAgentId})`
+    : 'Follow global default (currently no enabled agent)';
 
   async function copySecret(secretKey: string, value: string) {
     if (!value) {
@@ -391,7 +398,8 @@ export function WebSettingsPage({
                               onPatchTelegramAccount(accountId, { agentId: event.target.value });
                             }}
                             type="text"
-                            value={String(account.agent_id || 'claude')}
+                            placeholder={followGlobalPlaceholder}
+                            value={String(account.agent_id || '')}
                           />
                         </label>
                         <label className="web-settings-field">
@@ -613,7 +621,8 @@ export function WebSettingsPage({
                               onPatchFeishuAccount(accountId, { agentId: event.target.value });
                             }}
                             type="text"
-                            value={String(account.agent_id || 'claude')}
+                            placeholder={followGlobalPlaceholder}
+                            value={String(account.agent_id || '')}
                           />
                         </label>
                         <label className="web-settings-field">

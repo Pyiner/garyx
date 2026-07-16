@@ -185,7 +185,7 @@ test("desktopRoutesEqual normalizes optional null/undefined fields", () => {
   );
 });
 
-test("default-agent new-thread navigations dedupe their own echo (canonical commit)", () => {
+test("explicit Claude new-thread navigations preserve identity and dedupe their echo", () => {
   const host = fakeHost("#/thread");
   const store = new DesktopRouteStore(host);
   let notified = 0;
@@ -193,8 +193,7 @@ test("default-agent new-thread navigations dedupe their own echo (canonical comm
     notified += 1;
   });
 
-  // The 'claude' default agent is dropped from the hash; the echo parses
-  // back with agentId: null and must still compare equal.
+  // Claude is an ordinary explicit identity; only null means no selection.
   store.navigate({
     kind: "new-thread",
     workspacePath: "/Users/test/repo",
@@ -204,7 +203,7 @@ test("default-agent new-thread navigations dedupe their own echo (canonical comm
   assert.deepEqual(store.getSnapshot().route, {
     kind: "new-thread",
     workspacePath: "/Users/test/repo",
-    agentId: null,
+    agentId: "claude",
   });
   store.dispose();
 });
@@ -236,21 +235,21 @@ test("subscribeCommits delivers every commit synchronously with origin and settl
   assert.equal(commits[0].origin, "navigate");
   assert.equal(
     commits[0].route.agentId,
-    null,
-    "the committed route is canonical (default agent dropped)",
+    "claude",
+    "the committed route preserves explicit Claude",
   );
 
   // Equal-route navigate is a no-op: no commit event.
   order.length = 0;
   store.navigate(
-    { kind: "new-thread", workspacePath: null, agentId: null },
+    { kind: "new-thread", workspacePath: null, agentId: "claude" },
     { replace: true },
   );
   assert.deepEqual(order, [], "equal route: no notifications at all");
 
   // Alias normalization (equal route, different hash text): replace only,
   // still no commit event.
-  host.externalEdit("#/new");
+  host.externalEdit("#/new?agent=claude");
   assert.deepEqual(order, [], "echo/alias parse-equal: no commit event");
 
   // External edit to a different route: plain -> commit -> external.

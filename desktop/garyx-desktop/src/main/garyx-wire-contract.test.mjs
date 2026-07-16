@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   fetchAutomationActivity,
+  fetchBotConsoles,
   fetchConfiguredBots,
   fetchThreadLogs,
   fetchThreadPins,
@@ -21,8 +22,11 @@ import {
   listWorkspaceFiles,
   openChatStream,
   reorderRemoteThreadPins,
+  saveGatewaySettings,
   sendStreamingInput,
+  setDefaultCustomAgent,
   setGatewayFetch,
+  toggleCustomAgent,
 } from "./gary-client.ts";
 
 const settings = {
@@ -78,6 +82,7 @@ function canonicalAgent(overrides = {}) {
     system_prompt: "Synthetic prompt",
     built_in: false,
     standalone: false,
+    enabled: true,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-02T00:00:00Z",
     ...overrides,
@@ -284,18 +289,28 @@ test("capsules require snake_case nullable keys instead of camel aliases", async
 
 test("custom agents require snake_case names and present provider_icon", async () => {
   await withGatewayFetch(
-    async () => jsonResponse({ agents: [canonicalAgent()] }),
+    async () => jsonResponse({
+      agents: [canonicalAgent()],
+      default_agent_id: null,
+      effective_default_agent_id: "test-agent",
+    }),
     async () => {
-      const agents = await listCustomAgents(settings);
-      assert.equal(agents[0].displayName, "Test Agent");
-      assert.equal(agents[0].providerIcon, null);
+      const catalog = await listCustomAgents(settings);
+      assert.equal(catalog.agents[0].displayName, "Test Agent");
+      assert.equal(catalog.agents[0].providerIcon, null);
+      assert.equal(catalog.defaultAgentId, null);
+      assert.equal(catalog.effectiveDefaultAgentId, "test-agent");
     },
   );
   const wrongCase = canonicalAgent();
   delete wrongCase.display_name;
   wrongCase.displayName = "Test Agent";
   await withGatewayFetch(
-    async () => jsonResponse({ agents: [wrongCase] }),
+    async () => jsonResponse({
+      agents: [wrongCase],
+      default_agent_id: null,
+      effective_default_agent_id: null,
+    }),
     () =>
       assert.rejects(
         () => listCustomAgents(settings),
@@ -306,13 +321,56 @@ test("custom agents require snake_case names and present provider_icon", async (
   const missingAvatar = canonicalAgent();
   delete missingAvatar.avatar_data_url;
   await withGatewayFetch(
-    async () => jsonResponse({ agents: [missingAvatar] }),
+    async () => jsonResponse({
+      agents: [missingAvatar],
+      default_agent_id: null,
+      effective_default_agent_id: null,
+    }),
     () =>
       assert.rejects(
         () => listCustomAgents(settings),
         /custom agent list\.agents\[0\]\.avatar_data_url is required/,
       ),
   );
+});
+
+test("custom-agent availability mutations use the typed PATCH endpoints", async () => {
+  const requests = [];
+  await withGatewayFetch(
+    async (url, init) => {
+      requests.push({
+        path: new URL(String(url)).pathname,
+        method: init?.method,
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return jsonResponse(canonicalAgent({
+        agent_id: "codex",
+        enabled: requests.length > 1,
+        standalone: true,
+      }));
+    },
+    async () => {
+      const toggled = await toggleCustomAgent(settings, {
+        agentId: "codex",
+        enabled: false,
+      });
+      const selected = await setDefaultCustomAgent(settings, { agentId: "codex" });
+      assert.equal(toggled.enabled, false);
+      assert.equal(selected.enabled, true);
+    },
+  );
+  assert.deepEqual(requests, [
+    {
+      path: "/api/custom-agents/codex/toggle",
+      method: "PATCH",
+      body: { enabled: false },
+    },
+    {
+      path: "/api/custom-agents/codex/default",
+      method: "PATCH",
+      body: null,
+    },
+  ]);
 });
 
 test("catalog endpoints replay their distinct current casing contracts", async () => {
@@ -629,6 +687,60 @@ test("configured bots expose only display_name and retired migration code stays 
   assert.match(storeSource, /bot\.display_name\.trim\(\)/);
   assert.doesNotMatch(storeSource, /LEGACY_STATE_FILE_NAME/);
   assert.doesNotMatch(storeSource, /migrateLegacyStateFile/);
+});
+
+test("bot console mapping preserves configured and effective agent identities", async () => {
+  await withGatewayFetch(
+    async () => jsonResponse({
+      bots: [{
+        id: "test-channel:test-account",
+        channel: "test-channel",
+        account_id: "test-account",
+        title: "Test Bot",
+        agent_id: null,
+        effective_agent_id: "codex",
+        endpoints: [],
+        conversation_nodes: [],
+      }],
+    }),
+    async () => {
+      const [bot] = await fetchBotConsoles(settings);
+      assert.equal(bot.agentId, null);
+      assert.equal(bot.effectiveAgentId, "codex");
+    },
+  );
+});
+
+test("gateway settings serializer preserves explicit Claude and omits follow-global null", async () => {
+  let savedConfig = null;
+  await withGatewayFetch(
+    async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      if (path === "/api/settings" && init?.method === "PUT") {
+        savedConfig = JSON.parse(String(init.body));
+        return jsonResponse({ ok: true });
+      }
+      return jsonResponse({ config: savedConfig || {} });
+    },
+    () => saveGatewaySettings(settings, {
+      channels: {
+        telegram: {
+          accounts: {
+            explicit: { agent_id: "claude" },
+            inherited: { agent_id: null },
+          },
+        },
+      },
+    }),
+  );
+  assert.equal(
+    savedConfig.channels.telegram.accounts.explicit.agent_id,
+    "claude",
+  );
+  assert.equal(
+    Object.hasOwn(savedConfig.channels.telegram.accounts.inherited, "agent_id"),
+    false,
+  );
 });
 
 test("source guard rejects the retired DTO alias lookup sites", async () => {

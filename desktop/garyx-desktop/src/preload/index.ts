@@ -156,6 +156,10 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:update-custom-agent", input),
   deleteCustomAgent: (input) =>
     ipcRenderer.invoke("garyx:delete-custom-agent", input),
+  toggleCustomAgent: (input) =>
+    ipcRenderer.invoke("garyx:toggle-custom-agent", input),
+  setDefaultCustomAgent: (input) =>
+    ipcRenderer.invoke("garyx:set-default-custom-agent", input),
   generateCustomAgentAvatar: (input) =>
     ipcRenderer.invoke("garyx:generate-custom-agent-avatar", input),
   cancelCustomAgentAvatarGeneration: (input) =>

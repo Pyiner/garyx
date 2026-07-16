@@ -4,7 +4,7 @@ import type {
   GatewayConfigDocument,
 } from "@shared/contracts";
 
-import { fetchGatewaySettings, saveGatewaySettings, validateChannelAccount } from "./gary-client";
+import { fetchGatewaySettings, saveGatewaySettings, validateChannelAccount } from "./gary-client.ts";
 
 const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com";
 
@@ -112,7 +112,7 @@ function upsertChannelAccount(config: GatewayConfigDocument, input: AddChannelAc
   root.channels[pluginId].accounts[input.accountId] = {
     enabled: true,
     name: prepared.accountName,
-    agent_id: prepared.agentId || "claude",
+    agent_id: prepared.agentId,
     workspace_dir: prepared.workspaceDir,
     workspace_mode: prepared.workspaceMode,
     config: prepared.config,

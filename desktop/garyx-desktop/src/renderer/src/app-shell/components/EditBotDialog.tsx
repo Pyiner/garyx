@@ -43,6 +43,12 @@ import { JsonSchemaForm } from "../../channel-plugins/JsonSchemaForm";
 import { DirectoryInput } from "../../components/DirectoryInput";
 import { useChannelPluginCatalog } from "../../channel-plugins/useChannelPluginCatalog";
 import { useI18n } from "../../i18n";
+import {
+  channelAgentIdFromSelectValue,
+  channelAgentSelectValue,
+  explicitChannelAgentUnavailable,
+  FOLLOW_GLOBAL_AGENT_SELECT_VALUE,
+} from "../channel-agent-selection";
 
 type EditBotStep = 1 | 2;
 
@@ -50,13 +56,13 @@ export type EditBotDialogContext = {
   kind: string;
   accountId: string;
   account: any;
-  resolvedAgentId: string;
+  agentId: string | null;
 };
 
 export type EditBotPatch = {
   nextAccountId?: string | null;
   name?: string | null;
-  agentId?: string;
+  agentId?: string | null;
   workspaceDir?: string | null;
   workspaceMode?: DesktopWorkspaceMode;
   config?: Record<string, unknown>;
@@ -66,6 +72,7 @@ type EditBotDialogProps = {
   open: boolean;
   context: EditBotDialogContext | null;
   agentTargets: AgentTargetOption[];
+  effectiveDefaultAgentId?: string | null;
   workspaces?: DesktopWorkspace[];
   onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
   saving?: boolean;
@@ -164,13 +171,22 @@ function channelInitials(entry: ChannelPluginCatalogEntry | null): string {
 
 export function EditBotDialog(props: EditBotDialogProps) {
   const { t } = useI18n();
-  const { open, context, agentTargets, workspaces = [], onAddWorkspace, saving, onClose, onSave } =
-    props;
+  const {
+    open,
+    context,
+    agentTargets,
+    effectiveDefaultAgentId = null,
+    workspaces = [],
+    onAddWorkspace,
+    saving,
+    onClose,
+    onSave,
+  } = props;
   const { entries, loading: catalogLoading } = useChannelPluginCatalog();
 
   const [step, setStep] = useState<EditBotStep>(1);
   const [name, setName] = useState("");
-  const [agentId, setAgentId] = useState("");
+  const [agentId, setAgentId] = useState<string | null>(null);
   const [workspaceDir, setWorkspaceDir] = useState("");
   const [workspaceMode, setWorkspaceMode] = useState<DesktopWorkspaceMode>("local");
   const [pluginConfig, setPluginConfig] = useState<Record<string, unknown>>({});
@@ -187,7 +203,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
     const account = (context.account || {}) as Record<string, unknown>;
     setStep(1);
     setName(String(account.name || ""));
-    setAgentId(context.resolvedAgentId || "");
+    setAgentId(context.agentId);
     setWorkspaceDir(String(account.workspace_dir || ""));
     setWorkspaceMode(account.workspace_mode === "worktree" ? "worktree" : "local");
     setPluginConfig(accountToConfig(account));
@@ -210,6 +226,12 @@ export function EditBotDialog(props: EditBotDialogProps) {
   const selectedMethods = useMemo(() => {
     return selectedEntry ? resolveConfigMethods(selectedEntry) : null;
   }, [selectedEntry]);
+  const followGlobalLabel = useMemo(() => {
+    const current = agentTargets.find((target) => target.value === effectiveDefaultAgentId);
+    return current
+      ? t("Follow global default (currently {agent})", { agent: current.label })
+      : t("Follow global default (currently no enabled agent)");
+  }, [agentTargets, effectiveDefaultAgentId, t]);
 
   if (!context) {
     return (
@@ -229,11 +251,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
     reauthorizedAccountId && reauthorizedAccountId !== accountId
       ? reauthorizedAccountId
       : null;
-  const selectedAgentMissing = Boolean(
-    agentId &&
-      agentTargets.length > 0 &&
-      !agentTargets.find((target) => target.value === agentId),
-  );
+  const selectedAgentMissing = explicitChannelAgentUnavailable(agentTargets, agentId);
 
   function handleReauthorizeConfirmed(values: Record<string, unknown>) {
     setPluginConfig((current) => ({
@@ -266,7 +284,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
         workspaceMode,
         config: pluginConfig,
       };
-      if (agentId) patch.agentId = agentId;
+      patch.agentId = agentId;
       await onSave({ kind, accountId, patch });
       onClose();
     } catch (err) {
@@ -366,9 +384,8 @@ export function EditBotDialog(props: EditBotDialogProps) {
                     {t("Agent")}
                   </Label>
                   <Select
-                    value={agentId}
-                    onValueChange={setAgentId}
-                    disabled={agentTargets.length === 0}
+                    value={channelAgentSelectValue(agentId)}
+                    onValueChange={(value) => setAgentId(channelAgentIdFromSelectValue(value))}
                   >
                     <SelectTrigger className="add-bot-control" id="edit-bot-agent">
                       <SelectValue placeholder={t("Choose agent")} />
@@ -376,6 +393,14 @@ export function EditBotDialog(props: EditBotDialogProps) {
                     <SelectContent>
                       <SelectGroup>
                         <SelectLabel>{t("Agents")}</SelectLabel>
+                        <SelectItem value={FOLLOW_GLOBAL_AGENT_SELECT_VALUE}>
+                          {followGlobalLabel}
+                        </SelectItem>
+                        {selectedAgentMissing && agentId ? (
+                          <SelectItem disabled value={agentId}>
+                            {t('{id} (disabled or unavailable)', { id: agentId })}
+                          </SelectItem>
+                        ) : null}
                         {agentTargets.map((target) => (
                           <SelectItem key={target.value} value={target.value}>
                             <AgentOptionRow
@@ -388,7 +413,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
                   </Select>
                   {selectedAgentMissing ? (
                     <span className="add-bot-field-warning">
-                      {t('Agent "{id}" no longer exists. Choose again.', { id: agentId })}
+                      {t('Agent "{id}" is disabled or unavailable. Choose again or follow the global default.', { id: agentId })}
                     </span>
                   ) : null}
                 </div>
