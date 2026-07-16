@@ -887,6 +887,11 @@ button.message-image-frame:focus-visible {
   object-fit: contain;
   border-radius: 0;
   box-shadow: none;
+  /* The preview dialog itself is transparent, so images with an alpha
+     channel would show the scrim and thread content through their
+     translucent pixels. Back the image with an opaque surface, matching
+     the opaque thumbnail frame in the transcript. */
+  background: var(--color-token-bg-primary);
 }
 
 .task-notification-card {
