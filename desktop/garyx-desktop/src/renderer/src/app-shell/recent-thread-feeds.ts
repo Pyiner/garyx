@@ -4,12 +4,18 @@ import type {
   RecentThreadTaskFilter,
 } from "@shared/contracts";
 
-export type RecentThreadFilter = "all" | "nonTask";
+export type RecentThreadFilter = "all" | "nonTask" | "favorites";
+export type PaginatedRecentThreadFilter = Exclude<
+  RecentThreadFilter,
+  "favorites"
+>;
 export type RecentThreadRequestKind = "refresh" | "loadMore";
 export type RecentThreadLoadGate = "ready" | "exhausted" | "failed";
+export type RecentThreadRefreshMode = "rangeFill" | "replacement";
 
 export const RECENT_THREAD_PAGE_LIMIT = 100;
-export const RECENT_THREAD_PAGE_OVERLAP = 5;
+export const RECENT_THREAD_MAX_CHAIN_PAGES = 5;
+export const RECENT_THREAD_REPLACEMENT_CYCLE_INTERVAL = 30;
 
 export interface RecentThreadFeedState {
   orderedThreadIds: string[];
@@ -18,7 +24,7 @@ export interface RecentThreadFeedState {
   isLoadingMore: boolean;
   headFailure: string | null;
   loadGate: RecentThreadLoadGate;
-  nextOffset: number;
+  nextCursor: string | null;
   epoch: number;
   localMutationSequence: number;
   loadMoreFailureRevision: number;
@@ -26,12 +32,20 @@ export interface RecentThreadFeedState {
   activeLoadMoreRequestId: number | null;
   refreshAfterMutation: boolean;
   loadMoreAfterMutation: boolean;
+  storeIncarnationId: string | null;
+  serverBootId: string | null;
+  refreshCycle: number;
+  forceReplacementPending: boolean;
+  forceReplacementGeneration: number;
+  /** A second head verification still moved. It is serviced next cycle. */
+  trailingDirty: boolean;
 }
 
 export interface RecentThreadFeedsState {
   gatewayScope: string;
+  runtimeEpoch: number;
   selectedFilter: RecentThreadFilter;
-  feeds: Record<RecentThreadFilter, RecentThreadFeedState>;
+  feeds: Record<PaginatedRecentThreadFilter, RecentThreadFeedState>;
   summariesById: Record<string, DesktopThreadSummary>;
   /** Session tombstones for successful or still-pending local archives. */
   removedThreadIds: Record<string, true>;
@@ -40,19 +54,23 @@ export interface RecentThreadFeedsState {
 
 interface RecentThreadRequestTicketBase {
   gatewayScope: string;
-  filter: RecentThreadFilter;
+  runtimeEpoch: number;
+  filter: PaginatedRecentThreadFilter;
   feedEpoch: number;
   requestId: number;
   observedLocalMutationSequence: number;
   kind: RecentThreadRequestKind;
   limit: number;
-  offset: number;
+  cursor: string | null;
 }
 
 export interface RecentThreadRefreshTicket
   extends RecentThreadRequestTicketBase {
   kind: "refresh";
   observedLoadMoreFailureRevision: number;
+  mode: RecentThreadRefreshMode;
+  oldHeadActivitySeq: number | null;
+  observedForceReplacementGeneration: number;
 }
 
 export interface RecentThreadLoadMoreTicket
@@ -64,6 +82,14 @@ export type RecentThreadRequestTicket =
   | RecentThreadRefreshTicket
   | RecentThreadLoadMoreTicket;
 
+export interface RecentThreadRefreshBundle {
+  primaryPages: DesktopRecentThreadsPage[];
+  verificationPage: DesktopRecentThreadsPage;
+  /** At most one immediate fill round after the first head verification. */
+  immediatePages?: DesktopRecentThreadsPage[];
+  immediateVerificationPage?: DesktopRecentThreadsPage;
+}
+
 export interface RecentThreadRequestDecision<T extends RecentThreadRequestTicket> {
   state: RecentThreadFeedsState;
   ticket: T | null;
@@ -72,10 +98,29 @@ export interface RecentThreadRequestDecision<T extends RecentThreadRequestTicket
 export interface RecentThreadRemovalRollback {
   gatewayScope: string;
   threadId: string;
-  positions: Record<RecentThreadFilter, number>;
+  positions: Record<PaginatedRecentThreadFilter, number>;
 }
 
-const FILTERS: RecentThreadFilter[] = ["all", "nonTask"];
+export type RecentThreadCompletionAction =
+  | "applied"
+  | "dropped"
+  | "forceReplacement";
+
+export interface RecentThreadCompletion {
+  state: RecentThreadFeedsState;
+  action: RecentThreadCompletionAction;
+}
+
+export const PAGINATED_RECENT_THREAD_FILTERS: PaginatedRecentThreadFilter[] = [
+  "all",
+  "nonTask",
+];
+
+export function isPaginatedRecentThreadFilter(
+  filter: RecentThreadFilter,
+): filter is PaginatedRecentThreadFilter {
+  return filter !== "favorites";
+}
 
 function createFeed(epoch = 0): RecentThreadFeedState {
   return {
@@ -85,7 +130,7 @@ function createFeed(epoch = 0): RecentThreadFeedState {
     isLoadingMore: false,
     headFailure: null,
     loadGate: "ready",
-    nextOffset: 0,
+    nextCursor: null,
     epoch,
     localMutationSequence: 0,
     loadMoreFailureRevision: 0,
@@ -93,14 +138,22 @@ function createFeed(epoch = 0): RecentThreadFeedState {
     activeLoadMoreRequestId: null,
     refreshAfterMutation: false,
     loadMoreAfterMutation: false,
+    storeIncarnationId: null,
+    serverBootId: null,
+    refreshCycle: 0,
+    forceReplacementPending: false,
+    forceReplacementGeneration: 0,
+    trailingDirty: false,
   };
 }
 
 export function createRecentThreadFeedsState(
   gatewayScope = "",
+  runtimeEpoch = 0,
 ): RecentThreadFeedsState {
   return {
     gatewayScope,
+    runtimeEpoch,
     selectedFilter: "all",
     feeds: {
       all: createFeed(),
@@ -113,24 +166,36 @@ export function createRecentThreadFeedsState(
 }
 
 export function recentThreadTasksQuery(
-  filter: RecentThreadFilter,
+  filter: PaginatedRecentThreadFilter,
 ): RecentThreadTaskFilter {
   return filter === "all" ? "include" : "exclude";
 }
 
 export function recentThreadFilterLabel(filter: RecentThreadFilter): string {
-  return filter === "all" ? "All" : "Chats";
+  switch (filter) {
+    case "all":
+      return "All";
+    case "nonTask":
+      return "Chats";
+    case "favorites":
+      return "Favorites";
+  }
 }
 
 export function resetRecentThreadFeedsScope(
   state: RecentThreadFeedsState,
   gatewayScope: string,
+  runtimeEpoch = state.runtimeEpoch + (state.gatewayScope === gatewayScope ? 0 : 1),
 ): RecentThreadFeedsState {
-  if (state.gatewayScope === gatewayScope) {
+  if (
+    state.gatewayScope === gatewayScope &&
+    state.runtimeEpoch === runtimeEpoch
+  ) {
     return state;
   }
   return {
     gatewayScope,
+    runtimeEpoch,
     selectedFilter: "all",
     feeds: {
       all: createFeed(state.feeds.all.epoch + 1),
@@ -192,23 +257,37 @@ function mergeRecentThreadSummary(
 
 export function requestRecentThreadRefresh(
   state: RecentThreadFeedsState,
-  filter: RecentThreadFilter,
+  filter: PaginatedRecentThreadFilter,
+  options: { forceReplacement?: boolean } = {},
 ): RecentThreadRequestDecision<RecentThreadRefreshTicket> {
   const feed = state.feeds[filter];
-  if (!state.gatewayScope || feed.isRefreshingHead) {
+  if (!state.gatewayScope || feed.isRefreshingHead || feed.isLoadingMore) {
     return { state, ticket: null };
   }
   const requestId = state.nextRequestId;
+  const periodicReplacement =
+    (feed.refreshCycle + 1) % RECENT_THREAD_REPLACEMENT_CYCLE_INTERVAL === 0;
+  const mode: RecentThreadRefreshMode =
+    options.forceReplacement ||
+    feed.forceReplacementPending ||
+    !feed.isPrimed ||
+    periodicReplacement
+      ? "replacement"
+      : "rangeFill";
   const ticket: RecentThreadRefreshTicket = {
     gatewayScope: state.gatewayScope,
+    runtimeEpoch: state.runtimeEpoch,
     filter,
     feedEpoch: feed.epoch,
     requestId,
     observedLocalMutationSequence: feed.localMutationSequence,
     observedLoadMoreFailureRevision: feed.loadMoreFailureRevision,
     kind: "refresh",
+    mode,
+    oldHeadActivitySeq: activitySeqForId(state, feed.orderedThreadIds[0]),
+    observedForceReplacementGeneration: feed.forceReplacementGeneration,
     limit: RECENT_THREAD_PAGE_LIMIT,
-    offset: 0,
+    cursor: null,
   };
   return {
     state: {
@@ -231,7 +310,7 @@ export function requestRecentThreadRefresh(
 
 export function requestRecentThreadLoadMore(
   state: RecentThreadFeedsState,
-  filter: RecentThreadFilter,
+  filter: PaginatedRecentThreadFilter,
   retry = false,
 ): RecentThreadRequestDecision<RecentThreadLoadMoreTicket> {
   const feed = state.feeds[filter];
@@ -241,21 +320,24 @@ export function requestRecentThreadLoadMore(
   if (
     !state.gatewayScope ||
     feed.isLoadingMore ||
-    feed.nextOffset <= 0 ||
-    !gateAllowsRequest
+    feed.isRefreshingHead ||
+    feed.nextCursor === null ||
+    !gateAllowsRequest ||
+    feed.forceReplacementPending
   ) {
     return { state, ticket: null };
   }
   const requestId = state.nextRequestId;
   const ticket: RecentThreadLoadMoreTicket = {
     gatewayScope: state.gatewayScope,
+    runtimeEpoch: state.runtimeEpoch,
     filter,
     feedEpoch: feed.epoch,
     requestId,
     observedLocalMutationSequence: feed.localMutationSequence,
     kind: "loadMore",
     limit: RECENT_THREAD_PAGE_LIMIT,
-    offset: Math.max(0, feed.nextOffset - RECENT_THREAD_PAGE_OVERLAP),
+    cursor: feed.nextCursor,
   };
   return {
     state: {
@@ -275,100 +357,249 @@ export function requestRecentThreadLoadMore(
   };
 }
 
-export function completeRecentThreadRequest(
-  state: RecentThreadFeedsState,
-  ticket: RecentThreadRequestTicket,
-  page: DesktopRecentThreadsPage,
-): RecentThreadFeedsState {
-  if (
-    state.gatewayScope !== ticket.gatewayScope ||
-    page.gatewayScope !== ticket.gatewayScope
-  ) {
-    return clearOwnedRequest(state, ticket);
+/** Whether an IO orchestrator must follow the last page's cursor. */
+export function recentRefreshChainNeedsNextPage(
+  mode: RecentThreadRefreshMode,
+  oldHeadActivitySeq: number | null,
+  pages: DesktopRecentThreadsPage[],
+): boolean {
+  const last = pages.at(-1);
+  if (!last || !last.hasMore || pages.length >= RECENT_THREAD_MAX_CHAIN_PAGES) {
+    return false;
   }
+  if (mode === "replacement" || oldHeadActivitySeq === null) {
+    return true;
+  }
+  const tail = last.threads.at(-1)?.activitySeq;
+  return typeof tail === "number" && tail > oldHeadActivitySeq;
+}
+
+export function recentPageHeadActivitySeq(
+  page: DesktopRecentThreadsPage,
+): number | null {
+  const value = page.threads[0]?.activitySeq;
+  return typeof value === "number" ? value : null;
+}
+
+export function verificationObservedNewerHead(
+  chainFirstHead: number | null,
+  verificationPage: DesktopRecentThreadsPage,
+): boolean {
+  const verificationHead = recentPageHeadActivitySeq(verificationPage);
+  return (
+    verificationHead !== null &&
+    (chainFirstHead === null || verificationHead > chainFirstHead)
+  );
+}
+
+export function completeRecentThreadRefresh(
+  state: RecentThreadFeedsState,
+  ticket: RecentThreadRefreshTicket,
+  bundle: RecentThreadRefreshBundle,
+): RecentThreadCompletion {
   const feed = state.feeds[ticket.filter];
-  if (!requestIsOwned(feed, ticket)) {
-    return state;
+  if (!requestIsOwned(state, feed, ticket)) {
+    return { state, action: "dropped" };
   }
   if (feed.localMutationSequence !== ticket.observedLocalMutationSequence) {
-    return markRecentThreadMutationFollowUp(
-      clearOwnedRequest(state, ticket),
-      ticket,
-    );
+    return {
+      state: markRecentThreadMutationFollowUp(
+        clearOwnedRequest(state, ticket),
+        ticket,
+      ),
+      action: "dropped",
+    };
+  }
+  if (!bundle.primaryPages.length) {
+    return {
+      state: failRecentThreadRequest(state, ticket, "Recent threads are unavailable"),
+      action: "dropped",
+    };
   }
 
-  // A request issued after optimistic removal but before the archive commits
-  // may still observe the old server row. Keep a session tombstone after
-  // success (scope reset clears it); rollback is the only path that restores
-  // membership. This is mutation protection, not task-filter fallback.
-  const visiblePageThreads = page.threads.filter(
-    (thread) => !state.removedThreadIds[thread.id.trim()],
-  );
-  const pageIds = uniqueThreadIds(
-    visiblePageThreads.map((thread) => thread.id),
-  );
-  const withSummaries = ingestRecentThreadSummaries(
-    state,
-    visiblePageThreads,
-  );
-  const currentFeed = withSummaries.feeds[ticket.filter];
-  const returnedEnd = page.offset + page.count;
-
-  if (ticket.kind === "refresh") {
-    const beyondHead = currentFeed.nextOffset > returnedEnd;
-    const orderedThreadIds = beyondHead
-      ? mergeHead(pageIds, currentFeed.orderedThreadIds)
-      : pageIds;
-    const forgivesLoadFailure =
-      currentFeed.loadGate === "failed" &&
-      currentFeed.loadMoreFailureRevision ===
-        ticket.observedLoadMoreFailureRevision;
-    let loadGate = currentFeed.loadGate;
-    let nextOffset = currentFeed.nextOffset;
-    if (currentFeed.loadGate === "failed" && !forgivesLoadFailure) {
-      // A load-more that failed after this head request started owns the gate.
-    } else if (beyondHead) {
-      if (forgivesLoadFailure) {
-        loadGate = "ready";
-      }
-    } else {
-      loadGate = page.hasMore ? "ready" : "exhausted";
-      nextOffset = returnedEnd;
-    }
+  const allPages = [
+    ...bundle.primaryPages,
+    bundle.verificationPage,
+    ...(bundle.immediatePages ?? []),
+    ...(bundle.immediateVerificationPage
+      ? [bundle.immediateVerificationPage]
+      : []),
+  ];
+  const identity = consistentPageIdentity(allPages);
+  if (
+    !identity ||
+    allPages.some((page) => page.gatewayScope !== ticket.gatewayScope) ||
+    (feed.storeIncarnationId !== null &&
+      feed.storeIncarnationId !== identity.storeIncarnationId &&
+      ticket.mode !== "replacement") ||
+    (feed.serverBootId !== null &&
+      feed.serverBootId !== identity.serverBootId &&
+      ticket.mode !== "replacement")
+  ) {
     return {
+      state: markRecentThreadForceReplacement(
+        clearOwnedRequest(state, ticket),
+        [ticket.filter],
+      ),
+      action: "forceReplacement",
+    };
+  }
+
+  const primary = applyRefreshChain(
+    state,
+    ticket,
+    bundle.primaryPages,
+    feed.orderedThreadIds,
+    feed.nextCursor,
+    feed.loadGate,
+  );
+  let orderedThreadIds = primary.orderedThreadIds;
+  let nextCursor = primary.nextCursor;
+  let loadGate = primary.loadGate;
+  let replacementCommitted = primary.replacementCommitted;
+  const primaryHead = recentPageHeadActivitySeq(bundle.primaryPages[0]);
+  const needsImmediate = verificationObservedNewerHead(
+    primaryHead,
+    bundle.verificationPage,
+  );
+  let trailingDirty = false;
+
+  if (needsImmediate && bundle.immediatePages?.length) {
+    const immediateTicket: RecentThreadRefreshTicket = {
+      ...ticket,
+      mode: "rangeFill",
+      oldHeadActivitySeq: primaryHead,
+    };
+    const immediate = applyRefreshChain(
+      state,
+      immediateTicket,
+      bundle.immediatePages,
+      orderedThreadIds,
+      nextCursor,
+      loadGate,
+    );
+    orderedThreadIds = immediate.orderedThreadIds;
+    nextCursor = immediate.nextCursor;
+    loadGate = immediate.loadGate;
+    replacementCommitted =
+      replacementCommitted || immediate.replacementCommitted;
+    const immediateHead = recentPageHeadActivitySeq(bundle.immediatePages[0]);
+    trailingDirty = bundle.immediateVerificationPage
+      ? verificationObservedNewerHead(
+          immediateHead,
+          bundle.immediateVerificationPage,
+        )
+      : true;
+  } else if (needsImmediate) {
+    trailingDirty = true;
+  }
+
+  const visiblePages = [
+    ...bundle.primaryPages,
+    ...(bundle.immediatePages ?? []),
+  ];
+  const visibleThreads = visiblePages.flatMap((page) =>
+    page.threads.filter(
+      (thread) => !state.removedThreadIds[thread.id.trim()],
+    ),
+  );
+  const withSummaries = ingestRecentThreadSummaries(state, visibleThreads);
+  const current = withSummaries.feeds[ticket.filter];
+  const nextEpoch = replacementCommitted ? current.epoch + 1 : current.epoch;
+  const replacementRequestedAfterDispatch =
+    current.forceReplacementPending &&
+    current.forceReplacementGeneration !==
+      ticket.observedForceReplacementGeneration;
+  return {
+    state: {
       ...withSummaries,
       feeds: {
         ...withSummaries.feeds,
         [ticket.filter]: {
-          ...currentFeed,
-          orderedThreadIds,
+          ...current,
+          orderedThreadIds: orderedThreadIds.filter(
+            (id) => !state.removedThreadIds[id],
+          ),
           isPrimed: true,
           isRefreshingHead: false,
           headFailure: null,
           loadGate,
-          nextOffset,
+          nextCursor,
+          epoch: nextEpoch,
           activeRefreshRequestId: null,
+          storeIncarnationId: identity.storeIncarnationId,
+          serverBootId: identity.serverBootId,
+          refreshCycle: current.refreshCycle + 1,
+          forceReplacementPending: replacementRequestedAfterDispatch,
+          trailingDirty,
         },
       },
+    },
+    action: replacementRequestedAfterDispatch
+      ? "forceReplacement"
+      : "applied",
+  };
+}
+
+export function completeRecentThreadLoadMore(
+  state: RecentThreadFeedsState,
+  ticket: RecentThreadLoadMoreTicket,
+  page: DesktopRecentThreadsPage,
+): RecentThreadCompletion {
+  const feed = state.feeds[ticket.filter];
+  if (!requestIsOwned(state, feed, ticket)) {
+    return { state, action: "dropped" };
+  }
+  if (feed.localMutationSequence !== ticket.observedLocalMutationSequence) {
+    return {
+      state: markRecentThreadMutationFollowUp(
+        clearOwnedRequest(state, ticket),
+        ticket,
+      ),
+      action: "dropped",
     };
   }
-
+  if (
+    page.gatewayScope !== ticket.gatewayScope ||
+    (feed.storeIncarnationId !== null &&
+      feed.storeIncarnationId !== page.storeIncarnationId) ||
+    (feed.serverBootId !== null && feed.serverBootId !== page.serverBootId)
+  ) {
+    return {
+      state: markRecentThreadForceReplacement(
+        clearOwnedRequest(state, ticket),
+        [ticket.filter],
+      ),
+      action: "forceReplacement",
+    };
+  }
+  const visibleThreads = page.threads.filter(
+    (thread) => !state.removedThreadIds[thread.id.trim()],
+  );
+  const withSummaries = ingestRecentThreadSummaries(state, visibleThreads);
+  const current = withSummaries.feeds[ticket.filter];
+  const pageIds = uniqueThreadIds(visibleThreads.map((thread) => thread.id));
   return {
-    ...withSummaries,
-    feeds: {
-      ...withSummaries.feeds,
-      [ticket.filter]: {
-        ...currentFeed,
-        orderedThreadIds: appendPage(
-          pageIds,
-          currentFeed.orderedThreadIds,
-        ),
-        isLoadingMore: false,
-        loadGate: page.hasMore ? "ready" : "exhausted",
-        nextOffset: returnedEnd,
-        activeLoadMoreRequestId: null,
+    state: {
+      ...withSummaries,
+      feeds: {
+        ...withSummaries.feeds,
+        [ticket.filter]: {
+          ...current,
+          orderedThreadIds: appendPage(
+            pageIds,
+            current.orderedThreadIds,
+          ),
+          isLoadingMore: false,
+          loadGate: page.hasMore ? "ready" : "exhausted",
+          nextCursor: page.nextCursor,
+          activeLoadMoreRequestId: null,
+          storeIncarnationId: page.storeIncarnationId,
+          serverBootId: page.serverBootId,
+        },
       },
     },
+    action: "applied",
   };
 }
 
@@ -377,11 +608,14 @@ export function failRecentThreadRequest(
   ticket: RecentThreadRequestTicket,
   message: string,
 ): RecentThreadFeedsState {
-  if (state.gatewayScope !== ticket.gatewayScope) {
+  if (
+    state.gatewayScope !== ticket.gatewayScope ||
+    state.runtimeEpoch !== ticket.runtimeEpoch
+  ) {
     return state;
   }
   const feed = state.feeds[ticket.filter];
-  if (!requestIsOwned(feed, ticket)) {
+  if (!requestIsOwned(state, feed, ticket)) {
     return state;
   }
   const failedFeed: RecentThreadFeedState =
@@ -405,6 +639,23 @@ export function failRecentThreadRequest(
   };
 }
 
+export function markRecentThreadForceReplacement(
+  state: RecentThreadFeedsState,
+  filters: PaginatedRecentThreadFilter[] = PAGINATED_RECENT_THREAD_FILTERS,
+): RecentThreadFeedsState {
+  const feeds = { ...state.feeds };
+  for (const filter of filters) {
+    feeds[filter] = {
+      ...feeds[filter],
+      forceReplacementPending: true,
+      forceReplacementGeneration:
+        feeds[filter].forceReplacementGeneration + 1,
+      trailingDirty: false,
+    };
+  }
+  return { ...state, feeds };
+}
+
 export function removeThreadFromRecentFeeds(
   state: RecentThreadFeedsState,
   threadId: string,
@@ -415,7 +666,7 @@ export function removeThreadFromRecentFeeds(
     nonTask: state.feeds.nonTask.orderedThreadIds.indexOf(normalizedId),
   };
   const feeds = { ...state.feeds };
-  for (const filter of FILTERS) {
+  for (const filter of PAGINATED_RECENT_THREAD_FILTERS) {
     const feed = state.feeds[filter];
     feeds[filter] = {
       ...feed,
@@ -452,7 +703,7 @@ export function rollbackRecentThreadRemoval(
     return state;
   }
   const feeds = { ...state.feeds };
-  for (const filter of FILTERS) {
+  for (const filter of PAGINATED_RECENT_THREAD_FILTERS) {
     const position = rollback.positions[filter];
     const feed = state.feeds[filter];
     const withoutThread = feed.orderedThreadIds.filter(
@@ -486,7 +737,7 @@ export function upsertChatInRecentFeeds(
   }
   const withSummary = ingestRecentThreadSummaries(state, [summary]);
   const feeds = { ...withSummary.feeds };
-  for (const filter of FILTERS) {
+  for (const filter of PAGINATED_RECENT_THREAD_FILTERS) {
     const feed = withSummary.feeds[filter];
     feeds[filter] = {
       ...feed,
@@ -503,7 +754,7 @@ export function upsertChatInRecentFeeds(
 export function noteRecentThreadLocalMutation(
   state: RecentThreadFeedsState,
 ): RecentThreadFeedsState {
-  return FILTERS.reduce(
+  return PAGINATED_RECENT_THREAD_FILTERS.reduce(
     (current, filter) =>
       noteRecentThreadFilterLocalMutation(current, filter),
     state,
@@ -512,7 +763,7 @@ export function noteRecentThreadLocalMutation(
 
 export function noteRecentThreadFilterLocalMutation(
   state: RecentThreadFeedsState,
-  filter: RecentThreadFilter,
+  filter: PaginatedRecentThreadFilter,
 ): RecentThreadFeedsState {
   return {
     ...state,
@@ -529,7 +780,7 @@ export function noteRecentThreadFilterLocalMutation(
 
 export function consumeRecentThreadMutationFollowUp(
   state: RecentThreadFeedsState,
-  filter: RecentThreadFilter,
+  filter: PaginatedRecentThreadFilter,
   kind: RecentThreadRequestKind,
 ): RecentThreadRequestDecision<RecentThreadRequestTicket> {
   const feed = state.feeds[filter];
@@ -537,8 +788,7 @@ export function consumeRecentThreadMutationFollowUp(
     kind === "refresh"
       ? feed.refreshAfterMutation
       : feed.loadMoreAfterMutation;
-  const active =
-    kind === "refresh" ? feed.isRefreshingHead : feed.isLoadingMore;
+  const active = feed.isRefreshingHead || feed.isLoadingMore;
   if (!requested || active) {
     return { state, ticket: null };
   }
@@ -567,24 +817,35 @@ export function consumeRecentThreadMutationFollowUp(
 
 export function selectedRecentThreadFeed(
   state: RecentThreadFeedsState,
-): RecentThreadFeedState {
-  return state.feeds[state.selectedFilter];
+): RecentThreadFeedState | null {
+  return isPaginatedRecentThreadFilter(state.selectedFilter)
+    ? state.feeds[state.selectedFilter]
+    : null;
 }
 
 export function selectedRecentThreadSummaries(
   state: RecentThreadFeedsState,
 ): DesktopThreadSummary[] {
-  return selectedRecentThreadFeed(state).orderedThreadIds.flatMap((id) => {
+  const feed = selectedRecentThreadFeed(state);
+  if (!feed) {
+    return [];
+  }
+  return feed.orderedThreadIds.flatMap((id) => {
     const summary = state.summariesById[id];
     return summary ? [summary] : [];
   });
 }
 
 function requestIsOwned(
+  state: RecentThreadFeedsState,
   feed: RecentThreadFeedState,
   ticket: RecentThreadRequestTicket,
 ): boolean {
-  if (feed.epoch !== ticket.feedEpoch) {
+  if (
+    state.gatewayScope !== ticket.gatewayScope ||
+    state.runtimeEpoch !== ticket.runtimeEpoch ||
+    feed.epoch !== ticket.feedEpoch
+  ) {
     return false;
   }
   return ticket.kind === "refresh"
@@ -597,7 +858,7 @@ function clearOwnedRequest(
   ticket: RecentThreadRequestTicket,
 ): RecentThreadFeedsState {
   const feed = state.feeds[ticket.filter];
-  if (!requestIsOwned(feed, ticket)) {
+  if (!requestIsOwned(state, feed, ticket)) {
     return state;
   }
   const nextFeed =
@@ -637,6 +898,93 @@ function markRecentThreadMutationFollowUp(
   };
 }
 
+function applyRefreshChain(
+  state: RecentThreadFeedsState,
+  ticket: RecentThreadRefreshTicket,
+  pages: DesktopRecentThreadsPage[],
+  existingIds: string[],
+  existingCursor: string | null,
+  existingLoadGate: RecentThreadLoadGate,
+): {
+  orderedThreadIds: string[];
+  nextCursor: string | null;
+  loadGate: RecentThreadLoadGate;
+  replacementCommitted: boolean;
+} {
+  const pageIds = uniqueThreadIds(
+    pages.flatMap((page) =>
+      page.threads
+        .filter((thread) => !state.removedThreadIds[thread.id.trim()])
+        .map((thread) => thread.id),
+    ),
+  );
+  const last = pages.at(-1);
+  const tailSeq = last?.threads.at(-1)?.activitySeq;
+  const reachedAnchor =
+    ticket.oldHeadActivitySeq !== null &&
+    typeof tailSeq === "number" &&
+    tailSeq <= ticket.oldHeadActivitySeq;
+  const exhaustedBeforeAnchor = Boolean(last && !last.hasMore && !reachedAnchor);
+  const exceededWindow =
+    pages.length >= RECENT_THREAD_MAX_CHAIN_PAGES && !reachedAnchor;
+  const replacementCommitted =
+    ticket.mode === "replacement" ||
+    ticket.oldHeadActivitySeq === null ||
+    exhaustedBeforeAnchor ||
+    exceededWindow;
+  if (replacementCommitted) {
+    return {
+      orderedThreadIds: pageIds,
+      nextCursor: last?.nextCursor ?? null,
+      loadGate: last?.hasMore ? "ready" : "exhausted",
+      replacementCommitted: true,
+    };
+  }
+
+  let loadGate = existingLoadGate;
+  if (
+    loadGate === "failed" &&
+    ticket.observedLoadMoreFailureRevision ===
+      state.feeds[ticket.filter].loadMoreFailureRevision
+  ) {
+    loadGate = existingCursor === null ? "exhausted" : "ready";
+  }
+  return {
+    orderedThreadIds: appendHead(pageIds, existingIds),
+    nextCursor: existingCursor,
+    loadGate,
+    replacementCommitted: false,
+  };
+}
+
+function consistentPageIdentity(
+  pages: DesktopRecentThreadsPage[],
+): { storeIncarnationId: string; serverBootId: string } | null {
+  const first = pages[0];
+  if (!first) {
+    return null;
+  }
+  return pages.every(
+    (page) =>
+      page.gatewayScope === first.gatewayScope &&
+      page.storeIncarnationId === first.storeIncarnationId &&
+      page.serverBootId === first.serverBootId,
+  )
+    ? {
+        storeIncarnationId: first.storeIncarnationId,
+        serverBootId: first.serverBootId,
+      }
+    : null;
+}
+
+function activitySeqForId(
+  state: RecentThreadFeedsState,
+  id: string | undefined,
+): number | null {
+  const value = id ? state.summariesById[id]?.activitySeq : null;
+  return typeof value === "number" ? value : null;
+}
+
 function uniqueThreadIds(ids: string[]): string[] {
   const seen = new Set<string>();
   return ids.flatMap((id) => {
@@ -647,12 +995,9 @@ function uniqueThreadIds(ids: string[]): string[] {
   });
 }
 
-function mergeHead(pageIds: string[], existingIds: string[]): string[] {
-  const pageIdSet = new Set(pageIds);
-  return [
-    ...pageIds,
-    ...existingIds.filter((id) => !pageIdSet.has(id)),
-  ];
+function appendHead(pageIds: string[], existingIds: string[]): string[] {
+  const pageSet = new Set(pageIds);
+  return [...pageIds, ...existingIds.filter((id) => !pageSet.has(id))];
 }
 
 function appendPage(pageIds: string[], existingIds: string[]): string[] {

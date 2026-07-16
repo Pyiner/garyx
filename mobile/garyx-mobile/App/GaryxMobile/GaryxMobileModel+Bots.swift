@@ -267,13 +267,23 @@ extension GaryxMobileModel {
         if selectedThread?.id == normalizedThreadId {
             openNewThreadDraft()
         }
+        let gatewayClient: GaryxGatewayClient
         do {
-            _ = try await client().archiveThread(
-                threadId: normalizedThreadId,
-                endpointKeys: endpointKeys
-            )
+            gatewayClient = try client()
+        } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-
+            pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
+            homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+            lastError = displayMessage(for: error)
+            return
+        }
+        let result = await gatewayClient.archiveThread(
+            threadId: normalizedThreadId,
+            endpointKeys: endpointKeys
+        )
+        guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+        switch result {
+        case .ok:
             // A native SwiftUI List cannot safely delete a swipe-action row
             // and reinsert it in the same update cycle when the request
             // fails. Commit every visible row-set mutation exactly once,
@@ -297,11 +307,19 @@ extension GaryxMobileModel {
 
             await refreshRemoteState()
             await refreshThreads(source: .userAction)
-        } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+        case .definitiveEndpointResponse(let response):
             pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
             homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
-            lastError = displayMessage(for: error)
+            lastError = response.error.message ?? response.error.code
+        case .notSent(let message):
+            pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
+            homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+            lastError = message
+        case .ambiguous(let response):
+            pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
+            homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+            lastError = response.message
+            await forceReplaceThreadFeedsAfterAmbiguousLifecycle()
         }
     }
 }

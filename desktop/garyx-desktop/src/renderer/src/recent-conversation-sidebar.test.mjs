@@ -9,9 +9,11 @@ import { threadRailIsNearListEnd } from "./thread-conversation-sidebar-model.ts"
 
 test("Recent segmented tabs switch with both arrow keys", () => {
   assert.equal(recentFilterForArrowKey("all", "ArrowRight"), "nonTask");
+  assert.equal(recentFilterForArrowKey("nonTask", "ArrowRight"), "favorites");
+  assert.equal(recentFilterForArrowKey("favorites", "ArrowRight"), "all");
+  assert.equal(recentFilterForArrowKey("all", "ArrowLeft"), "favorites");
+  assert.equal(recentFilterForArrowKey("favorites", "ArrowLeft"), "nonTask");
   assert.equal(recentFilterForArrowKey("nonTask", "ArrowLeft"), "all");
-  assert.equal(recentFilterForArrowKey("all", "ArrowLeft"), "nonTask");
-  assert.equal(recentFilterForArrowKey("nonTask", "ArrowRight"), "all");
 });
 
 test("shared rail near-tail seam triggers only inside the threshold", () => {
@@ -49,7 +51,7 @@ function feed(overrides = {}) {
     isLoadingMore: false,
     headFailure: null,
     loadGate: "ready",
-    nextOffset: 0,
+    nextCursor: null,
     epoch: 0,
     localMutationSequence: 0,
     loadMoreFailureRevision: 0,
@@ -73,6 +75,10 @@ test("Recent presentation distinguishes initial, empty, and cached refresh state
   assert.deepEqual(
     recentConversationPresentation(feed({ isPrimed: true }), 0, "nonTask"),
     { emptyLabelKey: "No recent chats", footerKind: "hidden" },
+  );
+  assert.deepEqual(
+    recentConversationPresentation(feed({ isPrimed: true }), 0, "favorites"),
+    { emptyLabelKey: "No favorite threads", footerKind: "hidden" },
   );
   assert.deepEqual(
     recentConversationPresentation(
@@ -119,7 +125,7 @@ test("Recent presentation maps every load-more footer gate", () => {
   );
   assert.equal(
     recentConversationPresentation(
-      feed({ isPrimed: true, nextOffset: 100 }),
+      feed({ isPrimed: true, nextCursor: "cursor-next" }),
       3,
       "all",
     ).footerKind,
@@ -127,7 +133,11 @@ test("Recent presentation maps every load-more footer gate", () => {
   );
   assert.equal(
     recentConversationPresentation(
-      feed({ isPrimed: true, loadGate: "exhausted", nextOffset: 100 }),
+      feed({
+        isPrimed: true,
+        loadGate: "exhausted",
+        nextCursor: "cursor-next",
+      }),
       3,
       "all",
     ).footerKind,

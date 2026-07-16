@@ -955,6 +955,16 @@ struct GaryxConversationHeader: View {
                         ) {
                             model.togglePinnedThread(selectedThread.id)
                         }
+                        Button(
+                            model.threadIsFavorite(selectedThread.id)
+                                ? "Unfavorite thread"
+                                : "Favorite thread",
+                            systemImage: model.threadIsFavorite(selectedThread.id)
+                                ? "star.slash"
+                                : "star"
+                        ) {
+                            model.toggleThreadFavorite(selectedThread.id)
+                        }
                         Button("Rename", systemImage: "pencil") {
                             openRenamePrompt()
                         }

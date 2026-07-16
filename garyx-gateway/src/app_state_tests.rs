@@ -1,6 +1,6 @@
 use super::*;
 use crate::app_bootstrap::{AppStateBuilder, create_app_state};
-use crate::garyx_db::GaryxDbService;
+use crate::garyx_db::{GaryxDbService, RecentThreadDraft};
 use crate::recent_thread_projection::ActiveRunProbe;
 use async_trait::async_trait;
 use axum::body::Body;
@@ -449,7 +449,7 @@ async fn test_app_state_builder_wires_bridge_thread_store_for_recent_projection(
 }
 
 #[tokio::test]
-async fn startup_warmup_clears_dangling_orphan_run() {
+async fn read_side_warmup_does_not_run_destructive_orphan_cleanup() {
     let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
         GaryxConfig::default(),
     ))
@@ -473,33 +473,37 @@ async fn startup_warmup_clears_dangling_orphan_run() {
         )
         .await
         .unwrap();
+    state
+        .ops
+        .garyx_db
+        .upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::cold-running".to_owned(),
+            title: "Cold Running".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 1,
+            last_message_preview: String::new(),
+            recent_run_id: Some("run::cold-running".to_owned()),
+            active_run_id: Some("run::cold-running".to_owned()),
+            run_state: "running".to_owned(),
+            updated_at: Some("2026-01-01T00:00:01Z".to_owned()),
+            last_active_at: "2026-01-01T00:00:01Z".to_owned(),
+        })
+        .expect("seed projected running row after the record write");
     state.spawn_gateway_sync_cache_warmup();
-
-    // Startup settles orphaned running rows with one SQL pass: the bridge
-    // run index is empty at boot, so the projected active run left by the
-    // previous process must resolve to completed (#TASK-1864).
-    let record = tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        loop {
-            let records = state
-                .ops
-                .garyx_db
-                .list_recent_threads(10, 0)
-                .expect("list recent threads");
-            if let Some(record) = records
-                .iter()
-                .find(|record| record.thread_id == "thread::cold-running")
-                && record.active_run_id.is_none()
-            {
-                break record.clone();
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("warmup should settle the dangling run as an orphan");
-
-    assert_eq!(record.active_run_id, None);
-    assert_eq!(record.run_state, "completed");
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let record = state
+        .ops
+        .garyx_db
+        .list_recent_threads(10, 0)
+        .expect("list recent threads")
+        .into_iter()
+        .find(|record| record.thread_id == "thread::cold-running")
+        .expect("projected row");
+    assert_eq!(record.active_run_id.as_deref(), Some("run::cold-running"));
+    assert_eq!(record.run_state, "running");
 }
 
 // Reproduction (state-driven, no UI): a streaming run that is aborted must append

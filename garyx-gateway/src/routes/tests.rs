@@ -43,6 +43,41 @@ fn authed_request() -> axum::http::request::Builder {
     crate::test_support::authed_request()
 }
 
+#[tokio::test]
+async fn store_identity_endpoint_returns_persistent_incarnation_and_process_boot_uuid() {
+    let db = Arc::new(crate::garyx_db::GaryxDbService::memory().expect("memory database"));
+    let state = AppStateBuilder::new(test_config())
+        .with_garyx_db(db.clone())
+        .build();
+    let expected_incarnation = db.store_incarnation_id().unwrap();
+    let expected_boot = state.server_boot_id().to_owned();
+    let response = build_router(state)
+        .oneshot(
+            authed_request()
+                .uri("/api/store-identity")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(payload["store_incarnation_id"], expected_incarnation);
+    assert_eq!(payload["server_boot_id"], expected_boot);
+    uuid::Uuid::parse_str(payload["store_incarnation_id"].as_str().unwrap()).unwrap();
+    uuid::Uuid::parse_str(payload["server_boot_id"].as_str().unwrap()).unwrap();
+
+    let next_boot = AppStateBuilder::new(test_config())
+        .with_garyx_db(db)
+        .build();
+    assert_ne!(next_boot.server_boot_id(), expected_boot);
+}
+
 struct RouteStoreProbe {
     inner: Arc<dyn ThreadStore>,
     list_calls: AtomicUsize,
@@ -3440,6 +3475,381 @@ async fn thread_pin_routes_persist_state_in_garyx_db() {
 }
 
 #[tokio::test]
+async fn thread_favorite_routes_enforce_dual_cas_and_return_tagged_atomic_pages() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::favorite-route";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Favorite Route",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+            }),
+        )
+        .await
+        .unwrap();
+    let incarnation = state.ops.garyx_db.store_incarnation_id().unwrap();
+    let boot_id = state.server_boot_id().to_owned();
+    let router = build_router(state.clone());
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri("/api/thread-favorites")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let initial: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(initial["store_incarnation_id"], incarnation);
+    assert_eq!(initial["server_boot_id"], boot_id);
+    assert_eq!(initial["revision"], 0);
+    assert_eq!(initial["thread_ids"], json!([]));
+
+    for uri in [
+        format!("/api/thread-favorites/{thread_id}"),
+        format!(
+            "/api/thread-favorites/{thread_id}?expected_revision=nope&expected_store_incarnation={incarnation}"
+        ),
+        format!(
+            "/api/thread-favorites/{thread_id}?expected_revision=0&expected_store_incarnation=nope"
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                authed_request()
+                    .method("PUT")
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["kind"], "garyx_api_error");
+        assert_eq!(payload["operation"], "thread_favorites_put");
+        assert_eq!(payload["code"], "invalid_request");
+        assert_eq!(payload["store_incarnation_id"], incarnation);
+        assert_eq!(payload["server_boot_id"], boot_id);
+        assert_eq!(payload["revision"], 0);
+    }
+
+    let put_uri = format!(
+        "/api/thread-favorites/{thread_id}?expected_revision=0&expected_store_incarnation={incarnation}"
+    );
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("PUT")
+                .uri(put_uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first["favorited"], true);
+    assert_eq!(first["changed"], true);
+    assert_eq!(first["revision"], 1);
+    assert_eq!(first["thread_ids"], json!([thread_id]));
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("PUT")
+                .uri(format!(
+                    "/api/thread-favorites/{thread_id}?expected_revision=1&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let repeated: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(repeated["changed"], false);
+    assert_eq!(repeated["revision"], 2);
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/thread-favorites/{thread_id}?expected_revision=1&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let conflict: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(conflict["kind"], "garyx_api_error");
+    assert_eq!(conflict["operation"], "thread_favorites_delete");
+    assert_eq!(conflict["code"], "conflict");
+    assert_eq!(conflict["revision"], 2);
+    assert_eq!(conflict["thread_ids"], json!([thread_id]));
+
+    let wrong_incarnation = uuid::Uuid::new_v4();
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/thread-favorites/{thread_id}?expected_revision=0&expected_store_incarnation={wrong_incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let wrong: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(wrong["code"], "wrong_incarnation");
+    assert_eq!(wrong["revision"], 2);
+    assert_eq!(wrong["thread_ids"], json!([thread_id]));
+    assert_eq!(wrong["store_incarnation_id"], incarnation);
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("PUT")
+                .uri(format!(
+                    "/api/thread-favorites/thread::missing?expected_revision=2&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let missing: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(missing["operation"], "thread_favorites_put");
+    assert_eq!(missing["code"], "not_found");
+    assert_eq!(missing["revision"], 2);
+    assert_eq!(missing["thread_ids"], json!([thread_id]));
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/thread-favorites/thread::missing?expected_revision=2&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let missing_delete: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(missing_delete["operation"], "thread_favorites_delete");
+    assert_eq!(missing_delete["code"], "not_found");
+    assert_eq!(missing_delete["revision"], 2);
+
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/thread-favorites/{thread_id}?expected_revision=2&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let removed: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(removed["removed"], true);
+    assert_eq!(removed["revision"], 3);
+    assert_eq!(removed["thread_ids"], json!([]));
+
+    let response = router
+        .oneshot(
+            authed_request()
+                .method("DELETE")
+                .uri(format!(
+                    "/api/thread-favorites/{thread_id}?expected_revision=3&expected_store_incarnation={incarnation}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let no_op: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(no_op["removed"], false);
+    assert_eq!(no_op["revision"], 4);
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_thread_favorites()
+            .unwrap()
+            .favorites
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows() {
+    let state = AppStateBuilder::new(test_config()).build();
+    for thread_id in ["thread::snapshot-recent", "thread::snapshot-without-recent"] {
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": thread_id,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z"
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    state
+        .ops
+        .garyx_db
+        .upsert_recent_thread(crate::garyx_db::RecentThreadDraft {
+            thread_id: "thread::snapshot-recent".to_owned(),
+            title: "Snapshot Recent".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 1,
+            last_message_preview: "preview".to_owned(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: None,
+            last_active_at: "2026-07-16T00:00:00Z".to_owned(),
+        })
+        .unwrap();
+    state
+        .ops
+        .garyx_db
+        .remove_recent_thread("thread::snapshot-without-recent")
+        .unwrap();
+    let incarnation = state.ops.garyx_db.store_incarnation_id().unwrap();
+    state
+        .ops
+        .garyx_db
+        .set_thread_favorite("thread::snapshot-recent", true, 0, &incarnation)
+        .unwrap();
+    state
+        .ops
+        .garyx_db
+        .set_thread_favorite("thread::snapshot-without-recent", true, 1, &incarnation)
+        .unwrap();
+    let router = build_router(state.clone());
+    let response = router
+        .oneshot(
+            authed_request()
+                .uri("/api/thread-favorites/snapshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(payload["store_incarnation_id"], incarnation);
+    assert_eq!(payload["server_boot_id"], state.server_boot_id());
+    assert_eq!(payload["revision"], 2);
+    assert_eq!(payload["thread_ids"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["favorites"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["recent"]["total"], 1);
+    assert_eq!(payload["recent"]["truncated"], false);
+    assert_eq!(payload["recent"]["threads"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        payload["recent"]["threads"][0]["thread_id"],
+        "thread::snapshot-recent"
+    );
+    assert!(
+        payload["recent"]["threads"][0]["activity_seq"]
+            .as_i64()
+            .is_some_and(|seq| seq > 0),
+        "snapshot recent rows carry the monotonic wire ordering key"
+    );
+}
+
+#[tokio::test]
 async fn reorder_thread_pins_route_enforces_cas_and_returns_canonical_pages() {
     let state = AppStateBuilder::new(test_config()).build();
     state.ops.garyx_db.pin_thread("thread::a").expect("pin a");
@@ -3556,7 +3966,7 @@ async fn reorder_thread_pins_route_enforces_cas_and_returns_canonical_pages() {
 }
 
 #[tokio::test]
-async fn delete_thread_removes_garyx_db_pin() {
+async fn delete_thread_removes_pin_and_favorite_with_unconditional_favorite_bump() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::delete-pinned-route";
     state
@@ -3578,6 +3988,12 @@ async fn delete_thread_removes_garyx_db_pin() {
         .garyx_db
         .pin_thread(thread_id)
         .expect("pin test thread");
+    let incarnation = state.ops.garyx_db.store_incarnation_id().unwrap();
+    state
+        .ops
+        .garyx_db
+        .set_thread_favorite(thread_id, true, 0, &incarnation)
+        .expect("favorite test thread");
     let router = build_router(state.clone());
 
     let request = authed_request()
@@ -3595,6 +4011,16 @@ async fn delete_thread_removes_garyx_db_pin() {
             .expect("list pins")
             .pins
             .is_empty()
+    );
+    let favorites = state
+        .ops
+        .garyx_db
+        .list_thread_favorites()
+        .expect("list favorites");
+    assert!(favorites.favorites.is_empty());
+    assert_eq!(
+        favorites.revision, 2,
+        "successful ordinary delete bumps once regardless of removed membership"
     );
 }
 
@@ -3691,7 +4117,7 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
     let router = build_router(state.clone());
 
     let request = authed_request()
-        .uri("/api/recent-threads?limit=10&offset=0")
+        .uri("/api/recent-threads?limit=10")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -3702,38 +4128,51 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["count"], 3);
     assert_eq!(payload["total"], 3);
-    assert_eq!(payload["offset"], 0);
+    assert!(
+        payload.get("offset").is_none(),
+        "HTTP pagination is cursor-only"
+    );
     assert_eq!(payload["has_more"], false);
-    assert_eq!(payload["threads"][0]["thread_id"], "thread::recent-running");
-    assert_eq!(payload["threads"][0]["title"], "Recent Running");
-    assert_eq!(payload["threads"][0]["workspace_dir"], "/work/test-running");
-    assert_eq!(payload["threads"][0]["provider_type"], "codex");
-    assert_eq!(payload["threads"][0]["agent_id"], "agent::running");
-    assert_eq!(payload["threads"][0]["message_count"], 4);
+    assert_eq!(payload["next_cursor"], Value::Null);
+    assert!(uuid::Uuid::parse_str(payload["store_incarnation_id"].as_str().unwrap()).is_ok());
+    assert!(uuid::Uuid::parse_str(payload["server_boot_id"].as_str().unwrap()).is_ok());
     assert_eq!(
-        payload["threads"][0]["last_message_preview"],
-        "running assistant preview"
-    );
-    assert_eq!(payload["threads"][0]["active_run_id"], "run::active");
-    assert_eq!(payload["threads"][0]["run_state"], "running");
-    assert_eq!(payload["threads"][1]["thread_id"], "thread::recent-older");
-    assert_eq!(payload["threads"][1]["provider_type"], "claude");
-    assert_eq!(payload["threads"][1]["agent_id"], "agent::test");
-    assert_eq!(payload["threads"][1]["message_count"], 3);
-    assert_eq!(
-        payload["threads"][1]["last_message_preview"],
-        "older user preview"
-    );
-    assert_eq!(payload["threads"][1]["recent_run_id"], "run::older");
-    assert_eq!(payload["threads"][1]["run_state"], "completed");
-    assert_eq!(
-        payload["threads"][2]["thread_id"],
+        payload["threads"][0]["thread_id"],
         "thread::recent-no-timestamp"
     );
     assert_eq!(
-        payload["threads"][2]["last_active_at"],
+        payload["threads"][0]["last_active_at"],
         "1970-01-01T00:00:00.000Z"
     );
+    assert_eq!(payload["threads"][1]["thread_id"], "thread::recent-running");
+    assert_eq!(payload["threads"][1]["title"], "Recent Running");
+    assert_eq!(payload["threads"][1]["workspace_dir"], "/work/test-running");
+    assert_eq!(payload["threads"][1]["provider_type"], "codex");
+    assert_eq!(payload["threads"][1]["agent_id"], "agent::running");
+    assert_eq!(payload["threads"][1]["message_count"], 4);
+    assert_eq!(
+        payload["threads"][1]["last_message_preview"],
+        "running assistant preview"
+    );
+    assert_eq!(payload["threads"][1]["active_run_id"], "run::active");
+    assert_eq!(payload["threads"][1]["run_state"], "running");
+    assert_eq!(payload["threads"][2]["thread_id"], "thread::recent-older");
+    assert_eq!(payload["threads"][2]["provider_type"], "claude");
+    assert_eq!(payload["threads"][2]["agent_id"], "agent::test");
+    assert_eq!(payload["threads"][2]["message_count"], 3);
+    assert_eq!(
+        payload["threads"][2]["last_message_preview"],
+        "older user preview"
+    );
+    assert_eq!(payload["threads"][2]["recent_run_id"], "run::older");
+    assert_eq!(payload["threads"][2]["run_state"], "completed");
+    let sequences = payload["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|thread| thread["activity_seq"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert!(sequences.windows(2).all(|pair| pair[0] > pair[1]));
 
     let persisted = state
         .ops
@@ -3746,9 +4185,9 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
             .map(|thread| thread.thread_id.as_str())
             .collect::<Vec<_>>(),
         vec![
+            "thread::recent-no-timestamp",
             "thread::recent-running",
             "thread::recent-older",
-            "thread::recent-no-timestamp"
         ],
     );
 }
@@ -3845,9 +4284,12 @@ async fn recent_threads_route_defaults_to_thirty_threads() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["count"], 30);
     assert_eq!(payload["limit"], 30);
-    assert_eq!(payload["offset"], 0);
+    assert!(payload.get("offset").is_none());
     assert_eq!(payload["total"], 35);
     assert_eq!(payload["has_more"], true);
+    assert!(payload["next_cursor"].as_str().is_some());
+    assert!(uuid::Uuid::parse_str(payload["store_incarnation_id"].as_str().unwrap()).is_ok());
+    assert!(uuid::Uuid::parse_str(payload["server_boot_id"].as_str().unwrap()).is_ok());
     assert_eq!(payload["threads"].as_array().unwrap().len(), 30);
 }
 
@@ -3855,10 +4297,10 @@ async fn recent_threads_route_defaults_to_thirty_threads() {
 async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
     let state = AppStateBuilder::new(test_config()).build();
     for (thread_id, thread_type, timestamp) in [
-        ("thread::route-task-newest", "task", "2026-05-23T14:00:00Z"),
-        ("thread::route-chat-newer", "chat", "2026-05-23T13:00:00Z"),
-        ("thread::route-task-middle", "task", "2026-05-23T12:00:00Z"),
         ("thread::route-chat-older", "chat", "2026-05-23T11:00:00Z"),
+        ("thread::route-task-middle", "task", "2026-05-23T12:00:00Z"),
+        ("thread::route-chat-newer", "chat", "2026-05-23T13:00:00Z"),
+        ("thread::route-task-newest", "task", "2026-05-23T14:00:00Z"),
     ] {
         state
             .ops
@@ -3886,7 +4328,7 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
         .clone()
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=10&offset=0")
+                .uri("/api/recent-threads?limit=10")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3901,7 +4343,7 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
         .clone()
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=10&offset=0&tasks=include")
+                .uri("/api/recent-threads?limit=10&tasks=include")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3929,7 +4371,7 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
         .clone()
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=1&offset=0&tasks=exclude")
+                .uri("/api/recent-threads?limit=1&tasks=exclude")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3947,46 +4389,90 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
         excluded["threads"][0]["thread_id"],
         "thread::route-chat-newer"
     );
+    let exclude_cursor = excluded["next_cursor"].as_str().unwrap();
 
-    let only_response = router
+    let only_first_response = router
         .clone()
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=10&offset=1&tasks=only")
+                .uri("/api/recent-threads?limit=1&tasks=only")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(only_response.status(), StatusCode::OK);
-    let only_body = axum::body::to_bytes(only_response.into_body(), 1024 * 1024)
+    assert_eq!(only_first_response.status(), StatusCode::OK);
+    let only_first_body = axum::body::to_bytes(only_first_response.into_body(), 1024 * 1024)
         .await
         .unwrap();
-    let only: Value = serde_json::from_slice(&only_body).unwrap();
-    assert_eq!(only["total"], 2);
-    assert_eq!(only["offset"], 1);
-    assert_eq!(only["has_more"], false);
-    assert_eq!(only["threads"][0]["thread_id"], "thread::route-task-middle");
+    let only_first: Value = serde_json::from_slice(&only_first_body).unwrap();
+    assert_eq!(only_first["total"], 2);
+    assert_eq!(only_first["has_more"], true);
+    assert_eq!(
+        only_first["threads"][0]["thread_id"],
+        "thread::route-task-newest"
+    );
+    let only_cursor = only_first["next_cursor"].as_str().unwrap();
 
-    let clamped_response = router
+    let only_second_response = router
         .clone()
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=10&offset=99&tasks=only")
+                .uri(format!(
+                    "/api/recent-threads?limit=1&tasks=only&cursor={only_cursor}"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(clamped_response.status(), StatusCode::OK);
-    let clamped_body = axum::body::to_bytes(clamped_response.into_body(), 1024 * 1024)
+    assert_eq!(only_second_response.status(), StatusCode::OK);
+    let only_second_body = axum::body::to_bytes(only_second_response.into_body(), 1024 * 1024)
         .await
         .unwrap();
-    let clamped: Value = serde_json::from_slice(&clamped_body).unwrap();
-    assert_eq!(clamped["offset"], 2);
-    assert_eq!(clamped["total"], 2);
-    assert_eq!(clamped["count"], 0);
-    assert_eq!(clamped["threads"], json!([]));
+    let only_second: Value = serde_json::from_slice(&only_second_body).unwrap();
+    assert_eq!(only_second["total"], 2);
+    assert_eq!(only_second["has_more"], false);
+    assert_eq!(only_second["next_cursor"], Value::Null);
+    assert_eq!(
+        only_second["threads"][0]["thread_id"],
+        "thread::route-task-middle"
+    );
+
+    for (uri, expected_message) in [
+        (
+            format!("/api/recent-threads?limit=1&tasks=only&cursor={exclude_cursor}"),
+            "requested tasks filter",
+        ),
+        (
+            "/api/recent-threads?tasks=only&cursor=not-a-cursor".to_owned(),
+            "opaque recent-threads cursor",
+        ),
+        ("/api/recent-threads?limit=0".to_owned(), "1 through 200"),
+        ("/api/recent-threads?limit=201".to_owned(), "1 through 200"),
+        ("/api/recent-threads?offset=1".to_owned(), "unknown field"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(authed_request().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["kind"], "garyx_api_error");
+        assert_eq!(payload["operation"], "recent_threads_list");
+        assert_eq!(payload["code"], "invalid_request");
+        assert!(
+            payload["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(expected_message),
+            "unexpected invalid-request body for {uri}: {payload}"
+        );
+    }
 
     let invalid_response = router
         .oneshot(
@@ -4002,12 +4488,87 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
         .await
         .unwrap();
     let invalid: Value = serde_json::from_slice(&invalid_body).unwrap();
-    assert_eq!(invalid["error"], "BadRequest");
+    assert_eq!(invalid["kind"], "garyx_api_error");
+    assert_eq!(invalid["operation"], "recent_threads_list");
+    assert_eq!(invalid["code"], "invalid_request");
     assert!(
         invalid["message"]
             .as_str()
             .unwrap_or_default()
             .contains("include, exclude, only")
+    );
+}
+
+#[tokio::test]
+async fn recent_threads_route_keyset_does_not_skip_when_returned_row_is_deleted() {
+    let state = AppStateBuilder::new(test_config()).build();
+    for (index, thread_id) in [
+        "thread::cursor-old",
+        "thread::cursor-mid",
+        "thread::cursor-new",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": thread_id,
+                    "updated_at": format!("2026-07-16T00:0{index}:00Z")
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    let router = build_router(state.clone());
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri("/api/recent-threads?limit=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first["threads"][0]["thread_id"], "thread::cursor-new");
+    let cursor = first["next_cursor"].as_str().unwrap();
+
+    state
+        .ops
+        .garyx_db
+        .remove_recent_thread("thread::cursor-new")
+        .unwrap();
+    let response = router
+        .oneshot(
+            authed_request()
+                .uri(format!("/api/recent-threads?limit=1&cursor={cursor}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let second: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        second["threads"][0]["thread_id"], "thread::cursor-mid",
+        "keyset pagination cannot skip after a row above the cursor disappears"
     );
 }
 
@@ -4061,7 +4622,7 @@ async fn recent_threads_tasks_exclude_never_scans_thread_store() {
     let response = router
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=10&offset=0&tasks=exclude")
+                .uri("/api/recent-threads?limit=10&tasks=exclude")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -6274,6 +6835,12 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
         .garyx_db
         .pin_thread(thread_id)
         .expect("pin archived candidate");
+    let incarnation = state.ops.garyx_db.store_incarnation_id().unwrap();
+    state
+        .ops
+        .garyx_db
+        .set_thread_favorite(thread_id, true, 0, &incarnation)
+        .expect("favorite archived candidate");
     assert_eq!(
         state
             .ops
@@ -6350,6 +6917,9 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
             .pins
             .is_empty()
     );
+    let favorites = state.ops.garyx_db.list_thread_favorites().unwrap();
+    assert!(favorites.favorites.is_empty());
+    assert_eq!(favorites.revision, 2);
 
     let reconnected_thread_id = {
         let mut router = state.threads.router.lock().await;

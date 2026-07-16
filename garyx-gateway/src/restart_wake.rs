@@ -769,19 +769,28 @@ mod tests {
     #[test]
     fn wake_all_snapshot_includes_running_and_active_threads_with_cap() {
         let garyx_db = GaryxDbService::memory().expect("database");
-        seed_recent_record(
-            &garyx_db,
-            "thread::self",
-            "running",
-            None,
-            "2026-01-01T23:59:00Z",
-        );
+        for index in 0..20 {
+            seed_recent_record(
+                &garyx_db,
+                &format!("thread::extra-{index:02}"),
+                "running",
+                None,
+                &format!("2026-01-01T10:{index:02}:00Z"),
+            );
+        }
         seed_recent_record(
             &garyx_db,
             "thread::active-only",
             "completed",
             Some("run::active"),
             "2026-01-01T23:58:00Z",
+        );
+        seed_recent_record(
+            &garyx_db,
+            "thread::self",
+            "running",
+            None,
+            "2026-01-01T23:59:00Z",
         );
         seed_recent_record(
             &garyx_db,
@@ -797,16 +806,6 @@ mod tests {
             Some("run::ignored"),
             "2026-01-01T23:56:00Z",
         );
-        for index in 0..20 {
-            seed_recent_record(
-                &garyx_db,
-                &format!("thread::extra-{index:02}"),
-                "running",
-                None,
-                &format!("2026-01-01T10:{index:02}:00Z"),
-            );
-        }
-
         let snapshot = restart_wake_all_snapshot_from_db(&garyx_db).expect("snapshot");
 
         assert_eq!(snapshot.targets.len(), MAX_RESTART_WAKE_ALL_THREADS);

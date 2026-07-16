@@ -57,6 +57,9 @@ struct GaryxRootView: View {
                     onTogglePinnedThread: { threadId in
                         model.togglePinnedThread(threadId)
                     },
+                    onToggleFavoriteThread: { threadId in
+                        model.toggleThreadFavorite(threadId)
+                    },
                     onUnpinThread: { threadId in
                         model.unpinThread(threadId)
                     },
@@ -506,6 +509,7 @@ struct GaryxShellView: View, Equatable {
     let onStartNewChat: () -> Void
     let onOpenThread: (GaryxThreadSummary) -> Void
     let onTogglePinnedThread: (String) -> Void
+    let onToggleFavoriteThread: (String) -> Void
     let onUnpinThread: (String) -> Void
     let onBeginPinnedOrderDrag: () -> Void
     let onPreviewPinnedOrderDrag: ([String]) -> Void
@@ -634,6 +638,7 @@ struct GaryxShellView: View, Equatable {
                     onStartNewChat: onStartNewChat,
                     onOpenThread: onOpenThread,
                     onTogglePinnedThread: onTogglePinnedThread,
+                    onToggleFavoriteThread: onToggleFavoriteThread,
                     onUnpinThread: onUnpinThread,
                     onBeginPinnedOrderDrag: onBeginPinnedOrderDrag,
                     onPreviewPinnedOrderDrag: onPreviewPinnedOrderDrag,

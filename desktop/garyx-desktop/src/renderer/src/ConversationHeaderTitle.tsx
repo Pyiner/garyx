@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type RefObject } from 'react';
-import { Archive, MoreHorizontal, Pencil, X } from 'lucide-react';
+import { Archive, MoreHorizontal, Pencil, Star, StarOff, X } from 'lucide-react';
 
 import type { DesktopBotConsoleSummary } from '@shared/contracts';
 
@@ -31,12 +31,14 @@ type ConversationHeaderTitleProps = {
   isAutomationView: boolean;
   isBotsView: boolean;
   isSkillsView: boolean;
+  isThreadFavorite: boolean;
   isThreadPinned: boolean;
   archiveThreadDisabled: boolean;
   onBeginEdit: () => void;
   onArchiveThread: () => void;
   onCancelEdit: () => void;
   onSaveTitle: () => void;
+  onToggleFavoriteThread: () => void;
   onTogglePinnedThread: () => void;
   onTitleDraftChange: (value: string) => void;
   savingTitle: boolean;
@@ -54,12 +56,14 @@ export function ConversationHeaderTitle({
   isAutomationView,
   isBotsView,
   isSkillsView,
+  isThreadFavorite,
   isThreadPinned,
   archiveThreadDisabled,
   onBeginEdit,
   onArchiveThread,
   onCancelEdit,
   onSaveTitle,
+  onToggleFavoriteThread,
   onTogglePinnedThread,
   onTitleDraftChange,
   savingTitle,
@@ -178,6 +182,14 @@ export function ConversationHeaderTitle({
                       {isThreadPinned ? t('Unpin conversation') : t('Pin conversation')}
                     </span>
                     <DropdownMenuShortcut>⌥⌘P</DropdownMenuShortcut>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={onToggleFavoriteThread}>
+                    {isThreadFavorite ? <StarOff aria-hidden /> : <Star aria-hidden />}
+                    <span>
+                      {isThreadFavorite
+                        ? t('Unfavorite conversation')
+                        : t('Favorite conversation')}
+                    </span>
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={onBeginEdit}>
                     <Pencil aria-hidden />

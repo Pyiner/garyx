@@ -10,30 +10,202 @@ public struct GaryxThreadsPage: Decodable, Equatable, Sendable {
 
 
 public struct GaryxRecentThreadsPage: Decodable, Equatable, Sendable {
+    public var storeIncarnationId: String
+    public var serverBootId: String
     public var threads: [GaryxThreadSummary]
     public var count: Int
     public var limit: Int
-    public var offset: Int
     public var total: Int
     public var hasMore: Bool
+    public var nextCursor: String?
 
     enum CodingKeys: String, CodingKey {
+        case storeIncarnationId = "store_incarnation_id"
+        case serverBootId = "server_boot_id"
         case threads
         case count
         case limit
-        case offset
         case total
         case hasMore = "has_more"
+        case nextCursor = "next_cursor"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        threads = try container.decodeIfPresent([GaryxThreadSummary].self, forKey: .threads) ?? []
-        count = try container.decodeIfPresent(Int.self, forKey: .count) ?? threads.count
-        limit = try container.decodeIfPresent(Int.self, forKey: .limit) ?? count
-        offset = try container.decodeIfPresent(Int.self, forKey: .offset) ?? 0
-        total = try container.decodeIfPresent(Int.self, forKey: .total) ?? offset + count
-        hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? (offset + count < total)
+        storeIncarnationId = try container.decode(String.self, forKey: .storeIncarnationId)
+        serverBootId = try container.decode(String.self, forKey: .serverBootId)
+        threads = try container.decode([GaryxThreadSummary].self, forKey: .threads)
+        count = try container.decode(Int.self, forKey: .count)
+        limit = try container.decode(Int.self, forKey: .limit)
+        total = try container.decode(Int.self, forKey: .total)
+        hasMore = try container.decode(Bool.self, forKey: .hasMore)
+        guard container.contains(.nextCursor) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.nextCursor,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "next_cursor is required"
+                )
+            )
+        }
+        nextCursor = try container.decodeIfPresent(String.self, forKey: .nextCursor)
+        guard !storeIncarnationId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !serverBootId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              count >= 0,
+              total >= 0,
+              (1...200).contains(limit),
+              count == threads.count,
+              threads.allSatisfy({ $0.activitySeq != nil }),
+              hasMore == (nextCursor != nil),
+              nextCursor?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != true else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .threads,
+                in: container,
+                debugDescription: "Recent threads page violates the cursor/identity contract"
+            )
+        }
+    }
+}
+
+
+public struct GaryxThreadFavoriteRecord: Decodable, Equatable, Sendable {
+    public var threadId: String
+    public var favoritedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case threadId = "thread_id"
+        case favoritedAt = "favorited_at"
+    }
+}
+
+
+public struct GaryxThreadFavoritesPage: Decodable, Equatable, Sendable {
+    public var storeIncarnationId: String
+    public var serverBootId: String
+    public var revision: Int64
+    public var threadIds: [String]
+    public var favorites: [GaryxThreadFavoriteRecord]
+
+    enum CodingKeys: String, CodingKey {
+        case storeIncarnationId = "store_incarnation_id"
+        case serverBootId = "server_boot_id"
+        case revision
+        case threadIds = "thread_ids"
+        case favorites
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        storeIncarnationId = try container.decode(String.self, forKey: .storeIncarnationId)
+        serverBootId = try container.decode(String.self, forKey: .serverBootId)
+        revision = try container.decode(Int64.self, forKey: .revision)
+        threadIds = try container.decode([String].self, forKey: .threadIds)
+        favorites = try container.decode([GaryxThreadFavoriteRecord].self, forKey: .favorites)
+        try Self.validate(
+            storeIncarnationId: storeIncarnationId,
+            serverBootId: serverBootId,
+            revision: revision,
+            threadIds: threadIds,
+            favorites: favorites,
+            codingPath: container.codingPath
+        )
+    }
+
+    fileprivate static func validate(
+        storeIncarnationId: String,
+        serverBootId: String,
+        revision: Int64,
+        threadIds: [String],
+        favorites: [GaryxThreadFavoriteRecord],
+        codingPath: [CodingKey]
+    ) throws {
+        let normalizedIds = threadIds.map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let favoriteIds = favorites.map {
+            $0.threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !storeIncarnationId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !serverBootId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              revision >= 0,
+              normalizedIds.allSatisfy({ !$0.isEmpty }),
+              Set(normalizedIds).count == normalizedIds.count,
+              normalizedIds == favoriteIds,
+              favorites.allSatisfy({
+                  !$0.favoritedAt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              }) else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "Thread favorites page violates the identity/membership contract"
+                )
+            )
+        }
+    }
+}
+
+
+public struct GaryxThreadFavoritesSnapshot: Decodable, Equatable, Sendable {
+    public struct Recent: Decodable, Equatable, Sendable {
+        public var threads: [GaryxThreadSummary]
+        public var total: Int
+        public var truncated: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case threads
+            case total
+            case truncated
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            threads = try container.decode([GaryxThreadSummary].self, forKey: .threads)
+            total = try container.decode(Int.self, forKey: .total)
+            truncated = try container.decode(Bool.self, forKey: .truncated)
+            guard total >= threads.count,
+                  truncated || total == threads.count,
+                  threads.allSatisfy({ $0.activitySeq != nil }) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .threads,
+                    in: container,
+                    debugDescription: "Favorites snapshot recent rows violate the projection contract"
+                )
+            }
+        }
+    }
+
+    public var storeIncarnationId: String
+    public var serverBootId: String
+    public var revision: Int64
+    public var threadIds: [String]
+    public var favorites: [GaryxThreadFavoriteRecord]
+    public var recent: Recent
+
+    enum CodingKeys: String, CodingKey {
+        case storeIncarnationId = "store_incarnation_id"
+        case serverBootId = "server_boot_id"
+        case revision
+        case threadIds = "thread_ids"
+        case favorites
+        case recent
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        storeIncarnationId = try container.decode(String.self, forKey: .storeIncarnationId)
+        serverBootId = try container.decode(String.self, forKey: .serverBootId)
+        revision = try container.decode(Int64.self, forKey: .revision)
+        threadIds = try container.decode([String].self, forKey: .threadIds)
+        favorites = try container.decode([GaryxThreadFavoriteRecord].self, forKey: .favorites)
+        recent = try container.decode(Recent.self, forKey: .recent)
+        try GaryxThreadFavoritesPage.validate(
+            storeIncarnationId: storeIncarnationId,
+            serverBootId: serverBootId,
+            revision: revision,
+            threadIds: threadIds,
+            favorites: favorites,
+            codingPath: container.codingPath
+        )
     }
 }
 
@@ -118,6 +290,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var recentRunId: String?
     public var activeRunId: String?
     public var runState: String?
+    public var activitySeq: Int64?
     public var worktreePath: String?
     public var automationId: String?
     public var automationThreadMode: String?
@@ -137,6 +310,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         recentRunId: String?,
         activeRunId: String?,
         runState: String?,
+        activitySeq: Int64? = nil,
         worktreePath: String?,
         automationId: String? = nil,
         automationThreadMode: String? = nil,
@@ -155,6 +329,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         self.recentRunId = recentRunId
         self.activeRunId = activeRunId
         self.runState = runState
+        self.activitySeq = activitySeq
         self.worktreePath = worktreePath
         self.automationId = automationId
         self.automationThreadMode = automationThreadMode
@@ -196,6 +371,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         case activeRunIdCamel = "activeRunId"
         case runState = "run_state"
         case runStateCamel = "runState"
+        case activitySeq = "activity_seq"
         case worktree
         case automationId = "automation_id"
         case automationIdCamel = "automationId"
@@ -229,6 +405,15 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         recentRunId = try container.garyxDecodeFirstString(.recentRunId, .recentRunIdCamel)
         activeRunId = try container.garyxDecodeFirstString(.activeRunId, .activeRunIdCamel)
         runState = try container.garyxDecodeFirstString(.runState, .runStateCamel)
+        activitySeq = try container.decodeIfPresent(Int64.self, forKey: .activitySeq)
+        if let activitySeq,
+           activitySeq < 0 || activitySeq >= 9_007_199_254_740_991 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .activitySeq,
+                in: container,
+                debugDescription: "activity_seq must be a non-negative safe integer"
+            )
+        }
         worktreePath = try container
             .decodeIfPresent(GaryxThreadWorktreeSummary.self, forKey: .worktree)?
             .visiblePath

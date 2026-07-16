@@ -202,8 +202,43 @@ public struct GaryxGatewayRetryPolicy: Equatable, Sendable {
     }
 }
 
+public enum GaryxGatewayRequestSemantics: Equatable, Sendable {
+    case readRetryable
+    case mutationSingleAttempt
+}
+
+public struct GaryxGatewayTaggedAPIError: Decodable, Equatable, Sendable {
+    public let kind: String
+    public let operation: String
+    public let code: String
+    public let message: String?
+}
+
+public struct GaryxGatewayDefinitiveEndpointResponse<Response: Sendable>: Sendable {
+    public let status: Int
+    public let error: GaryxGatewayTaggedAPIError
+    public let decoded: Response?
+    public let body: Data
+}
+
+public struct GaryxGatewayAmbiguousResponse: Equatable, Sendable {
+    public let message: String
+    public let status: Int?
+    public let body: Data?
+}
+
+public enum GaryxGatewayMutationResult<Response: Sendable>: Sendable {
+    case ok(Response)
+    case definitiveEndpointResponse(GaryxGatewayDefinitiveEndpointResponse<Response>)
+    case ambiguous(GaryxGatewayAmbiguousResponse)
+    case notSent(String)
+}
+
+extension GaryxGatewayDefinitiveEndpointResponse: Equatable where Response: Equatable {}
+extension GaryxGatewayMutationResult: Equatable where Response: Equatable {}
+
 public enum GaryxGatewayRetryClassifier {
-    /// Errors raised before the request reached the server. Always safe to retry.
+    /// Transport errors that retryable reads may replay.
     public static func isConnectionEstablishmentError(_ error: Error) -> Bool {
         let nsError = error as NSError
         guard nsError.domain == NSURLErrorDomain else { return false }
@@ -224,7 +259,7 @@ public enum GaryxGatewayRetryClassifier {
         }
     }
 
-    /// Errors that could have been partially processed by the server. Safe only for idempotent calls.
+    /// Errors that may have reached the server and are replayed only for reads.
     public static func isAmbiguousNetworkError(_ error: Error) -> Bool {
         let nsError = error as NSError
         guard nsError.domain == NSURLErrorDomain else { return false }
@@ -239,18 +274,19 @@ public enum GaryxGatewayRetryClassifier {
         }
     }
 
-    public static func isRetryableStatus(_ statusCode: Int, idempotent: Bool) -> Bool {
+    public static func isRetryableStatus(
+        _ statusCode: Int,
+        semantics: GaryxGatewayRequestSemantics
+    ) -> Bool {
+        semantics == .readRetryable && isTransientStatus(statusCode)
+    }
+
+    /// Server statuses an owning state machine may explicitly retry after a
+    /// single-attempt mutation has settled.
+    public static func isTransientStatus(_ statusCode: Int) -> Bool {
         switch statusCode {
-        case 502:
-            // Bad Gateway typically means a reverse proxy failed to reach the upstream:
-            // the request was not processed, so retrying is safe for any method.
+        case 408, 425, 429, 502, 503, 504:
             return true
-        case 503, 504:
-            // Service Unavailable / Gateway Timeout might have partially processed the
-            // request, so only retry for idempotent calls.
-            return idempotent
-        case 408, 425, 429:
-            return idempotent
         default:
             return false
         }
@@ -327,15 +363,23 @@ public final class GaryxGatewayClient {
     public func listRecentThreads(
         filter: GaryxRecentThreadFilter = .all,
         limit: Int = 30,
-        offset: Int = 0
+        cursor: String? = nil
     ) async throws -> GaryxRecentThreadsPage {
-        try await get(
+        guard let tasksQueryValue = filter.tasksQueryValue else {
+            throw GaryxGatewayError.encodingFailed(
+                "Favorites is loaded from the thread-favorites snapshot."
+            )
+        }
+        var queryItems = [
+            URLQueryItem(name: "tasks", value: tasksQueryValue),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        if let cursor {
+            queryItems.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        return try await get(
             "/api/recent-threads",
-            queryItems: [
-                URLQueryItem(name: "tasks", value: filter.tasksQueryValue),
-                URLQueryItem(name: "limit", value: String(limit)),
-                URLQueryItem(name: "offset", value: String(offset)),
-            ]
+            queryItems: queryItems
         )
     }
 
@@ -345,6 +389,56 @@ public final class GaryxGatewayClient {
 
     public func listThreadPins() async throws -> GaryxThreadPinsPage {
         try await get("/api/thread-pins")
+    }
+
+    public func listThreadFavorites() async throws -> GaryxThreadFavoritesPage {
+        try await get("/api/thread-favorites")
+    }
+
+    public func threadFavoritesSnapshot() async throws -> GaryxThreadFavoritesSnapshot {
+        try await get("/api/thread-favorites/snapshot")
+    }
+
+    public func setThreadFavorite(
+        threadId: String,
+        favorited: Bool,
+        expectedRevision: Int64,
+        expectedStoreIncarnation: String
+    ) async -> GaryxGatewayMutationResult<GaryxThreadFavoritesPage> {
+        let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedIncarnation = expectedStoreIncarnation.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard normalizedThreadId.hasPrefix("thread::"),
+              expectedRevision >= 0,
+              !normalizedIncarnation.isEmpty else {
+            return .notSent("The favorites mutation is missing a valid precondition.")
+        }
+        do {
+            var request = try makeRequest(
+                path: "/api/thread-favorites/\(normalizedThreadId.urlPathEncoded)",
+                method: favorited ? "PUT" : "DELETE",
+                queryItems: [
+                    URLQueryItem(
+                        name: "expected_revision",
+                        value: String(expectedRevision)
+                    ),
+                    URLQueryItem(
+                        name: "expected_store_incarnation",
+                        value: normalizedIncarnation
+                    ),
+                ]
+            )
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            return await sendMutation(
+                request,
+                expectedOperation: favorited
+                    ? "thread_favorites_put"
+                    : "thread_favorites_delete"
+            )
+        } catch {
+            return .notSent(error.localizedDescription)
+        }
     }
 
     public func setThreadPinned(threadId: String, pinned: Bool) async throws -> GaryxThreadPinsPage {
@@ -374,7 +468,10 @@ public final class GaryxGatewayClient {
             )
         )
         do {
-            let data = try await sendRaw(request, idempotent: true, maxAttempts: 1)
+            let data = try await sendRaw(
+                request,
+                semantics: .mutationSingleAttempt
+            )
             return .accepted(try decoder.decode(GaryxThreadPinsPage.self, from: data))
         } catch GaryxGatewayError.httpStatus(409, let body, _) {
             guard let data = body.data(using: .utf8) else {
@@ -443,35 +540,48 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func deleteThread(threadId: String) async throws -> GaryxDeleteResult {
-        try await delete("/api/threads/\(threadId.urlPathEncoded)")
+    public func deleteThread(
+        threadId: String
+    ) async -> GaryxGatewayMutationResult<GaryxDeleteResult> {
+        do {
+            let request = try makeRequest(
+                path: "/api/threads/\(threadId.urlPathEncoded)",
+                method: "DELETE"
+            )
+            return await sendMutation(request, expectedOperation: "thread_delete")
+        } catch {
+            return .notSent(error.localizedDescription)
+        }
     }
 
     public func archiveThread(
         threadId: String,
         endpointKeys: [String] = []
-    ) async throws -> GaryxArchiveThreadResult {
-        try await post(
-            "/api/threads/\(threadId.urlPathEncoded)/archive",
-            body: GaryxArchiveThreadRequest(endpointKeys: endpointKeys),
-            idempotent: true
-        )
+    ) async -> GaryxGatewayMutationResult<GaryxArchiveThreadResult> {
+        do {
+            var request = try makeRequest(
+                path: "/api/threads/\(threadId.urlPathEncoded)/archive",
+                method: "POST"
+            )
+            request.httpBody = try encoder.encode(
+                GaryxArchiveThreadRequest(endpointKeys: endpointKeys)
+            )
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            return await sendMutation(request, expectedOperation: "thread_archive")
+        } catch {
+            return .notSent(error.localizedDescription)
+        }
     }
 
     public func startChat(_ request: GaryxStartChatRequest) async throws -> GaryxStartChatResult {
-        // Chat start is non-idempotent: only connection-establishment errors auto-retry.
         try await post("/api/chat/start", body: request)
     }
 
     public func interruptThread(threadId: String) async throws -> GaryxInterruptResult {
-        // Interrupt is idempotent: repeating it for the same thread converges on the same state.
-        try await post("/api/chat/interrupt", body: GaryxInterruptRequest(threadId: threadId), idempotent: true)
+        try await post("/api/chat/interrupt", body: GaryxInterruptRequest(threadId: threadId))
     }
 
     public func streamInput(_ request: GaryxStreamInputRequest) async throws -> GaryxStreamInputResult {
-        // Gateway does not dedup by client_intent_id on the queue, so we keep this
-        // non-idempotent: only connection-establishment errors auto-retry (safe because
-        // the request never reached the server). 5xx/timeout surface for explicit retry.
         try await post("/api/chat/stream-input", body: request)
     }
 
@@ -519,8 +629,7 @@ public final class GaryxGatewayClient {
         try await post(
             "/api/tools/image",
             body: GaryxGenerateAvatarRequest(prompt: prompt, timeoutSecs: timeoutSecs),
-            timeoutInterval: TimeInterval(timeoutSecs + 30),
-            allowsRetry: false
+            timeoutInterval: TimeInterval(timeoutSecs + 30)
         )
     }
 
@@ -542,16 +651,14 @@ public final class GaryxGatewayClient {
     public func setAgentEnabled(agentId: String, enabled: Bool) async throws -> GaryxAgentSummary {
         try await patch(
             "/api/custom-agents/\(agentId.urlPathEncoded)/toggle",
-            body: GaryxAgentToggleRequest(enabled: enabled),
-            idempotent: true
+            body: GaryxAgentToggleRequest(enabled: enabled)
         )
     }
 
     public func setDefaultAgent(agentId: String) async throws -> GaryxAgentSummary {
         try await patch(
             "/api/custom-agents/\(agentId.urlPathEncoded)/default",
-            body: GaryxEmptyBody(),
-            idempotent: true
+            body: GaryxEmptyBody()
         )
     }
 
@@ -918,7 +1025,7 @@ public final class GaryxGatewayClient {
     ) async throws -> Response {
         var request = try makeRequest(path: path, method: "GET", queryItems: queryItems)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        return try await send(request, idempotent: true)
+        return try await send(request, semantics: .readRetryable)
     }
 
     private func getText(
@@ -931,7 +1038,7 @@ public final class GaryxGatewayClient {
         request.setValue(accept, forHTTPHeaderField: "Accept")
         return try await sendText(
             request,
-            idempotent: true,
+            semantics: .readRetryable,
             maxAttempts: allowsRetry ? nil : 1
         )
     }
@@ -939,31 +1046,24 @@ public final class GaryxGatewayClient {
     private func post<Response: Decodable, Body: Encodable>(
         _ path: String,
         body: Body,
-        idempotent: Bool = false,
-        timeoutInterval: TimeInterval? = nil,
-        allowsRetry: Bool = true
+        timeoutInterval: TimeInterval? = nil
     ) async throws -> Response {
         var request = try makeRequest(path: path, method: "POST", timeoutInterval: timeoutInterval)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
-        return try await send(
-            request,
-            idempotent: idempotent,
-            maxAttempts: allowsRetry ? nil : 1
-        )
+        return try await send(request, semantics: .mutationSingleAttempt)
     }
 
     private func patch<Response: Decodable, Body: Encodable>(
         _ path: String,
-        body: Body,
-        idempotent: Bool = false
+        body: Body
     ) async throws -> Response {
         var request = try makeRequest(path: path, method: "PATCH")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
-        return try await send(request, idempotent: idempotent)
+        return try await send(request, semantics: .mutationSingleAttempt)
     }
 
     private func put<Response: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> Response {
@@ -971,7 +1071,7 @@ public final class GaryxGatewayClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
-        return try await send(request, idempotent: true)
+        return try await send(request, semantics: .mutationSingleAttempt)
     }
 
     private func delete<Response: Decodable>(
@@ -980,7 +1080,7 @@ public final class GaryxGatewayClient {
     ) async throws -> Response {
         var request = try makeRequest(path: path, method: "DELETE", queryItems: queryItems)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        return try await send(request, idempotent: true)
+        return try await send(request, semantics: .mutationSingleAttempt)
     }
 
     private func makeRequest(
@@ -1005,12 +1105,12 @@ public final class GaryxGatewayClient {
 
     private func send<Response: Decodable>(
         _ request: URLRequest,
-        idempotent: Bool,
+        semantics: GaryxGatewayRequestSemantics,
         maxAttempts: Int? = nil
     ) async throws -> Response {
         let data = try await sendRaw(
             request,
-            idempotent: idempotent,
+            semantics: semantics,
             maxAttempts: maxAttempts
         )
         if data.isEmpty, Response.self == GaryxEmptyResponse.self {
@@ -1021,18 +1121,99 @@ public final class GaryxGatewayClient {
 
     private func sendText(
         _ request: URLRequest,
-        idempotent: Bool,
+        semantics: GaryxGatewayRequestSemantics,
         maxAttempts: Int? = nil
     ) async throws -> String {
         let data = try await sendRaw(
             request,
-            idempotent: idempotent,
+            semantics: semantics,
             maxAttempts: maxAttempts
         )
         guard let text = String(data: data, encoding: .utf8) else {
             throw GaryxGatewayError.encodingFailed("The Garyx gateway returned non-UTF-8 text.")
         }
         return text
+    }
+
+    private func sendMutation<Response: Decodable & Sendable>(
+        _ request: URLRequest,
+        expectedOperation: String,
+        responseType _: Response.Type = Response.self
+    ) async -> GaryxGatewayMutationResult<Response> {
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            return .ambiguous(
+                GaryxGatewayAmbiguousResponse(
+                    message: error.localizedDescription,
+                    status: nil,
+                    body: nil
+                )
+            )
+        }
+        guard let http = response as? HTTPURLResponse else {
+            return .ambiguous(
+                GaryxGatewayAmbiguousResponse(
+                    message: "The Garyx gateway returned an invalid HTTP response.",
+                    status: nil,
+                    body: data
+                )
+            )
+        }
+
+        if (200..<300).contains(http.statusCode) {
+            do {
+                if data.isEmpty, Response.self == GaryxEmptyResponse.self {
+                    return .ok(GaryxEmptyResponse() as! Response)
+                }
+                return .ok(try decoder.decode(Response.self, from: data))
+            } catch {
+                return .ambiguous(
+                    GaryxGatewayAmbiguousResponse(
+                        message: "The Garyx gateway returned an undecodable success response.",
+                        status: http.statusCode,
+                        body: data
+                    )
+                )
+            }
+        }
+
+        guard let tagged = try? decoder.decode(GaryxGatewayTaggedAPIError.self, from: data),
+              tagged.kind == "garyx_api_error",
+              !tagged.code.isEmpty else {
+            return .ambiguous(
+                GaryxGatewayAmbiguousResponse(
+                    message: GaryxGatewayError.message(
+                        fromHTTPBody: String(data: data, encoding: .utf8) ?? ""
+                    ),
+                    status: http.statusCode,
+                    body: data
+                )
+            )
+        }
+        let endpointMatch = tagged.operation == expectedOperation
+        let gatewayAuthMatch = tagged.operation == "gateway_auth"
+            && (http.statusCode == 401 || http.statusCode == 403)
+            && (tagged.code == "unauthorized" || tagged.code == "forbidden")
+        guard endpointMatch || gatewayAuthMatch else {
+            return .ambiguous(
+                GaryxGatewayAmbiguousResponse(
+                    message: tagged.message ?? tagged.code,
+                    status: http.statusCode,
+                    body: data
+                )
+            )
+        }
+        return .definitiveEndpointResponse(
+            GaryxGatewayDefinitiveEndpointResponse(
+                status: http.statusCode,
+                error: tagged,
+                decoded: try? decoder.decode(Response.self, from: data),
+                body: data
+            )
+        )
     }
 
     /// Shared request core for the JSON and text routes: executes the request
@@ -1043,10 +1224,12 @@ public final class GaryxGatewayClient {
     /// decode failures never re-enter it.
     private func sendRaw(
         _ request: URLRequest,
-        idempotent: Bool,
+        semantics: GaryxGatewayRequestSemantics,
         maxAttempts requestedMaxAttempts: Int? = nil
     ) async throws -> Data {
-        let maxAttempts = max(1, requestedMaxAttempts ?? retryPolicy.maxAttempts)
+        let maxAttempts = semantics == .mutationSingleAttempt
+            ? 1
+            : max(1, requestedMaxAttempts ?? retryPolicy.maxAttempts)
         var attempt = 0
         while true {
             attempt += 1
@@ -1065,7 +1248,10 @@ public final class GaryxGatewayClient {
                     retryAfter: Self.retryAfterDelay(from: http)
                 )
                 if attempt < maxAttempts,
-                   GaryxGatewayRetryClassifier.isRetryableStatus(http.statusCode, idempotent: idempotent) {
+                   GaryxGatewayRetryClassifier.isRetryableStatus(
+                       http.statusCode,
+                       semantics: semantics
+                   ) {
                     try await sleepForRetry(after: error, attempt: attempt, response: http)
                     continue
                 }
@@ -1077,9 +1263,11 @@ public final class GaryxGatewayClient {
                     throw error
                 }
                 let shouldRetry: Bool
-                if GaryxGatewayRetryClassifier.isConnectionEstablishmentError(error) {
+                if semantics == .readRetryable,
+                   GaryxGatewayRetryClassifier.isConnectionEstablishmentError(error) {
                     shouldRetry = true
-                } else if idempotent, GaryxGatewayRetryClassifier.isAmbiguousNetworkError(error) {
+                } else if semantics == .readRetryable,
+                          GaryxGatewayRetryClassifier.isAmbiguousNetworkError(error) {
                     shouldRetry = true
                 } else {
                     shouldRetry = false

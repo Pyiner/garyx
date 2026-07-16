@@ -38,6 +38,16 @@ impl RuntimeAssembler {
             .data_dir
             .clone()
             .unwrap_or_else(|| default_session_data_dir().to_string_lossy().to_string());
+
+        // Take exclusive ownership of the data directory before opening any
+        // other persistent runtime store. GaryxDbService holds the lock for
+        // the lifetime of AppState and performs schema initialization only
+        // after the pre-R5 parent handoff barrier has cleared.
+        let garyx_db = Arc::new(garyx_gateway::garyx_db::GaryxDbService::open(
+            garyx_models::local_paths::garyx_database_path_for_data_dir(Path::new(
+                &session_data_dir,
+            )),
+        )?);
         let transcript_root = thread_transcripts_dir_for_data_dir(Path::new(&session_data_dir));
         let transcript_store = Arc::new(ThreadTranscriptStore::file(&transcript_root).await?);
         let message_ledger = Arc::new(
@@ -54,11 +64,6 @@ impl RuntimeAssembler {
         // upgrades from pre-SQLite installs; there is no runtime file mode
         // and no dual-write mirror. Emergency recovery = the archived
         // backups plus a fresh boot import, not a mode switch.
-        let garyx_db = Arc::new(garyx_gateway::garyx_db::GaryxDbService::open(
-            garyx_models::local_paths::garyx_database_path_for_data_dir(Path::new(
-                &session_data_dir,
-            )),
-        )?);
         tracing::info!("thread store backend: sqlite");
         // One-shot migration of the retired file-based task counter into the
         // SQLite allocator row (no-op once the row exists).
@@ -107,11 +112,8 @@ impl RuntimeAssembler {
         }
         let thread_logs = Arc::new(ThreadFileLogger::new(default_thread_log_dir()));
 
-        let mut builder = AppStateBuilder::new(self.config.clone()).with_persistent_local_stores();
-        // The sqlite thread-store backend already opened the garyx database;
-        // share that instance instead of letting the builder open a second
-        // one (single-writer discipline, D4).
-        builder = builder.with_garyx_db(garyx_db);
+        let builder = AppStateBuilder::new(self.config.clone())
+            .with_persistent_local_stores(garyx_db.clone());
         let state = builder
             .with_thread_store(thread_store.clone())
             .with_thread_history(thread_history.clone())
@@ -124,6 +126,11 @@ impl RuntimeAssembler {
             .with_restart_tokens(restart_tokens)
             .with_thread_log_sink(thread_logs.clone())
             .build();
+
+        // Crash recovery is a destructive projection update and must finish
+        // under the data-dir lock before Gateway binds its listener. It must
+        // not allocate new activity ordering: completed runs stay in place.
+        state.ops.garyx_db.clear_stale_active_runs()?;
 
         // Bind the bridge to AppState's final SQLite store handle so provider
         // persistence, routing, and history all share the same truth source.

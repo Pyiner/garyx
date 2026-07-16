@@ -22,6 +22,8 @@ export interface DesktopThreadSummary {
   agentId?: string | null;
   recentRunId?: string | null;
   runState?: string | null;
+  /** Monotonic gateway ordering key, present on recent/snapshot rows. */
+  activitySeq?: number | null;
   worktree?: ThreadWorktreeInfo | null;
 }
 
@@ -32,19 +34,81 @@ export interface ListRecentThreadsInput {
   gatewayScope: string;
   tasks: RecentThreadTaskFilter;
   limit: number;
-  offset: number;
+  cursor: string | null;
 }
 
 export interface DesktopRecentThreadsPage {
   /** Normalized Gateway URL actually used by the main-process request. */
   gatewayScope: string;
+  storeIncarnationId: string;
+  serverBootId: string;
   threads: DesktopThreadSummary[];
   count: number;
   total: number;
   limit: number;
-  offset: number;
   hasMore: boolean;
+  nextCursor: string | null;
 }
+
+export interface DesktopThreadFavoriteRecord {
+  threadId: string;
+  favoritedAt: string;
+}
+
+export interface DesktopThreadFavoritesPage {
+  storeIncarnationId: string;
+  serverBootId: string;
+  revision: number;
+  threadIds: string[];
+  favorites: DesktopThreadFavoriteRecord[];
+}
+
+export interface DesktopThreadFavoritesSnapshot
+  extends DesktopThreadFavoritesPage {
+  recent: {
+    threads: DesktopThreadSummary[];
+    total: number;
+    truncated: boolean;
+  };
+}
+
+export interface ThreadFavoritesReadInput {
+  /** Normalized Gateway URL captured by the renderer-owned request ticket. */
+  gatewayScope: string;
+}
+
+export interface SetThreadFavoriteInput extends ThreadFavoritesReadInput {
+  threadId: string;
+  favorited: boolean;
+  expectedRevision: number;
+  expectedStoreIncarnation: string;
+}
+
+export interface DesktopTaggedApiError {
+  kind: "garyx_api_error";
+  operation: string;
+  code: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+/** Serializable four-way mutation transport result crossing Electron IPC. */
+export type DesktopGatewayMutationResult<T> =
+  | { kind: "ok"; value: T; status: number }
+  | {
+      kind: "definitiveEndpointResponse";
+      status: number;
+      error: DesktopTaggedApiError;
+      value: T | null;
+      body: string;
+    }
+  | {
+      kind: "ambiguous";
+      message: string;
+      status?: number;
+      body?: string;
+    }
+  | { kind: "notSent"; message: string };
 
 export interface ThreadWorktreeInfo {
   mode?: string | null;

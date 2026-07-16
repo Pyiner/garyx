@@ -2836,6 +2836,24 @@ mod tests {
             )
             .expect("cutover still pending")
         );
+        let imported_activity_seq = db
+            .list_recent_threads(20, 0)
+            .expect("recent row immediately after import")
+            .into_iter()
+            .find(|row| row.thread_id == key)
+            .expect("import allocated recent row")
+            .activity_seq;
+        assert_eq!(
+            imported_activity_seq, 1,
+            "schema initialization must seed activity meta before the boot importer writes"
+        );
+        assert!(
+            !db.projection_state_exists(
+                crate::garyx_db::RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME,
+                1,
+            )
+            .expect("activity backfill still pending")
+        );
 
         db.run_thread_data_startup_migrations()
             .expect("post-import cutovers");
@@ -2847,14 +2865,20 @@ mod tests {
                 .expect("task record")["thread_kind"],
             "task"
         );
-        assert_eq!(
-            db.list_recent_threads(20, 0)
-                .expect("recent rows")
-                .into_iter()
-                .find(|row| row.thread_id == key)
-                .expect("recent task")
-                .thread_type,
-            "task"
+        let recent = db
+            .list_recent_threads(20, 0)
+            .expect("recent rows")
+            .into_iter()
+            .find(|row| row.thread_id == key)
+            .expect("recent task");
+        assert_eq!(recent.thread_type, "task");
+        assert!(recent.activity_seq > imported_activity_seq);
+        assert!(
+            db.projection_state_exists(
+                crate::garyx_db::RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME,
+                1,
+            )
+            .expect("activity backfill marker")
         );
         assert_eq!(
             db.list_thread_meta()

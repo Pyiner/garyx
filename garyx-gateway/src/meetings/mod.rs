@@ -166,7 +166,9 @@ impl From<GaryxDbError> for MeetingError {
             | GaryxDbError::Join(_)
             | GaryxDbError::Configuration(_)
             | GaryxDbError::Io(_)
-            | GaryxDbError::Sqlite(_) => Self::storage(error.to_string()),
+            | GaryxDbError::Sqlite(_)
+            | GaryxDbError::DataDirLocked { .. }
+            | GaryxDbError::ParentHandoffTimedOut { .. } => Self::storage(error.to_string()),
         }
     }
 }

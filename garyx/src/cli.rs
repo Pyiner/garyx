@@ -326,6 +326,9 @@ pub(crate) enum GatewayAction {
     Stop,
     /// Reload the running gateway config from disk without restart
     ReloadConfig,
+    /// Rotate the persistent store identity after restoring or cloning a full
+    /// data directory. The gateway must be stopped.
+    RotateStoreIncarnation,
     /// Ensure a gateway auth token exists and print it
     Token {
         /// Generate a fresh token even if one already exists

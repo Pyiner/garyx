@@ -221,6 +221,9 @@ import {
   createBrowserRouteHost,
 } from "./desktop-route-store";
 import { useRecentThreadFeeds } from "./useRecentThreadFeeds";
+import { useThreadFavorites } from "./useThreadFavorites";
+import { presentedFavoriteRows } from "./favorites-ingress";
+import type { RecentThreadFeedState } from "./recent-thread-feeds";
 import { recordTranscriptRender } from "./transcript-render-probe";
 import {
   deferConversationRailUnmount,
@@ -1838,6 +1841,11 @@ export function AppShell() {
     visibleThreadEntrySelectionSource === "workspace-conversation"
       ? visibleSelectedThreadId
       : null;
+  const threadFavorites = useThreadFavorites({
+    enabled: Boolean(desktopState?.entitiesGatewayUrl),
+    gatewayScope: desktopState?.entitiesGatewayUrl || "",
+    onError: setError,
+  });
   const recentThreadFeeds = useRecentThreadFeeds({
     enabled: shouldShowConversationRail && recentThreadsRailOpen,
     // Main owns Gateway URL normalization and stamps every entity slice with
@@ -1845,15 +1853,58 @@ export function AppShell() {
     // back to the raw settings string (trailing-slash mismatch would make an
     // otherwise valid page look cross-scope).
     gatewayScope: desktopState?.entitiesGatewayUrl || "",
+    runtimeEpoch: threadFavorites.state.runtimeEpoch,
+    observeStoreResponse: threadFavorites.observeStoreResponse,
     sharedSummaries:
       desktopState?.threads || EMPTY_DESKTOP_THREAD_SUMMARIES,
   });
+  const favoriteThreads = useMemo(() => {
+    return presentedFavoriteRows(
+      threadFavorites.state,
+      desktopState?.threads || EMPTY_DESKTOP_THREAD_SUMMARIES,
+    ).filter(
+      (thread) => !recentThreadFeeds.state.removedThreadIds[thread.id],
+    );
+  }, [
+    desktopState?.threads,
+    recentThreadFeeds.state.removedThreadIds,
+    threadFavorites.state,
+  ]);
+  const favoritesFeed = useMemo<RecentThreadFeedState>(
+    () => ({
+      orderedThreadIds: favoriteThreads.map((thread) => thread.id),
+      isPrimed: threadFavorites.state.rawRevision !== null,
+      isRefreshingHead: Boolean(threadFavorites.state.activeSnapshotTicket),
+      isLoadingMore: false,
+      headFailure: threadFavorites.state.snapshotFailure,
+      loadGate: "exhausted",
+      nextCursor: null,
+      epoch: threadFavorites.state.runtimeEpoch,
+      localMutationSequence: 0,
+      loadMoreFailureRevision: 0,
+      activeRefreshRequestId: null,
+      activeLoadMoreRequestId: null,
+      refreshAfterMutation: false,
+      loadMoreAfterMutation: false,
+      storeIncarnationId: threadFavorites.state.storeIncarnationId,
+      serverBootId: threadFavorites.state.favoritesServerBootId,
+      refreshCycle: 0,
+      forceReplacementPending: false,
+      forceReplacementGeneration: 0,
+      trailingDirty: threadFavorites.state.snapshotTrailingDirty,
+    }),
+    [favoriteThreads, threadFavorites.state],
+  );
+  const showingFavoriteThreads =
+    recentThreadFeeds.state.selectedFilter === "favorites";
+  const visibleRecentThreads = showingFavoriteThreads
+    ? favoriteThreads
+    : recentThreadFeeds.selectedThreads;
   const recentThreadRows = useMemo(
     () =>
-      // Ordering and membership come only from the server-filtered Recent
-      // feed. DesktopState.threads remains the full cache for every other
-      // Workspace/Bot/Pinned/Automation consumer.
-      recentThreadFeeds.selectedThreads.map((thread) => ({
+      // Ordering and membership come from the selected server-owned unit:
+      // keyset Recent for All/Chats, atomic snapshot for Favorites.
+      visibleRecentThreads.map((thread) => ({
         thread,
         isActive:
           visibleThreadEntrySelectionSource === "recent" &&
@@ -1861,7 +1912,7 @@ export function AppShell() {
         isBusy: threadRunStateIsRunning(thread),
       })),
     [
-      recentThreadFeeds.selectedThreads,
+      visibleRecentThreads,
       visibleSelectedThreadId,
       visibleThreadEntrySelectionSource,
     ],
@@ -3654,13 +3705,6 @@ export function AppShell() {
     await handleRemoveWorkspace(workspace.path || "");
   }
 
-  function isArchiveAlreadyApplied(error: unknown): boolean {
-    if (!(error instanceof Error)) {
-      return false;
-    }
-    return error.message.toLowerCase().includes("thread not found");
-  }
-
   async function archiveThreadOptimistically(input?: {
     threadId?: string | null;
     endpointKey?: string | null;
@@ -3723,15 +3767,28 @@ export function AppShell() {
 
     try {
       const api = getDesktopApi();
-      const archivedState = await api.archiveThread({
+      const archivedResult = await api.archiveThread({
         threadId: targetThreadId,
         endpointKeys: Array.from(endpointKeys).sort(),
       });
-      setDesktopState(desktopStateWithoutThread(archivedState, targetThreadId));
-    } catch (archiveError) {
-      if (isArchiveAlreadyApplied(archiveError)) {
+      if (archivedResult.kind !== "ok") {
+        recentThreadFeeds.rollbackRemoval(recentRollback);
+        setError(
+          archivedResult.kind === "definitiveEndpointResponse"
+            ? archivedResult.error.message || archivedResult.error.code
+            : archivedResult.message,
+        );
+        void refreshDesktopState().catch(() => null);
+        if (archivedResult.kind === "ambiguous") {
+          recentThreadFeeds.forceReplacement();
+          threadFavorites.refreshSnapshot();
+        }
         return;
       }
+      setDesktopState(
+        desktopStateWithoutThread(archivedResult.value, targetThreadId),
+      );
+    } catch (archiveError) {
       recentThreadFeeds.rollbackRemoval(recentRollback);
       setError(
         archiveError instanceof Error
@@ -3739,6 +3796,11 @@ export function AppShell() {
           : "Failed to delete the thread",
       );
       void refreshDesktopState().catch(() => null);
+      // IPC failure occurs after the renderer handed the operation to Main;
+      // whether the Gateway committed is unknowable, so reconstruct all
+      // affected feeds after preserving today's rollback/error UX.
+      recentThreadFeeds.forceReplacement();
+      threadFavorites.refreshSnapshot();
     } finally {
       setDeletingThreadId((current) =>
         current === targetThreadId ? null : current,
@@ -4685,7 +4747,7 @@ export function AppShell() {
       ) : conversationRailPresented && recentThreadsRailOpen ? (
         <RecentConversationSidebar
           collapseLabel={t("Collapse recent threads")}
-          feed={recentThreadFeeds.selectedFeed}
+          feed={showingFavoriteThreads ? favoritesFeed : recentThreadFeeds.selectedFeed!}
           formatThreadTimestamp={formatThreadTimestamp}
           logo={
             <span className="recent-conversation-logo">
@@ -4698,10 +4760,19 @@ export function AppShell() {
               conversationRail: { kind: "closed" },
             }));
           }}
-          onLoadMore={recentThreadFeeds.loadMore}
+          onLoadMore={showingFavoriteThreads ? undefined : recentThreadFeeds.loadMore}
           onRailResizeStart={handleRailResizeStart}
-          onRetry={recentThreadFeeds.retry}
-          onSelectFilter={recentThreadFeeds.selectFilter}
+          onRetry={
+            showingFavoriteThreads
+              ? threadFavorites.refreshSnapshot
+              : recentThreadFeeds.retry
+          }
+          onSelectFilter={(filter) => {
+            recentThreadFeeds.selectFilter(filter);
+            if (filter === "favorites") {
+              threadFavorites.refreshSnapshot();
+            }
+          }}
           railResizing={railResizing}
           rows={recentThreadRows.map((row) => ({
             key: row.thread.id,
@@ -4713,6 +4784,11 @@ export function AppShell() {
             onOpen: () => {
               void openExistingThread(row.thread.id, "recent");
             },
+            onUnfavorite: showingFavoriteThreads
+              ? () => {
+                  threadFavorites.setFavorite(row.thread.id, false);
+                }
+              : undefined,
             onArchive: row.isBusy
               ? undefined
               : () => {
@@ -4776,9 +4852,17 @@ export function AppShell() {
                 isAutomationView={isAutomationView}
                 isBotsView={isBotsView}
                 isSkillsView={isSkillsView}
+                isThreadFavorite={Boolean(
+                  selectedThreadId && threadFavorites.isFavorite(selectedThreadId),
+                )}
                 isThreadPinned={selectedThreadPinned}
                 onArchiveThread={() => {
                   void handleDeleteThread();
+                }}
+                onToggleFavoriteThread={() => {
+                  if (selectedThreadId) {
+                    threadFavorites.toggleFavorite(selectedThreadId);
+                  }
                 }}
                 onTogglePinnedThread={() => {
                   if (selectedThreadId) {

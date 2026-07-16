@@ -624,6 +624,30 @@ pub(crate) async fn cmd_gateway_stop() -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+pub(crate) fn cmd_gateway_rotate_store_incarnation(
+    config_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_config_or_default(config_path, ConfigRuntimeOverrides::default())?.config;
+    let data_dir = config
+        .sessions
+        .data_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(default_session_data_dir);
+    let database_path = garyx_models::local_paths::garyx_database_path_for_data_dir(&data_dir);
+    // GaryxDbService::open owns the data-dir lock, so a running gateway makes
+    // this command fail instead of rotating beneath live requests.
+    let database = garyx_gateway::garyx_db::GaryxDbService::open(&database_path)?;
+    let previous = database.store_incarnation_id()?;
+    let rotated = database.rotate_store_incarnation()?;
+    println!(
+        "Rotated store incarnation for {}: {} -> {}",
+        data_dir.display(),
+        previous,
+        rotated.store_incarnation_id
+    );
+    Ok(())
+}
+
 /// Resolve every input the platform backend needs to render a unit / plist.
 fn build_service_spec(
     config_path: &str,
@@ -654,12 +678,70 @@ fn detect_workspace_root() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::test_support::{ENV_LOCK, ScopedEnvVar};
     use axum::routing::get;
     use axum::{Json, Router, http::StatusCode};
-    use garyx_gateway::garyx_db::{GaryxDbService, RecentThreadDraft};
+    use garyx_gateway::garyx_db::{GaryxDbError, GaryxDbService, RecentThreadDraft};
     use garyx_models::local_paths::garyx_database_path_for_data_dir;
     use tempfile::tempdir;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn rotate_store_incarnation_command_uses_configured_data_dir() {
+        let temp = tempdir().expect("temp dir");
+        let custom_data_dir = temp.path().join("restored-data");
+        let config_path = temp.path().join("garyx.json");
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&json!({
+                "sessions": {"data_dir": custom_data_dir}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let database_path = garyx_database_path_for_data_dir(&custom_data_dir);
+        let database = GaryxDbService::open(&database_path).expect("seed restored database");
+        let before = database.store_incarnation_id().unwrap();
+        drop(database);
+
+        cmd_gateway_rotate_store_incarnation(config_path.to_str().unwrap())
+            .expect("offline rotate command");
+        let reopened = GaryxDbService::open(&database_path).expect("reopen rotated database");
+        assert_ne!(reopened.store_incarnation_id().unwrap(), before);
+        assert!(custom_data_dir.join("garyx.lock").exists());
+    }
+
+    #[test]
+    fn rotate_store_incarnation_command_refuses_a_live_gateway_lock() {
+        let _env_guard = ENV_LOCK.lock().expect("env lock");
+        let temp = tempdir().expect("temp dir");
+        let custom_data_dir = temp.path().join("live-data");
+        let config_path = temp.path().join("garyx.json");
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&json!({
+                "sessions": {"data_dir": custom_data_dir}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let database_path = garyx_database_path_for_data_dir(&custom_data_dir);
+        let live_gateway = GaryxDbService::open(&database_path).expect("live gateway owns lock");
+        let before = live_gateway.store_incarnation_id().unwrap();
+        let _wait = ScopedEnvVar::set_string("GARYX_DATA_LOCK_WAIT_SECS", "0");
+
+        let error = cmd_gateway_rotate_store_incarnation(config_path.to_str().unwrap())
+            .expect_err("online rotate must fail on the data-dir lock");
+        assert!(matches!(
+            error.downcast_ref::<GaryxDbError>(),
+            Some(GaryxDbError::DataDirLocked { .. })
+        ));
+        assert_eq!(
+            live_gateway.store_incarnation_id().unwrap(),
+            before,
+            "failed online rotate must not mutate store identity"
+        );
+    }
 
     fn seed_running_thread(data_dir: &Path, thread_id: &str) {
         let database = GaryxDbService::open(garyx_database_path_for_data_dir(data_dir))

@@ -2,6 +2,26 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class HomeProjectionReducerTests: XCTestCase {
+    func testFavoritesChangedPatchesPinnedAndRecentRowPresentation() throws {
+        let input = GaryxHomeListFixture.makeInputs(
+            threadCount: 6,
+            pinnedCount: 1,
+            runningCount: 0
+        )
+        var state = reduce(HomeProjectionState(), ingest(input, epoch: 1)).state
+        XCTAssertFalse(try row(in: state, id: "thread-0").presentation.isFavorite)
+        XCTAssertFalse(try row(in: state, id: "thread-2").presentation.isFavorite)
+
+        let favoriteResult = reduce(
+            state,
+            .favoritesChanged(favoritedThreadIds: ["thread-0", "thread-2"])
+        )
+        state = favoriteResult.state
+        XCTAssertTrue(try row(in: state, id: "thread-0").presentation.isFavorite)
+        XCTAssertTrue(try row(in: state, id: "thread-2").presentation.isFavorite)
+        XCTAssertNil(favoriteResult.difference)
+    }
+
     func testReducerCheckpointParityMatchesExistingHomeListStoreAcrossCorpora() {
         let corpora = [
             GaryxHomeListFixture.makeInputs(threadCount: 12, pinnedCount: 3, runningCount: 0),

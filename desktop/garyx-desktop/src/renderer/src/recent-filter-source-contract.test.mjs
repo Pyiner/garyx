@@ -10,6 +10,18 @@ const appShell = readFileSync(
   new URL("./app-shell/AppShell.tsx", import.meta.url),
   "utf8",
 );
+const conversationHeader = readFileSync(
+  new URL("./ConversationHeaderTitle.tsx", import.meta.url),
+  "utf8",
+);
+const sharedThreadRail = readFileSync(
+  new URL("./ThreadConversationSidebar.tsx", import.meta.url),
+  "utf8",
+);
+const workspaceRails = readFileSync(
+  new URL("./styles/workspace-rails.css", import.meta.url),
+  "utf8",
+);
 const hook = readFileSync(
   new URL("./app-shell/useRecentThreadFeeds.ts", import.meta.url),
   "utf8",
@@ -28,8 +40,30 @@ test("Recent tabs expose the required accessible segmented semantics", () => {
   assert.match(recentSidebar, /role="tablist"/);
   assert.match(recentSidebar, /role="tab"/);
   assert.match(recentSidebar, /aria-selected=\{selected\}/);
+  assert.match(recentSidebar, /"favorites"/);
   assert.match(recentSidebar, /event\.key !== "ArrowLeft"/);
   assert.match(recentSidebar, /event\.key !== "ArrowRight"/);
+});
+
+test("Desktop favorite controls share the pin menu and Favorites row accessory", () => {
+  const pinMenuItem = conversationHeader.indexOf(
+    "<DropdownMenuItem onSelect={onTogglePinnedThread}>",
+  );
+  const favoriteMenuItem = conversationHeader.indexOf(
+    "<DropdownMenuItem onSelect={onToggleFavoriteThread}>",
+  );
+  assert.ok(pinMenuItem >= 0);
+  assert.ok(favoriteMenuItem > pinMenuItem);
+  assert.match(conversationHeader, /<StarOff aria-hidden \/> : <Star aria-hidden \/>/);
+  assert.match(sharedThreadRail, /onUnfavorite\?: \(\) => void/);
+  assert.match(sharedThreadRail, /row\.onUnfavorite && !isConfirming/);
+  assert.match(sharedThreadRail, /aria-label=\{t\('Unfavorite conversation'\)\}/);
+  assert.match(
+    workspaceRails,
+    /\.thread-delete-button\.thread-unfavorite-button\s*\{\s*right: 32px;/,
+  );
+  assert.match(appShell, /onUnfavorite: showingFavoriteThreads/);
+  assert.match(appShell, /onArchive: row\.isBusy/);
 });
 
 test("AppShell owns the feed hook outside the conditional rail", () => {
@@ -42,11 +76,7 @@ test("AppShell owns the feed hook outside the conditional rail", () => {
   assert.ok(pinnedRowsStart > recentRowsStart);
   assert.ok(conditionalRail > hookOwner);
   const recentRowsOwner = appShell.slice(recentRowsStart, pinnedRowsStart);
-  assert.match(
-    recentRowsOwner,
-    /recentThreadFeeds\.selectedThreads\.map\(\(thread\) => \(\{/,
-  );
-  assert.doesNotMatch(recentRowsOwner, /desktopState\?\.threads/);
+  assert.match(recentRowsOwner, /visibleRecentThreads\.map\(\(thread\) => \(\{/);
   assert.match(hook, /resetRecentThreadFeedsScope/);
   assert.match(appShell, /gatewayScope: desktopState\?\.entitiesGatewayUrl \|\| ""/);
   assert.doesNotMatch(

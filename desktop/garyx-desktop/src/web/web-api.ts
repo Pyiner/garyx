@@ -99,8 +99,16 @@ export function resolveGatewayBase(): string {
 
 async function requestJson<T>(
   path: string,
-  init?: RequestInit,
+  semantics: 'readRetryable' | 'mutationSingleAttempt',
+  init: RequestInit = {},
 ): Promise<T> {
+  const method = (init.method || 'GET').toUpperCase();
+  const isRead = method === 'GET' || method === 'HEAD';
+  if (isRead !== (semantics === 'readRetryable')) {
+    throw new TypeError(
+      `${method} requests must use ${isRead ? 'readRetryable' : 'mutationSingleAttempt'} semantics.`,
+    );
+  }
   const response = await fetch(`${resolveGatewayBase()}${path}`, {
     ...init,
     headers: {
@@ -115,12 +123,18 @@ async function requestJson<T>(
 }
 
 export async function fetchChannelEndpoints(): Promise<DesktopChannelEndpoint[]> {
-  const payload = await requestJson<ChannelEndpointsResponse>('/api/channel-endpoints');
+  const payload = await requestJson<ChannelEndpointsResponse>(
+    '/api/channel-endpoints',
+    'readRetryable',
+  );
   return Array.isArray(payload.endpoints) ? payload.endpoints : [];
 }
 
 export async function fetchBotConsoles(): Promise<DesktopBotConsoleSummary[]> {
-  const payload = await requestJson<BotConsolesResponse>('/api/bot-consoles');
+  const payload = await requestJson<BotConsolesResponse>(
+    '/api/bot-consoles',
+    'readRetryable',
+  );
   return Array.isArray(payload.bots)
     ? payload.bots
         .map(mapBotConsoleSummary)
@@ -245,15 +259,18 @@ function mapBotConsoleSummary(value: unknown): DesktopBotConsoleSummary | null {
 }
 
 export async function fetchOverview(): Promise<GatewayOverviewResponse> {
-  return requestJson<GatewayOverviewResponse>('/api/overview');
+  return requestJson<GatewayOverviewResponse>('/api/overview', 'readRetryable');
 }
 
 export async function fetchAgentView(): Promise<AgentViewResponse> {
-  return requestJson<AgentViewResponse>('/api/agent-view');
+  return requestJson<AgentViewResponse>('/api/agent-view', 'readRetryable');
 }
 
 export async function fetchAgentCatalogDefaults(): Promise<AgentCatalogDefaults> {
-  const payload = await requestJson<Record<string, unknown>>('/api/custom-agents');
+  const payload = await requestJson<Record<string, unknown>>(
+    '/api/custom-agents',
+    'readRetryable',
+  );
   return {
     effectiveDefaultAgentId:
       stringOrNull(payload.effective_default_agent_id)?.trim() || null,
@@ -261,11 +278,17 @@ export async function fetchAgentCatalogDefaults(): Promise<AgentCatalogDefaults>
 }
 
 export async function fetchCronJobs(): Promise<CronJobsPayload> {
-  return requestJson<CronJobsPayload>('/api/cron/jobs?limit=200');
+  return requestJson<CronJobsPayload>(
+    '/api/cron/jobs?limit=200',
+    'readRetryable',
+  );
 }
 
 export async function fetchCronRuns(): Promise<CronRunsPayload> {
-  return requestJson<CronRunsPayload>('/api/cron/runs?limit=120');
+  return requestJson<CronRunsPayload>(
+    '/api/cron/runs?limit=120',
+    'readRetryable',
+  );
 }
 
 function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
@@ -285,7 +308,7 @@ function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
 }
 
 export async function fetchThreads(): Promise<DesktopThreadSummary[]> {
-  const payload = await requestJson<ThreadsPayload>('/api/threads');
+  const payload = await requestJson<ThreadsPayload>('/api/threads', 'readRetryable');
   const items = Array.isArray(payload.threads)
     ? payload.threads
     : Array.isArray(payload.sessions)
@@ -297,7 +320,10 @@ export async function fetchThreads(): Promise<DesktopThreadSummary[]> {
 }
 
 export async function fetchGatewaySettings(): Promise<GatewaySettingsPayload> {
-  const payload = await requestJson<GatewaySettingsPayload>('/api/settings');
+  const payload = await requestJson<GatewaySettingsPayload>(
+    '/api/settings',
+    'readRetryable',
+  );
   return {
     config: payload?.config && typeof payload.config === 'object' ? payload.config : {},
     source: payload?.source || 'gateway_api',
@@ -312,10 +338,14 @@ export async function saveGatewaySettings(
     ok?: boolean;
     message?: string;
     errors?: string[];
-  }>('/api/settings?merge=false', {
-    method: 'PUT',
-    body: JSON.stringify(config || {}),
-  });
+  }>(
+    '/api/settings?merge=false',
+    'mutationSingleAttempt',
+    {
+      method: 'PUT',
+      body: JSON.stringify(config || {}),
+    },
+  );
 
   return {
     ok: Boolean(result.ok),
@@ -367,5 +397,8 @@ export async function fetchLogsTail(level = ''): Promise<LogTailPayload> {
   if (level) {
     query.set('pattern', level === 'WARNING' ? 'WARN|WARNING' : level);
   }
-  return requestJson<LogTailPayload>(`/api/logs/tail?${query.toString()}`);
+  return requestJson<LogTailPayload>(
+    `/api/logs/tail?${query.toString()}`,
+    'readRetryable',
+  );
 }

@@ -159,7 +159,7 @@ impl AppStateBuilder {
     /// can never read or clobber live user data by default — a test's
     /// whole-file persist through these defaults is what erased a
     /// real custom agent on 2026-07-06.
-    pub fn with_persistent_local_stores(mut self) -> Self {
+    pub fn with_persistent_local_stores(mut self, garyx_db: Arc<GaryxDbService>) -> Self {
         if let Err(error) = self.skills.seed_builtin_skills() {
             warn!(error = %error, "failed to seed built-in skills during startup");
         }
@@ -172,10 +172,10 @@ impl AppStateBuilder {
             CustomAgentStore::file,
             CustomAgentStore::new,
         ));
-        self.garyx_db = Arc::new(
-            GaryxDbService::open(garyx_models::local_paths::default_garyx_database_path())
-                .unwrap_or_else(|error| panic!("failed to open garyx database: {error}")),
-        );
+        // RuntimeAssembler owns the one and only on-disk database open. In
+        // particular, a configured custom sessions.data_dir must never make
+        // the builder initialize (or purge) the default data directory first.
+        self.garyx_db = garyx_db;
         self.meetings_dir = garyx_models::local_paths::default_meetings_dir();
         self
     }
@@ -404,6 +404,7 @@ impl AppStateBuilder {
         let state = Arc::new(AppState {
             runtime: RuntimeState {
                 start_time,
+                server_boot_id: uuid::Uuid::new_v4().to_string(),
                 health_checker: HealthChecker::new(start_time),
                 live_config,
                 provider_runtime_ready: Arc::new(AtomicBool::new(self.provider_runtime_ready)),
@@ -476,7 +477,7 @@ mod tests {
     /// overwrote `custom-agents.json` and vaporized a real agent definition.
     ///
     /// Defaults must be in-memory. Production opts into disk-backed stores
-    /// explicitly via `with_persistent_local_stores()`.
+    /// explicitly via `with_persistent_local_stores(db)`.
     #[test]
     fn builder_defaults_stay_off_real_user_state() {
         let builder = AppStateBuilder::new(GaryxConfig::default());

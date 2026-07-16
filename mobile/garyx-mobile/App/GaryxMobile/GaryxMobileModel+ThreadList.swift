@@ -1,5 +1,12 @@
 import Foundation
 
+private struct GaryxFetchedRecentRefresh {
+    var bundle: GaryxRecentThreadRefreshBundle
+    var threads: [GaryxThreadSummary]
+}
+
+private struct GaryxRecentIdentityInterrupted: Error {}
+
 // Home recent-thread list: refresh and pagination, the widget snapshot
 // projection, workspace/bot thread merging, completed-thread history
 // hydration, and the background committed-run reconcile loop.
@@ -17,13 +24,28 @@ extension GaryxMobileModel {
         }
     }
 
-    func refreshThreads(source: GaryxThreadListRefreshSource) async {
+    func refreshThreads(
+        source: GaryxThreadListRefreshSource,
+        forceReplacement: Bool = false
+    ) async {
         guard hasGatewaySettings else { return }
         servicePinnedOrderRetry(source: source)
-        // Concurrent refresh entry points (pull-to-refresh, the 10s loop,
-        // the reconcile loop, action refreshes) coalesce into the ticket
-        // holder; refreshes never truncate loaded pages (TASK-1802 R2/R9).
-        guard let ticket = recentThreadFeeds.requestRefresh() else { return }
+        refreshThreadFavoritesSnapshot()
+        let gatewayScope = threadFavoritesState.gatewayScope
+        let favoritesEpoch = threadFavoritesState.runtimeEpoch
+        if recentThreadFeeds.selectedFilter == .favorites {
+            startAuxiliaryAllRecentThreadsRefresh(
+                source: source,
+                forceReplacement: forceReplacement || source == .userPullToRefresh
+            )
+            await refreshThreadPinsForFavorites(source: source)
+            return
+        }
+        guard let ticket = recentThreadFeeds.requestRefresh(
+            gatewayScope: gatewayScope,
+            runtimeEpoch: favoritesEpoch,
+            forceReplacement: forceReplacement || source == .userPullToRefresh
+        ) else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
         if ticket.filter == .nonTask {
             startAuxiliaryAllRecentThreadsRefresh(source: source)
@@ -35,17 +57,17 @@ extension GaryxMobileModel {
         do {
             let gatewayClient = try client()
             let pinsRequestStamp = capturePinnedOrderRequestStamp()
-            async let threadsPage = gatewayClient.listRecentThreads(
-                filter: ticket.filter,
-                limit: Self.threadListPageLimit
+            async let recentRefresh = fetchRecentRefresh(
+                ticket: ticket,
+                gatewayClient: gatewayClient
             )
             async let threadPinsPage = gatewayClient.listThreadPins()
-            let (page, pinsPage) = try await (threadsPage, threadPinsPage)
+            let (fetchedRefresh, pinsPage) = try await (recentRefresh, threadPinsPage)
             guard runtimeGeneration == gatewayRuntimeGeneration else {
                 recentThreadFeeds.failRefresh(ticket)
                 return
             }
-            var fetchedThreads = pendingThreadArchives.visibleThreads(page.threads)
+            var fetchedThreads = pendingThreadArchives.visibleThreads(fetchedRefresh.threads)
             let selectionIdForThisRefresh = selectedThread?.id
             let requiredThreadIds = normalizedThreadIds(
                 pendingThreadArchives.visibleThreadIds(pinsPage.threadIds) + [selectionIdForThisRefresh]
@@ -66,13 +88,9 @@ extension GaryxMobileModel {
             // App-layer refresh — a second refresh cannot interleave between
             // this page landing and its state writes and then be overwritten
             // by this (older) page when we resume (review #TASK-1804).
-            let visiblePageThreads = pendingThreadArchives.visibleThreads(page.threads)
             switch recentThreadFeeds.completeRefresh(
                 ticket,
-                pageIds: visiblePageThreads.map(\.id),
-                pageOffset: page.offset,
-                pageCount: page.count,
-                hasMore: page.hasMore
+                bundle: fetchedRefresh.bundle
             ) {
             case .abandonedStaleEpoch:
                 // The pager was reset mid-flight: the page belongs to the
@@ -88,7 +106,15 @@ extension GaryxMobileModel {
                     await self?.refreshThreads(source: source)
                 }
                 return
-            case .apply:
+            case .forceReplacement:
+                Task { [weak self] in
+                    await self?.refreshThreads(
+                        source: source,
+                        forceReplacement: true
+                    )
+                }
+                return
+            case .applied:
                 commitRefreshedRecentThreadsPage(
                     pinsPageThreadIds: pinsPage.threadIds,
                     fetchedThreads: fetchedThreads,
@@ -100,6 +126,9 @@ extension GaryxMobileModel {
                     pinsRequestStamp: pinsRequestStamp
                 )
             }
+        } catch is GaryxRecentIdentityInterrupted {
+            recentThreadFeeds.interruptRefresh(ticket)
+            return
         } catch {
             recentThreadFeeds.failRefresh(ticket)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
@@ -109,8 +138,16 @@ extension GaryxMobileModel {
         }
     }
 
-    private func startAuxiliaryAllRecentThreadsRefresh(source: GaryxThreadListRefreshSource) {
-        guard let ticket = recentThreadFeeds.requestRefresh(filter: .all) else { return }
+    private func startAuxiliaryAllRecentThreadsRefresh(
+        source: GaryxThreadListRefreshSource,
+        forceReplacement: Bool = false
+    ) {
+        guard let ticket = recentThreadFeeds.requestRefresh(
+            filter: .all,
+            gatewayScope: threadFavoritesState.gatewayScope,
+            runtimeEpoch: threadFavoritesState.runtimeEpoch,
+            forceReplacement: forceReplacement
+        ) else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
         let taskId = UUID()
         auxiliaryAllRecentThreadsRefreshTaskId = taskId
@@ -135,15 +172,15 @@ extension GaryxMobileModel {
         runtimeGeneration: UUID
     ) async {
         do {
-            let page = try await client().listRecentThreads(
-                filter: .all,
-                limit: Self.threadListPageLimit
+            let fetched = try await fetchRecentRefresh(
+                ticket: ticket,
+                gatewayClient: client()
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else {
                 recentThreadFeeds.failRefresh(ticket)
                 return
             }
-            let pageThreads = pendingThreadArchives.visibleThreads(page.threads)
+            let pageThreads = pendingThreadArchives.visibleThreads(fetched.threads)
             // Feed ids and their shared summaries are one projection commit.
             // This is normally inactive while Chats is selected, but the user
             // can switch to All while the auxiliary request is in flight.
@@ -153,12 +190,9 @@ extension GaryxMobileModel {
             defer { homeProjectionGateway.endTransaction(transactionId) }
             switch recentThreadFeeds.completeRefresh(
                 ticket,
-                pageIds: pageThreads.map(\.id),
-                pageOffset: page.offset,
-                pageCount: page.count,
-                hasMore: page.hasMore
+                bundle: fetched.bundle
             ) {
-            case .apply:
+            case .applied:
                 threads = Self.mergedThreadSummaries(
                     pendingThreadArchives.visibleThreads(threads)
                         + pageThreads.map(summaryWithCommittedRunState)
@@ -170,7 +204,12 @@ extension GaryxMobileModel {
                 startAuxiliaryAllRecentThreadsRefresh(source: source)
             case .abandonedStaleEpoch:
                 return
+            case .forceReplacement:
+                startAuxiliaryAllRecentThreadsRefresh(source: source)
             }
+        } catch is GaryxRecentIdentityInterrupted {
+            recentThreadFeeds.interruptRefresh(ticket)
+            return
         } catch {
             recentThreadFeeds.failRefresh(ticket)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
@@ -181,6 +220,213 @@ extension GaryxMobileModel {
             if recentThreadFeeds.selectedFilter == ticket.filter {
                 presentThreadListRefreshFailure(source: source, error: error)
             }
+        }
+    }
+
+    /// Favorites owns no Recent pager, but the Home root still owns the shared
+    /// pinned section. Keep its canonical page and any missing row summaries
+    /// fresh while the Favorites filter is selected.
+    private func refreshThreadPinsForFavorites(
+        source: GaryxThreadListRefreshSource
+    ) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            let gatewayClient = try client()
+            let requestStamp = capturePinnedOrderRequestStamp()
+            let page = try await gatewayClient.listThreadPins()
+            let requiredThreadIds = normalizedThreadIds(
+                pendingThreadArchives.visibleThreadIds(page.threadIds)
+            )
+            let missingThreads = await fetchMissingThreadSummaries(
+                using: gatewayClient,
+                requiredThreadIds: requiredThreadIds,
+                existingThreadIds: Set(threads.map(\.id))
+            )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            let transactionId = homeProjectionGateway.beginTransaction(
+                label: "favorites-pins-refresh"
+            )
+            defer { homeProjectionGateway.endTransaction(transactionId) }
+            applyPinnedThreadIds(
+                pendingThreadArchives.visibleThreadIds(page.threadIds),
+                revision: page.revision,
+                stamp: requestStamp
+            )
+            if !missingThreads.isEmpty {
+                threads = Self.mergedThreadSummaries(
+                    pendingThreadArchives.visibleThreads(threads)
+                        + pendingThreadArchives.visibleThreads(missingThreads)
+                            .map(summaryWithCommittedRunState)
+                )
+            }
+            persistRecentThreadsWidgetSnapshot()
+        } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration,
+                  recentThreadFeeds.selectedFilter == .favorites else { return }
+            presentThreadListRefreshFailure(source: source, error: error)
+        }
+    }
+
+    private func fetchRecentRefresh(
+        ticket: GaryxRecentThreadRefreshTicket,
+        gatewayClient: GaryxGatewayClient
+    ) async throws -> GaryxFetchedRecentRefresh {
+        let primary = try await fetchRecentChain(
+            ticket: ticket,
+            mode: ticket.mode,
+            oldHeadActivitySeq: ticket.oldHeadActivitySeq,
+            gatewayClient: gatewayClient
+        )
+        let verification = try await fetchRecentPage(
+            ticket: ticket,
+            cursor: nil,
+            gatewayClient: gatewayClient
+        )
+        let primaryHead = primary.pages.first?.headActivitySeq
+        var immediate: (pages: [GaryxRecentThreadFeedPage], threads: [GaryxThreadSummary])?
+        var immediateVerification: GaryxRecentThreadFeedPage?
+        if GaryxRecentThreadRangeFill.verificationObservedNewerHead(
+            chainFirstHead: primaryHead,
+            verificationPage: verification.feedPage
+        ) {
+            immediate = try await fetchRecentChain(
+                ticket: ticket,
+                mode: .rangeFill,
+                oldHeadActivitySeq: primaryHead,
+                gatewayClient: gatewayClient
+            )
+            immediateVerification = try await fetchRecentPage(
+                ticket: ticket,
+                cursor: nil,
+                gatewayClient: gatewayClient
+            ).feedPage
+        }
+        return GaryxFetchedRecentRefresh(
+            bundle: GaryxRecentThreadRefreshBundle(
+                primaryPages: primary.pages,
+                verificationPage: verification.feedPage,
+                immediatePages: immediate?.pages,
+                immediateVerificationPage: immediateVerification
+            ),
+            threads: primary.threads + (immediate?.threads ?? [])
+        )
+    }
+
+    private func fetchRecentChain(
+        ticket: GaryxRecentThreadRefreshTicket,
+        mode: GaryxRecentThreadRefreshMode,
+        oldHeadActivitySeq: Int64?,
+        gatewayClient: GaryxGatewayClient
+    ) async throws -> (pages: [GaryxRecentThreadFeedPage], threads: [GaryxThreadSummary]) {
+        var pages: [GaryxRecentThreadFeedPage] = []
+        var threads: [GaryxThreadSummary] = []
+        var cursor: String?
+        repeat {
+            let fetched = try await fetchRecentPage(
+                ticket: ticket,
+                cursor: cursor,
+                gatewayClient: gatewayClient
+            )
+            pages.append(fetched.feedPage)
+            threads += fetched.threads
+            cursor = fetched.nextCursor
+        } while GaryxRecentThreadRangeFill.needsNextPage(
+            mode: mode,
+            oldHeadActivitySeq: oldHeadActivitySeq,
+            pages: pages
+        )
+        return (pages, threads)
+    }
+
+    private func fetchRecentPage(
+        ticket: GaryxRecentThreadRefreshTicket,
+        cursor: String?,
+        gatewayClient: GaryxGatewayClient
+    ) async throws -> (
+        feedPage: GaryxRecentThreadFeedPage,
+        threads: [GaryxThreadSummary],
+        nextCursor: String?
+    ) {
+        let page = try await gatewayClient.listRecentThreads(
+            filter: ticket.filter,
+            limit: Self.threadListPageLimit,
+            cursor: cursor
+        )
+        guard let ownedFeed = recentThreadFeeds.feed(for: ticket.filter) else {
+            throw GaryxRecentIdentityInterrupted()
+        }
+        let decision = observeThreadStoreIdentity(
+            gatewayScope: ticket.gatewayScope,
+            runtimeEpoch: ticket.runtimeEpoch,
+            owned: ownedFeed.pager.epoch == ticket.pagerTicket.epoch
+                && ownedFeed.pager.isRefreshingHead,
+            storeIncarnationId: page.storeIncarnationId
+        )
+        guard decision == .accept else { throw GaryxRecentIdentityInterrupted() }
+        return (GaryxRecentThreadFeedPage(page), page.threads, page.nextCursor)
+    }
+
+    /// Archive/delete ambiguity keeps today's rollback/error UX, then calls
+    /// this reconstruction path. A commit before either replacement snapshot
+    /// disappears now; a later commit is picked up by the next M=30/foreground
+    /// replacement cycle.
+    func forceReplaceThreadFeedsAfterAmbiguousLifecycle() async {
+        recentThreadFeeds.forceReplacement()
+        // refreshThreads owns the favorites snapshot trigger as part of every
+        // head replacement. Do not enqueue a duplicate trailing snapshot for
+        // the same lifecycle reconstruction.
+        let selected = recentThreadFeeds.selectedFilter
+        if selected == .favorites {
+            refreshThreadFavoritesSnapshot()
+            await performAuxiliaryRecentReplacement(filter: .all)
+            await performAuxiliaryRecentReplacement(filter: .nonTask)
+            return
+        }
+        await refreshThreads(source: .userAction, forceReplacement: true)
+        let other: GaryxRecentThreadFilter = selected == .all ? .nonTask : .all
+        await performAuxiliaryRecentReplacement(filter: other)
+    }
+
+    private func performAuxiliaryRecentReplacement(
+        filter: GaryxRecentThreadFilter
+    ) async {
+        guard hasGatewaySettings,
+              let ticket = recentThreadFeeds.requestRefresh(
+                  filter: filter,
+                  gatewayScope: threadFavoritesState.gatewayScope,
+                  runtimeEpoch: threadFavoritesState.runtimeEpoch,
+                  forceReplacement: true
+              ) else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            let fetched = try await fetchRecentRefresh(
+                ticket: ticket,
+                gatewayClient: client()
+            )
+            guard runtimeGeneration == gatewayRuntimeGeneration else {
+                recentThreadFeeds.failRefresh(ticket)
+                return
+            }
+            switch recentThreadFeeds.completeRefresh(ticket, bundle: fetched.bundle) {
+            case .applied:
+                threads = Self.mergedThreadSummaries(
+                    pendingThreadArchives.visibleThreads(threads)
+                        + pendingThreadArchives.visibleThreads(fetched.threads)
+                            .map(summaryWithCommittedRunState)
+                )
+                persistRecentThreadsWidgetSnapshot()
+            case .forceReplacement:
+                // Keep the pending bit; the next periodic/foreground cycle
+                // retries without spinning recursively on a changing boot.
+                return
+            case .abandonedLocalMutation, .abandonedStaleEpoch:
+                return
+            }
+        } catch is GaryxRecentIdentityInterrupted {
+            recentThreadFeeds.interruptRefresh(ticket)
+            return
+        } catch {
+            recentThreadFeeds.failRefresh(ticket)
         }
     }
 
@@ -354,7 +600,11 @@ extension GaryxMobileModel {
 
     func loadMoreThreads(trigger: GaryxThreadListLoadMoreTrigger) async {
         guard hasGatewaySettings,
-              let ticket = recentThreadFeeds.requestLoadMore(trigger: trigger) else {
+              let ticket = recentThreadFeeds.requestLoadMore(
+                  trigger: trigger,
+                  gatewayScope: threadFavoritesState.gatewayScope,
+                  runtimeEpoch: threadFavoritesState.runtimeEpoch
+              ) else {
             // Rejected triggers are free: nothing is consumed, and the
             // sentinel/footer re-evaluate from pager state (TASK-1802 R4).
             return
@@ -365,7 +615,10 @@ extension GaryxMobileModel {
     /// The explicit tap on the failed footer row.
     func retryLoadMoreThreads() async {
         guard hasGatewaySettings,
-              let ticket = recentThreadFeeds.retryLoadMore() else {
+              let ticket = recentThreadFeeds.retryLoadMore(
+                  gatewayScope: threadFavoritesState.gatewayScope,
+                  runtimeEpoch: threadFavoritesState.runtimeEpoch
+              ) else {
             return
         }
         await performLoadMoreThreads(ticket: ticket)
@@ -377,19 +630,30 @@ extension GaryxMobileModel {
             let page = try await client().listRecentThreads(
                 filter: ticket.filter,
                 limit: ticket.limit,
-                offset: ticket.offset
+                cursor: ticket.cursor
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else {
                 recentThreadFeeds.failLoadMore(ticket)
                 return
             }
             let pageThreads = pendingThreadArchives.visibleThreads(page.threads)
+            guard let ownedFeed = recentThreadFeeds.feed(for: ticket.filter) else {
+                throw GaryxRecentIdentityInterrupted()
+            }
+            let identity = observeThreadStoreIdentity(
+                gatewayScope: ticket.gatewayScope,
+                runtimeEpoch: ticket.runtimeEpoch,
+                owned: ownedFeed.pager.epoch == ticket.pagerTicket.epoch
+                    && ownedFeed.pager.isLoadingMore,
+                storeIncarnationId: page.storeIncarnationId
+            )
+            guard identity == .accept else {
+                recentThreadFeeds.interruptLoadMore(ticket)
+                return
+            }
             switch recentThreadFeeds.completeLoadMore(
                 ticket,
-                pageIds: pageThreads.map(\.id),
-                pageOffset: page.offset,
-                pageCount: page.count,
-                hasMore: page.hasMore
+                page: GaryxRecentThreadFeedPage(page)
             ) {
             case .abandonedStaleEpoch:
                 // Pager reset mid-flight: the page belongs to the previous
@@ -403,10 +667,15 @@ extension GaryxMobileModel {
                 // window with fresh filters.
                 scheduleLoadMoreFollowUpAfterLocalMutation()
                 return
-            case .apply:
+            case .forceReplacement:
+                await forceReplaceThreadFeedsAfterAmbiguousLifecycle()
+                return
+            case .applied:
                 threads = Self.mergedThreadSummaries(threads + pageThreads.map(summaryWithCommittedRunState))
                 persistRecentThreadsWidgetSnapshot()
             }
+        } catch is GaryxRecentIdentityInterrupted {
+            recentThreadFeeds.interruptLoadMore(ticket)
         } catch {
             // No global toast: the footer's failed state is the feedback,
             // and the pager's failed gate blocks automatic re-fires
@@ -421,8 +690,15 @@ extension GaryxMobileModel {
     private func scheduleLoadMoreFollowUpAfterLocalMutation() {
         Task { [weak self] in
             guard let self else { return }
-            guard let ticket = recentThreadFeeds.requestLoadMore(trigger: .footer)
-                ?? recentThreadFeeds.retryLoadMore() else {
+            guard let ticket = recentThreadFeeds.requestLoadMore(
+                trigger: .footer,
+                gatewayScope: threadFavoritesState.gatewayScope,
+                runtimeEpoch: threadFavoritesState.runtimeEpoch
+            )
+                ?? recentThreadFeeds.retryLoadMore(
+                    gatewayScope: threadFavoritesState.gatewayScope,
+                    runtimeEpoch: threadFavoritesState.runtimeEpoch
+                ) else {
                 return
             }
             await performLoadMoreThreads(ticket: ticket)

@@ -257,11 +257,49 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
         return .apply(isBeyondHead ? .mergeBeyondHead : .replaceHead)
     }
 
+    /// Commits a seq range-fill chain. A replacement owns a fresh window and
+    /// advances the feed epoch; a normal fill preserves the loaded tail cursor.
+    /// The wrapper enforces the design's single lane, so no load-more ticket can
+    /// coexist with this epoch transition.
+    @discardableResult
+    public mutating func completeRangeRefresh(
+        _ ticket: GaryxThreadListRefreshTicket,
+        committedCount: Int,
+        hasMore: Bool,
+        replacementCommitted: Bool
+    ) -> GaryxThreadListRefreshCompletion {
+        guard ticket.epoch == epoch else { return .abandonedStaleEpoch }
+        isRefreshingHead = false
+        guard ticket.observedLocalMutationSequence == localMutationSequence else {
+            return .abandonedLocalMutation
+        }
+
+        let forgivesFailure = gate == .failed
+            && ticket.observedLoadMoreFailureRevision == loadMoreFailureRevision
+        if replacementCommitted {
+            epoch += 1
+            nextOffset = committedCount
+            gate = hasMore ? .ready : .exhausted
+            return .apply(.replaceHead)
+        }
+        if forgivesFailure {
+            gate = nextOffset > 0 ? .ready : .exhausted
+        }
+        return .apply(.mergeBeyondHead)
+    }
+
     public mutating func failRefresh(_ ticket: GaryxThreadListRefreshTicket) {
         guard ticket.epoch == epoch else { return }
         isRefreshingHead = false
         // Gate and cursor untouched: a refresh failure says nothing new
         // about load-more; presentation is the caller's policy concern.
+    }
+
+    /// Identity/scope interruption is not a network failure, but it must still
+    /// release the single-flight lane if the caller has not reset this epoch.
+    public mutating func interruptRefresh(_ ticket: GaryxThreadListRefreshTicket) {
+        guard ticket.epoch == epoch else { return }
+        isRefreshingHead = false
     }
 
     /// Resolves a finished load-more into apply-or-abandon. Both abandon
@@ -289,6 +327,13 @@ public struct GaryxHomeThreadListPager: Equatable, Sendable {
         isLoadingMore = false
         gate = .failed
         loadMoreFailureRevision += 1
+    }
+
+    /// Releases an identity-interrupted load-more without poisoning the retry
+    /// gate; the current domain will reissue from its own cursor or reset.
+    public mutating func interruptLoadMore(_ ticket: GaryxThreadListLoadMoreTicket) {
+        guard ticket.epoch == epoch else { return }
+        isLoadingMore = false
     }
 
     /// Gateway switch: everything back to initial; in-flight tickets from

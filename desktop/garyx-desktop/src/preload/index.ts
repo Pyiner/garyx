@@ -225,6 +225,12 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:update-thread-runtime-settings", input),
   listRecentThreads: (input) =>
     ipcRenderer.invoke("garyx:list-recent-threads", input),
+  listThreadFavorites: (input) =>
+    ipcRenderer.invoke("garyx:list-thread-favorites", input),
+  getThreadFavoritesSnapshot: (input) =>
+    ipcRenderer.invoke("garyx:get-thread-favorites-snapshot", input),
+  setThreadFavorite: (input) =>
+    ipcRenderer.invoke("garyx:set-thread-favorite", input),
   archiveThread: (input) => ipcRenderer.invoke("garyx:archive-thread", input),
   deleteThread: (input) => ipcRenderer.invoke("garyx:delete-thread", input),
   setThreadPinned: (input) =>

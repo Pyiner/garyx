@@ -6,6 +6,7 @@ struct HomeProjectionCapture: Equatable, Sendable {
     var agents: [GaryxAgentSummary]
     var automations: [GaryxAutomationSummary]
     var pinnedThreadIds: [String]
+    var favoritedThreadIds: [String]
     var selectedThreadId: String?
     var isLoadingThreads: Bool
     var isHomeVisible: Bool
@@ -20,6 +21,7 @@ struct HomeProjectionCapture: Equatable, Sendable {
         agents: [GaryxAgentSummary],
         automations: [GaryxAutomationSummary],
         pinnedThreadIds: [String],
+        favoritedThreadIds: [String] = [],
         selectedThreadId: String?,
         isLoadingThreads: Bool,
         isHomeVisible: Bool,
@@ -33,6 +35,7 @@ struct HomeProjectionCapture: Equatable, Sendable {
         self.agents = agents
         self.automations = automations
         self.pinnedThreadIds = pinnedThreadIds
+        self.favoritedThreadIds = favoritedThreadIds
         self.selectedThreadId = selectedThreadId
         self.isLoadingThreads = isLoadingThreads
         self.isHomeVisible = isHomeVisible
@@ -53,6 +56,7 @@ struct HomeProjectionCapture: Equatable, Sendable {
             agents: input.sectionsInput.agents,
             automations: input.sectionsInput.automations,
             pinnedThreadIds: input.sectionsInput.pinnedThreadIds,
+            favoritedThreadIds: input.sectionsInput.favoritedThreadIds,
             selectedThreadId: input.sectionsInput.selectedThreadId,
             isLoadingThreads: input.isLoadingThreads,
             isHomeVisible: input.isHomeVisible,
@@ -69,6 +73,7 @@ struct HomeProjectionCapture: Equatable, Sendable {
             agents: agents,
             automations: automations,
             pinnedThreadIds: pinnedThreadIds,
+            favoritedThreadIds: favoritedThreadIds,
             recentThreadIds: recentThreadIds,
             selectedThreadId: selectedThreadId
         )
@@ -89,6 +94,9 @@ struct HomeProjectionCapture: Equatable, Sendable {
         }
         if previous?.pinnedThreadIds != pinnedThreadIds {
             events.append(.pinsChanged(pinnedThreadIds: pinnedThreadIds))
+        }
+        if previous?.favoritedThreadIds != favoritedThreadIds {
+            events.append(.favoritesChanged(favoritedThreadIds: favoritedThreadIds))
         }
         if previous?.selectedThreadId != selectedThreadId {
             events.append(.selectedThreadChanged(threadId: selectedThreadId))

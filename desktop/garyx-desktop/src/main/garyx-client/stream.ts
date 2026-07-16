@@ -702,6 +702,7 @@ export async function streamThreadEvents(
           // reassembler below rebuilds full snapshots for downstream.
           `/api/threads/${encodeURIComponent(threadId)}/stream?after_seq=${afterSeq}&render_mode=delta${renderFloorParam}`,
         ),
+        "readRetryable",
         {
           headers,
           signal: watchdog.signal,
@@ -884,27 +885,32 @@ export async function openChatStream(
     input.images,
     input.files,
   );
-  const payloadValue = await requestJson<unknown>(settings, "/api/chat/start", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      message: input.message,
-      attachments: serializedAttachments.attachments,
-      images: serializedAttachments.images,
-      files: serializedAttachments.files,
-      threadId,
-      accountId: settings.accountId,
-      fromId: settings.fromId,
-      waitForResponse: false,
-      timeoutSeconds: settings.timeoutSeconds,
-      workspacePath: workspacePath || undefined,
-      metadata: {
-        client_timestamp_local: formatLocalChatTimestamp(),
-        client_intent_id: input.clientIntentId,
-      },
-    }),
-    signal: AbortSignal.timeout(8000),
-  });
+  const payloadValue = await requestJson<unknown>(
+    settings,
+    "/api/chat/start",
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        message: input.message,
+        attachments: serializedAttachments.attachments,
+        images: serializedAttachments.images,
+        files: serializedAttachments.files,
+        threadId,
+        accountId: settings.accountId,
+        fromId: settings.fromId,
+        waitForResponse: false,
+        timeoutSeconds: settings.timeoutSeconds,
+        workspacePath: workspacePath || undefined,
+        metadata: {
+          client_timestamp_local: formatLocalChatTimestamp(),
+          client_intent_id: input.clientIntentId,
+        },
+      }),
+      signal: AbortSignal.timeout(8000),
+    },
+  );
   const payload = requireContractRecord(payloadValue, "chat start response");
   const status = requireContractString(
     requireContractField(payload, "status", "chat start response"),
@@ -951,19 +957,24 @@ export async function sendStreamingInput(
     input.files,
   );
   try {
-    const payloadValue = await requestJson<unknown>(settings, "/api/chat/stream-input", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        threadId,
-        clientIntentId: input.clientIntentId,
-        message: input.message,
-        attachments: serializedAttachments.attachments,
-        images: serializedAttachments.images,
-        files: serializedAttachments.files,
-      }),
-      signal: AbortSignal.timeout(8000),
-    });
+    const payloadValue = await requestJson<unknown>(
+      settings,
+      "/api/chat/stream-input",
+      "mutationSingleAttempt",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId,
+          clientIntentId: input.clientIntentId,
+          message: input.message,
+          attachments: serializedAttachments.attachments,
+          images: serializedAttachments.images,
+          files: serializedAttachments.files,
+        }),
+        signal: AbortSignal.timeout(8000),
+      },
+    );
     const payload = requireContractRecord(
       payloadValue,
       "chat stream-input response",
@@ -1023,12 +1034,17 @@ export async function interruptThread(
   threadId: string,
 ): Promise<InterruptResult> {
   try {
-    const payloadValue = await requestJson<unknown>(settings, "/api/chat/interrupt", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ threadId }),
-      signal: AbortSignal.timeout(8000),
-    });
+    const payloadValue = await requestJson<unknown>(
+      settings,
+      "/api/chat/interrupt",
+      "mutationSingleAttempt",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ threadId }),
+        signal: AbortSignal.timeout(8000),
+      },
+    );
     const payload = requireContractRecord(payloadValue, "chat interrupt response");
     const status = requireContractString(
       requireContractField(payload, "status", "chat interrupt response"),

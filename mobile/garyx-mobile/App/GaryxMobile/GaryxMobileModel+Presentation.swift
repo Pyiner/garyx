@@ -33,7 +33,14 @@ extension GaryxMobileModel {
     }
 
     func refreshHomeObservationPaginationSnapshot() {
-        let pager = recentThreadFeeds.selectedPager
+        guard let pager = recentThreadFeeds.selectedPager else {
+            homeObservationStore.applyPagination(
+                isLoadingMoreThreads: false,
+                hasMoreThreadSummaries: false,
+                loadMoreFooterState: .hidden
+            )
+            return
+        }
         homeObservationStore.applyPagination(
             isLoadingMoreThreads: pager.isLoadingMore,
             hasMoreThreadSummaries: pager.hasMoreThreadSummaries,
@@ -138,11 +145,12 @@ extension GaryxMobileModel {
             agents: agents,
             automations: automations,
             pinnedThreadIds: pinnedThreadIds,
+            favoritedThreadIds: threadFavoritesState.presentedThreadIds,
             selectedThreadId: selectedThread?.id,
             isLoadingThreads: isLoadingThreads,
             isHomeVisible: isHomeVisible,
             selectedRecentFilter: recentThreadFeeds.selectedFilter,
-            recentFeedPresentation: recentThreadFeeds.selectedPresentation,
+            recentFeedPresentation: selectedRecentFeedPresentation,
             runTrackerBusyThreadIds: runTracker.busyThreadIds,
             committedRunStateBusyByThreadId: runStateByThread.mapValues { $0.busy }
         )
@@ -164,6 +172,7 @@ extension GaryxMobileModel {
                 agents: agents,
                 automations: automations,
                 pinnedThreadIds: pinnedThreadIds,
+                favoritedThreadIds: threadFavoritesState.presentedThreadIds,
                 recentThreadIds: visibleRecentThreadIds,
                 selectedThreadId: selectedThread?.id
             ),
@@ -171,7 +180,7 @@ extension GaryxMobileModel {
             isLoadingThreads: isLoadingThreads,
             isHomeVisible: isHomeVisible,
             selectedRecentFilter: recentThreadFeeds.selectedFilter,
-            recentFeedPresentation: recentThreadFeeds.selectedPresentation
+            recentFeedPresentation: selectedRecentFeedPresentation
         )
     }
 

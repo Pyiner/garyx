@@ -1,11 +1,15 @@
 use std::collections::BTreeSet;
 #[cfg(any(test, feature = "test-seams"))]
 use std::collections::{HashMap, HashSet};
-use std::io;
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
 #[cfg(any(test, feature = "test-seams"))]
 use std::sync::{Condvar, atomic::AtomicBool, atomic::Ordering};
 use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use chrono::{SecondsFormat, Utc};
 use garyx_router::{KnownChannelEndpoint, is_thread_key};
@@ -32,14 +36,18 @@ pub(crate) const THREAD_PIN_SORT_ORDER_MIGRATION_NAME: &str = "thread_pin_sort_o
 const THREAD_PIN_SORT_ORDER_MIGRATION_VERSION: i64 = 1;
 pub(crate) const DROP_THREAD_MESSAGE_ROUTES_MIGRATION_NAME: &str = "drop_thread_message_routes_v1";
 const DROP_THREAD_MESSAGE_ROUTES_MIGRATION_VERSION: i64 = 1;
+pub(crate) const RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME: &str = "recent_thread_activity_seq_v1";
+const RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION: i64 = 1;
 const LEGACY_IMPORT_GENERATION_NAME: &str = "legacy_import_generation";
 const LEGACY_IMPORT_GENERATION_VERSION: i64 = 1;
+pub(crate) const MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE: i64 = 9_007_199_254_740_991;
 
 #[cfg(any(test, feature = "test-seams"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TestDbFaultPoint {
     LegacyMarkerPairRead,
     LegacyImportCommit,
+    LegacyImportAfterIncarnationRotation,
     LegacyRetirementMarkerWrite,
     ArchivedThreadRead,
     LegacyGenerationSeedWrite,
@@ -149,6 +157,14 @@ pub enum GaryxDbError {
     Join(String),
     #[error("database configuration failed: {0}")]
     Configuration(String),
+    #[error(
+        "data dir is occupied by another Garyx gateway: {path} (waited {wait_secs}s); stop the running gateway or choose a different sessions.data_dir"
+    )]
+    DataDirLocked { path: PathBuf, wait_secs: u64 },
+    #[error(
+        "pre-lock Garyx parent process {parent_pid} did not exit within {wait_secs}s; refusing destructive database initialization"
+    )]
+    ParentHandoffTimedOut { parent_pid: u32, wait_secs: u64 },
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -183,6 +199,43 @@ pub struct ThreadPinsPage {
     pub revision: i64,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct StoreIncarnation {
+    pub store_incarnation_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FavoriteThreadRecord {
+    pub thread_id: String,
+    pub favorited_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ThreadFavoritesPage {
+    pub favorites: Vec<FavoriteThreadRecord>,
+    pub revision: i64,
+    pub store_incarnation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FavoriteThreadResult {
+    Updated {
+        changed: bool,
+        page: ThreadFavoritesPage,
+    },
+    Conflict(ThreadFavoritesPage),
+    WrongIncarnation(ThreadFavoritesPage),
+    NotFound(ThreadFavoritesPage),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadFavoritesSnapshot {
+    pub page: ThreadFavoritesPage,
+    pub recent_threads: Vec<RecentThreadRecord>,
+    pub recent_total: usize,
+    pub recent_truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReorderThreadPinsResult {
     Updated(ThreadPinsPage),
@@ -204,6 +257,7 @@ pub struct RecentThreadRecord {
     pub run_state: String,
     pub updated_at: Option<String>,
     pub last_active_at: String,
+    pub activity_seq: i64,
     pub recorded_at: String,
 }
 
@@ -216,6 +270,14 @@ pub(crate) enum RecentThreadTaskFilter {
 }
 
 impl RecentThreadTaskFilter {
+    pub(crate) fn cursor_value(self) -> &'static str {
+        match self {
+            Self::Include => "include",
+            Self::Exclude => "exclude",
+            Self::Only => "only",
+        }
+    }
+
     fn count_sql(self) -> &'static str {
         match self {
             Self::Include => "SELECT COUNT(*) FROM recent_threads",
@@ -229,28 +291,86 @@ impl RecentThreadTaskFilter {
             Self::Include => {
                 "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
-                        run_state, updated_at, last_active_at, recorded_at
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
-                  ORDER BY last_active_at DESC, thread_id ASC
+                  ORDER BY activity_seq DESC
                   LIMIT ?1 OFFSET ?2"
             }
             Self::Exclude => {
                 "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
-                        run_state, updated_at, last_active_at, recorded_at
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
                   WHERE thread_type <> 'task'
-                  ORDER BY last_active_at DESC, thread_id ASC
+                  ORDER BY activity_seq DESC
                   LIMIT ?1 OFFSET ?2"
             }
             Self::Only => {
                 "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
-                        run_state, updated_at, last_active_at, recorded_at
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
                   WHERE thread_type = 'task'
-                  ORDER BY last_active_at DESC, thread_id ASC
+                  ORDER BY activity_seq DESC
                   LIMIT ?1 OFFSET ?2"
+            }
+        }
+    }
+
+    fn keyset_page_sql(self, has_cursor: bool) -> &'static str {
+        match (self, has_cursor) {
+            (Self::Include, false) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  ORDER BY activity_seq DESC
+                  LIMIT ?1"
+            }
+            (Self::Include, true) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  WHERE activity_seq < ?1
+                  ORDER BY activity_seq DESC
+                  LIMIT ?2"
+            }
+            (Self::Exclude, false) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  WHERE thread_type <> 'task'
+                  ORDER BY activity_seq DESC
+                  LIMIT ?1"
+            }
+            (Self::Exclude, true) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  WHERE thread_type <> 'task' AND activity_seq < ?1
+                  ORDER BY activity_seq DESC
+                  LIMIT ?2"
+            }
+            (Self::Only, false) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  WHERE thread_type = 'task'
+                  ORDER BY activity_seq DESC
+                  LIMIT ?1"
+            }
+            (Self::Only, true) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  WHERE thread_type = 'task' AND activity_seq < ?1
+                  ORDER BY activity_seq DESC
+                  LIMIT ?2"
             }
         }
     }
@@ -261,6 +381,13 @@ pub(crate) struct RecentThreadDbPage {
     pub records: Vec<RecentThreadRecord>,
     pub total: usize,
     pub offset: usize,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecentThreadKeysetDbPage {
+    pub records: Vec<RecentThreadRecord>,
+    pub total: usize,
     pub has_more: bool,
 }
 
@@ -426,6 +553,10 @@ pub struct CapsuleUpdateDraft {
 }
 
 pub struct GaryxDbService {
+    /// Process-lifetime ownership of this database's data directory. The lock
+    /// is acquired before SQLite is opened, so schema initialization, imports,
+    /// startup purges, and orphan-run cleanup cannot overlap another gateway.
+    _data_dir_lock: Option<DataDirLock>,
     conn: Mutex<Connection>,
     /// Independent read connections (WAL snapshot reads) so point reads
     /// never queue behind the writer — or behind each other: WAL supports
@@ -449,6 +580,10 @@ pub(crate) struct ReadOnlyGaryxDb {
 }
 
 const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5_000);
+const DEFAULT_DATA_LOCK_WAIT: Duration = Duration::from_secs(30);
+const PRE_R5_PARENT_HANDOFF_WAIT: Duration = Duration::from_secs(60);
+const STARTUP_WAIT_POLL: Duration = Duration::from_millis(50);
+pub const THREAD_FAVORITES_SNAPSHOT_CAP: usize = 500;
 /// Read-pool size: enough to keep the common concurrent readers (desktop,
 /// mobile, a handful of agents) off each other's locks without holding a
 /// meaningful number of file handles.
@@ -470,12 +605,258 @@ fn configure_file_connection(conn: &Connection) -> GaryxDbResult<()> {
     Ok(())
 }
 
+struct DataDirLock {
+    file: File,
+    _path: PathBuf,
+}
+
+impl DataDirLock {
+    fn acquire(database_path: &Path, wait: Duration) -> GaryxDbResult<Self> {
+        let data_dir = database_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(data_dir)?;
+        let lock_path = data_dir.join("garyx.lock");
+        let mut file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        set_close_on_exec(&file)?;
+        acquire_exclusive_flock(&file, &lock_path, wait)?;
+
+        // The advisory lock is the authority; the PID is diagnostic data for
+        // operators and deterministic restart tests only.
+        file.set_len(0)?;
+        file.write_all(std::process::id().to_string().as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_data()?;
+        Ok(Self {
+            file,
+            _path: lock_path,
+        })
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    fn close_on_exec(&self) -> GaryxDbResult<bool> {
+        close_on_exec_is_set(&self.file)
+    }
+}
+
+impl Drop for DataDirLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        // Closing the file would release flock as well; the explicit unlock
+        // makes the ownership boundary clear and lets a waiter proceed before
+        // any later field-drop work.
+        unsafe {
+            libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_close_on_exec(file: &File) -> GaryxDbResult<()> {
+    let fd = file.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_close_on_exec(_file: &File) -> GaryxDbResult<()> {
+    Err(GaryxDbError::Configuration(
+        "per-data-dir flock is only supported on Unix".to_owned(),
+    ))
+}
+
+#[cfg(all(unix, any(test, feature = "test-seams")))]
+fn close_on_exec_is_set(file: &File) -> GaryxDbResult<bool> {
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    Ok(flags & libc::FD_CLOEXEC != 0)
+}
+
+#[cfg(all(not(unix), any(test, feature = "test-seams")))]
+fn close_on_exec_is_set(_file: &File) -> GaryxDbResult<bool> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+fn acquire_exclusive_flock(file: &File, lock_path: &Path, wait: Duration) -> GaryxDbResult<()> {
+    let started = Instant::now();
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(code) if code == libc::EINTR => continue,
+            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => {
+                let elapsed = started.elapsed();
+                if elapsed >= wait {
+                    return Err(GaryxDbError::DataDirLocked {
+                        path: lock_path.to_path_buf(),
+                        wait_secs: wait.as_secs(),
+                    });
+                }
+                std::thread::sleep(STARTUP_WAIT_POLL.min(wait.saturating_sub(elapsed)));
+            }
+            _ => return Err(error.into()),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn acquire_exclusive_flock(_file: &File, _lock_path: &Path, _wait: Duration) -> GaryxDbResult<()> {
+    Err(GaryxDbError::Configuration(
+        "per-data-dir flock is only supported on Unix".to_owned(),
+    ))
+}
+
+fn configured_data_lock_wait() -> GaryxDbResult<Duration> {
+    let Some(raw) = std::env::var_os("GARYX_DATA_LOCK_WAIT_SECS") else {
+        return Ok(DEFAULT_DATA_LOCK_WAIT);
+    };
+    let raw = raw.to_string_lossy();
+    let seconds = raw.trim().parse::<u64>().map_err(|_| {
+        GaryxDbError::Configuration(
+            "GARYX_DATA_LOCK_WAIT_SECS must be a non-negative integer".to_owned(),
+        )
+    })?;
+    Ok(Duration::from_secs(seconds))
+}
+
+#[cfg(unix)]
+fn wait_for_pre_r5_parent_handoff() -> GaryxDbResult<()> {
+    let parent_pid = unsafe { libc::getppid() };
+    if parent_pid <= 1 || !parent_has_same_executable_name(parent_pid as u32)? {
+        return Ok(());
+    }
+    wait_for_parent_exit(parent_pid as u32, PRE_R5_PARENT_HANDOFF_WAIT, || {
+        process_is_alive(parent_pid as u32)
+    })
+}
+
+#[cfg(not(unix))]
+fn wait_for_pre_r5_parent_handoff() -> GaryxDbResult<()> {
+    Ok(())
+}
+
+fn wait_for_parent_exit(
+    parent_pid: u32,
+    wait: Duration,
+    mut is_alive: impl FnMut() -> bool,
+) -> GaryxDbResult<()> {
+    let started = Instant::now();
+    loop {
+        if !is_alive() {
+            return Ok(());
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= wait {
+            return Err(GaryxDbError::ParentHandoffTimedOut {
+                parent_pid,
+                wait_secs: wait.as_secs(),
+            });
+        }
+        std::thread::sleep(STARTUP_WAIT_POLL.min(wait.saturating_sub(elapsed)));
+    }
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+        return true;
+    }
+    // EPERM still proves the process exists. Unknown errors are treated as
+    // alive so the handoff barrier fails closed.
+    !matches!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH))
+}
+
+#[cfg(unix)]
+fn parent_has_same_executable_name(parent_pid: u32) -> GaryxDbResult<bool> {
+    parent_has_same_executable_name_with(parent_pid, parent_executable_path)
+}
+
+#[cfg(unix)]
+fn parent_has_same_executable_name_with(
+    parent_pid: u32,
+    resolve_parent: impl FnOnce(u32) -> GaryxDbResult<PathBuf>,
+) -> GaryxDbResult<bool> {
+    let current = std::env::current_exe()?;
+    let current_name = current.file_name().ok_or_else(|| {
+        GaryxDbError::Configuration(format!(
+            "current executable path has no file name: {}",
+            current.display()
+        ))
+    })?;
+    let parent = resolve_parent(parent_pid)?;
+    let parent_name = parent.file_name().ok_or_else(|| {
+        GaryxDbError::Configuration(format!(
+            "parent executable path has no file name: {}",
+            parent.display()
+        ))
+    })?;
+    Ok(parent_name == current_name)
+}
+
+#[cfg(target_os = "linux")]
+fn parent_executable_path(parent_pid: u32) -> GaryxDbResult<PathBuf> {
+    Ok(std::fs::read_link(format!("/proc/{parent_pid}/exe"))?)
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn parent_executable_path(parent_pid: u32) -> GaryxDbResult<PathBuf> {
+    let output = std::process::Command::new("ps")
+        .args(["-p", &parent_pid.to_string(), "-o", "comm="])
+        .output()
+        .map_err(|error| {
+            GaryxDbError::Configuration(format!(
+                "failed to resolve parent executable with ps for pid {parent_pid}: {error}"
+            ))
+        })?;
+    if !output.status.success() {
+        return Err(GaryxDbError::Configuration(format!(
+            "ps failed while resolving parent executable for pid {parent_pid}: {}",
+            output.status
+        )));
+    }
+    let path = String::from_utf8(output.stdout).map_err(|error| {
+        GaryxDbError::Configuration(format!(
+            "ps returned non-UTF-8 parent executable for pid {parent_pid}: {error}"
+        ))
+    })?;
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(GaryxDbError::Configuration(format!(
+            "ps returned an empty parent executable for pid {parent_pid}"
+        )));
+    }
+    Ok(PathBuf::from(path))
+}
+
 impl GaryxDbService {
     pub fn open(path: impl AsRef<Path>) -> GaryxDbResult<Self> {
+        Self::open_with_lock_wait(path, configured_data_lock_wait()?)
+    }
+
+    fn open_with_lock_wait(path: impl AsRef<Path>, lock_wait: Duration) -> GaryxDbResult<Self> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        // This must stay before Connection::open and every schema/import/
+        // purge action. It is also the pre-R5 fallback cutover boundary:
+        // once we own the new lock, a still-live same-executable parent must
+        // exit before this binary may touch the database.
+        let data_dir_lock = DataDirLock::acquire(path, lock_wait)?;
+        wait_for_pre_r5_parent_handoff()?;
         let conn = Connection::open(path)?;
         configure_file_connection(&conn)?;
         initialize_connection(&conn)?;
@@ -490,6 +871,7 @@ impl GaryxDbService {
             readers.push(Mutex::new(reader));
         }
         Ok(Self {
+            _data_dir_lock: Some(data_dir_lock),
             conn: Mutex::new(conn),
             readers,
             next_reader: std::sync::atomic::AtomicUsize::new(0),
@@ -503,11 +885,29 @@ impl GaryxDbService {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         initialize_connection(&conn)?;
         Ok(Self {
+            _data_dir_lock: None,
             conn: Mutex::new(conn),
             readers: Vec::new(),
             next_reader: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(any(test, feature = "test-seams"))]
             test_faults: Mutex::new(TestDbFaults::default()),
+        })
+    }
+
+    pub fn store_incarnation_id(&self) -> GaryxDbResult<String> {
+        let conn = self.read_conn()?;
+        read_store_incarnation_id(&conn)
+    }
+
+    /// Rotate the persistent CAS identity for an offline full-data-dir
+    /// restore/clone. Normal opens and process restarts never call this.
+    pub fn rotate_store_incarnation(&self) -> GaryxDbResult<StoreIncarnation> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let store_incarnation_id = rotate_store_incarnation_tx(&tx)?;
+        tx.commit()?;
+        Ok(StoreIncarnation {
+            store_incarnation_id,
         })
     }
 
@@ -733,8 +1133,163 @@ impl GaryxDbService {
         Ok(ReorderThreadPinsResult::Updated(page))
     }
 
+    pub fn list_thread_favorites(&self) -> GaryxDbResult<ThreadFavoritesPage> {
+        self.list_thread_favorites_inner(|| Ok(()))
+    }
+
+    fn list_thread_favorites_inner<F>(
+        &self,
+        after_favorites: F,
+    ) -> GaryxDbResult<ThreadFavoritesPage>
+    where
+        F: FnOnce() -> GaryxDbResult<()>,
+    {
+        let mut conn = self.read_conn()?;
+        let tx = conn.transaction()?;
+        let favorites = read_thread_favorites_tx(&tx)?;
+
+        // Deterministic WAL seam: the identity and revision below must stay
+        // on the same snapshot even if another writer commits here.
+        after_favorites()?;
+
+        let page = read_thread_favorites_page_with_rows_tx(&tx, favorites)?;
+        tx.commit()?;
+        Ok(page)
+    }
+
+    pub fn set_thread_favorite(
+        &self,
+        thread_id: &str,
+        favorited: bool,
+        expected_revision: i64,
+        expected_store_incarnation: &str,
+    ) -> GaryxDbResult<FavoriteThreadResult> {
+        let thread_id = normalize_thread_id(thread_id)?;
+        if expected_revision < 0 {
+            return Err(GaryxDbError::BadRequest(
+                "expected_revision must be a non-negative integer".to_owned(),
+            ));
+        }
+        let expected_store_incarnation = Uuid::parse_str(expected_store_incarnation)
+            .map(|uuid| uuid.to_string())
+            .map_err(|_| {
+                GaryxDbError::BadRequest("expected_store_incarnation must be a UUID".to_owned())
+            })?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+
+        // Identity is the outer CAS fence: an old revision must never become
+        // usable merely because a restored store happens to reuse its value.
+        let current_incarnation = read_store_incarnation_id(&tx)?;
+        if current_incarnation != expected_store_incarnation {
+            let page = read_thread_favorites_page_tx(&tx)?;
+            tx.commit()?;
+            return Ok(FavoriteThreadResult::WrongIncarnation(page));
+        }
+        let current_revision = read_thread_favorites_revision_tx(&tx)?;
+        if current_revision != expected_revision {
+            let page = read_thread_favorites_page_tx(&tx)?;
+            tx.commit()?;
+            return Ok(FavoriteThreadResult::Conflict(page));
+        }
+
+        let changed = if favorited {
+            let favorited_at = now_string();
+            let inserted = tx.execute(
+                "INSERT INTO thread_favorites (thread_id, favorited_at)
+                 SELECT ?1, ?2
+                  WHERE EXISTS (SELECT 1 FROM thread_records WHERE key = ?1)
+                 ON CONFLICT(thread_id) DO NOTHING",
+                params![thread_id, favorited_at],
+            )? > 0;
+            if !inserted && !thread_record_exists_tx(&tx, &thread_id)? {
+                let page = read_thread_favorites_page_tx(&tx)?;
+                tx.commit()?;
+                return Ok(FavoriteThreadResult::NotFound(page));
+            }
+            inserted
+        } else {
+            if !thread_record_exists_tx(&tx, &thread_id)? {
+                let page = read_thread_favorites_page_tx(&tx)?;
+                tx.commit()?;
+                return Ok(FavoriteThreadResult::NotFound(page));
+            }
+            tx.execute(
+                "DELETE FROM thread_favorites WHERE thread_id = ?1",
+                params![thread_id],
+            )? > 0
+        };
+
+        // Every accepted conditional write advances the fence, including an
+        // idempotent repeated PUT or no-op DELETE.
+        bump_thread_favorites_revision_tx(&tx)?;
+        let page = read_thread_favorites_page_tx(&tx)?;
+        tx.commit()?;
+        Ok(FavoriteThreadResult::Updated { changed, page })
+    }
+
+    pub fn thread_favorites_snapshot(&self) -> GaryxDbResult<ThreadFavoritesSnapshot> {
+        self.thread_favorites_snapshot_inner(|| Ok(()))
+    }
+
+    fn thread_favorites_snapshot_inner<F>(
+        &self,
+        after_favorites: F,
+    ) -> GaryxDbResult<ThreadFavoritesSnapshot>
+    where
+        F: FnOnce() -> GaryxDbResult<()>,
+    {
+        let mut conn = self.read_conn()?;
+        let tx = conn.transaction()?;
+        let favorites = read_thread_favorites_tx(&tx)?;
+        let page = read_thread_favorites_page_with_rows_tx(&tx, favorites)?;
+
+        // The joined recent rows and membership page are one atomic read
+        // unit. A commit here must be invisible until the next snapshot.
+        after_favorites()?;
+
+        let recent_total: i64 = tx.query_row(
+            "SELECT COUNT(*)
+               FROM recent_threads AS recent
+               JOIN thread_favorites AS favorite
+                 ON favorite.thread_id = recent.thread_id",
+            [],
+            |row| row.get(0),
+        )?;
+        let recent_total = usize::try_from(recent_total).unwrap_or(usize::MAX);
+        let mut stmt = tx.prepare(
+            "SELECT recent.thread_id, recent.title, recent.workspace_dir,
+                    recent.thread_type, recent.provider_type, recent.agent_id,
+                    recent.message_count, recent.last_message_preview,
+                    recent.recent_run_id, recent.active_run_id, recent.run_state,
+                    recent.updated_at, recent.last_active_at, recent.activity_seq,
+                    recent.recorded_at
+               FROM recent_threads AS recent
+               JOIN thread_favorites AS favorite
+                 ON favorite.thread_id = recent.thread_id
+              ORDER BY recent.activity_seq DESC
+              LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(
+            params![i64::try_from(THREAD_FAVORITES_SNAPSHOT_CAP).unwrap_or(i64::MAX)],
+            recent_thread_record_from_row,
+        )?;
+        let mut recent_threads = Vec::new();
+        for row in rows {
+            recent_threads.push(row?);
+        }
+        drop(stmt);
+        tx.commit()?;
+        Ok(ThreadFavoritesSnapshot {
+            page,
+            recent_truncated: recent_total > recent_threads.len(),
+            recent_total,
+            recent_threads,
+        })
+    }
+
     /// Product archive semantics in one transaction: write the tombstone
-    /// and delete the record, its projection rows, and its pin together.
+    /// and delete the record, its projection rows, pin, and favorite together.
     /// Returns whether a record existed. Nothing is left to repair on any
     /// other path — a write racing this transaction either lands before
     /// the tombstone (and is deleted here) or is rejected by the in-tx
@@ -764,6 +1319,13 @@ impl GaryxDbService {
             params![thread_id],
         )? > 0;
         bump_thread_pins_revision_if_changed_tx(&tx, removed_pin)?;
+        let removed_favorite = tx.execute(
+            "DELETE FROM thread_favorites WHERE thread_id = ?1",
+            params![thread_id],
+        )? > 0;
+        // Archive tombstones prevent record resurrection, so a missing
+        // favorite needs no extra fence; only a changed collection bumps.
+        bump_thread_favorites_revision_if_changed_tx(&tx, removed_favorite)?;
         tx.commit()?;
         Ok(removed)
     }
@@ -1044,6 +1606,15 @@ impl GaryxDbService {
         self.list_recent_threads_page_inner(filter, limit, requested_offset, || Ok(()))
     }
 
+    pub(crate) fn list_recent_threads_keyset_page(
+        &self,
+        filter: RecentThreadTaskFilter,
+        limit: usize,
+        before_activity_seq: Option<i64>,
+    ) -> GaryxDbResult<RecentThreadKeysetDbPage> {
+        self.list_recent_threads_keyset_page_inner(filter, limit, before_activity_seq, || Ok(()))
+    }
+
     pub(crate) fn contains_selectable_recent_thread(&self, thread_id: &str) -> GaryxDbResult<bool> {
         let thread_id = normalize_thread_id(thread_id)?;
         let conn = self.read_conn()?;
@@ -1102,6 +1673,52 @@ impl GaryxDbService {
         })
     }
 
+    fn list_recent_threads_keyset_page_inner<F>(
+        &self,
+        filter: RecentThreadTaskFilter,
+        limit: usize,
+        before_activity_seq: Option<i64>,
+        after_count: F,
+    ) -> GaryxDbResult<RecentThreadKeysetDbPage>
+    where
+        F: FnOnce() -> GaryxDbResult<()>,
+    {
+        let mut conn = self.read_conn()?;
+        let tx = conn.transaction()?;
+        let total: i64 = tx.query_row(filter.count_sql(), [], |row| row.get(0))?;
+        let total = usize::try_from(total).unwrap_or(usize::MAX);
+
+        // Count and page are display metadata from one WAL snapshot. A
+        // concurrent writer may commit here, but this page must not mix it
+        // with the earlier total.
+        after_count()?;
+
+        let fetch_limit = limit.saturating_add(1);
+        let fetch_limit = i64::try_from(fetch_limit).unwrap_or(i64::MAX);
+        let mut stmt = tx.prepare(filter.keyset_page_sql(before_activity_seq.is_some()))?;
+        let mut rows = match before_activity_seq {
+            Some(activity_seq) => stmt.query(params![activity_seq, fetch_limit])?,
+            None => stmt.query(params![fetch_limit])?,
+        };
+        let mut records = Vec::with_capacity(limit.saturating_add(1));
+        while let Some(row) = rows.next()? {
+            records.push(recent_thread_record_from_row(row)?);
+        }
+        drop(rows);
+        drop(stmt);
+        tx.commit()?;
+
+        let has_more = records.len() > limit;
+        if has_more {
+            records.truncate(limit);
+        }
+        Ok(RecentThreadKeysetDbPage {
+            records,
+            total,
+            has_more,
+        })
+    }
+
     /// Startup crash recovery: the bridge run index is rebuilt empty on
     /// boot, so any projected `active_run_id`/`running` row is a dangling
     /// orphan from the previous process. One SQL pass settles both
@@ -1109,6 +1726,11 @@ impl GaryxDbService {
     /// closing batch; replaces the retired reconcile walk).
     pub fn clear_stale_active_runs(&self) -> GaryxDbResult<usize> {
         let conn = self.conn()?;
+        // Deliberately does not allocate activity_seq: merely settling a run
+        // orphan from the previous boot must not move an old thread to the
+        // head. RuntimeAssembler invokes this under the data-dir lock before
+        // listener bind; the source guard pins this as a pre-bind-only direct
+        // recent_threads UPDATE.
         let recent = conn.execute(
             "UPDATE recent_threads
                 SET active_run_id = NULL,
@@ -1193,6 +1815,9 @@ impl GaryxDbService {
             None,
         )?;
         if recovery {
+            rotate_store_incarnation_tx(&tx)?;
+            #[cfg(any(test, feature = "test-seams"))]
+            self.maybe_fail_test_db_call(TestDbFaultPoint::LegacyImportAfterIncarnationRotation)?;
             tx.execute(
                 "DELETE FROM projection_states WHERE projection_name = ?1",
                 params![crate::legacy_boot_import::LEGACY_ARCHIVE_RETIREMENT_NAME],
@@ -1275,11 +1900,140 @@ impl GaryxDbService {
     /// Run every versioned thread-data migration that must complete after
     /// the one-shot archive import and before the gateway starts serving.
     pub(crate) fn run_thread_data_startup_migrations(&self) -> GaryxDbResult<()> {
+        // Destructive cleanup belongs after the boot import, not in schema
+        // initialization. GaryxDbService's process-lifetime data-dir lock is
+        // already held, and RuntimeAssembler runs this before listener bind.
+        {
+            let conn = self.conn()?;
+            purge_retired_workflow_state(&conn)?;
+        }
         self.drop_thread_message_routes_v1()?;
         self.migrate_thread_pin_sort_order_v1()?;
         self.migrate_recent_task_thread_kind_v1()?;
+        self.migrate_recent_thread_activity_seq_v1()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         Ok(())
+    }
+
+    /// Backfill the monotonic recent-thread ordering key exactly once. This
+    /// marker is intentionally independent of legacy import generations:
+    /// recovery imports use the normal allocator and must never reset either
+    /// the marker or the meta high-water mark.
+    pub(crate) fn migrate_recent_thread_activity_seq_v1(
+        &self,
+    ) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let completed_source_count = tx
+            .query_row(
+                "SELECT source_row_count
+                   FROM projection_states
+                  WHERE projection_name = ?1 AND projection_version = ?2",
+                params![
+                    RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME,
+                    RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        let source_row_count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM recent_threads", [], |row| row.get(0))?;
+        let meta_activity_seq: i64 = tx.query_row(
+            "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let existing_max: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(activity_seq), 0) FROM recent_threads",
+            [],
+            |row| row.get(0),
+        )?;
+        let starting_activity_seq = meta_activity_seq.max(existing_max);
+        let final_activity_seq = starting_activity_seq
+            .checked_add(source_row_count)
+            .filter(|value| *value < MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE)
+            .ok_or_else(|| {
+                GaryxDbError::Configuration(
+                    "recent thread activity sequence space is exhausted".to_owned(),
+                )
+            })?;
+
+        // Re-running after an explicitly cleared marker remains deterministic
+        // and safe even if the prior unique index is still present.
+        tx.execute_batch(
+            "DROP INDEX IF EXISTS idx_recent_threads_activity_seq;
+             DROP INDEX IF EXISTS idx_recent_threads_task_activity_seq;
+             DROP INDEX IF EXISTS idx_recent_threads_non_task_activity_seq;",
+        )?;
+
+        let thread_ids = {
+            let mut stmt = tx.prepare(
+                "SELECT thread_id
+                   FROM recent_threads
+                  ORDER BY last_active_at ASC, thread_id DESC",
+            )?;
+            stmt.query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for (offset, thread_id) in thread_ids.iter().enumerate() {
+            let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+            let activity_seq = starting_activity_seq
+                .checked_add(offset)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| {
+                    GaryxDbError::Configuration(
+                        "recent thread activity sequence space is exhausted".to_owned(),
+                    )
+                })?;
+            // Pre-bind one-shot migration: this direct UPDATE is the sole
+            // backfill allow-list entry in addition to pre-bind orphan/type
+            // cleanup. Runtime projection writes always use the allocator.
+            tx.execute(
+                "UPDATE recent_threads SET activity_seq = ?1 WHERE thread_id = ?2",
+                params![activity_seq, thread_id],
+            )?;
+        }
+        tx.execute(
+            "UPDATE recent_threads_meta SET activity_seq = ?1 WHERE id = 1",
+            params![final_activity_seq],
+        )?;
+
+        tx.execute_batch(
+            "DROP INDEX IF EXISTS idx_recent_threads_last_active;
+             DROP INDEX IF EXISTS idx_recent_threads_task_last_active;
+             DROP INDEX IF EXISTS idx_recent_threads_non_task_last_active;
+             CREATE UNIQUE INDEX idx_recent_threads_activity_seq
+                 ON recent_threads(activity_seq DESC);
+             CREATE INDEX idx_recent_threads_task_activity_seq
+                 ON recent_threads(activity_seq DESC)
+                 WHERE thread_type = 'task';
+             CREATE INDEX idx_recent_threads_non_task_activity_seq
+                 ON recent_threads(activity_seq DESC)
+                 WHERE thread_type <> 'task';",
+        )?;
+        record_projection_state_tx(
+            &tx,
+            RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME,
+            RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION,
+            source_row_count,
+            None,
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count: thread_ids.len(),
+            already_completed: false,
+        })
     }
 
     pub(crate) fn drop_thread_message_routes_v1(&self) -> GaryxDbResult<OneShotMigrationSummary> {
@@ -1736,6 +2490,9 @@ impl GaryxDbService {
                 AND COALESCE(json_extract(body, '$.thread_kind'), '') <> 'task'",
             [],
         )?;
+        // Pre-bind one-shot projection correction. Changing the persisted
+        // thread kind is not user activity, so it intentionally preserves
+        // activity_seq rather than moving the row to the head.
         tx.execute(
             "UPDATE recent_threads
                 SET thread_type = 'task'
@@ -1869,8 +2626,11 @@ impl GaryxDbService {
         draft: RecentThreadDraft,
     ) -> GaryxDbResult<RecentThreadRecord> {
         let recorded_at = now_string();
-        let conn = self.conn()?;
-        upsert_recent_thread_tx(&conn, draft, &recorded_at)
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let record = upsert_recent_thread_tx(&tx, draft, &recorded_at)?;
+        tx.commit()?;
+        Ok(record)
     }
 
     pub fn remove_recent_thread(&self, thread_id: &str) -> GaryxDbResult<bool> {
@@ -2158,7 +2918,7 @@ impl GaryxDbService {
     }
 
     /// Single-transaction delete of a thread record, all its projection
-    /// rows, and its pin. Returns whether the record existed.
+    /// rows, pin, and favorite. Returns whether the record existed.
     pub(crate) fn delete_thread_record_with_projections(&self, key: &str) -> GaryxDbResult<bool> {
         #[cfg(any(test, feature = "test-seams"))]
         self.maybe_block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
@@ -2174,6 +2934,16 @@ impl GaryxDbService {
         let removed_pin =
             tx.execute("DELETE FROM thread_pins WHERE thread_id = ?1", params![key])? > 0;
         bump_thread_pins_revision_if_changed_tx(&tx, removed_pin)?;
+        tx.execute(
+            "DELETE FROM thread_favorites WHERE thread_id = ?1",
+            params![key],
+        )?;
+        // Ordinary delete has no durable tombstone. Every successful thread
+        // deletion advances the fence even when there was no favorite row,
+        // so a pre-delete orphan write cannot land after record recreation.
+        if removed && is_thread_key(&key) {
+            bump_thread_favorites_revision_tx(&tx)?;
+        }
         tx.commit()?;
         Ok(removed)
     }
@@ -2449,7 +3219,7 @@ fn list_active_recent_thread_ids(
         "SELECT thread_id
            FROM recent_threads
           WHERE {ACTIVE_RECENT_THREAD_PREDICATE}
-          ORDER BY last_active_at DESC, thread_id ASC
+          ORDER BY activity_seq DESC
           LIMIT ?1"
     );
     let limit = i64::try_from(limit).unwrap_or(i64::MAX);
@@ -2545,6 +3315,21 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             pins_revision INTEGER NOT NULL DEFAULT 0 CHECK (pins_revision >= 0)
         ) STRICT;
 
+        CREATE TABLE IF NOT EXISTS thread_favorites (
+            thread_id TEXT PRIMARY KEY,
+            favorited_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS thread_favorites_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            favorites_revision INTEGER NOT NULL DEFAULT 0 CHECK (favorites_revision >= 0)
+        ) STRICT;
+
+        CREATE TABLE IF NOT EXISTS garyx_store_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            store_incarnation_id TEXT NOT NULL
+        ) STRICT;
+
         -- Thread-record truth source (#TASK-1864 batch 2): canonical record
         -- bodies for thread::*/meta::*/cron::*/tool::* keys. Bodies never
         -- contain the retired `messages` snapshot; projections derive from
@@ -2575,19 +3360,20 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             run_state TEXT NOT NULL DEFAULT 'idle',
             updated_at TEXT,
             last_active_at TEXT NOT NULL,
+            activity_seq INTEGER NOT NULL DEFAULT 0 CHECK (
+                activity_seq >= 0
+                AND activity_seq < 9007199254740991
+            ),
             recorded_at TEXT NOT NULL
         ) STRICT;
 
-        CREATE INDEX IF NOT EXISTS idx_recent_threads_last_active
-            ON recent_threads(last_active_at DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_recent_threads_task_last_active
-            ON recent_threads(last_active_at DESC, thread_id ASC)
-            WHERE thread_type = 'task';
-
-        CREATE INDEX IF NOT EXISTS idx_recent_threads_non_task_last_active
-            ON recent_threads(last_active_at DESC, thread_id ASC)
-            WHERE thread_type <> 'task';
+        CREATE TABLE IF NOT EXISTS recent_threads_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            activity_seq INTEGER NOT NULL CHECK (
+                activity_seq >= 0
+                AND activity_seq < 9007199254740991
+            )
+        ) STRICT;
 
         CREATE TABLE IF NOT EXISTS projection_states (
             projection_name TEXT PRIMARY KEY,
@@ -2782,8 +3568,12 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         "#,
     )?;
     conn.execute_batch(meetings::MEETINGS_DDL)?;
+    ensure_recent_threads_activity_seq_column(conn)?;
+    ensure_recent_threads_meta_row(conn)?;
     ensure_thread_pins_sort_order_column(conn)?;
     ensure_thread_pins_meta_row(conn)?;
+    ensure_thread_favorites_meta_row(conn)?;
+    ensure_store_incarnation_row(conn)?;
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_thread_pins_sort_order
              ON thread_pins(sort_order ASC, pinned_at DESC, thread_id ASC);",
@@ -2812,7 +3602,6 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             ON workspaces(deleted_at, lower(COALESCE(NULLIF(name, ''), path)), lower(path));
         "#,
     )?;
-    purge_retired_workflow_state(conn)?;
     Ok(())
 }
 
@@ -2823,6 +3612,7 @@ fn purge_retired_workflow_state(conn: &Connection) -> GaryxDbResult<()> {
     let tx = conn.unchecked_transaction()?;
     let mut retired_thread_ids = BTreeSet::new();
     let mut removed_any_pin = false;
+    let mut removed_any_favorite = false;
 
     if sqlite_table_exists(&tx, "workflow_runs")? {
         // `task_thread_id` was added after the first Workflow schema. Read
@@ -2902,6 +3692,10 @@ fn purge_retired_workflow_state(conn: &Connection) -> GaryxDbResult<()> {
             "DELETE FROM thread_pins WHERE thread_id = ?1",
             params![thread_id],
         )? > 0;
+        removed_any_favorite |= tx.execute(
+            "DELETE FROM thread_favorites WHERE thread_id = ?1",
+            params![thread_id],
+        )? > 0;
         tx.execute(
             "DELETE FROM archived_threads WHERE thread_id = ?1",
             params![thread_id],
@@ -2924,6 +3718,10 @@ fn purge_retired_workflow_state(conn: &Connection) -> GaryxDbResult<()> {
         "#,
     )?;
     bump_thread_pins_revision_if_changed_tx(&tx, removed_any_pin)?;
+    // This runs under the process-lifetime data-dir lock and before listener
+    // bind, so there can be no in-flight HTTP writer to fence when no row was
+    // removed. Preserve the collection revision on a no-op purge.
+    bump_thread_favorites_revision_if_changed_tx(&tx, removed_any_favorite)?;
     tx.commit()?;
     Ok(())
 }
@@ -3054,6 +3852,84 @@ fn bump_thread_pins_revision_if_changed_tx(conn: &Connection, changed: bool) -> 
         ));
     }
     Ok(())
+}
+
+fn read_thread_favorites_tx(conn: &Connection) -> GaryxDbResult<Vec<FavoriteThreadRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT thread_id, favorited_at
+           FROM thread_favorites
+          ORDER BY favorited_at DESC, thread_id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(FavoriteThreadRecord {
+            thread_id: row.get(0)?,
+            favorited_at: row.get(1)?,
+        })
+    })?;
+    let mut favorites = Vec::new();
+    for row in rows {
+        favorites.push(row?);
+    }
+    Ok(favorites)
+}
+
+fn read_thread_favorites_revision_tx(conn: &Connection) -> GaryxDbResult<i64> {
+    Ok(conn.query_row(
+        "SELECT favorites_revision FROM thread_favorites_meta WHERE id = 1",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+fn read_thread_favorites_page_with_rows_tx(
+    conn: &Connection,
+    favorites: Vec<FavoriteThreadRecord>,
+) -> GaryxDbResult<ThreadFavoritesPage> {
+    Ok(ThreadFavoritesPage {
+        favorites,
+        revision: read_thread_favorites_revision_tx(conn)?,
+        store_incarnation_id: read_store_incarnation_id(conn)?,
+    })
+}
+
+fn read_thread_favorites_page_tx(conn: &Connection) -> GaryxDbResult<ThreadFavoritesPage> {
+    read_thread_favorites_page_with_rows_tx(conn, read_thread_favorites_tx(conn)?)
+}
+
+fn bump_thread_favorites_revision_tx(conn: &Connection) -> GaryxDbResult<()> {
+    let updated = conn.execute(
+        "UPDATE thread_favorites_meta
+            SET favorites_revision = favorites_revision + 1
+          WHERE id = 1",
+        [],
+    )?;
+    if updated != 1 {
+        return Err(GaryxDbError::Configuration(
+            "thread_favorites_meta singleton is missing".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn bump_thread_favorites_revision_if_changed_tx(
+    conn: &Connection,
+    changed: bool,
+) -> GaryxDbResult<()> {
+    if changed {
+        bump_thread_favorites_revision_tx(conn)?;
+    }
+    Ok(())
+}
+
+fn thread_record_exists_tx(conn: &Connection, thread_id: &str) -> GaryxDbResult<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM thread_records WHERE key = ?1",
+            params![thread_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 fn normalize_thread_id(thread_id: &str) -> GaryxDbResult<String> {
@@ -3225,7 +4101,7 @@ fn escape_like_pattern(prefix: &str) -> String {
 }
 
 fn upsert_recent_thread_tx(
-    conn: &Connection,
+    tx: &Transaction<'_>,
     draft: RecentThreadDraft,
     recorded_at: &str,
 ) -> GaryxDbResult<RecentThreadRecord> {
@@ -3242,14 +4118,15 @@ fn upsert_recent_thread_tx(
     let active_run_id = normalize_optional(draft.active_run_id.as_deref());
     let updated_at = normalize_optional(draft.updated_at.as_deref());
     let recorded_at = recorded_at.to_owned();
+    let activity_seq = allocate_recent_thread_activity_seq_tx(tx)?;
 
-    conn.execute(
+    tx.execute(
         "INSERT INTO recent_threads (
             thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
             message_count, last_message_preview, recent_run_id, active_run_id, run_state,
-            updated_at, last_active_at, recorded_at
+            updated_at, last_active_at, activity_seq, recorded_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT(thread_id) DO UPDATE SET
             title = excluded.title,
             workspace_dir = excluded.workspace_dir,
@@ -3263,6 +4140,7 @@ fn upsert_recent_thread_tx(
             run_state = excluded.run_state,
             updated_at = excluded.updated_at,
             last_active_at = excluded.last_active_at,
+            activity_seq = excluded.activity_seq,
             recorded_at = excluded.recorded_at",
         params![
             thread_id,
@@ -3278,6 +4156,7 @@ fn upsert_recent_thread_tx(
             run_state,
             updated_at,
             last_active_at,
+            activity_seq,
             recorded_at,
         ],
     )?;
@@ -3296,8 +4175,35 @@ fn upsert_recent_thread_tx(
         run_state,
         updated_at,
         last_active_at,
+        activity_seq,
         recorded_at,
     })
+}
+
+fn allocate_recent_thread_activity_seq_tx(tx: &Transaction<'_>) -> GaryxDbResult<i64> {
+    let current: i64 = tx.query_row(
+        "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let next = current
+        .checked_add(1)
+        .filter(|value| *value < MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE)
+        .ok_or_else(|| {
+            GaryxDbError::Configuration(
+                "recent thread activity sequence space is exhausted".to_owned(),
+            )
+        })?;
+    let updated = tx.execute(
+        "UPDATE recent_threads_meta SET activity_seq = ?1 WHERE id = 1",
+        params![next],
+    )?;
+    if updated != 1 {
+        return Err(GaryxDbError::Configuration(
+            "recent_threads_meta singleton is missing".to_owned(),
+        ));
+    }
+    Ok(next)
 }
 
 fn remove_recent_thread_tx(conn: &Connection, thread_id: &str) -> GaryxDbResult<bool> {
@@ -3589,6 +4495,35 @@ fn ensure_thread_pins_sort_order_column(conn: &Connection) -> GaryxDbResult<()> 
     Ok(())
 }
 
+fn ensure_recent_threads_activity_seq_column(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(recent_threads)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if columns.contains("activity_seq") {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE recent_threads
+             ADD COLUMN activity_seq INTEGER NOT NULL DEFAULT 0 CHECK (
+                 activity_seq >= 0
+                 AND activity_seq < 9007199254740991
+             )",
+        [],
+    )?;
+    Ok(())
+}
+
+fn ensure_recent_threads_meta_row(conn: &Connection) -> GaryxDbResult<()> {
+    conn.execute(
+        "INSERT INTO recent_threads_meta (id, activity_seq)
+         VALUES (1, 0)
+         ON CONFLICT(id) DO NOTHING",
+        [],
+    )?;
+    Ok(())
+}
+
 fn ensure_thread_pins_meta_row(conn: &Connection) -> GaryxDbResult<()> {
     let exists = conn
         .query_row(
@@ -3605,6 +4540,60 @@ fn ensure_thread_pins_meta_row(conn: &Connection) -> GaryxDbResult<()> {
         )?;
     }
     Ok(())
+}
+
+fn ensure_thread_favorites_meta_row(conn: &Connection) -> GaryxDbResult<()> {
+    conn.execute(
+        "INSERT INTO thread_favorites_meta (id, favorites_revision)
+         VALUES (1, 0)
+         ON CONFLICT(id) DO NOTHING",
+        [],
+    )?;
+    Ok(())
+}
+
+fn ensure_store_incarnation_row(conn: &Connection) -> GaryxDbResult<()> {
+    conn.execute(
+        "INSERT INTO garyx_store_meta (id, store_incarnation_id)
+         VALUES (1, ?1)
+         ON CONFLICT(id) DO NOTHING",
+        params![Uuid::new_v4().to_string()],
+    )?;
+    // Treat corruption as a startup failure rather than silently rotating the
+    // CAS domain during an ordinary reopen.
+    read_store_incarnation_id(conn).map(|_| ())
+}
+
+fn read_store_incarnation_id(conn: &Connection) -> GaryxDbResult<String> {
+    let raw: String = conn
+        .query_row(
+            "SELECT store_incarnation_id FROM garyx_store_meta WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            GaryxDbError::Configuration("garyx_store_meta singleton is missing".to_owned())
+        })?;
+    Uuid::parse_str(&raw)
+        .map(|uuid| uuid.to_string())
+        .map_err(|_| {
+            GaryxDbError::Configuration("store_incarnation_id is not a valid UUID".to_owned())
+        })
+}
+
+fn rotate_store_incarnation_tx(conn: &Connection) -> GaryxDbResult<String> {
+    let next = Uuid::new_v4().to_string();
+    let updated = conn.execute(
+        "UPDATE garyx_store_meta SET store_incarnation_id = ?1 WHERE id = 1",
+        params![next],
+    )?;
+    if updated != 1 {
+        return Err(GaryxDbError::Configuration(
+            "garyx_store_meta singleton is missing".to_owned(),
+        ));
+    }
+    Ok(next)
 }
 
 fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbResult<()> {
@@ -3803,7 +4792,8 @@ fn recent_thread_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Re
         run_state: row.get(10)?,
         updated_at: row.get(11)?,
         last_active_at: row.get(12)?,
-        recorded_at: row.get(13)?,
+        activity_seq: row.get(13)?,
+        recorded_at: row.get(14)?,
     })
 }
 
@@ -4042,6 +5032,162 @@ mod tests {
     }
 
     #[test]
+    fn file_store_incarnation_is_uuid_stable_on_reopen_and_rotates_only_explicitly() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let service = GaryxDbService::open(&path).expect("first open");
+        let first = service.store_incarnation_id().expect("first identity");
+        assert_eq!(Uuid::parse_str(&first).unwrap().to_string(), first);
+        drop(service);
+
+        let reopened = GaryxDbService::open(&path).expect("ordinary reopen");
+        assert_eq!(reopened.store_incarnation_id().unwrap(), first);
+        let rotated = reopened
+            .rotate_store_incarnation()
+            .expect("explicit offline rotation")
+            .store_incarnation_id;
+        assert_ne!(rotated, first);
+        drop(reopened);
+
+        let after_rotation = GaryxDbService::open(&path).expect("reopen after rotation");
+        assert_eq!(after_rotation.store_incarnation_id().unwrap(), rotated);
+    }
+
+    #[test]
+    fn data_dir_lock_precedes_schema_initialization_is_cloexec_and_times_out_boundedly() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        Connection::open(&path)
+            .expect("seed raw database")
+            .execute("CREATE TABLE untouched(value INTEGER)", [])
+            .expect("seed sentinel schema");
+
+        let owner = DataDirLock::acquire(&path, Duration::ZERO).expect("own data dir");
+        assert!(owner.close_on_exec().expect("CLOEXEC query"));
+        let started = Instant::now();
+        let error = GaryxDbService::open_with_lock_wait(&path, Duration::from_millis(80))
+            .err()
+            .expect("second gateway must time out");
+        assert!(matches!(error, GaryxDbError::DataDirLocked { .. }));
+        assert!(
+            started.elapsed() >= Duration::from_millis(70),
+            "lock wait returned before its bounded deadline"
+        );
+
+        let raw = Connection::open(&path).expect("inspect untouched database");
+        assert!(!sqlite_table_exists(&raw, "garyx_store_meta").unwrap());
+        assert!(sqlite_table_exists(&raw, "untouched").unwrap());
+        drop(raw);
+        drop(owner);
+
+        let service = GaryxDbService::open_with_lock_wait(&path, Duration::ZERO)
+            .expect("lock release permits startup");
+        assert!(service.store_incarnation_id().is_ok());
+    }
+
+    #[test]
+    fn data_dir_lock_waiter_continues_after_old_gateway_releases_for_restart_fallback() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let old_gateway = GaryxDbService::open(&path).expect("old gateway owns lock");
+        let waiter_path = path.clone();
+        let waiter = std::thread::spawn(move || {
+            GaryxDbService::open_with_lock_wait(waiter_path, Duration::from_secs(2))
+        });
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!waiter.is_finished(), "new gateway skipped the held lock");
+        drop(old_gateway);
+        let new_gateway = waiter
+            .join()
+            .expect("waiter thread")
+            .expect("new gateway takes released lock");
+        assert!(new_gateway.store_incarnation_id().is_ok());
+    }
+
+    #[test]
+    fn pre_r5_parent_handoff_has_continue_and_fail_closed_branches() {
+        let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let release = alive.clone();
+        let exiting_parent = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            release.store(false, std::sync::atomic::Ordering::Release);
+        });
+        wait_for_parent_exit(4242, Duration::from_secs(1), || {
+            alive.load(std::sync::atomic::Ordering::Acquire)
+        })
+        .expect("startup continues after parent exits");
+        exiting_parent.join().unwrap();
+
+        let error = wait_for_parent_exit(4243, Duration::from_millis(70), || true)
+            .expect_err("live parent at cap must fail closed");
+        assert!(matches!(
+            error,
+            GaryxDbError::ParentHandoffTimedOut {
+                parent_pid: 4243,
+                ..
+            }
+        ));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let raw = Connection::open(&path).expect("raw pre-R5 database");
+        raw.execute("CREATE TABLE untouched(value INTEGER)", [])
+            .unwrap();
+        drop(raw);
+        let lock = DataDirLock::acquire(&path, Duration::ZERO).expect("new binary lock");
+        let barrier = wait_for_parent_exit(4244, Duration::from_millis(60), || true);
+        assert!(barrier.is_err());
+        drop(lock);
+        let raw = Connection::open(&path).expect("inspect after failed handoff");
+        assert!(sqlite_table_exists(&raw, "untouched").unwrap());
+        assert!(
+            !sqlite_table_exists(&raw, "garyx_store_meta").unwrap(),
+            "fail-closed parent timeout must precede destructive/schema initialization"
+        );
+        drop(raw);
+        DataDirLock::acquire(&path, Duration::ZERO)
+            .expect("failed child released the data-dir lock");
+    }
+
+    #[test]
+    fn open_path_wires_parent_handoff_between_data_lock_and_database_open() {
+        let source = include_str!("mod.rs");
+        let open_path = source
+            .split_once("fn open_with_lock_wait(")
+            .expect("open_with_lock_wait definition")
+            .1
+            .split_once("pub fn memory()")
+            .expect("memory constructor follows open path")
+            .0;
+        let lock = open_path
+            .find("DataDirLock::acquire(path, lock_wait)?")
+            .expect("open path acquires data lock");
+        let handoff = open_path
+            .find("wait_for_pre_r5_parent_handoff()?")
+            .expect("open path invokes pre-R5 handoff barrier");
+        let connection = open_path
+            .find("Connection::open(path)?")
+            .expect("open path opens SQLite connection");
+        assert!(
+            lock < handoff && handoff < connection,
+            "startup ordering must remain lock -> parent handoff -> SQLite open"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_executable_resolution_failure_is_fail_closed() {
+        let error = parent_has_same_executable_name_with(4242, |_| {
+            Err(GaryxDbError::Configuration(
+                "synthetic ps failure".to_owned(),
+            ))
+        })
+        .expect_err("an unknown parent executable must abort startup");
+        assert!(matches!(error, GaryxDbError::Configuration(_)));
+    }
+
+    #[test]
     fn read_only_handle_queries_during_a_writer_lock_and_rejects_writes() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("garyx-db.sqlite3");
@@ -4107,6 +5253,347 @@ mod tests {
             run_state: "idle".to_owned(),
             updated_at: None,
             last_active_at: "2026-07-08T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn recent_activity_schema_initializes_before_writes_and_reopens_stably() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            let conn = Connection::open(&path).expect("legacy db");
+            conn.execute_batch(
+                "CREATE TABLE recent_threads (
+                     thread_id TEXT PRIMARY KEY,
+                     title TEXT NOT NULL DEFAULT '',
+                     workspace_dir TEXT,
+                     thread_type TEXT NOT NULL DEFAULT 'chat',
+                     provider_type TEXT,
+                     agent_id TEXT,
+                     message_count INTEGER NOT NULL DEFAULT 0,
+                     last_message_preview TEXT NOT NULL DEFAULT '',
+                     recent_run_id TEXT,
+                     active_run_id TEXT,
+                     run_state TEXT NOT NULL DEFAULT 'idle',
+                     updated_at TEXT,
+                     last_active_at TEXT NOT NULL,
+                     recorded_at TEXT NOT NULL
+                 ) STRICT;
+                 INSERT INTO recent_threads (
+                     thread_id, last_active_at, recorded_at
+                 ) VALUES (
+                     'thread::legacy-before-seq',
+                     '2026-07-01T00:00:00Z',
+                     '2026-07-01T00:00:00Z'
+                 );",
+            )
+            .expect("seed legacy recent table");
+        }
+
+        let db = GaryxDbService::open(&path).expect("open upgraded db");
+        let conn = db.conn().expect("writer");
+        let meta: i64 = conn
+            .query_row(
+                "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("meta initialized during schema open");
+        let legacy_seq: i64 = conn
+            .query_row(
+                "SELECT activity_seq FROM recent_threads
+                  WHERE thread_id = 'thread::legacy-before-seq'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("legacy column added during schema open");
+        assert_eq!((meta, legacy_seq), (0, 0));
+        drop(conn);
+        drop(db);
+
+        let reopened = GaryxDbService::open(&path).expect("reopen upgraded db");
+        let conn = reopened.conn().expect("writer after reopen");
+        assert_eq!(
+            conn.query_row(
+                "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0,
+            "ordinary reopen must not move the activity high-water mark"
+        );
+    }
+
+    #[test]
+    fn recent_activity_backfill_preserves_old_order_and_is_truly_one_shot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            let conn = Connection::open(&path).expect("legacy db");
+            conn.execute_batch(
+                "CREATE TABLE recent_threads (
+                     thread_id TEXT PRIMARY KEY,
+                     title TEXT NOT NULL DEFAULT '',
+                     workspace_dir TEXT,
+                     thread_type TEXT NOT NULL DEFAULT 'chat',
+                     provider_type TEXT,
+                     agent_id TEXT,
+                     message_count INTEGER NOT NULL DEFAULT 0,
+                     last_message_preview TEXT NOT NULL DEFAULT '',
+                     recent_run_id TEXT,
+                     active_run_id TEXT,
+                     run_state TEXT NOT NULL DEFAULT 'idle',
+                     updated_at TEXT,
+                     last_active_at TEXT NOT NULL,
+                     recorded_at TEXT NOT NULL
+                 ) STRICT;
+                 INSERT INTO recent_threads (
+                     thread_id, last_active_at, recorded_at
+                 ) VALUES
+                     ('thread::z-old', '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z'),
+                     ('thread::b-tie', '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z'),
+                     ('thread::a-tie', '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z');",
+            )
+            .expect("seed legacy order");
+        }
+
+        let db = GaryxDbService::open(&path).expect("open upgraded db");
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE recent_threads_meta SET activity_seq = 50 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+        let first = db
+            .migrate_recent_thread_activity_seq_v1()
+            .expect("backfill activity sequence");
+        assert_eq!(first.source_row_count, 3);
+        assert_eq!(first.updated_row_count, 3);
+        assert!(!first.already_completed);
+
+        let rows = db
+            .list_recent_threads(10, 0)
+            .expect("list migrated recent rows");
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.thread_id.as_str(), row.activity_seq))
+                .collect::<Vec<_>>(),
+            vec![
+                ("thread::a-tie", 53),
+                ("thread::b-tie", 52),
+                ("thread::z-old", 51),
+            ],
+            "descending seq must exactly preserve the former timestamp/id order"
+        );
+        let conn = db.conn().expect("writer");
+        assert_eq!(
+            conn.query_row(
+                "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            53,
+            "backfill must floor against and then advance the existing meta"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO recent_threads (
+                     thread_id, last_active_at, activity_seq, recorded_at
+                 ) VALUES (
+                     'thread::duplicate-seq', '2026-07-03T00:00:00Z', 53,
+                     '2026-07-03T00:00:00Z'
+                 )",
+                [],
+            )
+            .is_err(),
+            "the post-backfill activity sequence index must be unique"
+        );
+        drop(conn);
+
+        let second = db
+            .migrate_recent_thread_activity_seq_v1()
+            .expect("one-shot rerun");
+        assert!(second.already_completed);
+        assert_eq!(second.source_row_count, 3);
+        assert_eq!(second.updated_row_count, 0);
+        assert_eq!(
+            db.list_recent_threads(10, 0)
+                .unwrap()
+                .iter()
+                .map(|row| row.activity_seq)
+                .collect::<Vec<_>>(),
+            vec![53, 52, 51]
+        );
+        drop(db);
+
+        let reopened = GaryxDbService::open(&path).expect("reopen migrated db");
+        assert!(
+            reopened
+                .migrate_recent_thread_activity_seq_v1()
+                .unwrap()
+                .already_completed
+        );
+        assert_eq!(
+            reopened.list_recent_threads(10, 0).unwrap()[0].activity_seq,
+            53
+        );
+    }
+
+    #[test]
+    fn recent_activity_allocator_is_transactional_strict_and_safe_integer_bounded() {
+        let db = std::sync::Arc::new(GaryxDbService::memory().expect("memory db"));
+
+        {
+            let mut conn = db.conn().expect("writer");
+            let tx = conn.transaction().expect("transaction");
+            let record = upsert_recent_thread_tx(
+                &tx,
+                sample_recent_draft("thread::rolled-back-seq"),
+                "2026-07-16T00:00:00Z",
+            )
+            .expect("upsert inside uncommitted transaction");
+            assert_eq!(record.activity_seq, 1);
+            drop(tx);
+        }
+        assert!(db.list_recent_threads(10, 0).unwrap().is_empty());
+        assert_eq!(
+            db.conn()
+                .unwrap()
+                .query_row(
+                    "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0,
+            "allocator and projection upsert must roll back together"
+        );
+
+        let handles = (0..24)
+            .map(|index| {
+                let db = std::sync::Arc::clone(&db);
+                std::thread::spawn(move || {
+                    db.upsert_recent_thread(sample_recent_draft(&format!(
+                        "thread::concurrent-seq-{index:02}"
+                    )))
+                    .expect("concurrent upsert")
+                    .activity_seq
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut allocated = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("allocator thread"))
+            .collect::<Vec<_>>();
+        allocated.sort_unstable();
+        assert_eq!(allocated, (1..=24).collect::<Vec<_>>());
+
+        let first = db
+            .upsert_recent_thread(sample_recent_draft("thread::moves-to-head"))
+            .unwrap();
+        let second = db
+            .upsert_recent_thread(sample_recent_draft("thread::other-head"))
+            .unwrap();
+        let moved = db
+            .upsert_recent_thread(sample_recent_draft("thread::moves-to-head"))
+            .unwrap();
+        assert!(first.activity_seq < second.activity_seq);
+        assert!(second.activity_seq < moved.activity_seq);
+        assert_eq!(
+            db.list_recent_threads(2, 0).unwrap()[0].thread_id,
+            "thread::moves-to-head",
+            "every read-modify-write upsert gets a fresh monotonic ordering key"
+        );
+
+        let conn = db.conn().expect("writer");
+        assert!(
+            conn.execute(
+                "UPDATE recent_threads_meta SET activity_seq = 9007199254740991 WHERE id = 1",
+                [],
+            )
+            .is_err(),
+            "meta must reject values that are not exactly representable as desktop integers"
+        );
+        assert!(
+            conn.execute(
+                "UPDATE recent_threads SET activity_seq = 9007199254740991
+                  WHERE thread_id = 'thread::moves-to-head'",
+                [],
+            )
+            .is_err(),
+            "rows must enforce the same exclusive safe-integer bound"
+        );
+    }
+
+    #[test]
+    fn recovery_generation_never_resets_activity_meta_or_one_shot_marker() {
+        let db = GaryxDbService::memory().expect("memory db");
+        db.migrate_recent_thread_activity_seq_v1()
+            .expect("mark empty backfill complete");
+        let older = db
+            .upsert_recent_thread(sample_recent_draft("thread::before-recovery-older"))
+            .unwrap();
+        let old_head = db
+            .upsert_recent_thread(sample_recent_draft("thread::before-recovery-head"))
+            .unwrap();
+        assert_eq!((older.activity_seq, old_head.activity_seq), (1, 2));
+
+        assert_eq!(db.commit_legacy_import(0, false).unwrap(), 1);
+        db.record_legacy_archive_retirement().unwrap();
+        db.clear_projection_state(crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME)
+            .unwrap();
+        assert_eq!(db.commit_legacy_import(2, true).unwrap(), 2);
+        assert!(
+            db.projection_state_exists(
+                RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME,
+                RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION,
+            )
+            .unwrap(),
+            "recovery generation changes must not clear the independent seq marker"
+        );
+
+        let recovered = db
+            .upsert_recent_thread(sample_recent_draft("thread::recovery-import"))
+            .unwrap();
+        assert_eq!(recovered.activity_seq, 3);
+        assert!(
+            db.migrate_recent_thread_activity_seq_v1()
+                .unwrap()
+                .already_completed
+        );
+        let old_cursor_page = db
+            .list_recent_threads_keyset_page(
+                RecentThreadTaskFilter::Include,
+                10,
+                Some(old_head.activity_seq),
+            )
+            .expect("old cursor remains valid");
+        assert_eq!(
+            old_cursor_page
+                .records
+                .iter()
+                .map(|row| (row.thread_id.as_str(), row.activity_seq))
+                .collect::<Vec<_>>(),
+            vec![("thread::before-recovery-older", 1)]
+        );
+    }
+
+    fn seed_favorite_thread(service: &GaryxDbService, thread_id: &str, recent: bool) {
+        service
+            .write_thread_record_with_projections(
+                thread_id,
+                &json!({"thread_id": thread_id}).to_string(),
+                Some("2026-07-16T00:00:00Z"),
+                None,
+            )
+            .expect("seed favorite thread record");
+        if recent {
+            service
+                .upsert_recent_thread(sample_recent_draft(thread_id))
+                .expect("seed favorite recent projection");
         }
     }
 
@@ -4286,6 +5773,7 @@ mod tests {
     #[test]
     fn legacy_import_generation_commit_is_atomic_monotonic_and_recovery_clears_retirement() {
         let service = GaryxDbService::memory().expect("memory db");
+        let fresh_incarnation = service.store_incarnation_id().unwrap();
         service.fail_test_db_call(TestDbFaultPoint::LegacyImportCommit, 1);
         assert!(service.commit_legacy_import(0, false).is_err());
         assert_eq!(service.legacy_import_marker_pair().unwrap(), (false, false));
@@ -4294,8 +5782,10 @@ mod tests {
         assert_eq!(service.commit_legacy_import(0, false).unwrap(), 1);
         assert_eq!(service.legacy_import_marker_pair().unwrap(), (true, false));
         assert_eq!(raw_legacy_import_generation(&service), Some(1));
+        assert_eq!(service.store_incarnation_id().unwrap(), fresh_incarnation);
         service.record_legacy_archive_retirement().unwrap();
         assert_eq!(service.legacy_import_marker_pair().unwrap(), (true, true));
+        let generation_one_incarnation = service.store_incarnation_id().unwrap();
 
         assert!(
             service
@@ -4303,9 +5793,36 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(service.legacy_import_marker_pair().unwrap(), (false, true));
+        service.fail_test_db_call(TestDbFaultPoint::LegacyImportAfterIncarnationRotation, 1);
+        assert!(service.commit_legacy_import(3, true).is_err());
+        assert_eq!(
+            service.store_incarnation_id().unwrap(),
+            generation_one_incarnation,
+            "a crash after rotation but before commit must roll the identity back"
+        );
+        assert_eq!(service.legacy_import_marker_pair().unwrap(), (false, true));
+        assert_eq!(raw_legacy_import_generation(&service), Some(1));
         assert_eq!(service.commit_legacy_import(3, true).unwrap(), 2);
         assert_eq!(service.legacy_import_marker_pair().unwrap(), (true, false));
         assert_eq!(raw_legacy_import_generation(&service), Some(2));
+        assert_ne!(
+            service.store_incarnation_id().unwrap(),
+            generation_one_incarnation,
+            "a committed recovery must rotate exactly with its marker transaction"
+        );
+        seed_favorite_thread(&service, "thread::recovered-store", false);
+        assert!(matches!(
+            service
+                .set_thread_favorite(
+                    "thread::recovered-store",
+                    true,
+                    0,
+                    &generation_one_incarnation,
+                )
+                .expect("old incarnation write is classified"),
+            FavoriteThreadResult::WrongIncarnation(ref page)
+                if page.revision == 0 && page.favorites.is_empty()
+        ));
         assert!(
             service
                 .clear_projection_state(LEGACY_IMPORT_GENERATION_NAME)
@@ -5059,9 +6576,45 @@ mod tests {
                 .expect("seed row");
         }
 
+        let before = service
+            .list_recent_threads(10, 0)
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.thread_id, row.activity_seq))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let meta_before: i64 = service
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
         service.clear_stale_active_runs().expect("clear orphans");
 
         let rows = service.list_recent_threads(10, 0).expect("list");
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.thread_id.clone(), row.activity_seq))
+                .collect::<std::collections::BTreeMap<_, _>>(),
+            before,
+            "pre-bind orphan settlement must not move rows in activity order"
+        );
+        assert_eq!(
+            service
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            meta_before,
+            "pre-bind orphan settlement must not allocate a sequence"
+        );
         let state_of = |id: &str| {
             rows.iter()
                 .find(|row| row.thread_id == id)
@@ -5079,31 +6632,6 @@ mod tests {
     }
 
     #[test]
-    fn open_succeeds_while_another_connection_holds_a_write_lock() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join("garyx-db.sqlite3");
-        // First open creates the schema and flips the database to WAL.
-        let _first = GaryxDbService::open(&path).expect("first open");
-
-        // A separate connection holds a write transaction while a second
-        // service runs the full pragma/init order — the cross-process
-        // contention case busy_timeout exists for (WAL keeps schema reads
-        // from blocking on the writer).
-        let blocker = Connection::open(&path).expect("blocker connection");
-        blocker
-            .execute_batch("BEGIN IMMEDIATE;")
-            .expect("hold write lock");
-        let second = GaryxDbService::open(&path).expect("second open under held write lock");
-        blocker
-            .execute_batch("COMMIT;")
-            .expect("release write lock");
-
-        second
-            .pin_thread("thread::contended-open")
-            .expect("write after release");
-    }
-
-    #[test]
     fn memory_db_still_works_without_wal() {
         let service = GaryxDbService::memory().expect("memory db");
         service.pin_thread("thread::mem-check").expect("pin");
@@ -5113,7 +6641,7 @@ mod tests {
     }
 
     #[test]
-    fn opening_legacy_workflow_db_purges_tables_records_and_projections() {
+    fn startup_migrations_purge_legacy_workflow_tables_records_and_projections() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("garyx-db.sqlite3");
         drop(GaryxDbService::open(&path).expect("create current schema"));
@@ -5180,6 +6708,8 @@ mod tests {
                 );
                 INSERT INTO thread_pins (thread_id, pinned_at)
                 VALUES ('thread::legacy-workflow-task', '2026-07-01T00:00:00.000Z');
+                INSERT INTO thread_favorites (thread_id, favorited_at)
+                VALUES ('thread::legacy-workflow-task', '2026-07-01T00:00:00.000Z');
                 INSERT INTO archived_threads (thread_id, archived_at)
                 VALUES ('thread::legacy-workflow-child', '2026-07-01T00:00:00.000Z');
                 INSERT INTO thread_channel_endpoints (
@@ -5209,12 +6739,21 @@ mod tests {
         }
 
         let db = GaryxDbService::open(&path).expect("open migrated db");
+        db.run_thread_data_startup_migrations()
+            .expect("run destructive startup migrations");
         assert_eq!(
             db.list_pinned_threads()
                 .expect("pins after cleanup")
                 .revision,
             1,
             "startup cleanup must bump the collection exactly once"
+        );
+        assert_eq!(
+            db.list_thread_favorites()
+                .expect("favorites after cleanup")
+                .revision,
+            1,
+            "startup cleanup must bump favorites exactly once when changed"
         );
         for table in ["workflow_runs", "workflow_child_runs", "workflow_events"] {
             assert!(!sqlite_table_exists(&db.conn().expect("conn"), table).expect("table check"));
@@ -5244,6 +6783,7 @@ mod tests {
             ("thread_meta", "thread_id"),
             ("recent_threads", "thread_id"),
             ("thread_pins", "thread_id"),
+            ("thread_favorites", "thread_id"),
             ("archived_threads", "thread_id"),
             ("thread_channel_endpoints", "thread_id"),
             ("automation_thread_runs", "thread_id"),
@@ -5266,6 +6806,9 @@ mod tests {
         drop(db);
 
         let reopened = GaryxDbService::open(&path).expect("cleanup is idempotent");
+        reopened
+            .run_thread_data_startup_migrations()
+            .expect("rerun startup migrations");
         assert_eq!(
             reopened
                 .list_pinned_threads()
@@ -5273,6 +6816,14 @@ mod tests {
                 .revision,
             1,
             "a second startup cleanup must not bump an unchanged collection"
+        );
+        assert_eq!(
+            reopened
+                .list_thread_favorites()
+                .expect("favorites after idempotent cleanup")
+                .revision,
+            1,
+            "a no-op startup purge must preserve favorites revision"
         );
         assert!(
             reopened
@@ -5607,11 +7158,20 @@ mod tests {
         let path = dir.path().join("garyx-db.sqlite3");
         let reader = GaryxDbService::open(&path).expect("reader opens");
         reader.pin_thread("thread::first").expect("first pin");
-        let writer = GaryxDbService::open(&path).expect("writer opens");
+        // A raw SQLite connection is intentional: the production invariant
+        // forbids a second GaryxDbService for the same data dir, while this
+        // test still needs a commit between the page's two snapshot reads.
+        let writer = Connection::open(&path).expect("test-only raw writer");
 
         let snapshot = reader
             .list_pinned_threads_inner(|| {
-                writer.pin_thread("thread::second")?;
+                writer.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     INSERT INTO thread_pins (thread_id, pinned_at, sort_order)
+                     VALUES ('thread::second', '2026-07-16T00:00:00Z', -2);
+                     UPDATE thread_pins_meta SET pins_revision = pins_revision + 1 WHERE id = 1;
+                     COMMIT;",
+                )?;
                 Ok(())
             })
             .expect("snapshot page");
@@ -5684,6 +7244,327 @@ mod tests {
                 .0
         );
         assert_eq!(db.list_pinned_threads().expect("final page").revision, 3);
+    }
+
+    #[test]
+    fn thread_favorites_schema_initializes_singleton_before_startup_cleanup_and_reopens_stably() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let db = GaryxDbService::open(&path).expect("database");
+        assert_eq!(db.list_thread_favorites().unwrap().revision, 0);
+        let conn = db.conn().expect("writer");
+        assert!(sqlite_table_exists(&conn, "thread_favorites").unwrap());
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM thread_favorites_meta WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
+        );
+        drop(conn);
+        seed_favorite_thread(&db, "thread::reopen-favorite", false);
+        let incarnation = db.store_incarnation_id().unwrap();
+        db.set_thread_favorite("thread::reopen-favorite", true, 0, &incarnation)
+            .expect("favorite");
+        drop(db);
+
+        let reopened = GaryxDbService::open(&path).expect("reopen");
+        let page = reopened.list_thread_favorites().expect("reopened page");
+        assert_eq!(page.revision, 1);
+        assert_eq!(page.favorites.len(), 1);
+        assert_eq!(page.store_incarnation_id, incarnation);
+    }
+
+    #[test]
+    fn thread_favorites_cas_fences_identity_revision_and_bumps_every_accepted_noop() {
+        let db = GaryxDbService::memory().expect("database");
+        seed_favorite_thread(&db, "thread::favorite-cas", false);
+        let incarnation = db.store_incarnation_id().unwrap();
+        let initial = db.list_thread_favorites().expect("initial page");
+        assert_eq!(initial.revision, 0);
+        assert!(initial.favorites.is_empty());
+
+        let wrong = db
+            .set_thread_favorite("thread::favorite-cas", true, 0, &Uuid::new_v4().to_string())
+            .expect("wrong incarnation response");
+        assert!(matches!(
+            wrong,
+            FavoriteThreadResult::WrongIncarnation(ref page) if page.revision == 0
+        ));
+
+        let first = db
+            .set_thread_favorite("thread::favorite-cas", true, 0, &incarnation)
+            .expect("favorite");
+        let FavoriteThreadResult::Updated {
+            changed: true,
+            page: first,
+        } = first
+        else {
+            panic!("expected changed favorite")
+        };
+        assert_eq!(first.revision, 1);
+        assert_eq!(first.favorites.len(), 1);
+        let favorited_at = first.favorites[0].favorited_at.clone();
+
+        let repeated = db
+            .set_thread_favorite("thread::favorite-cas", true, 1, &incarnation)
+            .expect("repeat favorite");
+        let FavoriteThreadResult::Updated {
+            changed: false,
+            page: repeated,
+        } = repeated
+        else {
+            panic!("expected accepted no-op favorite")
+        };
+        assert_eq!(repeated.revision, 2);
+        assert_eq!(repeated.favorites[0].favorited_at, favorited_at);
+
+        let conflict = db
+            .set_thread_favorite("thread::favorite-cas", false, 1, &incarnation)
+            .expect("stale conflict");
+        assert!(matches!(
+            conflict,
+            FavoriteThreadResult::Conflict(ref page)
+                if page.revision == 2 && page.favorites.len() == 1
+        ));
+
+        let removed = db
+            .set_thread_favorite("thread::favorite-cas", false, 2, &incarnation)
+            .expect("unfavorite");
+        assert!(matches!(
+            removed,
+            FavoriteThreadResult::Updated {
+                changed: true,
+                ref page,
+            } if page.revision == 3 && page.favorites.is_empty()
+        ));
+        let repeated_delete = db
+            .set_thread_favorite("thread::favorite-cas", false, 3, &incarnation)
+            .expect("repeat unfavorite");
+        assert!(matches!(
+            repeated_delete,
+            FavoriteThreadResult::Updated {
+                changed: false,
+                ref page,
+            } if page.revision == 4 && page.favorites.is_empty()
+        ));
+
+        let missing = db
+            .set_thread_favorite("thread::missing", true, 4, &incarnation)
+            .expect("missing page");
+        assert!(matches!(
+            missing,
+            FavoriteThreadResult::NotFound(ref page)
+                if page.revision == 4 && page.favorites.is_empty()
+        ));
+    }
+
+    #[test]
+    fn thread_favorites_get_page_is_one_wal_snapshot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let db = GaryxDbService::open(&path).expect("database");
+        seed_favorite_thread(&db, "thread::first-favorite", false);
+        seed_favorite_thread(&db, "thread::second-favorite", false);
+        let incarnation = db.store_incarnation_id().unwrap();
+        db.set_thread_favorite("thread::first-favorite", true, 0, &incarnation)
+            .expect("first favorite");
+        let writer = Connection::open(&path).expect("test-only raw writer");
+
+        let snapshot = db
+            .list_thread_favorites_inner(|| {
+                writer.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     INSERT INTO thread_favorites (thread_id, favorited_at)
+                     VALUES ('thread::second-favorite', '2026-07-16T00:00:01Z');
+                     UPDATE thread_favorites_meta
+                        SET favorites_revision = favorites_revision + 1 WHERE id = 1;
+                     COMMIT;",
+                )?;
+                Ok(())
+            })
+            .expect("snapshot page");
+        assert_eq!(snapshot.revision, 1);
+        assert_eq!(
+            snapshot
+                .favorites
+                .iter()
+                .map(|favorite| favorite.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::first-favorite"]
+        );
+        let current = db.list_thread_favorites().expect("current page");
+        assert_eq!(current.revision, 2);
+        assert_eq!(current.favorites.len(), 2);
+    }
+
+    #[test]
+    fn favorites_snapshot_membership_revision_and_recent_rows_share_one_wal_snapshot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let db = GaryxDbService::open(&path).expect("database");
+        seed_favorite_thread(&db, "thread::snapshot-first", true);
+        seed_favorite_thread(&db, "thread::snapshot-second", true);
+        let incarnation = db.store_incarnation_id().unwrap();
+        db.set_thread_favorite("thread::snapshot-first", true, 0, &incarnation)
+            .expect("first favorite");
+        let writer = Connection::open(&path).expect("test-only raw writer");
+
+        let snapshot = db
+            .thread_favorites_snapshot_inner(|| {
+                writer.execute_batch(
+                    "BEGIN IMMEDIATE;
+                     INSERT INTO thread_favorites (thread_id, favorited_at)
+                     VALUES ('thread::snapshot-second', '2026-07-16T00:00:01Z');
+                     UPDATE thread_favorites_meta
+                        SET favorites_revision = favorites_revision + 1 WHERE id = 1;
+                     COMMIT;",
+                )?;
+                Ok(())
+            })
+            .expect("atomic snapshot");
+        assert_eq!(snapshot.page.revision, 1);
+        assert_eq!(snapshot.page.favorites.len(), 1);
+        assert_eq!(snapshot.recent_total, 1);
+        assert_eq!(snapshot.recent_threads.len(), 1);
+        assert_eq!(
+            snapshot.recent_threads[0].thread_id,
+            "thread::snapshot-first"
+        );
+
+        let current = db.thread_favorites_snapshot().expect("next snapshot");
+        assert_eq!(current.page.revision, 2);
+        assert_eq!(current.page.favorites.len(), 2);
+        assert_eq!(current.recent_total, 2);
+    }
+
+    #[test]
+    fn favorite_cleanup_interleavings_and_unconditional_plain_delete_bump_close_orphan_writes() {
+        let archived = GaryxDbService::memory().expect("archive database");
+        seed_favorite_thread(&archived, "thread::archive-first", false);
+        let incarnation = archived.store_incarnation_id().unwrap();
+        assert!(
+            archived
+                .archive_thread_record("thread::archive-first")
+                .expect("archive first")
+        );
+        assert!(matches!(
+            archived
+                .set_thread_favorite("thread::archive-first", true, 0, &incarnation)
+                .expect("post-archive write"),
+            FavoriteThreadResult::NotFound(ref page) if page.revision == 0
+        ));
+
+        let favorite_first = GaryxDbService::memory().expect("favorite-first database");
+        seed_favorite_thread(&favorite_first, "thread::favorite-first", false);
+        let incarnation = favorite_first.store_incarnation_id().unwrap();
+        favorite_first
+            .set_thread_favorite("thread::favorite-first", true, 0, &incarnation)
+            .expect("favorite first");
+        favorite_first
+            .archive_thread_record("thread::favorite-first")
+            .expect("archive cleans favorite");
+        assert_eq!(
+            favorite_first
+                .list_thread_favorites()
+                .expect("post archive")
+                .revision,
+            2
+        );
+        favorite_first
+            .archive_thread_record("thread::favorite-first")
+            .expect("repeat archive");
+        assert_eq!(
+            favorite_first
+                .list_thread_favorites()
+                .expect("repeat archive")
+                .revision,
+            2,
+            "archive tombstone permits bump-on-change"
+        );
+
+        let deleted = GaryxDbService::memory().expect("delete database");
+        seed_favorite_thread(&deleted, "thread::delete-recreate", false);
+        let incarnation = deleted.store_incarnation_id().unwrap();
+        assert!(
+            deleted
+                .delete_thread_record_with_projections("thread::delete-recreate")
+                .expect("plain delete without favorite")
+        );
+        assert_eq!(deleted.list_thread_favorites().unwrap().revision, 1);
+        seed_favorite_thread(&deleted, "thread::delete-recreate", false);
+        assert!(matches!(
+            deleted
+                .set_thread_favorite("thread::delete-recreate", true, 0, &incarnation)
+                .expect("orphan pre-delete write"),
+            FavoriteThreadResult::Conflict(ref page) if page.revision == 1
+        ));
+        assert!(
+            deleted
+                .list_thread_favorites()
+                .unwrap()
+                .favorites
+                .is_empty()
+        );
+
+        deleted
+            .set_thread_favorite("thread::delete-recreate", true, 1, &incarnation)
+            .expect("fresh favorite");
+        assert!(
+            deleted
+                .delete_thread_record_with_projections("thread::delete-recreate")
+                .expect("delete with favorite")
+        );
+        let page = deleted.list_thread_favorites().unwrap();
+        assert_eq!(page.revision, 3, "plain delete bumps exactly once");
+        assert!(page.favorites.is_empty());
+    }
+
+    #[test]
+    fn favorites_snapshot_is_atomic_empty_and_capped_with_truncation() {
+        let db = GaryxDbService::memory().expect("database");
+        let empty = db.thread_favorites_snapshot().expect("empty snapshot");
+        assert!(empty.page.favorites.is_empty());
+        assert!(empty.recent_threads.is_empty());
+        assert_eq!(empty.recent_total, 0);
+        assert!(!empty.recent_truncated);
+
+        let conn = db.conn().expect("writer");
+        conn.execute_batch(
+            "WITH RECURSIVE seq(x) AS (
+                 VALUES(0) UNION ALL SELECT x + 1 FROM seq WHERE x < 500
+             )
+             INSERT INTO thread_records (key, body, updated_at, recorded_at)
+             SELECT printf('thread::snapshot-%03d', x), '{}', NULL,
+                    '2026-07-16T00:00:00Z' FROM seq;
+             WITH RECURSIVE seq(x) AS (
+                 VALUES(0) UNION ALL SELECT x + 1 FROM seq WHERE x < 500
+             )
+             INSERT INTO thread_favorites (thread_id, favorited_at)
+             SELECT printf('thread::snapshot-%03d', x),
+                    printf('2026-07-16T00:%02d:%02dZ', x / 60, x % 60) FROM seq;
+             WITH RECURSIVE seq(x) AS (
+                 VALUES(0) UNION ALL SELECT x + 1 FROM seq WHERE x < 500
+             )
+             INSERT INTO recent_threads (
+                 thread_id, title, thread_type, message_count,
+                 last_message_preview, run_state, last_active_at, recorded_at
+             )
+             SELECT printf('thread::snapshot-%03d', x), printf('Favorite %03d', x),
+                    'chat', 1, '', 'idle',
+                    printf('2026-07-16T00:%02d:%02dZ', x / 60, x % 60),
+                    '2026-07-16T00:00:00Z' FROM seq;",
+        )
+        .expect("seed 501 joined favorites");
+        drop(conn);
+
+        let snapshot = db.thread_favorites_snapshot().expect("capped snapshot");
+        assert_eq!(snapshot.page.favorites.len(), 501);
+        assert_eq!(snapshot.recent_total, 501);
+        assert_eq!(snapshot.recent_threads.len(), 500);
+        assert!(snapshot.recent_truncated);
     }
 
     #[test]
@@ -6312,10 +8193,10 @@ mod tests {
     fn recent_threads_filtered_page_filters_before_pagination() {
         let db = GaryxDbService::memory().expect("db opens");
         for (thread_id, thread_type, timestamp) in [
-            ("thread::task-newest", "task", "2026-05-23T14:00:00Z"),
-            ("thread::chat-newer", "chat", "2026-05-23T13:00:00Z"),
             ("thread::task-middle", "task", "2026-05-23T12:00:00Z"),
             ("thread::chat-older", "chat", "2026-05-23T13:00:00Z"),
+            ("thread::chat-newer", "chat", "2026-05-23T13:00:00Z"),
+            ("thread::task-newest", "task", "2026-05-23T14:00:00Z"),
         ] {
             db.upsert_recent_thread(RecentThreadDraft {
                 thread_id: thread_id.to_owned(),
@@ -6392,6 +8273,95 @@ mod tests {
     }
 
     #[test]
+    fn recent_threads_keyset_does_not_skip_after_deletion_and_uses_n_plus_one() {
+        let db = GaryxDbService::memory().expect("db opens");
+        for thread_id in ["thread::oldest", "thread::middle", "thread::newest"] {
+            db.upsert_recent_thread(sample_recent_draft(thread_id))
+                .expect("seed recent row");
+        }
+
+        let first = db
+            .list_recent_threads_keyset_page(RecentThreadTaskFilter::Include, 1, None)
+            .expect("first keyset page");
+        assert_eq!(first.total, 3);
+        assert!(first.has_more, "N+1 must detect a second row");
+        assert_eq!(first.records.len(), 1);
+        assert_eq!(first.records[0].thread_id, "thread::newest");
+        let cursor = first.records[0].activity_seq;
+
+        db.remove_recent_thread("thread::newest")
+            .expect("delete already-returned row");
+        let second = db
+            .list_recent_threads_keyset_page(RecentThreadTaskFilter::Include, 1, Some(cursor))
+            .expect("second keyset page");
+        assert_eq!(second.total, 2);
+        assert!(second.has_more);
+        assert_eq!(
+            second.records[0].thread_id, "thread::middle",
+            "deleting a row above the cursor must not skip the next row"
+        );
+
+        let last = db
+            .list_recent_threads_keyset_page(
+                RecentThreadTaskFilter::Include,
+                1,
+                Some(second.records[0].activity_seq),
+            )
+            .expect("last keyset page");
+        assert_eq!(last.records[0].thread_id, "thread::oldest");
+        assert!(!last.has_more, "exactly N remaining rows has no next page");
+
+        let empty = db
+            .list_recent_threads_keyset_page(
+                RecentThreadTaskFilter::Include,
+                1,
+                Some(last.records[0].activity_seq),
+            )
+            .expect("empty tail page");
+        assert!(empty.records.is_empty());
+        assert!(!empty.has_more);
+    }
+
+    #[test]
+    fn recent_threads_keyset_count_and_rows_share_one_wal_snapshot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let db = GaryxDbService::open(&path).expect("db opens");
+        db.upsert_recent_thread(sample_recent_draft("thread::snapshot-before"))
+            .expect("seed initial row");
+
+        let page = db
+            .list_recent_threads_keyset_page_inner(
+                RecentThreadTaskFilter::Include,
+                10,
+                None,
+                || {
+                    let writer = Connection::open(&path)?;
+                    writer.execute_batch(
+                        "BEGIN IMMEDIATE;
+                         UPDATE recent_threads_meta SET activity_seq = 2 WHERE id = 1;
+                         INSERT INTO recent_threads (
+                             thread_id, title, thread_type, last_active_at,
+                             activity_seq, recorded_at
+                         ) VALUES (
+                             'thread::snapshot-after', 'After', 'chat',
+                             '2026-07-16T01:00:00Z', 2,
+                             '2026-07-16T01:00:00Z'
+                         );
+                         COMMIT;",
+                    )?;
+                    Ok(())
+                },
+            )
+            .expect("snapshot keyset page");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0].thread_id, "thread::snapshot-before");
+        assert_eq!(db.count_recent_threads().unwrap(), 2);
+    }
+
+    #[test]
     fn recent_threads_filtered_page_uses_one_read_snapshot() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("garyx-db.sqlite3");
@@ -6442,23 +8412,25 @@ mod tests {
     #[test]
     fn recent_threads_filtered_queries_use_partial_order_indexes() {
         let db = GaryxDbService::memory().expect("db opens");
+        db.migrate_recent_thread_activity_seq_v1()
+            .expect("create activity indexes");
         let conn = db.conn().expect("conn");
         for (predicate, expected_index) in [
             (
                 "thread_type = 'task'",
-                "idx_recent_threads_task_last_active",
+                "idx_recent_threads_task_activity_seq",
             ),
             (
                 "thread_type <> 'task'",
-                "idx_recent_threads_non_task_last_active",
+                "idx_recent_threads_non_task_activity_seq",
             ),
         ] {
             let sql = format!(
                 "EXPLAIN QUERY PLAN
                  SELECT thread_id FROM recent_threads
                   WHERE {predicate}
-                  ORDER BY last_active_at DESC, thread_id ASC
-                  LIMIT 10 OFFSET 0"
+                  ORDER BY activity_seq DESC
+                  LIMIT 10"
             );
             let mut stmt = conn.prepare(&sql).expect("prepare query plan");
             let details = stmt

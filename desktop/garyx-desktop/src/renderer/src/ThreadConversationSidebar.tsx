@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Archive, PanelLeftClose } from 'lucide-react';
+import { Archive, PanelLeftClose, StarOff } from 'lucide-react';
 
 import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './components/ui/tooltip';
@@ -29,6 +29,8 @@ export type ThreadRailRow = {
   onOpen: () => void;
   /** Per-row archive handler. Omit to render the row without an action. */
   onArchive?: () => void;
+  /** Favorites-only immediate removal action, rendered before Archive. */
+  onUnfavorite?: () => void;
 };
 
 type ThreadConversationSidebarProps = {
@@ -58,8 +60,8 @@ type ThreadConversationSidebarProps = {
 
 /**
  * Shared secondary "thread list" rail behind Workspaces, Bots, and Recent.
- * Each caller maps its data into {@link ThreadRailRow}s. Archive is the single
- * unified row action; omit `onArchive` for a read-only row.
+ * Each caller maps its data into {@link ThreadRailRow}s. Row accessories are
+ * composable; omit both handlers for a read-only row.
  */
 export function ThreadConversationSidebar({
   ariaLabel,
@@ -141,7 +143,7 @@ export function ThreadConversationSidebar({
       >
         {rows.length ? (
           rows.map((row) => {
-            const hasAction = Boolean(row.onArchive);
+            const hasAction = Boolean(row.onArchive || row.onUnfavorite);
             const isConfirming = confirmKey === row.key;
             const openable = row.openable !== false;
             return (
@@ -197,40 +199,63 @@ export function ThreadConversationSidebar({
                   <span className="bot-conversation-row-time">{formatThreadTimestamp(row.time)}</span>
                 </button>
                 {hasAction ? (
-                  isConfirming ? (
-                    <button
-                      aria-label={t('Confirm archive {name}', { name: row.title })}
-                      className="thread-delete-button confirm"
-                      style={{ opacity: 1, pointerEvents: 'auto' }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setConfirmKey(null);
-                        row.onArchive?.();
-                      }}
-                      tabIndex={-1}
-                      type="button"
-                    >
-                      {t('Confirm')}
-                    </button>
-                  ) : (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
+                  <>
+                    {row.onUnfavorite && !isConfirming ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            aria-label={t('Unfavorite conversation')}
+                            className="thread-delete-button thread-unfavorite-button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              row.onUnfavorite?.();
+                            }}
+                            tabIndex={-1}
+                            type="button"
+                          >
+                            <StarOff aria-hidden />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>{t('Unfavorite conversation')}</TooltipContent>
+                      </Tooltip>
+                    ) : null}
+                    {row.onArchive ? (
+                      isConfirming ? (
                         <button
-                          aria-label={t('Archive {name}', { name: row.title })}
-                          className="thread-delete-button"
+                          aria-label={t('Confirm archive {name}', { name: row.title })}
+                          className="thread-delete-button confirm"
+                          style={{ opacity: 1, pointerEvents: 'auto' }}
                           onClick={(event) => {
                             event.stopPropagation();
-                            setConfirmKey(row.key);
+                            setConfirmKey(null);
+                            row.onArchive?.();
                           }}
                           tabIndex={-1}
                           type="button"
                         >
-                          <Archive aria-hidden />
+                          {t('Confirm')}
                         </button>
-                      </TooltipTrigger>
-                      <TooltipContent>{t('Archive thread')}</TooltipContent>
-                    </Tooltip>
-                  )
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              aria-label={t('Archive {name}', { name: row.title })}
+                              className="thread-delete-button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setConfirmKey(row.key);
+                              }}
+                              tabIndex={-1}
+                              type="button"
+                            >
+                              <Archive aria-hidden />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('Archive thread')}</TooltipContent>
+                        </Tooltip>
+                      )
+                    ) : null}
+                  </>
                 ) : null}
               </div>
             );

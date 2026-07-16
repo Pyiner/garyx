@@ -67,6 +67,12 @@ Fields:
 | `meetings.join_retry_window_secs` | `300` | Absolute retry window for joining an invited meeting. |
 | `meetings.read_page_bytes` | `65536` | Hard cap for each newly produced structured meeting-read page; effective values have a 4096-byte floor. |
 
+Only one gateway process may own a configured session data directory at a
+time. Startup waits up to 30 seconds for the existing owner to release the
+directory lock, then exits without opening the database if ownership cannot be
+acquired. Set `GARYX_DATA_LOCK_WAIT_SECS` to a non-negative number of seconds
+to change that bounded wait for supervised handoffs.
+
 ## Channels
 
 Garyx stores user-facing channel accounts directly under `channels.<channel_id>`.

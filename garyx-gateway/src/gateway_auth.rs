@@ -107,17 +107,46 @@ pub fn extract_request_token(headers: &HeaderMap, uri: &Uri) -> Option<String> {
         .or_else(|| token_from_mcp_path(uri.path()))
 }
 
-fn authorization_failure_message(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GatewayAuthFailure {
+    Forbidden,
+    Unauthorized,
+}
+
+impl GatewayAuthFailure {
+    fn status(self) -> StatusCode {
+        match self {
+            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+        }
+    }
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::Forbidden => "forbidden",
+            Self::Unauthorized => "unauthorized",
+        }
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Self::Forbidden => TOKEN_NOT_CONFIGURED_MESSAGE,
+            Self::Unauthorized => UNAUTHORIZED_MESSAGE,
+        }
+    }
+}
+
+fn authorization_failure(
     state: &AppState,
     headers: &HeaderMap,
     uri: &Uri,
-) -> Option<&'static str> {
+) -> Option<GatewayAuthFailure> {
     let configured = configured_tokens(state);
     if configured.is_empty() {
-        return Some(TOKEN_NOT_CONFIGURED_MESSAGE);
+        return Some(GatewayAuthFailure::Forbidden);
     }
     let Some(provided) = extract_request_token(headers, uri) else {
-        return Some(UNAUTHORIZED_MESSAGE);
+        return Some(GatewayAuthFailure::Unauthorized);
     };
     if configured
         .iter()
@@ -125,12 +154,12 @@ fn authorization_failure_message(
     {
         None
     } else {
-        Some(UNAUTHORIZED_MESSAGE)
+        Some(GatewayAuthFailure::Unauthorized)
     }
 }
 
 pub fn request_authorized(state: &AppState, headers: &HeaderMap, uri: &Uri) -> bool {
-    authorization_failure_message(state, headers, uri).is_none()
+    authorization_failure(state, headers, uri).is_none()
 }
 
 fn request_from_loopback(req: &Request<Body>) -> bool {
@@ -140,13 +169,14 @@ fn request_from_loopback(req: &Request<Body>) -> bool {
         .unwrap_or(false)
 }
 
-pub fn unauthorized_gateway_response(message: &str) -> Response {
+fn gateway_auth_failure_response(failure: GatewayAuthFailure) -> Response {
     (
-        StatusCode::UNAUTHORIZED,
+        failure.status(),
         Json(json!({
-            "ok": false,
-            "error": "unauthorized",
-            "message": message,
+            "kind": "garyx_api_error",
+            "operation": "gateway_auth",
+            "code": failure.code(),
+            "message": failure.message(),
         })),
     )
         .into_response()
@@ -161,8 +191,8 @@ pub async fn enforce_gateway_auth(
         return next.run(req).await;
     }
 
-    if let Some(message) = authorization_failure_message(&state, req.headers(), req.uri()) {
-        unauthorized_gateway_response(message)
+    if let Some(failure) = authorization_failure(&state, req.headers(), req.uri()) {
+        gateway_auth_failure_response(failure)
     } else {
         next.run(req).await
     }

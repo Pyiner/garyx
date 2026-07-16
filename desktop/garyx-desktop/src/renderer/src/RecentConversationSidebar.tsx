@@ -5,7 +5,11 @@ import {
   type ReactNode,
 } from "react";
 
-import type { RecentThreadFeedState, RecentThreadFilter } from "./app-shell/recent-thread-feeds";
+import {
+  recentThreadFilterLabel,
+  type RecentThreadFeedState,
+  type RecentThreadFilter,
+} from "./app-shell/recent-thread-feeds";
 import {
   ThreadConversationSidebar,
   type ThreadRailRow,
@@ -23,7 +27,7 @@ type RecentConversationSidebarProps = {
   formatThreadTimestamp: (value?: string | null) => string;
   logo: ReactNode;
   onClose: () => void;
-  onLoadMore: () => void;
+  onLoadMore?: () => void;
   onRailResizeStart?: ComponentProps<
     typeof ThreadConversationSidebar
   >["onRailResizeStart"];
@@ -34,7 +38,7 @@ type RecentConversationSidebarProps = {
   selectedFilter: RecentThreadFilter;
 };
 
-const FILTERS: RecentThreadFilter[] = ["all", "nonTask"];
+const FILTERS: RecentThreadFilter[] = ["all", "nonTask", "favorites"];
 
 export function RecentConversationSidebar({
   collapseLabel,
@@ -54,6 +58,7 @@ export function RecentConversationSidebar({
   const tabRefs = useRef<Record<RecentThreadFilter, HTMLButtonElement | null>>({
     all: null,
     nonTask: null,
+    favorites: null,
   });
   const presentation = recentConversationPresentation(
     feed,
@@ -96,7 +101,7 @@ export function RecentConversationSidebar({
           role="tablist"
         >
           {FILTERS.map((filter) => {
-            const label = filter === "all" ? t("All") : t("Chats");
+            const label = t(recentThreadFilterLabel(filter));
             const selected = filter === selectedFilter;
             return (
               <button
@@ -121,7 +126,9 @@ export function RecentConversationSidebar({
       listFooter={listFooter}
       logo={logo}
       onClose={onClose}
-      onNearListEnd={feed.loadGate === "ready" ? onLoadMore : undefined}
+      onNearListEnd={
+        onLoadMore && feed.loadGate === "ready" ? onLoadMore : undefined
+      }
       onRailResizeStart={onRailResizeStart}
       railResizing={railResizing}
       rowClassName="recent-conversation-row-shell"

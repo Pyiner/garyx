@@ -42,7 +42,12 @@ fn public_runtime_routes() -> Router<Arc<AppState>> {
 }
 
 fn protected_runtime_routes() -> Router<Arc<AppState>> {
-    Router::new().route("/runtime", axum::routing::get(routes::runtime_info))
+    Router::new()
+        .route("/runtime", axum::routing::get(routes::runtime_info))
+        .route(
+            "/api/store-identity",
+            axum::routing::get(routes::store_identity),
+        )
 }
 
 fn usage_routes() -> Router<Arc<AppState>> {
@@ -82,6 +87,18 @@ fn thread_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/thread-pins/{key}",
             axum::routing::put(routes::pin_thread).delete(routes::unpin_thread),
+        )
+        .route(
+            "/api/thread-favorites",
+            axum::routing::get(routes::list_thread_favorites),
+        )
+        .route(
+            "/api/thread-favorites/snapshot",
+            axum::routing::get(routes::thread_favorites_snapshot),
+        )
+        .route(
+            "/api/thread-favorites/{key}",
+            axum::routing::put(routes::favorite_thread).delete(routes::unfavorite_thread),
         )
         .route(
             "/api/threads/{key}",

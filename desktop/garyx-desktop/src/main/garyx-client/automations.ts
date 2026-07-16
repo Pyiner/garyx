@@ -300,6 +300,7 @@ export async function fetchAutomations(
   const payload = await requestJson<AutomationsPayload>(
     settings,
     "/api/automations",
+    "readRetryable",
     {
       signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
     },
@@ -326,6 +327,7 @@ export async function createRemoteAutomation(
   const payload = await requestJson<AutomationSummaryPayload>(
     settings,
     "/api/automations",
+    "mutationSingleAttempt",
     {
       method: "POST",
       signal: AbortSignal.timeout(8000),
@@ -358,6 +360,7 @@ export async function updateRemoteAutomation(
   const payload = await requestJson<AutomationSummaryPayload>(
     settings,
     `/api/automations/${encodeURIComponent(automationId)}`,
+    "mutationSingleAttempt",
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),
@@ -382,6 +385,7 @@ export async function deleteRemoteAutomation(
   await requestJson<unknown>(
     settings,
     `/api/automations/${encodeURIComponent(automationId)}`,
+    "mutationSingleAttempt",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
@@ -396,6 +400,7 @@ export async function fetchAutomationActivity(
   const payload = await requestJson<AutomationActivityPayload>(
     settings,
     `/api/automations/${encodeURIComponent(automationId)}/activity`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -436,10 +441,15 @@ export async function runRemoteAutomationNow(
     durationMs?: number | null;
     excerpt?: string | null;
     threadId?: string | null;
-  }>(settings, `/api/automations/${encodeURIComponent(automationId)}/run-now`, {
-    method: "POST",
-    signal: AbortSignal.timeout(8000),
-  });
+  }>(
+    settings,
+    `/api/automations/${encodeURIComponent(automationId)}/run-now`,
+    "mutationSingleAttempt",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+    },
+  );
 
   return mapAutomationActivityEntry(payload, "run automation response");
 }

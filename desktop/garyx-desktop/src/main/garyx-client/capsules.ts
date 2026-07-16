@@ -116,9 +116,12 @@ function mapCapsulesPage(payload: unknown): DesktopCapsulesPage {
 export async function listCapsules(
   settings: DesktopSettings,
 ): Promise<DesktopCapsulesPage> {
-  const payload = await requestJson<CapsulesPayload>(settings, "/api/capsules", {
-    signal: AbortSignal.timeout(8000),
-  });
+  const payload = await requestJson<CapsulesPayload>(
+    settings,
+    "/api/capsules",
+    "readRetryable",
+    { signal: AbortSignal.timeout(8000) },
+  );
   return mapCapsulesPage(payload);
 }
 
@@ -134,6 +137,7 @@ export async function getCapsule(
     const payload = await requestJson<CapsulesPayload>(
       settings,
       `/api/capsules/${encodeURIComponent(id)}`,
+      "readRetryable",
       { signal: AbortSignal.timeout(8000) },
     );
     const record = requireContractRecord(payload, "get capsule response");
@@ -161,6 +165,7 @@ export async function getCapsuleHtml(
     const html = await requestText(
       settings,
       `/api/capsules/${encodeURIComponent(id)}/serve`,
+      "readRetryable",
       { signal: AbortSignal.timeout(15000) },
     );
     return { status: "ok", html };
@@ -183,10 +188,15 @@ export async function deleteCapsule(
   if (!id) {
     throw new Error("capsuleId is required");
   }
-  await requestJson<unknown>(settings, `/api/capsules/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    signal: AbortSignal.timeout(8000),
-  });
+  await requestJson<unknown>(
+    settings,
+    `/api/capsules/${encodeURIComponent(id)}`,
+    "mutationSingleAttempt",
+    {
+      method: "DELETE",
+      signal: AbortSignal.timeout(8000),
+    },
+  );
 }
 
 export async function setCapsuleFavorite(
@@ -200,6 +210,7 @@ export async function setCapsuleFavorite(
   const payload = await requestJson<CapsulesPayload>(
     settings,
     `/api/capsules/${encodeURIComponent(id)}/favorite`,
+    "mutationSingleAttempt",
     {
       method: input.favorited ? "PUT" : "DELETE",
       signal: AbortSignal.timeout(8000),

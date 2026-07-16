@@ -20,11 +20,17 @@ export {
   GatewayRequestError,
   normalizeGatewayUrl,
   requestJson,
+  requestMutationJson,
   requestText,
   setGatewayFetch,
   setGatewayStreamFetch,
 } from "./garyx-client/http.ts";
-export type { GatewayFetch } from "./garyx-client/http.ts";
+export type {
+  GatewayFetch,
+  GatewayMutationResult,
+  GatewayRequestSemantics,
+  GatewayTaggedApiError,
+} from "./garyx-client/http.ts";
 export {
   ThreadStreamGapError,
   streamThreadEvents,

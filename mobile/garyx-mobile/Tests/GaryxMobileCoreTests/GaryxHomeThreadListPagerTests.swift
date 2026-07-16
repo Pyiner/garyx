@@ -45,27 +45,31 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
     // MARK: 1. Initial refresh primes cursor and gate
 
     func testInitialRefreshPrimesCursorFromDecodedPage() throws {
-        // Real gateway response shape (snake_case page metadata, has_more
-        // derived when absent) — the exact payload the pager's inputs
-        // come from in production.
+        // Real cursor-only gateway response shape. The legacy offset pager is
+        // still exercised here as an isolated gate primitive until the Recent
+        // range-fill state replaces it.
         let json = Data("""
         {
           "threads": [
             {"thread_id": "thread::11111111-aaaa-bbbb-cccc-000000000001",
              "title": "Fix login flow", "last_active_at": "2026-07-07T02:00:00Z",
-             "last_message_preview": "done, tests green", "agent_id": "claude"},
+             "last_message_preview": "done, tests green", "agent_id": "claude",
+             "activity_seq": 3},
             {"thread_id": "thread::11111111-aaaa-bbbb-cccc-000000000002",
              "title": "Design review", "last_active_at": "2026-07-07T01:00:00Z",
-             "last_message_preview": "PASS", "agent_id": "codex"},
+             "last_message_preview": "PASS", "agent_id": "codex", "activity_seq": 2},
             {"thread_id": "thread::11111111-aaaa-bbbb-cccc-000000000003",
              "title": "Untitled", "last_active_at": "2026-07-07T00:30:00Z",
-             "last_message_preview": ""}
+             "last_message_preview": "", "activity_seq": 1}
           ],
-          "count": 3, "limit": 3, "offset": 0, "total": 12
+          "count": 3, "limit": 3, "total": 12, "has_more": true,
+          "next_cursor": "cursor-1",
+          "store_incarnation_id": "11111111-1111-4111-8111-111111111111",
+          "server_boot_id": "22222222-2222-4222-8222-222222222222"
         }
         """.utf8)
         let page = try JSONDecoder().decode(GaryxRecentThreadsPage.self, from: json)
-        XCTAssertTrue(page.hasMore, "has_more derives from offset + count < total")
+        XCTAssertTrue(page.hasMore)
 
         var pager = makePager(pageLimit: 3)
         XCTAssertNil(
@@ -76,7 +80,7 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
         let ticket = try XCTUnwrap(pager.requestRefresh())
         let application = pager.completeRefresh(
             ticket,
-            pageOffset: page.offset,
+            pageOffset: 0,
             pageCount: page.count,
             hasMore: page.hasMore
         )
@@ -321,6 +325,22 @@ final class GaryxHomeThreadListPagerTests: XCTestCase {
     }
 
     // MARK: 7. Reset + stale tickets
+
+    func testIdentityInterruptReleasesBothLanesWithoutCreatingFailureState() throws {
+        var pager = primedPager(cursor: 30)
+        let refresh = try XCTUnwrap(pager.requestRefresh())
+        let loadMore = try XCTUnwrap(pager.requestLoadMore(trigger: .footer))
+
+        pager.interruptRefresh(refresh)
+        pager.interruptLoadMore(loadMore)
+
+        XCTAssertFalse(pager.isRefreshingHead)
+        XCTAssertFalse(pager.isLoadingMore)
+        XCTAssertEqual(pager.gate, .ready)
+        XCTAssertEqual(pager.loadMoreFailureRevision, 0)
+        XCTAssertNotNil(pager.requestRefresh())
+        XCTAssertNotNil(pager.requestLoadMore(trigger: .footer))
+    }
 
     func testResetBumpsEpochAndStaleTicketsAreNoOps() throws {
         var pager = primedPager(cursor: 30)

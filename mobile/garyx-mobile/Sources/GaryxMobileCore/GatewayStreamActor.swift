@@ -89,9 +89,17 @@ public struct GatewayStreamConnection: Sendable {
 }
 
 public struct GatewayStreamTransport: Sendable {
-    public var connect: @Sendable (URLRequest) async throws -> GatewayStreamConnection
+    public var connect: @Sendable (
+        URLRequest,
+        GaryxGatewayRequestSemantics
+    ) async throws -> GatewayStreamConnection
 
-    public init(connect: @escaping @Sendable (URLRequest) async throws -> GatewayStreamConnection) {
+    public init(
+        connect: @escaping @Sendable (
+            URLRequest,
+            GaryxGatewayRequestSemantics
+        ) async throws -> GatewayStreamConnection
+    ) {
         self.connect = connect
     }
 }
@@ -399,9 +407,10 @@ public actor GatewayStreamActor {
                 nextResumeOverride = nil
                 processor.resetConnection(afterSeq: streamRequest.afterSeq, replayScope: streamRequest.replayScope)
                 let request = try endpoint.threadStreamRequest(threadId: threadId, request: streamRequest)
+                let semantics = GaryxGatewayRequestSemantics.readRetryable
                 let reconnect: GatewayStreamReconnect?
                 if let transport {
-                    let connection = try await transport.connect(request)
+                    let connection = try await transport.connect(request, semantics)
                     guard try await handleStatus(connection.statusCode, actionHandler: actionHandler) else { return }
                     reconnect = try await processLines(
                         connection.lines,
@@ -410,6 +419,10 @@ public actor GatewayStreamActor {
                         actionHandler: actionHandler
                     )
                 } else {
+                    precondition(
+                        semantics == .readRetryable && request.httpMethod == "GET",
+                        "Gateway streams are readRetryable GET requests"
+                    )
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     guard let http = response as? HTTPURLResponse else {
                         throw GaryxGatewayError.invalidHTTPResponse

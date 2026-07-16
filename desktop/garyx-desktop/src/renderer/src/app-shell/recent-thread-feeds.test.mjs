@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  completeRecentThreadRequest,
+  completeRecentThreadLoadMore,
   consumeRecentThreadMutationFollowUp,
   createRecentThreadFeedsState,
   failRecentThreadRequest,
   ingestRecentThreadSummaries,
+  markRecentThreadForceReplacement,
   noteRecentThreadFilterLocalMutation,
+  recentRefreshChainNeedsNextPage,
   removeThreadFromRecentFeeds,
   requestRecentThreadLoadMore,
   requestRecentThreadRefresh,
@@ -17,7 +19,20 @@ import {
   selectRecentThreadFilter,
   selectedRecentThreadSummaries,
   upsertChatInRecentFeeds,
+  verificationObservedNewerHead,
+  completeRecentThreadRefresh,
+  RECENT_THREAD_MAX_CHAIN_PAGES,
 } from "./recent-thread-feeds.ts";
+
+function completeRecentThreadRequest(state, ticket, responsePage) {
+  if (ticket.kind === "refresh") {
+    return completeRecentThreadRefresh(state, ticket, {
+      primaryPages: [responsePage],
+      verificationPage: responsePage,
+    }).state;
+  }
+  return completeRecentThreadLoadMore(state, ticket, responsePage).state;
+}
 
 function summary(id, title = id, threadType = "chat") {
   return {
@@ -31,14 +46,43 @@ function summary(id, title = id, threadType = "chat") {
 }
 
 function page(scope, ids, options = {}) {
+  const hasMore = options.hasMore ?? false;
   return {
     gatewayScope: scope,
+    storeIncarnationId: options.storeIncarnationId ?? "incarnation-a",
+    serverBootId: options.serverBootId ?? "boot-a",
     threads: ids.map((id) => summary(id)),
     count: options.count ?? ids.length,
     total: options.total ?? ids.length,
     limit: options.limit ?? 100,
-    offset: options.offset ?? 0,
+    hasMore,
+    nextCursor: Object.hasOwn(options, "nextCursor")
+      ? options.nextCursor
+      : hasMore
+        ? `cursor-${ids.at(-1) || "empty"}`
+        : null,
+  };
+}
+
+function seqPage(scope, rows, options = {}) {
+  return {
+    ...page(scope, [], {
+      ...options,
+      storeIncarnationId: options.incarnation ?? options.storeIncarnationId,
+      serverBootId: options.boot ?? options.serverBootId,
+    }),
+    threads: rows.map(([id, activitySeq]) => ({
+      ...summary(id),
+      activitySeq,
+    })),
+    count: rows.length,
+    total: options.total ?? rows.length,
     hasMore: options.hasMore ?? false,
+    nextCursor: Object.hasOwn(options, "nextCursor")
+      ? options.nextCursor
+      : options.hasMore
+        ? `cursor-${rows.at(-1)?.[1] ?? "empty"}`
+        : null,
   };
 }
 
@@ -61,6 +105,16 @@ test("Recent feeds default to All and map both filters to explicit wire values",
   assert.equal(state.feeds.nonTask.isPrimed, false);
   assert.equal(state.feeds.all.refreshAfterMutation, false);
   assert.equal(state.feeds.all.loadMoreAfterMutation, false);
+});
+
+test("Favorites selection owns no paginated Recent feed", () => {
+  const state = selectRecentThreadFilter(
+    createRecentThreadFeedsState("https://gateway.test"),
+    "favorites",
+  );
+  assert.equal(state.selectedFilter, "favorites");
+  assert.deepEqual(selectedRecentThreadSummaries(state), []);
+  assert.deepEqual(Object.keys(state.feeds).sort(), ["all", "nonTask"]);
 });
 
 test("filter tickets own independent rows and accept late completion into their own cache", () => {
@@ -126,7 +180,7 @@ test("successful empty pages are primed while first failures remain unavailable"
   assert.equal(failed.feeds.nonTask.headFailure, "offline");
 });
 
-test("head refresh merges loaded tails and overlap load-more advances by server cursor", () => {
+test("cursor pages replace the head and append load-more rows", () => {
   let state = createRecentThreadFeedsState("https://gateway.test");
   state = refresh(state, "all", ["a", "b", "c"], {
     count: 3,
@@ -135,18 +189,18 @@ test("head refresh merges loaded tails and overlap load-more advances by server 
   });
 
   let load = requestRecentThreadLoadMore(state, "all");
-  assert.equal(load.ticket.offset, 0);
+  assert.equal(load.ticket.cursor, "cursor-c");
   state = completeRecentThreadRequest(
     load.state,
     load.ticket,
-    page(state.gatewayScope, ["a", "b", "c", "d", "e", "f"], {
-      count: 6,
+    page(state.gatewayScope, ["d", "e", "f"], {
+      count: 3,
       total: 9,
       hasMore: true,
     }),
   );
   assert.deepEqual(state.feeds.all.orderedThreadIds, ["a", "b", "c", "d", "e", "f"]);
-  assert.equal(state.feeds.all.nextOffset, 6);
+  assert.equal(state.feeds.all.nextCursor, "cursor-f");
 
   const head = requestRecentThreadRefresh(state, "all");
   state = completeRecentThreadRequest(
@@ -158,27 +212,26 @@ test("head refresh merges loaded tails and overlap load-more advances by server 
       hasMore: true,
     }),
   );
-  assert.deepEqual(state.feeds.all.orderedThreadIds, ["new", "a", "b", "c", "d", "e", "f"]);
-  assert.equal(state.feeds.all.nextOffset, 6);
+  assert.deepEqual(state.feeds.all.orderedThreadIds, ["new", "a", "b"]);
+  assert.equal(state.feeds.all.nextCursor, "cursor-b");
 
   load = requestRecentThreadLoadMore(state, "all");
-  assert.equal(load.ticket.offset, 1);
+  assert.equal(load.ticket.cursor, "cursor-b");
   state = completeRecentThreadRequest(
     load.state,
     load.ticket,
     page(state.gatewayScope, ["a", "b", "c", "d", "e", "f", "g"], {
-      offset: 1,
-      count: 7,
+      count: 5,
       total: 8,
       hasMore: false,
     }),
   );
   assert.deepEqual(state.feeds.all.orderedThreadIds, ["new", "a", "b", "c", "d", "e", "f", "g"]);
-  assert.equal(state.feeds.all.nextOffset, 8);
+  assert.equal(state.feeds.all.nextCursor, null);
   assert.equal(state.feeds.all.loadGate, "exhausted");
 });
 
-test("each filter owns its offset and coalesces duplicate load-more triggers", () => {
+test("each filter owns its cursor and coalesces duplicate load-more triggers", () => {
   let state = createRecentThreadFeedsState("https://gateway.test");
   state = refresh(state, "all", ["task", "chat-a", "chat-b"], {
     count: 3,
@@ -196,14 +249,14 @@ test("each filter owns its offset and coalesces duplicate load-more triggers", (
   assert.equal(requestRecentThreadLoadMore(allLoad.state, "all").ticket, null);
   const chatsLoad = requestRecentThreadLoadMore(allLoad.state, "nonTask");
   assert.ok(chatsLoad.ticket);
-  assert.equal(allLoad.ticket.offset, 0);
-  assert.equal(chatsLoad.ticket.offset, 0);
+  assert.equal(allLoad.ticket.cursor, "cursor-chat-b");
+  assert.equal(chatsLoad.ticket.cursor, "cursor-chat-a");
 
   state = completeRecentThreadRequest(
     chatsLoad.state,
     chatsLoad.ticket,
-    page(state.gatewayScope, ["chat-a", "chat-b", "chat-c", "chat-d"], {
-      count: 4,
+    page(state.gatewayScope, ["chat-b", "chat-c", "chat-d"], {
+      count: 3,
       total: 10,
       hasMore: true,
     }),
@@ -211,14 +264,14 @@ test("each filter owns its offset and coalesces duplicate load-more triggers", (
   state = completeRecentThreadRequest(
     state,
     allLoad.ticket,
-    page(state.gatewayScope, ["task", "chat-a", "chat-b", "tail-a", "tail-b", "tail-c"], {
-      count: 6,
+    page(state.gatewayScope, ["tail-a", "tail-b", "tail-c"], {
+      count: 3,
       total: 20,
       hasMore: true,
     }),
   );
-  assert.equal(state.feeds.all.nextOffset, 6);
-  assert.equal(state.feeds.nonTask.nextOffset, 4);
+  assert.equal(state.feeds.all.nextCursor, "cursor-tail-c");
+  assert.equal(state.feeds.nonTask.nextCursor, "cursor-chat-d");
 });
 
 test("load-more failures require explicit retry and do not contaminate the other feed", () => {
@@ -355,7 +408,7 @@ test("a load-more abandoned by local mutation reissues its owned filter window",
     }),
   );
   assert.equal(state.feeds.nonTask.loadMoreAfterMutation, true);
-  assert.equal(state.feeds.nonTask.nextOffset, 2);
+  assert.equal(state.feeds.nonTask.nextCursor, "cursor-chat-b");
 
   const followUp = consumeRecentThreadMutationFollowUp(
     state,
@@ -364,7 +417,7 @@ test("a load-more abandoned by local mutation reissues its owned filter window",
   );
   assert.ok(followUp.ticket);
   assert.equal(followUp.ticket.filter, "nonTask");
-  assert.equal(followUp.ticket.offset, 0);
+  assert.equal(followUp.ticket.cursor, "cursor-chat-b");
   assert.equal(followUp.state.feeds.nonTask.loadMoreAfterMutation, false);
 });
 
@@ -398,4 +451,351 @@ test("canonical Recent membership never truncates the shared DesktopState cache"
     desktopThreads.map((thread) => thread.id),
     ["task", "chat", "generated", "hidden-side-chat"],
   );
+});
+
+function primeSeqFeed(rows, options = {}) {
+  let state = createRecentThreadFeedsState("https://gateway.test");
+  const requested = requestRecentThreadRefresh(state, "all");
+  const head = seqPage(state.gatewayScope, rows, {
+    hasMore: options.hasMore ?? true,
+    nextCursor: options.nextCursor ?? "cursor-old-tail",
+    total: options.total ?? 100,
+  });
+  const completed = completeRecentThreadRefresh(requested.state, requested.ticket, {
+    primaryPages: [head],
+    verificationPage: head,
+  });
+  assert.equal(completed.action, "applied");
+  return completed.state;
+}
+
+test("seq range-fill walks to the old head and atomically preserves the loaded tail", () => {
+  let state = primeSeqFeed([
+    ["old-head", 100],
+    ["old-99", 99],
+    ["old-98", 98],
+  ]);
+  const load = requestRecentThreadLoadMore(state, "all");
+  state = completeRecentThreadRequest(
+    load.state,
+    load.ticket,
+    seqPage(state.gatewayScope, [
+      ["old-97", 97],
+      ["old-96", 96],
+    ], { hasMore: true, nextCursor: "cursor-96", total: 100 }),
+  );
+  const refreshRequest = requestRecentThreadRefresh(state, "all");
+  assert.equal(refreshRequest.ticket.mode, "rangeFill");
+  assert.equal(refreshRequest.ticket.oldHeadActivitySeq, 100);
+  const first = seqPage(state.gatewayScope, [
+    ["new-105", 105],
+    ["new-104", 104],
+  ], { hasMore: true, nextCursor: "cursor-104", total: 105 });
+  assert.equal(
+    recentRefreshChainNeedsNextPage("rangeFill", 100, [first]),
+    true,
+  );
+  const second = seqPage(state.gatewayScope, [
+    ["new-103", 103],
+    ["old-head", 100],
+  ], { hasMore: true, nextCursor: "cursor-100", total: 105 });
+  assert.equal(
+    recentRefreshChainNeedsNextPage("rangeFill", 100, [first, second]),
+    false,
+  );
+  const result = completeRecentThreadRefresh(
+    refreshRequest.state,
+    refreshRequest.ticket,
+    { primaryPages: [first, second], verificationPage: first },
+  );
+  assert.equal(result.action, "applied");
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds, [
+    "new-105",
+    "new-104",
+    "new-103",
+    "old-head",
+    "old-99",
+    "old-98",
+    "old-97",
+    "old-96",
+  ]);
+  assert.equal(result.state.feeds.all.nextCursor, "cursor-96");
+});
+
+test("a failed page drops the entire range-fill chain and preserves the cache", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  const before = state.feeds.all.orderedThreadIds;
+  const request = requestRecentThreadRefresh(state, "all");
+  state = failRecentThreadRequest(request.state, request.ticket, "page two failed");
+  assert.deepEqual(state.feeds.all.orderedThreadIds, before);
+  assert.equal(state.feeds.all.headFailure, "page two failed");
+  assert.equal(state.feeds.all.isRefreshingHead, false);
+});
+
+test("K=5 overflow commits exactly the fetched window, drops old rows, and advances epoch", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  const oldEpoch = state.feeds.all.epoch;
+  const request = requestRecentThreadRefresh(state, "all");
+  const pages = Array.from({ length: RECENT_THREAD_MAX_CHAIN_PAGES }, (_, index) => {
+    const top = 200 - index * 2;
+    return seqPage(state.gatewayScope, [
+      [`new-${top}`, top],
+      [`new-${top - 1}`, top - 1],
+    ], {
+      hasMore: true,
+      nextCursor: `cursor-${top - 1}`,
+      total: 500,
+    });
+  });
+  assert.equal(recentRefreshChainNeedsNextPage("rangeFill", 100, pages), false);
+  const result = completeRecentThreadRefresh(request.state, request.ticket, {
+    primaryPages: pages,
+    verificationPage: pages[0],
+  });
+  assert.equal(result.action, "applied");
+  assert.equal(result.state.feeds.all.orderedThreadIds.includes("old"), false);
+  assert.equal(result.state.feeds.all.orderedThreadIds.length, 10);
+  assert.equal(result.state.feeds.all.nextCursor, "cursor-191");
+  assert.equal(result.state.feeds.all.epoch, oldEpoch + 1);
+});
+
+test("K overflow composes with one moved-head fill and bounded re-verification", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  const oldEpoch = state.feeds.all.epoch;
+  const request = requestRecentThreadRefresh(state, "all");
+  const pages = Array.from({ length: RECENT_THREAD_MAX_CHAIN_PAGES }, (_, index) => {
+    const top = 200 - index * 2;
+    return seqPage(state.gatewayScope, [
+      [`new-${top}`, top],
+      [`new-${top - 1}`, top - 1],
+    ], {
+      hasMore: true,
+      nextCursor: `cursor-${top - 1}`,
+      total: 500,
+    });
+  });
+  const verification = seqPage(state.gatewayScope, [["moved-220", 220]], {
+    hasMore: true,
+  });
+  const immediate = seqPage(state.gatewayScope, [
+    ["moved-220", 220],
+    ["new-200", 200],
+  ], { hasMore: true, nextCursor: "cursor-200", total: 501 });
+  const movingAgain = seqPage(state.gatewayScope, [["moved-again-230", 230]], {
+    hasMore: true,
+  });
+
+  const result = completeRecentThreadRefresh(request.state, request.ticket, {
+    primaryPages: pages,
+    verificationPage: verification,
+    immediatePages: [immediate],
+    immediateVerificationPage: movingAgain,
+  });
+
+  assert.equal(result.action, "applied");
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds.slice(0, 3), [
+    "moved-220",
+    "new-200",
+    "new-199",
+  ]);
+  assert.equal(result.state.feeds.all.orderedThreadIds.includes("old"), false);
+  assert.equal(result.state.feeds.all.orderedThreadIds.length, 11);
+  assert.equal(result.state.feeds.all.nextCursor, "cursor-191");
+  assert.equal(result.state.feeds.all.epoch, oldEpoch + 1);
+  assert.equal(result.state.feeds.all.trailingDirty, true);
+  assert.equal(
+    result.state.feeds.all.orderedThreadIds.includes("moved-again-230"),
+    false,
+  );
+});
+
+test("has_more=false before the old anchor performs a ghost-removing replacement", () => {
+  let state = primeSeqFeed([
+    ["old-head", 100],
+    ["ghost", 90],
+  ]);
+  const request = requestRecentThreadRefresh(state, "all");
+  const exhausted = seqPage(state.gatewayScope, [
+    ["new", 110],
+    ["still-live", 105],
+  ], { hasMore: false, nextCursor: null, total: 2 });
+  const result = completeRecentThreadRefresh(request.state, request.ticket, {
+    primaryPages: [exhausted],
+    verificationPage: exhausted,
+  });
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds, ["new", "still-live"]);
+  assert.equal(result.state.feeds.all.nextCursor, null);
+  assert.equal(result.state.feeds.all.loadGate, "exhausted");
+});
+
+test("each feed has one lane, so refresh and load-more are mutually exclusive", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  const refreshRequest = requestRecentThreadRefresh(state, "all");
+  assert.equal(requestRecentThreadLoadMore(refreshRequest.state, "all").ticket, null);
+
+  const failedRefresh = failRecentThreadRequest(
+    refreshRequest.state,
+    refreshRequest.ticket,
+    "offline",
+  );
+  const load = requestRecentThreadLoadMore(failedRefresh, "all");
+  assert.ok(load.ticket);
+  assert.equal(requestRecentThreadRefresh(load.state, "all").ticket, null);
+});
+
+test("boot-id change discards a range page, then converges through the replacement path", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  const range = requestRecentThreadRefresh(state, "all");
+  const newBoot = seqPage(state.gatewayScope, [["new", 110]], {
+    boot: "boot-b",
+    hasMore: false,
+    nextCursor: null,
+  });
+  let result = completeRecentThreadRefresh(range.state, range.ticket, {
+    primaryPages: [newBoot],
+    verificationPage: newBoot,
+  });
+  assert.equal(result.action, "forceReplacement");
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds, ["old"]);
+  assert.equal(result.state.feeds.all.forceReplacementPending, true);
+
+  const replacement = requestRecentThreadRefresh(result.state, "all");
+  assert.equal(replacement.ticket.mode, "replacement");
+  result = completeRecentThreadRefresh(replacement.state, replacement.ticket, {
+    primaryPages: [newBoot],
+    verificationPage: newBoot,
+  });
+  assert.equal(result.action, "applied");
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds, ["new"]);
+  assert.equal(result.state.feeds.all.serverBootId, "boot-b");
+});
+
+test("incarnation change converges through the replacement path", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  const range = requestRecentThreadRefresh(state, "all");
+  const newStore = seqPage(state.gatewayScope, [["new", 110]], {
+    incarnation: "inc-b",
+    hasMore: false,
+    nextCursor: null,
+  });
+  let result = completeRecentThreadRefresh(range.state, range.ticket, {
+    primaryPages: [newStore],
+    verificationPage: newStore,
+  });
+  assert.equal(result.action, "forceReplacement");
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds, ["old"]);
+
+  const replacement = requestRecentThreadRefresh(result.state, "all");
+  assert.equal(replacement.ticket.mode, "replacement");
+  result = completeRecentThreadRefresh(replacement.state, replacement.ticket, {
+    primaryPages: [newStore],
+    verificationPage: newStore,
+  });
+  assert.equal(result.action, "applied");
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds, ["new"]);
+  assert.equal(result.state.feeds.all.storeIncarnationId, "inc-b");
+});
+
+test("head verification performs at most one immediate fill and defers continued motion", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  const request = requestRecentThreadRefresh(state, "all");
+  const primary = seqPage(state.gatewayScope, [
+    ["new-110", 110],
+    ["old", 100],
+  ], { hasMore: true, nextCursor: "cursor-100" });
+  const verification = seqPage(state.gatewayScope, [["moved-120", 120]], {
+    hasMore: true,
+  });
+  assert.equal(verificationObservedNewerHead(110, verification), true);
+  const immediate = seqPage(state.gatewayScope, [
+    ["moved-120", 120],
+    ["new-110", 110],
+  ], { hasMore: true, nextCursor: "cursor-110" });
+  const stillMoving = seqPage(state.gatewayScope, [["moved-again-130", 130]], {
+    hasMore: true,
+  });
+  const result = completeRecentThreadRefresh(request.state, request.ticket, {
+    primaryPages: [primary],
+    verificationPage: verification,
+    immediatePages: [immediate],
+    immediateVerificationPage: stillMoving,
+  });
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds.slice(0, 3), [
+    "moved-120",
+    "new-110",
+    "old",
+  ]);
+  assert.equal(result.state.feeds.all.trailingDirty, true);
+  assert.equal(result.state.feeds.all.orderedThreadIds.includes("moved-again-130"), false);
+});
+
+test("periodic cycle 30 and lifecycle ambiguity share the force-replacement path", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  state = {
+    ...state,
+    feeds: {
+      ...state.feeds,
+      all: { ...state.feeds.all, refreshCycle: 29 },
+    },
+  };
+  assert.equal(requestRecentThreadRefresh(state, "all").ticket.mode, "replacement");
+
+  state = markRecentThreadForceReplacement(state);
+  assert.equal(state.feeds.all.forceReplacementPending, true);
+  assert.equal(state.feeds.nonTask.forceReplacementPending, true);
+  const replacement = requestRecentThreadRefresh(state, "all");
+  assert.equal(replacement.ticket.mode, "replacement");
+  const failed = failRecentThreadRequest(
+    replacement.state,
+    replacement.ticket,
+    "snapshot failed",
+  );
+  assert.deepEqual(failed.feeds.all.orderedThreadIds, ["old"]);
+  assert.equal(failed.feeds.all.forceReplacementPending, true);
+  assert.equal(requestRecentThreadRefresh(failed, "all").ticket.mode, "replacement");
+});
+
+test("a lifecycle force queued during an active refresh survives the old ticket", () => {
+  let state = primeSeqFeed([
+    ["target", 100],
+    ["keep", 90],
+  ]);
+  const old = requestRecentThreadRefresh(state, "all");
+  state = markRecentThreadForceReplacement(old.state);
+  const oldPage = seqPage(state.gatewayScope, [
+    ["target", 100],
+    ["keep", 90],
+  ]);
+  let result = completeRecentThreadRefresh(state, old.ticket, {
+    primaryPages: [oldPage],
+    verificationPage: oldPage,
+  });
+  assert.equal(result.action, "forceReplacement");
+  assert.equal(result.state.feeds.all.forceReplacementPending, true);
+
+  const replacement = requestRecentThreadRefresh(result.state, "all");
+  assert.equal(replacement.ticket.mode, "replacement");
+  const replacementPage = seqPage(result.state.gatewayScope, [["keep", 90]]);
+  result = completeRecentThreadRefresh(replacement.state, replacement.ticket, {
+    primaryPages: [replacementPage],
+    verificationPage: replacementPage,
+  });
+  assert.equal(result.action, "applied");
+  assert.equal(result.state.feeds.all.forceReplacementPending, false);
+  assert.deepEqual(result.state.feeds.all.orderedThreadIds, ["keep"]);
+});
+
+test("load-more boot mismatch never appends and schedules replacement", () => {
+  let state = primeSeqFeed([["old", 100]]);
+  const load = requestRecentThreadLoadMore(state, "all");
+  const result = completeRecentThreadRequest(
+    load.state,
+    load.ticket,
+    seqPage(state.gatewayScope, [["wrong-boot", 90]], {
+      boot: "boot-b",
+      hasMore: true,
+    }),
+  );
+  assert.deepEqual(result.feeds.all.orderedThreadIds, ["old"]);
+  assert.equal(result.feeds.all.forceReplacementPending, true);
 });

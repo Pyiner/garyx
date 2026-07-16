@@ -90,6 +90,8 @@ impl From<GaryxDbError> for CapsuleError {
             GaryxDbError::LockPoisoned
             | GaryxDbError::Join(_)
             | GaryxDbError::Configuration(_)
+            | GaryxDbError::DataDirLocked { .. }
+            | GaryxDbError::ParentHandoffTimedOut { .. }
             | GaryxDbError::Io(_)
             | GaryxDbError::Sqlite(_) => CapsuleError::internal(error.to_string()),
         }

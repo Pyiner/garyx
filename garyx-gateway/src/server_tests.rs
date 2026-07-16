@@ -114,13 +114,15 @@ async fn test_protected_route_requires_configured_gateway_token() {
         .unwrap();
 
     let resp = gw.router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 401);
+    assert_eq!(resp.status(), 403);
 
     let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "unauthorized");
+    assert_eq!(json["kind"], "garyx_api_error");
+    assert_eq!(json["operation"], "gateway_auth");
+    assert_eq!(json["code"], "forbidden");
     assert!(
         json["message"]
             .as_str()
@@ -162,7 +164,9 @@ async fn test_protected_route_requires_token_for_non_loopback() {
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "unauthorized");
+    assert_eq!(json["kind"], "garyx_api_error");
+    assert_eq!(json["operation"], "gateway_auth");
+    assert_eq!(json["code"], "unauthorized");
     assert_eq!(
         json["message"],
         "valid gateway authorization token required"

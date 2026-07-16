@@ -255,6 +255,7 @@ export async function fetchWorkspaces(
   const payload = await requestJson<{ workspaces?: WorkspacePayload[] }>(
     settings,
     "/api/workspaces",
+    "readRetryable",
     { signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS) },
   );
   return mapWorkspaces(payload);
@@ -267,6 +268,7 @@ export async function addRemoteWorkspace(
   const payload = await requestJson<{ workspaces?: WorkspacePayload[] }>(
     settings,
     "/api/workspaces",
+    "mutationSingleAttempt",
     {
       method: "POST",
       signal: AbortSignal.timeout(8000),
@@ -289,6 +291,7 @@ export async function deleteRemoteWorkspace(
   const payload = await requestJson<{ workspaces?: WorkspacePayload[] }>(
     settings,
     `/api/workspaces?${query.toString()}`,
+    "mutationSingleAttempt",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
@@ -307,6 +310,7 @@ export async function getWorkspaceGitStatus(
   const payload = await requestJson<WorkspaceGitStatusPayload>(
     settings,
     `/api/workspaces/git-status?${query.toString()}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -352,6 +356,7 @@ export async function listWorkspaceDirectories(
   }>(
     settings,
     `/api/workspaces/directories${suffix}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(8000),
     },
@@ -406,6 +411,7 @@ export async function listWorkspaceFiles(
   const payload = await requestJson<WorkspaceFileListingPayload>(
     settings,
     `/api/workspace-files?${query.toString()}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(10000),
     },
@@ -424,6 +430,7 @@ export async function previewWorkspaceFile(
   const payload = await requestJson<WorkspaceFilePreviewPayload>(
     settings,
     `/api/workspace-files/preview?${query.toString()}`,
+    "readRetryable",
     {
       signal: AbortSignal.timeout(15000),
     },
@@ -438,6 +445,7 @@ export async function uploadChatAttachments(
   const payload = await requestJson<UploadChatAttachmentsPayload>(
     settings,
     "/api/chat/attachments/upload",
+    "mutationSingleAttempt",
     {
       method: "POST",
       signal: AbortSignal.timeout(30000),
@@ -496,6 +504,7 @@ export async function uploadWorkspaceFiles(
   const payload = await requestJson<UploadWorkspaceFilesPayload>(
     settings,
     "/api/workspace-files/upload",
+    "mutationSingleAttempt",
     {
       method: "POST",
       signal: AbortSignal.timeout(20000),

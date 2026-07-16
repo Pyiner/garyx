@@ -200,6 +200,7 @@ export async function deleteThread(input: {
   setDesktopState: (value: DesktopState) => void;
   setSelectedThreadId: (value: string | null) => void;
   dispatchDelete: (threadId: string) => void;
+  onAmbiguousLifecycle?: () => void;
 }): Promise<void> {
   if (!input.desktopState) {
     return;
@@ -220,9 +221,21 @@ export async function deleteThread(input: {
   input.setDeletingThreadId(nextTargetThreadId);
   input.setError(null);
   try {
-    const nextState = await input.api.deleteThread({
+    const result = await input.api.deleteThread({
       threadId: nextTargetThreadId,
     });
+    if (result.kind !== "ok") {
+      input.setError(
+        result.kind === "definitiveEndpointResponse"
+          ? result.error.message || result.error.code
+          : result.message,
+      );
+      if (result.kind === "ambiguous") {
+        input.onAmbiguousLifecycle?.();
+      }
+      return;
+    }
+    const nextState = result.value;
     const deletingSelected = nextTargetThreadId === input.selectedThreadId;
     const fallbackThread = deletingSelected
       ? nextState.threads[0] || null
@@ -238,6 +251,7 @@ export async function deleteThread(input: {
         ? deleteError.message
         : "Failed to delete the thread",
     );
+    input.onAmbiguousLifecycle?.();
   } finally {
     input.setDeletingThreadId((current) =>
       current === nextTargetThreadId ? null : current,

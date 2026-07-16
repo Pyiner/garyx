@@ -67,3 +67,32 @@ fn raw_destructive_database_methods_are_crate_private_and_call_site_guarded() {
     );
     assert!(store.contains(".start_delete(key.clone(), async move"));
 }
+
+#[test]
+fn direct_recent_thread_updates_are_prebind_only_and_call_site_guarded() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let db = fs::read_to_string(source.join("garyx_db/mod.rs")).expect("read garyx db source");
+    let production = db.split("#[cfg(test)]\nmod ").next().unwrap_or(&db);
+
+    assert_eq!(
+        production.matches("\"UPDATE recent_threads\n").count()
+            + production.matches("\"UPDATE recent_threads SET").count(),
+        3,
+        "new direct recent_threads UPDATE paths must either allocate activity_seq or be added as an explicitly reviewed pre-bind-only exception"
+    );
+    assert!(
+        production.contains("\"UPDATE recent_threads\n                SET active_run_id = NULL")
+    );
+    assert!(
+        production.contains("\"UPDATE recent_threads\n                SET thread_type = 'task'")
+    );
+    assert!(
+        production.contains("\"UPDATE recent_threads SET activity_seq = ?1 WHERE thread_id = ?2\"")
+    );
+    assert!(production.contains(
+        "RuntimeAssembler invokes this under the data-dir lock before\n        // listener bind"
+    ));
+    assert!(production.contains(
+        "Pre-bind one-shot migration: this direct UPDATE is the sole\n            // backfill allow-list entry"
+    ));
+}

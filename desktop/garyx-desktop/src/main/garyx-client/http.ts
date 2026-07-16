@@ -91,6 +91,35 @@ export type GatewayFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export type GatewayRequestSemantics =
+  | "readRetryable"
+  | "mutationSingleAttempt";
+
+export interface GatewayTaggedApiError {
+  kind: "garyx_api_error";
+  operation: string;
+  code: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export type GatewayMutationResult<T> =
+  | { kind: "ok"; value: T; status: number }
+  | {
+      kind: "definitiveEndpointResponse";
+      status: number;
+      error: GatewayTaggedApiError;
+      value: T | null;
+      body: string;
+    }
+  | {
+      kind: "ambiguous";
+      message: string;
+      status?: number;
+      body?: string;
+    }
+  | { kind: "notSent"; message: string };
+
 let gatewayFetchImpl: GatewayFetch | null = null;
 let gatewayStreamFetchImpl: GatewayFetch | null = null;
 
@@ -121,8 +150,13 @@ export function setGatewayStreamFetch(fetchImpl: GatewayFetch | null): void {
 
 export function gatewayStreamFetch(
   input: string,
+  semantics: "readRetryable",
   init?: RequestInit,
 ): Promise<Response> {
+  const method = (init?.method || "GET").toUpperCase();
+  if (semantics !== "readRetryable" || (method !== "GET" && method !== "HEAD")) {
+    throw new TypeError("Gateway streams must use readRetryable GET semantics.");
+  }
   if (gatewayStreamFetchImpl) {
     return gatewayStreamFetchImpl(input, init);
   }
@@ -279,24 +313,91 @@ export function requireContractInteger(
   return value as number;
 }
 
+function prepareRequest(
+  settings: DesktopSettings,
+  path: string,
+  semantics: GatewayRequestSemantics,
+  init: RequestInit,
+  accept: string,
+): { url: string; init: RequestInit } {
+  const method = (init.method || "GET").toUpperCase();
+  const isRead = method === "GET" || method === "HEAD";
+  if (isRead !== (semantics === "readRetryable")) {
+    throw new TypeError(
+      `${method} requests must use ${isRead ? "readRetryable" : "mutationSingleAttempt"} semantics.`,
+    );
+  }
+
+  const url = buildUrl(settings, path);
+  // Validate before creating the fetch task so malformed configuration is a
+  // provable `notSent` outcome for classified mutations.
+  new URL(url);
+  if (init.signal?.aborted) {
+    throw new DOMException("The request was aborted before dispatch.", "AbortError");
+  }
+  const headers = applyGatewayAuthHeader(
+    applyGatewayCustomHeaders(new Headers(init.headers), settings.gatewayHeaders),
+    settings.gatewayAuthToken,
+  );
+  headers.set("Accept", accept);
+  if (init.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  return {
+    url,
+    init: {
+      ...init,
+      headers,
+    },
+  };
+}
+
+function messageFromUnknown(error: unknown): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : String(error || "Gateway request failed.");
+}
+
+function taggedErrorFromPayload(
+  payload: unknown,
+  expectedOperation: string,
+  status: number,
+): GatewayTaggedApiError | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  if (
+    record.kind !== "garyx_api_error" ||
+    typeof record.operation !== "string" ||
+    typeof record.code !== "string"
+  ) {
+    return null;
+  }
+  const endpointMatch = record.operation === expectedOperation;
+  const gatewayAuthMatch =
+    record.operation === "gateway_auth" &&
+    (status === 401 || status === 403) &&
+    (record.code === "unauthorized" || record.code === "forbidden");
+  return endpointMatch || gatewayAuthMatch
+    ? (record as GatewayTaggedApiError)
+    : null;
+}
+
 export async function requestJson<T>(
   settings: DesktopSettings,
   path: string,
-  init?: RequestInit,
+  semantics: GatewayRequestSemantics,
+  init: RequestInit = {},
 ): Promise<T> {
-  const headers = applyGatewayAuthHeader(
-    applyGatewayCustomHeaders(new Headers(init?.headers), settings.gatewayHeaders),
-    settings.gatewayAuthToken,
+  const request = prepareRequest(
+    settings,
+    path,
+    semantics,
+    init,
+    "application/json",
   );
-  headers.set("Accept", "application/json");
-  if (init?.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  const response = await gatewayFetch(buildUrl(settings, path), {
-    ...init,
-    headers,
-  });
+  const response = await gatewayFetch(request.url, request.init);
   const body = await response.text();
   const payload = tryParseJson<T>(body);
 
@@ -317,24 +418,133 @@ export async function requestJson<T>(
   return payload;
 }
 
+/**
+ * Executes one mutation attempt and preserves transport uncertainty for the
+ * reducer that owns retry/verification. A failure is definitive only when the
+ * gateway's tagged error matches the endpoint operation (or the narrow
+ * gateway-auth 401/403 acceptance set).
+ */
+export async function requestMutationJson<T>(
+  settings: DesktopSettings,
+  path: string,
+  semantics: "mutationSingleAttempt",
+  expectedOperation: string,
+  init: RequestInit,
+  decodePayload: (payload: unknown) => T,
+): Promise<GatewayMutationResult<T>> {
+  let request: { url: string; init: RequestInit };
+  try {
+    request = prepareRequest(
+      settings,
+      path,
+      semantics,
+      init,
+      "application/json",
+    );
+  } catch (error) {
+    return { kind: "notSent", message: messageFromUnknown(error) };
+  }
+
+  let responsePromise: Promise<Response>;
+  try {
+    responsePromise = gatewayFetch(request.url, request.init);
+  } catch (error) {
+    // Invoking the transport crosses the dispatch boundary. A custom fetch
+    // implementation could have created the request before throwing, so this
+    // is not provably `notSent`.
+    return { kind: "ambiguous", message: messageFromUnknown(error) };
+  }
+
+  let response: Response;
+  try {
+    response = await responsePromise;
+  } catch (error) {
+    return { kind: "ambiguous", message: messageFromUnknown(error) };
+  }
+
+  let body: string;
+  try {
+    body = await response.text();
+  } catch (error) {
+    return {
+      kind: "ambiguous",
+      message: messageFromUnknown(error),
+      status: response.status,
+    };
+  }
+  const payload = tryParseJson<T>(body);
+  if (response.ok) {
+    if (payload === null) {
+      return {
+        kind: "ambiguous",
+        message:
+          messageFromPlainTextBody(body) || "Gateway returned invalid JSON.",
+        status: response.status,
+        body,
+      };
+    }
+    try {
+      return {
+        kind: "ok",
+        value: decodePayload(payload),
+        status: response.status,
+      };
+    } catch (error) {
+      return {
+        kind: "ambiguous",
+        message: messageFromUnknown(error),
+        status: response.status,
+        body,
+      };
+    }
+  }
+
+  const tagged = taggedErrorFromPayload(
+    payload,
+    expectedOperation,
+    response.status,
+  );
+  if (tagged) {
+    let decoded: T | null = null;
+    try {
+      decoded = decodePayload(payload);
+    } catch {
+      // Tagged endpoint/auth errors remain definitive even when their payload
+      // intentionally omits a success-page body (for example auth failures).
+    }
+    return {
+      kind: "definitiveEndpointResponse",
+      status: response.status,
+      error: tagged,
+      value: decoded,
+      body,
+    };
+  }
+  return {
+    kind: "ambiguous",
+    message:
+      errorMessageFromPayload(payload) ||
+      messageFromPlainTextBody(body) ||
+      `${response.status} ${response.statusText}`,
+    status: response.status,
+    body,
+  };
+}
+
 export async function requestText(
   settings: DesktopSettings,
   path: string,
-  init?: RequestInit,
+  semantics: GatewayRequestSemantics,
+  init: RequestInit = {},
 ): Promise<string> {
-  const headers = applyGatewayAuthHeader(
-    applyGatewayCustomHeaders(new Headers(init?.headers), settings.gatewayHeaders),
-    settings.gatewayAuthToken,
+  const request = prepareRequest(
+    settings,
+    path,
+    semantics,
+    init,
+    "text/html, text/plain;q=0.9, */*;q=0.1",
   );
-  headers.set("Accept", "text/html, text/plain;q=0.9, */*;q=0.1");
-  if (init?.body && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-
-  const response = await gatewayFetch(buildUrl(settings, path), {
-    ...init,
-    headers,
-  });
+  const response = await gatewayFetch(request.url, request.init);
   const body = await response.text();
   const payload = tryParseJson<unknown>(body);
 
@@ -354,14 +564,22 @@ export async function requestJsonFromGatewayUrl<T>(
   gatewayAuthToken: string,
   gatewayHeaders: string | null | undefined,
   path: string,
-  init?: RequestInit,
+  semantics: GatewayRequestSemantics,
+  init: RequestInit = {},
 ): Promise<T> {
+  const method = (init.method || "GET").toUpperCase();
+  const isRead = method === "GET" || method === "HEAD";
+  if (isRead !== (semantics === "readRetryable")) {
+    throw new TypeError(
+      `${method} requests must use ${isRead ? "readRetryable" : "mutationSingleAttempt"} semantics.`,
+    );
+  }
   const headers = applyGatewayAuthHeader(
-    applyGatewayCustomHeaders(new Headers(init?.headers), gatewayHeaders),
+    applyGatewayCustomHeaders(new Headers(init.headers), gatewayHeaders),
     gatewayAuthToken,
   );
   headers.set("Accept", "application/json");
-  if (init?.body && !headers.has("Content-Type")) {
+  if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 

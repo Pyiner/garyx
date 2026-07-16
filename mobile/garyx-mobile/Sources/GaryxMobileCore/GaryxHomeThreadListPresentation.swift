@@ -97,12 +97,14 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
     let trailingTimestamp: String?
     let isSelected: Bool
     let isPinned: Bool
+    let isFavorite: Bool
     let isRunning: Bool
 
     init(
         thread: GaryxThreadSummary,
         isSelected: Bool,
         isPinned: Bool,
+        isFavorite: Bool = false,
         trailingTimestamp: String?,
         showsRunningState: Bool = true
     ) {
@@ -111,6 +113,7 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
         self.trailingTimestamp = trailingTimestamp
         self.isSelected = isSelected
         self.isPinned = isPinned
+        self.isFavorite = isFavorite
         self.isRunning = showsRunningState && Self.isRunning(thread)
     }
 
@@ -120,6 +123,7 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
         trailingTimestamp: String?,
         isSelected: Bool,
         isPinned: Bool,
+        isFavorite: Bool = false,
         isRunning: Bool
     ) {
         self.title = title
@@ -127,6 +131,7 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
         self.trailingTimestamp = trailingTimestamp
         self.isSelected = isSelected
         self.isPinned = isPinned
+        self.isFavorite = isFavorite
         self.isRunning = isRunning
     }
 
@@ -137,6 +142,7 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
             trailingTimestamp: trailingTimestamp,
             isSelected: isSelected,
             isPinned: isPinned,
+            isFavorite: isFavorite,
             isRunning: isRunning
         )
     }
@@ -148,6 +154,7 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
             trailingTimestamp: trailingTimestamp,
             isSelected: isSelected,
             isPinned: isPinned,
+            isFavorite: isFavorite,
             isRunning: isRunning
         )
     }
@@ -159,6 +166,7 @@ struct GaryxSidebarThreadRowPresentation: Equatable, Sendable {
             trailingTimestamp: trailingTimestamp,
             isSelected: isSelected,
             isPinned: isPinned,
+            isFavorite: isFavorite,
             isRunning: isRunning
         )
     }
@@ -196,6 +204,7 @@ struct GaryxHomeThreadSectionsInput: Equatable, Sendable {
     var agents: [GaryxAgentSummary]
     var automations: [GaryxAutomationSummary]
     var pinnedThreadIds: [String]
+    var favoritedThreadIds: [String]
     var recentThreadIds: [String]
     var selectedThreadId: String?
 
@@ -204,6 +213,7 @@ struct GaryxHomeThreadSectionsInput: Equatable, Sendable {
         agents: [GaryxAgentSummary],
         automations: [GaryxAutomationSummary],
         pinnedThreadIds: [String],
+        favoritedThreadIds: [String] = [],
         recentThreadIds: [String],
         selectedThreadId: String?
     ) {
@@ -211,6 +221,7 @@ struct GaryxHomeThreadSectionsInput: Equatable, Sendable {
         self.agents = agents
         self.automations = automations
         self.pinnedThreadIds = pinnedThreadIds
+        self.favoritedThreadIds = favoritedThreadIds
         self.recentThreadIds = recentThreadIds
         self.selectedThreadId = selectedThreadId
     }
@@ -675,6 +686,7 @@ enum GaryxHomeThreadSectionsBuilder {
         }
         let pinnedIds = normalizedPinnedThreadIds(input.pinnedThreadIds)
         let pinnedIdSet = Set(pinnedIds)
+        let favoritedIdSet = Set(normalizedPinnedThreadIds(input.favoritedThreadIds))
         let selectedThreadId = input.selectedThreadId
         var agentsById: [String: GaryxAgentSummary] = [:]
         for agent in input.agents where agentsById[agent.id] == nil {
@@ -690,6 +702,7 @@ enum GaryxHomeThreadSectionsBuilder {
                     thread: thread,
                     isSelected: selectedThreadId == thread.id,
                     isPinned: true,
+                    isFavorite: favoritedIdSet.contains(thread.id),
                     showsDivider: index > 0,
                     agentsById: agentsById,
                     automationThreadIds: automationThreadIds
@@ -705,6 +718,7 @@ enum GaryxHomeThreadSectionsBuilder {
                     thread: thread,
                     isSelected: selectedThreadId == thread.id,
                     isPinned: false,
+                    isFavorite: favoritedIdSet.contains(thread.id),
                     showsDivider: index > 0,
                     agentsById: agentsById,
                     automationThreadIds: automationThreadIds
@@ -736,6 +750,7 @@ enum GaryxHomeThreadSectionsBuilder {
         thread: GaryxThreadSummary,
         isSelected: Bool,
         isPinned: Bool,
+        isFavorite: Bool,
         showsDivider: Bool,
         agentsById: [String: GaryxAgentSummary],
         automationThreadIds: Set<String>
@@ -748,6 +763,7 @@ enum GaryxHomeThreadSectionsBuilder {
                 thread: thread,
                 isSelected: isSelected,
                 isPinned: isPinned,
+                isFavorite: isFavorite,
                 trailingTimestamp: nil,
                 showsRunningState: false
             ),
