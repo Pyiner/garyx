@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 19 — complete self-contained specification (no references
+Status: revision 20 — complete self-contained specification (no references
 to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–18.
+rounds 1–19.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -537,27 +537,36 @@ Ordering and ownership rules (R18-01 — one serialization domain, no
 TOCTOU):
 
 - All abort requests for an entity pass through a **single per-entity
-  abort domain**: status check, in-flight-operation lookup/creation,
-  and waiter registration happen atomically inside it. A request that
-  finds an in-flight abort operation joins its waiter list instead of
-  enqueueing a second command; a request that finds the durable status
-  already terminal-ish (`aborting|aborted` → 200, `finalizing|
-  finalized` → 409, deleted → 404) answers from the table without
-  touching the coordinator. There is no bare point-read-then-enqueue
-  path.
-- The operation's waiters are all answered when the arbitration
-  outcome commits — **by actual outcome**, not unconditionally: abort
-  won → `200 {status:"aborting"}`; end won the page-boundary
-  arbitration → `409 abort_refused_finalizing`; entity deleted
-  meanwhile → `404`. Answering precedes the (up to 20 s) leave
-  attempt, and a command admitted to the coordinator is owned by the
-  service — HTTP disconnects cancel nothing.
+  abort domain** that owns the operation's **entire lifecycle**
+  (R19-01): (a) status check, (b) operation creation **including the
+  successful enqueue of its one `AbortRequest` command** — the
+  operation becomes visible to later requests only after the enqueue
+  succeeded; an enqueue failure (queue closed, coordinator gone)
+  atomically rolls the operation back and completes any waiters with a
+  typed retryable error, (c) waiter registration — later requests
+  either join a **not-yet-completed** operation or read the completed
+  result / durable status; there is no window in which an orphan
+  operation can accumulate waiters with no command behind it, and no
+  bare point-read-then-enqueue path.
+- **Result publication also runs through the domain**: the coordinator
+  completes the operation by, inside the domain, marking it
+  `completed(outcome)` and then draining its waiters — so a request
+  racing the completion either registered before (gets the drain) or
+  enters after (sees `completed`/the new durable status; it can never
+  miss the notification or spawn a second command). Outcomes are
+  answered **by actual result**: abort won → `200 {status:"aborting"}`;
+  end won the page-boundary arbitration → `409
+  abort_refused_finalizing`; entity deleted meanwhile → `404`.
+  Answering precedes the (up to 20 s) leave attempt. A successfully
+  enqueued command is owned by the service; HTTP disconnects cancel
+  nothing after visibility, and before visibility the domain's
+  rollback rule above applies.
 - Timing, honestly: admission may wait for the current page commit —
   fetch is bounded at 10 s but the durability phase (`fdatasync` +
   SQLite with up to 5 s busy wait) is additional — so a first request
   may exceed the shared 10 s POST budget. `garyx meeting abort`
   performs **one automatic retry on timeout only** (typed transport
-  cause, 6.7): the retry re-enters the abort domain, where it either
+  cause, §6.6): the retry re-enters the abort domain, where it either
   joins the still-in-flight operation (answered at its outcome) or
   hits the status fast path — in both cases without waiting behind the
   leave attempt. Its result follows the table (200/409/404), and a
@@ -919,7 +928,7 @@ read command only** — no topic, no platform text:
 
 UI "chat about this meeting" (slice 3) prefills the composer with that
 line; the user may edit; the message travels existing paths unchanged;
-the agent runs the CLI (whose own rendering is governed by 6.6).
+the agent runs the CLI (whose own rendering is governed by §6.7).
 Recognition of a prior reference is the cursor row. Discovery without a
 reference: `garyx meeting list`. A deleted entity fails the command with
 "entity not found"; stale lines are harmless history.
@@ -1160,12 +1169,17 @@ token-vs-path-entity and token-mode mismatches; pending claimed via
 JSON re-served under human rendering (same span — format is not part
 of the claim); NDJSON paging in `--json`.
 
-**Abort domain (R18-01):** deterministic interleave — coordinator
-paused after batch drain, before CAS; a retry entering the abort
-domain joins the in-flight operation and is answered at the CAS
-outcome while leave hangs (no second queue entry, no 10 s starvation);
-first request timing out with end queued in the same batch → retry
-gets 409; retry after delete → 404.
+**Abort domain (R18-01, R19-01):** deterministic interleaves —
+coordinator paused after batch drain before CAS: retry joins the
+in-flight operation, answered at the CAS outcome while leave hangs (no
+second queue entry, no 10 s starvation); handler cancelled between
+operation create and enqueue → operation invisible/rolled back, no
+orphan waiters; coordinator channel closed at enqueue → waiters
+completed with the typed retryable error; concurrent retries injected
+after CAS but before waiter drain, after drain but before operation
+removal, and after removal — each ends with the actual `200/409/404`
+and never a second queued command; first request timing out with end
+queued in the same batch → retry gets 409; retry after delete → 404.
 
 **Transport seam (R18-02):** timeout triggers exactly one extra abort
 attempt; connection-refused triggers none; nested 400
