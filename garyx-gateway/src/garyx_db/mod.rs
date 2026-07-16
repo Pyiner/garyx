@@ -13,7 +13,10 @@ use std::time::{Duration, Instant};
 
 use chrono::{SecondsFormat, Utc};
 use garyx_router::{KnownChannelEndpoint, is_thread_key};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter,
+    types::Value as SqlValue,
+};
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
@@ -27,7 +30,9 @@ pub use task_forest::{
     TaskProjectionDraft,
 };
 
-const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 4;
+const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 5;
+pub(crate) const THREAD_META_SUMMARY_MIGRATION_NAME: &str = "thread_meta_summary_v1";
+const THREAD_META_SUMMARY_MIGRATION_VERSION: i64 = 1;
 pub(crate) const RECENT_TASK_THREAD_KIND_MIGRATION_NAME: &str = "recent_task_thread_kind_v1";
 const RECENT_TASK_THREAD_KIND_MIGRATION_VERSION: i64 = 1;
 pub(crate) const ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME: &str = "endpoint_holder_dedup_v1";
@@ -237,6 +242,13 @@ pub struct ThreadFavoritesSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadFavoritesSummarySnapshot {
+    pub snapshot: ThreadFavoritesSnapshot,
+    pub summaries: Vec<ThreadSummaryRow>,
+    pub summaries_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReorderThreadPinsResult {
     Updated(ThreadPinsPage),
     Conflict(ThreadPinsPage),
@@ -391,6 +403,281 @@ pub(crate) struct RecentThreadKeysetDbPage {
     pub has_more: bool,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ThreadSummaryRow {
+    pub thread_id: String,
+    pub title: Option<String>,
+    pub workspace_dir: Option<String>,
+    pub thread_type: String,
+    pub provider_type: Option<String>,
+    pub agent_id: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub message_count: u32,
+    pub last_user_message: Option<String>,
+    pub last_assistant_message: Option<String>,
+    pub last_message_preview: Option<String>,
+    pub recent_run_id: Option<String>,
+    pub active_run_id: Option<String>,
+    pub worktree: Option<Value>,
+    pub excluded_from_recent: bool,
+    #[serde(skip)]
+    pub(crate) sort_updated_at_us: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ThreadSummaryDbPage {
+    pub records: Vec<ThreadSummaryRow>,
+    pub has_more: bool,
+    pub store_incarnation_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ThreadSummaryTaskFilter {
+    #[default]
+    Include,
+    Exclude,
+    Only,
+}
+
+impl ThreadSummaryTaskFilter {
+    pub(crate) fn cursor_value(self) -> &'static str {
+        match self {
+            Self::Include => "include",
+            Self::Exclude => "exclude",
+            Self::Only => "only",
+        }
+    }
+
+    fn page_sql(self, scoped: bool, has_query: bool, has_cursor: bool) -> &'static str {
+        match self {
+            Self::Include => thread_summary_include_sql(scoped, has_query, has_cursor),
+            Self::Exclude => thread_summary_exclude_sql(scoped, has_query, has_cursor),
+            Self::Only => thread_summary_only_sql(scoped, has_query, has_cursor),
+        }
+    }
+}
+
+macro_rules! thread_summary_sql {
+    ("", "", $query:literal, $cursor:literal) => {
+        thread_summary_sql!("idx_thread_meta_summary_visible", "", "", $query, $cursor)
+    };
+    ("\n   AND workspace_dir = ?", "", $query:literal, $cursor:literal) => {
+        thread_summary_sql!(
+            "idx_thread_meta_summary_workspace_visible",
+            "\n   AND workspace_dir = ?",
+            "",
+            $query,
+            $cursor
+        )
+    };
+    ("", "\n   AND thread_type <> 'task'", $query:literal, $cursor:literal) => {
+        thread_summary_sql!(
+            "idx_thread_meta_summary_non_task",
+            "",
+            "\n   AND thread_type <> 'task'",
+            $query,
+            $cursor
+        )
+    };
+    (
+        "\n   AND workspace_dir = ?",
+        "\n   AND thread_type <> 'task'",
+        $query:literal,
+        $cursor:literal
+    ) => {
+        thread_summary_sql!(
+            "idx_thread_meta_summary_workspace_non_task",
+            "\n   AND workspace_dir = ?",
+            "\n   AND thread_type <> 'task'",
+            $query,
+            $cursor
+        )
+    };
+    ("", "\n   AND thread_type = 'task'", $query:literal, $cursor:literal) => {
+        thread_summary_sql!(
+            "idx_thread_meta_summary_task",
+            "",
+            "\n   AND thread_type = 'task'",
+            $query,
+            $cursor
+        )
+    };
+    (
+        "\n   AND workspace_dir = ?",
+        "\n   AND thread_type = 'task'",
+        $query:literal,
+        $cursor:literal
+    ) => {
+        thread_summary_sql!(
+            "idx_thread_meta_summary_workspace_task",
+            "\n   AND workspace_dir = ?",
+            "\n   AND thread_type = 'task'",
+            $query,
+            $cursor
+        )
+    };
+    ($index:literal, $scope:literal, $task:literal, $query:literal, $cursor:literal) => {
+        concat!(
+            "SELECT thread_id, thread_label, workspace_dir, thread_type, provider_type,\n",
+            "       agent_id, created_at, updated_at, message_count, last_user_message,\n",
+            "       last_assistant_message, last_message_preview, recent_run_id,\n",
+            "       active_run_id, worktree_json, excluded_from_recent, sort_updated_at_us\n",
+            "  FROM thread_meta INDEXED BY ",
+            $index,
+            "\n",
+            " WHERE default_list_hidden = 0",
+            $scope,
+            $task,
+            $query,
+            $cursor,
+            "\n ORDER BY sort_updated_at_us DESC, thread_id DESC\n LIMIT ?"
+        )
+    };
+}
+
+fn thread_summary_include_sql(scoped: bool, has_query: bool, has_cursor: bool) -> &'static str {
+    match (scoped, has_query, has_cursor) {
+        (false, false, false) => thread_summary_sql!("", "", "", ""),
+        (false, false, true) => thread_summary_sql!(
+            "",
+            "",
+            "",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+        (false, true, false) => {
+            thread_summary_sql!("", "", "\n   AND instr(search_text, ?) > 0", "")
+        }
+        (false, true, true) => thread_summary_sql!(
+            "",
+            "",
+            "\n   AND instr(search_text, ?) > 0",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+        (true, false, false) => {
+            thread_summary_sql!("\n   AND workspace_dir = ?", "", "", "")
+        }
+        (true, false, true) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "",
+            "",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+        (true, true, false) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "",
+            "\n   AND instr(search_text, ?) > 0",
+            ""
+        ),
+        (true, true, true) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "",
+            "\n   AND instr(search_text, ?) > 0",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+    }
+}
+
+fn thread_summary_exclude_sql(scoped: bool, has_query: bool, has_cursor: bool) -> &'static str {
+    match (scoped, has_query, has_cursor) {
+        (false, false, false) => {
+            thread_summary_sql!("", "\n   AND thread_type <> 'task'", "", "")
+        }
+        (false, false, true) => thread_summary_sql!(
+            "",
+            "\n   AND thread_type <> 'task'",
+            "",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+        (false, true, false) => thread_summary_sql!(
+            "",
+            "\n   AND thread_type <> 'task'",
+            "\n   AND instr(search_text, ?) > 0",
+            ""
+        ),
+        (false, true, true) => thread_summary_sql!(
+            "",
+            "\n   AND thread_type <> 'task'",
+            "\n   AND instr(search_text, ?) > 0",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+        (true, false, false) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "\n   AND thread_type <> 'task'",
+            "",
+            ""
+        ),
+        (true, false, true) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "\n   AND thread_type <> 'task'",
+            "",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+        (true, true, false) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "\n   AND thread_type <> 'task'",
+            "\n   AND instr(search_text, ?) > 0",
+            ""
+        ),
+        (true, true, true) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "\n   AND thread_type <> 'task'",
+            "\n   AND instr(search_text, ?) > 0",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+    }
+}
+
+fn thread_summary_only_sql(scoped: bool, has_query: bool, has_cursor: bool) -> &'static str {
+    match (scoped, has_query, has_cursor) {
+        (false, false, false) => {
+            thread_summary_sql!("", "\n   AND thread_type = 'task'", "", "")
+        }
+        (false, false, true) => thread_summary_sql!(
+            "",
+            "\n   AND thread_type = 'task'",
+            "",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+        (false, true, false) => thread_summary_sql!(
+            "",
+            "\n   AND thread_type = 'task'",
+            "\n   AND instr(search_text, ?) > 0",
+            ""
+        ),
+        (false, true, true) => thread_summary_sql!(
+            "",
+            "\n   AND thread_type = 'task'",
+            "\n   AND instr(search_text, ?) > 0",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+        (true, false, false) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "\n   AND thread_type = 'task'",
+            "",
+            ""
+        ),
+        (true, false, true) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "\n   AND thread_type = 'task'",
+            "",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+        (true, true, false) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "\n   AND thread_type = 'task'",
+            "\n   AND instr(search_text, ?) > 0",
+            ""
+        ),
+        (true, true, true) => thread_summary_sql!(
+            "\n   AND workspace_dir = ?",
+            "\n   AND thread_type = 'task'",
+            "\n   AND instr(search_text, ?) > 0",
+            "\n   AND (sort_updated_at_us, thread_id) < (?, ?)"
+        ),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecentThreadDraft {
     pub thread_id: String,
@@ -433,6 +720,9 @@ pub struct ThreadMetaRecord {
     pub last_delivery_context_json: Option<String>,
     pub last_delivery_updated_at: Option<String>,
     pub default_list_hidden: bool,
+    pub excluded_from_recent: bool,
+    pub sort_updated_at_us: i64,
+    pub search_text: String,
     pub projection_version: i64,
     pub projected_at: String,
 }
@@ -462,6 +752,9 @@ pub struct ThreadMetaDraft {
     pub last_delivery_context_json: Option<String>,
     pub last_delivery_updated_at: Option<String>,
     pub default_list_hidden: bool,
+    pub excluded_from_recent: bool,
+    pub sort_updated_at_us: i64,
+    pub search_text: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1232,10 +1525,38 @@ impl GaryxDbService {
         self.thread_favorites_snapshot_inner(|| Ok(()))
     }
 
+    pub fn thread_favorites_snapshot_with_summaries(
+        &self,
+    ) -> GaryxDbResult<ThreadFavoritesSummarySnapshot> {
+        let (snapshot, summaries) = self.thread_favorites_snapshot_with_options(true, || Ok(()))?;
+        let (summaries, summaries_truncated) =
+            summaries.expect("enhanced favorites snapshot always computes its summary window");
+        Ok(ThreadFavoritesSummarySnapshot {
+            snapshot,
+            summaries,
+            summaries_truncated,
+        })
+    }
+
     fn thread_favorites_snapshot_inner<F>(
         &self,
         after_favorites: F,
     ) -> GaryxDbResult<ThreadFavoritesSnapshot>
+    where
+        F: FnOnce() -> GaryxDbResult<()>,
+    {
+        self.thread_favorites_snapshot_with_options(false, after_favorites)
+            .map(|(snapshot, _)| snapshot)
+    }
+
+    fn thread_favorites_snapshot_with_options<F>(
+        &self,
+        include_summaries: bool,
+        after_favorites: F,
+    ) -> GaryxDbResult<(
+        ThreadFavoritesSnapshot,
+        Option<(Vec<ThreadSummaryRow>, bool)>,
+    )>
     where
         F: FnOnce() -> GaryxDbResult<()>,
     {
@@ -1279,13 +1600,61 @@ impl GaryxDbService {
             recent_threads.push(row?);
         }
         drop(stmt);
+        let summaries = if include_summaries {
+            let summaries_truncated = page.favorites.len() > THREAD_FAVORITES_SNAPSHOT_CAP;
+            let mut stmt = tx.prepare(
+                "WITH summary_window AS (
+                    SELECT favorite.thread_id,
+                           recent.activity_seq,
+                           favorite.favorited_at,
+                           CASE WHEN recent.thread_id IS NULL THEN 1 ELSE 0 END AS raw_segment
+                      FROM thread_favorites AS favorite
+                      LEFT JOIN recent_threads AS recent
+                        ON recent.thread_id = favorite.thread_id
+                     ORDER BY raw_segment ASC,
+                              recent.activity_seq DESC,
+                              favorite.favorited_at DESC,
+                              favorite.thread_id ASC
+                     LIMIT ?1
+                 )
+                 SELECT meta.thread_id, meta.thread_label, meta.workspace_dir,
+                        meta.thread_type, meta.provider_type, meta.agent_id,
+                        meta.created_at, meta.updated_at, meta.message_count,
+                        meta.last_user_message, meta.last_assistant_message,
+                        meta.last_message_preview, meta.recent_run_id,
+                        meta.active_run_id, meta.worktree_json,
+                        meta.excluded_from_recent, meta.sort_updated_at_us
+                   FROM summary_window AS member
+                   JOIN thread_meta AS meta ON meta.thread_id = member.thread_id
+                  WHERE meta.default_list_hidden = 0
+                  ORDER BY member.raw_segment ASC,
+                           member.activity_seq DESC,
+                           member.favorited_at DESC,
+                           member.thread_id ASC",
+            )?;
+            let rows = stmt.query_map(
+                params![i64::try_from(THREAD_FAVORITES_SNAPSHOT_CAP).unwrap_or(i64::MAX)],
+                thread_summary_row_from_row,
+            )?;
+            let mut summaries = Vec::new();
+            for row in rows {
+                summaries.push(row?);
+            }
+            drop(stmt);
+            Some((summaries, summaries_truncated))
+        } else {
+            None
+        };
         tx.commit()?;
-        Ok(ThreadFavoritesSnapshot {
-            page,
-            recent_truncated: recent_total > recent_threads.len(),
-            recent_total,
-            recent_threads,
-        })
+        Ok((
+            ThreadFavoritesSnapshot {
+                page,
+                recent_truncated: recent_total > recent_threads.len(),
+                recent_total,
+                recent_threads,
+            },
+            summaries,
+        ))
     }
 
     /// Product archive semantics in one transaction: write the tombstone
@@ -1910,6 +2279,7 @@ impl GaryxDbService {
         self.drop_thread_message_routes_v1()?;
         self.migrate_thread_pin_sort_order_v1()?;
         self.migrate_recent_task_thread_kind_v1()?;
+        self.migrate_thread_meta_summary_v1()?;
         self.migrate_recent_thread_activity_seq_v1()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         Ok(())
@@ -2533,6 +2903,94 @@ impl GaryxDbService {
         })
     }
 
+    /// Backfill the three list-summary columns from canonical thread records
+    /// exactly once per legacy-import generation. Normal writes derive the
+    /// same fields before entering the record/projection transaction.
+    pub(crate) fn migrate_thread_meta_summary_v1(&self) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let (import_generation, completed_source_count) = self.import_generation_cutover_gate(
+            &tx,
+            THREAD_META_SUMMARY_MIGRATION_NAME,
+            THREAD_META_SUMMARY_MIGRATION_VERSION,
+        )?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        let source_rows = {
+            let mut stmt = tx.prepare(
+                "SELECT meta.thread_id, record.body
+                   FROM thread_meta AS meta
+                   LEFT JOIN thread_records AS record ON record.key = meta.thread_id
+                  ORDER BY meta.thread_id ASC",
+            )?;
+            stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        let source_row_count = i64::try_from(source_rows.len()).unwrap_or(i64::MAX);
+
+        let mut updated_row_count = 0usize;
+        for (thread_id, body) in source_rows {
+            let body = body.ok_or_else(|| {
+                GaryxDbError::Configuration(
+                    "thread_meta summary cutover found a projection without a canonical record"
+                        .to_owned(),
+                )
+            })?;
+            let data: Value = serde_json::from_str(&body).map_err(|error| {
+                GaryxDbError::Configuration(format!(
+                    "thread_meta summary cutover could not decode {thread_id}: {error}"
+                ))
+            })?;
+            let projection = crate::thread_meta_projection::
+                thread_meta_projection_from_thread_data_with_active_run(&thread_id, &data, None)
+                .ok_or_else(|| {
+                    GaryxDbError::Configuration(format!(
+                        "thread_meta summary cutover rejected canonical id {thread_id}"
+                    ))
+                })?;
+            updated_row_count += tx.execute(
+                "UPDATE thread_meta
+                    SET excluded_from_recent = ?1,
+                        sort_updated_at_us = ?2,
+                        search_text = ?3
+                  WHERE thread_id = ?4",
+                params![
+                    if projection.thread_meta.excluded_from_recent {
+                        1
+                    } else {
+                        0
+                    },
+                    projection.thread_meta.sort_updated_at_us,
+                    projection.thread_meta.search_text,
+                    thread_id,
+                ],
+            )?;
+        }
+        record_projection_state_tx(
+            &tx,
+            THREAD_META_SUMMARY_MIGRATION_NAME,
+            THREAD_META_SUMMARY_MIGRATION_VERSION,
+            source_row_count,
+            Some(import_generation),
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count,
+            already_completed: false,
+        })
+    }
+
     pub fn projection_state_matches(
         &self,
         projection_name: &str,
@@ -2777,7 +3235,8 @@ impl GaryxDbService {
                           last_user_message, last_assistant_message, last_message_preview,
                           recent_run_id, active_run_id, worktree_json,
                           last_delivery_context_json, last_delivery_updated_at,
-                          default_list_hidden, provider_key, selected_model,
+                          default_list_hidden, excluded_from_recent, sort_updated_at_us,
+                          search_text, provider_key, selected_model,
                           selected_model_reasoning_effort, selected_model_service_tier,
                           sdk_session_id, projection_version, projected_at
                    FROM thread_meta";
@@ -2833,7 +3292,8 @@ impl GaryxDbService {
                     last_user_message, last_assistant_message, last_message_preview,
                     recent_run_id, active_run_id, worktree_json,
                     last_delivery_context_json, last_delivery_updated_at,
-                    default_list_hidden, provider_key, selected_model,
+                    default_list_hidden, excluded_from_recent, sort_updated_at_us,
+                    search_text, provider_key, selected_model,
                     selected_model_reasoning_effort, selected_model_service_tier,
                     sdk_session_id, projection_version, projected_at
              FROM thread_meta
@@ -2845,6 +3305,61 @@ impl GaryxDbService {
             records.push(row?);
         }
         Ok(records)
+    }
+
+    pub(crate) fn list_thread_summaries_keyset_page(
+        &self,
+        filter: ThreadSummaryTaskFilter,
+        workspace_dir: Option<&str>,
+        query: Option<&str>,
+        limit: usize,
+        before: Option<(i64, &str)>,
+        expected_store_incarnation: Option<&str>,
+    ) -> GaryxDbResult<ThreadSummaryDbPage> {
+        let mut conn = self.read_conn()?;
+        let tx = conn.transaction()?;
+        let store_incarnation_id = read_store_incarnation_id(&tx)?;
+        if expected_store_incarnation.is_some_and(|expected| expected != store_incarnation_id) {
+            return Err(GaryxDbError::BadRequest(
+                "cursor does not belong to the current store incarnation".to_owned(),
+            ));
+        }
+
+        let mut bind = Vec::with_capacity(6);
+        if let Some(workspace_dir) = workspace_dir {
+            bind.push(SqlValue::Text(workspace_dir.to_owned()));
+        }
+        if let Some(query) = query {
+            bind.push(SqlValue::Text(query.to_owned()));
+        }
+        if let Some((sort_updated_at_us, thread_id)) = before {
+            bind.push(SqlValue::Integer(sort_updated_at_us));
+            bind.push(SqlValue::Text(thread_id.to_owned()));
+        }
+        let fetch_limit = limit.saturating_add(1);
+        bind.push(SqlValue::Integer(
+            i64::try_from(fetch_limit).unwrap_or(i64::MAX),
+        ));
+
+        let sql = filter.page_sql(workspace_dir.is_some(), query.is_some(), before.is_some());
+        let mut stmt = tx.prepare(sql)?;
+        let rows = stmt.query_map(params_from_iter(bind.iter()), thread_summary_row_from_row)?;
+        let mut records = Vec::with_capacity(fetch_limit);
+        for row in rows {
+            records.push(row?);
+        }
+        drop(stmt);
+        tx.commit()?;
+
+        let has_more = records.len() > limit;
+        if has_more {
+            records.truncate(limit);
+        }
+        Ok(ThreadSummaryDbPage {
+            records,
+            has_more,
+            store_incarnation_id,
+        })
     }
 
     /// Test-fixture seeding only: production thread_meta rows derive in
@@ -3474,12 +3989,15 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             last_delivery_context_json TEXT,
             last_delivery_updated_at TEXT,
             default_list_hidden INTEGER NOT NULL DEFAULT 0,
+            excluded_from_recent INTEGER NOT NULL DEFAULT 0,
+            sort_updated_at_us INTEGER NOT NULL DEFAULT 0,
+            search_text TEXT NOT NULL DEFAULT '',
             provider_key TEXT,
             selected_model TEXT,
             selected_model_reasoning_effort TEXT,
             selected_model_service_tier TEXT,
             sdk_session_id TEXT,
-            projection_version INTEGER NOT NULL DEFAULT 4,
+            projection_version INTEGER NOT NULL DEFAULT 5,
             projected_at TEXT NOT NULL
         ) STRICT;
 
@@ -3593,6 +4111,25 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
 
         CREATE INDEX IF NOT EXISTS idx_thread_meta_visible_updated
             ON thread_meta(default_list_hidden, updated_at DESC, projected_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_visible
+            ON thread_meta(sort_updated_at_us DESC, thread_id DESC)
+            WHERE default_list_hidden = 0;
+        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_task
+            ON thread_meta(sort_updated_at_us DESC, thread_id DESC)
+            WHERE default_list_hidden = 0 AND thread_type = 'task';
+        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_non_task
+            ON thread_meta(sort_updated_at_us DESC, thread_id DESC)
+            WHERE default_list_hidden = 0 AND thread_type <> 'task';
+        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_visible
+            ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
+            WHERE default_list_hidden = 0;
+        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_task
+            ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
+            WHERE default_list_hidden = 0 AND thread_type = 'task';
+        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_non_task
+            ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
+            WHERE default_list_hidden = 0 AND thread_type <> 'task';
         "#,
     )?;
     ensure_workspaces_deleted_at_column(conn)?;
@@ -4003,13 +4540,39 @@ fn thread_meta_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Thre
         last_delivery_context_json: row.get(15)?,
         last_delivery_updated_at: row.get(16)?,
         default_list_hidden: row.get::<_, i64>(17)? != 0,
-        provider_key: row.get(18)?,
-        selected_model: row.get(19)?,
-        selected_model_reasoning_effort: row.get(20)?,
-        selected_model_service_tier: row.get(21)?,
-        sdk_session_id: row.get(22)?,
-        projection_version: row.get(23)?,
-        projected_at: row.get(24)?,
+        excluded_from_recent: row.get::<_, i64>(18)? != 0,
+        sort_updated_at_us: row.get(19)?,
+        search_text: row.get(20)?,
+        provider_key: row.get(21)?,
+        selected_model: row.get(22)?,
+        selected_model_reasoning_effort: row.get(23)?,
+        selected_model_service_tier: row.get(24)?,
+        sdk_session_id: row.get(25)?,
+        projection_version: row.get(26)?,
+        projected_at: row.get(27)?,
+    })
+}
+
+fn thread_summary_row_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadSummaryRow> {
+    let worktree_json: Option<String> = row.get(14)?;
+    Ok(ThreadSummaryRow {
+        thread_id: row.get(0)?,
+        title: row.get(1)?,
+        workspace_dir: row.get(2)?,
+        thread_type: row.get(3)?,
+        provider_type: row.get(4)?,
+        agent_id: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+        message_count: row.get::<_, i64>(8)?.clamp(0, i64::from(u32::MAX)) as u32,
+        last_user_message: row.get(9)?,
+        last_assistant_message: row.get(10)?,
+        last_message_preview: row.get(11)?,
+        recent_run_id: row.get(12)?,
+        active_run_id: row.get(13)?,
+        worktree: worktree_json.and_then(|value| serde_json::from_str(&value).ok()),
+        excluded_from_recent: row.get::<_, i64>(15)? != 0,
+        sort_updated_at_us: row.get(16)?,
     })
 }
 
@@ -4276,6 +4839,9 @@ fn upsert_thread_meta(
     let last_delivery_context_json = normalize_optional(meta.last_delivery_context_json.as_deref());
     let last_delivery_updated_at = normalize_optional(meta.last_delivery_updated_at.as_deref());
     let default_list_hidden = if meta.default_list_hidden { 1 } else { 0 };
+    let excluded_from_recent = if meta.excluded_from_recent { 1 } else { 0 };
+    let sort_updated_at_us = meta.sort_updated_at_us;
+    let search_text = meta.search_text.clone();
     let provider_key = normalize_optional(meta.provider_key.as_deref());
     let selected_model = normalize_optional(meta.selected_model.as_deref());
     let selected_model_reasoning_effort =
@@ -4290,11 +4856,12 @@ fn upsert_thread_meta(
             created_at, updated_at, message_count, last_user_message, last_assistant_message,
             last_message_preview, recent_run_id, active_run_id, worktree_json,
             last_delivery_context_json, last_delivery_updated_at, default_list_hidden,
+            excluded_from_recent, sort_updated_at_us, search_text,
             provider_key, selected_model, selected_model_reasoning_effort,
             selected_model_service_tier, sdk_session_id,
             projection_version, projected_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
          ON CONFLICT(thread_id) DO UPDATE SET
             workspace_dir = excluded.workspace_dir,
             thread_type = excluded.thread_type,
@@ -4318,6 +4885,9 @@ fn upsert_thread_meta(
             last_delivery_context_json = excluded.last_delivery_context_json,
             last_delivery_updated_at = excluded.last_delivery_updated_at,
             default_list_hidden = excluded.default_list_hidden,
+            excluded_from_recent = excluded.excluded_from_recent,
+            sort_updated_at_us = excluded.sort_updated_at_us,
+            search_text = excluded.search_text,
             projection_version = excluded.projection_version,
             projected_at = excluded.projected_at",
         params![
@@ -4339,6 +4909,9 @@ fn upsert_thread_meta(
             last_delivery_context_json,
             last_delivery_updated_at,
             default_list_hidden,
+            excluded_from_recent,
+            sort_updated_at_us,
+            search_text,
             provider_key,
             selected_model,
             selected_model_reasoning_effort,
@@ -4677,6 +5250,27 @@ fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()>
             [],
         )?;
     }
+    if !columns.contains("excluded_from_recent") {
+        conn.execute(
+            "ALTER TABLE thread_meta
+             ADD COLUMN excluded_from_recent INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !columns.contains("sort_updated_at_us") {
+        conn.execute(
+            "ALTER TABLE thread_meta
+             ADD COLUMN sort_updated_at_us INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !columns.contains("search_text") {
+        conn.execute(
+            "ALTER TABLE thread_meta
+             ADD COLUMN search_text TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
     if !columns.contains("projection_version") {
         conn.execute(
             "ALTER TABLE thread_meta
@@ -4906,6 +5500,7 @@ fn automation_thread_run_by_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::DateTime;
     use serde_json::json;
 
     /// A read query slow enough (tens of ms) to make lock serialization
@@ -5595,6 +6190,45 @@ mod tests {
                 .upsert_recent_thread(sample_recent_draft(thread_id))
                 .expect("seed favorite recent projection");
         }
+    }
+
+    fn seed_summary_favorite_tx(
+        tx: &Transaction<'_>,
+        thread_id: &str,
+        favorited_at: &str,
+        hidden: bool,
+        excluded_from_recent: bool,
+    ) {
+        tx.execute(
+            "INSERT INTO thread_favorites (thread_id, favorited_at) VALUES (?1, ?2)",
+            params![thread_id, favorited_at],
+        )
+        .expect("seed favorite membership");
+        tx.execute(
+            "INSERT INTO thread_meta (
+                thread_id, thread_label, default_list_hidden, excluded_from_recent,
+                sort_updated_at_us, search_text, projected_at
+             ) VALUES (?1, ?2, ?3, ?4, 0, '', '2026-07-17T00:00:00Z')",
+            params![
+                thread_id,
+                format!("Title for {thread_id}"),
+                if hidden { 1 } else { 0 },
+                if excluded_from_recent { 1 } else { 0 },
+            ],
+        )
+        .expect("seed favorite summary");
+    }
+
+    fn seed_summary_recent_tx(tx: &Transaction<'_>, thread_id: &str, activity_seq: i64) {
+        tx.execute(
+            "INSERT INTO recent_threads (
+                thread_id, title, thread_type, message_count, last_message_preview,
+                run_state, last_active_at, activity_seq, recorded_at
+             ) VALUES (?1, ?2, 'chat', 0, '', 'idle',
+                       '2026-07-17T00:00:00Z', ?3, '2026-07-17T00:00:00Z')",
+            params![thread_id, format!("Title for {thread_id}"), activity_seq],
+        )
+        .expect("seed recent favorite");
     }
 
     fn seed_task_kind_migration_row(
@@ -7441,6 +8075,60 @@ mod tests {
     }
 
     #[test]
+    fn favorites_enhanced_membership_and_summaries_share_one_wal_snapshot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let db = GaryxDbService::open(&path).expect("database");
+        {
+            let mut conn = db.conn().expect("writer");
+            let tx = conn.transaction().expect("seed transaction");
+            seed_summary_favorite_tx(
+                &tx,
+                "thread::enhanced-first",
+                "2026-07-17T00:00:00Z",
+                false,
+                true,
+            );
+            seed_summary_favorite_tx(
+                &tx,
+                "thread::enhanced-second",
+                "2026-07-17T00:00:01Z",
+                false,
+                true,
+            );
+            tx.execute(
+                "DELETE FROM thread_favorites WHERE thread_id = 'thread::enhanced-second'",
+                [],
+            )
+            .unwrap();
+            tx.commit().expect("seed commit");
+        }
+        let writer = Connection::open(&path).expect("test-only raw writer");
+
+        let (snapshot, summaries) = db
+            .thread_favorites_snapshot_with_options(true, || {
+                writer.execute(
+                    "INSERT INTO thread_favorites (thread_id, favorited_at)
+                     VALUES ('thread::enhanced-second', '2026-07-17T00:00:01Z')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("atomic enhanced snapshot");
+        let (summaries, truncated) = summaries.expect("summary payload");
+        assert_eq!(snapshot.page.favorites.len(), 1);
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].thread_id, "thread::enhanced-first");
+        assert!(!truncated);
+
+        let current = db
+            .thread_favorites_snapshot_with_summaries()
+            .expect("next enhanced snapshot");
+        assert_eq!(current.snapshot.page.favorites.len(), 2);
+        assert_eq!(current.summaries.len(), 2);
+    }
+
+    #[test]
     fn favorite_cleanup_interleavings_and_unconditional_plain_delete_bump_close_orphan_writes() {
         let archived = GaryxDbService::memory().expect("archive database");
         seed_favorite_thread(&archived, "thread::archive-first", false);
@@ -7565,6 +8253,175 @@ mod tests {
         assert_eq!(snapshot.recent_total, 501);
         assert_eq!(snapshot.recent_threads.len(), 500);
         assert!(snapshot.recent_truncated);
+    }
+
+    #[test]
+    fn favorites_summary_window_caps_501_all_excluded_members() {
+        let db = GaryxDbService::memory().expect("database");
+        {
+            let mut conn = db.conn().expect("writer");
+            let tx = conn.transaction().expect("seed transaction");
+            for index in 0..=500 {
+                let thread_id = format!("thread::excluded-{index:03}");
+                seed_summary_favorite_tx(&tx, &thread_id, &format!("{index:03}"), false, true);
+            }
+            tx.commit().expect("seed commit");
+        }
+
+        let enhanced = db
+            .thread_favorites_snapshot_with_summaries()
+            .expect("enhanced snapshot");
+        assert_eq!(enhanced.snapshot.page.favorites.len(), 501);
+        assert_eq!(enhanced.snapshot.recent_total, 0);
+        assert!(!enhanced.snapshot.recent_truncated);
+        assert!(enhanced.summaries_truncated);
+        assert_eq!(enhanced.summaries.len(), 500);
+        assert_eq!(
+            enhanced.summaries.first().unwrap().thread_id,
+            "thread::excluded-500"
+        );
+        assert!(
+            enhanced
+                .summaries
+                .iter()
+                .all(|row| row.thread_id != "thread::excluded-000")
+        );
+    }
+
+    #[test]
+    fn favorites_summary_window_appends_only_one_of_two_raw_members_after_499_recent() {
+        let db = GaryxDbService::memory().expect("database");
+        {
+            let mut conn = db.conn().expect("writer");
+            let tx = conn.transaction().expect("seed transaction");
+            for index in 0..499 {
+                let thread_id = format!("thread::recent-{index:03}");
+                seed_summary_favorite_tx(&tx, &thread_id, "recent", false, false);
+                seed_summary_recent_tx(&tx, &thread_id, i64::from(index) + 1);
+            }
+            seed_summary_favorite_tx(
+                &tx,
+                "thread::raw-newer",
+                "2026-07-17T00:00:01.000Z",
+                false,
+                true,
+            );
+            seed_summary_favorite_tx(
+                &tx,
+                "thread::raw-older",
+                "2026-07-17T00:00:00.000Z",
+                false,
+                true,
+            );
+            tx.commit().expect("seed commit");
+        }
+
+        let enhanced = db
+            .thread_favorites_snapshot_with_summaries()
+            .expect("enhanced snapshot");
+        assert_eq!(enhanced.snapshot.recent_total, 499);
+        assert!(enhanced.summaries_truncated);
+        assert_eq!(enhanced.summaries.len(), 500);
+        assert_eq!(
+            enhanced.summaries.last().unwrap().thread_id,
+            "thread::raw-newer"
+        );
+        assert!(
+            enhanced
+                .summaries
+                .iter()
+                .all(|row| row.thread_id != "thread::raw-older")
+        );
+    }
+
+    #[test]
+    fn favorites_hidden_member_occupies_a_summary_window_slot() {
+        let db = GaryxDbService::memory().expect("database");
+        {
+            let mut conn = db.conn().expect("writer");
+            let tx = conn.transaction().expect("seed transaction");
+            for index in 0..=500 {
+                let thread_id = format!("thread::hidden-window-{index:03}");
+                seed_summary_favorite_tx(
+                    &tx,
+                    &thread_id,
+                    &format!("{index:03}"),
+                    index == 500,
+                    true,
+                );
+            }
+            tx.commit().expect("seed commit");
+        }
+
+        let enhanced = db
+            .thread_favorites_snapshot_with_summaries()
+            .expect("enhanced snapshot");
+        assert!(enhanced.summaries_truncated);
+        assert_eq!(
+            enhanced.summaries.len(),
+            499,
+            "the hidden member consumes one of the 500 window positions"
+        );
+        assert!(
+            enhanced
+                .summaries
+                .iter()
+                .all(|row| row.thread_id != "thread::hidden-window-500")
+        );
+        assert!(
+            enhanced
+                .summaries
+                .iter()
+                .all(|row| row.thread_id != "thread::hidden-window-000"),
+            "the first visible member beyond the window must not leak in"
+        );
+    }
+
+    #[test]
+    fn favorites_raw_same_millisecond_tiebreak_selects_ascending_id_at_position_500() {
+        let db = GaryxDbService::memory().expect("database");
+        {
+            let mut conn = db.conn().expect("writer");
+            let tx = conn.transaction().expect("seed transaction");
+            for index in 0..499 {
+                let thread_id = format!("thread::tie-recent-{index:03}");
+                seed_summary_favorite_tx(&tx, &thread_id, "recent", false, false);
+                seed_summary_recent_tx(&tx, &thread_id, i64::from(index) + 1);
+            }
+            // Reverse insertion is deliberate: ordering must come from the
+            // raw fallback contract, not rowid/insertion order.
+            seed_summary_favorite_tx(
+                &tx,
+                "thread::raw-z",
+                "2026-07-17T00:00:00.123Z",
+                false,
+                true,
+            );
+            seed_summary_favorite_tx(
+                &tx,
+                "thread::raw-a",
+                "2026-07-17T00:00:00.123Z",
+                false,
+                true,
+            );
+            tx.commit().expect("seed commit");
+        }
+
+        let enhanced = db
+            .thread_favorites_snapshot_with_summaries()
+            .expect("enhanced snapshot");
+        assert!(enhanced.summaries_truncated);
+        assert_eq!(enhanced.summaries.len(), 500);
+        assert_eq!(
+            enhanced.summaries.last().unwrap().thread_id,
+            "thread::raw-a"
+        );
+        assert!(
+            enhanced
+                .summaries
+                .iter()
+                .all(|row| row.thread_id != "thread::raw-z")
+        );
     }
 
     #[test]
@@ -8447,6 +9304,155 @@ mod tests {
     }
 
     #[test]
+    fn thread_summary_keyset_branches_use_scoped_partial_indexes_without_temp_sort() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let conn = db.conn().expect("connection");
+        for (filter, suffix) in [
+            (ThreadSummaryTaskFilter::Include, "visible"),
+            (ThreadSummaryTaskFilter::Exclude, "non_task"),
+            (ThreadSummaryTaskFilter::Only, "task"),
+        ] {
+            for scoped in [false, true] {
+                for has_cursor in [false, true] {
+                    let expected_index = if scoped {
+                        format!("idx_thread_meta_summary_workspace_{suffix}")
+                    } else {
+                        format!("idx_thread_meta_summary_{suffix}")
+                    };
+                    let mut bind = Vec::new();
+                    if scoped {
+                        bind.push(SqlValue::Text("/workspace/test".to_owned()));
+                    }
+                    if has_cursor {
+                        bind.push(SqlValue::Integer(1));
+                        bind.push(SqlValue::Text("thread::cursor".to_owned()));
+                    }
+                    bind.push(SqlValue::Integer(31));
+                    let sql = format!(
+                        "EXPLAIN QUERY PLAN {}",
+                        filter.page_sql(scoped, false, has_cursor)
+                    );
+                    let mut stmt = conn.prepare(&sql).expect("prepare query plan");
+                    let details = stmt
+                        .query_map(params_from_iter(bind.iter()), |row| row.get::<_, String>(3))
+                        .expect("query plan")
+                        .collect::<Result<Vec<_>, _>>()
+                        .expect("plan rows")
+                        .join("\n");
+                    assert!(
+                        details.contains("USING INDEX") && details.contains(&expected_index),
+                        "expected {expected_index} for filter={filter:?} scoped={scoped} cursor={has_cursor}:\n{details}"
+                    );
+                    assert!(
+                        !details.contains("USE TEMP B-TREE"),
+                        "keyset branch must be index-ordered:\n{details}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn thread_meta_summary_cutover_backfills_all_columns_once_and_is_idempotent() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let records = [
+            (
+                "thread::summary-cutover-updated",
+                json!({
+                    "thread_id": "thread::summary-cutover-updated",
+                    "label": "Straße",
+                    "workspace_dir": "/workspace/Équipe",
+                    "agent_id": "Σς",
+                    "updated_at": "2026-07-17T01:02:03.500+00:00",
+                    "created_at": "2020-01-01T00:00:00Z",
+                    "last_assistant_preview": "％＿＼",
+                    "exclude_from_recent": "yes"
+                }),
+            ),
+            (
+                "thread::summary-cutover-created",
+                json!({
+                    "thread_id": "thread::summary-cutover-created",
+                    "label": "Created only",
+                    "created_at": "2026-07-17T01:02:03Z"
+                }),
+            ),
+            (
+                "thread::summary-cutover-null",
+                json!({"thread_id": "thread::summary-cutover-null"}),
+            ),
+        ];
+        {
+            let conn = db.conn().expect("writer");
+            for (thread_id, body) in &records {
+                conn.execute(
+                    "INSERT INTO thread_records (key, body, updated_at, recorded_at)
+                     VALUES (?1, ?2, NULL, '2026-07-17T00:00:00Z')",
+                    params![thread_id, body.to_string()],
+                )
+                .expect("seed canonical record");
+                conn.execute(
+                    "INSERT INTO thread_meta (
+                        thread_id, thread_label, excluded_from_recent,
+                        sort_updated_at_us, search_text, projected_at
+                     ) VALUES (?1, 'stale', 0, -1, 'stale', '2026-07-17T00:00:00Z')",
+                    params![thread_id],
+                )
+                .expect("seed stale projection");
+            }
+        }
+
+        let first = db
+            .migrate_thread_meta_summary_v1()
+            .expect("summary cutover");
+        assert_eq!(first.source_row_count, 3);
+        assert_eq!(first.updated_row_count, 3);
+        assert!(!first.already_completed);
+        let rows = db.list_thread_meta().expect("backfilled rows");
+        let updated = rows
+            .iter()
+            .find(|row| row.thread_id == "thread::summary-cutover-updated")
+            .unwrap();
+        assert!(updated.excluded_from_recent);
+        assert_eq!(
+            updated.sort_updated_at_us,
+            DateTime::parse_from_rfc3339("2026-07-17T01:02:03.500Z")
+                .unwrap()
+                .timestamp_micros()
+        );
+        assert_eq!(
+            updated.search_text,
+            crate::thread_meta_projection::normalize_for_search(
+                "Straße\n/workspace/Équipe\nΣς\n％＿＼",
+            )
+        );
+        let created = rows
+            .iter()
+            .find(|row| row.thread_id == "thread::summary-cutover-created")
+            .unwrap();
+        assert_eq!(
+            created.sort_updated_at_us,
+            DateTime::parse_from_rfc3339("2026-07-17T01:02:03Z")
+                .unwrap()
+                .timestamp_micros()
+        );
+        let missing = rows
+            .iter()
+            .find(|row| row.thread_id == "thread::summary-cutover-null")
+            .unwrap();
+        assert_eq!(missing.sort_updated_at_us, 0);
+        assert!(!missing.excluded_from_recent);
+
+        let second = db
+            .migrate_thread_meta_summary_v1()
+            .expect("idempotent summary cutover");
+        assert_eq!(second.source_row_count, 3);
+        assert_eq!(second.updated_row_count, 0);
+        assert!(second.already_completed);
+        assert_eq!(db.list_thread_meta().unwrap(), rows);
+    }
+
+    #[test]
     fn thread_meta_projection_round_trip_and_remove() {
         let db = GaryxDbService::memory().expect("db opens");
         let delivery_json = r#"{"channel":"telegram","account_id":"main","chat_id":"42","user_id":"42","delivery_target_type":"chat_id","delivery_target_id":"42"}"#.to_owned();
@@ -8476,6 +9482,9 @@ mod tests {
                 last_delivery_context_json: Some(delivery_json.clone()),
                 last_delivery_updated_at: Some("2026-06-03T08:00:01.000Z".to_owned()),
                 default_list_hidden: false,
+                excluded_from_recent: false,
+                sort_updated_at_us: 1_780_473_600_000_000,
+                search_text: "project thread\n/work/project\ncodex\ndone".to_owned(),
             },
             channel_endpoints: vec![KnownChannelEndpoint {
                 endpoint_key: "telegram::main::42".to_owned(),

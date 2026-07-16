@@ -1,3 +1,5 @@
+use caseless::Caseless;
+use chrono::DateTime;
 use garyx_models::routing::{
     DeliveryContext, infer_delivery_target_id, infer_delivery_target_type,
 };
@@ -7,8 +9,10 @@ use garyx_router::{
     is_default_thread_list_hidden, is_thread_key, label_from_value, workspace_dir_from_value,
 };
 use serde_json::Value;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::garyx_db::{ThreadMetaDraft, ThreadMetaProjectionDraft};
+use crate::recent_thread_projection::is_recent_thread_excluded;
 use crate::thread_runtime::selected_model_cells_from_thread_value;
 use crate::thread_type::thread_summary_type_from_record;
 
@@ -32,6 +36,16 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
     let last_message_preview = last_assistant_message
         .clone()
         .or_else(|| last_user_message.clone());
+    let agent_id = agent_id_from_value(data);
+    let excluded_from_recent = is_recent_thread_excluded(data);
+    let sort_updated_at_us =
+        summary_sort_updated_at_us(thread_updated_at.as_deref(), created_at.as_deref());
+    let search_text = summary_search_text(
+        thread_label.as_deref(),
+        workspace_dir.as_deref(),
+        agent_id.as_deref(),
+        last_message_preview.as_deref(),
+    );
     let recent_run_id = data
         .get("history")
         .and_then(|history| history.get("recent_committed_run_ids"))
@@ -56,7 +70,7 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
         workspace_dir: workspace_dir.clone(),
         thread_type: thread_summary_type_from_record(data),
         thread_label: thread_label.clone(),
-        agent_id: agent_id_from_value(data),
+        agent_id,
         provider_type: string_field(data, "provider_type"),
         provider_key: string_field(data, "provider_key"),
         selected_model,
@@ -77,6 +91,9 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
             .map(|(context_json, _)| context_json.clone()),
         last_delivery_updated_at: last_delivery.and_then(|(_, updated_at)| updated_at),
         default_list_hidden: is_default_thread_list_hidden(data),
+        excluded_from_recent,
+        sort_updated_at_us,
+        search_text,
     };
     let channel_endpoints = channel_endpoints_from_thread_data(thread_id, data);
     Some(ThreadMetaProjectionDraft {
@@ -84,6 +101,38 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
         thread_meta,
         channel_endpoints,
     })
+}
+
+pub(crate) fn normalize_for_search(value: &str) -> String {
+    value.nfkc().default_case_fold().collect()
+}
+
+fn summary_sort_updated_at_us(updated_at: Option<&str>, created_at: Option<&str>) -> i64 {
+    updated_at
+        .and_then(parse_rfc3339_micros)
+        .or_else(|| created_at.and_then(parse_rfc3339_micros))
+        .unwrap_or(0)
+}
+
+fn parse_rfc3339_micros(value: &str) -> Option<i64> {
+    DateTime::parse_from_rfc3339(value.trim())
+        .ok()
+        .map(|timestamp| timestamp.timestamp_micros())
+}
+
+fn summary_search_text(
+    title: Option<&str>,
+    workspace_dir: Option<&str>,
+    agent_id: Option<&str>,
+    last_message_preview: Option<&str>,
+) -> String {
+    normalize_for_search(&format!(
+        "{}\n{}\n{}\n{}",
+        title.unwrap_or_default(),
+        workspace_dir.unwrap_or_default(),
+        agent_id.unwrap_or_default(),
+        last_message_preview.unwrap_or_default(),
+    ))
 }
 
 /// Channel endpoint rows for one thread record: one row per binding the
@@ -179,4 +228,84 @@ fn last_message_preview_for_role(data: &Value, role: &str) -> Option<String> {
         return Some(preview.to_owned());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn normalize_for_search_obeys_nfkc_and_default_case_fold_contract() {
+        assert_eq!(
+            normalize_for_search("Cafe\u{301}"),
+            normalize_for_search("CAFÉ")
+        );
+        assert_eq!(normalize_for_search("Straße ẞ"), "strasse ss");
+        assert_eq!(normalize_for_search("Σςσ"), "σσσ");
+        assert_eq!(normalize_for_search("％＿＼"), "%_\\");
+        assert_eq!(normalize_for_search("left\0RIGHT"), "left\0right");
+    }
+
+    #[test]
+    fn summary_projection_reuses_recent_exclusion_helper_for_every_payload_shape() {
+        let cases = [
+            json!({}),
+            json!({"exclude_from_recent": true}),
+            json!({"exclude_from_recent": " YES "}),
+            json!({"excludeFromRecent": true}),
+            json!({"metadata": {"exclude_from_recent": "1"}}),
+            json!({"metadata": {"excludeFromRecent": true}}),
+            json!({"automation_thread_mode": "generated_thread"}),
+            json!({"metadata": {"automation_thread_mode": "GENERATED_THREAD"}}),
+        ];
+        for (index, data) in cases.into_iter().enumerate() {
+            let thread_id = format!("thread::exclusion-{index}");
+            let projected =
+                thread_meta_projection_from_thread_data_with_active_run(&thread_id, &data, None)
+                    .expect("summary projection");
+            assert_eq!(
+                projected.thread_meta.excluded_from_recent,
+                is_recent_thread_excluded(&data),
+                "payload {data}"
+            );
+        }
+    }
+
+    #[test]
+    fn summary_projection_derives_sort_fallback_and_four_field_search_text() {
+        let data = json!({
+            "label": "Straße",
+            "workspace_dir": "/workspace/Équipe",
+            "agent_id": "Σς",
+            "updated_at": "not-a-timestamp",
+            "created_at": "2026-07-17T01:02:03.456789+00:00",
+            "last_assistant_preview": "％＿＼\0Tail"
+        });
+        let projected = thread_meta_projection_from_thread_data_with_active_run(
+            "thread::summary-derived",
+            &data,
+            None,
+        )
+        .expect("summary projection")
+        .thread_meta;
+        assert_eq!(
+            projected.sort_updated_at_us,
+            DateTime::parse_from_rfc3339("2026-07-17T01:02:03.456789Z")
+                .unwrap()
+                .timestamp_micros()
+        );
+        assert_eq!(
+            projected.search_text,
+            normalize_for_search("Straße\n/workspace/Équipe\nΣς\n％＿＼\0Tail")
+        );
+
+        let missing = thread_meta_projection_from_thread_data_with_active_run(
+            "thread::summary-missing-time",
+            &json!({}),
+            None,
+        )
+        .unwrap();
+        assert_eq!(missing.thread_meta.sort_updated_at_us, 0);
+    }
 }

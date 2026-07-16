@@ -90,17 +90,40 @@ mod tests {
         let db = Arc::new(GaryxDbService::memory().expect("memory db"));
         db.upsert_recent_thread(draft("thread::reader-task", "task", "2026-07-11T02:00:00Z"))
             .expect("task row");
+        db.upsert_recent_thread(draft(
+            "thread::reader-chat-older",
+            "chat",
+            "2026-07-11T00:00:00Z",
+        ))
+        .expect("older chat row");
         db.upsert_recent_thread(draft("thread::reader-chat", "chat", "2026-07-11T01:00:00Z"))
             .expect("chat row");
-        let reader = SqlRecentThreadPageReader::new(db);
+        let reader = SqlRecentThreadPageReader::new(db.clone());
 
         let page = reader
             .page(RecentThreadFilter::Exclude, 10, 0)
             .await
             .expect("page");
-        assert_eq!(page.total, 1);
+        assert_eq!(page.total, 2);
         assert_eq!(page.entries[0].thread_id, "thread::reader-chat");
+        assert_eq!(page.entries[1].thread_id, "thread::reader-chat-older");
         assert_eq!(page.entries[0].last_message_preview, "preview");
+        let api_chats = db
+            .list_recent_threads_keyset_page(RecentThreadTaskFilter::Exclude, 10, None)
+            .expect("api recent chats page");
+        assert_eq!(page.total, api_chats.total);
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|entry| entry.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            api_chats
+                .records
+                .iter()
+                .map(|record| record.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            "bot /threads must remain membership/order-equivalent to /api/recent-threads?tasks=exclude"
+        );
         assert!(
             reader
                 .contains_selectable_thread("thread::reader-chat")

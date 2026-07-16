@@ -26,6 +26,7 @@ axum = { workspace = true, features = ["ws"] }
 tracing = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = "0.10"
+caseless = "0.2"
 iana-time-zone = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
@@ -53,6 +54,7 @@ sha2 = "0.10"
 crc32fast = "1"
 tower-http = { version = "0.6", features = ["limit"] }
 libc = "0.2"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile.workspace = true

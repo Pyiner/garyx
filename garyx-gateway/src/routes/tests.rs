@@ -43,6 +43,25 @@ fn authed_request() -> axum::http::request::Builder {
     crate::test_support::authed_request()
 }
 
+async fn authed_get_json(router: &axum::Router, uri: &str) -> (StatusCode, Value) {
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("GET request"),
+        )
+        .await
+        .expect("GET response");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .expect("GET body");
+    let payload = serde_json::from_slice(&body).expect("JSON response");
+    (status, payload)
+}
+
 #[tokio::test]
 async fn store_identity_endpoint_returns_persistent_incarnation_and_process_boot_uuid() {
     let db = Arc::new(crate::garyx_db::GaryxDbService::memory().expect("memory database"));
@@ -3762,18 +3781,19 @@ async fn thread_favorite_routes_enforce_dual_cas_and_return_tagged_atomic_pages(
 async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows() {
     let state = AppStateBuilder::new(test_config()).build();
     for thread_id in ["thread::snapshot-recent", "thread::snapshot-without-recent"] {
+        let mut record = json!({
+            "thread_id": thread_id,
+            "label": thread_id,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z"
+        });
+        if thread_id == "thread::snapshot-without-recent" {
+            record["exclude_from_recent"] = json!(true);
+        }
         state
             .threads
             .thread_store
-            .set(
-                thread_id,
-                json!({
-                    "thread_id": thread_id,
-                    "label": thread_id,
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-01T00:00:00Z"
-                }),
-            )
+            .set(thread_id, record)
             .await
             .unwrap();
     }
@@ -3814,6 +3834,7 @@ async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows
         .unwrap();
     let router = build_router(state.clone());
     let response = router
+        .clone()
         .oneshot(
             authed_request()
                 .uri("/api/thread-favorites/snapshot")
@@ -3823,12 +3844,28 @@ async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let payload: Value = serde_json::from_slice(
-        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
+    let omitted_body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let false_response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri("/api/thread-favorites/snapshot?include_summaries=false")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(false_response.status(), StatusCode::OK);
+    let false_body = axum::body::to_bytes(false_response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        omitted_body, false_body,
+        "omitting include_summaries must preserve the legacy envelope byte-for-byte"
+    );
+    let payload: Value = serde_json::from_slice(&omitted_body).unwrap();
     assert_eq!(payload["store_incarnation_id"], incarnation);
     assert_eq!(payload["server_boot_id"], state.server_boot_id());
     assert_eq!(payload["revision"], 2);
@@ -3847,6 +3884,668 @@ async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows
             .is_some_and(|seq| seq > 0),
         "snapshot recent rows carry the monotonic wire ordering key"
     );
+    assert!(payload.get("summaries").is_none());
+    assert!(payload.get("summaries_truncated").is_none());
+
+    let enhanced_response = router
+        .oneshot(
+            authed_request()
+                .uri("/api/thread-favorites/snapshot?include_summaries=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(enhanced_response.status(), StatusCode::OK);
+    let enhanced: Value = serde_json::from_slice(
+        &axum::body::to_bytes(enhanced_response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(enhanced["summaries_truncated"], false);
+    assert_eq!(enhanced["summaries"].as_array().unwrap().len(), 2);
+    let excluded = enhanced["summaries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["thread_id"] == "thread::snapshot-without-recent")
+        .expect("excluded favorite summary");
+    assert_eq!(excluded["excluded_from_recent"], true);
+}
+
+#[tokio::test]
+async fn thread_summaries_route_scopes_filters_fields_and_paginates_normalized_time_keys() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let rows = [
+        (
+            "thread::summary-task",
+            json!({
+                "thread_id": "thread::summary-task",
+                "thread_kind": "task",
+                "label": "Task summary",
+                "workspace_dir": "/workspace/alpha",
+                "created_at": "2026-07-17T00:00:00Z",
+                "updated_at": "2026-07-17T04:00:00Z",
+                "provider_type": "codex",
+                "agent_id": "test-agent",
+                "last_user_preview": "question",
+                "last_assistant_preview": "answer",
+                "worktree": {"path": "/workspace/alpha"}
+            }),
+        ),
+        (
+            "thread::summary-z-tie",
+            json!({
+                "thread_id": "thread::summary-z-tie",
+                "label": "Tie Z",
+                "workspace_dir": "/workspace/alpha",
+                "updated_at": "2026-07-17T02:00:00.500+00:00"
+            }),
+        ),
+        (
+            "thread::summary-a-tie",
+            json!({
+                "thread_id": "thread::summary-a-tie",
+                "label": "Tie A",
+                "workspace_dir": "/workspace/alpha",
+                "updated_at": "2026-07-17T02:00:00.500Z"
+            }),
+        ),
+        (
+            "thread::summary-created",
+            json!({
+                "thread_id": "thread::summary-created",
+                "label": "Created fallback",
+                "workspace_dir": "/workspace/alpha",
+                "created_at": "2026-07-17T01:00:00Z"
+            }),
+        ),
+        (
+            "thread::summary-null",
+            json!({
+                "thread_id": "thread::summary-null",
+                "label": "No timestamp",
+                "workspace_dir": "/workspace/alpha"
+            }),
+        ),
+        (
+            "thread::summary-other-workspace",
+            json!({
+                "thread_id": "thread::summary-other-workspace",
+                "label": "Other workspace",
+                "workspace_dir": "/workspace/beta",
+                "updated_at": "2026-07-17T05:00:00Z"
+            }),
+        ),
+        (
+            "thread::summary-hidden",
+            json!({
+                "thread_id": "thread::summary-hidden",
+                "label": "Hidden",
+                "workspace_dir": "/workspace/alpha",
+                "hidden": true,
+                "updated_at": "2026-07-17T06:00:00Z"
+            }),
+        ),
+    ];
+    for (thread_id, row) in rows {
+        state
+            .threads
+            .thread_store
+            .set(thread_id, row)
+            .await
+            .expect("seed summary row");
+    }
+    let router = build_router(state.clone());
+    let scope = urlencoding::encode("/workspace/alpha");
+    let (status, first) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&limit=2"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["has_more"], true);
+    assert_eq!(
+        first["store_incarnation_id"],
+        state.ops.garyx_db.store_incarnation_id().unwrap()
+    );
+    assert_eq!(first["server_boot_id"], state.server_boot_id());
+    assert!(first.get("total").is_none());
+    assert!(first.get("count").is_none());
+    assert_eq!(
+        first["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["thread_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["thread::summary-task", "thread::summary-z-tie"]
+    );
+    let keys = first["threads"][0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        keys,
+        BTreeSet::from([
+            "active_run_id",
+            "agent_id",
+            "created_at",
+            "excluded_from_recent",
+            "last_assistant_message",
+            "last_message_preview",
+            "last_user_message",
+            "message_count",
+            "provider_type",
+            "recent_run_id",
+            "thread_id",
+            "thread_type",
+            "title",
+            "updated_at",
+            "workspace_dir",
+            "worktree",
+        ])
+    );
+    assert_eq!(first["threads"][0]["title"], "Task summary");
+    assert_eq!(first["threads"][0]["last_user_message"], "question");
+    assert_eq!(first["threads"][0]["last_assistant_message"], "answer");
+    assert_eq!(first["threads"][0]["last_message_preview"], "answer");
+    assert_eq!(first["threads"][0]["worktree"]["path"], "/workspace/alpha");
+
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let (_, second) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&limit=2&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(
+        second["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["thread_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["thread::summary-a-tie", "thread::summary-created"]
+    );
+    let cursor = second["next_cursor"].as_str().unwrap();
+    let (_, third) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&limit=2&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(third["threads"][0]["thread_id"], "thread::summary-null");
+    assert_eq!(third["threads"][0]["updated_at"], Value::Null);
+    assert_eq!(third["has_more"], false);
+    assert_eq!(third["next_cursor"], Value::Null);
+
+    let (_, chats) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&tasks=exclude&limit=100"),
+    )
+    .await;
+    assert!(
+        chats["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["thread_type"] != "task")
+    );
+    assert_eq!(chats["threads"].as_array().unwrap().len(), 4);
+    let (_, tasks) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&tasks=only&limit=100"),
+    )
+    .await;
+    assert_eq!(tasks["threads"].as_array().unwrap().len(), 1);
+    assert_eq!(tasks["threads"][0]["thread_id"], "thread::summary-task");
+    let (_, searched_tasks) = authed_get_json(
+        &router,
+        &format!(
+            "/api/thread-summaries?workspace_dir={scope}&tasks=only&q=TASK%20SUMMARY&limit=100"
+        ),
+    )
+    .await;
+    assert_eq!(searched_tasks["threads"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        searched_tasks["threads"][0]["thread_id"],
+        "thread::summary-task"
+    );
+}
+
+#[tokio::test]
+async fn thread_summaries_cursor_binds_scope_tasks_canonical_query_and_incarnation() {
+    let state = AppStateBuilder::new(test_config()).build();
+    for (index, thread_id) in ["thread::cursor-search-a", "thread::cursor-search-b"]
+        .into_iter()
+        .enumerate()
+    {
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": format!("Straße result {index}"),
+                    "workspace_dir": "/workspace/cursor",
+                    "updated_at": format!("2026-07-17T0{}:00:00Z", index + 1)
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    let router = build_router(state);
+    let scope = urlencoding::encode("/workspace/cursor");
+    let (_, first) = authed_get_json(
+        &router,
+        &format!(
+            "/api/thread-summaries?workspace_dir={scope}&q={}&limit=1",
+            urlencoding::encode("  Straße  ")
+        ),
+    )
+    .await;
+    let cursor = first["next_cursor"].as_str().expect("next cursor");
+
+    let (status, equivalent) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&q=STRASSE&limit=1&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(equivalent["threads"].as_array().unwrap().len(), 1);
+
+    let decoded = decode_thread_summaries_cursor(cursor).expect("decode cursor");
+    let wrong_incarnation = encode_thread_summaries_cursor(
+        &decoded.scope,
+        ThreadSummaryTaskFilter::Include,
+        decoded.q.as_deref(),
+        &uuid::Uuid::new_v4().to_string(),
+        decoded.sort_key,
+        &decoded.thread_id,
+    );
+    for uri in [
+        format!(
+            "/api/thread-summaries?workspace_dir={}&q=STRASSE&limit=1&cursor={cursor}",
+            urlencoding::encode("/workspace/other")
+        ),
+        format!(
+            "/api/thread-summaries?workspace_dir={scope}&tasks=only&q=STRASSE&limit=1&cursor={cursor}"
+        ),
+        format!("/api/thread-summaries?workspace_dir={scope}&q=different&limit=1&cursor={cursor}"),
+        format!(
+            "/api/thread-summaries?workspace_dir={scope}&q=STRASSE&limit=1&cursor={wrong_incarnation}"
+        ),
+    ] {
+        let (status, payload) = authed_get_json(&router, &uri).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(payload["operation"], "thread_summaries_list");
+        assert_eq!(payload["code"], "invalid_request");
+    }
+}
+
+#[tokio::test]
+async fn thread_summaries_q_trim_empty_and_scalar_limits_are_server_canonical() {
+    let state = AppStateBuilder::new(test_config()).build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::q-boundary",
+            json!({
+                "thread_id": "thread::q-boundary",
+                "label": "Boundary",
+                "workspace_dir": "/workspace/q"
+            }),
+        )
+        .await
+        .unwrap();
+    let router = build_router(state);
+
+    let (status, omitted) = authed_get_json(&router, "/api/thread-summaries").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, blank) = authed_get_json(&router, "/api/thread-summaries?q=%20%20%20").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(blank, omitted);
+
+    for (query, expected_status) in [
+        ("a".repeat(100), StatusCode::OK),
+        ("a".repeat(101), StatusCode::BAD_REQUEST),
+        ("ß".repeat(50), StatusCode::OK),
+        ("ß".repeat(51), StatusCode::BAD_REQUEST),
+    ] {
+        let uri = format!("/api/thread-summaries?q={}", urlencoding::encode(&query));
+        let (status, _) = authed_get_json(&router, &uri).await;
+        assert_eq!(
+            status,
+            expected_status,
+            "query scalar count {}",
+            query.chars().count()
+        );
+    }
+    for uri in [
+        "/api/thread-summaries?limit=0",
+        "/api/thread-summaries?limit=101",
+        "/api/thread-summaries?workspace_dir=relative",
+        "/api/thread-summaries?cursor=not-a-cursor",
+        "/api/thread-summaries?offset=1",
+    ] {
+        let (status, payload) = authed_get_json(&router, uri).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(payload["operation"], "thread_summaries_list");
+    }
+}
+
+#[tokio::test]
+async fn thread_summaries_instr_search_handles_unicode_literals_nul_and_all_four_fields() {
+    let state = AppStateBuilder::new(test_config()).build();
+    for (thread_id, row) in [
+        (
+            "thread::search-unicode",
+            json!({
+                "thread_id": "thread::search-unicode",
+                "label": "Café Éclair Straße Σς token",
+                "workspace_dir": "/workspace/search",
+                "updated_at": "2026-07-17T04:00:00Z"
+            }),
+        ),
+        (
+            "thread::search-literals",
+            json!({
+                "thread_id": "thread::search-literals",
+                "label": "literal %_\\ and tail\\",
+                "workspace_dir": "/workspace/search",
+                "updated_at": "2026-07-17T03:00:00Z"
+            }),
+        ),
+        (
+            "thread::search-fullwidth",
+            json!({
+                "thread_id": "thread::search-fullwidth",
+                "label": "compat ％＿＼",
+                "workspace_dir": "/workspace/search",
+                "updated_at": "2026-07-17T02:00:00Z"
+            }),
+        ),
+        (
+            "thread::search-nul",
+            json!({
+                "thread_id": "thread::search-nul",
+                "label": "left ab\0cd right",
+                "workspace_dir": "/workspace/search",
+                "updated_at": "2026-07-17T01:00:00Z"
+            }),
+        ),
+        (
+            "thread::search-fields",
+            json!({
+                "thread_id": "thread::search-fields",
+                "workspace_dir": "/workspace/ÉquipeScope",
+                "agent_id": "AgentStraße",
+                "last_assistant_preview": "PreviewΣς",
+                "updated_at": "2026-07-17T00:00:00Z"
+            }),
+        ),
+    ] {
+        state
+            .threads
+            .thread_store
+            .set(thread_id, row)
+            .await
+            .unwrap();
+    }
+    let router = build_router(state);
+
+    for (query, expected) in [
+        ("CAFE\u{301}", vec!["thread::search-unicode"]),
+        ("éCLAIR", vec!["thread::search-unicode"]),
+        (
+            "STRASSE",
+            vec!["thread::search-unicode", "thread::search-fields"],
+        ),
+        ("σσ token", vec!["thread::search-unicode"]),
+        (
+            "%",
+            vec!["thread::search-fullwidth", "thread::search-literals"],
+        ),
+        (
+            "_",
+            vec!["thread::search-fullwidth", "thread::search-literals"],
+        ),
+        (
+            "\\",
+            vec!["thread::search-fullwidth", "thread::search-literals"],
+        ),
+        ("tail\\", vec!["thread::search-literals"]),
+        (
+            "％＿＼",
+            vec!["thread::search-fullwidth", "thread::search-literals"],
+        ),
+        ("b\0c", vec!["thread::search-nul"]),
+        ("e\u{301}quipescope", vec!["thread::search-fields"]),
+        ("agentstrasse", vec!["thread::search-fields"]),
+        ("previewσσ", vec!["thread::search-fields"]),
+    ] {
+        let uri = format!(
+            "/api/thread-summaries?q={}&limit=100",
+            urlencoding::encode(query)
+        );
+        let (status, payload) = authed_get_json(&router, &uri).await;
+        assert_eq!(status, StatusCode::OK, "query {query:?}");
+        let actual = payload["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["thread_id"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual,
+            expected.into_iter().collect::<BTreeSet<_>>(),
+            "query {query:?}"
+        );
+    }
+    let (_, fields) = authed_get_json(&router, "/api/thread-summaries?q=agentstrasse").await;
+    assert_eq!(fields["threads"][0]["title"], Value::Null);
+}
+
+#[tokio::test]
+async fn thread_summaries_key_moving_forward_waits_for_head_refresh() {
+    let state = AppStateBuilder::new(test_config()).build();
+    for (thread_id, hour) in [
+        ("thread::move-forward-new", 3),
+        ("thread::move-forward-middle", 2),
+        ("thread::move-forward-old", 1),
+    ] {
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": thread_id,
+                    "workspace_dir": "/workspace/move-forward",
+                    "updated_at": format!("2026-07-17T0{hour}:00:00Z")
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    let router = build_router(state.clone());
+    let scope = urlencoding::encode("/workspace/move-forward");
+    let (_, first) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&limit=1"),
+    )
+    .await;
+    assert_eq!(first["threads"][0]["thread_id"], "thread::move-forward-new");
+    let cursor = first["next_cursor"].as_str().unwrap();
+
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::move-forward-old",
+            json!({
+                "thread_id": "thread::move-forward-old",
+                "label": "Moved forward",
+                "workspace_dir": "/workspace/move-forward",
+                "updated_at": "2026-07-17T04:00:00Z"
+            }),
+        )
+        .await
+        .unwrap();
+    let (_, continuation) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&limit=1&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(
+        continuation["threads"][0]["thread_id"],
+        "thread::move-forward-middle"
+    );
+    let (_, refreshed) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&limit=1"),
+    )
+    .await;
+    assert_eq!(
+        refreshed["threads"][0]["thread_id"],
+        "thread::move-forward-old"
+    );
+}
+
+#[tokio::test]
+async fn thread_summaries_key_moving_backward_may_repeat_on_continuation() {
+    let state = AppStateBuilder::new(test_config()).build();
+    for (thread_id, hour) in [
+        ("thread::move-back-new", 3),
+        ("thread::move-back-middle", 2),
+        ("thread::move-back-old", 1),
+    ] {
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": thread_id,
+                    "workspace_dir": "/workspace/move-back",
+                    "updated_at": format!("2026-07-17T0{hour}:00:00Z")
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    let router = build_router(state.clone());
+    let scope = urlencoding::encode("/workspace/move-back");
+    let (_, first) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&limit=1"),
+    )
+    .await;
+    assert_eq!(first["threads"][0]["thread_id"], "thread::move-back-new");
+    let cursor = first["next_cursor"].as_str().unwrap();
+
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::move-back-new",
+            json!({
+                "thread_id": "thread::move-back-new",
+                "label": "Moved backward",
+                "workspace_dir": "/workspace/move-back",
+                "updated_at": "2026-07-17T00:00:00Z"
+            }),
+        )
+        .await
+        .unwrap();
+    let (_, continuation) = authed_get_json(
+        &router,
+        &format!("/api/thread-summaries?workspace_dir={scope}&limit=10&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(
+        continuation["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["thread_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            "thread::move-back-middle",
+            "thread::move-back-old",
+            "thread::move-back-new",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn summary_slice_preserves_existing_threads_recent_point_and_pins_envelopes() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::legacy-envelope";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Legacy envelope",
+                "workspace_dir": "/workspace/envelope",
+                "updated_at": "2026-07-17T00:00:00Z"
+            }),
+        )
+        .await
+        .unwrap();
+    state.ops.garyx_db.pin_thread(thread_id).unwrap();
+    let router = build_router(state);
+
+    for (uri, expected_keys) in [
+        (
+            "/api/threads?limit=10",
+            BTreeSet::from(["count", "limit", "offset", "threads", "total"]),
+        ),
+        (
+            "/api/recent-threads?limit=10",
+            BTreeSet::from([
+                "count",
+                "has_more",
+                "limit",
+                "next_cursor",
+                "server_boot_id",
+                "store_incarnation_id",
+                "threads",
+                "total",
+            ]),
+        ),
+        (
+            "/api/thread-pins",
+            BTreeSet::from(["pins", "revision", "thread_ids"]),
+        ),
+    ] {
+        let (status, payload) = authed_get_json(&router, uri).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            payload
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            expected_keys,
+            "{uri}"
+        );
+    }
+    let (status, point) = authed_get_json(&router, &format!("/api/threads/{thread_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(point["label"], "Legacy envelope");
+    assert!(point.get("title").is_none());
+    assert!(point.get("excluded_from_recent").is_none());
 }
 
 #[tokio::test]

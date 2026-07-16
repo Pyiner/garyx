@@ -69,6 +69,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(routes::list_recent_threads),
         )
         .route(
+            "/api/thread-summaries",
+            axum::routing::get(routes::list_thread_summaries),
+        )
+        .route(
             restart_wake::RESTART_WAKE_ALL_SNAPSHOT_PATH,
             axum::routing::get(restart_wake::restart_wake_all_snapshot_endpoint),
         )
