@@ -1,8 +1,10 @@
 # Feishu meeting entity
 
-Status: revision 20 — complete self-contained specification (no references
-to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–19.
+Status: revision 21 — sample-gate amendment (Section 3.1 triggered):
+production-grade payload evidence from mino_server replaced the polling
+assumption with push-based capture. Reviewed as part of the slice-2
+implementation gate. Prior baseline: revision 20, adversarial review
+#TASK-2337 rounds 1–19, 100% PASS.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -77,17 +79,13 @@ Product sign-off items (explicit, owner-revocable):
   always remove the bot manually.
 - **S3** The final ~30 s of speech becomes readable during the grace
   drain, not instantly.
-- **S4** Two distinct loss bounds (both only when the platform becomes
-  unreadable — grace expired while down, or bot removed — before
-  recovery can re-pull):
-  (a) *fetched-but-uncommitted*: at most **one platform events page**
-  (page_size ≤ 100 items) that was in memory at crash time;
-  (b) *uncaptured tail*: everything the platform had produced after the
-  last durable checkpoint but which was never fetched — under a
-  multi-page backlog this can be **any number of pages**. If the bot
-  goes down mid-meeting and never regains platform access, whatever it
-  had not yet pulled is simply never captured — the same acceptance as
-  the bot never having been present for that stretch.
+- **S4** (push model, rev21) Capture is at-most-once: an activity event
+  that arrives while the process is down, or crashes before its batch
+  commit, is **permanently lost** — there is no replay channel in
+  Phase 1 (the platform's pull API exists but is unadopted; a future
+  gap-fill fetch may reduce this window). A gateway restart mid-meeting
+  therefore loses the activity pushed during the outage — the same
+  acceptance as the bot not having been present for that stretch.
 - **S5** Agents learn about entities from referenced text,
   `garyx meeting list`, or memory; no automatic per-turn injection; an
   unreferenced entity may go unnoticed.
@@ -127,12 +125,31 @@ scopes granted and live-verified on the production app):
   `call_id` → long numeric `meeting.id`. Tenant token only.
 - `POST /open-apis/vc/v1/bots/leave`: leave by long meeting id (used
   only as best-effort abort compensation, 5.2).
-- `GET /open-apis/vc/v1/bots/events`: pull; `page_token` continuation —
-  **opaque**: stored and resumed from, never compared or ordered;
-  page_size 20–100.
-- Event types: `participant_joined/left`, `chat_received`,
-  `transcript_received`, `magic_share_started/ended`
-  (`share_doc.title/url`).
+- **In-meeting content arrives by push, not pull** (sample gate,
+  3.1): `vc.bot.meeting_activity_v1` events carry
+  `meeting_activity_items[]`, each with `activity_event_type`
+  (`transcript_received` | `chat_received` | `participant_left`),
+  `meeting.id`, and a per-type item array. Production evidence:
+  mino_server (`biz/domain/dmservice/meetingbotservice/service.go`,
+  `service_test.go`, `trigger_event.go` — exact field names below). A
+  pull API (`GET /open-apis/vc/v1/bots/events`) also exists (lark-cli
+  uses it) but is not used in Phase 1 (no production payload evidence;
+  a future gap-fill fetch after restarts may adopt it).
+- Pinned payload shapes (verbatim from mino_server tests):
+  - invite `event`: `meeting.id` (a pre-join reference — the real
+    meeting id is the one `bots/join` returns), `meeting.meeting_no`,
+    `meeting.topic`, `bot.id`, `inviter.id`. **No `call_id` exists.**
+  - ended `event`: `meeting.id` only.
+  - activity transcript item: `text`, `language`, `sentence_id`,
+    `start_time_ms`, `end_time_ms`, `speaker.id.open_id`,
+    `speaker.user_name`.
+  - activity chat item: `message_id`, `content`, `sent_timestamp`,
+    sender under `operator.id.open_id` / `operator.user_name` (fallback
+    `operator.name`).
+  - activity participant_left item: `participant.id.open_id`.
+  - JSON numbers in these payloads can be bare integers (mino hit
+    float64 precision loss via sonic); parse ids as strings or
+    arbitrary-precision, never via f64.
 - Transcript ~30 s latency, batched 5 s/100 items. Multi-party meetings
   only. Per-meeting owner switch "allow agents to join". `10005` = bot
   not in meeting. 5-minute post-end grace window; `20001` = window over.
@@ -150,17 +167,22 @@ official error table; unknown codes default to `Other`).
 
 ### 3.1 Sample-pinning gate
 
-Slice 2 opens by capturing sanitized fixtures: invite/ended envelopes
-**and the WS path each arrives on** (S1), join response, events pages
-including grace-window reads and the `20001` response, and the maximum
-observed single-page byte size (validates S4 phrasing). Pinned facts:
-invite payload fields; joining-stage identity; existence or absence of an
-in-band ended item (if absent, end sources are exactly `push` and
-`grace_expired`); grace-window read behavior; **duplicate-join and
-lost-response behavior** (join twice, join with dropped response —
-expected: idempotent same `meeting.id`, RR12-02); leave semantics. Any
-mismatch stops slice 2 for a design amendment. Slice 1 has no Feishu
-dependency.
+**Gate status: satisfied by production evidence (2026-07-16).** The
+payload shapes above are pinned from mino_server's production
+implementation and its committed test fixtures (not from live capture):
+`biz/infrastructure/channel/lark/trigger_event_vc_bot_test.go`
+(invite/ended), `biz/domain/dmservice/meetingbotservice/service_test.go`
+(activity items), `biz/infrastructure/channel/lark/vc_client.go`
+(join request/response). Remaining slice-2 verification (a check, not a
+blocking gate): the first real invited meeting must confirm these shapes
+against Garyx's own WS delivery — a mismatch stops rollout for an
+amendment. Facts still unpinned and accepted as implementation-time
+checks: whether `vc.bot.*` events arrive on Garyx's long-connection
+protobuf path (mino uses webhooks; Garyx console subscribes in
+long-connection mode — first real event settles it), and duplicate-join
+behavior (mino re-joins unconditionally with no error-code branch,
+suggesting benign semantics; our retry logic treats a join error that
+carries the meeting identity as success-equivalent).
 
 ## 4. Entity model and storage
 
@@ -328,37 +350,37 @@ id (splitting applies only to 1:1 candidates — a merge that would need
 splitting is simply not merged, so continuation source mapping is always
 unique). Segments never span pages.
 
-**Page-atomic commit (the durability core):** each poll fetches exactly
-one page (`poll_events` is one-page-per-call) under a 10 s timeout and
-commits atomically under the entity I/O write lock:
+**Batch-atomic commit (the durability core; push model, rev21):** the
+commit unit is one received `vc.bot.meeting_activity_v1` event (one
+bounded batch of items). On delivery the coordinator commits it
+atomically under the entity I/O write lock:
 
-1. normalize the page → `seg` lines (bounded as above);
-2. append `seg` lines → append one `ckpt {cursor_out = this page's
-   token}` → `fdatasync`;
+1. normalize the batch → `seg` lines (bounded as above; items whose
+   `sentence_id`/`message_id` already appear in the log are dropped —
+   redelivery dedup);
+2. append `seg` lines → append one `ckpt {event_id = the WS event's id}`
+   → `fdatasync`;
 3. SQLite cache transaction guarded by **epoch + monotonic generation**
-   (R7-04, RR8-02): `UPDATE meetings SET poll_cursor=…,
-   closed_segment_count=…, byte_size=…, cache_generation=:gen,
-   updated_at=… WHERE id=:id AND log_epoch = :epoch AND
-   cache_generation < :gen` — `:gen` is the checkpoint ordinal within the
-   current epoch, so a delayed repair can never overwrite a newer cache
-   and a stale-epoch writer can never touch a re-created log.
+   (R7-04, RR8-02): `UPDATE meetings SET closed_segment_count=…,
+   byte_size=…, cache_generation=:gen, updated_at=… WHERE id=:id AND
+   log_epoch = :epoch AND cache_generation < :gen` — `:gen` is the
+   checkpoint ordinal within the current epoch. (`poll_cursor` is
+   retired; the ckpt's `event_id` chain is the batch ledger.)
 
-Once the `ckpt` is fsynced the page is committed: the coordinator's
-in-memory cursor advances unconditionally; a failed cache transaction
-puts the entity in a retryable `cache-repair` state (backoff retries;
-each repair re-derives values from the canonical log **under the I/O
-lock** with the current generation guard). Recovery is forward-only: a
-committed page is never re-pulled because of cache failure. Empty polls
-still write a `ckpt`. `has_more=true` schedules the next page
-immediately; otherwise the 30 s cadence (jittered) applies. An in-flight
-page dropped by its timeout consumes nothing.
+Once the `ckpt` is fsynced the batch is committed; a failed cache
+transaction puts the entity in retryable `cache-repair` (backoff; each
+repair re-derives from the canonical log under the I/O lock with the
+generation guard); recovery is forward-only. There is no polling loop,
+no page token, no tick budget: data arrives when the platform pushes
+it.
 
 **Boot repair** (non-terminal entities only; terminal logs are never
 scanned at boot): validate line by line; truncate everything after the
 last valid `ckpt` (torn and complete `seg` lines alike — they belong to
-an uncommitted page); resume from that `ckpt`'s token; rebuild SQLite
-caches (with the generation guard) and the in-memory offset index in the
-same pass. Missing directories/files are tolerated everywhere (S8).
+an uncommitted batch, which is simply lost per S4; there is nothing to
+re-pull in the push model); rebuild SQLite caches (with the generation
+guard) and the in-memory offset index in the same pass. Missing
+directories/files are tolerated everywhere (S8).
 
 ### 4.3 Entity deletion
 
@@ -388,10 +410,11 @@ API: `DELETE /api/meetings/{id}`; CLI `garyx meeting delete <id>`.
 ```rust
 #[async_trait]
 pub trait MeetingPlatformClient: Send + Sync {
-    async fn join(&self, meeting_no: &str, call_id: Option<&str>)
+    async fn join(&self, meeting_no: &str, password: Option<&str>)
         -> Result<JoinedMeeting, MeetingApiError>;
-    async fn poll_events(&self, feishu_meeting_id: &str, page_token: &str)
-        -> Result<EventsPage, MeetingApiError>;   // exactly one page per call
+        // POST /vc/v1/bots/join {join_identify:{meeting_no}, join_type:1,
+        // password?} -> data.meeting.id (rev21: no call_id — it does not
+        // exist in the real payload)
     async fn leave(&self, feishu_meeting_id: &str)
         -> Result<(), MeetingApiError>;           // best-effort abort compensation
 }
@@ -399,6 +422,9 @@ pub trait MeetingEventSink: Send + Sync {
     fn register_client(&self, account_id: &str, client: Arc<dyn MeetingPlatformClient>);
     fn unregister_client(&self, account_id: &str);
     fn on_meeting_invited(&self, invite: MeetingInvite);
+    fn on_meeting_activity(&self, account_id: &str, event_id: &str, payload: serde_json::Value);
+        // rev21: bounded enqueue of the raw activity event; the
+        // coordinator normalizes and commits (4.2)
     fn on_meeting_ended(&self, account_id: &str, feishu_meeting_id: &str);
 }
 ```
@@ -518,10 +544,13 @@ abort path. The deadline applies **even while stalled** (it models invite
 validity). Join succeeding during the grace window is legal; polls then
 return data until `GraceExpired` finalizes.
 
-**Live polling:** page-atomic commits per 4.2. Transport errors back off
-30→60→120 s. `NotInMeeting` while live (no end signal) → abort path.
-`GraceExpired` while live → finalize immediately
-(`end_source='grace_expired'`).
+**Live capture (push, rev21):** activity batches commit per 4.2 as they
+arrive; between events the coordinator is idle (no polling loop). End
+detection is dual, mirroring production evidence: ① the
+`vc.bot.meeting_ended_v1` push, ② an activity `participant_left` item
+whose `participant.id.open_id` equals the bot's own open id (leave or
+removal — both arrive this way). `NotInMeeting` from a join/leave call
+retains its abort semantics.
 
 **Abort HTTP protocol (RR15-03, RR16-02, R17-02) — normative
 state/response table for `POST /api/meetings/{id}/abort`:**
@@ -574,21 +603,23 @@ TOCTOU):
 
 ### 5.3 End path and grace drain
 
-`EndedSignal(push)` (or `poll_ended` if pinned by 3.1): CAS
-`live→finalizing`, `ended_at=now`, `grace_deadline_at = now + 4 min`.
-Drain: keep polling on the normal cadence **until the deadline** — no
-quiescence shortcut. Then the terminal barrier and CAS `finalized`.
-`GraceExpired` during finalizing accelerates completion; `NotInMeeting`
-during finalizing completes early; `AbortRequest` during finalizing is
-refused; a stalled finalizing entity still finalizes at its deadline.
-Unknown-entity end signals are logged and dropped (grace-window polls are
-the correlation-free backstop). Restart during finalizing resumes the
-drain to the persisted deadline.
+On the end signal (either path above): CAS `live→finalizing`,
+`ended_at=now`, `grace_deadline_at = now + 4 min`, `end_source`
+recorded (`push` or `participant_left`). **Finalizing in the push model
+means staying subscribed for trailing activity** — late transcript
+batches keep arriving for a short while (production evidence: mino
+keeps a 6 h tombstone to absorb them; our capture window is 4 min,
+after which the terminal barrier runs and trailing pushes for a
+finalized entity are dropped with a debug log). `AbortRequest` during
+finalizing is refused; a stalled finalizing entity still finalizes at
+its deadline. Unknown-entity end signals and activity for unknown/
+terminal entities are logged and dropped. Restart during finalizing
+resumes the countdown to the persisted deadline.
 
 ### 5.4 State machine
 
 ```
- invite ─admission insert─> JOINING ─join ok─> LIVE ─page-atomic commits─┐
+ invite ─admission insert─> JOINING ─join ok─> LIVE ─batch commits (push)─┐
    │      (unique keys, S1/S2)  │(absolute        │                      │ commands: immediate
    │                            │ deadline,       │ EndedSignal/         │ when idle; after the
    │                            │ even stalled)   │ GraceExpired         │ current page commit
@@ -974,9 +1005,9 @@ at debug.
 | `garyx-models/src/local_paths.rs` | `default_meetings_dir()` | additive |
 | `garyx-models/src/config.rs` | `FeishuAccount.meeting_entities`, `GatewayConfig.meetings` (serde-default) | additive |
 | `garyx-channels/src/meeting_sink.rs` (new) | traits, `MeetingInvite`, typed errors, no-op impl | additive |
-| `garyx-channels/src/feishu/types.rs` | 2 event structs | additive |
-| `garyx-channels/src/feishu/ws.rs` | 2 dispatch branches → sink | additive |
-| `garyx-channels/src/feishu/client.rs` | `bots_join`/`bots_events`/`bots_leave` + adapter | additive |
+| `garyx-channels/src/feishu/types.rs` | 3 event structs | additive |
+| `garyx-channels/src/feishu/ws.rs` | 3 dispatch branches (invited/activity/ended) → sink | additive |
+| `garyx-channels/src/feishu/client.rs` | `bots_join`/`bots_leave` + adapter (no events pull, rev21) | additive |
 | `garyx-channels/src/plugin.rs`, `feishu.rs` | 1 constructor dependency | additive |
 | `garyx/src/commands/gateway.rs` | production `BuiltInPluginDiscoverer` construction (initial boot **and** `rebuild_channel_plugins` hot-reload) injects the same production `MeetingEventSink`; the no-op sink is for tests/non-gateway assemblies only | additive |
 | `garyx-gateway/src/meetings/` (new) | service, coordinators, log writer/repair, locks, index, routes | new module |
@@ -1011,10 +1042,15 @@ hashing is deterministic; merge-only-if-fits (a merge that would split is
 not merged); UTF-8-boundary truncation for every truncated field;
 continuation source mapping uniqueness.
 
-**Ticks/scheduling:** hanging `poll_events` cut by timeout; sustained
-`has_more` commits page-by-page with content readable between commits;
-command executed immediately when idle (joining/stalled admin abort) vs
-after the current page commit.
+**Push capture (rev21):** activity batch with mixed
+transcript/chat/participant_left items normalizes per the pinned
+shapes (fixtures copied from mino_server test data, sanitized);
+redelivered event (same event_id / same sentence_ids) is a dedup no-op;
+bare-integer ids parsed without f64 precision loss; activity for
+unknown/terminal entities dropped with log; participant_left of the
+bot's own open id triggers the end path; trailing activity during
+finalizing is captured, after finalized is dropped; command executed
+immediately when idle vs after the current batch commit.
 
 **Lifecycle:** end>abort arbitration; GraceExpired live/finalizing
 (accelerates); 10005 live (abort) / finalizing (complete early);
