@@ -488,65 +488,64 @@ fn render_meeting_list(meetings: &[serde_json::Value]) -> String {
 fn render_read_page(id: &str, response: &MeetingReadResponse) -> String {
     let meta = &response.meta;
     let mut output = String::new();
-    output.push_str(&format!("Meeting {}\n", meta.entity_id));
-    output.push_str(&format!("Mode: {}\n", meta.mode));
-    output.push_str(&format!("Log epoch: {}\n", meta.log_epoch));
+    // Compact self-describing header (owner-requested minimal format,
+    // 2026-07-17): one status line + one span line; lifecycle details and
+    // exact per-item metadata live in --json.
     match (meta.span_from, meta.span_to) {
         (Some(from), Some(to)) => {
-            output.push_str(&format!("Span: {from}..{to} of {}\n", meta.closed_total));
+            output.push_str(&format!(
+                "Meeting {} — {} — segments {from}..{to} of {} (epoch {}, {})\n",
+                meta.entity_id, meta.status, meta.closed_total, meta.log_epoch, meta.mode
+            ));
         }
-        _ => output.push_str(&format!("Span: empty of {}\n", meta.closed_total)),
+        _ => output.push_str(&format!(
+            "Meeting {} — {} — no new segments (total {}, epoch {}, {})\n",
+            meta.entity_id, meta.status, meta.closed_total, meta.log_epoch, meta.mode
+        )),
     }
-    output.push_str(&format!("Status: {}", meta.status));
-    if !meta.end_source.is_empty() {
-        output.push_str(&format!(" (end source: {})", meta.end_source));
+    let topic = sanitize_platform_text(&meta.topic).replace('\n', " ");
+    if !topic.is_empty() {
+        output.push_str(&format!("│ {topic}\n"));
     }
-    output.push('\n');
+    if meta.content_state != "ok" {
+        output.push_str(&format!("Content state: {}\n", meta.content_state));
+    }
     if !meta.stalled_reason.is_empty() {
         output.push_str(&format!("Stalled: {}\n", meta.stalled_reason));
-    }
-    output.push_str(&format!("Content state: {}\n", meta.content_state));
-    output.push_str(&format!(
-        "Started: {}  Ended: {}  Finalized: {}  Updated: {}\n",
-        format_local_timestamp(Some(&meta.started_at)),
-        format_local_timestamp(meta.ended_at.as_deref()),
-        format_local_timestamp(meta.finalized_at.as_deref()),
-        format_local_timestamp(Some(&meta.updated_at)),
-    ));
-    if let Some(content_lost_at) = meta.content_lost_at.as_deref() {
-        output.push_str(&format!(
-            "Content lost: {}\n",
-            format_local_timestamp(Some(content_lost_at))
-        ));
-    }
-    frame_field(&mut output, "Topic", &meta.topic);
-    if !meta.status_detail.is_empty() {
-        frame_field(&mut output, "Status detail", &meta.status_detail);
     }
     for note in &meta.notes {
         output.push_str(&format!("Note: {note}\n"));
     }
-    if meta.mode == "incremental" {
-        if let (Some(from), Some(to)) = (meta.span_from, meta.span_to) {
-            output.push_str("Confirmation: pending; this invocation confirms after stdout flush\n");
-            output.push_str(&format!(
-                "Re-read this span: garyx meeting read {id} --range {from}..{to} --epoch {}\n",
-                meta.log_epoch
-            ));
+    output.push('\n');
+    for segment in &response.segments {
+        let time = format_local_timestamp(Some(&segment.start));
+        let clock = time.split(' ').nth(1).unwrap_or(&time);
+        let speaker = sanitize_platform_text(&segment.speaker).replace('\n', " ");
+        let text = sanitize_platform_text(&segment.text);
+        let mut lines = text.split('\n');
+        let first = lines.next().unwrap_or_default();
+        if speaker.is_empty() {
+            output.push_str(&format!("│ [{clock}] {first}\n"));
         } else {
-            output.push_str("Confirmation: no pending span\n");
+            output.push_str(&format!("│ [{clock}] {speaker}：{first}\n"));
+        }
+        for line in lines {
+            output.push_str(&format!("│   {line}\n"));
         }
     }
-    for segment in &response.segments {
-        output.push_str(&format!(
-            "Segment {} ({:?}, {} → {})\n",
-            segment.seq, segment.kind, segment.start, segment.end
-        ));
-        frame_field(&mut output, "Speaker", &segment.speaker);
-        frame_field(&mut output, "Content", &segment.text);
-        frame_field(&mut output, "Sources", &segment.sources.join(", "));
-        if segment.cont {
-            output.push_str("Continuation: true\n");
+    if meta.mode == "incremental" {
+        match (meta.span_from, meta.span_to) {
+            (Some(from), Some(to)) => {
+                output.push_str(&format!(
+                    "\n(incremental — confirms after output; re-read: garyx meeting read {id} --range {from}..{to} --epoch {}; full transcript: garyx meeting read {id} --full)\n",
+                    meta.log_epoch
+                ));
+            }
+            _ => {
+                output.push_str(&format!(
+                    "\n(no new segments for this reader; full transcript: garyx meeting read {id} --full)\n"
+                ));
+            }
         }
     }
     if let Some(token) = meta.continue_token.as_deref() {
@@ -554,7 +553,6 @@ fn render_read_page(id: &str, response: &MeetingReadResponse) -> String {
             "Resume: garyx meeting read {id} --continue {token}\n"
         ));
     }
-    output.push('\n');
     output
 }
 
@@ -981,9 +979,9 @@ mod tests {
         let rendered = render_read_page(&response.meta.entity_id, &response);
         let command = rendered
             .lines()
-            .find(|line| line.starts_with("Re-read this span:"))
+            .find(|line| line.contains("re-read: garyx meeting read"))
             .expect("re-read command");
-        assert!(command.ends_with("--range 1..1 --epoch 3"));
+        assert!(command.contains("--range 1..1 --epoch 3"));
         assert_eq!(parse_range("1..1").expect("range"), (1, 1));
     }
 
@@ -1443,7 +1441,7 @@ mod tests {
         .await
         .expect("first real range page");
         let range_output = String::from_utf8(range_output).expect("range output");
-        assert!(range_output.contains("Span: 1..1 of 2"));
+        assert!(range_output.contains("segments 1..1 of 2"));
         let resume = range_output
             .lines()
             .find(|line| line.starts_with("Resume: garyx meeting read "))

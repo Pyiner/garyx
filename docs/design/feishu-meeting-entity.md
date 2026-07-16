@@ -142,6 +142,12 @@ scopes granted and live-verified on the production app):
   - invite `event`: `meeting.id` (a pre-join reference — the real
     meeting id is the one `bots/join` returns), `meeting.meeting_no`,
     `meeting.topic`, `bot.id`, `inviter.id`. **No `call_id` exists.**
+    **Real-event correction (2026-07-17, live verified):** actor `id`
+    fields arrive as objects (`{"open_id": "ou_…"}`), not bare strings
+    as reference fixtures suggested; parsing accepts string, integer,
+    and object forms (`open_id` > `user_id` > `union_id` > `id`).
+    Second-hand evidence is a draft, never a contract — every payload
+    fact here is (re)pinned against first real events.
   - ended `event`: `meeting.id` only.
   - activity transcript item: `text`, `language`, `sentence_id`,
     `start_time_ms`, `end_time_ms`, `speaker.id.open_id`,
@@ -611,11 +617,14 @@ TOCTOU):
 ### 5.3 End path and trailing capture window
 
 On the end signal (either path above): CAS `live→finalizing`,
-`ended_at=now`, `grace_deadline_at = now + 4 min`, `end_source`
+`ended_at=now`, `grace_deadline_at = now + 5.5 min` (owner-set: the
+push model makes waiting free, so the window covers the platform's full
+5-minute post-end horizon plus delivery slack; the earlier 4 min was a
+pull-era value whose headroom logic inverts under push), `end_source`
 recorded (`push` or `participant_left`). **Finalizing in the push model
 means staying subscribed for trailing activity** — late transcript
 batches keep arriving for a short while (production evidence: mino
-keeps a 6 h tombstone to absorb them; our capture window is 4 min,
+keeps a 6 h tombstone to absorb them; our capture window is 5.5 min,
 after which the terminal barrier runs and trailing pushes for a
 finalized entity are dropped with a debug log). `AbortRequest` during
 finalizing is refused; a stalled finalizing entity still finalizes at
@@ -932,7 +941,10 @@ enum TransportCause { Timeout, Connect, Other }
 ### 6.7 Self-describing output and untrusted framing
 
 All platform-derived text (topic, speaker, transcript text, share
-titles) is **untrusted data** wherever rendered. Human format: every
+titles) is **untrusted data** wherever rendered. Human format
+(owner-set, 2026-07-17): a compact conversational layout — one trusted
+header line, then one `│ [HH:MM:SS] speaker：text` line per segment
+(machine metadata lives in `--json` only); every
 content line is prefixed `│ `; metadata/header lines never share a line
 with content; **Unicode forced line breaks `U+2028`/`U+2029` are
 normalized to LF before per-line prefixing** (RR8-06), then C0 (except

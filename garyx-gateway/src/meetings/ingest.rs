@@ -123,7 +123,12 @@ impl Default for MeetingTiming {
             join_retry_window: Duration::from_secs(300),
             join_slot: Duration::from_secs(20),
             platform_timeout: Duration::from_secs(20),
-            finalizing_grace: Duration::from_secs(4 * 60),
+            // Push model: waiting costs nothing, so cover the platform's full
+            // 5-minute post-end window plus delivery slack (owner-picked
+            // 5.5 min). (4 min was a pull-era value where the last fetch
+            // needed headroom to finish inside the window — inverted
+            // semantics under push.)
+            finalizing_grace: Duration::from_secs(330),
             no_client_check: Duration::from_secs(60),
             barrier_retry: Duration::from_secs(1),
         }
