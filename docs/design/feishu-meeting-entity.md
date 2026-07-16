@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 18 — complete self-contained specification (no references
+Status: revision 19 — complete self-contained specification (no references
 to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–17.
+rounds 1–18.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -533,21 +533,35 @@ state/response table for `POST /api/meetings/{id}/abort`:**
 | `finalizing`, `finalized` | `409 abort_refused_finalizing`; a queued abort that loses end>abort arbitration at the page boundary receives the same `409` |
 | deleted | `404` |
 
-Ordering and ownership rules:
+Ordering and ownership rules (R18-01 — one serialization domain, no
+TOCTOU):
 
-- A command admitted to the coordinator is owned by the service; an
-  HTTP disconnect does not cancel it.
-- After the intent CAS commits, all HTTP requests waiting on that
-  command are answered **before** the (up to 20 s) leave attempt
-  begins.
+- All abort requests for an entity pass through a **single per-entity
+  abort domain**: status check, in-flight-operation lookup/creation,
+  and waiter registration happen atomically inside it. A request that
+  finds an in-flight abort operation joins its waiter list instead of
+  enqueueing a second command; a request that finds the durable status
+  already terminal-ish (`aborting|aborted` → 200, `finalizing|
+  finalized` → 409, deleted → 404) answers from the table without
+  touching the coordinator. There is no bare point-read-then-enqueue
+  path.
+- The operation's waiters are all answered when the arbitration
+  outcome commits — **by actual outcome**, not unconditionally: abort
+  won → `200 {status:"aborting"}`; end won the page-boundary
+  arbitration → `409 abort_refused_finalizing`; entity deleted
+  meanwhile → `404`. Answering precedes the (up to 20 s) leave
+  attempt, and a command admitted to the coordinator is owned by the
+  service — HTTP disconnects cancel nothing.
 - Timing, honestly: admission may wait for the current page commit —
   fetch is bounded at 10 s but the durability phase (`fdatasync` +
   SQLite with up to 5 s busy wait) is additional — so a first request
-  may exceed the shared 10 s POST budget. The `garyx meeting abort`
-  command therefore performs **one automatic retry on timeout** (its
-  own logic, not a shared-helper change): the retry lands on the fast
-  path above and returns `200` immediately. A second timeout is
-  reported to the caller.
+  may exceed the shared 10 s POST budget. `garyx meeting abort`
+  performs **one automatic retry on timeout only** (typed transport
+  cause, 6.7): the retry re-enters the abort domain, where it either
+  joins the still-in-flight operation (answered at its outcome) or
+  hits the status fast path — in both cases without waiting behind the
+  leave attempt. Its result follows the table (200/409/404), and a
+  second timeout is reported to the caller.
 
 ### 5.3 End path and grace drain
 
@@ -643,7 +657,7 @@ and notes; budgets are measured on this serialized JSON response
 (single, format-independent budget algebra — claim sizing no longer
 depends on presentation). The CLI's human format is a **pure local
 presentation layer** over the structured response: the `│ ` framing,
-control-character stripping, and U+2028/2029 normalization of 6.6 are
+control-character stripping, and U+2028/2029 normalization of 6.7 are
 CLI rendering rules; `--json` mode prints each page's structured
 response as one NDJSON line. A pending span claimed under any format
 re-serves identically under any other (spans are segment ranges;
@@ -849,7 +863,27 @@ command for the user/agent to re-run explicitly (predictability over
 convenience; unified with the named-400 rule of 6.1). Appends beyond the
 snapshot are invisible to that snapshot's pages.
 
-### 6.6 Self-describing output and untrusted framing
+### 6.6 Transport seam in the CLI (R18-02)
+
+`gateway_client.rs` gains one shared low-level primitive (additive; the
+existing JSON helpers become wrappers over it):
+
+```
+struct RawGatewayResponse { status: u16, raw_body: Vec<u8>, body_len: usize }
+enum TransportCause { Timeout, Connect, Other }
+```
+
+- meeting **read** consumes `RawGatewayResponse` directly: exact
+  `body_len` feeds budget accounting; non-2xx bodies are parsed as the
+  typed error envelope of 6.5 (never flattened to generic text).
+- meeting **abort** retries once **iff** the failure is
+  `TransportCause::Timeout`; `Connect`/`Other` report immediately (no
+  retry).
+- No HTTP/auth/timeout logic is duplicated into `meeting.rs`; the
+  single choke point stays in `gateway_client.rs` (§11 lists this full
+  responsibility).
+
+### 6.7 Self-describing output and untrusted framing
 
 All platform-derived text (topic, speaker, transcript text, share
 titles) is **untrusted data** wherever rendered. Human format: every
@@ -941,7 +975,7 @@ at debug.
 | `garyx-gateway/src/route_graph.rs` | 6 routes | additive |
 | `garyx-gateway/src/composition/*` | service wiring + sink injection | additive |
 | `garyx/src/commands/meeting.rs`, `cli.rs`, `main.rs` | CLI subcommand (incl. abort one-retry-on-timeout, typed-error envelope parsing from raw body) | additive |
-| `garyx/src/commands/gateway_client.rs` | surface raw response-body length alongside parsed JSON (additive helper variant for budget accounting) | additive |
+| `garyx/src/commands/gateway_client.rs` | shared `RawGatewayResponse {status, raw_body, body_len}` primitive + typed `TransportCause {Timeout, Connect, Other}`; existing JSON helpers wrap it (budget accounting, typed envelopes, timeout-only retry all build on this) | additive |
 | Desktop / iOS (slice 3) | gallery + prefill action | additive |
 
 **Not touched:** bridge, providers, router dispatch, transcripts,
@@ -1125,6 +1159,18 @@ resume command → real CLI parser → HTTP body → next page round-trip;
 token-vs-path-entity and token-mode mismatches; pending claimed via
 JSON re-served under human rendering (same span — format is not part
 of the claim); NDJSON paging in `--json`.
+
+**Abort domain (R18-01):** deterministic interleave — coordinator
+paused after batch drain, before CAS; a retry entering the abort
+domain joins the in-flight operation and is answered at the CAS
+outcome while leave hangs (no second queue entry, no 10 s starvation);
+first request timing out with end queued in the same batch → retry
+gets 409; retry after delete → 404.
+
+**Transport seam (R18-02):** timeout triggers exactly one extra abort
+attempt; connection-refused triggers none; nested 400
+code/restart_command survives (not flattened); success `body_len`
+equals actual body bytes.
 
 **Abort response (RR15-03, RR16-02):** end-to-end through the real CLI
 helper — full state/response table exercised (200 CAS / 200 no-op /
