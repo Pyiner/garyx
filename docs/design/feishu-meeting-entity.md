@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 13 — complete self-contained specification (no references
+Status: revision 14 — complete self-contained specification (no references
 to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–12.
+rounds 1–13.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -43,16 +43,18 @@ Product sign-off items (explicit, owner-revocable):
   owned by the durable `invite_event_id` unique key and end-path CAS,
   which absorb platform redelivery correctly even after an admission
   failure — the in-memory cache would wrongly swallow a redelivery that
-  arrives after a failed admission insert). Loss matrix (all four
-  quadrants stated honestly): ① ACK succeeded + process exits before the
-  durable insert → **lost** (platform will not redeliver an ACKed
-  event); ② ACK succeeded + admission insert exhausts 3 bounded retries
-  (100 ms / 1 s backoff, error-logged) → **lost**; ③ ACK send failed +
-  admission also failed → lost **unless** the platform happens to
-  redeliver (redelivery is a platform courtesy, not a guarantee) and the
-  redelivered event is admitted by the durable key; ④ all other
-  combinations → admitted (redelivery after successful admission is a
-  unique-key no-op). The raw-text
+  arrives after a failed admission insert). The loss rule is stated on
+  the only durable fact: **an invite is admitted iff its insert
+  committed.** If the insert did not commit — whatever the cause:
+  process exit before/during admission (with the local ACK outcome
+  being success, error, or unknown — the send may be in flight at
+  crash), or 3 exhausted retries (100 ms / 1 s backoff, error-logged
+  when the process survives to log it) — the invite is recovered only
+  if the platform later redelivers (a courtesy, likelier when our ACK
+  did not reach it, never guaranteed) and that redelivery's insert
+  commits; otherwise it is lost, possibly without any local log
+  (nothing durable exists to log from). Redelivery after a committed
+  insert is a unique-key no-op. The raw-text
   fallback path has no equivalent ACK evidence; the sample gate (3.1)
   pins which path carries invite/ended events; if the raw-text path can
   carry them, slice 2 halts for a design amendment.
@@ -219,7 +221,7 @@ CREATE TABLE meeting_read_cursors (
   CHECK ((pending_from IS NULL) = (pending_to IS NULL)
      AND (pending_from IS NULL) = (receipt IS NULL)
      AND (pending_from IS NULL OR
-          (pending_from > confirmed_seq AND pending_to >= pending_from))
+          (pending_from > confirmed_seq AND pending_to >= pending_from)))
 ) STRICT;
 ```
 
@@ -477,13 +479,17 @@ as follows:
   captured fixtures; if the platform instead errors on duplicate join,
   the mapped error is treated as success-equivalent iff it carries the
   meeting identity, else slice 2 halts for an amendment.
-- If the entity leaves `joining` for `aborting` (deadline/admin) while
-  a remote join later succeeds, the bot may linger in the meeting with
-  no capture. The abort path therefore makes one **best-effort
-  `bots/leave` call** (the platform API exists; failure is logged, not
-  retried — the meeting owner can always remove the bot manually).
-  Residual risk (bot present without capture until removed) is a
-  product sign-off note under S2.
+- **Leave compensation applies only to `live → aborting`** with a
+  registered client and a non-empty `feishu_meeting_id`: one
+  best-effort `bots/leave` (failure logged, never retried; no persisted
+  marker — a crash between abort CAS and the leave attempt simply skips
+  it). It is **not** attempted from `joining` aborts: at that point no
+  meeting id exists locally (the join response was cancelled or never
+  arrived), so there is nothing to leave with. The full residual risks
+  are product sign-offs under S2: a joining-abort that races a late
+  remote join leaves the bot in the meeting without capture until
+  removed manually; a no-client live abort terminates locally only; a
+  crash-skipped leave has the same effect.
 
 On success — CAS `joining→live`, backfill `feishu_meeting_id`
 (normalized) and `topic` (normalized per 4.1 bounds); on deadline →
@@ -787,8 +793,9 @@ at debug.
 | `garyx-channels/src/meeting_sink.rs` (new) | traits, `MeetingInvite`, typed errors, no-op impl | additive |
 | `garyx-channels/src/feishu/types.rs` | 2 event structs | additive |
 | `garyx-channels/src/feishu/ws.rs` | 2 dispatch branches → sink | additive |
-| `garyx-channels/src/feishu/client.rs` | `bots_join`/`bots_events` + adapter | additive |
+| `garyx-channels/src/feishu/client.rs` | `bots_join`/`bots_events`/`bots_leave` + adapter | additive |
 | `garyx-channels/src/plugin.rs`, `feishu.rs` | 1 constructor dependency | additive |
+| `garyx/src/commands/gateway.rs` | production `BuiltInPluginDiscoverer` construction (initial boot **and** `rebuild_channel_plugins` hot-reload) injects the same production `MeetingEventSink`; the no-op sink is for tests/non-gateway assemblies only | additive |
 | `garyx-gateway/src/meetings/` (new) | service, coordinators, log writer/repair, locks, index, routes | new module |
 | `garyx-gateway/src/garyx_db/mod.rs` | 2 tables + CRUD | additive |
 | `garyx-gateway/src/route_graph.rs` | 6 routes | additive |
@@ -942,17 +949,33 @@ read).
 joining/finalizing/aborting statuses render correctly in read/list
 output.
 
-**WS path / loss matrix (S1, RR12-01):** fixture records which path
-carries invite/ended; raw-text carriage asserts the slice-2 halt
-condition; ACK-success → crash-before-insert (lost, logged);
-ACK-failure → insert-failure → no redelivery (lost) vs redelivery
-admitted; redelivery after successful admission (no-op).
+**WS path / loss rule (S1, RR12-01, RR13-03):** fixture records which
+path carries invite/ended; raw-text carriage asserts the slice-2 halt
+condition; the durable-fact rule is exercised via external fault
+observation (no in-band "logged" guarantee asserted):
+crash-before-insert with ACK success / ACK error / ACK in-flight ×
+redelivery / no-redelivery matrices; insert-retries-exhausted;
+redelivery after committed insert (no-op).
 
-**Remote join (RR12-02):** delayed-success-after-cancel (second attempt
-converges on the same meeting id per pinned fixture);
-crash-after-remote-success-before-CAS → boot re-join converges; abort
-racing late join fires best-effort leave (failure logged, not
-retried); attempt pacing has no hot loop on immediate failure.
+**Normative DDL execution (RR13-01):** the DDL block is extracted
+verbatim from this document and executed against the target SQLite;
+the same test exercises both pairing CHECKs, the reader byte-length
+CHECK, and FK cascade behavior.
+
+**Hot reload (RR13-04):** real `rebuild_channel_plugins` cycle — old
+channel unregisters, new channel registers/replaces, existing
+non-terminal entities receive the register nudge, and a fresh invite
+admissions successfully after reload (production sink present on both
+construction paths; no silent no-op sink in gateway assemblies).
+
+**Remote join / leave (RR12-02, RR13-02):** delayed-success-after-cancel
+(second attempt converges on the same meeting id per pinned fixture);
+crash-after-remote-success-before-CAS → boot re-join converges;
+live-abort with client + id fires one best-effort leave (failure
+logged, not retried); joining-abort attempts no leave (empty id);
+no-client live abort terminates locally only; crash between abort CAS
+and leave skips it (documented sign-off behaviors asserted); attempt
+pacing has no hot loop on immediate failure.
 
 **Delete idempotency reset (RR12-03):** same event id redelivered after
 terminal → unique-key no-op; after delete → fresh entity (documented S2
