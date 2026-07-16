@@ -1440,9 +1440,6 @@ pub(super) fn normalize_activity(
                     let speaker_open_id = speaker
                         .and_then(|speaker| nested_exact_id(speaker, "id", "open_id"))
                         .unwrap_or_default();
-                    if bot_open_id.is_some_and(|bot| bot == speaker_open_id) {
-                        continue;
-                    }
                     let speaker_name = speaker
                         .and_then(|speaker| speaker.get("user_name"))
                         .and_then(Value::as_str)
@@ -1471,9 +1468,6 @@ pub(super) fn normalize_activity(
                     let operator_open_id = operator
                         .and_then(|operator| nested_exact_id(operator, "id", "open_id"))
                         .unwrap_or_default();
-                    if bot_open_id.is_some_and(|bot| bot == operator_open_id) {
-                        continue;
-                    }
                     let speaker = operator
                         .and_then(|operator| {
                             operator

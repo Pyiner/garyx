@@ -2085,7 +2085,7 @@ async fn push_capture_is_batch_atomic_deduplicated_exact_and_trails_to_finalize(
                         }
                     },
                     {
-                        "text": "bot output must not loop back",
+                        "text": "bot-authored transcript remains a 1:1 item",
                         "language": "en",
                         "sentence_id": "sentence-from-bot",
                         "start_time_ms": 2000,
@@ -2126,10 +2126,10 @@ async fn push_capture_is_batch_atomic_deduplicated_exact_and_trails_to_finalize(
         record.id == live.id && record.cache_generation == 1
     })
     .await;
-    assert_eq!(committed.closed_segment_count, 2);
+    assert_eq!(committed.closed_segment_count, 3);
     let first_scan = scan_log(&fixture.service.log_path(&live.id), 0, false).expect("scan");
     assert!(first_scan.source_ids.contains("9007199254740993"));
-    assert!(!first_scan.source_ids.contains("sentence-from-bot"));
+    assert!(first_scan.source_ids.contains("sentence-from-bot"));
 
     fixture
         .service
@@ -2141,7 +2141,7 @@ async fn push_capture_is_batch_atomic_deduplicated_exact_and_trails_to_finalize(
         .expect("record")
         .expect("meeting");
     assert_eq!(whole_redelivery.cache_generation, 1);
-    assert_eq!(whole_redelivery.closed_segment_count, 2);
+    assert_eq!(whole_redelivery.closed_segment_count, 3);
 
     fixture.service.on_meeting_activity(
         account_id,
@@ -2171,7 +2171,7 @@ async fn push_capture_is_batch_atomic_deduplicated_exact_and_trails_to_finalize(
         record.id == live.id && record.cache_generation == 2
     })
     .await;
-    assert_eq!(item_dedup.closed_segment_count, 3);
+    assert_eq!(item_dedup.closed_segment_count, 4);
 
     fixture.service.on_meeting_activity(
         account_id,
@@ -2216,7 +2216,7 @@ async fn push_capture_is_batch_atomic_deduplicated_exact_and_trails_to_finalize(
     })
     .await;
     assert_eq!(finalized.end_source, "participant_left");
-    assert_eq!(finalized.closed_segment_count, 4);
+    assert_eq!(finalized.closed_segment_count, 5);
     assert_eq!(finalized.cache_generation, 4);
 
     fixture.service.on_meeting_activity(

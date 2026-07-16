@@ -696,6 +696,8 @@ mod dispatch_tests {
 
     #[derive(Default)]
     struct RecordingMeetingSink {
+        registrations: std::sync::Mutex<Vec<String>>,
+        unregistrations: std::sync::Mutex<Vec<String>>,
         invites: std::sync::Mutex<Vec<crate::meeting_sink::MeetingInvite>>,
         activities: std::sync::Mutex<Vec<(String, String, Value)>>,
         ended: std::sync::Mutex<Vec<(String, String)>>,
@@ -704,12 +706,21 @@ mod dispatch_tests {
     impl crate::meeting_sink::MeetingEventSink for RecordingMeetingSink {
         fn register_client(
             &self,
-            _account_id: &str,
+            account_id: &str,
             _client: Arc<dyn crate::meeting_sink::MeetingPlatformClient>,
         ) {
+            self.registrations
+                .lock()
+                .unwrap()
+                .push(account_id.to_owned());
         }
 
-        fn unregister_client(&self, _account_id: &str) {}
+        fn unregister_client(&self, account_id: &str) {
+            self.unregistrations
+                .lock()
+                .unwrap()
+                .push(account_id.to_owned());
+        }
 
         fn on_meeting_invited(&self, invite: crate::meeting_sink::MeetingInvite) {
             self.invites.lock().unwrap().push(invite);
@@ -729,6 +740,70 @@ mod dispatch_tests {
                 .unwrap()
                 .push((account_id.to_owned(), feishu_meeting_id.to_owned()));
         }
+    }
+
+    #[tokio::test]
+    async fn feishu_channel_start_and_stop_register_and_unregister_meeting_client() {
+        let router = make_router();
+        let (bridge, _) = make_bridge().await;
+        let dispatcher: Arc<dyn crate::dispatcher::ChannelDispatcher> =
+            Arc::new(crate::dispatcher::ChannelDispatcherImpl::new());
+        let account_id = "meeting-lifecycle-account";
+        let account = FeishuAccount {
+            app_id: "test_app".to_owned(),
+            app_secret: "test_secret".to_owned(),
+            enabled: true,
+            domain: FeishuDomain::Feishu,
+            name: None,
+            agent_id: None,
+            workspace_dir: None,
+            owner_target: None,
+            require_mention: true,
+            topic_session_mode: TopicSessionMode::Disabled,
+            meeting_entities: true,
+        };
+        let config = FeishuConfig {
+            accounts: HashMap::from([(account_id.to_owned(), account)]),
+        };
+        let sink = Arc::new(RecordingMeetingSink::default());
+        let meeting_sink: Arc<dyn crate::meeting_sink::MeetingEventSink> = sink.clone();
+        let mut channel = FeishuChannel::new(
+            config,
+            router,
+            bridge,
+            dispatcher,
+            String::new(),
+            meeting_sink,
+        );
+        let client = FeishuClient {
+            app_id: "test_app".to_owned(),
+            app_secret: "test_secret".to_owned(),
+            domain: FeishuDomain::Feishu,
+            http: HttpClient::new(),
+            token_state: Arc::new(RwLock::new(Some((
+                "synthetic-token".to_owned(),
+                Instant::now() + Duration::from_secs(3_600),
+            )))),
+            refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+            api_base_override: Some("http://127.0.0.1:1".to_owned()),
+        };
+        channel
+            .clients
+            .insert(account_id.to_owned(), client.clone());
+        channel.meeting_clients.insert(
+            account_id.to_owned(),
+            FeishuMeetingPlatformClient::new(client),
+        );
+
+        channel.start_inner().await.expect("start channel");
+        assert_eq!(sink.registrations.lock().unwrap().as_slice(), [account_id]);
+        assert!(sink.unregistrations.lock().unwrap().is_empty());
+
+        channel.stop_inner().await;
+        assert_eq!(
+            sink.unregistrations.lock().unwrap().as_slice(),
+            [account_id]
+        );
     }
 
     #[tokio::test]

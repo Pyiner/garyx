@@ -24,6 +24,25 @@ async fn rebuild_channel_plugins(
     bridge: &Arc<MultiProviderBridge>,
     no_channels: bool,
 ) -> Result<(), String> {
+    rebuild_channel_plugins_with_factory(plugin_manager, config, state, bridge, no_channels, None)
+        .await
+}
+
+type RebuildDiscovererFactory = Box<
+    dyn FnOnce(
+            Arc<dyn garyx_channels::MeetingEventSink>,
+        ) -> Box<dyn garyx_channels::plugin::PluginDiscoverer>
+        + Send,
+>;
+
+async fn rebuild_channel_plugins_with_factory(
+    plugin_manager: &std::sync::Arc<tokio::sync::Mutex<ChannelPluginManager>>,
+    config: &GaryxConfig,
+    state: &Arc<AppState>,
+    bridge: &Arc<MultiProviderBridge>,
+    no_channels: bool,
+    discoverer_factory: Option<RebuildDiscovererFactory>,
+) -> Result<(), String> {
     {
         let mut manager = plugin_manager.lock().await;
         manager.stop_all().await;
@@ -42,15 +61,24 @@ async fn rebuild_channel_plugins(
                 .ops
                 .meetings
                 .start_ingestion(config.gateway.meetings.effective_join_retry_window_secs());
-            let built_in_discoverer = BuiltInPluginDiscoverer::with_dispatcher_and_meeting_sink(
-                config.channels.clone(),
-                state.threads.router.clone(),
-                bridge.clone(),
-                state.channel_dispatcher(),
-                config.gateway.public_url.clone(),
-                state.ops.meetings.clone(),
-            );
-            replacement.discover_and_register(&built_in_discoverer)?;
+            {
+                let meeting_sink: Arc<dyn garyx_channels::MeetingEventSink> =
+                    state.ops.meetings.clone();
+                let discoverer: Box<dyn garyx_channels::plugin::PluginDiscoverer> =
+                    if let Some(factory) = discoverer_factory {
+                        factory(meeting_sink)
+                    } else {
+                        Box::new(BuiltInPluginDiscoverer::with_dispatcher_and_meeting_sink(
+                            config.channels.clone(),
+                            state.threads.router.clone(),
+                            bridge.clone(),
+                            state.channel_dispatcher(),
+                            config.gateway.public_url.clone(),
+                            meeting_sink,
+                        ))
+                    };
+                replacement.discover_and_register(discoverer.as_ref())?;
+            }
 
             replacement.initialize_all().await;
             replacement.start_all().await;
@@ -686,8 +714,14 @@ mod tests {
     use crate::commands::test_support::{ENV_LOCK, ScopedEnvVar};
     use axum::routing::get;
     use axum::{Json, Router, http::StatusCode};
-    use garyx_gateway::garyx_db::{GaryxDbError, GaryxDbService, RecentThreadDraft};
+    use garyx_channels::plugin::{ManagedChannelPlugin, PluginDiscoverer};
+    use garyx_channels::{
+        Channel, ChannelError, JoinedMeeting, MeetingApiError, MeetingInvite, MeetingPlatformClient,
+    };
+    use garyx_gateway::garyx_db::{GaryxDbError, GaryxDbService, MeetingRecord, RecentThreadDraft};
+    use garyx_gateway::server::AppStateBuilder;
     use garyx_models::local_paths::garyx_database_path_for_data_dir;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::tempdir;
     use tokio::net::TcpListener;
 
@@ -746,6 +780,159 @@ mod tests {
             before,
             "failed online rotate must not mutate store identity"
         );
+
+    struct ReloadMeetingClient {
+        hang: bool,
+        join_calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl MeetingPlatformClient for ReloadMeetingClient {
+        async fn join(
+            &self,
+            _meeting_no: &str,
+            _password: Option<&str>,
+        ) -> Result<JoinedMeeting, MeetingApiError> {
+            let call = self.join_calls.fetch_add(1, Ordering::AcqRel) + 1;
+            if self.hang {
+                return std::future::pending().await;
+            }
+            Ok(JoinedMeeting {
+                feishu_meeting_id: format!("synthetic-reload-meeting-{call}"),
+            })
+        }
+
+        async fn leave(&self, _feishu_meeting_id: &str) -> Result<(), MeetingApiError> {
+            Ok(())
+        }
+    }
+
+    struct ReloadProbeChannel {
+        label: String,
+        account_id: String,
+        sink: Arc<dyn garyx_channels::MeetingEventSink>,
+        client: Arc<ReloadMeetingClient>,
+        invite_on_start: MeetingInvite,
+        lifecycle: Arc<std::sync::Mutex<Vec<String>>>,
+        running: bool,
+    }
+
+    #[async_trait]
+    impl Channel for ReloadProbeChannel {
+        fn name(&self) -> &str {
+            "feishu"
+        }
+
+        async fn start(&mut self) -> Result<(), ChannelError> {
+            self.sink
+                .register_client(&self.account_id, self.client.clone());
+            self.lifecycle
+                .lock()
+                .expect("lifecycle")
+                .push(format!("{}:register", self.label));
+            self.sink.on_meeting_invited(self.invite_on_start.clone());
+            self.running = true;
+            Ok(())
+        }
+
+        async fn stop(&mut self) -> Result<(), ChannelError> {
+            if self.running {
+                self.sink.unregister_client(&self.account_id);
+                self.lifecycle
+                    .lock()
+                    .expect("lifecycle")
+                    .push(format!("{}:unregister", self.label));
+                self.running = false;
+            }
+            Ok(())
+        }
+
+        fn is_running(&self) -> bool {
+            self.running
+        }
+    }
+
+    struct ReloadProbeDiscoverer {
+        label: String,
+        account_id: String,
+        sink: Arc<dyn garyx_channels::MeetingEventSink>,
+        client: Arc<ReloadMeetingClient>,
+        invite_on_start: MeetingInvite,
+        lifecycle: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl PluginDiscoverer for ReloadProbeDiscoverer {
+        fn discover(&self) -> Result<Vec<Box<dyn garyx_channels::plugin::ChannelPlugin>>, String> {
+            let metadata =
+                garyx_channels::builtin_plugin_metadata("feishu").expect("Feishu plugin metadata");
+            let channel = ReloadProbeChannel {
+                label: self.label.clone(),
+                account_id: self.account_id.clone(),
+                sink: self.sink.clone(),
+                client: self.client.clone(),
+                invite_on_start: self.invite_on_start.clone(),
+                lifecycle: self.lifecycle.clone(),
+                running: false,
+            };
+            Ok(vec![Box::new(ManagedChannelPlugin::new(
+                metadata,
+                Box::new(channel),
+            ))])
+        }
+    }
+
+    fn reload_probe_factory(
+        label: &str,
+        account_id: &str,
+        client: Arc<ReloadMeetingClient>,
+        invite_on_start: MeetingInvite,
+        lifecycle: Arc<std::sync::Mutex<Vec<String>>>,
+    ) -> RebuildDiscovererFactory {
+        let label = label.to_owned();
+        let account_id = account_id.to_owned();
+        Box::new(move |sink| {
+            Box::new(ReloadProbeDiscoverer {
+                label,
+                account_id,
+                sink,
+                client,
+                invite_on_start,
+                lifecycle,
+            })
+        })
+    }
+
+    fn reload_invite(account_id: &str, event_id: &str, meeting_no: &str) -> MeetingInvite {
+        MeetingInvite {
+            account_id: account_id.to_owned(),
+            event_id: event_id.to_owned(),
+            meeting_reference_id: format!("reference-{event_id}"),
+            meeting_no: meeting_no.to_owned(),
+            topic: format!("Synthetic reload {meeting_no}"),
+            bot_id: "bot_1000000001".to_owned(),
+            inviter_id: "user_1000000001".to_owned(),
+        }
+    }
+
+    async fn wait_for_reload_meeting(
+        db: &GaryxDbService,
+        predicate: impl Fn(&MeetingRecord) -> bool,
+    ) -> MeetingRecord {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(record) = db
+                    .list_all_meetings()
+                    .expect("list meetings")
+                    .into_iter()
+                    .find(|record| predicate(record))
+                {
+                    return record;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("meeting lifecycle converged")
     }
 
     fn seed_running_thread(data_dir: &Path, thread_id: &str) {
@@ -809,6 +996,109 @@ mod tests {
         )
         .expect("write config");
         config_path
+    }
+
+    #[tokio::test]
+    async fn rebuild_channel_plugins_unregisters_then_registers_and_nudges_real_meeting_sink() {
+        let temp = tempdir().expect("temp dir");
+        let db = Arc::new(GaryxDbService::memory().expect("database"));
+        let bridge = Arc::new(MultiProviderBridge::new());
+        let config = GaryxConfig::default();
+        let state = AppStateBuilder::new(config.clone())
+            .with_garyx_db(db.clone())
+            .with_meetings_dir(temp.path().join("meetings"))
+            .with_bridge(bridge.clone())
+            .build();
+        let plugin_manager = state.channel_plugin_manager();
+        let lifecycle = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let account_id = "synthetic-reload-account";
+
+        let old_client = Arc::new(ReloadMeetingClient {
+            hang: true,
+            join_calls: AtomicUsize::new(0),
+        });
+        rebuild_channel_plugins_with_factory(
+            &plugin_manager,
+            &config,
+            &state,
+            &bridge,
+            false,
+            Some(reload_probe_factory(
+                "old",
+                account_id,
+                old_client.clone(),
+                reload_invite(account_id, "evt-reload-existing", "111111111"),
+                lifecycle.clone(),
+            )),
+        )
+        .await
+        .expect("initial probe channel build");
+        let existing = wait_for_reload_meeting(&db, |record| {
+            record.account_id == account_id
+                && record.meeting_no == "111111111"
+                && record.status == "joining"
+        })
+        .await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while old_client.join_calls.load(Ordering::Acquire) == 0 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("old client join started");
+
+        let new_client = Arc::new(ReloadMeetingClient {
+            hang: false,
+            join_calls: AtomicUsize::new(0),
+        });
+        rebuild_channel_plugins_with_factory(
+            &plugin_manager,
+            &config,
+            &state,
+            &bridge,
+            false,
+            Some(reload_probe_factory(
+                "new",
+                account_id,
+                new_client.clone(),
+                reload_invite(account_id, "evt-reload-fresh", "222222222"),
+                lifecycle.clone(),
+            )),
+        )
+        .await
+        .expect("hot-reload probe channel build");
+
+        let resumed = wait_for_reload_meeting(&db, |record| {
+            record.id == existing.id && record.status == "live"
+        })
+        .await;
+        let fresh = wait_for_reload_meeting(&db, |record| {
+            record.account_id == account_id
+                && record.meeting_no == "222222222"
+                && record.status == "live"
+        })
+        .await;
+        assert_ne!(resumed.id, fresh.id);
+        assert_eq!(old_client.join_calls.load(Ordering::Acquire), 1);
+        assert_eq!(new_client.join_calls.load(Ordering::Acquire), 2);
+        assert_eq!(
+            lifecycle.lock().expect("lifecycle").as_slice(),
+            ["old:register", "old:unregister", "new:register"]
+        );
+
+        rebuild_channel_plugins(&plugin_manager, &config, &state, &bridge, true)
+            .await
+            .expect("disable channels after reload test");
+        assert_eq!(
+            lifecycle.lock().expect("lifecycle").as_slice(),
+            [
+                "old:register",
+                "old:unregister",
+                "new:register",
+                "new:unregister"
+            ]
+        );
+        state.ops.meetings.shutdown_ingestion();
     }
 
     #[tokio::test]
