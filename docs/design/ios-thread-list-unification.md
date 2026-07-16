@@ -1,10 +1,11 @@
-# iOS 线程列表统一化 —— 设计 v3（待复审）
+# iOS 线程列表统一化 —— 设计 v4（待复审）
 
 作者：Gary
 日期：2026-07-17
 基线：main `3dff1111a`
 
 修订记录：
+- **v4**（2026-07-17）：按三轮评审（FAIL，R3-F01..F06）修订：① Favorites provider 对 snapshot 缺失摘要的 membership ID 走既有 `/api/threads/:id` 有界 hydration，摘要到达前不发布裸 membership（R3-F01）；② pin 改 **`PinLease` RAII 句柄**并穷尽枚举释放点；picker `q` 纳入 provider 实例身份，q 变化 = cancel+升代+原子释放旧 pins（R3-F02）；③ `ambiguous` 定义为**保留态 reconstruction barrier**（按 instanceID 提交、失败粘性、旧 ticket 不得清除、淘汰冷加载视为权威完成；Favorites 继续由现有 reducer 裁决，hub 只做下游 fan-out）（R3-F03）；④ §4.6 补 recent feed 写事务五路径与 widget 重投影三触发点（R3-F04）；⑤ `q` 保持现有**四字段**搜索语义（title/workspace/agent/preview），新增 unicode casefold `search_text` 派生列，撤销 title-only 缩窄（R3-F05）；⑥ exclusion 谓词双端同构：新投影派生复用 recent 投影同一 helper，legacy adapter 镜像其层级/Bool 与字符串 truthy 强制转换/generated-mode 规则，配合成 payload 合同测试（R3-F06）；⑦ 修正"covering index"用词。
 - **v3**（2026-07-17）：按 #TASK-2362 二轮评审（FAIL，R2-F01..F06）修订：① keyset 排序键改为**规范化非空整数列 `sort_updated_at_us`**（与 excluded 标志同一次 cutover 回填），补 NULL/仅 created/混合格式/键移动的分页语义与测试（R2-F01）；② 索引族改为 scoped/unscoped 双列族 + 显式 `DESC` + `default_list_hidden=0` partial 谓词；响应信封补 `store_incarnation_id`/`server_boot_id`，cursor 内嵌 incarnation、失配 400；`has_more` 用 limit+1 免 COUNT（R2-F02）；③ summaryById 增加 **ref-count pin**（resident membership/选中/widget/composer 引用不被逐出）；picker 增加 SQL-backed `q` 搜索参数，撤销"本地前缀过滤"倾向（R2-F03）；④ §4.6 扩为**读写路径所有权表**，补 lifecycle optimistic/rollback、favorites 合并、gateway reset、composer 插入等全部写路径归属（R2-F04）；⑤ mutation hub 升级为 **began/committed/rolledBack/ambiguous 事务状态机**（携带 mutationID/runtime epoch/权威 revision，ambiguous 跨 scope replacement）（R2-F05）；⑥ 定义**双 wire adapter**（新 DTO 与 legacy `/api/threads/:id` 形状归一化，兼容 exclusion 标志三种拼写/位置），Favorite capability 区分添加/移除（excluded 已收藏必须可 Unfavorite）（R2-F06）；⑦ 404 旧网关分类收紧：仅精确 HTTP 404 视为旧网关，401/403/5xx/解码/网络错误走普通错误/重试。
 - **v2**（2026-07-17）：按一轮评审（FAIL，F-01..F-11）修订：文件夹改 `thread_meta` scoped keyset 新路由、砍批量点查 API、消费者穷尽表、feed 实例代际、capability 模型、`/api/threads` 保留、版本偏斜合同等。
 - v1：初版，一轮评审 FAIL。
@@ -62,7 +63,7 @@
 **参数**：
 - `workspace_dir=<绝对路径>`（可选；精确匹配）
 - `tasks=include|exclude|only`（可选，默认 `include`）
-- `q=<子串>`（可选；title 大小写不敏感子串过滤，供 picker 搜索；见"q 分支"）
+- `q=<子串>`（可选；跨 **title / workspace_dir / agent_id / last_message_preview 四字段**的大小写不敏感子串过滤——保持 picker 现有搜索语义不缩窄；长度上限 100，超限 400；见"q 分支"）
 - `cursor=<opaque>`（可选）
 - `limit=<1..100>`（可选，默认 30；非法 400）
 
@@ -90,9 +91,9 @@
 - scoped：`(workspace_dir, sort_updated_at_us DESC, thread_id DESC)`
 - unscoped：`(sort_updated_at_us DESC, thread_id DESC)`
 - 两族各配 visible / task / non-task partial index，`default_list_hidden=0` 进 partial 谓词（镜像 recent 投影的 partial index 模式）。
-- 全分支 `EXPLAIN QUERY PLAN` 测试：断言 covering index 供序、**无 `USE TEMP B-TREE`**（显式 `DESC` 列序）。
+- 全分支 `EXPLAIN QUERY PLAN` 测试：断言 `USING INDEX` 供序（17 列行查询非 covering，断言以实际计划输出为准）、**无 `USE TEMP B-TREE`**（显式 `DESC` 列序）。
 
-**q 分支**：`q` 非空时静态 SQL LIKE 分支（title，escape 通配符），同 cursor 键续页；这是**有界投影表过滤**（LIMIT 截断、单表、无 record body 读取），不在 plan 断言范围内但有行为测试。`q` 与 `workspace_dir`/`tasks` 可组合。
+**q 分支（R3-F05 根治）**：`thread_meta` 新增派生列 `search_text TEXT NOT NULL DEFAULT ''` = **unicode casefold**（Rust 全映射 `to_lowercase`，非 SQLite ASCII `lower()`）后的 `title + '\n' + workspace_dir + '\n' + agent_id + '\n' + last_message_preview` 拼接，写路径同事务派生。`q` 非空时静态 SQL 分支 `search_text LIKE '%'||?||'%'`（参数为同一 casefold 例程处理后的 q，escape 通配符），同 cursor 键续页；有界投影表过滤（LIMIT 截断、单表、无 record body 读取），不在 plan 断言范围但有行为测试（含 `Éclair`↔`éclair` 等非 ASCII 用例、空 title 行可被 workspace/agent/preview 命中）。`q` 与 `workspace_dir`/`tasks` 可组合。
 
 **实现模式**：镜像 bot-recent-threads 改版模式——page 查询单分支静态 SQL、显式读事务；count 不存在（信封无 total）。
 
@@ -100,8 +101,9 @@
 
 ### 3.2 `thread_meta` 增列与一次性 cutover
 
-- 新列：`excluded_from_recent INTEGER NOT NULL DEFAULT 0`（与 recent 投影同一排除谓词：`exclude_from_recent || generated_thread`）、`sort_updated_at_us INTEGER NOT NULL DEFAULT 0`。
-- 两列写路径同事务派生；**同一个**一次性版本化 cutover `thread_meta_summary_v1`（boot import 后运行、durable marker、幂等），单次存量扫描同时回填两列。无第二次大迁移。
+- 新列：`excluded_from_recent INTEGER NOT NULL DEFAULT 0`、`sort_updated_at_us INTEGER NOT NULL DEFAULT 0`、`search_text TEXT NOT NULL DEFAULT ''`（§3.1 q 分支）。
+- `excluded_from_recent` 派生**直接调用 recent 投影现有的 exclusion helper**（`recent_thread_projection.rs:156-179` 那套：top-level 与 metadata 两层、Bool 与字符串 `true/yes/1` truthy 强制转换、两层 `automation_thread_mode` generated 规则）——**同一函数，不重写谓词**（R3-F06 服务端半边）。
+- 三列写路径同事务派生；**同一个**一次性版本化 cutover `thread_meta_summary_v1`（boot import 后运行、durable marker、幂等），单次存量扫描同时回填三列。无第二次大迁移。
 
 ### 3.3 不动的部分（显式声明）
 
@@ -115,10 +117,10 @@
 
 ### 4.1 两层所有权 + 缓存 pin（R2-F03 根治）
 
-- **`GaryxThreadSummaryCache`（Core，新）**：`summaryById` 唯一"按 ID 取摘要"真相源，**ref-count pin + LRU**：
-  - pin 来源（强引用登记/注销）：各 resident membership store 的已加载成员、当前打开/选中线程、widget snapshot 集、composer pending 引用、picker 已加载页、bot drilldown entries；
-  - LRU **只逐出 ref-count=0** 的条目；pinned 条目不计入容量上限（上限只约束无引用池，默认 500）；
-  - membership store 持 ID 即持 pin → 结构上不存在"有成员无行"的悬空（R2-F03 反例被类型系统排除）；配"501+ 成员滚动回读"回归测试。
+- **`GaryxThreadSummaryCache`（Core，新）**：`summaryById` 唯一"按 ID 取摘要"真相源，**`PinLease`（RAII 句柄）+ LRU**（R3-F02 根治）：
+  - pin 不是裸 ref-count 调用，而是**持有型 lease 对象**：membership store 持有的是"有序 `PinLease` 列"而非 `[String]`，lease 释放（deinit/显式 invalidate）即注销引用——"有成员必有行"由持有关系保证，忘记释放/提前释放均不可表达；
+  - **释放点穷尽枚举**（每处配测试，所有提前返回路径必须释放）：page replace/remove、feed 淘汰/reset、gateway scope epoch reset、picker `q` 更换/sheet 关闭/已选 target 更换、widget 写完成/取消/skip（含 `+ThreadPersistence.swift:8-38` 的多处提前返回）、composer settle/cancel 全部移除路径（`+Composer.swift:293-347`）、bot entries replacement；
+  - LRU 只逐出零引用条目；pinned 不计容量上限（上限只约束无引用池，默认 500）；配"501+ 成员滚动回读"、"重叠 pin 来源"、"提前返回不泄漏"回归测试。
 - **scope membership store**：只持成员顺序 + 分页/过渡状态；行内容从 summaryById 解引用；runtime overlay 走既有 runtime 合并路径落 overlay 层。
 
 ### 4.2 membership provider 抽象
@@ -127,9 +129,10 @@
 1. **recent**：现 feeds/pager 零改动；
 2. **workspace(path)**：`/api/thread-summaries?workspace_dir=…`，复用 `GaryxHomeThreadListPager` 纯状态机；
 3. **botConversations(groupId)**：bot console/endpoints 派生（非线程分页），摘要走 summaryById + 逐 ID `/api/threads/:id` 补缺；
-4. **automationThreads(id)**：既有端点 + load-more 页驱动。
+4. **automationThreads(id)**：既有端点 + load-more 页驱动；
+5. **favorites**（R3-F01 根治）：snapshot 整替机制与现有 reducer（unresolved fence/verify/补偿 CAS）**全部保持**；snapshot 缺失摘要的 membership ID（excluded 已收藏的冷启动场景）经既有 `/api/threads/:id` **有界逐 ID hydration** 补行，**摘要到达前不发布裸 membership**（该行先不可见，摘要到达后随下一次快照发布出现）；不加任何 batch/record-scan fallback。`.removeOnly` 的入口由此保证存在。
 
-通用 presentation/action store（`GaryxHomeThreadListStore` 泛化）消费任一 provider 快照；`.recent(all)` 保留 pinned 段 + 拖拽重排。**automation picker** 用 unscoped provider + `q` 服务端搜索（R2-F03：撤销"本地前缀过滤"——本地过滤只滤已加载页会漏未翻页目标，不得称为全量搜索）；picker 已选 target 的摘要经点查 pin 保活。
+通用 presentation/action store（`GaryxHomeThreadListStore` 泛化）消费任一 provider 快照；`.recent(all)` 保留 pinned 段 + 拖拽重排。**automation picker** 用 unscoped provider + `q` 服务端搜索（撤销"本地前缀过滤"——只滤已加载页会漏未翻页目标）。**`q` 是 provider 实例身份的一部分**（R3-F02）：q 变化 = cancel 在途 + 实例升代 + **原子释放旧页全部 PinLease**；旧实例任何晚到响应（含首屏）按实例代际丢弃——cursor digest 拦不住的"旧 q 首屏晚返回"时序由代际闭合。picker 已选 target 的摘要经点查 + 独立 lease 保活，不随搜索页释放。
 
 ### 4.3 feed 注册表与 mutation hub（R2-F05 根治）
 
@@ -137,15 +140,16 @@
 - **`GaryxThreadMutationHub` = 事务状态机（非成功通知总线）**：
   - 事件：`began / committed / rolledBack / ambiguous`，携带 `mutationID`、mutation 种类与目标、gateway runtime epoch、权威结果（committed 附服务端权威 membership/revision 数据，如 pin resolve 结果）；
   - 所有 resident store（含 summaryById）订阅：同一 `mutationID` 下**同步进入 pending → committed/rolledBack**，跨 scope 一致呈现请求中/失败/回滚态；
-  - `ambiguous`（如归档结果不明确）触发**所有相关 scope** 的 authoritative replacement（不只 Home feed）；
+  - **`ambiguous` = 保留态 reconstruction barrier**（R3-F03，非"发起一次刷新"）：每个相关 resident store 按自己的 `instanceID` 提交 authoritative replacement；replacement 携带独立 generation，**旧 ticket 不得消费/清除后排队的 replacement**；replacement 失败**粘性保留** pending 标志等下次重试（对齐 `GaryxRecentThreadFeeds.swift:338-359` 现语义）；store 被淘汰后冷加载视为该 store 的权威完成；archive ambiguous 立即撤销行的 archiving motion、**旧快照保留到 replacement 到达**；
+  - **Favorites 例外条款**：favorites 的 ambiguous/verify/补偿 CAS 语义继续由现有 `GaryxFavoritesState` reducer 独占裁决，hub 对 favorites 只做其**下游 fan-out**（把 reducer 已裁决的结果播给其他 scope），绝不替代该 reducer；
   - 现有 Home archive（begin/commit/cancel/ambiguous replacement，`GaryxMobileModel+Bots.swift:248-323`）与 pin（begin/resolve/rollback，`+ThreadPersistence.swift:63-100,133-155`）逻辑**重构为 hub 的参考实现**，characterization 测试钉住首页行为守恒。
 
 ### 4.4 wire 归一化与能力模型（R2-F06 根治）
 
 - **双 wire adapter（Core）**：
   1. `ThreadSummaryRow → GaryxThreadSummary`（新路由）；
-  2. legacy `/api/threads/:id` record → `GaryxThreadSummary`：兼容 `label→title`、exclusion 标志的三种形态（top-level `exclude_from_recent` / camelCase `excludeFromRecent` / metadata 嵌套）与 `generated_thread`；**不改服务端信封**。
-  两 adapter 归一到同一 `GaryxThreadSummary`，SwiftPM 用真实捕获 payload 做双形状对照测试。
+  2. legacy `/api/threads/:id` record → `GaryxThreadSummary`：兼容 `label→title`；exclusion 判定**逐项镜像服务端 helper 的完整谓词**（R3-F06）——top-level 与 metadata 两层查找、`exclude_from_recent`/`excludeFromRecent` 双拼写、值接受 Bool **与字符串 truthy（`true`/`yes`/`1`）**、两层 `automation_thread_mode` 的 generated 规则；**不改服务端信封**。
+  两 adapter 归一到同一 `GaryxThreadSummary`。测试双轨：真实捕获 payload 对照 + **合成 payload 合同测试**（字符串 truthy/falsey、两层错位、缺失字段各组合），保证同一 canonical record 从两个入口得到同一 `excluded_from_recent`（capability 不随入口漂移）。
 - **capabilities**：
 ```
 struct GaryxThreadRowCapabilities {
@@ -184,6 +188,12 @@ struct GaryxThreadRowCapabilities {
 | **archive 本地删除** | `+ThreadPersistence.swift:164-176` | hub `committed(archive)` 事件 |
 | **gateway reset** | `+Gateway.swift:133` | 注册表级 reset：feeds registry + summaryById + hub 随 gateway scope epoch 整体清位 |
 | **catalog restore/debug fixture** | 各处 | summaryById seed 入口（测试专用路径显式标注） |
+| **recent head refresh 前快照 + commit** | `+ThreadList.swift:53-119,439-498` | recent membership store 的 ticket-accepted 事务：快照/commit/selection rebind 全在 store commit 边界内完成，summaryById write-through 随 commit 同步（R3-F04） |
+| **auxiliary All merge** | `+ThreadList.swift:183-200` | 同上：辅助 feed 页作为 store 事务的一部分 merge，不再写 `model.threads` |
+| **Favorites pin 补摘要** | `+ThreadList.swift:229-262` | favorites provider hydration（§4.2 第 5 项） |
+| **ambiguous auxiliary replacement merge** | `+ThreadList.swift:400-417` | hub `ambiguous` barrier（§4.3）内的 store replacement 提交 |
+| **load-more merge** | `+ThreadList.swift:627-675` | recent membership store 的 loadMore ticket acceptance（pager 语义不动） |
+| **widget 重投影触发** | `+CatalogCache.swift:68-70`、`+StateSync.swift:30-33`、`+AgentsWorkspaces.swift:1144-1146` | widget publisher 改订阅 recent store 快照变更（发布边界 = store commit），彻底不读 `model.threads`（R3-F04） |
 | `refreshWorkspaceAndBotThreads()` 全量循环 | `+ThreadList.swift:708-739` | **删除** |
 
 终态 `model.threads` **整字段删除**；S3 验收含"grep 零残留读写点"，残留即 FAIL。optimistic/rollback 一律经 hub，禁止 store 私有双写。
@@ -193,7 +203,7 @@ struct GaryxThreadRowCapabilities {
 1. 文件夹成员集不变、时间降序语义不变；取数改 keyset 分页 + stale-while-refresh + mutation fan-out（"不同步"消失，无行静默消失）。
 2. **同时间戳 tiebreak 从 title 改为 `thread_id DESC`**（服务端确定性排序的代价，行序仅在同微秒时间戳内可能与今天不同）。
 3. 手势增强：drilldown 获得长按菜单（按 capabilities 裁剪）；excluded 线程 Favorite 新增不可达、移除恒可用。
-4. automation 列表可翻页到底；drilldown 时间戳变 live。
+4. automation 列表可翻页到底；drilldown 时间戳变 live。picker 搜索四字段语义保持不变（服务端化，覆盖未翻页候选属增强）；`q` 长度上限 100 为新约束。
 5. **版本偏斜合同**：新 iOS + 旧 gateway → `/api/thread-summaries` 返回**精确 HTTP 404** → 文件夹列表与 picker 增强模式显式"网关版本过旧，请升级"空态；**401/403/5xx/解码错误/网络故障不得归类为旧网关**，走普通错误/重试呈现。picker 404 降级为 recent 已加载页 + 同一升级提示；bot hydration/首页/favorites/automation 走既有端点不受影响。不做静默 fallback、不留旧全量 dump 双路径。
 
 ## 6. 明确不做
@@ -209,8 +219,8 @@ struct GaryxThreadRowCapabilities {
 
 | 切片 | 内容 | 验证 |
 |---|---|---|
-| S1 gateway | §3.1 新路由 + §3.2 增列/cutover + §3.3 对齐断言 | `cargo test -p garyx-gateway --lib`：全分支 query-plan（无 TEMP B-TREE）、cursor scope/tasks/q/incarnation 失配 400、NULL/仅 created/混合格式/键前移后移分页用例、cutover 幂等回填、`q` 行为用例、既有端点信封 characterization、bot `/threads`≡Chats 对齐 |
-| S2 Core | §4.1 pin 缓存 + §4.2 provider/store 泛化 + §4.3 代际/hub 状态机 + §4.4 双 adapter/capabilities | SwiftPM：ABA 回归、LRU 501+ 成员回读、pin 登记/注销、hub began/committed/rolledBack/ambiguous 跨 store 一致性、双 wire 形状对照（真实捕获 payload）、capabilities 全表、首页守恒 characterization |
+| S1 gateway | §3.1 新路由 + §3.2 增列/cutover + §3.3 对齐断言 | `cargo test -p garyx-gateway --lib`：全分支 query-plan（USING INDEX/无 TEMP B-TREE）、cursor scope/tasks/q/incarnation 失配 400、NULL/仅 created/混合格式/键前移后移分页用例、cutover 幂等回填（三列）、`q` 四字段/非 ASCII casefold/空 title 用例、exclusion helper 复用断言、既有端点信封 characterization、bot `/threads`≡Chats 对齐 |
+| S2 Core | §4.1 PinLease 缓存 + §4.2 provider/store 泛化（含 favorites hydration）+ §4.3 代际/hub 状态机 + §4.4 双 adapter/capabilities | SwiftPM：ABA 回归、LRU 501+ 成员回读、PinLease 释放点全枚举（重叠来源/提前返回不泄漏/picker q 换代原子释放）、favorites 冷启动 excluded 已收藏行出现且 removeOnly 可用、hub 四态跨 store 一致性、ambiguous barrier 对照 `GaryxRecentThreadFeedsTests.swift:390-444` 现有两用例等价、双 wire 形状对照（真实捕获 + 合成 truthy/falsey payload）、capabilities 全表、首页守恒 characterization |
 | S3 App | §4.5 行统一/List scaffold/窄 store + §4.6 所有权表逐行核销 + 全量 dump 删除 + 404/错误分类呈现 | xcodebuild 构建 + SwiftPM headless（真实捕获数据）；`model.threads` grep 零残留；手势 capability 清单逐面核对；xcodegen pbxproj 同步提交 |
 | S4 清理 | iOS 侧 `label` 兼容层删除（限不再消费的层）、旧 wrapper 删除 grep 断言、死代码清扫 | 全量 grep 盘点 + tier1 |
 
@@ -226,6 +236,5 @@ struct GaryxThreadRowCapabilities {
 
 ## 9. 开放问题（复审请裁决）
 
-1. favorites snapshot join 换 `thread_meta`（excluded favorite 可见化）作为后续独立小案——本设计以 `.removeOnly` 门禁过渡，是否可接受？
-2. `q` 搜索是否需要同时匹配 `last_message_preview`（本版仅 title）？
-3. picker 已选 target 不在当前搜索结果页时的呈现（本版：经点查 pin 单独显示在"已选"区）——是否符合 Mac app 语义，S3 实现时对照。
+1. favorites snapshot join 换 `thread_meta`（excluded favorite 服务端可见化）作为后续独立小案的优先级——本设计客户端 hydration（§4.2 第 5 项）已保证行可见且 `.removeOnly` 可达，服务端根治是否仍列高优先级后续？
+2. picker 已选 target 不在当前搜索结果页时的呈现（本版：经点查 + 独立 lease 显示在"已选"区）——是否符合 Mac app 语义，S3 实现时对照。
