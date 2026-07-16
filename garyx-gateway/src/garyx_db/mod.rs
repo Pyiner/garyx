@@ -14,8 +14,10 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
+mod meetings;
 mod task_forest;
 
+pub use meetings::*;
 pub use task_forest::{
     CURRENT_TASK_PROJECTION_VERSION, TaskForestNode, TaskForestPage, TaskForestScope,
     TaskProjectionDraft,
@@ -2779,6 +2781,7 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
 
         "#,
     )?;
+    conn.execute_batch(meetings::MEETINGS_DDL)?;
     ensure_thread_pins_sort_order_column(conn)?;
     ensure_thread_pins_meta_row(conn)?;
     conn.execute_batch(

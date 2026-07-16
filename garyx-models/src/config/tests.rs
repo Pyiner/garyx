@@ -12,6 +12,27 @@ fn test_gateway_defaults() {
     let gw = GatewayConfig::default();
     assert_eq!(gw.port, 31337);
     assert_eq!(gw.host, "0.0.0.0");
+    assert_eq!(gw.meetings.poll_interval_secs, 30);
+    assert_eq!(gw.meetings.join_retry_window_secs, 300);
+    assert_eq!(gw.meetings.read_page_bytes, 65_536);
+    assert_eq!(gw.meetings.effective_poll_interval_secs(), 30);
+    assert_eq!(gw.meetings.effective_read_page_bytes(), 65_536);
+}
+
+#[test]
+fn meeting_config_is_serde_defaulted_and_clamps_runtime_floors() {
+    let config: GaryxConfig = serde_json::from_value(serde_json::json!({
+        "gateway": {
+            "meetings": {
+                "poll_interval_secs": 1,
+                "read_page_bytes": 1
+            }
+        }
+    }))
+    .expect("config");
+    assert_eq!(config.gateway.meetings.join_retry_window_secs, 300);
+    assert_eq!(config.gateway.meetings.effective_poll_interval_secs(), 10);
+    assert_eq!(config.gateway.meetings.effective_read_page_bytes(), 4_096);
 }
 
 #[test]

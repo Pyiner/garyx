@@ -28,6 +28,7 @@ use crate::event_stream_hub::EventStreamHub;
 use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
+use crate::meetings::MeetingService;
 use crate::provider_auth::ClaudeAuthSessionStore;
 use crate::recent_thread_projection::{ActiveRunProbe, BridgeActiveRunProbe};
 use crate::recent_thread_reader::SqlRecentThreadPageReader;
@@ -81,6 +82,7 @@ pub struct AppStateBuilder {
     skills: Arc<SkillsService>,
     custom_agents: Arc<CustomAgentStore>,
     garyx_db: Arc<GaryxDbService>,
+    meetings_dir: PathBuf,
     /// Optional override for the active-run probe. Production leaves this `None`
     /// and `build` wires a bridge-backed probe; tests inject a fake to control
     /// which runs count as live.
@@ -141,6 +143,8 @@ impl AppStateBuilder {
             skills,
             custom_agents: Arc::new(CustomAgentStore::new()),
             garyx_db: garyx_db_default,
+            meetings_dir: std::env::temp_dir()
+                .join(format!("garyx-meetings-test-{}", uuid::Uuid::new_v4())),
             active_run_probe: None,
             provider_runtime_ready: true,
         }
@@ -172,6 +176,7 @@ impl AppStateBuilder {
             GaryxDbService::open(garyx_models::local_paths::default_garyx_database_path())
                 .unwrap_or_else(|error| panic!("failed to open garyx database: {error}")),
         );
+        self.meetings_dir = garyx_models::local_paths::default_meetings_dir();
         self
     }
 
@@ -283,6 +288,11 @@ impl AppStateBuilder {
         self
     }
 
+    pub fn with_meetings_dir(mut self, meetings_dir: PathBuf) -> Self {
+        self.meetings_dir = meetings_dir;
+        self
+    }
+
     pub fn build(self) -> Arc<AppState> {
         let start_time = Instant::now();
         // Runtime assembly runs the legacy boot import before reaching this
@@ -383,6 +393,14 @@ impl AppStateBuilder {
 
         let live_config = Arc::new(LiveConfigCell::new(self.config.clone()));
         let events = EventStreamHub::new(self.event_tx);
+        let meetings = Arc::new(
+            MeetingService::new(
+                self.garyx_db.clone(),
+                self.meetings_dir,
+                self.config.gateway.meetings.effective_read_page_bytes(),
+            )
+            .unwrap_or_else(|error| panic!("failed to initialize meeting service: {error}")),
+        );
         let state = Arc::new(AppState {
             runtime: RuntimeState {
                 start_time,
@@ -409,6 +427,7 @@ impl AppStateBuilder {
                 skills: self.skills,
                 custom_agents: self.custom_agents,
                 garyx_db: self.garyx_db,
+                meetings,
                 provider_auth_sessions: Arc::new(ClaudeAuthSessionStore::default()),
                 channel_endpoint_snapshot: Mutex::new(None),
             },

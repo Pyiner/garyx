@@ -11,7 +11,7 @@ struct GaryxMobileApp: App {
 
     var body: some Scene {
         WindowGroup {
-            GaryxRootView(model: model)
+            rootContent
                 .environmentObject(model)
                 .environment(model.homeObservationStore)
                 .environment(\.garyxAvatarImageProvider, model.avatarImageProvider)
@@ -20,5 +20,18 @@ struct GaryxMobileApp: App {
                     model.handleScenePhase(phase)
                 }
         }
+    }
+
+    @ViewBuilder
+    private var rootContent: some View {
+        #if DEBUG
+        if let fixture = GaryxImagePreviewDebugFixture.current {
+            fixture.view
+        } else {
+            GaryxRootView(model: model)
+        }
+        #else
+        GaryxRootView(model: model)
+        #endif
     }
 }

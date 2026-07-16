@@ -6,10 +6,12 @@ import {
   mkdirSync,
   renameSync,
 } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import {
   app,
   BrowserWindow,
   clipboard,
+  dialog,
   ipcMain,
   Menu,
   Tray,
@@ -77,6 +79,7 @@ import type {
   RenameThreadInput,
   RemoveWorkspaceInput,
   RunAutomationNowInput,
+  SaveImageInput,
   SaveSkillFileInput,
   SaveMemoryDocumentInput,
   SelectAutomationInput,
@@ -107,6 +110,10 @@ import type {
   AssignTaskInput,
   CopyTextToClipboardInput,
 } from "@shared/contracts";
+import {
+  buildImageSaveFileName,
+  decodeImageDataUrl,
+} from "./image-save";
 
 import {
   createCustomAgent,
@@ -1012,6 +1019,41 @@ function registerIpcHandlers(): void {
     async (_event, input: PreviewWorkspaceFileInput) => {
       const settings = await resolveSettings();
       return previewWorkspaceFile(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:save-image",
+    async (event, input: SaveImageInput) => {
+      const decoded = decodeImageDataUrl(String(input?.dataUrl || ""));
+      const fileName = buildImageSaveFileName(
+        typeof input?.suggestedName === "string"
+          ? input.suggestedName
+          : undefined,
+        decoded.mediaType,
+      );
+      const options = {
+        title: "Save Image",
+        defaultPath: join(app.getPath("downloads"), fileName),
+        filters: [
+          {
+            name: "Image",
+            extensions: [decoded.extension],
+          },
+        ],
+      };
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const selection = owner && !owner.isDestroyed()
+        ? await dialog.showSaveDialog(owner, options)
+        : await dialog.showSaveDialog(options);
+      if (selection.canceled || !selection.filePath) {
+        return { canceled: true } as const;
+      }
+      await writeFile(selection.filePath, decoded.bytes);
+      return {
+        canceled: false,
+        filePath: selection.filePath,
+      } as const;
     },
   );
 

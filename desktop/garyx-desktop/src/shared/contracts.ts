@@ -4,6 +4,7 @@
 
 export * from "./contracts/settings.ts";
 export * from "./contracts/provider.ts";
+export * from "./contracts/image.ts";
 export * from "./contracts/workspace.ts";
 export * from "./contracts/transcript.ts";
 export * from "./contracts/channel.ts";

@@ -82,6 +82,8 @@ pub struct GatewayConfig {
     pub search: SearchConfig,
     #[serde(default)]
     pub auto_update: GatewayAutoUpdateConfig,
+    #[serde(default)]
+    pub meetings: MeetingConfig,
 }
 
 fn default_port() -> u16 {
@@ -100,7 +102,50 @@ impl Default for GatewayConfig {
             auth_token: String::new(),
             search: SearchConfig::default(),
             auto_update: GatewayAutoUpdateConfig::default(),
+            meetings: MeetingConfig::default(),
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MeetingConfig {
+    #[serde(default = "default_meeting_poll_interval_secs")]
+    pub poll_interval_secs: u64,
+    #[serde(default = "default_meeting_join_retry_window_secs")]
+    pub join_retry_window_secs: u64,
+    #[serde(default = "default_meeting_read_page_bytes")]
+    pub read_page_bytes: usize,
+}
+
+fn default_meeting_poll_interval_secs() -> u64 {
+    30
+}
+
+fn default_meeting_join_retry_window_secs() -> u64 {
+    300
+}
+
+fn default_meeting_read_page_bytes() -> usize {
+    65_536
+}
+
+impl Default for MeetingConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval_secs: default_meeting_poll_interval_secs(),
+            join_retry_window_secs: default_meeting_join_retry_window_secs(),
+            read_page_bytes: default_meeting_read_page_bytes(),
+        }
+    }
+}
+
+impl MeetingConfig {
+    pub fn effective_poll_interval_secs(&self) -> u64 {
+        self.poll_interval_secs.clamp(10, 120)
+    }
+
+    pub fn effective_read_page_bytes(&self) -> usize {
+        self.read_page_bytes.max(4_096)
     }
 }
 

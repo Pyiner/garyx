@@ -9,6 +9,41 @@ pub(super) struct GatewayEndpoint {
     pub(super) auth_token: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RawGatewayResponse {
+    pub(super) status: u16,
+    pub(super) raw_body: Vec<u8>,
+    pub(super) body_len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TransportCause {
+    Timeout,
+    Connect,
+    Other,
+}
+
+#[derive(Debug)]
+pub(super) struct RawGatewayError {
+    #[allow(dead_code)] // consumed by timeout-only meeting abort retry in delivery slice 2
+    pub(super) cause: TransportCause,
+    cli_error: GatewayCliError,
+}
+
+impl RawGatewayError {
+    pub(super) fn into_cli_error(self) -> GatewayCliError {
+        self.cli_error
+    }
+}
+
+impl std::fmt::Display for RawGatewayError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.cli_error.fmt(formatter)
+    }
+}
+
+impl std::error::Error for RawGatewayError {}
+
 /// Per-attempt timeout for idempotent (GET) gateway requests.
 const GATEWAY_GET_TIMEOUT: Duration = Duration::from_secs(5);
 /// Per-attempt timeout for mutating gateway requests.
@@ -40,6 +75,9 @@ enum GatewayRetryPolicy {
     /// never reached a listener. A timed-out mutation may have landed and
     /// must not be resent blindly.
     ConnectOnly,
+    /// Make exactly one transport attempt. Meeting abort uses this seam so
+    /// its caller can retry once only after inspecting `TransportCause::Timeout`.
+    SingleShot,
 }
 
 /// Pure retry decision so the policy table is unit-testable without a
@@ -52,6 +90,9 @@ fn transport_failure_retriable(
     attempts_made: usize,
     timeout_attempts_made: usize,
 ) -> bool {
+    if policy == GatewayRetryPolicy::SingleShot {
+        return false;
+    }
     if attempts_made >= GATEWAY_MAX_CONNECT_ATTEMPTS {
         return false;
     }
@@ -222,22 +263,37 @@ async fn execute_gateway_json(
     gateway: &GatewayEndpoint,
     policy: GatewayRetryPolicy,
 ) -> Result<Value, Box<dyn std::error::Error>> {
+    let response = execute_gateway_raw(builder, gateway, policy)
+        .await
+        .map_err(RawGatewayError::into_cli_error)?;
+    decode_gateway_response(response)
+}
+
+async fn execute_gateway_raw(
+    builder: reqwest::RequestBuilder,
+    gateway: &GatewayEndpoint,
+    policy: GatewayRetryPolicy,
+) -> Result<RawGatewayResponse, RawGatewayError> {
     let builder = gateway_request(builder, gateway);
     if builder.try_clone().is_none() {
         // Non-clonable (streaming) body: single shot, previous behavior.
         let response = builder
             .send()
             .await
-            .map_err(|error| gateway_send_error_for_policy(gateway, &error, policy))?;
-        return decode_gateway_response(response).await;
+            .map_err(|error| raw_gateway_error(gateway, &error, policy))?;
+        return raw_response_with_context(response, gateway, policy).await;
     }
 
     let mut attempts_made = 0usize;
     let mut timeout_attempts_made = 0usize;
     let response = loop {
-        let attempt = builder
-            .try_clone()
-            .ok_or("gateway request body is not retriable")?;
+        let attempt = builder.try_clone().ok_or_else(|| RawGatewayError {
+            cause: TransportCause::Other,
+            cli_error: GatewayCliError {
+                kind: GatewayErrorKind::Rejected,
+                message: "gateway request body is not retriable".to_owned(),
+            },
+        })?;
         attempts_made += 1;
         match attempt.send().await {
             Ok(response) => break response,
@@ -252,27 +308,63 @@ async fn execute_gateway_json(
                     attempts_made,
                     timeout_attempts_made,
                 ) {
-                    return Err(gateway_send_error_for_policy(gateway, &error, policy).into());
+                    return Err(raw_gateway_error(gateway, &error, policy));
                 }
                 tokio::time::sleep(retry_backoff(attempts_made)).await;
             }
         }
     };
-    decode_gateway_response(response).await
+    raw_response_with_context(response, gateway, policy).await
 }
 
-async fn decode_gateway_response(
+async fn raw_response_with_context(
     response: reqwest::Response,
+    gateway: &GatewayEndpoint,
+    policy: GatewayRetryPolicy,
+) -> Result<RawGatewayResponse, RawGatewayError> {
+    let status = response.status().as_u16();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| raw_gateway_error(gateway, &error, policy))?;
+    let raw_body = bytes.to_vec();
+    Ok(RawGatewayResponse {
+        status,
+        body_len: raw_body.len(),
+        raw_body,
+    })
+}
+
+fn decode_gateway_response(
+    response: RawGatewayResponse,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let status = response.status();
-    let body = response.text().await?;
+    let status = reqwest::StatusCode::from_u16(response.status)?;
     if !status.is_success() {
+        let body = String::from_utf8_lossy(&response.raw_body);
         return Err(gateway_status_error(status, &body).into());
     }
-    if body.trim().is_empty() {
+    if response.raw_body.iter().all(u8::is_ascii_whitespace) {
         return Ok(json!({}));
     }
-    Ok(serde_json::from_str(&body)?)
+    Ok(serde_json::from_slice(&response.raw_body)?)
+}
+
+fn raw_gateway_error(
+    gateway: &GatewayEndpoint,
+    error: &reqwest::Error,
+    policy: GatewayRetryPolicy,
+) -> RawGatewayError {
+    let cause = if error.is_timeout() {
+        TransportCause::Timeout
+    } else if error.is_connect() {
+        TransportCause::Connect
+    } else {
+        TransportCause::Other
+    };
+    RawGatewayError {
+        cause,
+        cli_error: gateway_send_error_for_policy(gateway, error, policy),
+    }
 }
 
 /// Mutations that time out are never auto-resent; tell the caller to verify
@@ -283,7 +375,7 @@ fn gateway_send_error_for_policy(
     policy: GatewayRetryPolicy,
 ) -> GatewayCliError {
     let mut cli_error = gateway_send_error(gateway, error);
-    if policy == GatewayRetryPolicy::ConnectOnly && error.is_timeout() && !error.is_connect() {
+    if policy != GatewayRetryPolicy::Idempotent && error.is_timeout() && !error.is_connect() {
         cli_error.message.push_str(
             " — the request was not auto-retried; verify whether the write landed (e.g. `garyx task list`) before resending",
         );
@@ -316,6 +408,43 @@ pub(super) async fn post_gateway_json(
         .json(payload)
         .timeout(GATEWAY_MUTATION_TIMEOUT);
     execute_gateway_json(builder, gateway, GatewayRetryPolicy::ConnectOnly).await
+}
+
+pub(super) async fn post_gateway_raw(
+    gateway: &GatewayEndpoint,
+    path: &str,
+    payload: &Value,
+    retry_timeout: bool,
+) -> Result<RawGatewayResponse, RawGatewayError> {
+    let url = format!("{}{}", gateway.base_url, path);
+    let builder = shared_http_client()
+        .post(&url)
+        .json(payload)
+        .timeout(GATEWAY_MUTATION_TIMEOUT);
+    execute_gateway_raw(
+        builder,
+        gateway,
+        if retry_timeout {
+            GatewayRetryPolicy::Idempotent
+        } else {
+            GatewayRetryPolicy::ConnectOnly
+        },
+    )
+    .await
+}
+
+#[allow(dead_code)] // consumed by timeout-only meeting abort retry in delivery slice 2
+pub(super) async fn post_gateway_raw_once(
+    gateway: &GatewayEndpoint,
+    path: &str,
+    payload: &Value,
+) -> Result<RawGatewayResponse, RawGatewayError> {
+    let url = format!("{}{}", gateway.base_url, path);
+    let builder = shared_http_client()
+        .post(&url)
+        .json(payload)
+        .timeout(GATEWAY_MUTATION_TIMEOUT);
+    execute_gateway_raw(builder, gateway, GatewayRetryPolicy::SingleShot).await
 }
 
 pub(super) async fn post_gateway_json_as_cli_actor(
@@ -393,6 +522,17 @@ pub(super) async fn delete_gateway_json(
         .delete(&url)
         .timeout(GATEWAY_MUTATION_TIMEOUT);
     execute_gateway_json(builder, gateway, GatewayRetryPolicy::ConnectOnly).await
+}
+
+pub(super) async fn delete_gateway_raw(
+    gateway: &GatewayEndpoint,
+    path: &str,
+) -> Result<RawGatewayResponse, RawGatewayError> {
+    let url = format!("{}{}", gateway.base_url, path);
+    let builder = shared_http_client()
+        .delete(&url)
+        .timeout(GATEWAY_MUTATION_TIMEOUT);
+    execute_gateway_raw(builder, gateway, GatewayRetryPolicy::ConnectOnly).await
 }
 
 pub(super) fn principal_payload(principal: &str) -> Result<Value, Box<dyn std::error::Error>> {
@@ -487,6 +627,10 @@ mod tests {
                 "third connect failure must exhaust for {policy:?}"
             );
         }
+        assert!(
+            !transport_failure_retriable(GatewayRetryPolicy::SingleShot, true, false, 1, 0),
+            "the raw abort seam must surface Connect without retrying"
+        );
     }
 
     #[test]
@@ -507,6 +651,13 @@ mod tests {
         ));
         assert!(!transport_failure_retriable(
             GatewayRetryPolicy::ConnectOnly,
+            false,
+            true,
+            1,
+            1
+        ));
+        assert!(!transport_failure_retriable(
+            GatewayRetryPolicy::SingleShot,
             false,
             true,
             1,
@@ -658,6 +809,52 @@ mod tests {
             cli_error.message
         );
         assert_eq!(connections.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn raw_transport_preserves_exact_body_length_and_typed_timeout_cause() {
+        let (base_url, connections) = spawn_test_server(vec![TestConn::Ok]).await;
+        let gateway = test_endpoint(base_url);
+        let builder = shared_http_client()
+            .get(format!("{}/api/meetings", gateway.base_url))
+            .timeout(Duration::from_millis(150));
+        let raw = execute_gateway_raw(builder, &gateway, GatewayRetryPolicy::Idempotent)
+            .await
+            .expect("raw response");
+        assert_eq!(raw.status, 200);
+        assert_eq!(raw.body_len, raw.raw_body.len());
+        assert_eq!(raw.raw_body, br#"{"ok":true}"#);
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+
+        let (base_url, connections) = spawn_test_server(vec![TestConn::StallMs(2_000)]).await;
+        let gateway = test_endpoint(base_url);
+        let builder = shared_http_client()
+            .post(format!("{}/api/meetings/test/abort", gateway.base_url))
+            .json(&json!({}))
+            .timeout(Duration::from_millis(100));
+        let error = execute_gateway_raw(builder, &gateway, GatewayRetryPolicy::SingleShot)
+            .await
+            .expect_err("timeout");
+        assert_eq!(error.cause, TransportCause::Timeout);
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn raw_transport_single_shot_classifies_connection_refused_without_retry() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("probe");
+        let addr = listener.local_addr().expect("addr");
+        drop(listener);
+        let gateway = test_endpoint(format!("http://{addr}"));
+        let builder = shared_http_client()
+            .post(format!("{}/api/meetings/test/abort", gateway.base_url))
+            .json(&json!({}))
+            .timeout(Duration::from_millis(100));
+        let error = execute_gateway_raw(builder, &gateway, GatewayRetryPolicy::SingleShot)
+            .await
+            .expect_err("connect");
+        assert_eq!(error.cause, TransportCause::Connect);
     }
 
     /// Bind a port, drop the listener (subsequent connects are refused —

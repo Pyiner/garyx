@@ -11,7 +11,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
     name = "garyx",
     version = VERSION,
     about = "Garyx – AI chat gateway",
-    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, provider, channels, commands, automation, db\n  Work with threads   task, thread, message, bot, usage, tool\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
+    after_help = "Command groups:\n  Run the gateway     gateway, status, doctor, onboard, config, logs, update, auto-update, plugins\n  Manage assets       agent, provider, channels, commands, automation, db\n  Work with context   task, thread, meeting, message, bot, usage, tool\n\nExit codes:\n  0 success · 1 error · 2 usage error · 3 gateway unreachable · 4 not found · 5 edit conflict"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -180,6 +180,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: TaskAction,
     },
+    /// Read and manage captured meeting entities
+    #[command(display_order = 39, alias = "meetings")]
+    Meeting {
+        #[command(subcommand)]
+        action: MeetingAction,
+    },
     /// Send an outbound channel message via a bot
     #[command(
         display_order = 42,
@@ -199,6 +205,62 @@ pub(crate) enum Commands {
         file: Option<PathBuf>,
         /// Message text. Required unless --image or --file is provided.
         text: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum MeetingAction {
+    /// List meeting entities
+    List {
+        /// Output the complete catalog as structured JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read meeting segments incrementally or as a stateless snapshot
+    Read {
+        /// Meeting entity UUID
+        id: String,
+        /// Read a stateless full snapshot
+        #[arg(
+            long,
+            conflicts_with_all = ["range", "continue_token", "epoch", "thread"]
+        )]
+        full: bool,
+        /// Read a stateless closed sequence range in A..B form
+        #[arg(
+            long,
+            value_name = "A..B",
+            conflicts_with_all = ["full", "continue_token", "thread"]
+        )]
+        range: Option<String>,
+        /// Require this log epoch for a range read
+        #[arg(long, requires = "range", conflicts_with = "continue_token")]
+        epoch: Option<i64>,
+        /// Resume a full or range snapshot using its opaque token
+        #[arg(
+            long = "continue",
+            value_name = "TOKEN",
+            conflicts_with_all = ["full", "range", "epoch", "thread"]
+        )]
+        continue_token: Option<String>,
+        /// Reader identity override for incremental mode; defaults to GARYX_THREAD_ID
+        #[arg(
+            long,
+            value_name = "ID",
+            conflicts_with_all = ["full", "range", "continue_token"]
+        )]
+        thread: Option<String>,
+        /// Emit each structured response page as one NDJSON line
+        #[arg(long)]
+        json: bool,
+        /// Total structured JSON response-byte target; minimum 4096
+        #[arg(long, value_name = "N")]
+        max_bytes: Option<usize>,
+    },
+    /// Permanently delete a terminal meeting entity
+    Delete {
+        /// Meeting entity UUID
+        id: String,
     },
 }
 
@@ -1276,6 +1338,53 @@ mod tests {
     #[test]
     fn cli_definition_is_internally_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn meeting_header_commands_parse_verbatim_and_invalid_epoch_modes_are_rejected() {
+        let id = "00000000-0000-7000-8000-000000000001";
+        let range = Cli::try_parse_from([
+            "garyx", "meeting", "read", id, "--range", "100..200", "--epoch", "7",
+        ])
+        .expect("range command");
+        match range.command {
+            Some(Commands::Meeting {
+                action:
+                    MeetingAction::Read {
+                        range,
+                        epoch,
+                        continue_token,
+                        ..
+                    },
+            }) => {
+                assert_eq!(range.as_deref(), Some("100..200"));
+                assert_eq!(epoch, Some(7));
+                assert!(continue_token.is_none());
+            }
+            _ => panic!("unexpected meeting range parse"),
+        }
+
+        let continued = Cli::try_parse_from([
+            "garyx",
+            "meeting",
+            "read",
+            id,
+            "--continue",
+            "shell_safe-token",
+        ])
+        .expect("continue command");
+        match continued.command {
+            Some(Commands::Meeting {
+                action: MeetingAction::Read { continue_token, .. },
+            }) => assert_eq!(continue_token.as_deref(), Some("shell_safe-token")),
+            _ => panic!("unexpected meeting continue parse"),
+        }
+
+        assert!(
+            Cli::try_parse_from(["garyx", "meeting", "read", id, "--full", "--epoch", "7"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from(["garyx", "meeting", "read", id, "--epoch", "7"]).is_err());
     }
 }
 

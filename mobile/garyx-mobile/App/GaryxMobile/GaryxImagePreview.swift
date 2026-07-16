@@ -57,6 +57,11 @@ struct GaryxFullscreenImageGalleryPreview: View {
 
     @State private var selection: Int
     @State private var pagingDisabled = false
+    @State private var galleryDismissOffset: CGFloat = 0
+    @State private var saveState: GaryxImagePreviewSaveState = .idle
+    @State private var saveAlert: GaryxImagePreviewSaveAlert?
+    @State private var saveTask: Task<Void, Never>?
+    @State private var saveOperationID: UUID?
 
     init(
         sources: [GaryxImagePreviewSource],
@@ -99,16 +104,34 @@ struct GaryxFullscreenImageGalleryPreview: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .ignoresSafeArea()
+                .offset(y: galleryDismissOffset)
                 // While zoomed in, horizontal pans move the image, not the pager.
                 .scrollDisabled(pagingDisabled)
                 .onChange(of: selection) { _, _ in
                     pagingDisabled = false
+                    cancelCurrentSave()
                 }
+            }
+        }
+        .background {
+            if sources.count > 1 {
+                GaryxImagePreviewDismissGestureBridge(
+                    isEnabled: !pagingDisabled && saveAlert == nil,
+                    onChanged: { galleryDismissOffset = $0 },
+                    onEnded: resetGalleryDismissOffset,
+                    onDismiss: onDismiss
+                )
+                .allowsHitTesting(false)
             }
         }
         .preferredColorScheme(.dark)
         .overlay(alignment: .topTrailing) {
-            closeButton
+            GaryxAdaptiveGlassContainer(spacing: 10) {
+                HStack(spacing: 10) {
+                    saveButton
+                    closeButton
+                }
+            }
                 .padding(.top, 12)
                 .padding(.trailing, 16)
                 .zIndex(10)
@@ -119,6 +142,48 @@ struct GaryxFullscreenImageGalleryPreview: View {
                     .padding(.top, 20)
             }
         }
+        .overlay(alignment: .bottom) {
+            if saveState == .saved {
+                savedConfirmation
+                    .padding(.bottom, 28)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .alert(item: $saveAlert, content: saveAlertView)
+        .onDisappear {
+            cancelCurrentSave()
+        }
+    }
+
+    private var saveButton: some View {
+        Button {
+            saveCurrentImage()
+        } label: {
+            Group {
+                if saveState == .saving {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.primary)
+                } else {
+                    Image(systemName: saveState == .saved ? "checkmark" : "square.and.arrow.down")
+                        .font(GaryxFont.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+            .garyxAdaptiveGlass(
+                .regular,
+                isInteractive: true,
+                tint: Color(.systemBackground).opacity(0.32),
+                fallbackMaterial: .ultraThinMaterial,
+                in: Circle()
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(saveState == .saving)
+        .accessibilityLabel("Save image to Photos")
+        .accessibilityValue(saveState.accessibilityValue)
     }
 
     private var closeButton: some View {
@@ -129,6 +194,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
                 .font(GaryxFont.system(size: 16, weight: .semibold))
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44)
+                .contentShape(Circle())
                 .garyxAdaptiveGlass(
                     .regular,
                     isInteractive: true,
@@ -138,8 +204,23 @@ struct GaryxFullscreenImageGalleryPreview: View {
                 )
         }
         .buttonStyle(.plain)
-        .contentShape(Circle())
         .accessibilityLabel("Close image preview")
+    }
+
+    private var savedConfirmation: some View {
+        Label("Saved to Photos", systemImage: "checkmark.circle.fill")
+            .font(GaryxFont.callout(weight: .semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16)
+            .frame(minHeight: 44)
+            .garyxAdaptiveGlass(
+                .regular,
+                isInteractive: false,
+                tint: Color(.systemBackground).opacity(0.32),
+                fallbackMaterial: .ultraThinMaterial,
+                in: Capsule()
+            )
+            .accessibilityIdentifier("Image saved to Photos")
     }
 
     private var pageIndexLabel: some View {
@@ -157,6 +238,117 @@ struct GaryxFullscreenImageGalleryPreview: View {
             )
             .accessibilityLabel("Image \(selection + 1) of \(sources.count)")
     }
+
+    @MainActor
+    private func saveCurrentImage() {
+        guard saveState != .saving,
+              sources.indices.contains(selection) else {
+            return
+        }
+        let source = sources[selection]
+        cancelCurrentSave()
+        let operationID = UUID()
+        saveOperationID = operationID
+        saveState = .saving
+        saveTask = Task { @MainActor in
+            do {
+                try await GaryxImagePhotoLibrary.save(
+                    source: source,
+                    loadGatewayDataURL: loadGatewayDataUrl
+                )
+                guard ownsSaveOperation(operationID) else { return }
+                withAnimation(.easeOut(duration: 0.18)) {
+                    saveState = .saved
+                }
+                UIAccessibility.post(notification: .announcement, argument: "Saved to Photos")
+                try await Task.sleep(for: .seconds(2.4))
+                guard ownsSaveOperation(operationID), saveState == .saved else { return }
+                saveOperationID = nil
+                saveTask = nil
+                withAnimation(.easeOut(duration: 0.18)) {
+                    saveState = .idle
+                }
+            } catch is CancellationError {
+                finishSaveOperationIfOwned(operationID)
+            } catch {
+                guard finishSaveOperationIfOwned(operationID) else { return }
+                if let photoError = error as? GaryxImagePhotoLibraryError,
+                   case .addPermissionDenied = photoError {
+                    saveAlert = .permissionDenied
+                } else {
+                    saveAlert = .failed
+                }
+            }
+        }
+    }
+
+    private func ownsSaveOperation(_ operationID: UUID) -> Bool {
+        saveOperationID == operationID && !Task.isCancelled
+    }
+
+    @discardableResult
+    private func finishSaveOperationIfOwned(_ operationID: UUID) -> Bool {
+        guard saveOperationID == operationID else { return false }
+        saveOperationID = nil
+        saveTask = nil
+        saveState = .idle
+        return true
+    }
+
+    private func cancelCurrentSave() {
+        saveOperationID = nil
+        saveTask?.cancel()
+        saveTask = nil
+        saveState = .idle
+    }
+
+    private func resetGalleryDismissOffset() {
+        withAnimation(.spring(response: 0.22, dampingFraction: 0.88)) {
+            galleryDismissOffset = 0
+        }
+    }
+
+    private func saveAlertView(_ alert: GaryxImagePreviewSaveAlert) -> Alert {
+        switch alert {
+        case .permissionDenied:
+            return Alert(
+                title: Text("Photos Access Needed"),
+                message: Text("Allow Garyx to add photos in Settings, then try again."),
+                primaryButton: .default(Text("Open Settings")) {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    UIApplication.shared.open(url)
+                },
+                secondaryButton: .cancel()
+            )
+        case .failed:
+            return Alert(
+                title: Text("Unable to Save Image"),
+                message: Text("The image could not be loaded or added to Photos."),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+    }
+}
+
+private enum GaryxImagePreviewSaveState: Equatable {
+    case idle
+    case saving
+    case saved
+
+    var accessibilityValue: Text {
+        switch self {
+        case .idle: Text("Ready")
+        case .saving: Text("Saving")
+        case .saved: Text("Saved")
+        }
+    }
+}
+
+private enum GaryxImagePreviewSaveAlert: Int, Equatable, Identifiable {
+    case permissionDenied
+    case failed
+
+    var id: Int { rawValue }
 }
 
 private struct GaryxImagePreviewPage: View {
@@ -345,9 +537,10 @@ private struct GaryxZoomableImageCanvas: View {
     /// True when this canvas is one page of a paged gallery. Inside a paged
     /// TabView, an attached drag gesture claims the touch stream before the
     /// pager's scroll view, so left/right page swipes stop working. Paged
-    /// canvases keep the drag gesture masked off until the image is zoomed
-    /// in (paging is disabled then anyway); the standalone single-image
-    /// preview keeps it always for pull-down dismissal.
+    /// canvases keep the SwiftUI drag masked off until the image is zoomed in
+    /// (paging is disabled then anyway). A direction-filtered UIKit bridge on
+    /// the gallery owns fit-scale pull-down dismissal without stealing pager
+    /// swipes; standalone previews keep this SwiftUI gesture throughout.
     var isPagedGalleryPage = false
     var onZoomActiveChanged: ((Bool) -> Void)? = nil
     let onDismiss: () -> Void
@@ -357,6 +550,7 @@ private struct GaryxZoomableImageCanvas: View {
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
     @State private var dismissDragOffset: CGFloat = 0
+    @State private var dismissDragPhase: GaryxImagePreviewDragPhase = .pending
 
     private var dragGestureMask: GestureMask {
         if isPagedGalleryPage, scale <= 1.02 {
@@ -422,11 +616,14 @@ private struct GaryxZoomableImageCanvas: View {
         DragGesture()
             .onChanged { value in
                 guard scale > 1 else {
-                    // Only track clearly downward drags so horizontal pager
-                    // swipes do not bob the image vertically.
-                    let downward = value.translation.height
-                    let horizontal = abs(value.translation.width)
-                    dismissDragOffset = downward > 0 && downward > horizontal ? downward : 0
+                    dismissDragPhase = GaryxImagePreviewDismissGesture.classify(
+                        currentPhase: dismissDragPhase,
+                        translation: value.translation
+                    )
+                    dismissDragOffset = GaryxImagePreviewDismissGesture.visibleOffset(
+                        phase: dismissDragPhase,
+                        translation: value.translation
+                    )
                     return
                 }
                 offset = CGSize(
@@ -436,7 +633,10 @@ private struct GaryxZoomableImageCanvas: View {
             }
             .onEnded { value in
                 guard scale > 1 else {
-                    if shouldDismiss(for: value) {
+                    if GaryxImagePreviewDismissGesture.shouldDismiss(
+                        phase: dismissDragPhase,
+                        translation: value.translation
+                    ) {
                         onDismiss()
                         return
                     }
@@ -449,17 +649,104 @@ private struct GaryxZoomableImageCanvas: View {
             }
     }
 
-    private func shouldDismiss(for value: DragGesture.Value) -> Bool {
-        let downward = value.translation.height
-        let horizontal = abs(value.translation.width)
-        return downward > 88 && downward > horizontal * 1.25
-    }
-
     private func resetViewport() {
         scale = 1
         lastScale = 1
         offset = .zero
         lastOffset = .zero
         dismissDragOffset = 0
+        dismissDragPhase = .pending
     }
 }
+
+#if DEBUG
+enum GaryxImagePreviewDebugFixture: String {
+    case single
+    case gallery
+    case cancellationRaceGallery = "cancellation-race-gallery"
+    case failingGallery = "failing-gallery"
+
+    static var current: Self? {
+        ProcessInfo.processInfo.environment["GARYX_MOBILE_IMAGE_PREVIEW_FIXTURE"]
+            .flatMap(Self.init(rawValue:))
+    }
+
+    @ViewBuilder
+    var view: some View {
+        GaryxImagePreviewDebugFixtureView(mode: self)
+    }
+
+    var sources: [GaryxImagePreviewSource] {
+        let red = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mNUcLj0nwEPYGIgAIaHAgBE3AJBVcnK6gAAAABJRU5ErkJggg=="
+        let green = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFklEQVR42mOM8VjwnwEPYGIgAIaHAgBXtgJTMAef0wAAAABJRU5ErkJggg=="
+        switch self {
+        case .single:
+            return [GaryxImagePreviewSource(title: "Single fixture.png", dataUrl: red)]
+        case .gallery:
+            return [
+                GaryxImagePreviewSource(title: "Gallery fixture 1.png", dataUrl: red),
+                GaryxImagePreviewSource(title: "Gallery fixture 2.png", dataUrl: green),
+            ]
+        case .cancellationRaceGallery, .failingGallery:
+            return [
+                GaryxImagePreviewSource(
+                    title: "Slow gateway fixture.png",
+                    gatewayFilePath: "/fixture/slow.png",
+                    initialImage: GaryxImageDecoder.image(fromDataUrl: red, maxPixelSize: 4_096)
+                ),
+                GaryxImagePreviewSource(title: "Next page fixture.png", dataUrl: green),
+            ]
+        }
+    }
+
+    var loadGatewayDataURL: ((String) async -> String?)? {
+        switch self {
+        case .single, .gallery:
+            return nil
+        case .cancellationRaceGallery:
+            return { _ in
+                do {
+                    try await Task.sleep(for: .seconds(30))
+                } catch is CancellationError {
+                    await Self.waitIgnoringCancellation(for: 2.2)
+                } catch {
+                    return nil
+                }
+                return nil
+            }
+        case .failingGallery:
+            return { _ in
+                try? await Task.sleep(for: .milliseconds(300))
+                return nil
+            }
+        }
+    }
+
+    private static func waitIgnoringCancellation(for seconds: Double) async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+                continuation.resume()
+            }
+        }
+    }
+}
+
+private struct GaryxImagePreviewDebugFixtureView: View {
+    let mode: GaryxImagePreviewDebugFixture
+    @State private var isPresented = true
+
+    var body: some View {
+        if isPresented {
+            GaryxFullscreenImageGalleryPreview(
+                sources: mode.sources,
+                initialIndex: 0,
+                loadGatewayDataUrl: mode.loadGatewayDataURL,
+                onDismiss: { isPresented = false }
+            )
+        } else {
+            Text("Preview dismissed")
+                .accessibilityIdentifier("Image preview dismissed")
+        }
+    }
+}
+#endif
