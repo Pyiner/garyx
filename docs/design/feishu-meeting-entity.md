@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 10 — complete self-contained specification (no references
+Status: revision 11 — complete self-contained specification (no references
 to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–9.
+rounds 1–10.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -33,10 +33,14 @@ reference. 7. Orthogonality: additive touchpoints only (Section 11).
 
 Product sign-off items (explicit, owner-revocable):
 
-- **S1** On the Feishu WS **protobuf data-event path**, events are ACKed
-  before processing; an invite on that path is lost iff the process dies
-  or the admission insert exhausts 3 bounded retries (100 ms / 1 s
-  backoff, error-logged) in the ACK→admission window. The raw-text
+- **S1** On the Feishu WS **protobuf data-event path**, an ACK send is
+  **attempted** before processing; a send failure is logged and
+  processing continues anyway (admission proceeds; the platform's
+  redelivery of an un-ACKed event is absorbed by the
+  `invite_event_id` unique key). An invite on that path is lost iff the
+  process dies or the admission insert exhausts 3 bounded retries
+  (100 ms / 1 s backoff, error-logged) in the ACK-attempt→admission
+  window. The raw-text
   fallback path has no equivalent ACK evidence; the sample gate (3.1)
   pins which path carries invite/ended events; if the raw-text path can
   carry them, slice 2 halts for a design amendment.
@@ -44,10 +48,17 @@ Product sign-off items (explicit, owner-revocable):
   deletion create new entities capturing from that point.
 - **S3** The final ~30 s of speech becomes readable during the grace
   drain, not instantly.
-- **S4** A crash normally loses nothing (an uncommitted page is
-  re-pulled). If the platform becomes unreadable before the re-pull
-  (grace expired while down; bot removed), at most **one platform events
-  page** (page_size ≤ 100 items) is permanently, silently lost.
+- **S4** Two distinct loss bounds (both only when the platform becomes
+  unreadable — grace expired while down, or bot removed — before
+  recovery can re-pull):
+  (a) *fetched-but-uncommitted*: at most **one platform events page**
+  (page_size ≤ 100 items) that was in memory at crash time;
+  (b) *uncaptured tail*: everything the platform had produced after the
+  last durable checkpoint but which was never fetched — under a
+  multi-page backlog this can be **any number of pages**. If the bot
+  goes down mid-meeting and never regains platform access, whatever it
+  had not yet pulled is simply never captured — the same acceptance as
+  the bot never having been present for that stretch.
 - **S5** Agents learn about entities from referenced text,
   `garyx meeting list`, or memory; no automatic per-turn injection; an
   unreferenced entity may go unnoticed.
@@ -71,7 +82,7 @@ Product sign-off items (explicit, owner-revocable):
 
 | # | Fact | Evidence |
 |---|---|---|
-| B1 | Feishu WS protobuf data-event path ACKs before processing; a raw-text fallback path processes without that ACK evidence. Only `im.message.receive_v1` is handled today; other event types fall to an ignore branch; 30 min in-memory event-id dedup | `garyx-channels/src/feishu/ws.rs:968,997,1040,1049-1072`, `feishu.rs:95` |
+| B1 | Feishu WS protobuf data-event path **attempts** an ACK send before processing (a failed send is logged and processing continues); a raw-text fallback path processes without that ACK evidence. Only `im.message.receive_v1` is handled today; other event types fall to an ignore branch; 30 min in-memory event-id dedup | `garyx-channels/src/feishu/ws.rs:914,925,997,1049-1072`, `feishu.rs:95` (line refs re-pinned at review round 10) |
 | B2 | `FeishuChannel::new(config, router, bridge, dispatcher, public_url)`; per-account deps flow into `FeishuRuntimeContext`; constructor injection threads through `BuiltInPluginDiscoverer::with_dispatcher` | `feishu.rs:370`, `ws.rs:38-69`, `plugin.rs:3235,3322` |
 | B3 | gateway depends on channels (never reverse); a channels-defined, gateway-implemented trait compiles; first such **production service seam** | `garyx-gateway/Cargo.toml:20` |
 | B4 | `FeishuClient` owns tenant-token refresh (double-checked, single-flight, 5 min margin) and is `Clone`, but `pub(crate)` — gateway cannot name it; cross-crate use requires a public trait object | `client.rs:127,226,243` |
@@ -136,6 +147,7 @@ CREATE TABLE meetings (
   status_detail        TEXT NOT NULL DEFAULT '',        -- ≤256 bytes
   content_state        TEXT NOT NULL DEFAULT 'ok' CHECK (content_state IN ('ok','lost')),
   content_lost_at      TEXT,
+  -- pairing enforced below with: CHECK ((content_state = 'lost') = (content_lost_at IS NOT NULL))
   failure_kind         TEXT NOT NULL DEFAULT '' CHECK (failure_kind IN
     ('','auth','transport')),
   failure_since        TEXT,
@@ -153,7 +165,8 @@ CREATE TABLE meetings (
   finalized_at         TEXT,
   created_at           TEXT NOT NULL,
   updated_at           TEXT NOT NULL,
-  CHECK ((failure_kind = '') = (failure_since IS NULL))
+  CHECK ((failure_kind = '') = (failure_since IS NULL)),
+  CHECK ((content_state = 'lost') = (content_lost_at IS NOT NULL))
 ) STRICT;
 CREATE UNIQUE INDEX idx_meetings_invite ON meetings(invite_event_id);
 CREATE UNIQUE INDEX idx_meetings_active_no
@@ -170,7 +183,7 @@ CREATE TABLE meeting_read_cursors (
   meeting_id    TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
   reader_id     TEXT NOT NULL
     CHECK (length(CAST(reader_id AS BLOB)) BETWEEN 1 AND 128),  -- bytes, not chars
-  log_epoch     INTEGER NOT NULL DEFAULT 0 CHECK (log_epoch >= 0),   -- RR9-01
+  log_epoch     INTEGER NOT NULL CHECK (log_epoch >= 0),  -- no default: always explicitly inserted from meetings.log_epoch (RR10-01)
   confirmed_seq INTEGER NOT NULL DEFAULT 0 CHECK (confirmed_seq >= 0),
   pending_from  INTEGER,
   pending_to    INTEGER,
@@ -235,7 +248,8 @@ loss` error; a `--range` request may carry an optional epoch (default:
 current) and a non-current epoch returns the same content-loss error.
 Boot repair verifies every `ckpt` line's epoch equals the DB's current
 epoch (foreign-epoch lines are treated as an invalid tail). Field-bound
-table: `epoch` is a non-negative integer, bounded by rollover count.
+table: `epoch` is a non-negative 64-bit integer (starts at 0,
+incremented once per content-loss rollover).
 
 A **terminal** entity whose non-empty log is found missing at read time
 gets `content_state='lost'` + `content_lost_at=now` — **separate
@@ -559,31 +573,38 @@ Cursor algebra (single SQLite transactions):
    a pending span exists, a later lost response of course leaves the row
    in place — that is the at-least-once path, not a failed first read.)
 1. **Ensure row:** `INSERT INTO meeting_read_cursors (meeting_id,
-   reader_id, confirmed_seq, updated_at) VALUES (…, 0, now)
-   ON CONFLICT DO NOTHING` — created on the first incremental fetch that
-   passes preflight, even if the increment is empty (the row is the
-   recognition state).
+   reader_id, log_epoch, confirmed_seq, updated_at)
+   VALUES (…, :snapshot_epoch, 0, now) ON CONFLICT DO NOTHING` — the
+   epoch is always written explicitly from the preflight snapshot's
+   epoch; created on the first incremental fetch that passes preflight,
+   even if the increment is empty (the row is the recognition state).
 2. **Fetch:** read the row. Pending exists → re-serve exactly
    `(pending_from..pending_to)` with the stored receipt (at-least-once;
    receipts are shared, not per-caller). Else compute the next span
    `(confirmed_seq, min(latest_snapshot, budget-limited end))` and claim:
    `UPDATE … SET pending_from=:f, pending_to=:t, receipt=:r, updated_at=now
-   WHERE meeting_id=:m AND reader_id=:rd AND confirmed_seq=:expected
-   AND pending_from IS NULL`. Zero rows → a concurrent fetch won →
+   WHERE meeting_id=:m AND reader_id=:rd AND log_epoch=:snapshot_epoch
+   AND confirmed_seq=:expected AND pending_from IS NULL`. Zero rows are
+   **trichotomized** (RR10-01): row gone → entity deleted (404); row's
+   epoch ≠ snapshot epoch → rollover raced this request → return the
+   content-loss error (the caller re-runs preflight); else a concurrent
+   fetch won →
    re-read the row and **re-run preflight until the snapshot covers the
    winner's `pending_to`** (RR9-02: the loser's earlier snapshot may
    predate the winner's claim; slicing never exceeds the snapshot, so
    the loser refreshes rather than violating it), then re-serve the
    winner's span and receipt. An empty span
    serves the empty-increment header without claiming pending.
-3. **Confirm** (`/read/confirm {receipt}`):
+3. **Confirm** (`/read/confirm {reader_id, receipt, log_epoch}` — the
+   CLI passes the epoch it received with the fetch):
    `UPDATE … SET confirmed_seq=pending_to, pending_from=NULL,
    pending_to=NULL, receipt=NULL, updated_at=now
    WHERE meeting_id=:m AND reader_id=:rd AND receipt=:receipt
-   AND log_epoch=:current_epoch` (a rollover between fetch and confirm
-   fails the CAS; the CLI reports the content-loss error).
-   Unknown/stale receipt → idempotent no-op success. Deleted entity →
-   404.
+   AND log_epoch=:request_epoch`. Outcome discrimination (RR10-01):
+   request epoch ≠ entity's current epoch → **content-loss error**
+   (rollover invalidated the span); request epoch current but receipt
+   unknown/cleared → **idempotent no-op success** (already confirmed);
+   deleted entity → 404.
 4. **The CLI performs fetch → render → stdout flush → confirm in one
    invocation.** Crash/broken pipe before flush → pending survives → the
    same span re-serves next time. Confirm committed but its response
@@ -593,7 +614,8 @@ Cursor algebra (single SQLite transactions):
 
 ### 6.5 Stateless snapshots (`--full`, `--range`)
 
-The first response pins `(closed_latest, log_offset)`; every page returns
+The first response pins `(log_epoch, closed_latest, log_offset)`; every
+page returns
 a **fresh token for the same snapshot** with a sliding 10-minute
 inactivity expiry. Tokens are base64url (shell-safe) encoding
 `{entity_id, log_epoch, snapshot, next_seq, mode, range_end, checksum, issued_at}` — a token whose epoch is no longer current fails with `snapshot invalidated by content loss`.
@@ -622,7 +644,8 @@ Every response names: mode; exact span served; totals; entity status —
 covering **all DDL states**: joining / live / finalizing / aborting /
 finalized / aborted (+ `end_source`, synthesized `stalled_reason` where
 applicable, `content_lost` marker, timestamps); for incremental —
-confirmation state and "re-read any span: `--range A..B`"; for empty
+confirmation state and the epoch-qualified re-read command
+("re-read this span: `--range A..B --epoch E`"); for empty
 increments — "no new segments since [N]"; for first reads — "first read
 for this reader"; for budget overshoot / pending replay — the explicit
 notes (6.1).
@@ -805,7 +828,19 @@ error; old snapshot token → `snapshot invalidated by content loss`; old
 tail; loser-refresh: snapshot A (latest=10) → append to 20 → B claims
 1..20 → A re-preflights until its snapshot covers 20, then re-serves;
 `--full/--range --max-bytes 1GiB` still served in `read_page_bytes`
-pages server-side.
+pages server-side. **Epoch algebra (RR10-01/03):** new reader created at
+epoch>0 confirms successfully; preflight→rollover→claim returns
+content-loss (epoch trichotomy); old-epoch receipt → content-loss vs
+same-epoch stale receipt → idempotent no-op (distinct assertions);
+epoch>0 ordinary fetch/confirm round-trip; header-printed
+`--range … --epoch E` command re-executed verbatim after rollover
+returns content-loss, not new-epoch content; token/range epoch
+consistency. **S4(b) tail loss:** 3-page backlog, crash before P1
+commit, recovery at GraceExpired → all three pages lost, no corruption,
+loss logged. **ACK failure (RR10-04):** ACK send failure → processing
+continues → duplicate redelivery absorbed by unique key.
+**content_state pairing:** both illegal combinations rejected by
+CHECK.
 
 **Recognition preflight (RR8-03):** first cold terminal read hitting
 `index_building` creates no cursor row; successful retry creates it;
