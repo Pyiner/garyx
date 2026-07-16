@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 15 — complete self-contained specification (no references
+Status: revision 16 — complete self-contained specification (no references
 to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–14.
+rounds 1–15.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -66,13 +66,15 @@ Product sign-off items (explicit, owner-revocable):
   realistic window is minutes; manual deletion of a meeting whose stale
   invite is still in flight is an owner action on their own data) — the
   `meeting_invite_keys` rows cascade-delete with the entity by design,
-  and no independent tombstone-key store is kept. Three leave-related residual risks are likewise
-  accepted (RR14-04): ① a **joining** abort never attempts leave (no
-  meeting id exists locally), so a late remote join can leave the bot
-  in the meeting without capture until removed manually; ② a
+  and no independent tombstone-key store is kept. Four leave-related residual risks are likewise
+  accepted (RR14-04, RR15-04): ① a **joining** abort never attempts
+  leave (no meeting id exists locally), so a late remote join can leave
+  the bot in the meeting without capture until removed manually; ② a
   **no-client** live abort terminates locally only; ③ a crash between
-  the abort CAS and the single leave attempt skips it. In all three
-  the meeting owner can always remove the bot manually.
+  the abort CAS and the single leave attempt skips it; ④ a
+  registered-client leave attempt may itself **time out (20 s) or
+  fail**, and is never retried. In all four the meeting owner can
+  always remove the bot manually.
 - **S3** The final ~30 s of speech becomes readable during the grace
   drain, not instantly.
 - **S4** Two distinct loss bounds (both only when the platform becomes
@@ -366,7 +368,8 @@ Terminal entities only (409 otherwise). Under the entity I/O write lock:
 2. atomic `rename {id}/ → {id}.tombstone/` — a missing dir is a legal
    empty entity (a joining-deadline abort may never have appended):
    skip the rename;
-3. DB transaction deletes the `meetings` row (cascades cursors);
+3. DB transaction deletes the `meetings` row (cascades cursor rows and
+   invite-key rows);
 4. remove the tombstone dir.
 
 Boot order: **tombstone reconcile before log repair** — tombstone+row →
@@ -565,14 +568,18 @@ drain to the persisted deadline.
 CLI:
 
 - `garyx meeting list [--json]`
-- `garyx meeting read <id> [--full | --range A..B [--epoch E]]
-  [--continue <token>] [--thread <id>] [--json] [--max-bytes N]` —
-  `--epoch` is valid only with `--range` (the parser rejects it with
-  `--full` or incremental mode) and defaults to the entity's current
-  epoch; a non-current value returns the content-loss error (old spans
-  are never silently re-mapped onto new content). `--continue <token>`
-  resumes a stateless snapshot stream from a printed continuation token
-  (valid only with the mode that produced it).
+- `garyx meeting read <id> [--full | --range A..B [--epoch E] |
+  --continue <token>] [--thread <id>] [--json] [--max-bytes N]` —
+  `--epoch` is valid only with `--range` and defaults to the entity's
+  current epoch (non-current → content-loss error; old spans are never
+  silently re-mapped). **`--continue <token>` is a token-only mode**
+  (RR15-02): mutually exclusive with `--full`, `--range`, and
+  `--epoch`; the token envelope carries the mode, position, epoch, and
+  range bounds, the CLI sends `{mode: <from token>, continue_token}`
+  verbatim, and the server validates the token against the path entity
+  and its own mode. Mismatches (token for another entity, token mode vs
+  body mode, expired) are named 400s. Headers print the exact resume
+  command: `garyx meeting read <id> --continue <token>`.
 - `garyx meeting abort <id>` (admin; joining|live)
 - `garyx meeting delete <id>` (terminal only)
 
@@ -620,10 +627,19 @@ or `--thread`; missing both → error naming both remedies). `--full` and
 ever created or touched. Only a successful incremental fetch creates a
 cursor row.
 
-**Response budget (R7-02, RR8-01):** `--max-bytes` (floor 4096; below →
-CLI error) is a **soft target measured on the final rendered response**
-(headers and framing included, per mode). Two rules govern its
-interaction with pending spans:
+**Response budget (R7-02, RR8-01, RR15-01):** the **single normative
+budget algebra is the serialized byte length of the structured JSON
+response body** — the `{meta, segments[]}` DTO defined above, measured
+at serialization time on the exact bytes sent. `meta` fields (all
+non-null unless noted): `mode`, `entity_id`, `log_epoch`, `status`,
+`span_from`/`span_to` (null for empty increments), `closed_total`,
+`receipt?` (incremental only), `continue_token?` (stateless only),
+`notes[]`. There is **no render-mode input to claim sizing**: human
+formatting is CLI-local presentation and its stdout may legitimately
+exceed the JSON budget (framing/prefix inflation affects the terminal,
+never the claim or the pending span). `--max-bytes` (floor 4096; below
+→ CLI error) is the client's requested value for this JSON budget. Two
+rules govern its interaction with pending spans:
 
 - **Every newly produced page is budget-bounded server-side:** the
   claimed span (incremental) and every `--full`/`--range` snapshot page
@@ -750,8 +766,9 @@ a **fresh token for the same snapshot** with a sliding 10-minute
 inactivity expiry. Tokens are base64url (shell-safe) encoding
 `{entity_id, log_epoch, snapshot, next_seq, mode, range_end, checksum, issued_at}` — a token whose epoch is no longer current fails with `snapshot invalidated by content loss`.
 The CLI loops within one invocation streaming pages to stdout until
-exhausted, or stops at `--max-bytes` and prints the resume command with
-the latest token. Inactivity >10 min → the read restarts from the
+exhausted, or stops once **cumulative fetched JSON bytes** reach
+`--max-bytes` (the same single algebra; human stdout size does not
+gate) and prints the resume command with the latest token. Inactivity >10 min → the read restarts from the
 beginning (stateless by design; stated in output). Appends beyond the
 snapshot are invisible to that snapshot's pages.
 
@@ -843,7 +860,7 @@ at debug.
 | `garyx-channels/src/plugin.rs`, `feishu.rs` | 1 constructor dependency | additive |
 | `garyx/src/commands/gateway.rs` | production `BuiltInPluginDiscoverer` construction (initial boot **and** `rebuild_channel_plugins` hot-reload) injects the same production `MeetingEventSink`; the no-op sink is for tests/non-gateway assemblies only | additive |
 | `garyx-gateway/src/meetings/` (new) | service, coordinators, log writer/repair, locks, index, routes | new module |
-| `garyx-gateway/src/garyx_db/mod.rs` | 2 tables + CRUD | additive |
+| `garyx-gateway/src/garyx_db/mod.rs` | 3 tables (meetings, meeting_invite_keys, meeting_read_cursors) + CRUD incl. admission-key cascade | additive |
 | `garyx-gateway/src/route_graph.rs` | 6 routes | additive |
 | `garyx-gateway/src/composition/*` | service wiring + sink injection | additive |
 | `garyx/src/commands/meeting.rs`, `cli.rs`, `main.rs` | CLI subcommand | additive |
@@ -913,11 +930,13 @@ receipt no-op; cursors never regress; empty increment creates the row;
 id from two callers shares a cursor (S6/S7 fixtures); many minted reader
 ids (S7 documented behavior + cascade cleanup).
 
-**Budget (R7-02, RR8-01):** `--max-bytes 4096` with a 32 KiB line →
-single segment served with the overshoot note; newline-heavy segment
-whose framed rendering exceeds raw JSON size; maximal topic/header
-metadata counted before content; floor rejection (0/1/4095); no
-zero-progress token in any case; **pending-replay indivisibility**:
+**Budget (R7-02, RR8-01, RR15-01):** `--max-bytes 4096` with a 32 KiB
+line → single segment served with the overshoot note; the RR15-01
+counterexample pinned: two newline-heavy segments whose JSON is
+48 KiB (fits a 64 KiB cap → both claimed) while their human rendering
+is 96 KiB (irrelevant to the claim; CLI stdout exceeds the JSON budget
+by design); floor rejection (0/1/4095); no zero-progress token in any
+case; **pending-replay indivisibility**:
 64 KiB/JSON claim → response lost → 4 KiB/human retry re-serves the
 entire span with the replay note; concurrent winner/loser with different
 budgets both deliver the winner's full span; new claims capped by
@@ -1016,11 +1035,21 @@ entity lifecycle until deletion); post-delete redelivery creates a
 fresh entity; two distinct events admitted concurrently (one entity,
 two key rows).
 
-**Wire schema (RR14-03):** real CLI→HTTP body assertions for all three
-modes; field-combination 400s (epoch with full; token with explicit
-range; missing reader_id for incremental); JSON-claimed pending
-re-served identically under human rendering (same span, same budget
-algebra); NDJSON paging in `--json`.
+**Wire schema / continuation (RR14-03, RR15-02):** real CLI→HTTP body
+assertions for all three modes plus token-only continue; field-
+combination 400s (epoch with full; token with explicit range/epoch;
+missing reader_id for incremental; stateless modes reject reader
+identity); missing `GARYX_THREAD_ID` without `--thread` errors;
+explicit `--thread` override honored; range first request → printed
+resume command → real CLI parser → HTTP body → next page round-trip;
+token-vs-path-entity and token-mode mismatches; pending claimed via
+JSON re-served under human rendering (same span — format is not part
+of the claim); NDJSON paging in `--json`.
+
+**Abort response (RR15-03):** end-to-end through the real CLI helper —
+abort during a 10 s page + hanging leave still returns 200 at the
+intent CAS; timeout-and-retry hits the idempotent no-op; entity
+converges to aborted within the leave bound.
 
 **Leave bound (RR14-04):** a never-returning `leave()` — entity reaches
 `aborted` within the timeout bound, exactly one attempt observed.
