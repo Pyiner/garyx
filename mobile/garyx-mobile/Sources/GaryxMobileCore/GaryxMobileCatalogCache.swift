@@ -1,11 +1,13 @@
 import Foundation
 
 struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
-    static let currentVersion = 4
+    static let currentVersion = 5
 
     var version: Int
     var savedAt: Date
     var agents: [GaryxCachedAgent]
+    var gatewayDefaultAgentId: String?
+    var effectiveDefaultAgentId: String?
     var workspacePaths: [String]
     var skills: [GaryxCachedSkill]
     var capsules: [GaryxCachedCapsule]
@@ -22,6 +24,8 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         version: Int = Self.currentVersion,
         savedAt: Date = Date(),
         agents: [GaryxCachedAgent],
+        gatewayDefaultAgentId: String? = nil,
+        effectiveDefaultAgentId: String? = nil,
         workspacePaths: [String],
         skills: [GaryxCachedSkill],
         capsules: [GaryxCachedCapsule] = [],
@@ -37,6 +41,8 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         self.version = version
         self.savedAt = savedAt
         self.agents = agents
+        self.gatewayDefaultAgentId = gatewayDefaultAgentId
+        self.effectiveDefaultAgentId = effectiveDefaultAgentId
         self.workspacePaths = workspacePaths
         self.skills = skills
         self.capsules = capsules
@@ -52,6 +58,8 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
 
     init(
         agents: [GaryxAgentSummary],
+        gatewayDefaultAgentId: String? = nil,
+        effectiveDefaultAgentId: String? = nil,
         workspacePaths: [String],
         skills: [GaryxSkillSummary],
         capsules: [GaryxCapsuleSummary] = [],
@@ -68,6 +76,8 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         self.init(
             savedAt: savedAt,
             agents: agents.map(GaryxCachedAgent.init),
+            gatewayDefaultAgentId: gatewayDefaultAgentId,
+            effectiveDefaultAgentId: effectiveDefaultAgentId,
             workspacePaths: workspacePaths,
             skills: skills.map(GaryxCachedSkill.init),
             capsules: capsules.map(GaryxCachedCapsule.init),
@@ -92,6 +102,7 @@ struct GaryxCachedAgent: Codable, Equatable {
     var avatarDataUrl: String
     var builtIn: Bool
     var standalone: Bool
+    var enabled: Bool
     var createdAt: String?
     var updatedAt: String?
 
@@ -104,6 +115,7 @@ struct GaryxCachedAgent: Codable, Equatable {
         avatarDataUrl = agent.avatarDataUrl
         builtIn = agent.builtIn
         standalone = agent.standalone
+        enabled = agent.enabled
         createdAt = agent.createdAt
         updatedAt = agent.updatedAt
     }
@@ -118,9 +130,39 @@ struct GaryxCachedAgent: Codable, Equatable {
             avatarDataUrl: avatarDataUrl,
             builtIn: builtIn,
             standalone: standalone,
+            enabled: enabled,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case displayName
+        case providerType
+        case modelName
+        case defaultWorkspaceDir
+        case avatarDataUrl
+        case builtIn
+        case standalone
+        case enabled
+        case createdAt
+        case updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        providerType = try container.decode(String.self, forKey: .providerType)
+        modelName = try container.decode(String.self, forKey: .modelName)
+        defaultWorkspaceDir = try container.decode(String.self, forKey: .defaultWorkspaceDir)
+        avatarDataUrl = try container.decode(String.self, forKey: .avatarDataUrl)
+        builtIn = try container.decode(Bool.self, forKey: .builtIn)
+        standalone = try container.decode(Bool.self, forKey: .standalone)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
     }
 }
 
@@ -408,6 +450,7 @@ struct GaryxCachedConfiguredBot: Codable, Equatable {
     var displayName: String
     var enabled: Bool
     var agentId: String?
+    var effectiveAgentId: String?
     var workspaceDir: String?
     var workspaceMode: String?
     var rootBehavior: String
@@ -421,6 +464,7 @@ struct GaryxCachedConfiguredBot: Codable, Equatable {
         displayName = bot.displayName
         enabled = bot.enabled
         agentId = bot.agentId
+        effectiveAgentId = bot.effectiveAgentId
         workspaceDir = bot.workspaceDir
         workspaceMode = bot.workspaceMode
         rootBehavior = bot.rootBehavior
@@ -436,6 +480,7 @@ struct GaryxCachedConfiguredBot: Codable, Equatable {
             displayName: displayName,
             enabled: enabled,
             agentId: agentId,
+            effectiveAgentId: effectiveAgentId,
             workspaceDir: workspaceDir,
             workspaceMode: workspaceMode,
             rootBehavior: rootBehavior,
@@ -488,6 +533,7 @@ struct GaryxCachedBotConsole: Codable, Equatable {
     var title: String
     var subtitle: String
     var agentId: String?
+    var effectiveAgentId: String?
     var rootBehavior: String
     var status: String
     var latestActivity: String?
@@ -504,6 +550,7 @@ struct GaryxCachedBotConsole: Codable, Equatable {
         title = console.title
         subtitle = console.subtitle
         agentId = console.agentId
+        effectiveAgentId = console.effectiveAgentId
         rootBehavior = console.rootBehavior
         status = console.status
         latestActivity = console.latestActivity
@@ -522,6 +569,7 @@ struct GaryxCachedBotConsole: Codable, Equatable {
             title: title,
             subtitle: subtitle,
             agentId: agentId,
+            effectiveAgentId: effectiveAgentId,
             rootBehavior: rootBehavior,
             status: status,
             latestActivity: latestActivity,
@@ -532,6 +580,12 @@ struct GaryxCachedBotConsole: Codable, Equatable {
             defaultOpenThreadId: defaultOpenThreadId,
             conversationNodes: []
         )
+    }
+}
+
+enum GaryxMobileCatalogCachePolicy {
+    static func shouldRestore(version: Int) -> Bool {
+        version == GaryxMobileCatalogCacheSnapshot.currentVersion
     }
 }
 

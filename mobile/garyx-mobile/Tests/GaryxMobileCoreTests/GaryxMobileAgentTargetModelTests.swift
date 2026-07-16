@@ -2,8 +2,8 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobileAgentTargetModelTests: XCTestCase {
-    func testTargetsIncludeOnlyStandaloneAgents() throws {
-        let agents = try JSONDecoder().decode(GaryxAgentsPage.self, from: Data(#"{"agents":[{"agent_id":"codex","display_name":"Codex","provider_type":"codex","built_in":true,"standalone":true},{"agent_id":"embedded","display_name":"Embedded","standalone":false}]}"#.utf8)).agents
+    func testTargetsIncludeOnlyEnabledStandaloneAgents() throws {
+        let agents = try JSONDecoder().decode(GaryxAgentsPage.self, from: Data(#"{"agents":[{"agent_id":"codex","display_name":"Codex","provider_type":"codex","built_in":true,"standalone":true,"enabled":true},{"agent_id":"disabled","display_name":"Disabled","standalone":true,"enabled":false},{"agent_id":"embedded","display_name":"Embedded","standalone":false,"enabled":true}]}"#.utf8)).agents
         let targets = GaryxMobileAgentTargetMapper.makeTargets(agents: agents)
         XCTAssertEqual(targets.map(\.id), ["codex"])
         XCTAssertEqual(targets.first?.title, "Codex")

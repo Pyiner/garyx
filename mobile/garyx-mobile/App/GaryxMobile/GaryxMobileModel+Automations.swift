@@ -47,7 +47,7 @@ extension GaryxMobileModel {
         _ automation: GaryxAutomationSummary,
         label: String,
         prompt: String,
-        agentId rawAgentId: String,
+        agentId rawAgentId: String?,
         schedule: GaryxAutomationSchedule,
         targetsExistingThread: Bool,
         targetThreadId: String,
@@ -58,13 +58,14 @@ extension GaryxMobileModel {
         let nextTargetThreadId = targetsExistingThread
             ? targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
             : ""
-        let nextAgentId = rawAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextAgentId = rawAgentId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .garyxTrimmedNilIfEmpty
         let nextWorkspacePath = workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextLabel.isEmpty, !nextPrompt.isEmpty else { return false }
         if targetsExistingThread {
             guard !nextTargetThreadId.isEmpty else { return false }
         } else {
-            guard !nextAgentId.isEmpty else { return false }
             guard !nextWorkspacePath.isEmpty else { return false }
         }
         let runtimeGeneration = gatewayRuntimeGeneration

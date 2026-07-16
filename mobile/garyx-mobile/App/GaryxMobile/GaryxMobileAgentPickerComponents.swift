@@ -471,11 +471,159 @@ struct GaryxAgentTargetPickerControl: View {
     }
 
     private var selectedLabel: String {
-        selectedTarget?.title ?? (normalizedSelection.isEmpty ? model.agentTargetsPlaceholderText : normalizedSelection)
+        if let selectedTarget {
+            return selectedTarget.title
+        }
+        if normalizedSelection.isEmpty {
+            return model.agentTargetsPlaceholderText
+        }
+        return "\(normalizedSelection) · unavailable"
     }
 
     private var normalizedSelection: String {
         selectedAgentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// Account configuration picker. `nil` is a real persisted state meaning
+/// “follow the gateway default”; it never crosses the wire as a UI sentinel.
+struct GaryxBotAgentPickerControl: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @Binding var configuredAgentId: String?
+    var isPresented: Binding<Bool>?
+    @State private var internalShowsPicker = false
+
+    private var showsPicker: Binding<Bool> {
+        isPresented ?? $internalShowsPicker
+    }
+
+    var body: some View {
+        Button {
+            Task { await model.refreshAgentTargetsIfNeeded() }
+            showsPicker.wrappedValue = true
+        } label: {
+            HStack(spacing: 8) {
+                Text(selectedOption?.title ?? "Follow global default")
+                    .font(GaryxFont.callout(weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(GaryxFont.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .buttonStyle(.plain)
+        .popover(
+            isPresented: showsPicker,
+            attachmentAnchor: .rect(.bounds),
+            arrowEdge: .top
+        ) {
+            GaryxBotAgentPickerPopover(
+                configuredAgentId: $configuredAgentId,
+                options: options
+            )
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var options: [GaryxBotAgentPickerOption] {
+        GaryxBotAgentPickerPresentation.makeOptions(
+            targets: model.agentTargets,
+            effectiveDefaultAgentId: model.effectiveDefaultAgentId,
+            configuredAgentId: configuredAgentId
+        )
+    }
+
+    private var selectedOption: GaryxBotAgentPickerOption? {
+        let selection = GaryxBotAgentPickerPresentation.selection(configuredAgentId: configuredAgentId)
+        return options.first { $0.selection == selection }
+    }
+}
+
+private struct GaryxBotAgentPickerPopover: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var configuredAgentId: String?
+    let options: [GaryxBotAgentPickerOption]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                    Button {
+                        apply(option.selection)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 12) {
+                            optionIcon(option)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.title)
+                                    .font(GaryxFont.callout(weight: .semibold))
+                                    .foregroundStyle(option.isAvailable ? Color.primary : Color.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if !option.subtitle.isEmpty {
+                                    Text(option.subtitle)
+                                        .font(GaryxFont.caption())
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            Spacer(minLength: 8)
+                            if option.isRecommended {
+                                GaryxStatusPill(text: "Recommended", tone: .muted)
+                            }
+                            if option.selection == selectedSelection {
+                                GaryxSelectionCheckmark(size: 17)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 58)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!option.isAvailable)
+
+                    if index < options.count - 1 {
+                        Divider().padding(.leading, 52)
+                    }
+                }
+            }
+        }
+        .frame(width: 340)
+        .frame(maxHeight: 480)
+        .background(.regularMaterial)
+    }
+
+    @ViewBuilder
+    private func optionIcon(_ option: GaryxBotAgentPickerOption) -> some View {
+        if let target = option.target {
+            GaryxAgentAvatarView(
+                agentId: target.id,
+                avatarDataUrl: target.avatarDataUrl,
+                label: target.title,
+                providerType: target.providerType,
+                builtIn: target.builtIn,
+                diameter: 28
+            )
+        } else {
+            Image(systemName: option.selection == .followGlobal ? "arrow.triangle.branch" : "exclamationmark.circle")
+                .font(GaryxFont.system(size: 15, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+        }
+    }
+
+    private var selectedSelection: GaryxBotAgentSelection {
+        GaryxBotAgentPickerPresentation.selection(configuredAgentId: configuredAgentId)
+    }
+
+    private func apply(_ selection: GaryxBotAgentSelection) {
+        switch selection {
+        case .followGlobal:
+            configuredAgentId = nil
+        case .agent(let id):
+            configuredAgentId = id
+        }
     }
 }
 

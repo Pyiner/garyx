@@ -281,7 +281,9 @@ extension GaryxMobileModel {
 
     func canSendComposerPayload(text: String, attachments: [GaryxMobileComposerAttachment]) -> Bool {
         let hasPayload = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
-        return hasPayload && (
+        return hasPayload
+            && !isNewThreadAgentBindingUnavailable
+            && (
             (!isSelectedThreadSending && !isSelectedThreadRemoteBusy)
                 || canQueueSelectedThreadInput
         )
@@ -507,14 +509,14 @@ extension GaryxMobileModel {
 
     var selectedAgentTarget: GaryxMobileAgentTarget? {
         GaryxMobileAgentTargetMapper.selectedTarget(
-            id: selectedAgentTargetId,
+            id: newThreadAgentTargetId(),
             targets: agentTargets
         )
     }
 
     var selectedAgentLabel: String {
         GaryxMobileAgentTargetMapper.selectedAgentLabel(
-            selectedAgentTargetId: selectedAgentTargetId,
+            selectedAgentTargetId: newThreadAgentTargetId(),
             target: selectedAgentTarget
         )
     }
@@ -522,7 +524,7 @@ extension GaryxMobileModel {
     var selectedThreadAgentTarget: GaryxMobileAgentTarget? {
         GaryxMobileAgentTargetMapper.selectedThreadTarget(
             thread: selectedThread,
-            selectedAgentTargetId: selectedAgentTargetId,
+            selectedAgentTargetId: newThreadAgentTargetId(),
             targets: agentTargets
         )
     }
@@ -532,6 +534,21 @@ extension GaryxMobileModel {
             thread: selectedThread,
             target: selectedThreadAgentTarget,
             fallbackSelectedAgentLabel: selectedAgentLabel
+        )
+    }
+
+    /// Availability is an admission concern only for a draft that would create
+    /// a fresh binding. Existing threads keep their bound agent even when it is
+    /// disabled or the catalog has no enabled entries.
+    var isNewThreadAgentBindingUnavailable: Bool {
+        guard selectedThread == nil, agentTargetsLoadPhase.hasResolved else { return false }
+        let botAgentId = currentPendingBotDraft()?.agentId
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let draftOverride = botAgentId.isEmpty ? currentPendingNewThreadAgentTargetId() : botAgentId
+        return !GaryxNewThreadAgentSelection.isAvailable(
+            draftOverrideAgentId: draftOverride,
+            effectiveDefaultAgentId: effectiveDefaultAgentId,
+            enabledAgentIds: Set(agentTargets.map(\.id))
         )
     }
 

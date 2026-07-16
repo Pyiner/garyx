@@ -245,6 +245,74 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(agent.updatedAt, "2026-07-13T12:00:00Z")
     }
 
+    func testAgentCatalogToggleAndDefaultUseAvailabilityRoutes() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        let requestCount = GaryxAtomicCounter()
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            let call = requestCount.increment()
+            let path = request.url.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)
+            }?.percentEncodedPath
+            let body: String
+            switch call {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(path, "/api/custom-agents")
+                body = #"{"agents":[{"agent_id":"codex","enabled":true}],"default_agent_id":"claude","effective_default_agent_id":"codex"}"#
+            case 2:
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                XCTAssertEqual(path, "/api/custom-agents/codex/toggle")
+                let object = try XCTUnwrap(
+                    JSONSerialization.jsonObject(with: try XCTUnwrap(garyxRequestBodyData(from: request)))
+                        as? [String: Any]
+                )
+                XCTAssertEqual(object["enabled"] as? Bool, false)
+                body = #"{"agent_id":"codex","enabled":false}"#
+            case 3:
+                XCTAssertEqual(request.httpMethod, "PATCH")
+                XCTAssertEqual(path, "/api/custom-agents/codex/default")
+                body = #"{"agent_id":"codex","enabled":true}"#
+            default:
+                XCTFail("Unexpected request \(call)")
+                body = #"{}"#
+            }
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, Data(body.utf8))
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+
+        let catalog = try await client.listAgentCatalog()
+        XCTAssertEqual(catalog.defaultAgentId, "claude")
+        XCTAssertEqual(catalog.effectiveDefaultAgentId, "codex")
+        XCTAssertEqual(catalog.agents.first?.enabled, true)
+        let disabled = try await client.setAgentEnabled(agentId: "codex", enabled: false)
+        let defaultAgent = try await client.setDefaultAgent(agentId: "codex")
+        XCTAssertEqual(disabled.enabled, false)
+        XCTAssertEqual(defaultAgent.id, "codex")
+        XCTAssertEqual(requestCount.value(), 3)
+    }
+
     func testCustomAgentRequestEncodesEmptyModelAsPresentValue() throws {
         let request = GaryxCustomAgentRequest(
             agentId: "agent-test",
@@ -1715,6 +1783,13 @@ final class GaryxGatewayClientTests: XCTestCase {
             with: JSONEncoder().encode(unchangedAutomationUpdate)
         ) as? [String: Any]
         XCTAssertFalse(unchangedAutomationUpdateObject?.keys.contains("targetThreadId") ?? true)
+        XCTAssertFalse(unchangedAutomationUpdateObject?.keys.contains("agentId") ?? true)
+
+        let changedAutomationAgent = GaryxAutomationUpdateRequest(agentId: "codex")
+        let changedAutomationAgentObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(changedAutomationAgent)
+        ) as? [String: Any]
+        XCTAssertEqual(changedAutomationAgentObject?["agentId"] as? String, "codex")
 
         let boundAutomationUpdate = GaryxAutomationUpdateRequest(targetThreadId: "thread::target")
         let boundAutomationUpdateObject = try JSONSerialization.jsonObject(
@@ -1853,6 +1928,8 @@ final class GaryxGatewayClientTests: XCTestCase {
             from: Data(
                 """
                 {
+                  "default_agent_id": "agent-disabled",
+                  "effective_default_agent_id": "agent-test",
                   "agents": [
                     {
                       "agent_id": "agent-test",
@@ -1867,6 +1944,7 @@ final class GaryxGatewayClientTests: XCTestCase {
                       "system_prompt": "Help with test work.",
                       "built_in": false,
                       "standalone": true,
+                      "enabled": true,
                       "created_at": "2026-03-01T09:00:00Z",
                       "updated_at": "2026-03-01T09:10:00Z"
                     },
@@ -1874,6 +1952,7 @@ final class GaryxGatewayClientTests: XCTestCase {
                       "agentId": "agent-remote-avatar",
                       "displayName": "Remote Avatar Agent",
                       "providerType": "codex_app_server",
+                      "enabled": false,
                       "avatarURL": "https://example.test/avatar.png"
                     }
                   ]
@@ -1912,6 +1991,7 @@ final class GaryxGatewayClientTests: XCTestCase {
                       "display_name": "Test Bot",
                       "enabled": true,
                       "agent_id": "agent-test",
+                      "effective_agent_id": "agent-test",
                       "workspace_dir": "/workspace/project",
                       "root_behavior": "open_default",
                       "main_endpoint_status": "resolved",
@@ -1935,6 +2015,7 @@ final class GaryxGatewayClientTests: XCTestCase {
                       "title": "Test Bot",
                       "subtitle": "API / account-test",
                       "agent_id": "agent-test",
+                      "effective_agent_id": "agent-test",
                       "root_behavior": "open_default",
                       "status": "connected",
                       "latest_activity": "2026-03-01T09:15:00Z",
@@ -1991,13 +2072,18 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
 
         XCTAssertEqual(agents.agents.first?.providerEnv["TOKEN"], "${TOKEN}")
+        XCTAssertEqual(agents.defaultAgentId, "agent-disabled")
+        XCTAssertEqual(agents.effectiveDefaultAgentId, "agent-test")
+        XCTAssertEqual(agents.agents.map(\.enabled), [true, false])
         XCTAssertEqual(agents.agents.first?.systemPrompt, "Help with test work.")
         XCTAssertEqual(agents.agents.last?.avatarDataUrl, "https://example.test/avatar.png")
         XCTAssertEqual(plugins.plugins.first?.iconDataUrl, "data:image/png;base64,dGVzdA==")
         XCTAssertEqual(plugins.plugins.first?.configMethods.first?.kind, "auth_flow")
         XCTAssertEqual(configuredBots.bots.first?.agentId, "agent-test")
+        XCTAssertEqual(configuredBots.bots.first?.effectiveAgentId, "agent-test")
         XCTAssertEqual(configuredBots.bots.first?.mainThreadId, nil)
         XCTAssertEqual(botConsoles.bots.first?.agentId, "agent-test")
+        XCTAssertEqual(botConsoles.bots.first?.effectiveAgentId, "agent-test")
         XCTAssertEqual(botConsoles.bots.first?.mainThreadId, "thread::main")
         XCTAssertEqual(botConsoles.bots.first?.conversationNodes.first?.endpoint.threadId, "thread::test")
         XCTAssertEqual(binding.endpointKey, "telegram::main::1000000001")

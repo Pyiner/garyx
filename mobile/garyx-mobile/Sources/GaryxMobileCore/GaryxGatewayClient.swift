@@ -475,9 +475,12 @@ public final class GaryxGatewayClient {
         try await post("/api/chat/stream-input", body: request)
     }
 
+    public func listAgentCatalog() async throws -> GaryxAgentsPage {
+        try await get("/api/custom-agents")
+    }
+
     public func listAgents() async throws -> [GaryxAgentSummary] {
-        let page: GaryxAgentsPage = try await get("/api/custom-agents")
-        return page.agents
+        (try await listAgentCatalog()).agents
     }
 
     public func getAgent(agentId: String) async throws -> GaryxAgentSummary {
@@ -534,6 +537,22 @@ public final class GaryxGatewayClient {
 
     public func deleteAgent(agentId: String) async throws -> GaryxEmptyResponse {
         try await delete("/api/custom-agents/\(agentId.urlPathEncoded)")
+    }
+
+    public func setAgentEnabled(agentId: String, enabled: Bool) async throws -> GaryxAgentSummary {
+        try await patch(
+            "/api/custom-agents/\(agentId.urlPathEncoded)/toggle",
+            body: GaryxAgentToggleRequest(enabled: enabled),
+            idempotent: true
+        )
+    }
+
+    public func setDefaultAgent(agentId: String) async throws -> GaryxAgentSummary {
+        try await patch(
+            "/api/custom-agents/\(agentId.urlPathEncoded)/default",
+            body: GaryxEmptyBody(),
+            idempotent: true
+        )
     }
 
     public func listSkills() async throws -> [GaryxSkillSummary] {

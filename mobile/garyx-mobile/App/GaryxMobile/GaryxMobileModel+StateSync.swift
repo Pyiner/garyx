@@ -5,6 +5,17 @@ import WidgetKit
 
 extension GaryxMobileModel {
     @discardableResult
+    func applyAgentCatalog(_ catalog: GaryxAgentsPage) -> Bool {
+        let rawDefault = catalog.defaultAgentId?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let effectiveDefault = catalog.effectiveDefaultAgentId?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        gatewayDefaultAgentId = rawDefault.isEmpty ? nil : rawDefault
+        effectiveDefaultAgentId = effectiveDefault.isEmpty ? nil : effectiveDefault
+        return applyAgentTargets(agents: catalog.agents)
+    }
+
+    @discardableResult
     func applyAgentTargets(
         agents nextAgents: [GaryxAgentSummary]
     ) -> Bool {
@@ -15,23 +26,12 @@ extension GaryxMobileModel {
         if agentTargetsLoadPhase != .loaded {
             agentTargetsLoadPhase = .loaded
         }
-        ensureSelectedAgentTarget()
         if didUpdateTargets {
             if !threads.isEmpty {
                 persistRecentThreadsWidgetSnapshot()
             }
         }
         return didUpdateTargets
-    }
-
-    func ensureSelectedAgentTarget() {
-        let targets = agentTargets
-        if targets.contains(where: { $0.id == selectedAgentTargetId }) {
-            return
-        }
-        if let first = targets.first {
-            setSelectedAgentTarget(first.id)
-        }
     }
 
     func ensureSelectedWorkspace() {

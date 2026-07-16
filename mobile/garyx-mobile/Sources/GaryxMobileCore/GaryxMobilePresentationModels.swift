@@ -8,6 +8,12 @@ struct GaryxAutomationDraft: Equatable {
     var targetsExistingThread = false
     var targetThreadId = ""
     var workspacePath = ""
+    /// `nil` for create. Edit drafts retain their original mode so generated
+    /// jobs can preserve a disabled current agent while target→generated is
+    /// treated as a new binding.
+    var originalTargetsExistingThread: Bool?
+    var originalAgentTargetId = ""
+    var agentChanged = false
 
     var trimmedLabel: String {
         label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -29,7 +35,11 @@ struct GaryxAutomationDraft: Equatable {
         targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    func canSubmit(workspacePaths: [String], threadOptions: [GaryxThreadSummary]) -> Bool {
+    func canSubmit(
+        workspacePaths: [String],
+        threadOptions: [GaryxThreadSummary],
+        enabledAgentIds: Set<String>? = nil
+    ) -> Bool {
         guard !trimmedLabel.isEmpty,
               !trimmedPrompt.isEmpty else {
             return false
@@ -37,7 +47,15 @@ struct GaryxAutomationDraft: Equatable {
         if targetsExistingThread {
             return !effectiveThreadId(threadOptions: threadOptions).isEmpty
         }
-        return !trimmedAgentTargetId.isEmpty && !effectiveWorkspacePath(workspacePaths: workspacePaths).isEmpty
+        guard !trimmedAgentTargetId.isEmpty,
+              !effectiveWorkspacePath(workspacePaths: workspacePaths).isEmpty else {
+            return false
+        }
+        guard let enabledAgentIds else { return true }
+        if requiresEnabledGeneratedAgent {
+            return enabledAgentIds.contains(trimmedAgentTargetId)
+        }
+        return true
     }
 
     func effectiveWorkspacePath(workspacePaths: [String]) -> String {
@@ -66,6 +84,25 @@ struct GaryxAutomationDraft: Equatable {
         } else {
             workspacePath = effectiveWorkspacePath(workspacePaths: workspacePaths)
         }
+    }
+
+    mutating func selectAgentTarget(_ id: String) {
+        agentTargetId = id
+        agentChanged = true
+    }
+
+    var requiresEnabledGeneratedAgent: Bool {
+        guard !targetsExistingThread else { return false }
+        return originalTargetsExistingThread == nil
+            || originalTargetsExistingThread == true
+            || agentChanged
+    }
+
+    var updateAgentId: String? {
+        guard !targetsExistingThread, agentChanged, !trimmedAgentTargetId.isEmpty else {
+            return nil
+        }
+        return trimmedAgentTargetId
     }
 }
 

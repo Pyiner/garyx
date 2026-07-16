@@ -149,12 +149,13 @@ struct GaryxBotAccountForm: View {
     @State private var generatedAccountId = ""
     @State private var displayName = ""
     @State private var enabled = true
-    @State private var agentId = "claude"
+    @State private var agentId: String?
     @State private var workspaceDir = ""
     @State private var workspaceMode = "local"
     @State private var configValues: [String: GaryxJSONValue] = [:]
     @State private var errorText: String?
     @State private var showsAgentPicker = false
+    @State private var hasChosenAgent = false
 
     private var isEditing: Bool { account != nil }
 
@@ -169,10 +170,13 @@ struct GaryxBotAccountForm: View {
         .onAppear(perform: initializeIfNeeded)
         .task {
             await model.refreshAgentTargetsIfNeeded()
-            applyDefaultAgentIfNeeded()
+            applyPreferredAgentIfNeeded()
+        }
+        .onChange(of: model.effectiveDefaultAgentId) { _, _ in
+            applyPreferredAgentIfNeeded()
         }
         .onChange(of: model.agentTargets) { _, _ in
-            applyDefaultAgentIfNeeded()
+            applyPreferredAgentIfNeeded()
         }
         .onChange(of: channel) { _, _ in
             guard initialized, !isEditing else { return }
@@ -278,18 +282,12 @@ struct GaryxBotAccountForm: View {
     private var agentPicker: some View {
         GaryxFormRow(
             title: "Agent",
-            onTap: model.agentTargets.isEmpty ? nil : { showsAgentPicker = true }
+            onTap: { showsAgentPicker = true }
         ) {
-            if model.agentTargets.isEmpty {
-                Text(model.agentTargetsPlaceholderText)
-                    .font(GaryxFont.callout())
-                    .foregroundStyle(.secondary)
-            } else {
-                GaryxAgentTargetPickerControl(
-                    selectedAgentTargetId: $agentId,
-                    isPresented: $showsAgentPicker
-                )
-            }
+            GaryxBotAgentPickerControl(
+                configuredAgentId: agentSelection,
+                isPresented: $showsAgentPicker
+            )
         }
     }
 
@@ -306,29 +304,39 @@ struct GaryxBotAccountForm: View {
             accountId = account.accountId
             displayName = account.displayName == account.accountId ? "" : account.displayName
             enabled = account.enabled
-            agentId = account.agentId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "claude"
+            agentId = account.agentId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
             workspaceDir = account.workspaceDir ?? ""
             workspaceMode = account.workspaceMode == "worktree" ? "worktree" : "local"
             configValues = account.config
         } else {
             channel = availablePlugins.first?.id ?? channel
             enabled = true
-            agentId = model.agentTargets.first(where: { $0.id == "claude" })?.id
-                ?? model.agentTargets.first?.id
-                ?? "claude"
+            agentId = preferredAgentId
             workspaceMode = "local"
             resetGeneratedAccountIdIfNeeded()
             applySchemaDefaults(replacing: false)
         }
     }
 
-    private func applyDefaultAgentIfNeeded() {
-        guard initialized, !isEditing, !model.agentTargets.isEmpty else { return }
-        if !model.agentTargets.contains(where: { $0.id == agentId }) {
-            agentId = model.agentTargets.first(where: { $0.id == "claude" })?.id
-                ?? model.agentTargets.first?.id
-                ?? agentId
+    private var preferredAgentId: String? {
+        GaryxBotAgentPickerPresentation.preferredConfiguredAgentId(
+            targets: model.agentTargets,
+            effectiveDefaultAgentId: model.effectiveDefaultAgentId
+        )
+    }
+
+    private var agentSelection: Binding<String?> {
+        Binding {
+            agentId
+        } set: { next in
+            hasChosenAgent = true
+            agentId = next
         }
+    }
+
+    private func applyPreferredAgentIfNeeded() {
+        guard initialized, !isEditing, !hasChosenAgent, agentId == nil else { return }
+        agentId = preferredAgentId
     }
 
     private func resetGeneratedAccountIdIfNeeded() {
@@ -386,7 +394,7 @@ struct GaryxBotAccountForm: View {
             accountId: trimmedAccountId,
             displayName: displayName,
             enabled: enabled,
-            agentId: agentId.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            agentId: agentId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             workspaceDir: workspaceDir.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             workspaceMode: workspaceMode,
             config: normalizedConfig

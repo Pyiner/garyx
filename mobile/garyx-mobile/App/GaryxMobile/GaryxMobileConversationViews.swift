@@ -243,7 +243,17 @@ struct GaryxConversationView: View {
                         .accessibilityLabel("Scroll to latest message")
                     }
 
+                    if model.isNewThreadAgentBindingUnavailable {
+                        Label("Enable an agent to start a new thread", systemImage: "exclamationmark.circle")
+                            .font(GaryxFont.caption(weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 18)
+                            .accessibilityIdentifier("new-thread-agent-unavailable")
+                    }
+
                     GaryxComposer(isFocused: $isComposerFocused)
+                        .disabled(model.isNewThreadAgentBindingUnavailable)
                 }
                 .frame(maxWidth: .infinity)
                 .animation(.easeOut(duration: 0.18), value: showsScrollToBottomButton)

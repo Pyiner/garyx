@@ -2,6 +2,38 @@ import Foundation
 
 public struct GaryxAgentsPage: Decodable, Equatable, Sendable {
     public var agents: [GaryxAgentSummary]
+    /// The user's persisted choice. It may name an agent that is currently disabled.
+    public var defaultAgentId: String?
+    /// The enabled standalone agent the gateway will use for a new implicit binding.
+    public var effectiveDefaultAgentId: String?
+
+    public init(
+        agents: [GaryxAgentSummary],
+        defaultAgentId: String? = nil,
+        effectiveDefaultAgentId: String? = nil
+    ) {
+        self.agents = agents
+        self.defaultAgentId = defaultAgentId
+        self.effectiveDefaultAgentId = effectiveDefaultAgentId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case agents
+        case defaultAgentId = "default_agent_id"
+        case defaultAgentIdCamel = "defaultAgentId"
+        case effectiveDefaultAgentId = "effective_default_agent_id"
+        case effectiveDefaultAgentIdCamel = "effectiveDefaultAgentId"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        agents = try container.decode([GaryxAgentSummary].self, forKey: .agents)
+        defaultAgentId = try container.garyxDecodeFirstString(.defaultAgentId, .defaultAgentIdCamel)
+        effectiveDefaultAgentId = try container.garyxDecodeFirstString(
+            .effectiveDefaultAgentId,
+            .effectiveDefaultAgentIdCamel
+        )
+    }
 }
 
 
@@ -18,6 +50,7 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
     public var systemPrompt: String
     public var builtIn: Bool
     public var standalone: Bool
+    public var enabled: Bool
     public var createdAt: String?
     public var updatedAt: String?
 
@@ -34,6 +67,7 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
         systemPrompt: String = "",
         builtIn: Bool = false,
         standalone: Bool = true,
+        enabled: Bool = true,
         createdAt: String? = nil,
         updatedAt: String? = nil
     ) {
@@ -49,6 +83,7 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
         self.systemPrompt = systemPrompt
         self.builtIn = builtIn
         self.standalone = standalone
+        self.enabled = enabled
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -81,6 +116,7 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
         case builtIn = "built_in"
         case builtInCamel = "builtIn"
         case standalone
+        case enabled
         case createdAt = "created_at"
         case createdAtCamel = "createdAt"
         case updatedAt = "updated_at"
@@ -114,6 +150,7 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
         systemPrompt = try container.garyxDecodeFirstString(.systemPrompt, .systemPromptCamel) ?? ""
         builtIn = try container.garyxDecodeFirstBool(.builtIn, .builtInCamel) ?? false
         standalone = try container.garyxDecodeFirstBool(.standalone) ?? true
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         createdAt = try container.garyxDecodeFirstString(.createdAt, .createdAtCamel)
         updatedAt = try container.garyxDecodeFirstString(.updatedAt, .updatedAtCamel)
     }
@@ -386,6 +423,8 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
     public var defaultWorkspaceDir: String?
     public var avatarDataUrl: String?
     public var systemPrompt: String?
+    /// `nil` preserves an existing value on update and lets create default to enabled.
+    public var enabled: Bool?
     /// Concurrency token for updates: the `updatedAt` of the agent this edit
     /// was based on. Required by the gateway on PUT; omitted on POST.
     public var expectedUpdatedAt: String?
@@ -401,6 +440,7 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
         defaultWorkspaceDir: String? = nil,
         avatarDataUrl: String? = nil,
         systemPrompt: String? = nil,
+        enabled: Bool? = nil,
         expectedUpdatedAt: String? = nil
     ) {
         self.agentId = agentId
@@ -413,6 +453,7 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
         self.defaultWorkspaceDir = defaultWorkspaceDir
         self.avatarDataUrl = avatarDataUrl
         self.systemPrompt = systemPrompt
+        self.enabled = enabled
         self.expectedUpdatedAt = expectedUpdatedAt
     }
 
@@ -427,6 +468,15 @@ public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
         case defaultWorkspaceDir = "default_workspace_dir"
         case avatarDataUrl = "avatar_data_url"
         case systemPrompt = "system_prompt"
+        case enabled
         case expectedUpdatedAt = "expected_updated_at"
+    }
+}
+
+public struct GaryxAgentToggleRequest: Encodable, Equatable, Sendable {
+    public var enabled: Bool
+
+    public init(enabled: Bool) {
+        self.enabled = enabled
     }
 }
