@@ -61,6 +61,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
     @State private var saveState: GaryxImagePreviewSaveState = .idle
     @State private var saveAlert: GaryxImagePreviewSaveAlert?
     @State private var saveTask: Task<Void, Never>?
+    @State private var saveOperationID: UUID?
 
     init(
         sources: [GaryxImagePreviewSource],
@@ -108,15 +109,14 @@ struct GaryxFullscreenImageGalleryPreview: View {
                 .scrollDisabled(pagingDisabled)
                 .onChange(of: selection) { _, _ in
                     pagingDisabled = false
-                    saveTask?.cancel()
-                    saveState = .idle
+                    cancelCurrentSave()
                 }
             }
         }
         .background {
             if sources.count > 1 {
                 GaryxImagePreviewDismissGestureBridge(
-                    isEnabled: !pagingDisabled,
+                    isEnabled: !pagingDisabled && saveAlert == nil,
                     onChanged: { galleryDismissOffset = $0 },
                     onEnded: resetGalleryDismissOffset,
                     onDismiss: onDismiss
@@ -151,7 +151,7 @@ struct GaryxFullscreenImageGalleryPreview: View {
         }
         .alert(item: $saveAlert, content: saveAlertView)
         .onDisappear {
-            saveTask?.cancel()
+            cancelCurrentSave()
         }
     }
 
@@ -246,7 +246,9 @@ struct GaryxFullscreenImageGalleryPreview: View {
             return
         }
         let source = sources[selection]
-        saveTask?.cancel()
+        cancelCurrentSave()
+        let operationID = UUID()
+        saveOperationID = operationID
         saveState = .saving
         saveTask = Task { @MainActor in
             do {
@@ -254,20 +256,22 @@ struct GaryxFullscreenImageGalleryPreview: View {
                     source: source,
                     loadGatewayDataURL: loadGatewayDataUrl
                 )
-                try Task.checkCancellation()
+                guard ownsSaveOperation(operationID) else { return }
                 withAnimation(.easeOut(duration: 0.18)) {
                     saveState = .saved
                 }
                 UIAccessibility.post(notification: .announcement, argument: "Saved to Photos")
                 try await Task.sleep(for: .seconds(2.4))
-                guard !Task.isCancelled, saveState == .saved else { return }
+                guard ownsSaveOperation(operationID), saveState == .saved else { return }
+                saveOperationID = nil
+                saveTask = nil
                 withAnimation(.easeOut(duration: 0.18)) {
                     saveState = .idle
                 }
             } catch is CancellationError {
-                saveState = .idle
+                finishSaveOperationIfOwned(operationID)
             } catch {
-                saveState = .idle
+                guard finishSaveOperationIfOwned(operationID) else { return }
                 if let photoError = error as? GaryxImagePhotoLibraryError,
                    case .addPermissionDenied = photoError {
                     saveAlert = .permissionDenied
@@ -276,6 +280,26 @@ struct GaryxFullscreenImageGalleryPreview: View {
                 }
             }
         }
+    }
+
+    private func ownsSaveOperation(_ operationID: UUID) -> Bool {
+        saveOperationID == operationID && !Task.isCancelled
+    }
+
+    @discardableResult
+    private func finishSaveOperationIfOwned(_ operationID: UUID) -> Bool {
+        guard saveOperationID == operationID else { return false }
+        saveOperationID = nil
+        saveTask = nil
+        saveState = .idle
+        return true
+    }
+
+    private func cancelCurrentSave() {
+        saveOperationID = nil
+        saveTask?.cancel()
+        saveTask = nil
+        saveState = .idle
     }
 
     private func resetGalleryDismissOffset() {
@@ -320,7 +344,7 @@ private enum GaryxImagePreviewSaveState: Equatable {
     }
 }
 
-private enum GaryxImagePreviewSaveAlert: Int, Identifiable {
+private enum GaryxImagePreviewSaveAlert: Int, Equatable, Identifiable {
     case permissionDenied
     case failed
 
@@ -639,6 +663,8 @@ private struct GaryxZoomableImageCanvas: View {
 enum GaryxImagePreviewDebugFixture: String {
     case single
     case gallery
+    case cancellationRaceGallery = "cancellation-race-gallery"
+    case failingGallery = "failing-gallery"
 
     static var current: Self? {
         ProcessInfo.processInfo.environment["GARYX_MOBILE_IMAGE_PREVIEW_FIXTURE"]
@@ -661,6 +687,46 @@ enum GaryxImagePreviewDebugFixture: String {
                 GaryxImagePreviewSource(title: "Gallery fixture 1.png", dataUrl: red),
                 GaryxImagePreviewSource(title: "Gallery fixture 2.png", dataUrl: green),
             ]
+        case .cancellationRaceGallery, .failingGallery:
+            return [
+                GaryxImagePreviewSource(
+                    title: "Slow gateway fixture.png",
+                    gatewayFilePath: "/fixture/slow.png",
+                    initialImage: GaryxImageDecoder.image(fromDataUrl: red, maxPixelSize: 4_096)
+                ),
+                GaryxImagePreviewSource(title: "Next page fixture.png", dataUrl: green),
+            ]
+        }
+    }
+
+    var loadGatewayDataURL: ((String) async -> String?)? {
+        switch self {
+        case .single, .gallery:
+            return nil
+        case .cancellationRaceGallery:
+            return { _ in
+                do {
+                    try await Task.sleep(for: .seconds(30))
+                } catch is CancellationError {
+                    await Self.waitIgnoringCancellation(for: 2.2)
+                } catch {
+                    return nil
+                }
+                return nil
+            }
+        case .failingGallery:
+            return { _ in
+                try? await Task.sleep(for: .milliseconds(300))
+                return nil
+            }
+        }
+    }
+
+    private static func waitIgnoringCancellation(for seconds: Double) async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+                continuation.resume()
+            }
         }
     }
 }
@@ -674,6 +740,7 @@ private struct GaryxImagePreviewDebugFixtureView: View {
             GaryxFullscreenImageGalleryPreview(
                 sources: mode.sources,
                 initialIndex: 0,
+                loadGatewayDataUrl: mode.loadGatewayDataURL,
                 onDismiss: { isPresented = false }
             )
         } else {

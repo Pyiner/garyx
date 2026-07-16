@@ -68,6 +68,44 @@ final class ImagePreviewInteractionTests: XCTestCase {
         )
     }
 
+    func testCancelledSlowGatewaySaveCannotOverwriteNextPageSaveState() {
+        let app = launchPreview(mode: "cancellation-race-gallery")
+        let saveButton = app.buttons["Save image to Photos"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 3))
+        saveButton.tap()
+
+        app.swipeLeft()
+        XCTAssertTrue(app.staticTexts["Image 2 of 2"].waitForExistence(timeout: 3))
+        saveButton.tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["Image saved to Photos"].waitForExistence(timeout: 5)
+        )
+
+        XCTAssertFalse(app.alerts["Unable to Save Image"].exists)
+        XCTAssertEqual(
+            saveButton.value as? String,
+            "Saved",
+            "a cancelled save must not clear a newer save's state"
+        )
+    }
+
+    func testGalleryFailureAlertBlocksPullDownDismissBridge() {
+        let app = launchPreview(mode: "failing-gallery")
+        let saveButton = app.buttons["Save image to Photos"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 3))
+        saveButton.tap()
+
+        let alert = app.alerts["Unable to Save Image"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        pullDownPreview(in: app)
+
+        XCTAssertTrue(alert.exists, "the save failure alert should remain presented")
+        XCTAssertFalse(
+            app.staticTexts["Image preview dismissed"].exists,
+            "a pull-down over an alert must not dismiss the underlying preview"
+        )
+    }
+
     private func launchPreview(mode: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["GARYX_MOBILE_IMAGE_PREVIEW_FIXTURE"] = mode
