@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use garyx_channels::{OutboundMessage, SendMessageResult};
-use garyx_models::thread_logs::ThreadLogEvent;
+use garyx_models::thread_logs::{ThreadLogEvent, is_canonical_thread_id};
 use garyx_models::{
     ChannelOutboundContent, MessageLifecycleStatus, MessageTerminalReason, TaskNotificationTarget,
 };
@@ -297,6 +297,12 @@ async fn deliver_notification_to_bot(
                     &metadata,
                 )
                 .await
+                .map_err(|error| {
+                    TaskNotificationError::new(
+                        event,
+                        format!("failed to create notification target thread: {error}"),
+                    )
+                })?
         }
     };
 
@@ -414,19 +420,23 @@ async fn send_notification_message(
                 },
             )
             .await;
-            let mut router = state.threads.router.lock().await;
-            for message_id in message_ids {
-                router
-                    .record_outbound_message_with_thread_log(
-                        log_thread_id,
-                        channel,
-                        account_id,
-                        chat_id,
-                        delivery_thread_id,
-                        &message_id,
-                        None,
+            if is_canonical_thread_id(log_thread_id) {
+                for message_id in message_ids {
+                    record_api_thread_log(
+                        state,
+                        ThreadLogEvent::info(
+                            log_thread_id,
+                            "delivery",
+                            "outbound message delivered",
+                        )
+                        .with_field("channel", json!(channel))
+                        .with_field("account_id", json!(account_id))
+                        .with_field("chat_id", json!(chat_id))
+                        .with_field("message_id", json!(message_id))
+                        .with_field("thread_id", json!(log_thread_id)),
                     )
                     .await;
+                }
             }
             Ok(())
         }

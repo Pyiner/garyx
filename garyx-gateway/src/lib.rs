@@ -63,6 +63,8 @@ pub mod workspaces;
 mod downstream_real_tests;
 #[cfg(all(test, feature = "real-provider-tests"))]
 mod managed_mcp_real_tests;
+#[cfg(test)]
+mod source_guard_tests;
 
 pub use cron::CronService;
 pub use route_graph::build_router;

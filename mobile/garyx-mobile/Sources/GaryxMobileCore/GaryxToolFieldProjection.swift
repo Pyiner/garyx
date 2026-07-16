@@ -68,10 +68,13 @@ enum GaryxToolFieldProjectionResolver {
         toolResult: GaryxTranscriptMessage?
     ) -> GaryxResolvedToolFieldProjection? {
         guard let projection else { return nil }
+        // Completion may contribute call-side detail that was not known when
+        // the paired tool use was committed, so resolve across both bodies.
         return GaryxResolvedToolFieldProjection(
             kind: projection.kind,
             toolName: projection.toolName,
-            call: resolve(projection.call, from: toolUse),
+            call: resolve(projection.call, from: toolUse)
+                ?? resolve(projection.call, from: toolResult),
             result: resolve(projection.result, from: toolResult),
             status: projection.status,
             exitCode: projection.exitCode,

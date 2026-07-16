@@ -115,6 +115,12 @@ impl RenderToolFieldProjection {
             duration_ms: None,
         };
         if is_result {
+            if kind == RenderToolKind::Image {
+                // Native image-generation items only expose the revised prompt
+                // on completion. Keep it as the call-side detail while the
+                // generated path remains the result-side image selector.
+                projection.call = call_selector(message, kind);
+            }
             projection.result = result_selector(message, kind);
         } else {
             projection.call = call_selector(message, kind);
@@ -141,6 +147,9 @@ impl RenderToolFieldProjection {
             && result.visibility != RenderToolVisibility::Normal
         {
             self.visibility = result.visibility;
+        }
+        if self.call.is_none() {
+            self.call = result.call;
         }
         if let Some(result_selector) = result.result {
             let repeats_visual_call = self.call.as_ref().is_some_and(|call_selector| {
@@ -408,6 +417,8 @@ fn call_selector(
             "label",
             "description",
             "prompt",
+            "revisedPrompt",
+            "revised_prompt",
             "path",
             "file_path",
             "filePath",
@@ -441,7 +452,7 @@ fn call_selector(
         ],
     };
     select_object_field(root, &prefix, input, keys, kind, false).or_else(|| {
-        (!input.is_empty()).then(|| RenderToolFieldSelector {
+        (kind != RenderToolKind::Image && !input.is_empty()).then(|| RenderToolFieldSelector {
             root,
             path: prefix,
             format: RenderToolFieldFormat::Json,
@@ -460,10 +471,25 @@ fn result_selector(
 ) -> Option<RenderToolFieldSelector> {
     if let Some(content) = message.get("content") {
         if let Some(object) = content.as_object() {
-            if let Some(selector) = select_object_field(
-                RenderToolFieldRoot::Content,
-                &[],
-                object,
+            let keys: &[&str] = if kind == RenderToolKind::Image {
+                &[
+                    "savedPath",
+                    "saved_path",
+                    "aggregatedOutput",
+                    "result",
+                    "output",
+                    "content",
+                    "stdout",
+                    "stderr",
+                    "text",
+                    "message",
+                    "error",
+                    "changes",
+                    "diff",
+                    "action",
+                    "path",
+                ]
+            } else {
                 &[
                     "aggregatedOutput",
                     "result",
@@ -478,16 +504,17 @@ fn result_selector(
                     "diff",
                     "action",
                     "path",
-                ],
-                kind,
-                true,
-            ) {
+                ]
+            };
+            if let Some(selector) =
+                select_object_field(RenderToolFieldRoot::Content, &[], object, keys, kind, true)
+            {
                 return Some(selector);
             }
             // A command execution with no meaningful output should have no
             // result body. Falling back to the entire execution envelope is
             // precisely the noisy JSON presentation this projection avoids.
-            if kind == RenderToolKind::Command {
+            if matches!(kind, RenderToolKind::Command | RenderToolKind::Image) {
                 return None;
             }
             if !object.is_empty() {
@@ -555,6 +582,13 @@ fn select_object_field(
 ) -> Option<RenderToolFieldSelector> {
     keys.iter().find_map(|key| {
         let value = object.get(*key).filter(|value| meaningful_value(value))?;
+        if result
+            && kind == RenderToolKind::Image
+            && *key == "result"
+            && looks_like_base64_image_result(value)
+        {
+            return None;
+        }
         let mut path = prefix.to_vec();
         path.push((*key).to_owned());
         Some(selector_for_value(
@@ -587,7 +621,7 @@ fn selector_for_value(
         (RenderToolFieldLabel::Command, RenderToolFieldFormat::Code)
     } else if matches!(key, "file_path" | "filePath" | "AbsolutePath" | "file") {
         (RenderToolFieldLabel::File, RenderToolFieldFormat::Path)
-    } else if key == "path" && kind == RenderToolKind::Image {
+    } else if matches!(key, "savedPath" | "saved_path" | "path") && kind == RenderToolKind::Image {
         (RenderToolFieldLabel::Image, RenderToolFieldFormat::Image)
     } else if key == "path" {
         (RenderToolFieldLabel::File, RenderToolFieldFormat::Path)
@@ -595,7 +629,10 @@ fn selector_for_value(
         (RenderToolFieldLabel::Query, RenderToolFieldFormat::Text)
     } else if key == "url" {
         (RenderToolFieldLabel::Url, RenderToolFieldFormat::Text)
-    } else if matches!(key, "prompt" | "Prompt") {
+    } else if matches!(
+        key,
+        "prompt" | "Prompt" | "revisedPrompt" | "revised_prompt"
+    ) {
         (RenderToolFieldLabel::Prompt, RenderToolFieldFormat::Text)
     } else if key == "content" && result && kind == RenderToolKind::Command {
         (RenderToolFieldLabel::Output, RenderToolFieldFormat::Code)
@@ -668,6 +705,37 @@ fn meaningful_value(value: &Value) -> bool {
         Value::Object(values) => !values.is_empty(),
         Value::Bool(_) | Value::Number(_) => true,
     }
+}
+
+const LARGE_BASE64_BLOB_MIN_LENGTH: usize = 16_384;
+
+fn looks_like_base64_image_result(value: &Value) -> bool {
+    let Some(value) = value.as_str().map(str::trim) else {
+        return false;
+    };
+    let data_url_payload = value
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(','))
+        .filter(|(metadata, _)| metadata.to_ascii_lowercase().contains(";base64"));
+    let candidate = data_url_payload.map_or(value, |(_, payload)| payload);
+    let has_image_signature = [
+        "iVBORw0KGgo", // PNG
+        "/9j/",        // JPEG
+        "R0lGOD",      // GIF
+        "UklGR",       // WebP
+        "Qk",          // BMP
+        "SUkq",        // little-endian TIFF
+        "TU0A",        // big-endian TIFF
+    ]
+    .iter()
+    .any(|signature| candidate.starts_with(signature));
+    (data_url_payload.is_some()
+        || has_image_signature
+        || candidate.len() >= LARGE_BASE64_BLOB_MIN_LENGTH)
+        && candidate.len().is_multiple_of(4)
+        && candidate
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
 }
 
 fn string_field(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
@@ -836,6 +904,136 @@ mod tests {
         assert_eq!(projection.result, None);
         assert_eq!(projection.status.as_deref(), Some("completed"));
         assert_eq!(projection.exit_code, Some(0));
+    }
+
+    #[test]
+    fn codex_native_image_generation_projects_prompt_and_saved_image_path() {
+        let call = object(json!({
+            "role": "tool_use",
+            "tool_name": "imageGeneration",
+            "metadata": {
+                "item_type": "imageGeneration",
+                "source": "codex_app_server"
+            },
+            "content": {
+                "id": "exec-00000000-0000-0000-0000-000000000001",
+                "result": "",
+                "revisedPrompt": null,
+                "status": "in_progress",
+                "type": "imageGeneration"
+            }
+        }));
+        let result = object(json!({
+            "role": "tool_result",
+            "tool_name": "imageGeneration",
+            "metadata": {
+                "item_type": "imageGeneration",
+                "source": "codex_app_server"
+            },
+            "content": {
+                "id": "exec-00000000-0000-0000-0000-000000000001",
+                "result": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                "revisedPrompt": "A synthetic lighthouse beneath a violet evening sky.",
+                "savedPath": "/Users/test/.codex/generated_images/00000000-0000-0000-0000-000000000001/exec-00000000-0000-0000-0000-000000000001.png",
+                "status": "completed",
+                "type": "imageGeneration"
+            }
+        }));
+
+        let mut projection = RenderToolFieldProjection::from_message(&call, false).unwrap();
+        let started_call = projection.call.clone();
+        projection.absorb_result(RenderToolFieldProjection::from_message(&result, true).unwrap());
+
+        assert_eq!(
+            (
+                started_call,
+                projection.call.clone(),
+                projection.result.clone()
+            ),
+            (
+                None,
+                Some(RenderToolFieldSelector {
+                    root: RenderToolFieldRoot::Content,
+                    path: vec!["revisedPrompt".to_owned()],
+                    format: RenderToolFieldFormat::Text,
+                    label: RenderToolFieldLabel::Prompt,
+                }),
+                Some(RenderToolFieldSelector {
+                    root: RenderToolFieldRoot::Content,
+                    path: vec!["savedPath".to_owned()],
+                    format: RenderToolFieldFormat::Image,
+                    label: RenderToolFieldLabel::Image,
+                }),
+            )
+        );
+        assert_eq!(projection.status.as_deref(), Some("completed"));
+        let wire = serde_json::to_string(&projection).unwrap();
+        assert!(!wire.contains("iVBORw0KGgo"));
+        assert!(!wire.contains("A synthetic lighthouse"));
+        assert!(!wire.contains("/Users/test"));
+    }
+
+    #[test]
+    fn image_generation_projects_snake_case_prompt_and_saved_path_aliases() {
+        let result = object(json!({
+            "role": "tool_result",
+            "tool_name": "imageGeneration",
+            "content": {
+                "id": "exec-snake-case",
+                "result": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                "revised_prompt": "A synthetic paper boat on a quiet pond.",
+                "saved_path": "/Users/test/.codex/generated_images/synthetic/exec-snake-case.png",
+                "status": "completed",
+                "type": "imageGeneration"
+            }
+        }));
+
+        let projection = RenderToolFieldProjection::from_message(&result, true).unwrap();
+
+        assert_eq!(
+            projection.call,
+            Some(RenderToolFieldSelector {
+                root: RenderToolFieldRoot::Content,
+                path: vec!["revised_prompt".to_owned()],
+                format: RenderToolFieldFormat::Text,
+                label: RenderToolFieldLabel::Prompt,
+            })
+        );
+        assert_eq!(
+            projection.result,
+            Some(RenderToolFieldSelector {
+                root: RenderToolFieldRoot::Content,
+                path: vec!["saved_path".to_owned()],
+                format: RenderToolFieldFormat::Image,
+                label: RenderToolFieldLabel::Image,
+            })
+        );
+    }
+
+    #[test]
+    fn image_generation_never_projects_raw_base64_result_as_text_or_json() {
+        for raw_result in [
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=".to_owned(),
+            "A".repeat(LARGE_BASE64_BLOB_MIN_LENGTH),
+        ] {
+            let result = object(json!({
+                "role": "tool_result",
+                "tool_name": "imageGeneration",
+                "content": {
+                    "id": "exec-no-saved-path",
+                    "result": raw_result,
+                    "revisedPrompt": null,
+                    "status": "completed",
+                    "type": "imageGeneration"
+                }
+            }));
+
+            let projection = RenderToolFieldProjection::from_message(&result, true).unwrap();
+
+            assert_eq!(projection.call, None);
+            assert_eq!(projection.result, None);
+            assert_eq!(projection.status.as_deref(), Some("completed"));
+        }
     }
 
     #[test]

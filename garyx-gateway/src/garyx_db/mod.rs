@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
+#[cfg(any(test, feature = "test-seams"))]
+use std::sync::{Condvar, atomic::AtomicBool, atomic::Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use chrono::{SecondsFormat, Utc};
@@ -26,6 +28,8 @@ pub(crate) const ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME: &str = "endpoint_holder_d
 const ENDPOINT_HOLDER_DEDUP_MIGRATION_VERSION: i64 = 1;
 pub(crate) const THREAD_PIN_SORT_ORDER_MIGRATION_NAME: &str = "thread_pin_sort_order_v1";
 const THREAD_PIN_SORT_ORDER_MIGRATION_VERSION: i64 = 1;
+pub(crate) const DROP_THREAD_MESSAGE_ROUTES_MIGRATION_NAME: &str = "drop_thread_message_routes_v1";
+const DROP_THREAD_MESSAGE_ROUTES_MIGRATION_VERSION: i64 = 1;
 const LEGACY_IMPORT_GENERATION_NAME: &str = "legacy_import_generation";
 const LEGACY_IMPORT_GENERATION_VERSION: i64 = 1;
 
@@ -37,6 +41,7 @@ pub(crate) enum TestDbFaultPoint {
     LegacyRetirementMarkerWrite,
     ArchivedThreadRead,
     LegacyGenerationSeedWrite,
+    DeleteThreadRecord,
 }
 
 #[cfg(any(test, feature = "test-seams"))]
@@ -44,6 +49,90 @@ pub(crate) enum TestDbFaultPoint {
 struct TestDbFaults {
     calls: HashMap<TestDbFaultPoint, usize>,
     fail_on: HashSet<(TestDbFaultPoint, usize)>,
+    mutation_barriers: HashMap<TestDbMutationPoint, std::sync::Arc<TestDbMutationBarrierState>>,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum TestDbMutationPoint {
+    ArchiveThreadRecord,
+    DeleteThreadRecord,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+#[derive(Debug)]
+struct TestDbMutationBarrierState {
+    started: AtomicBool,
+    started_notify: tokio::sync::Notify,
+    released: Mutex<bool>,
+    release_notify: Condvar,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+impl TestDbMutationBarrierState {
+    fn new() -> Self {
+        Self {
+            started: AtomicBool::new(false),
+            started_notify: tokio::sync::Notify::new(),
+            released: Mutex::new(false),
+            release_notify: Condvar::new(),
+        }
+    }
+
+    fn block(&self) {
+        self.started.store(true, Ordering::Release);
+        self.started_notify.notify_waiters();
+        let mut released = self
+            .released
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while !*released {
+            released = self
+                .release_notify
+                .wait(released)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+
+    fn release(&self) {
+        *self
+            .released
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        self.release_notify.notify_all();
+    }
+}
+
+/// One-shot deterministic seam proving that a coordinator-owned blocking
+/// mutation outlives cancellation of the HTTP future that initiated it.
+#[cfg(any(test, feature = "test-seams"))]
+pub(crate) struct TestDbMutationBarrier {
+    state: std::sync::Arc<TestDbMutationBarrierState>,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+impl TestDbMutationBarrier {
+    pub(crate) async fn wait_until_started(&self) {
+        loop {
+            let notified = self.state.started_notify.notified();
+            if self.state.started.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        self.state.release();
+    }
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+impl Drop for TestDbMutationBarrier {
+    fn drop(&mut self) {
+        // A failed test must never strand a blocking-pool worker.
+        self.state.release();
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -190,31 +279,6 @@ pub struct RecentThreadDraft {
     pub last_active_at: String,
 }
 
-/// Test-only observation shape for the `thread_message_routes` projection.
-/// Production maintains the table (same-transaction derivation, per-thread
-/// delete, aggregate diagnostics count) but has no row-level reader today.
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadMessageRouteRecord {
-    pub thread_id: String,
-    pub channel: String,
-    pub account_id: String,
-    pub chat_id: String,
-    pub thread_binding_key: Option<String>,
-    pub message_id: String,
-    pub projected_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ThreadMessageRouteDraft {
-    pub thread_id: String,
-    pub channel: String,
-    pub account_id: String,
-    pub chat_id: String,
-    pub thread_binding_key: Option<String>,
-    pub message_id: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadMetaRecord {
     pub thread_id: String,
@@ -276,7 +340,6 @@ pub struct ThreadMetaProjectionDraft {
     pub thread_id: String,
     pub thread_meta: ThreadMetaDraft,
     pub channel_endpoints: Vec<KnownChannelEndpoint>,
-    pub message_routes: Vec<ThreadMessageRouteDraft>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -454,6 +517,33 @@ impl GaryxDbService {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .fail_on
             .insert((point, occurrence));
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    pub(crate) fn block_test_db_mutation(
+        &self,
+        point: TestDbMutationPoint,
+    ) -> TestDbMutationBarrier {
+        let state = std::sync::Arc::new(TestDbMutationBarrierState::new());
+        self.test_faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mutation_barriers
+            .insert(point, state.clone());
+        TestDbMutationBarrier { state }
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    fn maybe_block_test_db_mutation(&self, point: TestDbMutationPoint) {
+        let barrier = self
+            .test_faults
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mutation_barriers
+            .remove(&point);
+        if let Some(barrier) = barrier {
+            barrier.block();
+        }
     }
 
     #[cfg(any(test, feature = "test-seams"))]
@@ -647,7 +737,9 @@ impl GaryxDbService {
     /// other path — a write racing this transaction either lands before
     /// the tombstone (and is deleted here) or is rejected by the in-tx
     /// tombstone check in `write_thread_record_with_projections`.
-    pub fn archive_thread_record(&self, thread_id: &str) -> GaryxDbResult<bool> {
+    pub(crate) fn archive_thread_record(&self, thread_id: &str) -> GaryxDbResult<bool> {
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_block_test_db_mutation(TestDbMutationPoint::ArchiveThreadRecord);
         let thread_id = normalize_thread_id(thread_id)?;
         let archived_at = now_string();
         let mut conn = self.conn()?;
@@ -1181,10 +1273,74 @@ impl GaryxDbService {
     /// Run every versioned thread-data migration that must complete after
     /// the one-shot archive import and before the gateway starts serving.
     pub(crate) fn run_thread_data_startup_migrations(&self) -> GaryxDbResult<()> {
+        self.drop_thread_message_routes_v1()?;
         self.migrate_thread_pin_sort_order_v1()?;
         self.migrate_recent_task_thread_kind_v1()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         Ok(())
+    }
+
+    pub(crate) fn drop_thread_message_routes_v1(&self) -> GaryxDbResult<OneShotMigrationSummary> {
+        self.drop_thread_message_routes_v1_inner(|_| Ok(()))
+    }
+
+    fn drop_thread_message_routes_v1_inner<F>(
+        &self,
+        after_drop: F,
+    ) -> GaryxDbResult<OneShotMigrationSummary>
+    where
+        F: FnOnce(&Transaction<'_>) -> GaryxDbResult<()>,
+    {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let completed_source_count = tx
+            .query_row(
+                "SELECT source_row_count
+                   FROM projection_states
+                  WHERE projection_name = ?1 AND projection_version = ?2",
+                params![
+                    DROP_THREAD_MESSAGE_ROUTES_MIGRATION_NAME,
+                    DROP_THREAD_MESSAGE_ROUTES_MIGRATION_VERSION
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        let table_exists = tx
+            .query_row(
+                "SELECT 1 FROM sqlite_master
+                  WHERE type = 'table' AND name = 'thread_message_routes'",
+                [],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        let source_row_count = if table_exists { 1 } else { 0 };
+
+        tx.execute("DROP TABLE IF EXISTS thread_message_routes", [])?;
+        after_drop(&tx)?;
+        record_projection_state_tx(
+            &tx,
+            DROP_THREAD_MESSAGE_ROUTES_MIGRATION_NAME,
+            DROP_THREAD_MESSAGE_ROUTES_MIGRATION_VERSION,
+            source_row_count,
+            None,
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count: usize::from(table_exists),
+            already_completed: false,
+        })
     }
 
     pub(crate) fn migrate_thread_pin_sort_order_v1(
@@ -1730,8 +1886,7 @@ impl GaryxDbService {
         let count: i64 = conn.query_row(
             "SELECT
                 (SELECT COUNT(*) FROM thread_meta) +
-                (SELECT COUNT(*) FROM thread_channel_endpoints) +
-                (SELECT COUNT(*) FROM thread_message_routes)",
+                (SELECT COUNT(*) FROM thread_channel_endpoints)",
             [],
             |row| row.get(0),
         )?;
@@ -1790,37 +1945,6 @@ impl GaryxDbService {
                 known_channel_endpoint_from_row,
             )
             .optional()?)
-    }
-
-    /// Test-only observation port over `thread_message_routes` (#TASK-2269
-    /// finding 2). Do not adopt in production reads; condition queries must go
-    /// through purpose-built projections instead of full-table listings.
-    #[cfg(test)]
-    pub fn list_thread_message_routes(&self) -> GaryxDbResult<Vec<ThreadMessageRouteRecord>> {
-        let conn = self.read_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT thread_id, channel, account_id, chat_id, thread_binding_key,
-                    message_id, projected_at
-             FROM thread_message_routes
-             ORDER BY projected_at ASC, thread_id ASC, message_id ASC",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let thread_binding_key: String = row.get(4)?;
-            Ok(ThreadMessageRouteRecord {
-                thread_id: row.get(0)?,
-                channel: row.get(1)?,
-                account_id: row.get(2)?,
-                chat_id: row.get(3)?,
-                thread_binding_key: optional_from_stored_string(&thread_binding_key),
-                message_id: row.get(5)?,
-                projected_at: row.get(6)?,
-            })
-        })?;
-        let mut records = Vec::new();
-        for row in rows {
-            records.push(row?);
-        }
-        Ok(records)
     }
 
     /// Per-thread persisted delivery contexts from the thread_meta projection.
@@ -2033,7 +2157,11 @@ impl GaryxDbService {
 
     /// Single-transaction delete of a thread record, all its projection
     /// rows, and its pin. Returns whether the record existed.
-    pub fn delete_thread_record_with_projections(&self, key: &str) -> GaryxDbResult<bool> {
+    pub(crate) fn delete_thread_record_with_projections(&self, key: &str) -> GaryxDbResult<bool> {
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
+        #[cfg(any(test, feature = "test-seams"))]
+        self.maybe_fail_test_db_call(TestDbFaultPoint::DeleteThreadRecord)?;
         let key = normalize_required("key", key)?;
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -2595,20 +2723,6 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             projected_at TEXT NOT NULL
         ) STRICT;
 
-        CREATE TABLE IF NOT EXISTS thread_message_routes (
-            channel TEXT NOT NULL,
-            account_id TEXT NOT NULL,
-            chat_id TEXT NOT NULL DEFAULT '',
-            thread_binding_key TEXT NOT NULL DEFAULT '',
-            message_id TEXT NOT NULL,
-            thread_id TEXT NOT NULL,
-            projected_at TEXT NOT NULL,
-            PRIMARY KEY (channel, account_id, chat_id, thread_binding_key, message_id)
-        ) STRICT;
-
-        CREATE INDEX IF NOT EXISTS idx_thread_message_routes_thread
-            ON thread_message_routes(thread_id);
-
         CREATE TABLE IF NOT EXISTS automation_thread_runs (
             automation_id TEXT NOT NULL,
             run_id TEXT NOT NULL,
@@ -2990,13 +3104,6 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Sole remaining caller is the test-only `list_thread_message_routes`
-/// observation port, so this helper is gated with it.
-#[cfg(test)]
-fn optional_from_stored_string(value: &str) -> Option<String> {
-    normalize_optional(Some(value))
-}
-
 fn thread_meta_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadMetaRecord> {
     Ok(ThreadMetaRecord {
         thread_id: row.get(0)?,
@@ -3220,10 +3327,6 @@ fn replace_thread_meta_projection_tx(
         endpoint.thread_id = Some(thread_id.clone());
         upsert_thread_channel_endpoint(tx, &endpoint, recorded_at)?;
     }
-    for mut route in draft.message_routes {
-        route.thread_id = thread_id.clone();
-        upsert_thread_message_route(tx, &route, recorded_at)?;
-    }
     Ok(())
 }
 
@@ -3235,10 +3338,6 @@ fn remove_thread_meta_projection_tx(conn: &Connection, thread_id: &str) -> Garyx
     )?;
     removed += conn.execute(
         "DELETE FROM thread_channel_endpoints WHERE thread_id = ?1",
-        params![thread_id],
-    )?;
-    removed += conn.execute(
-        "DELETE FROM thread_message_routes WHERE thread_id = ?1",
         params![thread_id],
     )?;
     Ok(removed)
@@ -3402,45 +3501,6 @@ fn upsert_thread_channel_endpoint(
             thread_updated_at,
             last_inbound_at,
             last_delivery_at,
-            recorded_at,
-        ],
-    )?;
-    Ok(())
-}
-
-fn upsert_thread_message_route(
-    tx: &Transaction<'_>,
-    route: &ThreadMessageRouteDraft,
-    recorded_at: &str,
-) -> GaryxDbResult<()> {
-    let thread_id = normalize_thread_id(&route.thread_id)?;
-    let channel = normalize_required("channel", &route.channel)?;
-    let account_id = route.account_id.trim().to_owned();
-    let chat_id = route.chat_id.trim().to_owned();
-    let thread_binding_key = route
-        .thread_binding_key
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_owned();
-    let message_id = normalize_required("message_id", &route.message_id)?;
-
-    tx.execute(
-        "INSERT INTO thread_message_routes (
-            channel, account_id, chat_id, thread_binding_key, message_id, thread_id, projected_at
-         )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(channel, account_id, chat_id, thread_binding_key, message_id)
-         DO UPDATE SET
-            thread_id = excluded.thread_id,
-            projected_at = excluded.projected_at",
-        params![
-            channel,
-            account_id,
-            chat_id,
-            thread_binding_key,
-            message_id,
-            thread_id,
             recorded_at,
         ],
     )?;
@@ -4130,6 +4190,94 @@ mod tests {
             )
             .expect("seed pre-generation cutover marker");
         }
+    }
+
+    fn seed_retired_thread_message_routes_table(service: &GaryxDbService) {
+        service
+            .conn()
+            .expect("conn")
+            .execute_batch(
+                "CREATE TABLE thread_message_routes (message_id TEXT NOT NULL);
+                 INSERT INTO thread_message_routes (message_id) VALUES ('legacy-message');",
+            )
+            .expect("seed retired message routes table");
+    }
+
+    #[test]
+    fn drop_thread_message_routes_migration_is_atomic_and_one_shot() {
+        let service = GaryxDbService::memory().expect("memory db");
+        seed_retired_thread_message_routes_table(&service);
+
+        let failed = service.drop_thread_message_routes_v1_inner(|_| {
+            Err(GaryxDbError::Configuration(
+                "injected post-drop failure".to_owned(),
+            ))
+        });
+        assert!(failed.is_err());
+        assert!(
+            sqlite_table_exists(
+                &service.conn().expect("conn after rollback"),
+                "thread_message_routes"
+            )
+            .expect("table check after rollback"),
+            "the table drop must roll back when marker recording cannot commit"
+        );
+        assert!(
+            !service
+                .projection_state_exists(
+                    DROP_THREAD_MESSAGE_ROUTES_MIGRATION_NAME,
+                    DROP_THREAD_MESSAGE_ROUTES_MIGRATION_VERSION,
+                )
+                .expect("marker after rollback")
+        );
+
+        let first = service
+            .drop_thread_message_routes_v1()
+            .expect("first migration");
+        assert_eq!(first.source_row_count, 1);
+        assert_eq!(first.updated_row_count, 1);
+        assert!(!first.already_completed);
+        assert!(
+            !sqlite_table_exists(
+                &service.conn().expect("conn after migration"),
+                "thread_message_routes"
+            )
+            .expect("table check after migration")
+        );
+
+        seed_retired_thread_message_routes_table(&service);
+        let second = service
+            .drop_thread_message_routes_v1()
+            .expect("completed migration skips");
+        assert!(second.already_completed);
+        assert_eq!(second.updated_row_count, 0);
+        assert!(
+            sqlite_table_exists(
+                &service.conn().expect("conn after skipped rerun"),
+                "thread_message_routes"
+            )
+            .expect("table check after skipped rerun"),
+            "an existing marker must prevent the migration from running again"
+        );
+    }
+
+    #[test]
+    fn drop_thread_message_routes_migration_tolerates_missing_table() {
+        let service = GaryxDbService::memory().expect("memory db");
+        let summary = service
+            .drop_thread_message_routes_v1()
+            .expect("missing table is a no-op");
+        assert_eq!(summary.source_row_count, 0);
+        assert_eq!(summary.updated_row_count, 0);
+        assert!(!summary.already_completed);
+        assert!(
+            service
+                .projection_state_exists(
+                    DROP_THREAD_MESSAGE_ROUTES_MIGRATION_NAME,
+                    DROP_THREAD_MESSAGE_ROUTES_MIGRATION_VERSION,
+                )
+                .expect("migration marker")
+        );
     }
 
     #[test]
@@ -5037,12 +5185,6 @@ mod tests {
                     'test::main::legacy', 'test', 'main', 'legacy',
                     'thread::legacy-workflow-child', '2026-07-01T00:00:00.000Z'
                 );
-                INSERT INTO thread_message_routes (
-                    channel, account_id, message_id, thread_id, projected_at
-                ) VALUES (
-                    'test', 'main', 'legacy-message', 'thread::legacy-workflow-child',
-                    '2026-07-01T00:00:00.000Z'
-                );
                 INSERT INTO automation_thread_runs (
                     automation_id, run_id, thread_id, mode, status, started_at, recorded_at
                 ) VALUES (
@@ -5101,7 +5243,6 @@ mod tests {
             ("thread_pins", "thread_id"),
             ("archived_threads", "thread_id"),
             ("thread_channel_endpoints", "thread_id"),
-            ("thread_message_routes", "thread_id"),
             ("automation_thread_runs", "thread_id"),
         ] {
             let sql = format!(
@@ -5302,7 +5443,6 @@ mod tests {
                 thread_id: Some("thread::current-holder".to_owned()),
                 ..Default::default()
             }],
-            message_routes: Vec::new(),
         })
         .expect("single-holder endpoint upsert");
 
@@ -6378,14 +6518,6 @@ mod tests {
                 last_inbound_at: Some("2026-06-03T07:59:59.000Z".to_owned()),
                 last_delivery_at: Some("2026-06-03T08:00:01.000Z".to_owned()),
             }],
-            message_routes: vec![ThreadMessageRouteDraft {
-                thread_id: "thread::project".to_owned(),
-                channel: "telegram".to_owned(),
-                account_id: "main".to_owned(),
-                chat_id: "42".to_owned(),
-                thread_binding_key: Some("42".to_owned()),
-                message_id: "message-1".to_owned(),
-            }],
         })
         .expect("project thread meta");
 
@@ -6410,11 +6542,6 @@ mod tests {
         assert_eq!(endpoints[0].endpoint_key, "telegram::main::42");
         assert_eq!(endpoints[0].thread_id.as_deref(), Some("thread::project"));
 
-        let routes = db.list_thread_message_routes().expect("list routes");
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].message_id, "message-1");
-        assert_eq!(routes[0].thread_binding_key.as_deref(), Some("42"));
-
         assert!(
             db.remove_thread_meta_projection("thread::project")
                 .expect("remove projection")
@@ -6427,11 +6554,6 @@ mod tests {
         assert!(
             db.list_thread_channel_endpoints()
                 .expect("list endpoints after remove")
-                .is_empty()
-        );
-        assert!(
-            db.list_thread_message_routes()
-                .expect("list routes after remove")
                 .is_empty()
         );
     }

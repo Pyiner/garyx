@@ -50,7 +50,7 @@ test('builds stable hash routes', () => {
       workspacePath: '/Users/gary/repo',
       agentId: 'claude',
     }),
-    '#/new?workspace=%2FUsers%2Fgary%2Frepo',
+    '#/new?workspace=%2FUsers%2Fgary%2Frepo&agent=claude',
   );
   assert.equal(
     buildDesktopRouteHash({ kind: 'settings', tabId: 'gateway' }),

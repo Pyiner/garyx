@@ -63,7 +63,7 @@ fn ensure_onboard_api_account(config: &mut GaryxConfig, account_id: &str) -> boo
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: None,
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -279,7 +279,7 @@ mod tests {
                 token: "t".to_owned(),
                 enabled: true,
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 groups: Default::default(),
@@ -300,7 +300,7 @@ mod tests {
             ApiAccount {
                 enabled: true,
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 workspace_mode: None,
             },

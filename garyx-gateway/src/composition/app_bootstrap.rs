@@ -336,12 +336,12 @@ impl AppStateBuilder {
 
         // Seed the bridge with the current agent registry before the first
         // request. Runtime config reloads refresh the same snapshot.
-        let boot_agent_profiles = self.custom_agents.list_agents_blocking();
+        let boot_agent_snapshot = self.custom_agents.snapshot_blocking();
         let bridge_for_profiles = self.bridge.clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 bridge_for_profiles
-                    .replace_agent_profiles(boot_agent_profiles)
+                    .replace_agent_profiles(boot_agent_snapshot)
                     .await;
             });
         } else {

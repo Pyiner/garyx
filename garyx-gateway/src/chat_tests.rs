@@ -6,7 +6,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
 use garyx_channels::{
     ChannelDispatcher, ChannelInfo, OutboundMessage, SendMessageResult, StreamDispatchCallback,
     StreamingDispatchTarget,
@@ -15,8 +15,13 @@ use garyx_models::config::{ApiAccount, GaryxConfig};
 use garyx_models::provider::{
     AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
 };
+use garyx_router::{
+    AdmittedRun, AgentDispatcher, ThreadCreationError, ThreadCreator, ThreadEnsureOptions,
+    ThreadStore,
+};
 use serde_json::{Value, json};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
@@ -40,6 +45,25 @@ struct BlockingReplyProvider {
 }
 struct WorkspaceRecordingProvider {
     observed_workspace_dir: Arc<Mutex<Option<Option<String>>>>,
+}
+struct MetadataRecordingProvider {
+    calls: Arc<AtomicUsize>,
+    observed: Arc<Mutex<Vec<ProviderRunOptions>>>,
+}
+
+struct FailingStorageThreadCreator;
+
+#[async_trait]
+impl ThreadCreator for FailingStorageThreadCreator {
+    async fn create_thread(
+        &self,
+        _thread_store: Arc<dyn ThreadStore>,
+        _options: ThreadEnsureOptions,
+    ) -> Result<(String, Value), ThreadCreationError> {
+        Err(ThreadCreationError::Storage(
+            "injected creation backend failure".to_owned(),
+        ))
+    }
 }
 
 #[derive(Default)]
@@ -82,7 +106,6 @@ impl ChannelDispatcher for RecordingDispatcher {
     fn build_stream_event_callback(
         &self,
         target: StreamingDispatchTarget,
-        _router: Arc<tokio::sync::Mutex<garyx_router::MessageRouter>>,
     ) -> Option<StreamDispatchCallback> {
         let calls = self.calls.clone();
         Some(Arc::new(move |envelope| {
@@ -293,6 +316,53 @@ impl ProviderRuntime for WorkspaceRecordingProvider {
     }
 }
 
+#[async_trait]
+impl ProviderRuntime for MetadataRecordingProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        _on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.observed.lock().unwrap().push(options.clone());
+        Ok(ProviderRunResult {
+            run_id: "metadata-recording-provider".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: String::new(),
+            session_messages: Vec::new(),
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: None,
+            success: true,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost: 0.0,
+            duration_ms: 1,
+        })
+    }
+
+    async fn get_or_create_session(&self, thread_id: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{thread_id}"))
+    }
+}
+
 async fn test_state_with_provider() -> Arc<AppState> {
     let mut config = GaryxConfig::default();
     config.channels.api.accounts.insert(
@@ -300,7 +370,7 @@ async fn test_state_with_provider() -> Arc<AppState> {
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -323,7 +393,7 @@ async fn test_state_with_slow_provider() -> (Arc<AppState>, Arc<MultiProviderBri
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -344,6 +414,61 @@ async fn test_state_with_slow_provider() -> (Arc<AppState>, Arc<MultiProviderBri
     )
 }
 
+async fn recording_state(
+    account_agent_id: Option<&str>,
+    disabled_agent_ids: &[&str],
+) -> (
+    Arc<AppState>,
+    Arc<MultiProviderBridge>,
+    Arc<AtomicUsize>,
+    Arc<Mutex<Vec<ProviderRunOptions>>>,
+) {
+    let mut config = GaryxConfig::default();
+    config.channels.api.accounts.insert(
+        "main".to_owned(),
+        ApiAccount {
+            enabled: true,
+            name: None,
+            agent_id: account_agent_id.map(ToOwned::to_owned),
+            workspace_dir: None,
+            workspace_mode: None,
+        },
+    );
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    for agent_id in disabled_agent_ids {
+        custom_agents
+            .set_enabled(agent_id, false)
+            .await
+            .expect("disable test agent");
+    }
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider(
+            "metadata-recording-provider",
+            Arc::new(MetadataRecordingProvider {
+                calls: calls.clone(),
+                observed: observed.clone(),
+            }),
+        )
+        .await;
+    bridge
+        .set_route("api", "main", "metadata-recording-provider")
+        .await;
+    bridge
+        .set_default_provider_key("metadata-recording-provider")
+        .await;
+    bridge
+        .replace_agent_profiles(custom_agents.snapshot().await)
+        .await;
+    let state = AppStateBuilder::new(config)
+        .with_bridge(bridge.clone())
+        .with_custom_agent_store(custom_agents)
+        .build();
+    (state, bridge, calls, observed)
+}
+
 fn test_state_no_bridge() -> Arc<AppState> {
     AppStateBuilder::new(GaryxConfig::default()).build()
 }
@@ -355,7 +480,7 @@ async fn test_state_with_unready_provider_runtime() -> Arc<AppState> {
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -429,6 +554,19 @@ async fn test_chat_start_http_returns_503_while_provider_runtime_starts() {
 #[tokio::test]
 async fn test_chat_start_http_returns_accepted() {
     let state = test_state_with_provider().await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::chat-start-http",
+            json!({
+                "thread_id": "thread::chat-start-http",
+                "agent_id": "claude",
+                "provider_type": "claude_code"
+            }),
+        )
+        .await
+        .unwrap();
     let router = test_router(state);
 
     let req = Request::builder()
@@ -459,6 +597,250 @@ async fn test_chat_start_http_returns_accepted() {
 }
 
 #[tokio::test]
+async fn test_chat_start_missing_explicit_thread_is_404_before_agent_gate_or_bridge() {
+    let (state, bridge, calls, _) =
+        recording_state(None, &["claude", "codex", "traex", "antigravity"]).await;
+    let thread_id = "thread::missing-explicit-all-disabled";
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "threadId": thread_id,
+                "message": "must not run",
+                "waitForResponse": false
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = test_router(state).oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(bridge.thread_affinity_for(thread_id).await.is_none());
+}
+
+#[tokio::test]
+async fn test_chat_start_implicit_thread_fails_with_no_enabled_agent_before_bridge() {
+    let (state, _, calls, _) =
+        recording_state(None, &["claude", "codex", "traex", "antigravity"]).await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "message": "must not create",
+                "waitForResponse": false
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = test_router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error"], "no enabled standalone agent is available");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(
+        state
+            .threads
+            .thread_store
+            .list_keys(Some("thread::"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn test_chat_start_implicit_thread_storage_failure_returns_500() {
+    let state = test_state_with_provider().await;
+    state
+        .threads
+        .router
+        .lock()
+        .await
+        .set_thread_creator(Arc::new(FailingStorageThreadCreator));
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "message": "must fail closed",
+                "waitForResponse": false
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = test_router(state.clone()).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error"], "injected creation backend failure");
+    assert!(
+        state
+            .threads
+            .thread_store
+            .list_keys(Some("thread::"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn test_chat_start_reserved_metadata_cannot_override_fresh_canonical_binding() {
+    let (state, _, calls, observed) = recording_state(None, &["codex"]).await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "message": "canonical identity wins",
+                "waitForResponse": false,
+                "metadata": {
+                    "agent_id": "codex",
+                    "requested_provider_type": "codex_app_server",
+                    "provider_env": {"SHOULD_NOT_SURVIVE": "secret"},
+                    "model": "request-model"
+                }
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = test_router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let thread_id = payload["threadId"].as_str().expect("created thread id");
+    let record = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .unwrap()
+        .expect("created thread");
+    assert_eq!(record["agent_id"], "claude");
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("provider called");
+    let observed = observed.lock().unwrap();
+    let options = observed.first().expect("provider options");
+    assert_eq!(options.thread_id, thread_id);
+    assert_eq!(options.metadata["agent_id"], "claude");
+    assert_eq!(options.metadata["requested_provider_type"], "claude_code");
+    assert_eq!(options.metadata["model"], "request-model");
+    assert!(
+        options
+            .metadata
+            .get("provider_env")
+            .and_then(Value::as_object)
+            .is_none_or(|env| !env.contains_key("SHOULD_NOT_SURVIVE"))
+    );
+}
+
+#[tokio::test]
+async fn test_chat_start_existing_disabled_agent_thread_continues() {
+    let (state, _, calls, observed) = recording_state(Some("codex"), &["claude"]).await;
+    let thread_id = "thread::existing-disabled-agent";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "agent_id": "claude",
+                "provider_type": "claude_code"
+            }),
+        )
+        .await
+        .unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "threadId": thread_id,
+                "message": "continue existing binding",
+                "waitForResponse": false,
+                "metadata": {"agent_id": "codex"}
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = test_router(state).oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("provider called");
+    assert_eq!(observed.lock().unwrap()[0].metadata["agent_id"], "claude");
+}
+
+#[tokio::test]
+async fn test_chat_start_legacy_unstamped_thread_keeps_bridge_fallback_when_all_disabled() {
+    let (state, _, calls, observed) =
+        recording_state(None, &["claude", "codex", "traex", "antigravity"]).await;
+    let thread_id = "thread::legacy-unstamped-agent";
+    state
+        .threads
+        .thread_store
+        .set(thread_id, json!({"thread_id": thread_id}))
+        .await
+        .unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/start")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "threadId": thread_id,
+                "message": "continue legacy binding",
+                "waitForResponse": false
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let response = test_router(state).oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while calls.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("legacy thread reaches configured bridge fallback");
+    let observed = observed.lock().unwrap();
+    assert_eq!(observed[0].thread_id, thread_id);
+    assert!(observed[0].metadata.get("agent_id").is_none());
+}
+
+#[tokio::test]
 async fn test_chat_start_http_forwards_bound_reply_using_run_start_binding_snapshot() {
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
@@ -469,7 +851,7 @@ async fn test_chat_start_http_forwards_bound_reply_using_run_start_binding_snaps
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -601,7 +983,7 @@ async fn test_chat_start_assigns_private_workspace_to_thread_without_workspace()
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -728,24 +1110,30 @@ async fn test_chat_health_no_bridge() {
 #[tokio::test]
 async fn test_chat_interrupt_http_aborts_active_thread_run() {
     let (state, bridge) = test_state_with_slow_provider().await;
-    let router = test_router(state);
     let thread_id = "thread::chat-interrupt-http";
     let run_id = "run-chat-interrupt-http";
-
-    bridge
-        .start_agent_run(
-            AgentRunRequest::new(
-                thread_id,
-                "keep running",
-                run_id,
-                "api",
-                "main",
-                Default::default(),
-            ),
-            None,
-        )
+    state
+        .threads
+        .thread_store
+        .set(thread_id, json!({}))
         .await
         .unwrap();
+    let admitted = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        AgentRunRequest::new(
+            thread_id,
+            "keep running",
+            run_id,
+            "api",
+            "main",
+            Default::default(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    bridge.dispatch(admitted, None).await.unwrap();
+    let router = test_router(state);
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(bridge.is_run_active(run_id).await);
 

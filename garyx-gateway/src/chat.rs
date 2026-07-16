@@ -21,7 +21,10 @@ use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use garyx_models::MessageLifecycleStatus;
 use garyx_models::provider::{AgentDispatchOutcome, AgentRunRequest, StreamEvent};
-use garyx_router::{THREAD_TRANSCRIPT_REPLAY_CAP, ThreadTranscriptRecord};
+use garyx_router::{
+    AdmittedRun, AgentDispatcher, RunAdmissionError, THREAD_TRANSCRIPT_REPLAY_CAP,
+    ThreadTranscriptRecord,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -369,24 +372,46 @@ async fn start_chat_run(
     };
     let callback = compose_stream_callbacks(callbacks);
     state.sync_external_user_skills_before_run("api_chat_start", &thread_id);
-    let start_result = state
-        .integration
-        .bridge
-        .start_agent_run(
-            AgentRunRequest::new(
-                &thread_id,
-                &prepared.effective_message,
-                &run_id,
-                &prepared.channel,
-                &prepared.account_id,
-                metadata,
-            )
-            .with_images(Some(prepared.images))
-            .with_workspace_dir(prepared.workspace_path)
-            .with_requested_provider(prepared.provider_type),
-            callback,
+    let admitted = match AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        AgentRunRequest::new(
+            &thread_id,
+            &prepared.effective_message,
+            &run_id,
+            &prepared.channel,
+            &prepared.account_id,
+            metadata,
         )
-        .await;
+        .with_images(Some(prepared.images))
+        .with_workspace_dir(prepared.workspace_path)
+        .with_requested_provider(prepared.provider_type),
+    )
+    .await
+    {
+        Ok(run) => run,
+        Err(error) => {
+            for task in stream_tasks {
+                task.abort();
+            }
+            bound_stream.abort();
+            let status = match error {
+                RunAdmissionError::NotFound(_) => StatusCode::NOT_FOUND,
+                RunAdmissionError::Archived(_) | RunAdmissionError::Stale(_) => {
+                    StatusCode::CONFLICT
+                }
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            return Err((
+                status,
+                Json(json!({
+                    "runId": run_id,
+                    "threadId": thread_id,
+                    "error": error.to_string(),
+                })),
+            ));
+        }
+    };
+    let start_result = state.integration.bridge.dispatch(admitted, callback).await;
 
     match start_result {
         Ok(outcome) => {

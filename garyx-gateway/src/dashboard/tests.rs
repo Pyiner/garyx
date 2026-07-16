@@ -206,7 +206,7 @@ async fn test_settings_returns_raw_config() {
                     token: "secret-bot-token".to_owned(),
                     enabled: true,
                     name: None,
-                    agent_id: "claude".to_owned(),
+                    agent_id: Some("claude".to_owned()),
                     workspace_dir: None,
                     owner_target: None,
                     groups: Default::default(),

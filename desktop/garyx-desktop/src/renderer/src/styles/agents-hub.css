@@ -134,9 +134,28 @@
 }
 
 .agents-hub-cell-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
   font-size: var(--text-base);
   font-weight: var(--font-weight-medium);
   color: var(--color-token-text-primary);
+}
+
+.agents-hub-default-badge {
+  font-size: 10px;
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+.agents-hub-default-badge.is-muted {
+  border-color: color-mix(
+    in srgb,
+    var(--color-token-description-foreground) 28%,
+    transparent
+  );
+  color: var(--color-token-description-foreground);
 }
 
 .agents-hub-cell-id {

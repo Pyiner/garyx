@@ -133,7 +133,7 @@ function createWindowHarness({
   let olderPageIndex = 0;
   const mirror = new GatewayMirror({
     getState: async () => ({}),
-    listCustomAgents: async () => [],
+    listCustomAgents: async () => ({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null }),
     getThreadHistory: async () =>
       olderPages[Math.min(olderPageIndex++, olderPages.length - 1)],
     getThreadHistoryFull: async (threadId) => {
@@ -339,7 +339,7 @@ test("anchor: pagination expands a windowed snapshot and lights up older turns",
   );
   const mirror = new GatewayMirror({
     getState: async () => ({}),
-    listCustomAgents: async () => [],
+    listCustomAgents: async () => ({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null }),
     getThreadHistory: async () => older,
     getThreadHistoryFull: async () => recent,
     startThreadStream: async (input) => starts.push(input),

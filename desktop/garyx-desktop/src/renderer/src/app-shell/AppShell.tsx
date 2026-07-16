@@ -14,6 +14,7 @@ import { PanelLeft } from "lucide-react";
 
 import {
   type DesktopApiProviderType,
+  type DesktopAgentCatalog,
   type DesktopBotConsoleSummary,
   type DesktopCustomAgent,
   type ConnectionStatus,
@@ -30,6 +31,7 @@ import {
   type ThreadTranscript,
   type WindowLayoutBootstrap,
 } from "@shared/contracts";
+
 import { desktopStateWithoutThread } from "@shared/desktop-state";
 import { isToolRole } from "@shared/transcript-sync";
 
@@ -199,7 +201,11 @@ import {
   summarizeRemoteStateErrors,
 } from "./gateway-errors";
 import { buildAgentOptions, buildAgentTargetOptions } from "./agent-options";
-import { providerLabel } from "./components/agents-hub-helpers";
+import {
+  canUseAgentForNewBinding,
+  isNewDraftBindingBlocked,
+  suggestedAgentId,
+} from "./agent-availability-model";
 import {
   I18nProvider,
   createTranslator,
@@ -328,6 +334,11 @@ const CapsulesPanel = lazy(() =>
   })),
 );
 const EMPTY_UI_TRANSCRIPT_MESSAGES: UiTranscriptMessage[] = [];
+const EMPTY_DESKTOP_AGENT_CATALOG: DesktopAgentCatalog = {
+  agents: [],
+  defaultAgentId: null,
+  effectiveDefaultAgentId: null,
+};
 const EMPTY_DESKTOP_THREAD_SUMMARIES: DesktopThreadSummary[] = [];
 
 
@@ -613,7 +624,9 @@ export function AppShell() {
     },
     [pinnedOrderIngress],
   );
-  const [desktopAgents, setDesktopAgents] = useState<DesktopCustomAgent[]>([]);
+  const [desktopAgentCatalog, setDesktopAgentCatalog] =
+    useState<DesktopAgentCatalog>(EMPTY_DESKTOP_AGENT_CATALOG);
+  const desktopAgents = desktopAgentCatalog.agents;
   const [connection, setConnection] = useState<ConnectionStatus | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() =>
     initialRouteValue.kind === "thread" ? initialRouteValue.threadId : null,
@@ -649,10 +662,10 @@ export function AppShell() {
     botId: string | null;
     threadId: string;
   } | null>(null);
-  const [pendingAgentId, setPendingAgentId] = useState<string>(
+  const [pendingAgentId, setPendingAgentId] = useState<string | null>(
     initialRouteValue.kind === "new-thread" && initialRouteValue.agentId
       ? initialRouteValue.agentId
-      : "claude",
+      : null,
   );
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const [pendingModelReasoningEffort, setPendingModelReasoningEffort] =
@@ -819,6 +832,7 @@ export function AppShell() {
     contentView,
     desktopState,
     desktopAgents,
+    effectiveDefaultAgentId: desktopAgentCatalog.effectiveDefaultAgentId,
     getRouteVersion: () => desktopRouteStore.getSnapshot().version,
     navigateRoute: (route) => {
       desktopRouteStore.navigate(route, { replace: true });
@@ -915,7 +929,7 @@ export function AppShell() {
     selectedThreadId,
     selectedThreadIdRef,
     setConnection,
-    setDesktopAgents,
+    setDesktopAgentCatalog,
     setDesktopState,
     setError,
     setGatewaySettingsStatus,
@@ -990,7 +1004,9 @@ export function AppShell() {
   const activeThreadProviderModels = activeThreadProviderType
     ? providerModelsByType[activeThreadProviderType] || null
     : null;
-  const pendingAgent = desktopAgentMap.get(pendingAgentId) || null;
+  const pendingAgent = pendingAgentId
+    ? desktopAgentMap.get(pendingAgentId) || null
+    : null;
   const pendingAgentProviderType = pendingAgent?.providerType || null;
   const pendingProviderModels = pendingAgentProviderType
     ? providerModelsByType[pendingAgentProviderType] || null
@@ -1072,11 +1088,28 @@ export function AppShell() {
     [desktopAgents],
   );
   const addBotAgentTargets = useMemo(() => {
-    const options = buildAgentTargetOptions(desktopAgents);
-    return options.length
-      ? options
-      : [{ id: "claude", value: "claude", label: providerLabel("claude_code"), kind: "builtin" as const, providerType: "claude_code" as const }];
+    return buildAgentTargetOptions(desktopAgents);
   }, [desktopAgents]);
+  const pendingAgentAvailable = canUseAgentForNewBinding(pendingAgent);
+  const newDraftHasNoEnabledAgent = isNewDraftBindingBlocked(
+    hasNewThreadDraft,
+    pendingAgent,
+  );
+  useEffect(() => {
+    if (!hasNewThreadDraft || pendingAgentId !== null) {
+      return;
+    }
+    const effectiveAgentId = suggestedAgentId(desktopAgentCatalog);
+    if (!effectiveAgentId) {
+      return;
+    }
+    setPendingAgentId(effectiveAgentId);
+    syncDraftRoute({ agentId: effectiveAgentId });
+  }, [
+    desktopAgentCatalog.effectiveDefaultAgentId,
+    hasNewThreadDraft,
+    pendingAgentId,
+  ]);
   const pendingAgentLabel =
     pendingAgent?.displayName?.trim() ||
     pendingAgentId ||
@@ -1090,7 +1123,9 @@ export function AppShell() {
     : pendingAgent?.providerType || "claude_code";
   const composerAgentLabel = selectedThreadId
     ? activeAgentLabel
-    : pendingAgentLabel;
+    : pendingAgentAvailable
+      ? pendingAgentLabel
+      : t("No enabled agents");
   const gatewayIndicator = computeGatewayIndicator({
     status: connection,
     failureCount: gatewayFailureCount,
@@ -2314,7 +2349,6 @@ export function AppShell() {
       sourceThreadId: sideChatSourceThreadId,
       activeThread,
       threadSummaryById,
-      pendingAgentId,
       setDesktopState,
       setError,
     };
@@ -2537,11 +2571,11 @@ export function AppShell() {
   }
 
   async function refreshAgentTargets() {
-    const nextAgents = await window.garyxDesktop
+    const nextCatalog = await window.garyxDesktop
       .listCustomAgents()
-      .catch(() => [] as DesktopCustomAgent[]);
+      .catch(() => EMPTY_DESKTOP_AGENT_CATALOG);
     startTransition(() => {
-      setDesktopAgents(nextAgents);
+      setDesktopAgentCatalog(nextCatalog);
     });
   }
 
@@ -2760,13 +2794,13 @@ export function AppShell() {
 
           // Fast hydration: the threads slice is a recent page (pinned ids
           // repaired by id). The full set follows below, off the paint path.
-          const [nextState, nextStatus, nextAgents] =
+          const [nextState, nextStatus, nextAgentCatalog] =
             await Promise.all([
               requestDesktopState(() => window.garyxDesktop.getStateFast()),
               window.garyxDesktop.checkConnection(),
               window.garyxDesktop
                 .listCustomAgents()
-                .catch(() => [] as DesktopCustomAgent[]),
+                .catch(() => EMPTY_DESKTOP_AGENT_CATALOG),
             ]);
           if (cancelled) {
             return;
@@ -2786,7 +2820,7 @@ export function AppShell() {
             if (pinOrderSnapshot) {
               setPinnedOrderMainSnapshot(pinOrderSnapshot);
             }
-            setDesktopAgents(nextAgents);
+            setDesktopAgentCatalog(nextAgentCatalog);
             setSettingsDraft(nextState.settings);
             setConnection(nextStatus);
           });
@@ -2842,7 +2876,9 @@ export function AppShell() {
           setSelectedThreadId(null);
           setPendingWorkspacePath(startupRoute.workspacePath || null);
           setPendingWorkspaceMode("local");
-          setPendingAgentId(startupRoute.agentId || "claude");
+          setPendingAgentId(
+            startupRoute.agentId || null,
+          );
         } else {
           setSelectedThreadId((current) =>
             isKnownThreadId(hydratedState, current)
@@ -3154,7 +3190,7 @@ export function AppShell() {
       setPendingWorkspacePath(null);
       setPendingWorkspaceMode("local");
       setPendingBotId(null);
-      setPendingAgentId(created.thread.agentId || providerHint || "claude");
+      setPendingAgentId(created.thread.agentId || providerHint || null);
       requestComposerFocus();
     } catch (resumeError) {
       const message =
@@ -3332,7 +3368,9 @@ export function AppShell() {
     setPendingWorkspaceMode("local");
     setPendingBotId(input.botId ?? null);
     if (input.agentId !== undefined) {
-      setPendingAgentId(input.agentId || "claude");
+      const nextAgentId = input.agentId
+        || desktopAgentCatalog.effectiveDefaultAgentId;
+      setPendingAgentId(nextAgentId);
     }
     clearComposerDraft();
     requestComposerFocus();
@@ -3342,7 +3380,9 @@ export function AppShell() {
     desktopRouteStore.syncRoute({
       kind: "new-thread",
       workspacePath: input.workspacePath || null,
-      agentId: input.agentId !== undefined ? input.agentId : pendingAgentId,
+      agentId: input.agentId !== undefined
+        ? input.agentId || desktopAgentCatalog.effectiveDefaultAgentId
+        : pendingAgentId,
     });
   }
 
@@ -4022,9 +4062,11 @@ export function AppShell() {
         composerHasPayload={composerHasPayload}
         composerImages={composerImages}
         composerPendingUploads={composerPendingUploads}
-        composerEditingLocked={composerEditingLocked}
-        composerLocked={composerLocked}
-        composerPlaceholder={composerPlaceholder}
+        composerEditingLocked={composerEditingLocked || newDraftHasNoEnabledAgent}
+        composerLocked={composerLocked || newDraftHasNoEnabledAgent}
+        composerPlaceholder={newDraftHasNoEnabledAgent
+          ? t("Enable an agent to start a new thread")
+          : composerPlaceholder}
         composerProviderType={composerProviderType}
         composerResetKey={composerResetKey}
         composerWorkspaceBranch={composerWorkspaceBranch}
@@ -4682,6 +4724,7 @@ export function AppShell() {
       ) : null}
       <AddBotDialogRoot
         agentTargets={addBotAgentTargets}
+        effectiveDefaultAgentId={desktopAgentCatalog.effectiveDefaultAgentId}
         onAddWorkspace={addWorkspacePathFromPicker}
         onCreateChannel={handleAddChannelAccount}
         ref={addBotDialogRef}
@@ -4792,6 +4835,7 @@ export function AppShell() {
                   <GatewaySettingsPanel
                     activeTab={settingsActiveTab}
                     agents={desktopAgents}
+                    effectiveDefaultAgentId={desktopAgentCatalog.effectiveDefaultAgentId}
                     commands={commands}
                     commandsLoading={commandsLoading}
                     commandsSaving={commandsSaving}

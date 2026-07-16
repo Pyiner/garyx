@@ -57,6 +57,9 @@ export type AutomationDraft = {
   label: string;
   prompt: string;
   agentId: string;
+  agentChanged: boolean;
+  initialTargetMode: 'new_thread' | 'existing_thread';
+  targetEffectiveAgentId: string;
   targetMode: 'new_thread' | 'existing_thread';
   targetThreadId: string;
   workspacePath: string;
@@ -325,6 +328,26 @@ export function AutomationDialog({
 }: AutomationDialogProps) {
   const { t } = useI18n();
   const { mode, draft } = state;
+  const selectedTargetThread = threadOptions.find(
+    (thread) => thread.id === draft.targetThreadId,
+  ) || null;
+  const targetEffectiveAgentId = selectedTargetThread?.agentId?.trim()
+    || draft.targetEffectiveAgentId.trim();
+  const targetEffectiveAgent = agentOptions.find(
+    (option) => option.id === targetEffectiveAgentId,
+  ) || null;
+  const generatedAgentAvailable = agentOptions.some(
+    (option) => option.id === draft.agentId,
+  );
+  const mayPreserveUnavailableGeneratedAgent =
+    mode === 'edit'
+    && draft.initialTargetMode === 'new_thread'
+    && !draft.agentChanged;
+  const generatedAgentBlocked = draft.targetMode === 'new_thread'
+    && (
+      !draft.agentId.trim()
+      || (!generatedAgentAvailable && !mayPreserveUnavailableGeneratedAgent)
+    );
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -364,7 +387,11 @@ export function AutomationDialog({
             <Select
               value={draft.agentId || undefined}
               onValueChange={(value) =>
-                onDraftChange((d) => ({ ...d, agentId: value }))
+                onDraftChange((d) => ({
+                  ...d,
+                  agentId: value,
+                  agentChanged: true,
+                }))
               }
             >
               <SelectTrigger className="w-full">
@@ -374,7 +401,7 @@ export function AutomationDialog({
                 <SelectGroup>
                   <SelectLabel>{t('Agents')}</SelectLabel>
                   {draft.agentId && !agentOptions.some((option) => option.id === draft.agentId) ? (
-                    <SelectItem value={draft.agentId}>
+                    <SelectItem disabled value={draft.agentId}>
                       <AgentOptionRow
                         agentId={draft.agentId}
                         kind="agent"
@@ -392,6 +419,17 @@ export function AutomationDialog({
                 </SelectGroup>
               </SelectContent>
             </Select>
+            {!agentOptions.length ? (
+              <FieldDescription>
+                {t('No enabled agent is available. Enable one to create a generated-thread automation.')}
+              </FieldDescription>
+            ) : draft.agentId && !generatedAgentAvailable ? (
+              <FieldDescription>
+                {mayPreserveUnavailableGeneratedAgent
+                  ? t('This disabled agent will be preserved unless you explicitly choose another agent.')
+                  : t('Choose an enabled agent before saving this mode change.')}
+              </FieldDescription>
+            ) : null}
           </Field>
           )}
 
@@ -403,7 +441,20 @@ export function AutomationDialog({
               value={draft.targetMode}
               onValueChange={(value) => {
                 if (value === 'new_thread') {
-                  onDraftChange((d) => ({ ...d, targetMode: 'new_thread', targetThreadId: '' }));
+                  onDraftChange((d) => {
+                    const targetThread = threadOptions.find(
+                      (thread) => thread.id === d.targetThreadId,
+                    );
+                    const currentTargetAgentId = targetThread?.agentId?.trim()
+                      || d.targetEffectiveAgentId.trim();
+                    return {
+                      ...d,
+                      agentId: d.initialTargetMode === 'existing_thread'
+                        ? currentTargetAgentId
+                        : d.agentId,
+                      targetMode: 'new_thread',
+                    };
+                  });
                 } else if (value === 'existing_thread') {
                   onDraftChange((d) => {
                     const fallbackThread = threadOptions.find((thread) => thread.id === d.targetThreadId)
@@ -412,6 +463,9 @@ export function AutomationDialog({
                       ...d,
                       targetMode: 'existing_thread',
                       targetThreadId: fallbackThread?.id || d.targetThreadId,
+                      targetEffectiveAgentId:
+                        fallbackThread?.agentId?.trim()
+                        || d.targetEffectiveAgentId,
                       workspacePath: fallbackThread?.workspacePath || d.workspacePath,
                     };
                   });
@@ -436,6 +490,23 @@ export function AutomationDialog({
 
           {draft.targetMode === 'existing_thread' ? (
             <Field>
+              <FieldLabel>{t('Agent')}</FieldLabel>
+              <Input
+                readOnly
+                value={targetEffectiveAgent
+                  ? t('Follows target thread · {agent}', { agent: targetEffectiveAgent.label })
+                  : targetEffectiveAgentId
+                    ? t('Follows target thread · {agent}', { agent: targetEffectiveAgentId })
+                    : t('Follows target thread · unavailable until the thread has an agent')}
+              />
+              <FieldDescription>
+                {t("The target thread's current agent is resolved at run time and cannot be overridden here.")}
+              </FieldDescription>
+            </Field>
+          ) : null}
+
+          {draft.targetMode === 'existing_thread' ? (
+            <Field>
               <FieldLabel>{t('Thread')}</FieldLabel>
               <AutomationThreadPicker
                 agentOptions={agentOptions}
@@ -448,6 +519,7 @@ export function AutomationDialog({
                     return {
                       ...d,
                       targetThreadId: value,
+                      targetEffectiveAgentId: thread?.agentId?.trim() || '',
                       workspacePath: thread?.workspacePath || d.workspacePath,
                     };
                   })
@@ -640,7 +712,7 @@ export function AutomationDialog({
             <Button
               type="submit"
               className="h-8 rounded-full px-4 text-[12px] shadow-sm active:scale-[0.96]"
-              disabled={saving}
+              disabled={saving || generatedAgentBlocked}
             >
               {saving ? t('Saving…') : mode === 'create' ? t('Create') : t('Save')}
             </Button>

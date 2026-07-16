@@ -98,6 +98,7 @@ public struct GaryxConfiguredBot: Decodable, Identifiable, Equatable, Sendable {
     public var displayName: String
     public var enabled: Bool
     public var agentId: String?
+    public var effectiveAgentId: String?
     public var workspaceDir: String?
     public var workspaceMode: String?
     public var rootBehavior: String
@@ -111,6 +112,7 @@ public struct GaryxConfiguredBot: Decodable, Identifiable, Equatable, Sendable {
         displayName: String,
         enabled: Bool = true,
         agentId: String? = nil,
+        effectiveAgentId: String? = nil,
         workspaceDir: String? = nil,
         workspaceMode: String? = nil,
         rootBehavior: String = "open_default",
@@ -123,6 +125,7 @@ public struct GaryxConfiguredBot: Decodable, Identifiable, Equatable, Sendable {
         self.displayName = displayName
         self.enabled = enabled
         self.agentId = agentId
+        self.effectiveAgentId = effectiveAgentId
         self.workspaceDir = workspaceDir
         self.workspaceMode = workspaceMode
         self.rootBehavior = rootBehavior
@@ -141,6 +144,8 @@ public struct GaryxConfiguredBot: Decodable, Identifiable, Equatable, Sendable {
         case enabled
         case agentId = "agent_id"
         case agentIdCamel = "agentId"
+        case effectiveAgentId = "effective_agent_id"
+        case effectiveAgentIdCamel = "effectiveAgentId"
         case workspaceDir = "workspace_dir"
         case workspaceDirCamel = "workspaceDir"
         case workspaceMode = "workspace_mode"
@@ -162,6 +167,7 @@ public struct GaryxConfiguredBot: Decodable, Identifiable, Equatable, Sendable {
         displayName = try container.garyxDecodeFirstString(.displayName, .displayNameCamel, .name) ?? "\(channel):\(accountId)"
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel)
+        effectiveAgentId = try container.garyxDecodeFirstString(.effectiveAgentId, .effectiveAgentIdCamel)
         workspaceDir = try container.garyxDecodeFirstString(.workspaceDir, .workspaceDirCamel)
         workspaceMode = try container.garyxDecodeFirstString(.workspaceMode, .workspaceModeCamel)
         rootBehavior = try container.garyxDecodeFirstString(.rootBehavior, .rootBehaviorCamel) ?? "open_default"
@@ -235,6 +241,7 @@ public struct GaryxBotConsoleSummary: Decodable, Identifiable, Equatable, Sendab
     public var title: String
     public var subtitle: String
     public var agentId: String?
+    public var effectiveAgentId: String?
     public var rootBehavior: String
     public var status: String
     public var latestActivity: String?
@@ -252,6 +259,7 @@ public struct GaryxBotConsoleSummary: Decodable, Identifiable, Equatable, Sendab
         title: String,
         subtitle: String = "",
         agentId: String? = nil,
+        effectiveAgentId: String? = nil,
         rootBehavior: String = "open_default",
         status: String = "idle",
         latestActivity: String? = nil,
@@ -268,6 +276,7 @@ public struct GaryxBotConsoleSummary: Decodable, Identifiable, Equatable, Sendab
         self.title = title
         self.subtitle = subtitle
         self.agentId = agentId
+        self.effectiveAgentId = effectiveAgentId
         self.rootBehavior = rootBehavior
         self.status = status
         self.latestActivity = latestActivity
@@ -288,6 +297,8 @@ public struct GaryxBotConsoleSummary: Decodable, Identifiable, Equatable, Sendab
         case subtitle
         case agentId = "agent_id"
         case agentIdCamel = "agentId"
+        case effectiveAgentId = "effective_agent_id"
+        case effectiveAgentIdCamel = "effectiveAgentId"
         case rootBehavior = "root_behavior"
         case rootBehaviorCamel = "rootBehavior"
         case status
@@ -315,6 +326,7 @@ public struct GaryxBotConsoleSummary: Decodable, Identifiable, Equatable, Sendab
         title = try container.garyxDecodeFirstString(.title) ?? id
         subtitle = try container.garyxDecodeFirstString(.subtitle) ?? ""
         agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel)
+        effectiveAgentId = try container.garyxDecodeFirstString(.effectiveAgentId, .effectiveAgentIdCamel)
         rootBehavior = try container.garyxDecodeFirstString(.rootBehavior, .rootBehaviorCamel) ?? "open_default"
         status = try container.garyxDecodeFirstString(.status) ?? "idle"
         latestActivity = try container.garyxDecodeFirstString(.latestActivity, .latestActivityCamel)

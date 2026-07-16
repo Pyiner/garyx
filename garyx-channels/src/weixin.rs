@@ -2490,7 +2490,6 @@ struct WeixinStreamConsumerContext {
     account_id: String,
     user_id: String,
     context_token: String,
-    router: Arc<Mutex<MessageRouter>>,
     thread_id: Arc<std::sync::Mutex<String>>,
     typing_ticket: Option<String>,
     running: Arc<AtomicBool>,
@@ -2548,24 +2547,6 @@ async fn open_live_message_for_context(
     prefer_latest_token: bool,
 ) -> LiveMessage {
     LiveMessage::open(resolve_stream_context_token(ctx, prefer_latest_token).await).await
-}
-
-async fn record_stream_outbound(ctx: &WeixinStreamConsumerContext, client_id: &str) {
-    let thread_id = current_stream_thread_id(ctx);
-    if thread_id.trim().is_empty() {
-        return;
-    }
-    let mut router_guard = ctx.router.lock().await;
-    router_guard
-        .record_outbound_message_with_persistence(
-            &thread_id,
-            "weixin",
-            &ctx.account_id,
-            &ctx.user_id,
-            None,
-            client_id,
-        )
-        .await;
 }
 
 async fn ensure_stream_typing(
@@ -2735,7 +2716,6 @@ async fn finalize_live_message(
             live.last_sent_visible = live.text_visible.clone();
             live.last_sent_at = Some(Instant::now());
             *calls_used = calls_used.saturating_add(1);
-            record_stream_outbound(ctx, &live.client_id).await;
             record_weixin_finalize_reason(reason).await;
             LiveTextSendResult::Sent
         }
@@ -2837,10 +2817,9 @@ async fn drain_live_media(
         )
         .await
         {
-            Ok(message_id) => {
+            Ok(_) => {
                 sent_media_refs.insert(dedupe_key);
                 *calls_used = calls_used.saturating_add(1);
-                record_stream_outbound(ctx, &message_id).await;
             }
             Err(error) => {
                 let reason = classify_text_send_error(&error);
@@ -3107,7 +3086,6 @@ pub(crate) struct WeixinStreamingCallbackConfig {
     pub(crate) account_id: String,
     pub(crate) user_id: String,
     pub(crate) context_token: String,
-    pub(crate) router: Arc<Mutex<MessageRouter>>,
     pub(crate) thread_id: String,
     pub(crate) typing_ticket: Option<String>,
     pub(crate) running: Arc<AtomicBool>,
@@ -3125,7 +3103,6 @@ pub(crate) fn build_weixin_response_callback(
         account_id: cfg.account_id,
         user_id: cfg.user_id,
         context_token: cfg.context_token,
-        router: cfg.router,
         thread_id: Arc::new(std::sync::Mutex::new(cfg.thread_id)),
         typing_ticket: cfg.typing_ticket,
         running: cfg.running,
@@ -3278,9 +3255,7 @@ async fn flush_non_streaming_weixin_text(
         }
     }
 
-    let message_id = if let Some(message_id) = maybe_message_id {
-        message_id
-    } else if !plain_text.is_empty() {
+    if maybe_message_id.is_none() && !plain_text.is_empty() {
         match send_text_message(
             &ctx.http,
             &ctx.account,
@@ -3290,7 +3265,7 @@ async fn flush_non_streaming_weixin_text(
         )
         .await
         {
-            Ok(message_id) => message_id,
+            Ok(_) => {}
             Err(error) => {
                 error!(
                     account_id = %ctx.account_id,
@@ -3309,11 +3284,7 @@ async fn flush_non_streaming_weixin_text(
                 return;
             }
         }
-    } else {
-        return;
-    };
-
-    record_stream_outbound(ctx, &message_id).await;
+    }
 }
 
 async fn run_non_streaming_update_consumer(
@@ -3787,7 +3758,6 @@ impl WeixinChannel {
 
         let response_account = runtime.account.clone();
         let response_http = runtime.http.clone();
-        let response_router = runtime.router.clone();
         let response_account_id = runtime.account_id.clone();
         let response_user_id = from_id.clone();
         let response_context_token = message.context_token.clone();
@@ -3827,7 +3797,6 @@ impl WeixinChannel {
                 account_id: response_account_id,
                 user_id: response_user_id,
                 context_token: response_context_token,
-                router: response_router,
                 thread_id: thread_id_cb,
                 typing_ticket,
                 running: runtime.running.clone(),
@@ -3858,7 +3827,6 @@ impl WeixinChannel {
                     response_account_id: &str,
                     response_user_id: &str,
                     response_context_token: &str,
-                    response_router: &Arc<Mutex<MessageRouter>>,
                     thread_id_cb: &Arc<std::sync::Mutex<String>>,
                     sent_media_refs: &mut HashSet<String>,
                 ) {
@@ -4000,9 +3968,7 @@ impl WeixinChannel {
                             }
                         }
                     }
-                    let message_id = if let Some(message_id) = maybe_message_id {
-                        message_id
-                    } else if !plain_text.is_empty() {
+                    if maybe_message_id.is_none() && !plain_text.is_empty() {
                         match send_text_message(
                             response_http,
                             response_account,
@@ -4012,7 +3978,7 @@ impl WeixinChannel {
                         )
                         .await
                         {
-                            Ok(message_id) => message_id,
+                            Ok(_) => {}
                             Err(error) => {
                                 error!(
                                     account_id = %response_account_id,
@@ -4037,22 +4003,6 @@ impl WeixinChannel {
                                 return;
                             }
                         }
-                    } else {
-                        return;
-                    };
-
-                    if !thread_id.trim().is_empty() {
-                        let mut router_guard = response_router.lock().await;
-                        router_guard
-                            .record_outbound_message_with_persistence(
-                                &thread_id,
-                                "weixin",
-                                response_account_id,
-                                response_user_id,
-                                None,
-                                &message_id,
-                            )
-                            .await;
                     }
                 }
 
@@ -4138,7 +4088,6 @@ impl WeixinChannel {
                                     &response_account_id,
                                     &response_user_id,
                                     &response_context_token,
-                                    &response_router,
                                     &thread_id_cb,
                                     &mut sent_media_refs,
                                 )
@@ -4185,7 +4134,6 @@ impl WeixinChannel {
                                 &response_account_id,
                                 &response_user_id,
                                 &response_context_token,
-                                &response_router,
                                 &thread_id_cb,
                                 &mut sent_media_refs,
                             )
@@ -4233,7 +4181,6 @@ impl WeixinChannel {
             thread_binding_key: from_id.clone(),
             message: clean_text,
             run_id,
-            reply_to_message_id: None,
             images: Vec::new(),
             extra_metadata: metadata,
             file_paths: file_paths_for_agent,
@@ -4360,19 +4307,7 @@ impl WeixinChannel {
                             )
                             .await
                             {
-                                Ok(message_id) => {
-                                    let mut router_guard = runtime.router.lock().await;
-                                    router_guard
-                                        .record_outbound_message_with_persistence(
-                                            &result.thread_id,
-                                            "weixin",
-                                            &runtime.account_id,
-                                            &from_id,
-                                            None,
-                                            &message_id,
-                                        )
-                                        .await;
-                                }
+                                Ok(_) => {}
                                 Err(error) => {
                                     error!(
                                         account_id = %runtime.account_id,

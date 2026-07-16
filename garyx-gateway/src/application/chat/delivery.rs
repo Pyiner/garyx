@@ -59,7 +59,6 @@ pub async fn build_bound_response_callback(
         let callback = build_stream_dispatch_callback(
             state.channel_dispatcher(),
             target.clone(),
-            state.threads.router.clone(),
             StreamDispatchRole::Origin,
         );
         let bound_consumer = build_bound_delivery_consumer(
@@ -140,7 +139,6 @@ fn build_bound_delivery_consumer(
         return None;
     }
 
-    let router = state.threads.router.clone();
     let dispatcher = state.channel_dispatcher();
     let callbacks: Vec<Arc<dyn Fn(StreamEvent) + Send + Sync>> = targets
         .into_iter()
@@ -149,7 +147,6 @@ fn build_bound_delivery_consumer(
             let callback = build_stream_dispatch_callback(
                 dispatcher.clone(),
                 target.clone(),
-                router.clone(),
                 StreamDispatchRole::BoundTarget,
             );
             if callback.is_none() {

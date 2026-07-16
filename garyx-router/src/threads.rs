@@ -847,7 +847,9 @@ pub fn default_agent_for_channel_account(
             .api
             .accounts
             .get(account_id)
-            .map(|account| account.agent_id.trim().to_owned()),
+            .and_then(|account| account.agent_id.as_deref())
+            .map(str::trim)
+            .map(str::to_owned),
         _ => config
             .channels
             .plugins

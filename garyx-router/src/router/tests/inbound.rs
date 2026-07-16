@@ -43,7 +43,6 @@ fn test_inbound_command_classifier_reads_metadata_text() {
         thread_binding_key: "user1".to_owned(),
         message: "ignored".to_owned(),
         run_id: "run-1".to_owned(),
-        reply_to_message_id: None,
         images: Vec::new(),
         extra_metadata,
         file_paths: Vec::new(),

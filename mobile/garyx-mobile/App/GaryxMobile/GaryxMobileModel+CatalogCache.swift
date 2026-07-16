@@ -37,11 +37,13 @@ extension GaryxMobileModel {
         guard let data = defaults.data(forKey: key) else { return }
         let decoder = JSONDecoder()
         guard let snapshot = try? decoder.decode(GaryxMobileCatalogCacheSnapshot.self, from: data),
-              snapshot.version == GaryxMobileCatalogCacheSnapshot.currentVersion else {
+              GaryxMobileCatalogCachePolicy.shouldRestore(version: snapshot.version) else {
             defaults.removeObject(forKey: key)
             return
         }
         catalogSnapshotRestored = true
+        gatewayDefaultAgentId = snapshot.gatewayDefaultAgentId
+        effectiveDefaultAgentId = snapshot.effectiveDefaultAgentId
         let cachedAgents = snapshot.agents.map(\.model)
         GaryxEquatableAssignment.assignIfChanged(current: agents, next: cachedAgents) { agents = $0 }
         skills = snapshot.skills.map(\.model)
@@ -61,7 +63,6 @@ extension GaryxMobileModel {
         restoreWorkspaceCatalogPaths(snapshot.workspacePaths)
         if !agents.isEmpty {
             agentTargetsLoadPhase = .loaded
-            ensureSelectedAgentTarget()
         }
         ensureSelectedWorkspace()
         if !threads.isEmpty {
@@ -72,6 +73,8 @@ extension GaryxMobileModel {
     func persistCatalogCacheSnapshot() {
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: agents,
+            gatewayDefaultAgentId: gatewayDefaultAgentId,
+            effectiveDefaultAgentId: effectiveDefaultAgentId,
             workspacePaths: userWorkspacePaths,
             skills: skills,
             capsules: capsules,

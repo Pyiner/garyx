@@ -16,8 +16,7 @@
 //! streamed text and, on `Done`, posts it back out through the
 //! plugin's own `dispatch_outbound` via the [`ChannelDispatcher`];
 //! structured tool events are forwarded without text rendering.
-//! `record_outbound` is a no-op for now — the stream-driven
-//! callback already handles the write-path bookkeeping. `abandon_inbound`
+//! `record_outbound` remains a compatibility no-op. `abandon_inbound`
 //! tombstones a live stream so later provider events stop fanning out.
 
 use std::collections::HashSet;
@@ -127,8 +126,7 @@ impl HostInboundHandler {
 /// Mirror of `plugin_host::protocol::InboundRequestPayload` — kept as
 /// a local shape so we only pull in what the handler needs. The wire
 /// shape is `{ account_id, from_id, is_group, thread_binding_key,
-/// message, run_id, reply_to_message_id?, images[], file_paths[],
-/// extra_metadata{} }`.
+/// message, run_id, images[], file_paths[], extra_metadata{} }`.
 #[derive(Debug, Deserialize)]
 struct DeliverInboundParams {
     account_id: String,
@@ -140,8 +138,6 @@ struct DeliverInboundParams {
     message: String,
     #[serde(default)]
     run_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    reply_to_message_id: Option<String>,
     #[serde(default)]
     images: Vec<AttachmentRef>,
     #[serde(default)]
@@ -169,12 +165,8 @@ impl InboundHandler for HostInboundHandler {
             "commands/list" => self.handle_commands_list(params).await,
             "deliver_inbound" => self.handle_deliver_inbound(params).await,
             "record_outbound" => {
-                // The `route_and_dispatch` response callback already
-                // persists outbound replies it emits, so an explicit
-                // record from the plugin is redundant in the common
-                // case. Accept as a no-op rather than rejecting —
-                // plugins that track this bookkeeping externally
-                // still round-trip cleanly.
+                // Retained as a deprecated compatibility no-op so older
+                // plugins continue to round-trip cleanly.
                 Ok(Value::Object(Default::default()))
             }
             "abandon_inbound" => self.handle_abandon_inbound(params),
@@ -392,7 +384,6 @@ impl HostInboundHandler {
             thread_binding_key: parsed.thread_binding_key.clone(),
             message: parsed.message,
             run_id: run_id.clone(),
-            reply_to_message_id: parsed.reply_to_message_id,
             images: inline_images,
             extra_metadata,
             file_paths: parsed.file_paths,
@@ -415,7 +406,6 @@ impl HostInboundHandler {
                     stream_id: stream_id.clone(),
                     run_id: run_id.clone(),
                     endpoint_identity: origin_endpoint_identity.clone(),
-                    router: self.router.clone(),
                     dispatcher: self.swap.clone(),
                     streams: self.streams.clone(),
                     live_streams: self.live_streams.clone(),
@@ -613,7 +603,6 @@ struct DeferredOriginNativeStreamCtx {
     stream_id: String,
     run_id: String,
     endpoint_identity: String,
-    router: Arc<Mutex<MessageRouter>>,
     dispatcher: Arc<dyn ChannelDispatcher>,
     streams: Arc<StreamRegistry>,
     live_streams: Arc<StdMutex<HashSet<String>>>,
@@ -636,7 +625,6 @@ struct DeferredOriginNativeStreamInner {
     stream_id: String,
     run_id: String,
     endpoint_identity: String,
-    router: Arc<Mutex<MessageRouter>>,
     dispatcher: Arc<dyn ChannelDispatcher>,
     streams: Arc<StreamRegistry>,
     typed_stream_id: StreamId,
@@ -660,7 +648,6 @@ impl DeferredOriginNativeStream {
                 stream_id: ctx.stream_id,
                 run_id: ctx.run_id,
                 endpoint_identity: ctx.endpoint_identity,
-                router: ctx.router,
                 dispatcher: ctx.dispatcher,
                 streams: ctx.streams,
                 live_streams: ctx.live_streams,
@@ -741,7 +728,6 @@ impl DeferredOriginNativeStreamInner {
         let callback = build_stream_dispatch_callback(
             self.dispatcher.clone(),
             target,
-            self.router.clone(),
             StreamDispatchRole::Origin,
         );
         if callback.is_some() {

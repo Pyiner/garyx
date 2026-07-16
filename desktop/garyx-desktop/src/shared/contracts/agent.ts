@@ -17,8 +17,17 @@ export interface DesktopCustomAgent {
   systemPrompt: string;
   builtIn: boolean;
   standalone: boolean;
+  enabled: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DesktopAgentCatalog {
+  agents: DesktopCustomAgent[];
+  /** Persisted user choice. It may name an agent that is currently disabled. */
+  defaultAgentId: string | null;
+  /** Server-resolved enabled standalone agent, or null when all are disabled. */
+  effectiveDefaultAgentId: string | null;
 }
 
 export interface CreateCustomAgentInput {
@@ -41,6 +50,15 @@ export interface UpdateCustomAgentInput extends CreateCustomAgentInput {
 }
 
 export interface DeleteCustomAgentInput {
+  agentId: string;
+}
+
+export interface ToggleCustomAgentInput {
+  agentId: string;
+  enabled: boolean;
+}
+
+export interface SetDefaultCustomAgentInput {
   agentId: string;
 }
 

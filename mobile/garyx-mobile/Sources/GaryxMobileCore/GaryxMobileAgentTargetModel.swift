@@ -34,7 +34,7 @@ public enum GaryxMobileAgentTargetMapper {
         agents: [GaryxAgentSummary]
     ) -> [GaryxMobileAgentTarget] {
         let agentItems = agents
-            .filter(\.standalone)
+            .filter { $0.standalone && $0.enabled }
             .map {
                 GaryxMobileAgentTarget(
                     id: $0.id,
@@ -50,17 +50,17 @@ public enum GaryxMobileAgentTargetMapper {
     }
 
     public static func selectedTarget(
-        id selectedId: String,
+        id selectedId: String?,
         targets: [GaryxMobileAgentTarget]
     ) -> GaryxMobileAgentTarget? {
-        let normalizedId = selectedId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedId = selectedId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !normalizedId.isEmpty else { return nil }
         return targets.first { $0.id == normalizedId }
     }
 
     public static func selectedThreadTarget(
         thread: GaryxThreadSummary?,
-        selectedAgentTargetId: String,
+        selectedAgentTargetId: String?,
         targets: [GaryxMobileAgentTarget]
     ) -> GaryxMobileAgentTarget? {
         guard let thread else {
@@ -75,10 +75,10 @@ public enum GaryxMobileAgentTargetMapper {
     }
 
     public static func selectedAgentLabel(
-        selectedAgentTargetId: String,
+        selectedAgentTargetId: String?,
         target: GaryxMobileAgentTarget?
     ) -> String {
-        target?.title ?? selectedAgentTargetId
+        target?.title ?? selectedAgentTargetId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     public static func selectedThreadAgentLabel(

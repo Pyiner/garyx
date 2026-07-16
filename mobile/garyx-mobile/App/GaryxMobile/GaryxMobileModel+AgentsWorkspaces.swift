@@ -311,11 +311,6 @@ extension GaryxMobileModel {
         )
     }
 
-    func setSelectedAgentTarget(_ id: String) {
-        selectedAgentTargetId = id
-        defaults.set(id, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId))
-    }
-
     func openAgentChatDraft(_ id: String) {
         let targetId = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !targetId.isEmpty else { return }
@@ -329,24 +324,18 @@ extension GaryxMobileModel {
                 return targetId
             }
         }
-        let pendingTargetId = currentPendingNewThreadAgentTargetId()
-        if !pendingTargetId.isEmpty {
-            return pendingTargetId
-        }
-        return selectedAgentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GaryxNewThreadAgentSelection.agentId(
+            draftOverrideAgentId: currentPendingNewThreadAgentTargetId(),
+            effectiveDefaultAgentId: effectiveDefaultAgentId
+        ) ?? ""
     }
 
     func setNewThreadAgentTarget(_ id: String) {
-        if pendingNewThreadAgentTargetGeneration == selectedThreadDraftGeneration {
-            setPendingNewThreadAgentTarget(id)
-        } else {
-            setSelectedAgentTarget(id)
-        }
+        setPendingNewThreadAgentTarget(id)
         // A model/thinking override only makes sense for the agent it was picked for.
         clearNewThreadModelOverride()
         // The composer's target changed; bind to that target's own draft buffer so
-        // one new-thread target's text is never shown or sent under another. Covers
-        // both the pending and the selected-default branches above.
+        // one new-thread target's text is never shown or sent under another.
         if selectedThread == nil {
             switchComposerDraft(to: newThreadComposerDraftKey)
         }
@@ -412,16 +401,12 @@ extension GaryxMobileModel {
 
     func setPendingNewThreadAgentTarget(_ id: String?) {
         let targetId = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !targetId.isEmpty else {
-            clearPendingNewThreadAgentTarget()
-            return
-        }
-        pendingNewThreadAgentTargetId = targetId
+        selectedAgentTargetId = targetId.isEmpty ? nil : targetId
         pendingNewThreadAgentTargetGeneration = selectedThreadDraftGeneration
     }
 
     func clearPendingNewThreadAgentTarget() {
-        pendingNewThreadAgentTargetId = nil
+        selectedAgentTargetId = nil
         pendingNewThreadAgentTargetGeneration = nil
     }
 
@@ -429,7 +414,7 @@ extension GaryxMobileModel {
         guard pendingNewThreadAgentTargetGeneration == selectedThreadDraftGeneration else {
             return ""
         }
-        return pendingNewThreadAgentTargetId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return selectedAgentTargetId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     func setNewThreadWorkspace(_ path: String) {
@@ -611,7 +596,7 @@ extension GaryxMobileModel {
                 sourceUpdatedAt: agent.updatedAt
             )
             replaceAgent(agent)
-            setSelectedAgentTarget(agent.id)
+            await refreshAgentTargets()
             return .saved(agent)
         } catch let error as GaryxGatewayError {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
@@ -660,7 +645,6 @@ extension GaryxMobileModel {
                 await removeAvatar(id: immutableAgentId)
             }
             replaceAgent(updated, replacing: immutableAgentId)
-            setSelectedAgentTarget(updated.id)
             return .saved(updated)
         } catch let error as GaryxGatewayError {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return .superseded }
@@ -682,8 +666,35 @@ extension GaryxMobileModel {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             await removeAvatar(id: agent.id)
             agents.removeAll { $0.id == agent.id }
-            ensureSelectedAgentTarget()
             persistCatalogCacheSnapshot()
+            await refreshAgentTargets()
+        } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func setAgentEnabled(_ agent: GaryxAgentSummary, enabled: Bool) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            let updated = try await client().setAgentEnabled(agentId: agent.id, enabled: enabled)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            replaceAgent(updated)
+            await refreshAgentTargets()
+        } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func setDefaultAgent(_ agent: GaryxAgentSummary) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            _ = try await client().setDefaultAgent(agentId: agent.id)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            // The response is one agent row; refresh the catalog so both raw and
+            // effective defaults move together from the gateway truth source.
+            await refreshAgentTargets()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)

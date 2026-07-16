@@ -248,6 +248,70 @@ test('Image view exposes one gateway path preview when use and result repeat the
   ]);
 });
 
+test('native image generation resolves its result-owned prompt and saved image path', () => {
+  const prompt = 'A synthetic lighthouse beneath a violet evening sky.';
+  const imagePath = '/Users/test/.codex/generated_images/synthetic/exec-native.png';
+  const merged = resolveMergedToolTrace(
+    {
+      role: 'tool_use',
+      content: {
+        id: 'exec-native',
+        result: '',
+        revisedPrompt: null,
+        status: 'in_progress',
+        type: 'imageGeneration',
+      },
+      toolUseId: 'tool:image-generation',
+      toolName: 'imageGeneration',
+    },
+    {
+      role: 'tool_result',
+      content: {
+        id: 'exec-native',
+        result: FAKE_BASE64,
+        revisedPrompt: prompt,
+        savedPath: imagePath,
+        status: 'completed',
+        type: 'imageGeneration',
+      },
+      toolUseId: 'tool:image-generation',
+      toolName: 'imageGeneration',
+    },
+    {
+      tool_name: 'imageGeneration',
+      kind: 'image',
+      visibility: 'normal',
+      call: {
+        root: 'content',
+        path: ['revisedPrompt'],
+        format: 'text',
+        label: 'prompt',
+      },
+      result: {
+        root: 'content',
+        path: ['savedPath'],
+        format: 'image',
+        label: 'image',
+      },
+      status: 'completed',
+    },
+  );
+
+  assert.equal(merged.summary, prompt);
+  assert.equal(merged.inputDetail, prompt);
+  assert.equal(merged.inputLabel, 'Prompt');
+  assert.equal(merged.resultDetail, undefined);
+  assert.equal(merged.resultLabel, 'Image');
+  assert.deepEqual(merged.pathImages, [
+    {
+      key: `projected-image:${imagePath}`,
+      path: imagePath,
+      alt: 'exec-native.png',
+    },
+  ]);
+  assert.ok(!JSON.stringify(merged).includes(FAKE_BASE64), 'tool row must not leak base64');
+});
+
 test('ordinary path-bearing tools do not request gateway image previews', () => {
   const merged = resolveMergedToolTrace(
     {

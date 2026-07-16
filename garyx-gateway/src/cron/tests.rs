@@ -1,12 +1,12 @@
 use super::*;
 use async_trait::async_trait;
-use garyx_bridge::{ProviderRuntime, BridgeError};
+use garyx_bridge::{BridgeError, ProviderRuntime};
 use garyx_channels::{ChannelDispatcher, ChannelDispatcherImpl, ChannelInfo, OutboundMessage};
 use garyx_models::config::{CronAction, CronConfig, CronJobConfig, CronSchedule};
 use garyx_models::provider::{
     ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent,
 };
-use garyx_models::thread_logs::NoopThreadLogSink;
+use garyx_models::thread_logs::{NoopThreadLogSink, ThreadLogChunk, ThreadLogEvent, ThreadLogSink};
 use garyx_router::ThreadStore;
 use tempfile::TempDir;
 
@@ -14,6 +14,48 @@ use tempfile::TempDir;
 struct RecordingDispatcher {
     calls: std::sync::Mutex<Vec<OutboundMessage>>,
     message_ids: std::sync::Mutex<Vec<String>>,
+}
+
+#[derive(Default)]
+struct RecordingThreadLogSink {
+    events: std::sync::Mutex<Vec<ThreadLogEvent>>,
+}
+
+impl RecordingThreadLogSink {
+    fn events(&self) -> Vec<ThreadLogEvent> {
+        self.events
+            .lock()
+            .expect("recording thread log lock poisoned")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl ThreadLogSink for RecordingThreadLogSink {
+    async fn record_event(&self, event: ThreadLogEvent) {
+        self.events
+            .lock()
+            .expect("recording thread log lock poisoned")
+            .push(event);
+    }
+
+    async fn read_chunk(
+        &self,
+        thread_id: &str,
+        cursor: Option<u64>,
+    ) -> Result<ThreadLogChunk, String> {
+        Ok(ThreadLogChunk {
+            thread_id: thread_id.to_owned(),
+            path: String::new(),
+            text: String::new(),
+            cursor: cursor.unwrap_or_default(),
+            reset: cursor.is_none(),
+        })
+    }
+
+    async fn delete_thread(&self, _thread_id: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl RecordingDispatcher {
@@ -64,6 +106,7 @@ struct SuccessfulAutomationProvider;
 struct CountingAutomationProvider {
     calls: std::sync::atomic::AtomicUsize,
     delay_ms: u64,
+    provider_type: ProviderType,
 }
 
 /// Records every `run_streaming` invocation's thread, message, and metadata
@@ -133,11 +176,25 @@ async fn wire_front_door_state(
     svc: &Arc<CronService>,
     bridge: Arc<MultiProviderBridge>,
 ) -> Arc<crate::server::AppState> {
+    wire_front_door_state_with_agents(
+        svc,
+        bridge,
+        Arc::new(crate::custom_agents::CustomAgentStore::new()),
+    )
+    .await
+}
+
+async fn wire_front_door_state_with_agents(
+    svc: &Arc<CronService>,
+    bridge: Arc<MultiProviderBridge>,
+    custom_agents: Arc<crate::custom_agents::CustomAgentStore>,
+) -> Arc<crate::server::AppState> {
     let state = crate::composition::app_bootstrap::AppStateBuilder::new(
         garyx_models::config::GaryxConfig::default(),
     )
     .with_bridge(bridge.clone())
     .with_cron_service(svc.clone())
+    .with_custom_agent_store(custom_agents.clone())
     .build();
     bridge
         .set_thread_store(state.threads.thread_store.clone())
@@ -150,7 +207,7 @@ async fn wire_front_door_state(
         Arc::new(ChannelDispatcherImpl::new()),
         Arc::new(NoopThreadLogSink),
         HashMap::new(),
-        Arc::new(crate::custom_agents::CustomAgentStore::new()),
+        custom_agents,
     )
     .await;
     state
@@ -207,9 +264,14 @@ impl ProviderRuntime for SuccessfulAutomationProvider {
 
 impl CountingAutomationProvider {
     fn new(delay_ms: u64) -> Self {
+        Self::new_with_type(delay_ms, ProviderType::ClaudeCode)
+    }
+
+    fn new_with_type(delay_ms: u64, provider_type: ProviderType) -> Self {
         Self {
             calls: std::sync::atomic::AtomicUsize::new(0),
             delay_ms,
+            provider_type,
         }
     }
 
@@ -221,7 +283,7 @@ impl CountingAutomationProvider {
 #[async_trait]
 impl ProviderRuntime for CountingAutomationProvider {
     fn provider_type(&self) -> ProviderType {
-        ProviderType::ClaudeCode
+        self.provider_type.clone()
     }
 
     fn is_ready(&self) -> bool {
@@ -672,6 +734,7 @@ async fn test_load_skips_invalid_persisted_schedule() {
             created_at: Utc::now(),
             last_run_at: None,
             system: false,
+            validation_error: None,
         },
     )
     .await
@@ -841,9 +904,9 @@ async fn test_tick_failure_does_not_advance_schedule() {
         ui_schedule: None,
         action: CronAction::AgentTurn,
         target: None,
-        message: None,
-        workspace_dir: None,
-        agent_id: None,
+        message: Some("exercise runtime failure".to_owned()),
+        workspace_dir: Some("/tmp".to_owned()),
+        agent_id: Some("claude".to_owned()),
         thread_id: None,
         delete_after_run: false,
         enabled: true,
@@ -925,13 +988,9 @@ async fn test_run_now_delete_after_run_removes_job_and_file() {
 #[tokio::test]
 async fn test_build_scheduled_response_callback_sends_final_message() {
     let dispatcher = Arc::new(RecordingDispatcher::default());
-    let router = Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-        Arc::new(garyx_router::InMemoryThreadStore::new()),
-        garyx_models::config::GaryxConfig::default(),
-    )));
     let callback = build_scheduled_response_callback(
         dispatcher.clone(),
-        router,
+        Arc::new(NoopThreadLogSink),
         ScheduledResponseContext {
             thread_id: "cron::daily".to_owned(),
             channel: "telegram".to_owned(),
@@ -964,27 +1023,15 @@ async fn test_build_scheduled_response_callback_sends_final_message() {
 }
 
 #[tokio::test]
-async fn test_build_scheduled_response_callback_records_reply_routing() {
+async fn test_build_scheduled_response_callback_records_delivery_log_per_message_id() {
     let dispatcher = Arc::new(RecordingDispatcher::with_message_ids(vec![
         "cron_msg_1".to_owned(),
+        "cron_msg_2".to_owned(),
     ]));
-    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
-    store
-        .set(
-            "cron::daily",
-            serde_json::json!({
-                "thread_id": "cron::daily",
-            }),
-        )
-        .await
-        .unwrap();
-    let router = Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-        store.clone(),
-        garyx_models::config::GaryxConfig::default(),
-    )));
+    let thread_logs = Arc::new(RecordingThreadLogSink::default());
     let callback = build_scheduled_response_callback(
         dispatcher,
-        router.clone(),
+        thread_logs.clone(),
         ScheduledResponseContext {
             thread_id: "cron::daily".to_owned(),
             channel: "telegram".to_owned(),
@@ -993,7 +1040,7 @@ async fn test_build_scheduled_response_callback_records_reply_routing() {
             delivery_target_type: "chat_id".to_owned(),
             delivery_target_id: "42".to_owned(),
             delivery_thread_id: Some("42_t100".to_owned()),
-            thread_log_id: None,
+            thread_log_id: Some("thread::cron-log".to_owned()),
         },
     );
 
@@ -1003,29 +1050,30 @@ async fn test_build_scheduled_response_callback_records_reply_routing() {
     callback(StreamEvent::Done);
     tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
 
-    {
-        let router_guard = router.lock().await;
+    let events = thread_logs.events();
+    assert_eq!(events.len(), 2);
+    for (event, message_id) in events.iter().zip(["cron_msg_1", "cron_msg_2"]) {
+        assert_eq!(event.thread_id, "thread::cron-log");
+        assert_eq!(event.stage, "delivery");
+        assert_eq!(event.message, "outbound message delivered");
         assert_eq!(
-            router_guard.resolve_reply_thread_for_chat(
-                "telegram",
-                "main",
-                Some("42"),
-                Some("42_t100"),
-                "cron_msg_1",
-            ),
-            Some("cron::daily")
+            event.fields.get("channel"),
+            Some(&serde_json::json!("telegram"))
+        );
+        assert_eq!(
+            event.fields.get("account_id"),
+            Some(&serde_json::json!("main"))
+        );
+        assert_eq!(event.fields.get("chat_id"), Some(&serde_json::json!("42")));
+        assert_eq!(
+            event.fields.get("message_id"),
+            Some(&serde_json::json!(message_id))
+        );
+        assert_eq!(
+            event.fields.get("thread_id"),
+            Some(&serde_json::json!("thread::cron-log"))
         );
     }
-
-    let thread_state = store.get("cron::daily").await.unwrap().unwrap();
-    assert_eq!(
-        thread_state["outbound_message_ids"][0]["thread_binding_key"],
-        serde_json::json!("42_t100")
-    );
-    assert_eq!(
-        thread_state["outbound_message_ids"][0]["message_id"],
-        serde_json::json!("cron_msg_1")
-    );
 }
 
 #[tokio::test]
@@ -1033,14 +1081,9 @@ async fn test_build_scheduled_response_callback_preserves_assistant_segments() {
     let dispatcher = Arc::new(RecordingDispatcher::with_message_ids(vec![
         "cron_msg_1".to_owned(),
     ]));
-    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
-    let router = Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-        store,
-        garyx_models::config::GaryxConfig::default(),
-    )));
     let callback = build_scheduled_response_callback(
         dispatcher.clone(),
-        router,
+        Arc::new(NoopThreadLogSink),
         ScheduledResponseContext {
             thread_id: "cron::daily".to_owned(),
             channel: "telegram".to_owned(),
@@ -1079,14 +1122,9 @@ async fn test_build_scheduled_response_callback_stops_after_user_ack_boundary() 
     let dispatcher = Arc::new(RecordingDispatcher::with_message_ids(vec![
         "cron_msg_1".to_owned(),
     ]));
-    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
-    let router = Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
-        store,
-        garyx_models::config::GaryxConfig::default(),
-    )));
     let callback = build_scheduled_response_callback(
         dispatcher.clone(),
-        router,
+        Arc::new(NoopThreadLogSink),
         ScheduledResponseContext {
             thread_id: "cron::daily".to_owned(),
             channel: "telegram".to_owned(),
@@ -1140,9 +1178,7 @@ async fn test_dispatch_agent_turn_recovers_thread_target_delivery_from_store() {
             garyx_models::config::GaryxConfig::default(),
         ))),
         bridge: Arc::new(MultiProviderBridge::new()),
-        channel_dispatcher: Arc::new(ChannelDispatcherImpl::new()),
         thread_logs: Arc::new(NoopThreadLogSink),
-        managed_mcp_servers: HashMap::new(),
         custom_agents: Arc::new(crate::custom_agents::CustomAgentStore::new()),
     })));
     let job = CronJob {
@@ -1165,6 +1201,7 @@ async fn test_dispatch_agent_turn_recovers_thread_target_delivery_from_store() {
         created_at: Utc::now(),
         last_run_at: None,
         system: false,
+        validation_error: None,
     };
 
     let active_agent_runs = Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
@@ -1232,6 +1269,63 @@ async fn test_successful_automation_run_persists_thread_id() {
 }
 
 #[tokio::test]
+async fn generated_automation_disabled_at_run_time_records_visible_failure() {
+    let tmp = TempDir::new().unwrap();
+    let svc = Arc::new(CronService::new(tmp.path().to_path_buf()));
+    svc.add(CronJobConfig {
+        id: "automation-disabled-at-run".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Disabled at run".to_owned()),
+        schedule: CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("must fail visibly".to_owned()),
+        workspace_dir: Some("/tmp/automation-disabled-at-run".to_owned()),
+        agent_id: Some("claude".to_owned()),
+        thread_id: None,
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .unwrap();
+
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .set_enabled("claude", false)
+        .await
+        .expect("disable bound generated agent after configuration");
+    let provider = Arc::new(CountingAutomationProvider::new(0));
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("disabled-at-run-provider", provider.clone())
+        .await;
+    bridge
+        .set_default_provider_key("disabled-at-run-provider")
+        .await;
+    let state = wire_front_door_state_with_agents(&svc, bridge, custom_agents).await;
+
+    let run = svc.run_now("automation-disabled-at-run").await.unwrap();
+    assert_eq!(run.status, JobRunStatus::Failed);
+    assert!(
+        run.error
+            .as_deref()
+            .is_some_and(|error| error.contains("agent is disabled: claude"))
+    );
+    assert_eq!(provider.calls(), 0);
+    assert!(
+        state
+            .threads
+            .thread_store
+            .list_keys(Some("thread::"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn test_bound_automation_run_reuses_existing_thread() {
     let tmp = TempDir::new().unwrap();
     let svc = Arc::new(CronService::new(tmp.path().to_path_buf()));
@@ -1262,12 +1356,20 @@ async fn test_bound_automation_run_reuses_existing_thread() {
         .register_provider("automation-success", Arc::new(SuccessfulAutomationProvider))
         .await;
     bridge.set_default_provider_key("automation-success").await;
-    let state = wire_front_door_state(&svc, bridge).await;
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .set_enabled("claude", false)
+        .await
+        .expect("disable existing target binding");
+    let state = wire_front_door_state_with_agents(&svc, bridge, custom_agents).await;
     let store = state.threads.thread_store.clone();
     store
         .set(
             target_thread_id,
             serde_json::json!({
+                "thread_id": target_thread_id,
+                "agent_id": "claude",
+                "provider_type": "claude_code",
                 "workspace_dir": "/tmp/bound-automation",
                 "metadata": {
                     "agent_id": "claude"
@@ -1290,6 +1392,81 @@ async fn test_bound_automation_run_reuses_existing_thread() {
 
     assert_eq!(reloaded_job.thread_id.as_deref(), Some(target_thread_id));
     assert!(store.get(target_thread_id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn target_automation_runtime_uses_live_codex_binding_not_legacy_claude_job_cache() {
+    let tmp = TempDir::new().unwrap();
+    let svc = Arc::new(CronService::new(tmp.path().to_path_buf()));
+    let target_thread_id = "thread::target-live-codex";
+    svc.add(CronJobConfig {
+        id: "automation-target-live-codex".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Live target binding".to_owned()),
+        schedule: CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("use the target binding".to_owned()),
+        workspace_dir: None,
+        // Historical target jobs could persist a stale explicit cache. The
+        // target thread below is canonically Codex and must win at runtime.
+        agent_id: Some("claude".to_owned()),
+        thread_id: Some(target_thread_id.to_owned()),
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .unwrap();
+
+    let bridge = Arc::new(MultiProviderBridge::new());
+    let claude = Arc::new(CountingAutomationProvider::new_with_type(
+        0,
+        ProviderType::ClaudeCode,
+    ));
+    let codex = Arc::new(CountingAutomationProvider::new_with_type(
+        0,
+        ProviderType::CodexAppServer,
+    ));
+    bridge
+        .register_provider("legacy-claude-provider", claude.clone())
+        .await;
+    bridge
+        .register_provider("live-codex-provider", codex.clone())
+        .await;
+    bridge
+        .set_default_provider_key("legacy-claude-provider")
+        .await;
+    let state = wire_front_door_state(&svc, bridge).await;
+    state
+        .threads
+        .thread_store
+        .set(
+            target_thread_id,
+            serde_json::json!({
+                "thread_id": target_thread_id,
+                "agent_id": "codex",
+                "provider_type": "codex_app_server",
+                "workspace_dir": "/tmp/target-live-codex",
+                "metadata": {
+                    "agent_id": "codex",
+                    "requested_provider_type": "codex_app_server"
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+    let run = svc.run_now("automation-target-live-codex").await.unwrap();
+    assert_eq!(run.status, JobRunStatus::Success);
+    assert_eq!(run.thread_id.as_deref(), Some(target_thread_id));
+    assert_eq!(codex.calls(), 1, "the live target binding selects Codex");
+    assert_eq!(
+        claude.calls(),
+        0,
+        "the stale job-level Claude cache must not influence dispatch"
+    );
 }
 
 #[tokio::test]
@@ -2274,7 +2451,7 @@ async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn()
     // criterion that closes the schedule→tick→dispatch loop.
     use crate::composition::app_bootstrap::AppStateBuilder;
     use crate::mcp::tools::schedule_followup::followup_job_id;
-    use garyx_bridge::{ProviderRuntime, BridgeError};
+    use garyx_bridge::{BridgeError, ProviderRuntime};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
@@ -2659,4 +2836,290 @@ async fn test_internal_dispatch_drops_when_thread_missing() {
     // The persisted (serde) form must be exactly "failed_dropped" per AC.
     let serialized = serde_json::to_string(&runs[0].status).unwrap();
     assert_eq!(serialized, "\"failed_dropped\"");
+}
+
+fn structurally_invalid_job_config(id: &str, action: CronAction, enabled: bool) -> CronJobConfig {
+    CronJobConfig {
+        id: id.to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Repairable invalid job".to_owned()),
+        schedule: CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action,
+        target: None,
+        message: Some("Run later".to_owned()),
+        workspace_dir: None,
+        agent_id: Some("claude".to_owned()),
+        thread_id: None,
+        delete_after_run: false,
+        enabled,
+        system: false,
+    }
+}
+
+#[test]
+fn noncanonical_thread_id_cannot_hide_behind_generated_workspace_or_delivery_target() {
+    let mut agent_turn =
+        structurally_invalid_job_config("invalid-thread-agent", CronAction::AgentTurn, true);
+    agent_turn.workspace_dir = Some("/tmp/generated-but-invalid-thread".to_owned());
+    agent_turn.thread_id = Some("cron::not-a-thread".to_owned());
+    agent_turn.target = Some("last".to_owned());
+    assert_eq!(
+        CronJob::from_config(&agent_turn)
+            .validation_error
+            .as_deref(),
+        Some("invalid canonical thread_id for agent turn")
+    );
+
+    let mut system_event =
+        structurally_invalid_job_config("invalid-thread-system", CronAction::SystemEvent, true);
+    system_event.thread_id = Some("cron::not-a-thread".to_owned());
+    system_event.target = Some("last".to_owned());
+    assert_eq!(
+        CronJob::from_config(&system_event)
+            .validation_error
+            .as_deref(),
+        Some("invalid canonical thread_id for system event")
+    );
+}
+
+#[tokio::test]
+async fn validation_recomputes_invalid_valid_invalid_without_restart_and_is_not_persisted() {
+    let tmp = TempDir::new().unwrap();
+    let svc = CronService::new(tmp.path().to_path_buf());
+    let invalid =
+        structurally_invalid_job_config("validation-transition", CronAction::AgentTurn, true);
+    let added = svc.add(invalid.clone()).await.unwrap();
+    assert_eq!(
+        added.validation_error.as_deref(),
+        Some("missing canonical target for agent turn")
+    );
+
+    let first_run = svc.run_now("validation-transition").await.unwrap();
+    assert_eq!(first_run.status, JobRunStatus::Failed);
+    assert_eq!(
+        first_run.error.as_deref(),
+        Some("missing canonical target for agent turn")
+    );
+
+    let mut valid = invalid.clone();
+    valid.workspace_dir = Some("/tmp/automation-validation".to_owned());
+    valid.agent_id = None;
+    let valid = svc
+        .update("validation-transition", valid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(valid.validation_error.is_none());
+    assert_eq!(valid.agent_id.as_deref(), Some("claude"));
+
+    let invalid_again = svc
+        .update("validation-transition", invalid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(invalid_again.validation_error.is_some());
+    let persisted =
+        std::fs::read_to_string(jobs_dir(tmp.path()).join("validation-transition.json")).unwrap();
+    assert!(!persisted.contains("validation_error"));
+
+    let mut upsert_valid =
+        structurally_invalid_job_config("validation-upsert", CronAction::AgentTurn, true);
+    upsert_valid.workspace_dir = Some("/tmp/automation-validation".to_owned());
+    let (upserted, _) = svc.upsert(upsert_valid).await.unwrap();
+    assert!(upserted.validation_error.is_none());
+    let (upserted_invalid, _) = svc
+        .upsert(structurally_invalid_job_config(
+            "validation-upsert",
+            CronAction::AgentTurn,
+            true,
+        ))
+        .await
+        .unwrap();
+    assert!(upserted_invalid.validation_error.is_some());
+}
+
+#[tokio::test]
+async fn scheduler_claim_revalidates_stale_validation_fail_closed() {
+    let tmp = TempDir::new().unwrap();
+    let svc = CronService::new(tmp.path().to_path_buf());
+    svc.add(structurally_invalid_job_config(
+        "stale-validation",
+        CronAction::AgentTurn,
+        true,
+    ))
+    .await
+    .unwrap();
+    {
+        let mut jobs = svc.jobs.write().await;
+        let job = jobs.get_mut("stale-validation").unwrap();
+        job.validation_error = None;
+        job.next_run = Utc::now() - chrono::Duration::seconds(1);
+    }
+
+    let claimed = CronService::claim_job_for_execution(
+        tmp.path(),
+        &svc.jobs,
+        &svc.active_agent_runs,
+        &svc.dispatch_runtime,
+        "stale-validation",
+    )
+    .await;
+    assert!(claimed.is_none());
+    assert_eq!(
+        svc.get("stale-validation")
+            .await
+            .unwrap()
+            .validation_error
+            .as_deref(),
+        Some("missing canonical target for agent turn")
+    );
+    assert!(
+        svc.list_runs_for_job("stale-validation", 10, 0)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn load_marks_threadless_agent_turn_and_system_event_invalid_from_disk_and_config() {
+    for availability in ["enabled", "selected-disabled", "all-disabled"] {
+        let tmp = TempDir::new().unwrap();
+        ensure_dirs(tmp.path()).await.unwrap();
+        for (id, action, enabled) in [
+            ("disk-agent", CronAction::AgentTurn, true),
+            ("disk-system", CronAction::SystemEvent, false),
+        ] {
+            let job = CronJob::from_config(&structurally_invalid_job_config(id, action, enabled));
+            persist_job(tmp.path(), &job).await.unwrap();
+        }
+        let config = CronConfig {
+            jobs: vec![
+                structurally_invalid_job_config("config-agent", CronAction::AgentTurn, false),
+                structurally_invalid_job_config("config-system", CronAction::SystemEvent, true),
+            ],
+        };
+        let svc = Arc::new(CronService::new(tmp.path().to_path_buf()));
+        svc.load(&config).await.unwrap();
+
+        let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+        match availability {
+            "enabled" => {}
+            "selected-disabled" => {
+                custom_agents
+                    .set_enabled("claude", false)
+                    .await
+                    .expect("disable selected agent");
+                assert_eq!(
+                    custom_agents.effective_default_agent_id().await.as_deref(),
+                    Some("codex"),
+                    "the structural rejection must not be a no-enabled false positive"
+                );
+            }
+            "all-disabled" => {
+                for agent in custom_agents.list_agents().await {
+                    custom_agents
+                        .set_enabled(&agent.agent_id, false)
+                        .await
+                        .expect("disable every agent");
+                }
+                assert!(custom_agents.effective_default_agent_id().await.is_none());
+            }
+            _ => unreachable!(),
+        }
+        let provider = Arc::new(CountingAutomationProvider::new(0));
+        let bridge = Arc::new(MultiProviderBridge::new());
+        bridge
+            .register_provider("threadless-validation-provider", provider.clone())
+            .await;
+        bridge
+            .set_default_provider_key("threadless-validation-provider")
+            .await;
+        let _state = wire_front_door_state_with_agents(&svc, bridge, custom_agents.clone()).await;
+
+        for (id, expected) in [
+            ("disk-agent", "missing canonical target for agent turn"),
+            ("disk-system", "missing canonical target for system event"),
+            ("config-agent", "missing canonical target for agent turn"),
+            ("config-system", "missing canonical target for system event"),
+        ] {
+            let job = svc.get(id).await.unwrap();
+            assert_eq!(
+                job.validation_error.as_deref(),
+                Some(expected),
+                "availability={availability} id={id}"
+            );
+            let run = svc
+                .run_now(id)
+                .await
+                .expect("invalid run is visibly recorded");
+            assert_eq!(run.status, JobRunStatus::Failed);
+            assert_eq!(run.error.as_deref(), Some(expected));
+        }
+        assert_eq!(
+            provider.calls(),
+            0,
+            "thread-less jobs must never reach bridge/provider when availability={availability}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn generated_agent_normalization_is_idempotent_across_config_merge_reloads() {
+    let tmp = TempDir::new().unwrap();
+    let mut generated =
+        structurally_invalid_job_config("generated-normalization", CronAction::AgentTurn, true);
+    generated.workspace_dir = Some("/tmp/generated-normalization".to_owned());
+    generated.agent_id = Some("   ".to_owned());
+    let config = CronConfig {
+        jobs: vec![generated.clone()],
+    };
+
+    let first = CronService::new(tmp.path().to_path_buf());
+    first.load(&config).await.unwrap();
+    assert_eq!(
+        first
+            .get("generated-normalization")
+            .await
+            .unwrap()
+            .agent_id
+            .as_deref(),
+        Some("claude")
+    );
+
+    let second = CronService::new(tmp.path().to_path_buf());
+    second.load(&config).await.unwrap();
+    assert_eq!(
+        second
+            .get("generated-normalization")
+            .await
+            .unwrap()
+            .agent_id
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(generated.agent_id.as_deref(), Some("   "));
+}
+
+#[test]
+fn log_and_internal_dispatch_jobs_are_outside_agent_validation_contract() {
+    let mut log = CronJob::from_config(&make_job_config("log-unaffected", 60));
+    log.action = CronAction::Log;
+    assert!(validate_cron_job(&log).is_none());
+
+    let internal = CronJob::from_config(&CronJobConfig {
+        id: "internal-unaffected".to_owned(),
+        kind: CronJobKind::InternalDispatch {
+            payload: garyx_models::config::InternalDispatchJobPayload {
+                prompt: "continue".to_owned(),
+                scheduled_at: Utc::now(),
+                delay_seconds_requested: 1,
+                reason: None,
+                originating_run_id: None,
+            },
+        },
+        action: CronAction::AgentTurn,
+        ..make_job_config("internal-unaffected", 60)
+    });
+    assert!(validate_cron_job(&internal).is_none());
 }

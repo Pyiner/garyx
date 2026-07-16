@@ -83,6 +83,7 @@ type GatewaySettingsPanelProps = {
   gatewayStatusMessage?: string | null;
   savingLocalSettings?: boolean;
   agents?: DesktopCustomAgent[];
+  effectiveDefaultAgentId?: string | null;
   skills?: DesktopSkillInfo[];
   workspaces?: DesktopWorkspace[];
   onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
@@ -424,6 +425,7 @@ export function GatewaySettingsPanel({
   gatewayStatusMessage = null,
   savingLocalSettings = false,
   agents = [],
+  effectiveDefaultAgentId = null,
   workspaces = [],
   onAddWorkspace,
   onCreateSlashCommand = noopAsync,
@@ -917,6 +919,7 @@ export function GatewaySettingsPanel({
       tabContent = (
         <ChannelsSettingsPanel
           agents={agents}
+          effectiveDefaultAgentId={effectiveDefaultAgentId}
           workspaces={workspaces}
           gatewayDraft={gatewayDraft}
           gatewaySaving={gatewaySaving}

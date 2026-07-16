@@ -9,11 +9,9 @@ use super::super::*;
 use crate::threads::{
     ChannelBinding, ThreadEnsureOptions, default_agent_for_channel_account,
     default_workspace_for_channel_account, default_workspace_mode_for_channel_account,
-    endpoint_key, new_thread_key, worktree_base_dir_for_config,
+    endpoint_key, worktree_base_dir_for_config,
 };
 use crate::{EndpointBindingMutationError, EndpointDetachResult};
-
-const INBOUND_FALLBACK_AGENT_ID: &str = "claude";
 
 fn delivery_thread_scope_from_binding(binding: &ChannelBinding) -> Option<String> {
     let binding_key = binding.binding_key.trim();
@@ -114,17 +112,6 @@ impl MessageRouter {
             return None;
         }
         Some(existing)
-    }
-
-    pub async fn resolve_canonical_thread_id(&mut self, thread_id: &str) -> Option<String> {
-        let trimmed = thread_id.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if self.threads.exists_logged(trimmed).await {
-            return Some(trimmed.to_owned());
-        }
-        None
     }
 
     pub(in crate::router) async fn endpoint_binding_from_inbound(
@@ -236,12 +223,29 @@ impl MessageRouter {
         account_id: &str,
         thread_binding_key: &str,
         extra_metadata: &HashMap<String, Value>,
-    ) -> String {
+    ) -> Result<String, String> {
+        self.resolve_or_create_inbound_thread_typed(
+            channel,
+            account_id,
+            thread_binding_key,
+            extra_metadata,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+
+    pub async fn resolve_or_create_inbound_thread_typed(
+        &mut self,
+        channel: &str,
+        account_id: &str,
+        thread_binding_key: &str,
+        extra_metadata: &HashMap<String, Value>,
+    ) -> Result<String, ThreadCreationError> {
         if let Some(existing) = self
             .current_canonical_thread_for_binding(channel, account_id, thread_binding_key)
             .await
         {
-            return existing;
+            return Ok(existing);
         }
 
         let display_label =
@@ -265,53 +269,7 @@ impl MessageRouter {
             origin_from_id: None,
             is_group: None,
         };
-        let configured_agent_id = options.agent_id.clone();
-        let (thread_id, _value) = match self.create_thread_with_options(options.clone()).await {
-            Ok(created) => created,
-            Err(error) => {
-                let should_fallback = configured_agent_id
-                    .as_deref()
-                    .is_some_and(|agent_id| agent_id != INBOUND_FALLBACK_AGENT_ID);
-                if should_fallback {
-                    let mut fallback_options = options;
-                    fallback_options.agent_id = Some(INBOUND_FALLBACK_AGENT_ID.to_owned());
-                    match self.create_thread_with_options(fallback_options).await {
-                        Ok(created) => {
-                            tracing::warn!(
-                                channel,
-                                account_id,
-                                configured_agent_id = configured_agent_id.as_deref().unwrap_or(""),
-                                fallback_agent_id = INBOUND_FALLBACK_AGENT_ID,
-                                error = %error,
-                                "inbound thread creation failed; using fallback agent"
-                            );
-                            created
-                        }
-                        Err(fallback_error) => {
-                            tracing::warn!(
-                                channel,
-                                account_id,
-                                configured_agent_id = configured_agent_id.as_deref().unwrap_or(""),
-                                fallback_agent_id = INBOUND_FALLBACK_AGENT_ID,
-                                error = %error,
-                                fallback_error = %fallback_error,
-                                "inbound thread creation failed with configured and fallback agents"
-                            );
-                            return new_thread_key();
-                        }
-                    }
-                } else {
-                    tracing::warn!(
-                        channel,
-                        account_id,
-                        configured_agent_id = configured_agent_id.as_deref().unwrap_or(""),
-                        error = %error,
-                        "inbound thread creation failed"
-                    );
-                    return new_thread_key();
-                }
-            }
-        };
+        let (thread_id, _value) = self.create_thread_with_options(options).await?;
 
         let binding = self
             .endpoint_binding_from_inbound(
@@ -333,61 +291,35 @@ impl MessageRouter {
                 error = %error,
                 "failed to persist inbound channel binding"
             );
-            return thread_id;
+            return Ok(thread_id);
         }
 
-        thread_id
+        Ok(thread_id)
     }
 
     pub(in crate::router) async fn resolve_thread_for_request(
         &mut self,
         route: RouteContext<'_>,
-    ) -> (String, bool) {
-        if let Some(reply_id) = route.reply_to_message_id {
-            let chat_id = Self::reply_chat_id(route.extra_metadata);
-            if let Some(reply_thread) = self.resolve_reply_thread_for_chat(
-                route.channel,
-                route.account_id,
-                chat_id.as_deref(),
-                Some(route.thread_binding_key),
-                reply_id,
-            ) {
-                let reply_thread = reply_thread.to_owned();
-                if Self::is_scheduled_thread(&reply_thread) {
-                    return (reply_thread, true);
-                }
-                if let Some(canonical) = self.resolve_canonical_thread_id(&reply_thread).await {
-                    return (canonical, true);
-                }
-            }
-        }
-
-        (
-            self.resolve_or_create_inbound_thread(
-                route.channel,
-                route.account_id,
-                route.thread_binding_key,
-                route.extra_metadata,
-            )
-            .await,
-            false,
+    ) -> Result<String, String> {
+        self.resolve_or_create_inbound_thread(
+            route.channel,
+            route.account_id,
+            route.thread_binding_key,
+            route.extra_metadata,
         )
+        .await
     }
 
     pub(in crate::router) async fn apply_auto_recovery_if_needed(
         &mut self,
         route: RouteContext<'_>,
         mut thread_id: String,
-        reply_routed: bool,
     ) -> String {
         let binding_context_key = Self::build_binding_context_key(
             route.channel,
             route.account_id,
             route.thread_binding_key,
         );
-        if reply_routed && Self::is_scheduled_thread(&thread_id) {
-            self.switch_to_thread(&binding_context_key, &thread_id);
-        }
         if Self::is_scheduled_thread(&thread_id) {
             return thread_id;
         }

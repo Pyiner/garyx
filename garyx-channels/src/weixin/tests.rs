@@ -10,7 +10,7 @@ fn weixin_test_account(api: &MockServer, token: &str) -> WeixinAccount {
         enabled: true,
         base_url: api.uri(),
         name: None,
-        agent_id: "claude".to_owned(),
+        agent_id: Some("claude".to_owned()),
         workspace_dir: None,
         streaming_update: true,
     }
@@ -457,7 +457,7 @@ async fn test_upload_media_to_cdn_pipeline_with_mocks() {
         enabled: true,
         base_url: api.uri(),
         name: None,
-        agent_id: "claude".to_owned(),
+        agent_id: Some("claude".to_owned()),
         workspace_dir: None,
         streaming_update: true,
     };
@@ -763,17 +763,12 @@ async fn test_streaming_update_consumer_user_ack_finalizes_visible_and_uses_fres
     // the active provider stream emits its UserAck boundary.
     set_context_token(&account_id, &user_id, &fresh_token).await;
 
-    let router = Arc::new(Mutex::new(MessageRouter::new(
-        Arc::new(garyx_router::InMemoryThreadStore::new()),
-        garyx_models::config::GaryxConfig::default(),
-    )));
     let ctx = WeixinStreamConsumerContext {
         http: Client::new(),
         account,
         account_id: account_id.clone(),
         user_id: user_id.clone(),
         context_token: original_token.clone(),
-        router,
         thread_id: Arc::new(std::sync::Mutex::new(String::new())),
         typing_ticket: None,
         running: Arc::new(AtomicBool::new(true)),

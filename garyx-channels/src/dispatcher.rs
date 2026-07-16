@@ -15,7 +15,6 @@ use async_trait::async_trait;
 use garyx_models::ChannelOutboundContent;
 use garyx_models::provider::{StreamBoundaryKind, StreamEvent};
 use garyx_models::routing::{infer_delivery_target_id, infer_delivery_target_type};
-use garyx_router::MessageRouter;
 use regex::Regex;
 use reqwest::{Client, StatusCode, header, multipart};
 use serde_json::Value;
@@ -170,7 +169,6 @@ pub trait ChannelDispatcher: Send + Sync {
     fn build_stream_event_callback(
         &self,
         _target: StreamingDispatchTarget,
-        _router: Arc<Mutex<MessageRouter>>,
     ) -> Option<StreamDispatchCallback> {
         None
     }
@@ -206,7 +204,6 @@ impl OutboundStreamState {
 struct OutboundStreamCallbackShared {
     dispatcher: Arc<dyn ChannelDispatcher>,
     target: StreamingDispatchTarget,
-    router: Arc<Mutex<MessageRouter>>,
     state: std::sync::Mutex<OutboundStreamState>,
     delivery_gate: Mutex<()>,
     flush_user_ack_boundary: bool,
@@ -215,7 +212,6 @@ struct OutboundStreamCallbackShared {
 struct PluginStreamEventCallbackShared {
     sender: PluginSenderHandle,
     target: StreamingDispatchTarget,
-    router: Arc<Mutex<MessageRouter>>,
     delivery_gate: Mutex<()>,
 }
 
@@ -225,9 +221,7 @@ impl PluginStreamEventCallbackShared {
         let request = DispatchStreamEvent::from(envelope);
 
         match self.sender.dispatch_stream_event(request).await {
-            Ok(result) => {
-                self.record_outbound_messages(&result.message_ids).await;
-            }
+            Ok(_) => {}
             Err(error) => {
                 warn!(
                     plugin_id = %self.sender.plugin_id(),
@@ -242,37 +236,15 @@ impl PluginStreamEventCallbackShared {
             }
         }
     }
-
-    async fn record_outbound_messages(&self, message_ids: &[String]) {
-        if self.target.target_thread_id.trim().is_empty() || message_ids.is_empty() {
-            return;
-        }
-
-        let mut router = self.router.lock().await;
-        for message_id in message_ids {
-            router
-                .record_outbound_message_with_persistence(
-                    &self.target.target_thread_id,
-                    &self.target.channel,
-                    &self.target.account_id,
-                    &self.target.chat_id,
-                    self.target.thread_id.as_deref(),
-                    message_id,
-                )
-                .await;
-        }
-    }
 }
 
 fn build_plugin_stream_event_callback(
     sender: PluginSenderHandle,
     target: StreamingDispatchTarget,
-    router: Arc<Mutex<MessageRouter>>,
 ) -> StreamDispatchCallback {
     let shared = Arc::new(PluginStreamEventCallbackShared {
         sender,
         target,
-        router,
         delivery_gate: Mutex::new(()),
     });
 
@@ -360,9 +332,7 @@ impl OutboundStreamCallbackShared {
         };
 
         match self.dispatcher.send_message(request).await {
-            Ok(SendMessageResult { message_ids }) => {
-                self.record_outbound_messages(&message_ids).await;
-            }
+            Ok(_) => {}
             Err(error) => {
                 warn!(
                     channel = %self.target.channel,
@@ -373,26 +343,6 @@ impl OutboundStreamCallbackShared {
                     "outbound stream callback failed to send channel message"
                 );
             }
-        }
-    }
-
-    async fn record_outbound_messages(&self, message_ids: &[String]) {
-        if self.target.target_thread_id.trim().is_empty() || message_ids.is_empty() {
-            return;
-        }
-
-        let mut router = self.router.lock().await;
-        for message_id in message_ids {
-            router
-                .record_outbound_message_with_persistence(
-                    &self.target.target_thread_id,
-                    &self.target.channel,
-                    &self.target.account_id,
-                    &self.target.chat_id,
-                    self.target.thread_id.as_deref(),
-                    message_id,
-                )
-                .await;
         }
     }
 }
@@ -406,13 +356,11 @@ impl OutboundStreamCallbackShared {
 pub fn build_outbound_stream_callback(
     dispatcher: Arc<dyn ChannelDispatcher>,
     target: StreamingDispatchTarget,
-    router: Arc<Mutex<MessageRouter>>,
     role: StreamDispatchRole,
 ) -> Arc<dyn Fn(StreamEvent) + Send + Sync> {
     let shared = Arc::new(OutboundStreamCallbackShared {
         dispatcher,
         target,
-        router,
         state: std::sync::Mutex::new(OutboundStreamState::default()),
         delivery_gate: Mutex::new(()),
         flush_user_ack_boundary: role.legacy_adapter_flushes_user_ack(),
@@ -433,10 +381,9 @@ pub fn build_outbound_stream_callback(
 pub fn build_stream_dispatch_callback(
     dispatcher: Arc<dyn ChannelDispatcher>,
     target: StreamingDispatchTarget,
-    router: Arc<Mutex<MessageRouter>>,
     role: StreamDispatchRole,
 ) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
-    if let Some(callback) = dispatcher.build_stream_event_callback(target.clone(), router.clone()) {
+    if let Some(callback) = dispatcher.build_stream_event_callback(target.clone()) {
         return Some(Arc::new(move |event| {
             if matches!(
                 event,
@@ -463,9 +410,7 @@ pub fn build_stream_dispatch_callback(
         return None;
     }
 
-    Some(build_outbound_stream_callback(
-        dispatcher, target, router, role,
-    ))
+    Some(build_outbound_stream_callback(dispatcher, target, role))
 }
 
 // ---------------------------------------------------------------------------
@@ -2517,7 +2462,6 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
     fn build_stream_event_callback(
         &self,
         target: StreamingDispatchTarget,
-        router: Arc<Mutex<MessageRouter>>,
     ) -> Option<StreamDispatchCallback> {
         match target.channel.as_str() {
             "telegram" => {
@@ -2530,16 +2474,13 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                     crate::telegram::StreamingCallbackConfig {
                         http: sender.http.clone(),
                         token: sender.token.clone(),
-                        router,
                         account_id: sender.account_id.clone(),
                         chat_id,
                         api_base: sender.api_base.clone(),
                         reply_to_mode: garyx_models::config::ReplyToMode::Off,
                         reply_to: None,
                         outbound_thread_id,
-                        outbound_thread_scope: target.thread_id,
                     },
-                    target.target_thread_id,
                 );
                 Some(Arc::new(move |envelope| {
                     stream_callback(envelope.event);
@@ -2550,7 +2491,6 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                 let (stream_callback, thread_id_tx) = crate::feishu::build_feishu_response_callback(
                     crate::feishu::FeishuStreamingCallbackConfig {
                         client: sender.stream_client(),
-                        router,
                         account_id: sender.account_id.clone(),
                         receive_id_type: target.delivery_target_type.clone(),
                         chat_id: target.delivery_target_id.clone(),
@@ -2558,7 +2498,6 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                         reply_in_thread: false,
                         is_group_reply: false,
                         mention_prefix: String::new(),
-                        native_thread_scope: target.thread_id.clone(),
                         processing_reaction_id: None,
                     },
                 );
@@ -2569,17 +2508,11 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
             }
             "discord" => {
                 let sender = self.discord_senders.get(&target.account_id)?;
-                let thread_binding_key = target
-                    .thread_id
-                    .clone()
-                    .unwrap_or_else(|| target.chat_id.clone());
                 let (stream_callback, thread_id_tx) =
                     crate::discord::build_discord_response_callback(
                         crate::discord::DiscordStreamingCallbackConfig {
                             sender: sender.clone(),
-                            router,
                             chat_id: target.chat_id.clone(),
-                            thread_binding_key,
                             reply_to_message_id: None,
                         },
                     );
@@ -2597,7 +2530,6 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                         account_id: sender.account_id.clone(),
                         user_id: target.delivery_target_id.clone(),
                         context_token: String::new(),
-                        router,
                         thread_id: target.target_thread_id.clone(),
                         typing_ticket: None,
                         running: sender.running.clone(),
@@ -2610,11 +2542,7 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
             other => {
                 let sender = self.plugin_senders.get(other)?;
                 if sender.capabilities().dispatch_stream_event {
-                    Some(build_plugin_stream_event_callback(
-                        sender.clone(),
-                        target,
-                        router,
-                    ))
+                    Some(build_plugin_stream_event_callback(sender.clone(), target))
                 } else {
                     None
                 }
@@ -2712,11 +2640,8 @@ impl ChannelDispatcher for SwappableDispatcher {
     fn build_stream_event_callback(
         &self,
         target: StreamingDispatchTarget,
-        router: Arc<Mutex<MessageRouter>>,
     ) -> Option<StreamDispatchCallback> {
-        self.inner
-            .load()
-            .build_stream_event_callback(target, router)
+        self.inner.load().build_stream_event_callback(target)
     }
 
     fn supports_legacy_stream_adapter(&self, target: &StreamingDispatchTarget) -> bool {

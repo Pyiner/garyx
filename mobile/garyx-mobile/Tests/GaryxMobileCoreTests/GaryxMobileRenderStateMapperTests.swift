@@ -594,6 +594,115 @@ final class GaryxMobileRenderStateMapperTests: XCTestCase {
         XCTAssertEqual(detail.sections[1].content, .codeCard(output))
     }
 
+    func testNativeImageGenerationResolvesResultOwnedPromptAndSavedPath() throws {
+        let prompt = "A synthetic lighthouse beneath a violet evening sky."
+        let imagePath = "/Users/test/.codex/generated_images/synthetic/exec-native.png"
+        let transcriptMessages = [
+            GaryxTranscriptMessage(
+                index: 1,
+                role: .toolUse,
+                content: json(#"""
+                {
+                  "id": "exec-native",
+                  "result": "",
+                  "revisedPrompt": null,
+                  "status": "in_progress",
+                  "type": "imageGeneration"
+                }
+                """#),
+                toolName: "imageGeneration",
+                toolUseId: "call-image-generation"
+            ),
+            GaryxTranscriptMessage(
+                index: 2,
+                role: .toolResult,
+                content: json(#"""
+                {
+                  "id": "exec-native",
+                  "result": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                  "revisedPrompt": "A synthetic lighthouse beneath a violet evening sky.",
+                  "savedPath": "/Users/test/.codex/generated_images/synthetic/exec-native.png",
+                  "status": "completed",
+                  "type": "imageGeneration"
+                }
+                """#),
+                toolName: "imageGeneration",
+                toolUseId: "call-image-generation"
+            ),
+        ]
+        let projection = GaryxRenderToolFieldProjection(
+            toolName: "imageGeneration",
+            kind: .image,
+            call: .init(
+                root: .content,
+                path: ["revisedPrompt"],
+                format: .text,
+                label: .prompt
+            ),
+            result: .init(
+                root: .content,
+                path: ["savedPath"],
+                format: .image,
+                label: .image
+            ),
+            status: "completed"
+        )
+        let snapshot = GaryxRenderSnapshot(
+            basedOnSeq: 3,
+            rows: [
+                .userTurn(GaryxRenderUserTurnRow(
+                    id: "turn:image-generation",
+                    user: ref(seq: 1, role: "user"),
+                    activity: [
+                        .step(GaryxRenderStepRow(
+                            id: "step:image-generation",
+                            steps: [
+                                .toolGroup(GaryxRenderToolGroup(
+                                    id: "tool-group:image-generation",
+                                    status: .completed,
+                                    entries: [
+                                        GaryxRenderToolEntry(
+                                            id: "tool-entry:image-generation",
+                                            toolUseId: "call-image-generation",
+                                            status: .completed,
+                                            toolUse: ref(seq: 2, role: "tool_use"),
+                                            toolResult: ref(seq: 3, role: "tool_result"),
+                                            projection: projection
+                                        ),
+                                    ]
+                                )),
+                            ]
+                        )),
+                    ]
+                )),
+            ]
+        )
+
+        let rows = GaryxMobileRenderStateMapper.rows(
+            snapshot: snapshot,
+            messages: [mobileMessage(index: 0, role: .user, text: "Generate")],
+            transcriptMessages: transcriptMessages
+        )
+        guard case let .turn(turn) = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only),
+              case let .toolGroup(toolMessage) = try XCTUnwrap(turn.steps.only) else {
+            return XCTFail("expected projected image-generation tool group")
+        }
+        let entry = try XCTUnwrap(toolMessage.toolTraceGroup?.entries.only)
+
+        XCTAssertEqual(entry.title, "Image")
+        XCTAssertEqual(entry.inputText, prompt)
+        XCTAssertEqual(entry.inputLabel, "Prompt")
+        XCTAssertEqual(entry.resultText, imagePath)
+        XCTAssertEqual(entry.resultLabel, "Image")
+        XCTAssertEqual(entry.primaryPath, imagePath)
+        XCTAssertEqual(GaryxToolCallPresentation.imageRefs(from: [entry]).map(\.path), [imagePath])
+        XCTAssertEqual(
+            GaryxToolCallPresentation.detail(for: entry).sections.map(\.content),
+            [.codeCard(prompt), .imagePreview(imagePath)]
+        )
+        XCTAssertFalse(entry.resultText?.contains("iVBORw0KGgo") == true)
+    }
+
     func testToolProjectionDecodesServerSnakeCaseFields() throws {
         let snapshot = try decodeRenderSnapshot(#"""
         {

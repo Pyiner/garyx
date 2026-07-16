@@ -2,6 +2,7 @@ use garyx_router::ThreadStoreExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -13,8 +14,8 @@ use garyx_models::{
     ThreadTask,
 };
 use garyx_router::{
-    CreateTaskInput, TaskListFilter, TaskRuntimeInput, TaskService, TaskServiceError,
-    UpdateTaskStatusInput, WorkspaceMode, workspace_dir_from_value,
+    CreateTaskInput, NewTaskAgentGate, TaskListFilter, TaskRuntimeInput, TaskService,
+    TaskServiceError, UpdateTaskStatusInput, WorkspaceMode, workspace_dir_from_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -22,8 +23,9 @@ use uuid::Uuid;
 
 use crate::agent_identity::{
     default_workspace_dir_from_agent_reference, resolve_agent_reference_from_stores,
-    snapshot_agent_runtime_metadata_to_thread_record,
+    resolve_new_agent_binding_from_store, snapshot_agent_runtime_metadata_to_thread_record,
 };
+use crate::custom_agents::CustomAgentStore;
 use crate::garyx_db::{GaryxDbError, TaskForestScope};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
@@ -366,47 +368,34 @@ pub async fn assign_task(
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
     };
-    if let Err(error) = validate_task_assignee_agent(&state, Some(&body.to)).await {
-        return task_error_response(error);
-    }
     let assignee = body.to;
     let self_claim = actor.as_ref() == Some(&assignee);
-    if let Ok((thread_id, _, _)) = service.get_task(&task_id).await
-        && let Err(error) =
-            validate_thread_runtime_allows_assignee(&state, &thread_id, &assignee).await
+    match service
+        .assign_task_with_record(&task_id, assignee, actor)
+        .await
     {
-        return task_error_response(error);
-    }
-    match service.assign_task(&task_id, assignee, actor).await {
-        Ok(task) => {
-            let assignee_for_workspace = task.assignee.clone();
+        Ok((thread_id, record, task)) => {
             let mut payload = json!({ "task": task });
-            if let Ok((thread_id, record, _)) = service.get_task(&task_id).await {
-                if let Err(error) = ensure_thread_workspace_from_assignee_default(
-                    &state,
-                    &thread_id,
-                    assignee_for_workspace.as_ref(),
-                )
-                .await
-                {
-                    return task_error_response(error);
-                }
-                let has_executor = payload["task"]
-                    .get("executor")
-                    .is_some_and(|value| !value.is_null());
-                if !self_claim && !has_executor {
-                    let body_for_dispatch = task_body_for_dispatch(&payload["task"])
-                        .or_else(|| task_body_from_record(&record));
-                    if let Some(dispatch) = spawn_task_auto_dispatch(
-                        state.clone(),
-                        thread_id,
-                        payload["task"].clone(),
-                        "assign",
-                        None,
-                        body_for_dispatch.as_deref(),
-                    ) {
-                        payload["dispatch"] = dispatch;
-                    }
+            state
+                .integration
+                .bridge
+                .set_thread_workspace_binding(&thread_id, workspace_dir_from_value(&record))
+                .await;
+            let has_executor = payload["task"]
+                .get("executor")
+                .is_some_and(|value| !value.is_null());
+            if !self_claim && !has_executor {
+                let body_for_dispatch = task_body_for_dispatch(&payload["task"])
+                    .or_else(|| task_body_from_record(&record));
+                if let Some(dispatch) = spawn_task_auto_dispatch(
+                    state.clone(),
+                    thread_id,
+                    payload["task"].clone(),
+                    "assign",
+                    None,
+                    body_for_dispatch.as_deref(),
+                ) {
+                    payload["dispatch"] = dispatch;
                 }
             }
             (StatusCode::OK, Json(payload))
@@ -542,7 +531,35 @@ pub(crate) fn task_service(state: &Arc<AppState>) -> TaskService {
         Arc::new(crate::task_projection::SqliteTaskCounterStore::new(
             state.ops.garyx_db.clone(),
         )),
+        Arc::new(GatewayNewTaskAgentGate {
+            custom_agents: state.ops.custom_agents.clone(),
+        }),
     )
+}
+
+struct GatewayNewTaskAgentGate {
+    custom_agents: Arc<CustomAgentStore>,
+}
+
+#[async_trait]
+impl NewTaskAgentGate for GatewayNewTaskAgentGate {
+    async fn resolve_new_task_agent(
+        &self,
+        requested_agent_id: Option<&str>,
+    ) -> Result<garyx_models::ResolvedAgentBinding, garyx_models::AgentBindingError> {
+        resolve_new_agent_binding_from_store(self.custom_agents.as_ref(), requested_agent_id).await
+    }
+
+    async fn resolve_existing_task_agent(
+        &self,
+        current_agent_id: &str,
+    ) -> Result<garyx_models::ResolvedAgentBinding, garyx_models::AgentBindingError> {
+        garyx_models::resolve_agent_binding(
+            &self.custom_agents.snapshot().await,
+            None,
+            Some(current_agent_id),
+        )
+    }
 }
 
 fn task_list_filter(query: TaskListQuery) -> Result<TaskListFilter, TaskServiceError> {
@@ -741,127 +758,6 @@ fn task_runtime_for_executor(
     }
     runtime.agent_id = Some(executor_agent_id.to_owned());
     Ok(Some(runtime))
-}
-
-async fn validate_thread_runtime_allows_assignee(
-    state: &Arc<AppState>,
-    thread_id: &str,
-    assignee: &Principal,
-) -> Result<(), TaskServiceError> {
-    let Principal::Agent { agent_id } = assignee else {
-        return Ok(());
-    };
-    let Some(thread) = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .map_err(|error| TaskServiceError::Store(error.to_string()))?
-    else {
-        return Ok(());
-    };
-    let reference = resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
-        .await
-        .map_err(TaskServiceError::UnknownAgent)?;
-
-    let thread_agent_id = thread
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let Some(thread_agent_id) = thread_agent_id else {
-        return Ok(());
-    };
-    if thread_agent_id != reference.bound_agent_id() {
-        return Err(TaskServiceError::BadRequest(format!(
-            "task thread {thread_id} is bound to agent {thread_agent_id}; cannot assign it to agent {}",
-            reference.bound_agent_id()
-        )));
-    }
-
-    if let Some(thread_provider_type) = thread
-        .get("provider_type")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<garyx_models::ProviderType>(value).ok())
-    {
-        let reference_provider_type = reference.provider_type();
-        if thread_provider_type != reference_provider_type {
-            return Err(TaskServiceError::BadRequest(format!(
-                "task thread {thread_id} is bound to provider {thread_provider_type:?}; cannot assign it to provider {reference_provider_type:?}"
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-async fn ensure_thread_workspace_from_assignee_default(
-    state: &Arc<AppState>,
-    thread_id: &str,
-    assignee: Option<&Principal>,
-) -> Result<(), TaskServiceError> {
-    let Some(Principal::Agent { agent_id }) = assignee else {
-        return Ok(());
-    };
-    let Some(mut updated) = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .map_err(|error| TaskServiceError::Store(error.to_string()))?
-    else {
-        return Ok(());
-    };
-    let reference = resolve_agent_reference_from_stores(state.ops.custom_agents.as_ref(), agent_id)
-        .await
-        .map_err(TaskServiceError::UnknownAgent)?;
-    let existing_workspace_dir = workspace_dir_from_value(&updated);
-    let default_workspace_dir = if existing_workspace_dir.is_none() {
-        default_workspace_dir_for_agent(state, agent_id).await?
-    } else {
-        None
-    };
-    let should_bind_agent = updated
-        .get("agent_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_none();
-    let Some(obj) = updated.as_object_mut() else {
-        return Err(TaskServiceError::Store(format!(
-            "thread payload is not an object: {thread_id}"
-        )));
-    };
-    if let Some(default_workspace_dir) = default_workspace_dir {
-        obj.insert(
-            "workspace_dir".to_owned(),
-            Value::String(default_workspace_dir),
-        );
-    }
-    if should_bind_agent {
-        obj.insert(
-            "agent_id".to_owned(),
-            Value::String(reference.bound_agent_id().to_owned()),
-        );
-        obj.insert("provider_type".to_owned(), json!(reference.provider_type()));
-    }
-    obj.insert(
-        "updated_at".to_owned(),
-        Value::String(Utc::now().to_rfc3339()),
-    );
-    state
-        .threads
-        .thread_store
-        .set(thread_id, updated.clone())
-        .await
-        .map_err(|error| TaskServiceError::Store(error.to_string()))?;
-    state
-        .integration
-        .bridge
-        .set_thread_workspace_binding(thread_id, workspace_dir_from_value(&updated))
-        .await;
-    Ok(())
 }
 
 async fn ensure_created_task_thread_provider_from_bound_agent(
@@ -1136,15 +1032,21 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
         TaskServiceError::BadRequest(_) => "BadRequest",
         TaskServiceError::UnknownPrincipal(_) => "UnknownPrincipal",
         TaskServiceError::UnknownAgent(_) => "UnknownAgent",
+        TaskServiceError::AgentBinding(garyx_models::AgentBindingError::AgentDisabled(_)) => {
+            "AgentDisabled"
+        }
+        TaskServiceError::AgentBinding(garyx_models::AgentBindingError::NoEnabledAgent) => {
+            "NoEnabledAgent"
+        }
+        TaskServiceError::AgentBinding(_) => "UnknownAgent",
         TaskServiceError::Store(_) | TaskServiceError::Counter(_) | TaskServiceError::Serde(_) => {
             "Internal"
         }
     };
     let status = match code {
         "NotFound" => StatusCode::NOT_FOUND,
-        "NotATask" | "InvalidTransition" | "BadRequest" | "UnknownPrincipal" | "UnknownAgent" => {
-            StatusCode::BAD_REQUEST
-        }
+        "NotATask" | "InvalidTransition" | "BadRequest" | "UnknownPrincipal" | "UnknownAgent"
+        | "AgentDisabled" | "NoEnabledAgent" => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (

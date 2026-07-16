@@ -174,7 +174,7 @@ impl MultiProviderBridge {
                 .resolve_account_provider_key(
                     "api",
                     account_id,
-                    &account.agent_id,
+                    account.agent_id.as_deref().unwrap_or("claude"),
                     &default_workspace,
                     &default_key,
                 )
@@ -350,6 +350,7 @@ impl MultiProviderBridge {
             .agent_profiles
             .read()
             .await
+            .profiles
             .values()
             .cloned()
             .collect::<Vec<_>>();
@@ -461,6 +462,7 @@ impl MultiProviderBridge {
             .agent_profiles
             .read()
             .await
+            .profiles
             .values()
             .cloned()
             .collect::<Vec<_>>();
@@ -536,6 +538,7 @@ impl MultiProviderBridge {
             .agent_profiles
             .read()
             .await
+            .profiles
             .values()
             .cloned()
             .collect::<Vec<_>>();

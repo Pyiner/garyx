@@ -80,6 +80,14 @@ fn api_router(state: Arc<AppState>) -> Router {
                 .put(update_custom_agent)
                 .delete(delete_custom_agent),
         )
+        .route(
+            "/api/custom-agents/{agent_id}/toggle",
+            axum::routing::patch(toggle_custom_agent),
+        )
+        .route(
+            "/api/custom-agents/{agent_id}/default",
+            axum::routing::patch(set_default_custom_agent),
+        )
         .route("/api/cron/jobs", axum::routing::get(cron_jobs))
         .route("/api/cron/runs", axum::routing::get(cron_runs))
         .route(
@@ -300,7 +308,7 @@ async fn test_bot_status_returns_current_bound_thread_only() {
                     token: "token".to_owned(),
                     enabled: true,
                     name: Some("Telegram Main".to_owned()),
-                    agent_id: "codex".to_owned(),
+                    agent_id: Some("codex".to_owned()),
                     workspace_dir: Some("/tmp/current-workspace".to_owned()),
                     owner_target: Some(garyx_models::config::OwnerTargetConfig {
                         target_type: "chat_id".to_owned(),
@@ -413,7 +421,7 @@ async fn test_bot_bind_rebinds_main_endpoint_to_existing_thread() {
                     token: "token".to_owned(),
                     enabled: true,
                     name: Some("Telegram Main".to_owned()),
-                    agent_id: "codex".to_owned(),
+                    agent_id: Some("codex".to_owned()),
                     workspace_dir: Some("/tmp/current-workspace".to_owned()),
                     owner_target: Some(garyx_models::config::OwnerTargetConfig {
                         target_type: "chat_id".to_owned(),
@@ -524,7 +532,7 @@ async fn test_bot_bind_rejects_cross_channel_thread() {
                     token: "token".to_owned(),
                     enabled: true,
                     name: Some("Telegram Main".to_owned()),
-                    agent_id: "codex".to_owned(),
+                    agent_id: Some("codex".to_owned()),
                     workspace_dir: None,
                     owner_target: Some(garyx_models::config::OwnerTargetConfig {
                         target_type: "chat_id".to_owned(),
@@ -594,7 +602,7 @@ async fn test_bot_unbind_clears_main_endpoint_binding() {
                     token: "token".to_owned(),
                     enabled: true,
                     name: Some("Telegram Main".to_owned()),
-                    agent_id: "codex".to_owned(),
+                    agent_id: Some("codex".to_owned()),
                     workspace_dir: None,
                     owner_target: Some(garyx_models::config::OwnerTargetConfig {
                         target_type: "chat_id".to_owned(),
@@ -718,7 +726,272 @@ async fn test_create_and_list_custom_agents() {
             && agent["model_service_tier"] == "priority"
             && agent["avatar_data_url"] == "data:image/png;base64,dGVzdA=="
             && agent["provider_icon"]["key"] == "codex"
+            && agent["enabled"] == true
     }));
+}
+
+#[tokio::test]
+async fn custom_agent_toggle_default_and_put_enabled_tristate_contract() {
+    let state = test_state();
+    let router = api_router(state);
+    let create = Request::builder()
+        .method("POST")
+        .uri("/api/custom-agents")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "agent_id": "reviewer",
+                "display_name": "Reviewer",
+                "provider_type": "codex_app_server"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(create).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(created["enabled"], true);
+
+    let disable = Request::builder()
+        .method("PATCH")
+        .uri("/api/custom-agents/reviewer/toggle")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({"enabled": false}).to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(disable).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let disabled: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(disabled["enabled"], false);
+    assert_ne!(
+        disabled["updated_at"], created["updated_at"],
+        "a real custom-agent toggle must advance its optimistic-write token"
+    );
+
+    let rejected_default = Request::builder()
+        .method("PATCH")
+        .uri("/api/custom-agents/reviewer/default")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(rejected_default)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // Omitted enabled on PUT preserves the stored false value.
+    let update = Request::builder()
+        .method("PUT")
+        .uri("/api/custom-agents/reviewer")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "agent_id": "reviewer",
+                "display_name": "Renamed Reviewer",
+                "provider_type": "codex_app_server",
+                "expected_updated_at": disabled["updated_at"]
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(update).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(updated["enabled"], false);
+
+    let enable = Request::builder()
+        .method("PATCH")
+        .uri("/api/custom-agents/reviewer/toggle")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({"enabled": true}).to_string()))
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(enable).await.unwrap().status(),
+        StatusCode::OK
+    );
+    let set_default = Request::builder()
+        .method("PATCH")
+        .uri("/api/custom-agents/reviewer/default")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(set_default).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let list = Request::builder()
+        .method("GET")
+        .uri("/api/custom-agents")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(list).await.unwrap();
+    let listed: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(listed["default_agent_id"], "reviewer");
+    assert_eq!(listed["effective_default_agent_id"], "reviewer");
+
+    let disable_default = Request::builder()
+        .method("PATCH")
+        .uri("/api/custom-agents/reviewer/toggle")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({"enabled": false}).to_string()))
+        .unwrap();
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(disable_default)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    let list = Request::builder()
+        .method("GET")
+        .uri("/api/custom-agents")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(list).await.unwrap();
+    let listed: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(listed["default_agent_id"], "reviewer");
+    assert_eq!(listed["effective_default_agent_id"], "claude");
+
+    let delete = Request::builder()
+        .method("DELETE")
+        .uri("/api/custom-agents/reviewer")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(delete).await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    let list = Request::builder()
+        .method("GET")
+        .uri("/api/custom-agents")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(list).await.unwrap();
+    let listed: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(listed["default_agent_id"].is_null());
+    assert_eq!(listed["effective_default_agent_id"], "claude");
+
+    for agent_id in ["claude", "codex", "traex", "antigravity"] {
+        let disable = Request::builder()
+            .method("PATCH")
+            .uri(format!("/api/custom-agents/{agent_id}/toggle"))
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"enabled": false}).to_string()))
+            .unwrap();
+        assert_eq!(
+            router.clone().oneshot(disable).await.unwrap().status(),
+            StatusCode::OK
+        );
+    }
+    let list = Request::builder()
+        .method("GET")
+        .uri("/api/custom-agents")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(list).await.unwrap();
+    let listed: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(listed["effective_default_agent_id"].is_null());
+}
+
+#[tokio::test]
+async fn custom_agent_persist_failure_returns_500_without_memory_or_bridge_publish() {
+    use crate::composition::app_bootstrap::AppStateBuilder;
+
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("custom-agents.json");
+    let store = Arc::new(
+        crate::custom_agents::CustomAgentStore::file(&path).expect("file-backed agent store"),
+    );
+    store
+        .set_default_agent("codex")
+        .await
+        .expect("seed persisted envelope");
+    let before_disk = std::fs::read(&path).expect("read committed envelope");
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_custom_agent_store(store.clone())
+        .build();
+    state
+        .integration
+        .bridge
+        .replace_agent_profiles(store.snapshot().await)
+        .await;
+    assert!(
+        state
+            .integration
+            .bridge
+            .agent_profile("claude")
+            .await
+            .expect("boot profile")
+            .enabled
+    );
+
+    let mut blocking_tmp = path.as_os_str().to_owned();
+    blocking_tmp.push(".tmp");
+    let blocking_tmp = std::path::PathBuf::from(blocking_tmp);
+    std::fs::create_dir(&blocking_tmp).expect("block atomic temp write with directory");
+    let request = Request::builder()
+        .method("PATCH")
+        .uri("/api/custom-agents/claude/toggle")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({"enabled": false}).to_string()))
+        .unwrap();
+    let response = api_router(state.clone()).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(store.get_agent("claude").await.unwrap().enabled);
+    assert_eq!(store.default_agent_id().await.as_deref(), Some("codex"));
+    assert_eq!(
+        std::fs::read(&path).expect("read unchanged disk state"),
+        before_disk
+    );
+    assert!(
+        state
+            .integration
+            .bridge
+            .agent_profile("claude")
+            .await
+            .expect("unchanged bridge profile")
+            .enabled
+    );
 }
 
 #[tokio::test]
@@ -1058,11 +1331,21 @@ async fn test_thread_history_detail_with_thread_id_and_tool_messages() {
     assert_eq!(json["message_stats"]["total_messages_in_session"], 2);
     assert_eq!(json["message_stats"]["returned_messages"], 2);
     assert_eq!(json["messages"].as_array().unwrap().len(), 2);
-    assert_eq!(json["outbound_total"], 1);
+    assert!(json.get("outbound_deliveries").is_none());
+    assert!(json.get("outbound_total").is_none());
     assert_eq!(json["messages"][0]["text"], "hello");
     assert_eq!(json["messages"][0]["message"]["role"], "user");
     assert_eq!(json["messages"][1]["text"], "world");
     assert_eq!(json["messages"][1]["message"]["content"], "world");
+}
+
+#[tokio::test]
+async fn test_thread_history_error_omits_retired_delivery_fields() {
+    let json = thread_history_for_key(&test_state(), "", 10, true, None, None, None).await;
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["reason"], "missing-thread-id");
+    assert!(json.get("outbound_deliveries").is_none());
+    assert!(json.get("outbound_total").is_none());
 }
 
 #[tokio::test]
@@ -1596,6 +1879,42 @@ async fn test_cron_jobs_with_service() {
     })
     .await
     .unwrap();
+    svc.add(garyx_models::config::CronJobConfig {
+        id: "invalid-agent-turn".to_owned(),
+        kind: Default::default(),
+        label: None,
+        schedule: garyx_models::config::CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: garyx_models::config::CronAction::AgentTurn,
+        target: None,
+        message: Some("repair me".to_owned()),
+        workspace_dir: None,
+        agent_id: Some("claude".to_owned()),
+        thread_id: None,
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .unwrap();
+    svc.add(garyx_models::config::CronJobConfig {
+        id: "invalid-system-event".to_owned(),
+        kind: Default::default(),
+        label: None,
+        schedule: garyx_models::config::CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: garyx_models::config::CronAction::SystemEvent,
+        target: None,
+        message: Some("repair this target".to_owned()),
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: None,
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .unwrap();
 
     // Replace state with cron service
     let mut state_with_cron = (*state).clone_for_test();
@@ -1616,9 +1935,30 @@ async fn test_cron_jobs_with_service() {
         .await
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["count"], 1);
+    assert_eq!(json["count"], 3);
     assert_eq!(json["service_available"], true);
-    assert_eq!(json["jobs"][0]["id"], "test-job");
+    let jobs = json["jobs"].as_array().unwrap();
+    let valid = jobs.iter().find(|job| job["id"] == "test-job").unwrap();
+    assert_eq!(valid["validation_state"], "valid");
+    assert!(valid["validation_error"].is_null());
+    let invalid = jobs
+        .iter()
+        .find(|job| job["id"] == "invalid-agent-turn")
+        .unwrap();
+    assert_eq!(invalid["validation_state"], "invalid");
+    assert_eq!(
+        invalid["validation_error"],
+        "missing canonical target for agent turn"
+    );
+    let invalid_system = jobs
+        .iter()
+        .find(|job| job["id"] == "invalid-system-event")
+        .unwrap();
+    assert_eq!(invalid_system["validation_state"], "invalid");
+    assert_eq!(
+        invalid_system["validation_error"],
+        "missing canonical target for system event"
+    );
 }
 
 #[tokio::test]
@@ -2528,7 +2868,7 @@ async fn test_settings_update_partial_payload_preserves_existing_sections() {
                     token: "telegram-secret".to_owned(),
                     enabled: true,
                     name: None,
-                    agent_id: "claude".to_owned(),
+                    agent_id: Some("claude".to_owned()),
                     workspace_dir: None,
                     owner_target: None,
                     groups: std::collections::HashMap::new(),

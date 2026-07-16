@@ -2,7 +2,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use garyx_models::{CustomAgentProfile, ProviderType, builtin_provider_agent_profiles};
+#[cfg(test)]
+use garyx_models::AGENT_STORE_VERSION;
+use garyx_models::{
+    AgentAvailabilitySnapshot, CustomAgentProfile, ProviderType, builtin_provider_agent_profiles,
+    parse_agent_store_document, resolve_effective_default, serialize_agent_store_document,
+};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
@@ -14,6 +19,8 @@ pub struct UpsertCustomAgentRequest {
     #[serde(alias = "name")]
     pub display_name: String,
     pub provider_type: ProviderType,
+    #[serde(default)]
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default, alias = "modelReasoningEffort")]
@@ -35,24 +42,37 @@ pub struct UpsertCustomAgentRequest {
     pub system_prompt: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct AgentStoreState {
+    agents: HashMap<String, CustomAgentProfile>,
+    default_agent_id: Option<String>,
+    revision: u64,
+}
+
 fn normalize_system_prompt(value: &str) -> String {
     value.trim().to_owned()
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CustomAgentStore {
-    inner: RwLock<HashMap<String, CustomAgentProfile>>,
+    inner: RwLock<AgentStoreState>,
     persistence_path: Option<PathBuf>,
+}
+
+impl Default for CustomAgentStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CustomAgentStore {
     pub fn new() -> Self {
-        let builtins = builtin_profiles()
-            .into_iter()
-            .map(|profile| (profile.agent_id.clone(), profile))
-            .collect();
         Self {
-            inner: RwLock::new(builtins),
+            inner: RwLock::new(AgentStoreState {
+                agents: builtin_map(),
+                default_agent_id: None,
+                revision: 1,
+            }),
             persistence_path: None,
         }
     }
@@ -62,40 +82,46 @@ impl CustomAgentStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
-        let mut agents = builtin_profiles()
-            .into_iter()
-            .map(|profile| (profile.agent_id.clone(), profile))
-            .collect::<HashMap<_, _>>();
+
+        let mut state = AgentStoreState {
+            agents: builtin_map(),
+            default_agent_id: None,
+            revision: 1,
+        };
+        let mut migrate_legacy = false;
         if path.exists() {
             let content = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
             if !content.trim().is_empty() {
-                let persisted =
-                    serde_json::from_str::<HashMap<String, serde_json::Value>>(&content)
-                        .map_err(|error| error.to_string())?;
-                for (agent_id, value) in persisted {
-                    let unsupported_provider = value
-                        .get("provider_type")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|provider_type| {
-                            ProviderType::from_slug(provider_type).is_none()
-                        });
-                    if unsupported_provider {
-                        tracing::warn!(
-                            agent_id,
-                            "skipping persisted custom agent with unsupported provider type"
-                        );
-                        continue;
-                    }
-                    let profile = serde_json::from_value::<CustomAgentProfile>(value)
-                        .map_err(|error| error.to_string())?;
-                    agents.insert(agent_id, profile);
+                let parsed =
+                    parse_agent_store_document(&content).map_err(|error| error.to_string())?;
+                for agent_id in parsed.skipped_unsupported_agent_ids {
+                    tracing::warn!(
+                        agent_id,
+                        "skipping persisted custom agent with unsupported provider type"
+                    );
                 }
+                state.agents = parsed
+                    .agents
+                    .into_iter()
+                    .map(|profile| (profile.agent_id.clone(), profile))
+                    .collect();
+                state.default_agent_id = parsed.default_agent_id;
+                migrate_legacy = parsed.migrated_from_legacy;
             }
         }
-        Ok(Self {
-            inner: RwLock::new(agents),
+
+        let store = Self {
+            inner: RwLock::new(state),
             persistence_path: Some(path),
-        })
+        };
+        if migrate_legacy {
+            let state = store
+                .inner
+                .try_read()
+                .map_err(|_| "custom agent store lock unexpectedly contested".to_owned())?;
+            store.persist_state(&state)?;
+        }
+        Ok(store)
     }
 
     /// Where this store persists to, if anywhere. `None` means the store is
@@ -104,41 +130,42 @@ impl CustomAgentStore {
         self.persistence_path.as_deref()
     }
 
-    pub async fn list_agents(&self) -> Vec<CustomAgentProfile> {
-        let mut agents = self
+    pub async fn snapshot(&self) -> AgentAvailabilitySnapshot {
+        let state = self.inner.read().await;
+        snapshot_from_state(&state)
+    }
+
+    /// Snapshot the whole decision unit without entering async context.
+    pub fn snapshot_blocking(&self) -> AgentAvailabilitySnapshot {
+        let state = self
             .inner
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        agents.sort_by(|left, right| {
-            left.built_in
-                .cmp(&right.built_in)
-                .then_with(|| left.display_name.cmp(&right.display_name))
-        });
-        agents
+            .try_read()
+            .expect("custom agent store lock contested during boot snapshot");
+        snapshot_from_state(&state)
+    }
+
+    pub async fn list_agents(&self) -> Vec<CustomAgentProfile> {
+        sorted_profiles(&self.inner.read().await.agents)
     }
 
     /// Snapshot the agent list without entering async context.
-    ///
-    /// Intended for boot-time snapshots. Returns an empty vec if the lock is
-    /// contested, which during startup should never happen.
     pub fn list_agents_blocking(&self) -> Vec<CustomAgentProfile> {
-        let Ok(guard) = self.inner.try_read() else {
-            return Vec::new();
-        };
-        let mut agents = guard.values().cloned().collect::<Vec<_>>();
-        agents.sort_by(|left, right| {
-            left.built_in
-                .cmp(&right.built_in)
-                .then_with(|| left.display_name.cmp(&right.display_name))
-        });
-        agents
+        self.inner
+            .try_read()
+            .map(|state| sorted_profiles(&state.agents))
+            .unwrap_or_default()
+    }
+
+    pub async fn default_agent_id(&self) -> Option<String> {
+        self.inner.read().await.default_agent_id.clone()
+    }
+
+    pub async fn effective_default_agent_id(&self) -> Option<String> {
+        resolve_effective_default(&self.snapshot().await).map(|binding| binding.agent_id)
     }
 
     pub async fn get_agent(&self, agent_id: &str) -> Option<CustomAgentProfile> {
-        self.inner.read().await.get(agent_id).cloned()
+        self.inner.read().await.agents.get(agent_id).cloned()
     }
 
     pub async fn upsert_agent(
@@ -160,11 +187,7 @@ impl CustomAgentStore {
                 .into_iter()
                 .filter_map(|(key, value)| {
                     let key = key.trim();
-                    if key.is_empty() {
-                        None
-                    } else {
-                        Some((key.to_owned(), value.trim().to_owned()))
-                    }
+                    (!key.is_empty()).then(|| (key.to_owned(), value.trim().to_owned()))
                 })
                 .collect::<HashMap<_, _>>()
         });
@@ -184,9 +207,11 @@ impl CustomAgentStore {
                 "display_name is required".to_owned(),
             ));
         }
+
         let now = Utc::now().to_rfc3339();
-        let mut inner = self.inner.write().await;
-        if inner
+        let mut state = self.inner.write().await;
+        if state
+            .agents
             .get(agent_id)
             .is_some_and(|existing| existing.built_in)
         {
@@ -196,64 +221,61 @@ impl CustomAgentStore {
         }
         check_write_expectation(
             &expectation,
-            inner
+            state
+                .agents
                 .get(agent_id)
                 .map(|profile| profile.updated_at.as_str()),
             "custom agent",
         )?;
-        let created_at = inner
-            .get(agent_id)
-            .map(|existing| existing.created_at.clone())
-            .unwrap_or_else(|| now.clone());
-        let default_workspace_dir = match requested_default_workspace_dir {
-            Some(value) if value.is_empty() => None,
-            Some(value) => Some(value),
-            None => inner
-                .get(agent_id)
-                .and_then(|existing| existing.default_workspace_dir.clone()),
-        };
-        let avatar_data_url = match requested_avatar_data_url {
-            Some(value) if value.is_empty() => None,
-            Some(value) => Some(value),
-            None => inner
-                .get(agent_id)
-                .and_then(|existing| existing.avatar_data_url.clone()),
-        };
-        let existing = inner.get(agent_id);
-        let model = requested_model
-            .or_else(|| existing.map(|profile| profile.model.clone()))
-            .unwrap_or_default();
-        let model_reasoning_effort = requested_model_reasoning_effort
-            .or_else(|| existing.map(|profile| profile.model_reasoning_effort.clone()))
-            .unwrap_or_default();
-        let model_service_tier = requested_model_service_tier
-            .or_else(|| existing.map(|profile| profile.model_service_tier.clone()))
-            .unwrap_or_default();
-        let provider_env = provider_env
-            .or_else(|| existing.map(|profile| profile.provider_env.clone()))
-            .unwrap_or_default();
-        let system_prompt = requested_system_prompt
-            .or_else(|| existing.map(|profile| profile.system_prompt.clone()))
-            .unwrap_or_default();
+
+        let existing = state.agents.get(agent_id);
         let profile = CustomAgentProfile {
             agent_id: agent_id.to_owned(),
             display_name: display_name.to_owned(),
             provider_type: request.provider_type,
-            model,
-            model_reasoning_effort,
-            model_service_tier,
-            provider_env,
-            default_workspace_dir,
-            avatar_data_url,
-            system_prompt,
+            enabled: request
+                .enabled
+                .or_else(|| existing.map(|profile| profile.enabled))
+                .unwrap_or(true),
+            model: requested_model
+                .or_else(|| existing.map(|profile| profile.model.clone()))
+                .unwrap_or_default(),
+            model_reasoning_effort: requested_model_reasoning_effort
+                .or_else(|| existing.map(|profile| profile.model_reasoning_effort.clone()))
+                .unwrap_or_default(),
+            model_service_tier: requested_model_service_tier
+                .or_else(|| existing.map(|profile| profile.model_service_tier.clone()))
+                .unwrap_or_default(),
+            provider_env: provider_env
+                .or_else(|| existing.map(|profile| profile.provider_env.clone()))
+                .unwrap_or_default(),
+            default_workspace_dir: match requested_default_workspace_dir {
+                Some(value) if value.is_empty() => None,
+                Some(value) => Some(value),
+                None => existing.and_then(|profile| profile.default_workspace_dir.clone()),
+            },
+            avatar_data_url: match requested_avatar_data_url {
+                Some(value) if value.is_empty() => None,
+                Some(value) => Some(value),
+                None => existing.and_then(|profile| profile.avatar_data_url.clone()),
+            },
+            system_prompt: requested_system_prompt
+                .or_else(|| existing.map(|profile| profile.system_prompt.clone()))
+                .unwrap_or_default(),
             built_in: false,
             standalone: true,
-            created_at,
+            created_at: existing
+                .map(|profile| profile.created_at.clone())
+                .unwrap_or_else(|| now.clone()),
             updated_at: now,
         };
-        inner.insert(agent_id.to_owned(), profile.clone());
-        self.persist_locked(&inner)
+
+        let mut next = state.clone();
+        next.agents.insert(agent_id.to_owned(), profile.clone());
+        next.revision = next.revision.saturating_add(1);
+        self.persist_state(&next)
             .map_err(StoreWriteError::Persist)?;
+        *state = next;
         Ok(profile)
     }
 
@@ -270,38 +292,133 @@ impl CustomAgentStore {
             .map_err(|error| error.message().to_owned())
     }
 
-    pub async fn delete_agent(&self, agent_id: &str) -> Result<(), String> {
-        let mut inner = self.inner.write().await;
-        let Some(existing) = inner.get(agent_id) else {
-            return Err("custom agent not found".to_owned());
+    pub async fn set_enabled(
+        &self,
+        agent_id: &str,
+        enabled: bool,
+    ) -> Result<CustomAgentProfile, StoreWriteError> {
+        let agent_id = agent_id.trim();
+        let mut state = self.inner.write().await;
+        let Some(existing) = state.agents.get(agent_id) else {
+            return Err(StoreWriteError::NotFound("agent not found".to_owned()));
         };
-        if existing.built_in {
-            return Err("built-in agents cannot be deleted".to_owned());
+        if existing.enabled == enabled {
+            return Ok(existing.clone());
         }
-        inner.remove(agent_id);
-        self.persist_locked(&inner)
+        let mut profile = existing.clone();
+        profile.enabled = enabled;
+        if !profile.built_in {
+            profile.updated_at = Utc::now().to_rfc3339();
+        }
+        let mut next = state.clone();
+        next.agents.insert(agent_id.to_owned(), profile.clone());
+        next.revision = next.revision.saturating_add(1);
+        self.persist_state(&next)
+            .map_err(StoreWriteError::Persist)?;
+        *state = next;
+        Ok(profile)
     }
 
-    /// Persist while the caller still holds the write guard, so a mutation
-    /// and its disk write form one critical section. Writers are strictly
-    /// ordered and a stale snapshot can never land after a newer one — the
-    /// lost-update shape that erased a real agent definition on 2026-07-06.
-    fn persist_locked(&self, inner: &HashMap<String, CustomAgentProfile>) -> Result<(), String> {
+    pub async fn set_default_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<CustomAgentProfile, StoreWriteError> {
+        let agent_id = agent_id.trim();
+        let mut state = self.inner.write().await;
+        let Some(profile) = state.agents.get(agent_id).cloned() else {
+            return Err(StoreWriteError::NotFound("agent not found".to_owned()));
+        };
+        if !profile.standalone {
+            return Err(StoreWriteError::Invalid(
+                "default agent must be standalone".to_owned(),
+            ));
+        }
+        if !profile.enabled {
+            return Err(StoreWriteError::Invalid(format!(
+                "agent is disabled: {agent_id}"
+            )));
+        }
+        if state.default_agent_id.as_deref() == Some(agent_id) {
+            return Ok(profile);
+        }
+        let mut next = state.clone();
+        next.default_agent_id = Some(agent_id.to_owned());
+        next.revision = next.revision.saturating_add(1);
+        self.persist_state(&next)
+            .map_err(StoreWriteError::Persist)?;
+        *state = next;
+        Ok(profile)
+    }
+
+    pub async fn delete_agent(&self, agent_id: &str) -> Result<(), StoreWriteError> {
+        let agent_id = agent_id.trim();
+        let mut state = self.inner.write().await;
+        let Some(existing) = state.agents.get(agent_id) else {
+            return Err(StoreWriteError::NotFound(
+                "custom agent not found".to_owned(),
+            ));
+        };
+        if existing.built_in {
+            return Err(StoreWriteError::Invalid(
+                "built-in agents cannot be deleted".to_owned(),
+            ));
+        }
+        let mut next = state.clone();
+        next.agents.remove(agent_id);
+        if next.default_agent_id.as_deref() == Some(agent_id) {
+            next.default_agent_id = None;
+        }
+        next.revision = next.revision.saturating_add(1);
+        self.persist_state(&next)
+            .map_err(StoreWriteError::Persist)?;
+        *state = next;
+        Ok(())
+    }
+
+    /// Serialize exactly the proposed state. Callers still hold the mutation
+    /// lock and only swap `inner` after this succeeds.
+    fn persist_state(&self, state: &AgentStoreState) -> Result<(), String> {
         let Some(path) = &self.persistence_path else {
             return Ok(());
         };
-        let snapshot = inner
-            .iter()
-            .filter(|(_, profile)| !profile.built_in)
-            .map(|(agent_id, profile)| (agent_id.clone(), profile.clone()))
-            .collect::<HashMap<_, _>>();
-        let json = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
+        let agents = sorted_profiles(&state.agents);
+        let json = serialize_agent_store_document(&agents, state.default_agent_id.as_deref())
+            .map_err(|error| error.to_string())?;
         crate::atomic_write::write_json_atomic(path, &json)
     }
 }
 
-fn builtin_profiles() -> Vec<CustomAgentProfile> {
+fn builtin_map() -> HashMap<String, CustomAgentProfile> {
     builtin_provider_agent_profiles()
+        .into_iter()
+        .map(|profile| (profile.agent_id.clone(), profile))
+        .collect()
+}
+
+fn sorted_profiles(agents: &HashMap<String, CustomAgentProfile>) -> Vec<CustomAgentProfile> {
+    const BUILTIN_ORDER: &[&str] = &["claude", "codex", "traex", "antigravity"];
+    let builtin_rank = |agent_id: &str| {
+        BUILTIN_ORDER
+            .iter()
+            .position(|candidate| *candidate == agent_id)
+            .unwrap_or(usize::MAX)
+    };
+    let mut profiles = agents.values().cloned().collect::<Vec<_>>();
+    profiles.sort_by(|left, right| match (left.built_in, right.built_in) {
+        (true, true) => builtin_rank(&left.agent_id).cmp(&builtin_rank(&right.agent_id)),
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (false, false) => left.agent_id.cmp(&right.agent_id),
+    });
+    profiles
+}
+
+fn snapshot_from_state(state: &AgentStoreState) -> AgentAvailabilitySnapshot {
+    AgentAvailabilitySnapshot {
+        agents: sorted_profiles(&state.agents),
+        default_agent_id: state.default_agent_id.clone(),
+        agent_state_revision: state.revision,
+    }
 }
 
 #[cfg(test)]

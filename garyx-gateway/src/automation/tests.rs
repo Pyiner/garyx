@@ -1,7 +1,8 @@
 use super::{
-    AutomationThreadsParams, UpdateAutomationBody, automation_agent_id, automation_threads,
-    build_automation_job, compile_schedule, infer_schedule_view, is_automation_job, parse_time_hm,
-    to_summary, update_automation,
+    AutomationThreadsParams, CreateAutomationBody, UpdateAutomationBody, automation_agent_id,
+    automation_threads, build_automation_job, compile_schedule, create_automation,
+    infer_schedule_view, is_automation_job, list_automations, parse_time_hm, to_summary,
+    update_automation,
 };
 use crate::cron::{CronJob, CronService, JobRunStatus};
 use crate::garyx_db::AutomationThreadRunDraft;
@@ -154,7 +155,7 @@ fn build_automation_job_persists_selected_agent() {
         "automation::digest",
         "Digest",
         "Summarize recent updates.",
-        "codex",
+        Some("codex"),
         Some("/tmp/repo"),
         None,
         AutomationScheduleView::Interval { hours: 6 },
@@ -171,7 +172,7 @@ fn build_automation_job_preserves_target_thread() {
         "automation::thread-digest",
         "Thread Digest",
         "Summarize this thread.",
-        "codex",
+        Some("codex"),
         None,
         Some("thread::target"),
         AutomationScheduleView::Interval { hours: 6 },
@@ -227,13 +228,14 @@ fn thread_only_prompt_jobs_are_automation_jobs() {
         created_at: Utc::now(),
         last_run_at: None,
         system: false,
+        validation_error: None,
     };
 
     assert!(is_automation_job(&job));
 }
 
-#[test]
-fn automation_summary_defaults_agent_to_claude_for_legacy_jobs() {
+#[tokio::test]
+async fn automation_summary_defaults_agent_to_claude_for_legacy_jobs() {
     let job = CronJob {
         id: "automation::legacy".to_owned(),
         kind: CronJobKind::AutomationPrompt,
@@ -256,15 +258,18 @@ fn automation_summary_defaults_agent_to_claude_for_legacy_jobs() {
         created_at: Utc::now(),
         last_run_at: None,
         system: false,
+        validation_error: None,
     };
 
     assert_eq!(automation_agent_id(&job), "claude");
-    let summary = to_summary(&job, None).expect("summary");
-    assert_eq!(summary.agent_id, "claude");
+    let state = AppStateBuilder::new(GaryxConfig::default()).build();
+    let summary = to_summary(&state, &job, None).await.expect("summary");
+    assert_eq!(summary.agent_id.as_deref(), Some("claude"));
+    assert_eq!(summary.effective_agent_id.as_deref(), Some("claude"));
 }
 
-#[test]
-fn automation_summary_exposes_bound_target_thread() {
+#[tokio::test]
+async fn automation_summary_exposes_bound_target_thread() {
     let job = CronJob {
         id: "automation::bound".to_owned(),
         kind: CronJobKind::AutomationPrompt,
@@ -277,7 +282,9 @@ fn automation_summary_exposes_bound_target_thread() {
         target: None,
         message: Some("Summarize this thread.".to_owned()),
         workspace_dir: None,
-        agent_id: Some("codex".to_owned()),
+        // Legacy dirty cache: target execution must ignore this value and
+        // derive the target thread's live binding instead.
+        agent_id: Some("claude".to_owned()),
         thread_id: Some("thread::target".to_owned()),
         delete_after_run: false,
         enabled: true,
@@ -287,12 +294,167 @@ fn automation_summary_exposes_bound_target_thread() {
         created_at: Utc::now(),
         last_run_at: None,
         system: false,
+        validation_error: None,
     };
 
-    let summary = to_summary(&job, None).expect("summary");
+    let state = AppStateBuilder::new(GaryxConfig::default()).build();
+    state
+        .threads
+        .thread_store
+        .set("thread::target", serde_json::json!({ "agent_id": "codex" }))
+        .await
+        .unwrap();
+    let summary = to_summary(&state, &job, None).await.expect("summary");
     assert_eq!(summary.target_thread_id.as_deref(), Some("thread::target"));
     assert_eq!(summary.thread_id.as_deref(), Some("thread::target"));
     assert_eq!(summary.workspace_dir, "");
+    assert!(summary.agent_id.is_none());
+    assert_eq!(summary.effective_agent_id.as_deref(), Some("codex"));
+    assert_eq!(
+        summary.agent_resolution,
+        super::AutomationAgentResolution::FollowThread
+    );
+    let wire = serde_json::to_value(&summary).unwrap();
+    assert!(wire["agentId"].is_null());
+    assert_eq!(wire["effectiveAgentId"], "codex");
+}
+
+#[tokio::test]
+async fn automation_summary_target_missing_uses_typed_nullable_wire_state() {
+    let job = CronJob {
+        id: "automation::missing-target".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Missing target".to_owned()),
+        schedule: CronSchedule::Interval {
+            interval_secs: 3600,
+        },
+        ui_schedule: Some(AutomationScheduleView::Interval { hours: 1 }),
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("Summarize this thread.".to_owned()),
+        workspace_dir: None,
+        agent_id: Some("claude".to_owned()),
+        thread_id: Some("thread::missing-target".to_owned()),
+        delete_after_run: false,
+        enabled: true,
+        next_run: Utc::now(),
+        last_status: JobRunStatus::NeverRun,
+        run_count: 0,
+        created_at: Utc::now(),
+        last_run_at: None,
+        system: false,
+        validation_error: None,
+    };
+    let state = AppStateBuilder::new(GaryxConfig::default()).build();
+    let summary = to_summary(&state, &job, None).await.unwrap();
+    assert_eq!(
+        summary.agent_resolution,
+        super::AutomationAgentResolution::TargetMissing
+    );
+    let wire = serde_json::to_value(summary).unwrap();
+    assert!(wire.get("agentId").is_some_and(serde_json::Value::is_null));
+    assert!(
+        wire.get("effectiveAgentId")
+            .is_some_and(serde_json::Value::is_null)
+    );
+}
+
+#[tokio::test]
+async fn automation_list_keeps_legacy_delivery_target_rows_visible() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    service
+        .add(CronJobConfig {
+            id: "automation::legacy-last".to_owned(),
+            kind: CronJobKind::AutomationPrompt,
+            label: Some("Legacy delivery".to_owned()),
+            schedule: CronSchedule::Interval {
+                interval_secs: 3600,
+            },
+            ui_schedule: Some(AutomationScheduleView::Interval { hours: 1 }),
+            action: CronAction::AgentTurn,
+            target: Some("last".to_owned()),
+            message: Some("Summarize the last delivery target.".to_owned()),
+            workspace_dir: None,
+            agent_id: Some("claude".to_owned()),
+            thread_id: None,
+            delete_after_run: false,
+            enabled: true,
+            system: false,
+        })
+        .await
+        .unwrap();
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_cron_service(service)
+        .build();
+
+    let response = list_automations(State(state)).await.into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let wire: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(wire["automations"].as_array().unwrap().len(), 1);
+    assert_eq!(wire["automations"][0]["workspaceDir"], "");
+}
+
+#[tokio::test]
+async fn unsupported_legacy_schedule_lists_and_repairs_without_rewriting_raw_schedule() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    service
+        .add(CronJobConfig {
+            id: "automation::repair-schedule".to_owned(),
+            kind: CronJobKind::AutomationPrompt,
+            label: Some("Repair me".to_owned()),
+            schedule: CronSchedule::Interval { interval_secs: 90 },
+            ui_schedule: None,
+            action: CronAction::AgentTurn,
+            target: None,
+            message: Some("Repair this legacy row.".to_owned()),
+            workspace_dir: None,
+            agent_id: None,
+            thread_id: None,
+            delete_after_run: false,
+            enabled: true,
+            system: false,
+        })
+        .await
+        .unwrap();
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_cron_service(service.clone())
+        .build();
+
+    let response = list_automations(State(state.clone())).await.into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let wire: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(wire["automations"][0]["validationState"], "invalid");
+    assert_eq!(wire["automations"][0]["schedule"]["kind"], "once");
+
+    let repair: UpdateAutomationBody = serde_json::from_value(serde_json::json!({
+        "label": "Repaired",
+        "workspaceDir": "/tmp/repaired-automation",
+        "agentId": "claude"
+    }))
+    .unwrap();
+    let response = update_automation(
+        State(state),
+        Path("automation::repair-schedule".to_owned()),
+        Json(repair),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let repaired = service.get("automation::repair-schedule").await.unwrap();
+    assert_eq!(
+        repaired.schedule,
+        CronSchedule::Interval { interval_secs: 90 }
+    );
+    assert!(repaired.ui_schedule.is_none());
+    assert!(repaired.validation_error.is_none());
 }
 
 #[tokio::test]
@@ -323,6 +485,15 @@ async fn update_automation_null_target_thread_clears_binding() {
     let state = AppStateBuilder::new(GaryxConfig::default())
         .with_cron_service(service.clone())
         .build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::target",
+            serde_json::json!({ "agent_id": "claude" }),
+        )
+        .await
+        .unwrap();
     let body: UpdateAutomationBody = serde_json::from_value(serde_json::json!({
         "targetThreadId": null,
         "workspaceDir": "/tmp/repo"
@@ -494,4 +665,518 @@ async fn automation_threads_endpoint_returns_generated_run_associations() {
         "generated_thread"
     );
     assert_eq!(payload["items"][0]["thread"]["excludeFromRecent"], true);
+}
+
+fn target_automation_config(id: &str, thread_id: &str) -> CronJobConfig {
+    CronJobConfig {
+        id: id.to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Target automation".to_owned()),
+        schedule: CronSchedule::Interval {
+            interval_secs: 3600,
+        },
+        ui_schedule: Some(AutomationScheduleView::Interval { hours: 1 }),
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("Continue the target thread.".to_owned()),
+        workspace_dir: None,
+        // Deliberately wrong legacy cache; target mode must ignore it.
+        agent_id: Some("claude".to_owned()),
+        thread_id: Some(thread_id.to_owned()),
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    }
+}
+
+#[tokio::test]
+async fn invalid_threadless_automation_stays_visible_and_repairable_with_null_agent_wire() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    let mut invalid = target_automation_config("automation::invalid", "thread::unused");
+    invalid.thread_id = None;
+    invalid.agent_id = None;
+    service.add(invalid).await.unwrap();
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_cron_service(service)
+        .build();
+
+    let response = list_automations(State(state)).await.into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let row = &payload["automations"][0];
+    assert_eq!(row["validationState"], "invalid");
+    assert_eq!(
+        row["validationError"],
+        "missing canonical target for agent turn"
+    );
+    assert!(row.get("agentId").is_some_and(serde_json::Value::is_null));
+    assert!(
+        row.get("effectiveAgentId")
+            .is_some_and(serde_json::Value::is_null)
+    );
+}
+
+#[tokio::test]
+async fn target_mode_ignores_disabled_job_agent_but_conversion_gates_live_thread_binding() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    service
+        .add(target_automation_config(
+            "automation::target-disabled",
+            "thread::target-disabled",
+        ))
+        .await
+        .unwrap();
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .set_enabled("codex", false)
+        .await
+        .expect("disable target binding");
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_custom_agent_store(custom_agents)
+        .with_cron_service(service.clone())
+        .build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::target-disabled",
+            serde_json::json!({"agent_id": "codex", "workspace_dir": "/tmp/target"}),
+        )
+        .await
+        .unwrap();
+
+    let label_only: UpdateAutomationBody =
+        serde_json::from_value(serde_json::json!({"label": "Renamed target"})).unwrap();
+    let response = update_automation(
+        State(state.clone()),
+        Path("automation::target-disabled".to_owned()),
+        Json(label_only),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let clear_target: UpdateAutomationBody = serde_json::from_value(serde_json::json!({
+        "targetThreadId": null,
+        "workspaceDir": "/tmp/generated"
+    }))
+    .unwrap();
+    let response = update_automation(
+        State(state.clone()),
+        Path("automation::target-disabled".to_owned()),
+        Json(clear_target),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        service
+            .get("automation::target-disabled")
+            .await
+            .unwrap()
+            .thread_id
+            .as_deref(),
+        Some("thread::target-disabled")
+    );
+
+    // Creating another target-existing automation is pure configuration and
+    // ignores the disabled job-level selection entirely.
+    let response = create_automation(
+        State(state),
+        Json(CreateAutomationBody {
+            label: "Another target".to_owned(),
+            prompt: "Continue it.".to_owned(),
+            agent_id: Some("codex".to_owned()),
+            workspace_dir: None,
+            target_thread_id: Some("thread::target-disabled".to_owned()),
+            schedule: AutomationScheduleView::Interval { hours: 1 },
+            enabled: Some(true),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn target_to_generated_uses_live_binding_and_missing_target_requires_explicit_reselection() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    service
+        .add(target_automation_config(
+            "automation::live-binding",
+            "thread::live-binding",
+        ))
+        .await
+        .unwrap();
+    service
+        .add(target_automation_config(
+            "automation::missing-binding",
+            "thread::missing-binding",
+        ))
+        .await
+        .unwrap();
+    service
+        .add(target_automation_config(
+            "automation::unbound-target",
+            "thread::unbound-target",
+        ))
+        .await
+        .unwrap();
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_cron_service(service.clone())
+        .build();
+
+    // Simulates a legacy unbound thread acquiring its binding later via task
+    // assignment: conversion must read this current record, not a boot cache.
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::live-binding",
+            serde_json::json!({"agent_id": "codex", "workspace_dir": "/tmp/live"}),
+        )
+        .await
+        .unwrap();
+    let clear: UpdateAutomationBody = serde_json::from_value(serde_json::json!({
+        "targetThreadId": null,
+        "workspaceDir": "/tmp/generated"
+    }))
+    .unwrap();
+    let response = update_automation(
+        State(state.clone()),
+        Path("automation::live-binding".to_owned()),
+        Json(clear),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        service
+            .get("automation::live-binding")
+            .await
+            .unwrap()
+            .agent_id
+            .as_deref(),
+        Some("codex")
+    );
+
+    let no_choice: UpdateAutomationBody = serde_json::from_value(serde_json::json!({
+        "targetThreadId": null,
+        "workspaceDir": "/tmp/generated"
+    }))
+    .unwrap();
+    let response = update_automation(
+        State(state.clone()),
+        Path("automation::missing-binding".to_owned()),
+        Json(no_choice),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Existence alone is not a binding. A real legacy thread with no
+    // canonical agent must require the same explicit re-selection as a
+    // deleted target rather than falling through to the global default.
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::unbound-target",
+            serde_json::json!({
+                "thread_id": "thread::unbound-target",
+                "workspace_dir": "/tmp/unbound-target"
+            }),
+        )
+        .await
+        .unwrap();
+    let no_choice: UpdateAutomationBody = serde_json::from_value(serde_json::json!({
+        "targetThreadId": null,
+        "workspaceDir": "/tmp/generated"
+    }))
+    .unwrap();
+    let response = update_automation(
+        State(state.clone()),
+        Path("automation::unbound-target".to_owned()),
+        Json(no_choice),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(error["error"].as_str().is_some_and(|message| {
+        message.contains("has no agent binding") && message.contains("select an enabled agent")
+    }));
+
+    let explicit_unbound: UpdateAutomationBody = serde_json::from_value(serde_json::json!({
+        "targetThreadId": null,
+        "workspaceDir": "/tmp/generated",
+        "agentId": "codex"
+    }))
+    .unwrap();
+    let response = update_automation(
+        State(state.clone()),
+        Path("automation::unbound-target".to_owned()),
+        Json(explicit_unbound),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        service
+            .get("automation::unbound-target")
+            .await
+            .unwrap()
+            .agent_id
+            .as_deref(),
+        Some("codex")
+    );
+
+    let explicit: UpdateAutomationBody = serde_json::from_value(serde_json::json!({
+        "targetThreadId": null,
+        "workspaceDir": "/tmp/generated",
+        "agentId": "claude"
+    }))
+    .unwrap();
+    let response = update_automation(
+        State(state),
+        Path("automation::missing-binding".to_owned()),
+        Json(explicit),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn generated_create_omitting_agent_persists_non_claude_effective_default() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .set_default_agent("codex")
+        .await
+        .expect("set non-Claude default");
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_custom_agent_store(custom_agents)
+        .with_cron_service(service.clone())
+        .build();
+
+    let response = create_automation(
+        State(state),
+        Json(CreateAutomationBody {
+            label: "Defaulted generated".to_owned(),
+            prompt: "Use the effective default.".to_owned(),
+            agent_id: None,
+            workspace_dir: Some("/tmp/defaulted-generated".to_owned()),
+            target_thread_id: None,
+            schedule: AutomationScheduleView::Interval { hours: 1 },
+            enabled: Some(true),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let summary: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(summary["agentId"], "codex");
+    assert_eq!(summary["effectiveAgentId"], "codex");
+    assert_eq!(summary["agentResolution"], "resolved");
+
+    let jobs = service.list().await;
+    assert_eq!(jobs.len(), 1);
+    assert_eq!(jobs[0].agent_id.as_deref(), Some("codex"));
+}
+
+#[tokio::test]
+async fn generated_create_explicit_disabled_agent_is_rejected_without_fallback() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .set_enabled("codex", false)
+        .await
+        .expect("disable explicit selection");
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_custom_agent_store(custom_agents)
+        .with_cron_service(service.clone())
+        .build();
+
+    let response = create_automation(
+        State(state),
+        Json(CreateAutomationBody {
+            label: "Disabled generated".to_owned(),
+            prompt: "Do not fall back.".to_owned(),
+            agent_id: Some("codex".to_owned()),
+            workspace_dir: Some("/tmp/disabled-generated".to_owned()),
+            target_thread_id: None,
+            schedule: AutomationScheduleView::Interval { hours: 1 },
+            enabled: Some(true),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"], "agent is disabled: codex");
+    assert!(service.list().await.is_empty());
+}
+
+#[tokio::test]
+async fn target_to_generated_is_rejected_when_all_agents_are_disabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    service
+        .add(target_automation_config(
+            "automation::all-disabled-conversion",
+            "thread::all-disabled-conversion",
+        ))
+        .await
+        .unwrap();
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    for agent in custom_agents.list_agents().await {
+        custom_agents
+            .set_enabled(&agent.agent_id, false)
+            .await
+            .expect("disable every agent");
+    }
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_custom_agent_store(custom_agents)
+        .with_cron_service(service.clone())
+        .build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::all-disabled-conversion",
+            serde_json::json!({
+                "thread_id": "thread::all-disabled-conversion",
+                "agent_id": "claude",
+                "workspace_dir": "/tmp/all-disabled-target"
+            }),
+        )
+        .await
+        .unwrap();
+
+    let clear: UpdateAutomationBody = serde_json::from_value(serde_json::json!({
+        "targetThreadId": null,
+        "workspaceDir": "/tmp/all-disabled-generated"
+    }))
+    .unwrap();
+    let response = update_automation(
+        State(state),
+        Path("automation::all-disabled-conversion".to_owned()),
+        Json(clear),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"], "agent is disabled: claude");
+    let persisted = service
+        .get("automation::all-disabled-conversion")
+        .await
+        .unwrap();
+    assert_eq!(
+        persisted.thread_id.as_deref(),
+        Some("thread::all-disabled-conversion")
+    );
+    assert_eq!(persisted.agent_id.as_deref(), Some("claude"));
+}
+
+#[tokio::test]
+async fn generated_label_edit_preserves_disabled_binding_but_explicit_rebind_rejects() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    let mut generated = target_automation_config("automation::generated-disabled", "unused");
+    generated.thread_id = None;
+    generated.workspace_dir = Some("/tmp/generated".to_owned());
+    generated.agent_id = Some("codex".to_owned());
+    service.add(generated).await.unwrap();
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents.set_enabled("codex", false).await.unwrap();
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_custom_agent_store(custom_agents)
+        .with_cron_service(service.clone())
+        .build();
+
+    let label_only: UpdateAutomationBody =
+        serde_json::from_value(serde_json::json!({"label": "Still bound"})).unwrap();
+    let response = update_automation(
+        State(state.clone()),
+        Path("automation::generated-disabled".to_owned()),
+        Json(label_only),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        service
+            .get("automation::generated-disabled")
+            .await
+            .unwrap()
+            .agent_id
+            .as_deref(),
+        Some("codex")
+    );
+
+    let explicit_same: UpdateAutomationBody =
+        serde_json::from_value(serde_json::json!({"agentId": "codex"})).unwrap();
+    let response = update_automation(
+        State(state),
+        Path("automation::generated-disabled".to_owned()),
+        Json(explicit_same),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn generated_create_with_all_agents_disabled_fails_without_creating_job() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    for agent in custom_agents.list_agents().await {
+        custom_agents
+            .set_enabled(&agent.agent_id, false)
+            .await
+            .unwrap();
+    }
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_custom_agent_store(custom_agents)
+        .with_cron_service(service.clone())
+        .build();
+    let response = create_automation(
+        State(state),
+        Json(CreateAutomationBody {
+            label: "No agent".to_owned(),
+            prompt: "Do work".to_owned(),
+            agent_id: None,
+            workspace_dir: Some("/tmp/generated".to_owned()),
+            target_thread_id: None,
+            schedule: AutomationScheduleView::Interval { hours: 1 },
+            enabled: Some(true),
+        }),
+    )
+    .await
+    .into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(service.list().await.is_empty());
 }

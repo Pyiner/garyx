@@ -1029,6 +1029,53 @@ fn parse_task_stop_and_delete() {
 }
 
 #[test]
+fn parse_agent_availability_commands() {
+    let cli = Cli::parse_from(["garyx", "agent", "enable", "codex", "--json"]);
+    match cli.command {
+        Some(Commands::Agent {
+            action: AgentAction::Enable { agent_id, json },
+        }) => {
+            assert_eq!(agent_id, "codex");
+            assert!(json);
+        }
+        _ => panic!("expected Agent::Enable"),
+    }
+
+    let cli = Cli::parse_from(["garyx", "agent", "disable", "reviewer"]);
+    match cli.command {
+        Some(Commands::Agent {
+            action: AgentAction::Disable { agent_id, json },
+        }) => {
+            assert_eq!(agent_id, "reviewer");
+            assert!(!json);
+        }
+        _ => panic!("expected Agent::Disable"),
+    }
+
+    let cli = Cli::parse_from(["garyx", "agent", "default"]);
+    match cli.command {
+        Some(Commands::Agent {
+            action: AgentAction::Default { agent_id, json },
+        }) => {
+            assert_eq!(agent_id, None);
+            assert!(!json);
+        }
+        _ => panic!("expected Agent::Default query"),
+    }
+
+    let cli = Cli::parse_from(["garyx", "agent", "default", "codex", "--json"]);
+    match cli.command {
+        Some(Commands::Agent {
+            action: AgentAction::Default { agent_id, json },
+        }) => {
+            assert_eq!(agent_id.as_deref(), Some("codex"));
+            assert!(json);
+        }
+        _ => panic!("expected Agent::Default mutation"),
+    }
+}
+
+#[test]
 fn parse_agent_create() {
     let cli = Cli::parse_from([
         "garyx",
@@ -1460,7 +1507,7 @@ async fn onboard_updates_existing_config_without_resetting_other_fields() {
         ApiAccount {
             enabled: false,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -1545,7 +1592,7 @@ async fn channels_add_non_interactive_telegram() {
     assert!(account.enabled);
     assert_eq!(account.token, "123:ABCDEF");
     assert_eq!(account.name.as_deref(), Some("Alice Bot"));
-    assert_eq!(account.agent_id, "claude");
+    assert_eq!(account.agent_id, None);
 }
 
 #[tokio::test]
@@ -1583,7 +1630,7 @@ async fn channels_add_non_interactive_discord() {
     assert_eq!(account.token, "discord-token");
     assert_eq!(account.name.as_deref(), Some("Discord Bot"));
     assert!(account.require_mention);
-    assert_eq!(account.agent_id, "claude");
+    assert_eq!(account.agent_id, None);
 }
 
 #[tokio::test]
@@ -1625,7 +1672,7 @@ async fn channels_add_non_interactive_feishu() {
     assert!(account.enabled);
     assert_eq!(account.config["app_id"], "cli_abcdef");
     assert_eq!(account.config["app_secret"], "s_xyz");
-    assert_eq!(account.agent_id.as_deref(), Some("claude"));
+    assert_eq!(account.agent_id, None);
 }
 
 #[tokio::test]
@@ -1660,7 +1707,7 @@ async fn channels_add_non_interactive_api_only_needs_account() {
     let account = loaded.config.channels.api.accounts.get("scripted").unwrap();
     assert!(account.enabled);
     assert_eq!(account.workspace_dir.as_deref(), Some("/tmp/ws"));
-    assert_eq!(account.agent_id, "claude");
+    assert_eq!(account.agent_id, None);
 }
 
 #[tokio::test]
@@ -1693,7 +1740,7 @@ async fn channels_add_non_interactive_persists_explicit_agent_id() {
     )
     .unwrap();
     let account = loaded.config.channels.api.accounts.get("scripted").unwrap();
-    assert_eq!(account.agent_id, "product-ship");
+    assert_eq!(account.agent_id.as_deref(), Some("product-ship"));
 }
 
 #[tokio::test]
@@ -2137,7 +2184,7 @@ fn plugin_discovery_with_valid_config() {
                 token: "fake-token".to_owned(),
                 enabled: true,
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 groups: Default::default(),
@@ -2156,7 +2203,7 @@ fn plugin_discovery_with_valid_config() {
                 enabled: true,
                 domain: Default::default(),
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 require_mention: true,
@@ -2198,7 +2245,7 @@ fn routing_rebuild_channels_prefers_enabled_accounts() {
                 token: "t".to_owned(),
                 enabled: false,
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 groups: Default::default(),
@@ -2216,7 +2263,7 @@ fn routing_rebuild_channels_prefers_enabled_accounts() {
                 enabled: true,
                 domain: Default::default(),
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 require_mention: true,
@@ -2245,7 +2292,7 @@ fn routing_rebuild_channels_includes_all_enabled_channels() {
                 token: "t".to_owned(),
                 enabled: true,
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 groups: Default::default(),
@@ -2263,7 +2310,7 @@ fn routing_rebuild_channels_includes_all_enabled_channels() {
                 enabled: true,
                 domain: Default::default(),
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 require_mention: true,
@@ -2275,7 +2322,7 @@ fn routing_rebuild_channels_includes_all_enabled_channels() {
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -2411,7 +2458,7 @@ async fn startup_runtime_assembles_without_rebuilding_thread_indexes_from_canoni
         token: "token".to_owned(),
         enabled: true,
         name: None,
-        agent_id: "claude".to_owned(),
+        agent_id: Some("claude".to_owned()),
         workspace_dir: None,
         owner_target: None,
         groups: Default::default(),

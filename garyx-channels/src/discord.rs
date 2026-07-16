@@ -51,6 +51,7 @@ pub(crate) struct DiscordUser {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub(crate) struct DiscordMessageReference {
     #[serde(default)]
     pub message_id: Option<String>,
@@ -68,6 +69,7 @@ pub(crate) struct DiscordMessageCreateEvent {
     #[serde(default)]
     pub mentions: Vec<DiscordUser>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub message_reference: Option<DiscordMessageReference>,
     #[serde(default)]
     pub attachments: Vec<DiscordAttachment>,
@@ -283,10 +285,6 @@ pub(crate) fn build_inbound_request(
         },
         message,
         run_id: uuid::Uuid::new_v4().to_string(),
-        reply_to_message_id: event
-            .message_reference
-            .as_ref()
-            .and_then(|reference| reference.message_id.clone()),
         images: Vec::new(),
         extra_metadata: metadata,
         file_paths: Vec::new(),
@@ -837,9 +835,7 @@ async fn download_remote_markdown_image(
 
 pub(crate) struct DiscordStreamingCallbackConfig {
     pub sender: DiscordSender,
-    pub router: Arc<Mutex<MessageRouter>>,
     pub chat_id: String,
-    pub thread_binding_key: String,
     pub reply_to_message_id: Option<String>,
 }
 
@@ -847,7 +843,6 @@ struct DiscordStreamState {
     stream_text: PluginStreamSendState,
     markdown_image_scan_text: String,
     sent_markdown_image_keys: HashSet<String>,
-    recorded_message_ids: HashSet<String>,
     message_id: Option<String>,
     last_rendered_text: String,
     finalized: bool,
@@ -864,7 +859,6 @@ impl Default for DiscordStreamState {
             stream_text: PluginStreamSendState::new(discord_stream_send_policy()),
             markdown_image_scan_text: String::new(),
             sent_markdown_image_keys: HashSet::new(),
-            recorded_message_ids: HashSet::new(),
             message_id: None,
             last_rendered_text: String::new(),
             finalized: false,
@@ -885,45 +879,6 @@ impl DiscordStreamingCallbackShared {
         state.message_id = None;
         state.last_rendered_text.clear();
         state.finalized = false;
-    }
-
-    async fn record_outbound_messages(&self, thread_id: &str, message_ids: &[String]) {
-        if thread_id.trim().is_empty() || message_ids.is_empty() {
-            return;
-        }
-        let thread_binding_key = if self.cfg.thread_binding_key.trim().is_empty() {
-            None
-        } else {
-            Some(self.cfg.thread_binding_key.as_str())
-        };
-        let mut router = self.cfg.router.lock().await;
-        for message_id in message_ids {
-            router
-                .record_outbound_message_with_persistence(
-                    thread_id,
-                    "discord",
-                    &self.cfg.sender.account_id,
-                    &self.cfg.chat_id,
-                    thread_binding_key,
-                    message_id,
-                )
-                .await;
-        }
-    }
-
-    async fn record_new_outbound_messages(
-        &self,
-        thread_id: &str,
-        state: &mut DiscordStreamState,
-        message_ids: Vec<String>,
-    ) {
-        let new_ids = message_ids
-            .into_iter()
-            .filter(|message_id| state.recorded_message_ids.insert(message_id.clone()))
-            .collect::<Vec<_>>();
-        if !new_ids.is_empty() {
-            self.record_outbound_messages(thread_id, &new_ids).await;
-        }
     }
 
     async fn send_initial_text(
@@ -948,8 +903,6 @@ impl DiscordStreamingCallbackShared {
             Ok(message_ids) => {
                 state.message_id = message_ids.last().cloned();
                 state.last_rendered_text = display_text.to_owned();
-                self.record_new_outbound_messages(thread_id, state, message_ids)
-                    .await;
                 true
             }
             Err(error) => {
@@ -986,8 +939,7 @@ impl DiscordStreamingCallbackShared {
         {
             Ok(edited_id) => {
                 state.last_rendered_text = display_text.to_owned();
-                self.record_new_outbound_messages(thread_id, state, vec![edited_id])
-                    .await;
+                let _ = edited_id;
                 true
             }
             Err(error) => {
@@ -1161,10 +1113,7 @@ impl DiscordStreamingCallbackShared {
                     .send_text(&self.cfg.chat_id, &chunks[1..].join(""), None)
                     .await
                 {
-                    Ok(message_ids) => {
-                        self.record_new_outbound_messages(thread_id, state, message_ids)
-                            .await;
-                    }
+                    Ok(_) => {}
                     Err(error) => {
                         warn!(
                             account_id = %self.cfg.sender.account_id,
@@ -1224,10 +1173,7 @@ impl DiscordStreamingCallbackShared {
                 )
                 .await
             {
-                Ok(message_ids) => {
-                    self.record_new_outbound_messages(thread_id, state, message_ids)
-                        .await;
-                }
+                Ok(_) => {}
                 Err(error) => {
                     warn!(
                         account_id = %self.cfg.sender.account_id,
@@ -1280,10 +1226,7 @@ impl DiscordStreamingCallbackShared {
             .await;
         let _ = tokio::fs::remove_file(&image_path).await;
         match send_result {
-            Ok(message_ids) => {
-                self.record_new_outbound_messages(thread_id, state, message_ids)
-                    .await;
-            }
+            Ok(_) => {}
             Err(error) => {
                 warn!(
                     account_id = %self.cfg.sender.account_id,
@@ -1683,9 +1626,7 @@ impl DiscordChannel {
         let (response_callback, thread_id_tx) =
             build_discord_response_callback(DiscordStreamingCallbackConfig {
                 sender: sender.clone(),
-                router: runtime.router.clone(),
                 chat_id: reply_target.clone(),
-                thread_binding_key: thread_binding_key.clone(),
                 reply_to_message_id: Some(reply_to.clone()),
             });
 
@@ -1749,21 +1690,7 @@ impl DiscordChannel {
                         .send_text(&reply_target, &local_reply, Some(&reply_to))
                         .await
                     {
-                        Ok(message_ids) => {
-                            let mut router = runtime.router.lock().await;
-                            for message_id in message_ids {
-                                router
-                                    .record_outbound_message_with_persistence(
-                                        &result.thread_id,
-                                        "discord",
-                                        &runtime.account_id,
-                                        &reply_target,
-                                        Some(&thread_binding_key),
-                                        &message_id,
-                                    )
-                                    .await;
-                            }
-                        }
+                        Ok(_) => {}
                         Err(error) => {
                             warn!(
                                 account_id = %runtime.account_id,
@@ -1775,11 +1702,22 @@ impl DiscordChannel {
                 }
             }
             Err(error) => {
+                replay_subscription.abort();
                 warn!(
                     account_id = %runtime.account_id,
                     error = %error,
                     "failed to route Discord inbound message"
                 );
+                if let Err(send_error) = sender
+                    .send_text(&reply_target, &format!("Error: {error}"), Some(&reply_to))
+                    .await
+                {
+                    warn!(
+                        account_id = %runtime.account_id,
+                        error = %send_error,
+                        "failed to send Discord routing error reply"
+                    );
+                }
             }
         }
     }
@@ -1833,23 +1771,104 @@ impl Channel for DiscordChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use garyx_models::AgentBindingError;
     use garyx_models::config::DiscordAccount;
     use garyx_models::provider::StreamEvent;
+    use garyx_router::{ThreadCreationError, ThreadCreator, ThreadEnsureOptions, ThreadStore};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    struct NoEnabledThreadCreator;
+
+    #[async_trait]
+    impl ThreadCreator for NoEnabledThreadCreator {
+        async fn create_thread(
+            &self,
+            _thread_store: Arc<dyn ThreadStore>,
+            _options: ThreadEnsureOptions,
+        ) -> Result<(String, Value), ThreadCreationError> {
+            Err(AgentBindingError::NoEnabledAgent.into())
+        }
+    }
 
     fn account(require_mention: bool) -> DiscordAccount {
         DiscordAccount {
             token: "discord-token".to_owned(),
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             owner_target: None,
             require_mention,
             api_base: "https://discord.com/api/v10".to_owned(),
             gateway_url: "wss://gateway.discord.gg/?v=10&encoding=json".to_owned(),
         }
+    }
+
+    #[tokio::test]
+    async fn inbound_no_enabled_agent_sends_visible_error_reply() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-error-reply"
+            })))
+            .mount(&server)
+            .await;
+
+        let router = crate::test_helpers::make_router();
+        router
+            .lock()
+            .await
+            .set_thread_creator(Arc::new(NoEnabledThreadCreator));
+        let bridge = crate::test_helpers::make_bridge_with(Arc::new(
+            crate::test_helpers::ConfigurableTestProvider::echo(),
+        ))
+        .await;
+        let mut configured_account = account(false);
+        configured_account.api_base = server.uri();
+        let runtime = DiscordInboundRuntime {
+            http: Client::new(),
+            account_id: "main".to_owned(),
+            account: configured_account,
+            router,
+            bridge,
+            dispatcher: Arc::new(crate::dispatcher::ChannelDispatcherImpl::new()),
+        };
+        let bot = DiscordCurrentUser {
+            id: "bot-999".to_owned(),
+            username: Some("Garyx".to_owned()),
+        };
+
+        DiscordChannel::handle_message_create(
+            &runtime,
+            &bot,
+            DiscordMessageCreateEvent {
+                id: "message-001".to_owned(),
+                channel_id: "dm-channel-123".to_owned(),
+                guild_id: None,
+                content: "hello".to_owned(),
+                author: DiscordUser {
+                    id: "user-123".to_owned(),
+                    username: Some("Test User".to_owned()),
+                    bot: false,
+                },
+                mentions: Vec::new(),
+                message_reference: None,
+                attachments: Vec::new(),
+            },
+        )
+        .await;
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(
+            body["content"],
+            "Error: no enabled standalone agent is available"
+        );
+        assert_eq!(body["message_reference"]["message_id"], "message-001");
     }
 
     #[test]
@@ -1903,7 +1922,7 @@ mod tests {
     }
 
     #[test]
-    fn guild_mention_is_stripped_and_reply_id_is_preserved() {
+    fn guild_mention_is_stripped_without_adding_reference_text() {
         let event = DiscordMessageCreateEvent {
             id: "message-003".to_owned(),
             channel_id: "guild-channel-123".to_owned(),
@@ -1931,12 +1950,68 @@ mod tests {
         assert!(request.is_group);
         assert_eq!(request.thread_binding_key, "guild-channel-123");
         assert_eq!(request.message, "please help");
-        assert_eq!(request.reply_to_message_id.as_deref(), Some("reply-001"));
         assert_eq!(request.extra_metadata["guild_id"], "guild-456");
         assert_eq!(
             request.extra_metadata["delivery_thread_id"],
             "guild-channel-123"
         );
+    }
+
+    #[tokio::test]
+    async fn referenced_guild_message_uses_current_binding() {
+        let event = DiscordMessageCreateEvent {
+            id: "message-current-binding".to_owned(),
+            channel_id: "guild-channel-123".to_owned(),
+            guild_id: Some("guild-456".to_owned()),
+            content: "<@bot-999> follow up".to_owned(),
+            author: DiscordUser {
+                id: "user-123".to_owned(),
+                username: Some("Test User".to_owned()),
+                bot: false,
+            },
+            mentions: vec![DiscordUser {
+                id: "bot-999".to_owned(),
+                username: Some("Garyx".to_owned()),
+                bot: true,
+            }],
+            message_reference: Some(DiscordMessageReference {
+                message_id: Some("message-from-another-thread".to_owned()),
+            }),
+            attachments: Vec::new(),
+        };
+        let request = build_inbound_request("main", &account(true), "bot-999", event)
+            .expect("referenced guild message should route");
+        assert_eq!(request.message, "follow up");
+
+        let router = crate::test_helpers::make_router();
+        {
+            let mut router_guard = router.lock().await;
+            router_guard
+                .ensure_thread_entry(
+                    "thread::discord-current",
+                    "discord",
+                    "main",
+                    "guild-channel-123",
+                    Some("Current"),
+                )
+                .await;
+            let binding_key =
+                MessageRouter::build_binding_context_key("discord", "main", "guild-channel-123");
+            router_guard.switch_to_thread(&binding_key, "thread::discord-current");
+        }
+        let bridge = crate::test_helpers::make_bridge_with(Arc::new(
+            crate::test_helpers::ConfigurableTestProvider::echo(),
+        ))
+        .await;
+        let callback: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(|_| {});
+        let result = router
+            .lock()
+            .await
+            .route_and_dispatch(request, bridge.as_ref(), Some(callback))
+            .await
+            .expect("referenced message should dispatch");
+
+        assert_eq!(result.thread_id, "thread::discord-current");
     }
 
     #[test]
@@ -2127,7 +2202,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_callback_sends_final_text_and_records_outbound() {
+    async fn response_callback_sends_final_text_with_wire_reply() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/channels/dm-channel-123/messages"))
@@ -2137,7 +2212,6 @@ mod tests {
             .mount(&server)
             .await;
 
-        let router = crate::test_helpers::make_router();
         let (callback, thread_id_tx) =
             build_discord_response_callback(DiscordStreamingCallbackConfig {
                 sender: DiscordSender {
@@ -2147,9 +2221,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: router.clone(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2192,18 +2264,6 @@ mod tests {
             create_body["message_reference"]["message_id"],
             "message-001"
         );
-
-        let router = router.lock().await;
-        assert_eq!(
-            router.resolve_reply_thread_for_chat(
-                "discord",
-                "main",
-                Some("dm-channel-123"),
-                Some("user-123"),
-                "discord-reply-001",
-            ),
-            Some("thread::discord-test"),
-        );
     }
 
     #[tokio::test]
@@ -2233,9 +2293,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: crate::test_helpers::make_router(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2314,9 +2372,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: crate::test_helpers::make_router(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2393,9 +2449,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: crate::test_helpers::make_router(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2452,9 +2506,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: crate::test_helpers::make_router(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2552,9 +2604,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: crate::test_helpers::make_router(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2604,9 +2654,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: crate::test_helpers::make_router(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2670,9 +2718,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: crate::test_helpers::make_router(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2748,9 +2794,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: crate::test_helpers::make_router(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2822,9 +2866,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: crate::test_helpers::make_router(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2902,9 +2944,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router: crate::test_helpers::make_router(),
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -2941,7 +2981,6 @@ mod tests {
         let image_path = tmp.path().join("plot.png");
         std::fs::write(&image_path, b"fake png").unwrap();
 
-        let router = crate::test_helpers::make_router();
         let (callback, thread_id_tx) =
             build_discord_response_callback(DiscordStreamingCallbackConfig {
                 sender: DiscordSender {
@@ -2951,9 +2990,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router,
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx
@@ -3005,7 +3042,6 @@ mod tests {
             .mount(&server)
             .await;
 
-        let router = crate::test_helpers::make_router();
         let (callback, thread_id_tx) =
             build_discord_response_callback(DiscordStreamingCallbackConfig {
                 sender: DiscordSender {
@@ -3015,9 +3051,7 @@ mod tests {
                     api_base: server.uri(),
                     is_running: true,
                 },
-                router,
                 chat_id: "dm-channel-123".to_owned(),
-                thread_binding_key: "user-123".to_owned(),
                 reply_to_message_id: Some("message-001".to_owned()),
             });
         thread_id_tx

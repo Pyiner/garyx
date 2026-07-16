@@ -44,7 +44,7 @@ impl MessageRouter {
                 thread_binding_key,
                 &request.extra_metadata,
             )
-            .await
+            .await?
         };
 
         let delivery_chat_id =

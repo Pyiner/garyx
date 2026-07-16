@@ -14,7 +14,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
-use garyx_router::{ThreadStore, ThreadStoreError, ThreadTranscriptStore, is_thread_key};
+use garyx_router::{
+    ThreadRunCoordinator, ThreadStore, ThreadStoreError, ThreadTranscriptStore, is_thread_key,
+};
 use serde_json::Value;
 
 use crate::garyx_db::{GaryxDbResult, GaryxDbService, ThreadRecordProjections};
@@ -48,6 +50,7 @@ pub(crate) struct SqliteThreadStore {
     /// derivation for one key, so concurrent writes to the same thread
     /// cannot interleave (folded in from RecentThreadProjectingStore).
     key_locks: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    run_coordinator: Arc<ThreadRunCoordinator>,
 }
 
 impl SqliteThreadStore {
@@ -67,6 +70,7 @@ impl SqliteThreadStore {
             transcript_store,
             active_run_probe,
             key_locks: StdMutex::new(HashMap::new()),
+            run_coordinator: Arc::new(ThreadRunCoordinator::new()),
         }
     }
 
@@ -145,6 +149,19 @@ impl SqliteThreadStore {
 
 #[async_trait]
 impl ThreadStore for SqliteThreadStore {
+    fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
+        self.run_coordinator.clone()
+    }
+
+    async fn is_archived(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
+        let garyx_db = Arc::clone(&self.garyx_db);
+        let key = thread_id.to_owned();
+        garyx_db
+            .run_blocking(move |db| db.is_thread_archived(&key))
+            .await
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))
+    }
+
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError> {
         let garyx_db = Arc::clone(&self.garyx_db);
         let key = thread_id.to_owned();
@@ -170,17 +187,25 @@ impl ThreadStore for SqliteThreadStore {
         // check runs inside the record-write transaction itself, so a
         // racing archive can never be overtaken (#TASK-2099; rejection
         // semantics from review #TASK-1901).
-        self.write_record(thread_id, data).await
+        self.write_record(thread_id, data).await?;
+        self.run_coordinator.record_written(thread_id);
+        Ok(())
     }
 
     async fn delete(&self, thread_id: &str) -> Result<bool, ThreadStoreError> {
         let lock = self.key_lock(thread_id);
-        let _guard = lock.lock().await;
         let garyx_db = Arc::clone(&self.garyx_db);
         let key = thread_id.to_owned();
-        garyx_db
-            .run_blocking(move |db| db.delete_thread_record_with_projections(&key))
+        self.run_coordinator
+            .start_delete(key.clone(), async move {
+                let _guard = lock.lock().await;
+                garyx_db
+                    .run_blocking(move |db| db.delete_thread_record_with_projections(&key))
+                    .await
+                    .map_err(|error| ThreadStoreError::Backend(error.to_string()))
+            })
             .await
+            .map_err(|error| ThreadStoreError::Backend(error.to_string()))?
             .map_err(|error| ThreadStoreError::Backend(error.to_string()))
     }
 

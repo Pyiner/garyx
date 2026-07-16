@@ -1386,22 +1386,16 @@ struct GaryxAgentCard: View {
     @State private var showsDeleteConfirmation = false
 
     var body: some View {
-        GaryxRowActionMenu(actions: agentSwipeActions) {
-            Button {
-                model.selectedAgentDetail = agent
-            } label: {
-                GaryxAgentIdentityRow(
-                    id: agent.id,
-                    title: agent.displayName,
-                    subtitle: "",
-                    avatarDataUrl: agent.avatarDataUrl,
-                    providerType: agent.providerType,
-                    builtIn: agent.builtIn,
-                    selected: model.selectedAgentTargetId == agent.id
-                )
+        GaryxSwipeActionRow(id: "agent:\(agent.id)", actions: availabilitySwipeActions) {
+            GaryxRowActionMenu(actions: agentMenuActions) {
+                Button {
+                    model.selectedAgentDetail = agent
+                } label: {
+                    agentIdentityRow
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
         }
         .fullScreenCover(isPresented: $showsEditForm) {
             GaryxAgentEditSheet(agent: agent)
@@ -1416,15 +1410,35 @@ struct GaryxAgentCard: View {
         }
     }
 
-    private var agentSwipeActions: [GaryxRowAction] {
-        var actions = [
-            GaryxRowAction(title: "Chat", systemImage: "message", tone: .accent) {
-                model.openAgentChatDraft(agent.id)
+    private var availabilitySwipeActions: [GaryxRowAction] {
+        [
+            GaryxRowAction(
+                title: agent.enabled ? "Disable" : "Enable",
+                systemImage: agent.enabled ? "pause.circle" : "play.circle",
+                tone: agent.enabled ? .warning : .accent
+            ) {
+                Task { await model.setAgentEnabled(agent, enabled: !agent.enabled) }
             },
-            GaryxRowAction(title: "Use", systemImage: "checkmark.circle") {
-                model.setSelectedAgentTarget(agent.id)
-            }
         ]
+    }
+
+    private var agentMenuActions: [GaryxRowAction] {
+        var actions: [GaryxRowAction] = []
+        if GaryxAgentAvailabilityPresentation.allowsNewBindingActions(
+            enabled: agent.enabled,
+            standalone: agent.standalone
+        ) {
+            actions.append(
+                GaryxRowAction(title: "Chat", systemImage: "message", tone: .accent) {
+                    model.openAgentChatDraft(agent.id)
+                }
+            )
+            actions.append(
+                GaryxRowAction(title: "Use", systemImage: "checkmark.circle") {
+                    Task { await model.setDefaultAgent(agent) }
+                }
+            )
+        }
         if !agent.builtIn {
             actions.append(
                 GaryxRowAction(title: "Edit", systemImage: "pencil") {
@@ -1438,6 +1452,52 @@ struct GaryxAgentCard: View {
             )
         }
         return actions
+    }
+
+    private var agentIdentityRow: some View {
+        HStack(spacing: 12) {
+            GaryxAgentAvatarView(
+                agentId: agent.id,
+                avatarDataUrl: agent.avatarDataUrl,
+                label: agent.displayName,
+                providerType: agent.providerType,
+                builtIn: agent.builtIn
+            )
+            VStack(alignment: .leading, spacing: 3) {
+                Text(agent.displayName.isEmpty ? agent.id : agent.displayName)
+                    .font(GaryxFont.body(weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(agent.id)
+                    .font(GaryxFont.caption(weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 5) {
+                GaryxStatusPill(
+                    text: GaryxAgentAvailabilityPresentation.statusLabel(enabled: agent.enabled),
+                    tone: agent.enabled ? .good : .muted
+                )
+                if let badge = defaultBadge {
+                    GaryxStatusPill(
+                        text: badge.label,
+                        tone: badge.isMuted ? .muted : .good
+                    )
+                }
+            }
+        }
+        .padding(10)
+        .contentShape(Rectangle())
+    }
+
+    private var defaultBadge: GaryxAgentDefaultBadgeState? {
+        GaryxAgentAvailabilityPresentation.defaultBadge(
+            agentId: agent.id,
+            enabled: agent.enabled,
+            defaultAgentId: model.gatewayDefaultAgentId,
+            effectiveDefaultAgentId: model.effectiveDefaultAgentId
+        )
     }
 }
 

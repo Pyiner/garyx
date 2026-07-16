@@ -72,6 +72,9 @@ export type AutomationDraft = {
   label: string;
   prompt: string;
   agentId: string;
+  agentChanged: boolean;
+  initialTargetMode: 'new_thread' | 'existing_thread';
+  targetEffectiveAgentId: string;
   targetMode: 'new_thread' | 'existing_thread';
   targetThreadId: string;
   workspacePath: string;

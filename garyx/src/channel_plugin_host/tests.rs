@@ -48,7 +48,6 @@ impl ChannelDispatcher for RecordingOriginNativeDispatcher {
     fn build_stream_event_callback(
         &self,
         _target: StreamingDispatchTarget,
-        _router: Arc<Mutex<MessageRouter>>,
     ) -> Option<StreamDispatchCallback> {
         let envelopes = self.envelopes.clone();
         Some(Arc::new(move |envelope| {
@@ -310,7 +309,6 @@ async fn deferred_origin_native_stream_buffers_until_thread_attached() {
         stream_id: stream_id.clone(),
         run_id: "run-origin-native".to_owned(),
         endpoint_identity: "minolab::main::chat-1".to_owned(),
-        router: handler.router.clone(),
         dispatcher: dispatcher.clone(),
         streams: handler.streams.clone(),
         live_streams: handler.live_streams.clone(),
@@ -439,7 +437,7 @@ async fn commands_list_returns_plugin_filtered_command_list() {
 }
 
 #[tokio::test]
-async fn deliver_inbound_preserves_native_command_arguments_and_uses_plugin_outbound() {
+async fn deliver_inbound_ignores_deprecated_reply_id_and_uses_current_binding() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let current_thread_id = "thread::current";
     store
@@ -501,6 +499,7 @@ async fn deliver_inbound_preserves_native_command_arguments_and_uses_plugin_outb
                 "from_id": "user-1",
                 "thread_binding_key": "chat-1",
                 "message": "/threads@sample_bot 2",
+                "reply_to_message_id": "message-from-another-thread",
                 "extra_metadata": {
                     NATIVE_COMMAND_TEXT_METADATA_KEY: "/threads@sample_bot 2",
                     "chat_id": "chat-1"

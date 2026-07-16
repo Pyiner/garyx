@@ -19,6 +19,9 @@ type BotConsolesResponse = {
 type GatewayOverviewResponse = Record<string, unknown>;
 
 type AgentViewResponse = Record<string, unknown>;
+type AgentCatalogDefaults = {
+  effectiveDefaultAgentId: string | null;
+};
 
 type ThreadSummaryPayload = {
   thread_key?: string;
@@ -224,6 +227,8 @@ function mapBotConsoleSummary(value: unknown): DesktopBotConsoleSummary | null {
     latestActivity: stringOrNull(record.latest_activity),
     endpointCount: numberOrZero(record.endpoint_count),
     boundEndpointCount: numberOrZero(record.bound_endpoint_count),
+    agentId: stringOrNull(record.agent_id)?.trim() || null,
+    effectiveAgentId: stringOrNull(record.effective_agent_id)?.trim() || null,
     workspaceDir: stringOrNull(record.workspace_dir),
     mainEndpointStatus: record.main_endpoint_status === 'resolved' ? 'resolved' : 'unresolved',
     mainEndpoint: mapBotConsoleEndpoint(record.main_endpoint),
@@ -245,6 +250,14 @@ export async function fetchOverview(): Promise<GatewayOverviewResponse> {
 
 export async function fetchAgentView(): Promise<AgentViewResponse> {
   return requestJson<AgentViewResponse>('/api/agent-view');
+}
+
+export async function fetchAgentCatalogDefaults(): Promise<AgentCatalogDefaults> {
+  const payload = await requestJson<Record<string, unknown>>('/api/custom-agents');
+  return {
+    effectiveDefaultAgentId:
+      stringOrNull(payload.effective_default_agent_id)?.trim() || null,
+  };
 }
 
 export async function fetchCronJobs(): Promise<CronJobsPayload> {

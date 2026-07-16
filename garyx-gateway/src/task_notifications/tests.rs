@@ -3,10 +3,11 @@ use super::*;
 use async_trait::async_trait;
 use chrono::Utc;
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
 use garyx_channels::{ChannelDispatcher, ChannelInfo};
 use garyx_models::config::{GaryxConfig, OwnerTargetConfig, TelegramAccount};
 use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent};
+use garyx_models::thread_logs::{ThreadLogChunk, ThreadLogEvent, ThreadLogSink};
 use garyx_models::{Principal, TaskEvent, TaskEventKind, TaskStatus, ThreadTask};
 
 type ProviderCall = (String, String, HashMap<String, Value>);
@@ -25,6 +26,48 @@ impl RecordingDispatcher {
 #[derive(Default)]
 struct RecordingProvider {
     calls: std::sync::Mutex<Vec<ProviderCall>>,
+}
+
+#[derive(Default)]
+struct RecordingThreadLogSink {
+    events: std::sync::Mutex<Vec<ThreadLogEvent>>,
+}
+
+impl RecordingThreadLogSink {
+    fn events(&self) -> Vec<ThreadLogEvent> {
+        self.events
+            .lock()
+            .expect("thread log lock poisoned")
+            .clone()
+    }
+}
+
+#[async_trait]
+impl ThreadLogSink for RecordingThreadLogSink {
+    async fn record_event(&self, event: ThreadLogEvent) {
+        self.events
+            .lock()
+            .expect("thread log lock poisoned")
+            .push(event);
+    }
+
+    async fn read_chunk(
+        &self,
+        thread_id: &str,
+        cursor: Option<u64>,
+    ) -> Result<ThreadLogChunk, String> {
+        Ok(ThreadLogChunk {
+            thread_id: thread_id.to_owned(),
+            path: String::new(),
+            text: String::new(),
+            cursor: cursor.unwrap_or_default(),
+            reset: cursor.is_none(),
+        })
+    }
+
+    async fn delete_thread(&self, _thread_id: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl RecordingProvider {
@@ -160,7 +203,7 @@ fn telegram_owner_config() -> GaryxConfig {
                 token: "token".to_owned(),
                 enabled: true,
                 name: Some("Main".to_owned()),
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: Some(OwnerTargetConfig {
                     target_type: "chat_id".to_owned(),
@@ -426,6 +469,7 @@ async fn dispatch_does_not_replay_ready_notification_without_handoff() {
 #[tokio::test]
 async fn dispatches_ready_notification_to_bot_target() {
     let dispatcher = Arc::new(RecordingDispatcher::default());
+    let thread_logs = Arc::new(RecordingThreadLogSink::default());
     let provider = Arc::new(RecordingProvider::default());
     let bridge = Arc::new(MultiProviderBridge::new());
     bridge
@@ -438,6 +482,7 @@ async fn dispatches_ready_notification_to_bot_target() {
     let state = crate::app_bootstrap::AppStateBuilder::new(telegram_owner_config())
         .with_bridge(bridge.clone())
         .with_channel_dispatcher(dispatcher.clone())
+        .with_thread_log_sink(thread_logs.clone())
         .build();
     bridge
         .set_thread_store(state.threads.thread_store.clone())
@@ -553,6 +598,95 @@ async fn dispatches_ready_notification_to_bot_target() {
         }
     }
     assert!(persisted_notification);
+
+    let delivery_events = thread_logs
+        .events()
+        .into_iter()
+        .filter(|event| event.stage == "delivery" && event.message == "outbound message delivered")
+        .collect::<Vec<_>>();
+    assert_eq!(delivery_events.len(), 1);
+    let event = &delivery_events[0];
+    assert!(event.thread_id.starts_with("thread::"));
+    assert_eq!(event.fields.get("channel"), Some(&json!("telegram")));
+    assert_eq!(event.fields.get("account_id"), Some(&json!("main")));
+    assert_eq!(event.fields.get("chat_id"), Some(&json!("chat-42")));
+    assert_eq!(
+        event.fields.get("message_id"),
+        Some(&json!("msg-task-review"))
+    );
+    assert_eq!(event.fields.get("thread_id"), Some(&json!(event.thread_id)));
+}
+
+#[tokio::test]
+async fn inherited_bot_config_saves_with_all_agents_disabled_but_first_thread_creation_fails() {
+    let dispatcher = Arc::new(RecordingDispatcher::default());
+    let provider = Arc::new(RecordingProvider::default());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("recording-provider", provider.clone())
+        .await;
+    bridge
+        .set_route("telegram", "main", "recording-provider")
+        .await;
+    bridge.set_default_provider_key("recording-provider").await;
+    let mut config = telegram_owner_config();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .get_mut("main")
+        .expect("configured bot")
+        .agent_id = None;
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    for agent in custom_agents.list_agents().await {
+        custom_agents
+            .set_enabled(&agent.agent_id, false)
+            .await
+            .expect("disable agent");
+    }
+    let state = crate::app_bootstrap::AppStateBuilder::new(config)
+        .with_custom_agent_store(custom_agents)
+        .with_bridge(bridge.clone())
+        .with_channel_dispatcher(dispatcher.clone())
+        .build();
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::task-no-enabled-agent",
+            json!({
+                "thread_id": "thread::task-no-enabled-agent",
+                "task": task_for_notification(TaskNotificationTarget::Bot {
+                    channel: "telegram".to_owned(),
+                    account_id: "main".to_owned(),
+                }),
+            }),
+        )
+        .await
+        .unwrap();
+
+    let error = deliver_task_review_handoff(
+        &state,
+        TaskReadyForReviewEvent {
+            thread_id: "thread::task-no-enabled-agent".to_owned(),
+            task_id: "#TASK-42".to_owned(),
+            run_id: Some("run-no-enabled-agent".to_owned()),
+            handoff: Some("Ready for review.".to_owned()),
+        },
+    )
+    .await
+    .expect_err("first bot thread binding must fail closed");
+
+    assert!(
+        error
+            .message
+            .contains("no enabled standalone agent is available")
+    );
+    assert!(dispatcher.calls().is_empty());
+    assert!(provider.calls().is_empty());
 }
 
 #[test]

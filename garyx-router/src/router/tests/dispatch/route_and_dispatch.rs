@@ -7,18 +7,37 @@ use crate::{
 
 struct FallbackOnlyThreadCreator;
 
+struct NoEnabledThreadCreator;
+
 #[async_trait]
 impl ThreadCreator for FallbackOnlyThreadCreator {
     async fn create_thread(
         &self,
         thread_store: Arc<dyn ThreadStore>,
         options: ThreadEnsureOptions,
-    ) -> Result<(String, Value), String> {
+    ) -> Result<(String, Value), ThreadCreationError> {
         match options.agent_id.as_deref() {
-            Some("claude") => create_thread_record(&thread_store, options).await,
-            Some(agent_id) => Err(format!("unknown agent_id: {agent_id}")),
-            None => Err("agent_id is required".to_owned()),
+            Some("claude") => create_thread_record(&thread_store, options)
+                .await
+                .map_err(ThreadCreationError::Other),
+            Some(agent_id) => Err(ThreadCreationError::Other(format!(
+                "unknown agent_id: {agent_id}"
+            ))),
+            None => Err(ThreadCreationError::Other(
+                "agent_id is required".to_owned(),
+            )),
         }
+    }
+}
+
+#[async_trait]
+impl ThreadCreator for NoEnabledThreadCreator {
+    async fn create_thread(
+        &self,
+        _thread_store: Arc<dyn ThreadStore>,
+        _options: ThreadEnsureOptions,
+    ) -> Result<(String, Value), ThreadCreationError> {
+        Err(garyx_models::AgentBindingError::NoEnabledAgent.into())
     }
 }
 
@@ -40,7 +59,7 @@ impl ThreadCreator for CapturingThreadCreator {
         &self,
         thread_store: Arc<dyn ThreadStore>,
         options: ThreadEnsureOptions,
-    ) -> Result<(String, Value), String> {
+    ) -> Result<(String, Value), ThreadCreationError> {
         self.options.lock().await.push(options.clone());
         let thread_id = "thread::captured";
         let value = json!({
@@ -51,7 +70,7 @@ impl ThreadCreator for CapturingThreadCreator {
         thread_store
             .set(thread_id, value.clone())
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| ThreadCreationError::Other(error.to_string()))?;
         Ok((thread_id.to_owned(), value))
     }
 }
@@ -93,7 +112,6 @@ fn native_thread_request(command: &str, run_id: &str) -> InboundRequest {
         thread_binding_key: "1000000001".to_owned(),
         message: command.to_owned(),
         run_id: run_id.to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::from([
             (
@@ -119,7 +137,6 @@ async fn test_route_and_dispatch_basic() {
         thread_binding_key: "user42".to_owned(),
         message: "hello bot".to_owned(),
         run_id: "run-1".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -178,7 +195,6 @@ async fn test_route_and_dispatch_maps_legacy_claude_tty_provider_to_claude_code(
         thread_binding_key: "user42".to_owned(),
         message: "hello interactive claude".to_owned(),
         run_id: "run-claude-tty".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::from([(
             "requested_provider_type".to_owned(),
@@ -198,7 +214,7 @@ async fn test_route_and_dispatch_maps_legacy_claude_tty_provider_to_claude_code(
 }
 
 #[tokio::test]
-async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent() {
+async fn test_route_and_dispatch_preserves_invalid_channel_agent_without_fallback() {
     let store = Arc::new(InMemoryThreadStore::new());
     let mut config = GaryxConfig::default();
     config
@@ -228,7 +244,6 @@ async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent(
         thread_binding_key: "issue-1".to_owned(),
         message: "hello".to_owned(),
         run_id: "run-examplebot-invalid-agent".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::from([
             ("chat_id".to_owned(), Value::String("issue-1".to_owned())),
@@ -237,33 +252,20 @@ async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent(
         file_paths: vec![],
     };
 
-    let result = router
+    let error = router
         .route_and_dispatch(request, &dispatcher, None)
         .await
-        .unwrap();
+        .expect_err("an invalid explicit channel agent must not fall back");
 
-    let saved = store
-        .get(&result.thread_id)
-        .await
-        .unwrap()
-        .expect("fallback thread should be persisted");
-    assert_eq!(saved["agent_id"], "claude");
-    assert_eq!(saved["channel"], "examplebot");
-    assert_eq!(saved["account_id"], "main");
-
-    let bindings = bindings_from_value(&saved);
-    assert_eq!(bindings.len(), 1);
-    assert_eq!(bindings[0].channel, "examplebot");
-    assert_eq!(bindings[0].account_id, "main");
-    assert_eq!(bindings[0].binding_key, "issue-1");
-
-    assert_eq!(
+    assert_eq!(error, "unknown agent_id: missing-agent");
+    assert!(store.list_keys(None).await.unwrap().is_empty());
+    assert!(
         router
             .resolve_endpoint_thread_id("examplebot", "main", "issue-1")
             .await
-            .as_deref(),
-        Some(result.thread_id.as_str())
+            .is_none()
     );
+    assert!(dispatcher.dispatched.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -300,7 +302,8 @@ async fn test_inbound_thread_creation_uses_configured_bot_workspace_mode() {
 
     let thread_id = router
         .resolve_or_create_inbound_thread("telegram", "main", "1000000001", &HashMap::new())
-        .await;
+        .await
+        .expect("thread created");
 
     assert_eq!(thread_id, "thread::captured");
     let options = creator.options.lock().await;
@@ -311,6 +314,38 @@ async fn test_inbound_thread_creation_uses_configured_bot_workspace_mode() {
         options[0].worktree_base_dir.as_deref(),
         Some(data_root.path().join("worktrees").as_path())
     );
+}
+
+#[tokio::test]
+async fn test_inbound_thread_creation_preserves_inherited_agent_as_none() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    let mut config = GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::PluginAccountEntry {
+                enabled: true,
+                agent_id: None,
+                config: json!({ "token": "test-token" }),
+                ..Default::default()
+            },
+        );
+
+    let creator = Arc::new(CapturingThreadCreator::new());
+    let mut router = MessageRouter::new(store, config);
+    router.set_thread_creator(creator.clone());
+
+    router
+        .resolve_or_create_inbound_thread("telegram", "main", "1000000001", &HashMap::new())
+        .await
+        .expect("thread created");
+
+    let options = creator.options.lock().await;
+    assert_eq!(options.len(), 1);
+    assert_eq!(options[0].agent_id, None);
 }
 
 #[tokio::test]
@@ -326,7 +361,6 @@ async fn test_route_and_dispatch_uses_explicit_delivery_thread_id() {
         thread_binding_key: "-100123_t555".to_owned(),
         message: "hello topic".to_owned(),
         run_id: "run-topic-explicit".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::from([
             ("chat_id".to_owned(), Value::String("-100123".to_owned())),
@@ -366,7 +400,6 @@ async fn test_route_and_dispatch_weixin_reuses_endpoint_thread_for_same_user() {
         thread_binding_key: "u@im.wechat".to_owned(),
         message: "first".to_owned(),
         run_id: "run-wx-1".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -384,7 +417,6 @@ async fn test_route_and_dispatch_weixin_reuses_endpoint_thread_for_same_user() {
         thread_binding_key: "u@im.wechat".to_owned(),
         message: "second".to_owned(),
         run_id: "run-wx-2".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -419,7 +451,7 @@ async fn test_route_and_dispatch_injects_runtime_context_and_workspace() {
                     token: "token".to_owned(),
                     enabled: true,
                     name: None,
-                    agent_id: "claude".to_owned(),
+                    agent_id: Some("claude".to_owned()),
                     workspace_dir: Some("/tmp/runtime-ws".to_owned()),
                     owner_target: None,
                     groups: Default::default(),
@@ -437,7 +469,6 @@ async fn test_route_and_dispatch_injects_runtime_context_and_workspace() {
         thread_binding_key: "user42".to_owned(),
         message: "hello context".to_owned(),
         run_id: "run-ctx-1".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -514,7 +545,6 @@ async fn test_route_and_dispatch_handles_native_sessions_locally() {
         thread_binding_key: "user42".to_owned(),
         message: "/threads".to_owned(),
         run_id: "run-cmd-1".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata,
         file_paths: vec![],
@@ -557,7 +587,6 @@ async fn test_route_and_dispatch_new_session_sets_last_delivery_on_new_thread() 
         thread_binding_key: "user42".to_owned(),
         message: "/newthread".to_owned(),
         run_id: "run-cmd-new".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata,
         file_paths: vec![],
@@ -585,6 +614,30 @@ async fn test_route_and_dispatch_new_session_sets_last_delivery_on_new_thread() 
 }
 
 #[tokio::test]
+async fn test_newthread_surfaces_no_enabled_agent_without_creating_or_dispatching() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    let (mut router, _) = test_router(store.clone(), GaryxConfig::default());
+    router.set_thread_creator(Arc::new(NoEnabledThreadCreator));
+    let dispatcher = MockDispatcher::new();
+
+    let error = router
+        .route_and_dispatch(
+            native_thread_request("/newthread", "run-no-enabled-newthread"),
+            &dispatcher,
+            None,
+        )
+        .await
+        .expect_err("newthread must fail closed when no agent can be bound");
+
+    assert_eq!(
+        error,
+        "failed to create thread: no enabled standalone agent is available"
+    );
+    assert!(store.list_keys(None).await.unwrap().is_empty());
+    assert!(dispatcher.dispatched.lock().await.is_empty());
+}
+
+#[tokio::test]
 async fn test_route_and_dispatch_weixin_newthread_binds_endpoint() {
     let store = Arc::new(InMemoryThreadStore::new());
     let (mut router, _) = test_router(store, GaryxConfig::default());
@@ -608,7 +661,6 @@ async fn test_route_and_dispatch_weixin_newthread_binds_endpoint() {
         thread_binding_key: "u@im.wechat".to_owned(),
         message: "/newthread".to_owned(),
         run_id: "run-cmd-new-wx".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata,
         file_paths: vec![],
@@ -686,7 +738,6 @@ async fn test_route_and_dispatch_recent_list_uses_reader_after_newthread_rebind(
                 thread_binding_key: "user42".to_owned(),
                 message: "/newthread".to_owned(),
                 run_id: "run-cmd-new-threads-list".to_owned(),
-                reply_to_message_id: None,
                 images: vec![],
                 extra_metadata: newthread_meta,
                 file_paths: vec![],
@@ -724,7 +775,6 @@ async fn test_route_and_dispatch_recent_list_uses_reader_after_newthread_rebind(
                 thread_binding_key: "user42".to_owned(),
                 message: "/threads".to_owned(),
                 run_id: "run-cmd-threads-after-new".to_owned(),
-                reply_to_message_id: None,
                 images: vec![],
                 extra_metadata: threads_meta,
                 file_paths: vec![],
@@ -1200,7 +1250,6 @@ async fn test_route_and_dispatch_native_command_uses_metadata_text() {
         thread_binding_key: "ou_user".to_owned(),
         message: "ou_user: /threads".to_owned(),
         run_id: "run-cmd-2".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata,
         file_paths: vec![],
@@ -1241,7 +1290,6 @@ async fn test_route_and_dispatch_transforms_custom_slash_command() {
         thread_binding_key: "user42".to_owned(),
         message: "/summary".to_owned(),
         run_id: "run-custom-command".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -1285,7 +1333,6 @@ async fn test_route_and_dispatch_group() {
         thread_binding_key: "group_123".to_owned(),
         message: "group msg".to_owned(),
         run_id: "run-2".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -1316,7 +1363,6 @@ async fn test_route_and_dispatch_group_reuses_thread() {
         thread_binding_key: "oc_abc123".to_owned(),
         message: "hello".to_owned(),
         run_id: run_id.to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -1340,274 +1386,6 @@ async fn test_route_and_dispatch_group_reuses_thread() {
 }
 
 #[tokio::test]
-async fn test_route_and_dispatch_with_reply_routing() {
-    let mut router = make_router();
-    let dispatcher = MockDispatcher::new();
-    router
-        .threads
-        .set("thread::special", json!({"messages": []}))
-        .await
-        .unwrap();
-
-    // Record an outbound message first
-    router.record_outbound_message("thread::special", "telegram", "bot1", "msg42");
-
-    let request = InboundRequest {
-        channel: "telegram".to_owned(),
-        account_id: "bot1".to_owned(),
-        from_id: "user42".to_owned(),
-        is_group: false,
-        thread_binding_key: "user42".to_owned(),
-        message: "reply msg".to_owned(),
-        run_id: "run-3".to_owned(),
-        reply_to_message_id: Some("msg42".to_owned()),
-        images: vec![],
-        extra_metadata: HashMap::new(),
-        file_paths: vec![],
-    };
-
-    let result = router
-        .route_and_dispatch(request, &dispatcher, None)
-        .await
-        .unwrap();
-
-    // Should route to the reply thread, not the default
-    assert_eq!(result.thread_id, "thread::special");
-    let metadata = dispatcher.metadata.lock().await;
-    assert_eq!(metadata.len(), 1);
-    assert_eq!(
-        metadata[0].get("reply_to_message_id"),
-        Some(&json!("msg42"))
-    );
-    assert_eq!(metadata[0].get("is_reply_routed"), Some(&json!(true)));
-}
-
-#[tokio::test]
-async fn test_route_and_dispatch_reply_routing_switches_scheduled_thread() {
-    let mut router = make_router();
-    let dispatcher = MockDispatcher::new();
-    router
-        .threads
-        .set("cron::daily::user42", json!({"messages": []}))
-        .await
-        .unwrap();
-    router.record_outbound_message("cron::daily::user42", "telegram", "bot1", "msg42");
-
-    let request = InboundRequest {
-        channel: "telegram".to_owned(),
-        account_id: "bot1".to_owned(),
-        from_id: "user42".to_owned(),
-        is_group: false,
-        thread_binding_key: "user42".to_owned(),
-        message: "reply msg".to_owned(),
-        run_id: "run-3s".to_owned(),
-        reply_to_message_id: Some("msg42".to_owned()),
-        images: vec![],
-        extra_metadata: HashMap::new(),
-        file_paths: vec![],
-    };
-
-    let result = router
-        .route_and_dispatch(request, &dispatcher, None)
-        .await
-        .unwrap();
-    assert_eq!(result.thread_id, "cron::daily::user42");
-    assert_eq!(
-        router.get_current_thread_id_for_binding("telegram", "bot1", "user42"),
-        Some("cron::daily::user42")
-    );
-}
-
-#[tokio::test]
-async fn test_route_and_dispatch_reply_routing_is_scoped_by_chat_id() {
-    let mut router = make_router();
-    let dispatcher = MockDispatcher::new();
-    router
-        .threads
-        .set("session_chat_1", json!({"messages": []}))
-        .await
-        .unwrap();
-    router
-        .threads
-        .set("session_chat_2", json!({"messages": []}))
-        .await
-        .unwrap();
-
-    router.record_outbound_message_for_chat(
-        "session_chat_1",
-        "telegram",
-        "bot1",
-        "chat-1",
-        None,
-        "42",
-    );
-    router.record_outbound_message_for_chat(
-        "session_chat_2",
-        "telegram",
-        "bot1",
-        "chat-2",
-        None,
-        "42",
-    );
-
-    let mut extra_metadata = HashMap::new();
-    extra_metadata.insert("chat_id".to_owned(), json!("chat-2"));
-
-    let request = InboundRequest {
-        channel: "telegram".to_owned(),
-        account_id: "bot1".to_owned(),
-        from_id: "user42".to_owned(),
-        is_group: false,
-        thread_binding_key: "user42".to_owned(),
-        message: "reply msg".to_owned(),
-        run_id: "run-chat-scope".to_owned(),
-        reply_to_message_id: Some("42".to_owned()),
-        images: vec![],
-        extra_metadata,
-        file_paths: vec![],
-    };
-
-    let result = router
-        .route_and_dispatch(request, &dispatcher, None)
-        .await
-        .unwrap();
-    assert_eq!(result.thread_id, "session_chat_2");
-}
-
-#[tokio::test]
-async fn test_route_and_dispatch_reply_routing_backfills_missing_thread_context() {
-    let store = Arc::new(InMemoryThreadStore::new());
-    store
-        .set(
-            "thread::special",
-            json!({
-                "messages": [{"role": "assistant", "content": "hello"}]
-            }),
-        )
-        .await
-        .unwrap();
-
-    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
-    let dispatcher = MockDispatcher::new();
-    router.record_outbound_message("thread::special", "telegram", "bot1", "msg42");
-
-    let request = InboundRequest {
-        channel: "telegram".to_owned(),
-        account_id: "bot1".to_owned(),
-        from_id: "user42".to_owned(),
-        is_group: false,
-        thread_binding_key: "user42".to_owned(),
-        message: "reply msg".to_owned(),
-        run_id: "run-3b".to_owned(),
-        reply_to_message_id: Some("msg42".to_owned()),
-        images: vec![],
-        extra_metadata: HashMap::new(),
-        file_paths: vec![],
-    };
-
-    let result = router
-        .route_and_dispatch(request, &dispatcher, None)
-        .await
-        .unwrap();
-    assert_eq!(result.thread_id, "thread::special");
-
-    let thread_state = store.get("thread::special").await.unwrap().unwrap();
-    assert_eq!(thread_state["channel"], "telegram");
-    assert_eq!(thread_state["account_id"], "bot1");
-    assert_eq!(thread_state["from_id"], "user42");
-    assert_eq!(thread_state["is_group"], false);
-    assert!(thread_state.get("updated_at").is_some());
-}
-
-#[tokio::test]
-async fn test_route_and_dispatch_ignores_stale_reply_route_for_missing_thread() {
-    let store = Arc::new(InMemoryThreadStore::new());
-    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
-    let dispatcher = MockDispatcher::new();
-
-    router.record_outbound_message_for_chat(
-        "thread::missing",
-        "telegram",
-        "bot1",
-        "42",
-        None,
-        "msg42",
-    );
-
-    let mut extra_metadata = HashMap::new();
-    extra_metadata.insert("chat_id".to_owned(), json!("42"));
-
-    let request = InboundRequest {
-        channel: "telegram".to_owned(),
-        account_id: "bot1".to_owned(),
-        from_id: "42".to_owned(),
-        is_group: false,
-        thread_binding_key: "42".to_owned(),
-        message: "reply msg".to_owned(),
-        run_id: "run-stale-reply".to_owned(),
-        reply_to_message_id: Some("msg42".to_owned()),
-        images: vec![],
-        extra_metadata,
-        file_paths: vec![],
-    };
-
-    let result = router
-        .route_and_dispatch(request, &dispatcher, None)
-        .await
-        .unwrap();
-    assert!(is_thread_key(&result.thread_id));
-    assert_ne!(result.thread_id, "thread::missing");
-    assert!(!result.metadata.extra.contains_key("is_reply_routed"));
-}
-
-#[tokio::test]
-async fn test_route_and_dispatch_backfill_does_not_override_existing_context() {
-    let store = Arc::new(InMemoryThreadStore::new());
-    store
-        .set(
-            "thread::special",
-            json!({
-                "channel": "feishu",
-                "account_id": "app1",
-                "from_id": "ou_existing",
-                "is_group": true
-            }),
-        )
-        .await
-        .unwrap();
-
-    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
-    let dispatcher = MockDispatcher::new();
-    router.record_outbound_message("thread::special", "telegram", "bot1", "msg42");
-
-    let request = InboundRequest {
-        channel: "telegram".to_owned(),
-        account_id: "bot1".to_owned(),
-        from_id: "user42".to_owned(),
-        is_group: false,
-        thread_binding_key: "user42".to_owned(),
-        message: "reply msg".to_owned(),
-        run_id: "run-3c".to_owned(),
-        reply_to_message_id: Some("msg42".to_owned()),
-        images: vec![],
-        extra_metadata: HashMap::new(),
-        file_paths: vec![],
-    };
-
-    let result = router
-        .route_and_dispatch(request, &dispatcher, None)
-        .await
-        .unwrap();
-    assert_eq!(result.thread_id, "thread::special");
-
-    let thread_state = store.get("thread::special").await.unwrap().unwrap();
-    assert_eq!(thread_state["channel"], "feishu");
-    assert_eq!(thread_state["account_id"], "app1");
-    assert_eq!(thread_state["from_id"], "ou_existing");
-    assert_eq!(thread_state["is_group"], true);
-}
-
-#[tokio::test]
 async fn test_route_and_dispatch_with_images() {
     let mut router = make_router();
     let dispatcher = MockDispatcher::new();
@@ -1626,7 +1404,6 @@ async fn test_route_and_dispatch_with_images() {
         thread_binding_key: "user42".to_owned(),
         message: "analyze this".to_owned(),
         run_id: "run-4".to_owned(),
-        reply_to_message_id: None,
         images,
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -1659,7 +1436,6 @@ async fn test_route_and_dispatch_persists_attached_file_paths_as_metadata() {
         thread_binding_key: "user42".to_owned(),
         message: "please inspect this document".to_owned(),
         run_id: "run-file-1".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![
@@ -1709,7 +1485,6 @@ async fn test_route_and_dispatch_preserves_existing_path_image_attachments_metad
         thread_binding_key: "issue-42".to_owned(),
         message: "please inspect the issue attachments".to_owned(),
         run_id: "run-acmechat-attachments".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::from([(
             "attachments".to_owned(),
@@ -1761,7 +1536,6 @@ async fn test_route_and_dispatch_updates_last_delivery() {
         thread_binding_key: "user42".to_owned(),
         message: "hello".to_owned(),
         run_id: "run-5".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -1801,7 +1575,6 @@ async fn test_route_and_dispatch_persists_last_delivery_context() {
         thread_binding_key: "topic-1".to_owned(),
         message: "hello".to_owned(),
         run_id: "run-5-persist".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -1843,7 +1616,6 @@ async fn test_route_and_dispatch_last_delivery_prefers_chat_id_metadata() {
         thread_binding_key: "topic-1".to_owned(),
         message: "hello".to_owned(),
         run_id: "run-5b".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: extra,
         file_paths: vec![],
@@ -1911,7 +1683,6 @@ async fn test_route_and_dispatch_auto_recovery() {
         thread_binding_key: "user42".to_owned(),
         message: "hello".to_owned(),
         run_id: "run-6".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -1973,7 +1744,6 @@ async fn test_route_and_dispatch_auto_recovery_ignores_missing_target() {
         thread_binding_key: "user42".to_owned(),
         message: "hello".to_owned(),
         run_id: "run-6b".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -2033,7 +1803,6 @@ async fn test_route_and_dispatch_uses_projected_owner_without_rebuilt_endpoint_m
         thread_binding_key: "user42".to_owned(),
         message: "hello after restart".to_owned(),
         run_id: "run-lazy-endpoint-binding".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -2058,193 +1827,41 @@ async fn test_route_and_dispatch_uses_projected_owner_without_rebuilt_endpoint_m
 }
 
 #[tokio::test]
-async fn test_route_and_dispatch_reply_routing_falls_back_to_rebound_thread_when_old_thread_is_missing()
- {
-    let store = Arc::new(InMemoryThreadStore::new());
-    let store_dyn: Arc<dyn crate::ThreadStore> = store.clone();
-    seed_bound_dm_thread(&store, "thread::old", "bot1", "user42", json!({})).await;
-    let (new_thread, _) = create_thread_record(
-        &store_dyn,
-        ThreadEnsureOptions {
-            label: Some("Rebound".to_owned()),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("thread should be created");
-    let (mut router, mutator) = test_router(store.clone(), GaryxConfig::default());
-    let old_binding = bindings_from_value(&store.get("thread::old").await.unwrap().unwrap())
-        .into_iter()
-        .next()
-        .unwrap();
-    mutator.seed_owner("thread::old", old_binding).await;
-    router
-        .bind_endpoint_runtime(
-            &new_thread,
-            ChannelBinding {
-                channel: "telegram".to_owned(),
-                account_id: "bot1".to_owned(),
-                binding_key: "user42".to_owned(),
-                chat_id: "user42".to_owned(),
-                delivery_target_type: "chat_id".to_owned(),
-                delivery_target_id: "user42".to_owned(),
-                display_label: "user42".to_owned(),
-                last_inbound_at: None,
-                last_delivery_at: None,
-            },
-        )
-        .await
-        .expect("bind should succeed");
-
-    router.record_outbound_message_for_chat(
-        "thread::old",
-        "telegram",
-        "bot1",
-        "user42",
-        None,
-        "reply-1",
-    );
-    assert!(store.delete("thread::old").await.unwrap());
-
-    let request = InboundRequest {
-        channel: "telegram".to_owned(),
-        account_id: "bot1".to_owned(),
-        from_id: "user42".to_owned(),
-        is_group: false,
-        thread_binding_key: "user42".to_owned(),
-        message: "follow missing thread".to_owned(),
-        run_id: "run-rebound-fallback".to_owned(),
-        reply_to_message_id: Some("reply-1".to_owned()),
-        images: vec![],
-        extra_metadata: HashMap::from([("chat_id".to_owned(), Value::String("user42".to_owned()))]),
-        file_paths: vec![],
-    };
-
-    let dispatcher = MockDispatcher::new();
-    let result = router
-        .route_and_dispatch(request, &dispatcher, None)
-        .await
-        .unwrap();
-
-    assert_eq!(result.thread_id, new_thread);
-    assert_eq!(
-        router
-            .resolve_endpoint_thread_id("telegram", "bot1", "user42")
-            .await
-            .as_deref(),
-        Some(new_thread.as_str())
-    );
-    let dispatched = dispatcher.dispatched.lock().await;
-    assert_eq!(dispatched[0].0, new_thread);
-}
-
-#[tokio::test]
-async fn test_route_and_dispatch_reply_routing_falls_back_after_real_initial_dispatch_and_delete() {
-    let store = Arc::new(InMemoryThreadStore::new());
-    let store_dyn: Arc<dyn crate::ThreadStore> = store.clone();
-    let (mut router, _) = test_router(store.clone(), GaryxConfig::default());
-    let dispatcher = MockDispatcher::new();
-
-    let initial = InboundRequest {
-        channel: "telegram".to_owned(),
-        account_id: "bot1".to_owned(),
-        from_id: "user42".to_owned(),
-        is_group: false,
-        thread_binding_key: "user42".to_owned(),
-        message: "first message".to_owned(),
-        run_id: "run-initial".to_owned(),
-        reply_to_message_id: None,
-        images: vec![],
-        extra_metadata: HashMap::from([("chat_id".to_owned(), Value::String("user42".to_owned()))]),
-        file_paths: vec![],
-    };
-
-    let initial_result = router
-        .route_and_dispatch(initial, &dispatcher, None)
-        .await
-        .unwrap();
-    router.record_outbound_message_for_chat(
-        &initial_result.thread_id,
-        "telegram",
-        "bot1",
-        "user42",
-        None,
-        "reply-1",
-    );
-
-    let (new_thread, _) = create_thread_record(
-        &store_dyn,
-        ThreadEnsureOptions {
-            label: Some("Rebound".to_owned()),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("thread should be created");
-    router
-        .bind_endpoint_runtime(
-            &new_thread,
-            ChannelBinding {
-                channel: "telegram".to_owned(),
-                account_id: "bot1".to_owned(),
-                binding_key: "user42".to_owned(),
-                chat_id: "user42".to_owned(),
-                delivery_target_type: "chat_id".to_owned(),
-                delivery_target_id: "user42".to_owned(),
-                display_label: "user42".to_owned(),
-                last_inbound_at: None,
-                last_delivery_at: None,
-            },
-        )
-        .await
-        .expect("bind should succeed");
-
-    assert!(store.delete(&initial_result.thread_id).await.unwrap());
-
-    let request = InboundRequest {
-        channel: "telegram".to_owned(),
-        account_id: "bot1".to_owned(),
-        from_id: "user42".to_owned(),
-        is_group: false,
-        thread_binding_key: "user42".to_owned(),
-        message: "follow missing thread".to_owned(),
-        run_id: "run-rebound-fallback-real".to_owned(),
-        reply_to_message_id: Some("reply-1".to_owned()),
-        images: vec![],
-        extra_metadata: HashMap::from([("chat_id".to_owned(), Value::String("user42".to_owned()))]),
-        file_paths: vec![],
-    };
-
-    let result = router
-        .route_and_dispatch(request, &dispatcher, None)
-        .await
-        .unwrap();
-
-    assert_eq!(result.thread_id, new_thread);
-    let dispatched = dispatcher.dispatched.lock().await;
-    assert_eq!(dispatched.last().unwrap().0, new_thread);
-}
-
-#[tokio::test]
-async fn test_route_and_dispatch_scheduled_thread_skips_auto_recovery() {
+async fn test_route_and_dispatch_scheduled_pseudo_thread_cannot_bypass_admission() {
     let store = Arc::new(InMemoryThreadStore::new());
     store
         .set(
             "cron::daily::user42",
             json!({
-                "auto_recover_next_thread": "bot1::main::recovered"
+                "auto_recover_next_thread": "thread::recovered"
             }),
         )
         .await
         .unwrap();
     store
-        .set("bot1::main::recovered", json!({"messages": []}))
+        .set("thread::recovered", json!({"messages": []}))
         .await
         .unwrap();
 
-    let mut router = MessageRouter::new(store, GaryxConfig::default());
+    let (mut router, _) = test_router(store, GaryxConfig::default());
+    router
+        .bind_endpoint_runtime(
+            "cron::daily::user42",
+            ChannelBinding {
+                channel: "telegram".to_owned(),
+                account_id: "bot1".to_owned(),
+                binding_key: "user42".to_owned(),
+                chat_id: "user42".to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: "user42".to_owned(),
+                display_label: "user42".to_owned(),
+                last_inbound_at: None,
+                last_delivery_at: None,
+            },
+        )
+        .await
+        .expect("scheduled thread should bind");
     let dispatcher = MockDispatcher::new();
-    router.record_outbound_message("cron::daily::user42", "telegram", "bot1", "msg42");
 
     let request = InboundRequest {
         channel: "telegram".to_owned(),
@@ -2252,21 +1869,19 @@ async fn test_route_and_dispatch_scheduled_thread_skips_auto_recovery() {
         from_id: "user42".to_owned(),
         is_group: false,
         thread_binding_key: "user42".to_owned(),
-        message: "reply msg".to_owned(),
+        message: "ordinary inbound".to_owned(),
         run_id: "run-6c".to_owned(),
-        reply_to_message_id: Some("msg42".to_owned()),
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
     };
 
-    let result = router
+    let error = router
         .route_and_dispatch(request, &dispatcher, None)
         .await
-        .unwrap();
-    assert_eq!(result.thread_id, "cron::daily::user42");
-    let dispatched = dispatcher.dispatched.lock().await;
-    assert_eq!(dispatched[0].0, "cron::daily::user42");
+        .expect_err("cron pseudo threads cannot enter agent admission");
+    assert_eq!(error, "invalid canonical thread id: cron::daily::user42");
+    assert!(dispatcher.dispatched.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -2282,7 +1897,6 @@ async fn test_route_and_dispatch_failure() {
         thread_binding_key: "user42".to_owned(),
         message: "hello".to_owned(),
         run_id: "run-7".to_owned(),
-        reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::new(),
         file_paths: vec![],
@@ -2355,36 +1969,4 @@ async fn test_dispatch_to_existing_session_keeps_explicit_target() {
     assert_eq!(dispatched.len(), 1);
     assert_eq!(dispatched[0].0, "thread::old-session");
     assert_eq!(dispatched[0].1, "continue working");
-}
-
-#[test]
-fn test_wrap_response_callback() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    let inner_called = Arc::new(AtomicBool::new(false));
-    let inner_flag = inner_called.clone();
-    let inner: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
-        if matches!(event, StreamEvent::Done) {
-            inner_flag.store(true, Ordering::Relaxed);
-        }
-    });
-
-    let record_called = Arc::new(AtomicBool::new(false));
-    let record_flag = record_called.clone();
-
-    let wrapped = MessageRouter::wrap_response_callback(inner, move |_msg_id| {
-        record_flag.store(true, Ordering::Relaxed);
-    });
-
-    // Non-final call
-    wrapped(StreamEvent::Delta {
-        text: "chunk".to_owned(),
-    });
-    assert!(!inner_called.load(Ordering::Relaxed));
-    assert!(!record_called.load(Ordering::Relaxed));
-
-    // Final call
-    wrapped(StreamEvent::Done);
-    assert!(inner_called.load(Ordering::Relaxed));
-    assert!(record_called.load(Ordering::Relaxed));
 }

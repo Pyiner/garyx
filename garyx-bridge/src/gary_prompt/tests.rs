@@ -172,8 +172,13 @@ fn runtime_metadata_includes_local_current_time() {
     // Pin the *local* semantics, not just the shape: the stamp must be the
     // machine's local wall clock (a UTC stamp in the same shape would drift
     // by the UTC offset).
-    let drift = (parsed - chrono::Local::now().naive_local()).num_seconds().abs();
-    assert!(drift < 300, "current_time must be local wall-clock, drift {drift}s");
+    let drift = (parsed - chrono::Local::now().naive_local())
+        .num_seconds()
+        .abs();
+    assert!(
+        drift < 300,
+        "current_time must be local wall-clock, drift {drift}s"
+    );
     assert!(zone.ends_with(')'));
 }
 

@@ -136,6 +136,30 @@ fn format_automation_schedule(schedule: &Value) -> String {
     }
 }
 
+fn format_automation_agent(value: &Value) -> String {
+    let effective = value["effectiveAgentId"]
+        .as_str()
+        .filter(|agent_id| !agent_id.trim().is_empty());
+    match value["agentResolution"].as_str() {
+        Some("follow_thread") => effective
+            .map(|agent_id| format!("thread:{agent_id}"))
+            .unwrap_or_else(|| "follow thread".to_owned()),
+        Some("target_missing") => "target missing".to_owned(),
+        _ => effective
+            .or_else(|| value["agentId"].as_str())
+            .unwrap_or("-")
+            .to_owned(),
+    }
+}
+
+fn format_automation_validation(value: &Value) -> String {
+    match value["validationState"].as_str() {
+        Some("invalid") => "invalid".to_owned(),
+        Some("valid") => "valid".to_owned(),
+        _ => "-".to_owned(),
+    }
+}
+
 fn print_automation_summary(value: &Value) {
     println!("Automation: {}", value["id"].as_str().unwrap_or("-"));
     println!("Name: {}", value["label"].as_str().unwrap_or("-"));
@@ -146,7 +170,11 @@ fn print_automation_summary(value: &Value) {
             .map(|enabled| enabled.to_string())
             .unwrap_or_else(|| "-".to_owned())
     );
-    println!("Agent: {}", value["agentId"].as_str().unwrap_or("-"));
+    println!("Agent: {}", format_automation_agent(value));
+    println!("Validation: {}", format_automation_validation(value));
+    if let Some(error) = value["validationError"].as_str() {
+        println!("Validation error: {error}");
+    }
     println!(
         "Workspace: {}",
         value["workspaceDir"].as_str().unwrap_or("-")
@@ -212,10 +240,10 @@ pub(crate) async fn cmd_automation_list(
         return Ok(());
     }
     println!(
-        "{:<42}  {:<7}  {:<28}  {:<26}  NAME",
-        "ID", "ENABLED", "SCHEDULE", "NEXT RUN"
+        "{:<42}  {:<7}  {:<20}  {:<10}  {:<24}  {:<26}  NAME",
+        "ID", "ENABLED", "AGENT", "VALIDATION", "SCHEDULE", "NEXT RUN"
     );
-    println!("{}", "-".repeat(120));
+    println!("{}", "-".repeat(158));
     for item in &items {
         let id = item["id"].as_str().unwrap_or("-");
         let enabled = if item["enabled"].as_bool().unwrap_or(false) {
@@ -224,9 +252,13 @@ pub(crate) async fn cmd_automation_list(
             "no"
         };
         let schedule = format_automation_schedule(&item["schedule"]);
+        let agent = format_automation_agent(item);
+        let validation = format_automation_validation(item);
         let next_run = format_local_timestamp(item["nextRun"].as_str());
         let label = item["label"].as_str().unwrap_or("-");
-        println!("{id:<42}  {enabled:<7}  {schedule:<28}  {next_run:<26}  {label}");
+        println!(
+            "{id:<42}  {enabled:<7}  {agent:<20}  {validation:<10}  {schedule:<24}  {next_run:<26}  {label}"
+        );
     }
     Ok(())
 }
@@ -505,6 +537,27 @@ mod tests {
     use std::sync::{Arc as StdArc, Mutex};
     use tempfile::tempdir;
     use tokio::{net::TcpListener, task::JoinHandle};
+
+    #[test]
+    fn typed_automation_agent_and_validation_fields_drive_cli_labels() {
+        let target = json!({
+            "agentId": null,
+            "agentResolution": "follow_thread",
+            "effectiveAgentId": "codex",
+            "validationState": "invalid",
+            "validationError": "target has no canonical binding"
+        });
+        assert_eq!(format_automation_agent(&target), "thread:codex");
+        assert_eq!(format_automation_validation(&target), "invalid");
+
+        let missing = json!({
+            "agentId": null,
+            "agentResolution": "target_missing",
+            "effectiveAgentId": null,
+            "validationState": "invalid"
+        });
+        assert_eq!(format_automation_agent(&missing), "target missing");
+    }
 
     async fn spawn_automation_http_test_server(
         requests: StdArc<Mutex<Vec<RecordedRequest>>>,

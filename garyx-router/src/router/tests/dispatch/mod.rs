@@ -2,7 +2,7 @@ use super::*;
 use crate::memory_store::InMemoryThreadStore;
 use async_trait::async_trait;
 use garyx_models::config::SlashCommand;
-use garyx_models::provider::{AgentRunRequest, ProviderType};
+use garyx_models::provider::ProviderType;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,9 +46,10 @@ impl MockDispatcher {
 impl AgentDispatcher for MockDispatcher {
     async fn dispatch(
         &self,
-        request: AgentRunRequest,
+        run: crate::AdmittedRun,
         _response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
     ) -> Result<garyx_models::provider::AgentDispatchOutcome, String> {
+        let (request, _lease) = run.into_dispatch_parts();
         if self.should_fail {
             return Err("mock dispatch failure".to_owned());
         }

@@ -67,25 +67,26 @@ function getTargetLabel(
 }
 
 function getAgentLabel(
-  state: DesktopState | null,
   agents: DesktopCustomAgent[],
   automation: DesktopAutomationSummary,
+  t: Translate,
 ): string | null {
-  const targetThreadId = automation.targetThreadId?.trim();
-  if (targetThreadId) {
-    // A thread-bound automation runs under the thread's own agent; the
-    // automation-level agent does not apply. Derive the pill from the
-    // thread, and show none rather than a wrong default when unknown.
-    const thread = state?.threads.find((entry) => entry.id === targetThreadId);
-    const threadAgentId = thread?.agentId?.trim();
-    if (!threadAgentId) {
-      return null;
-    }
-    const match = agents.find((agent) => agent.agentId === threadAgentId);
-    return match?.displayName || threadAgentId;
+  if (automation.agentResolution === 'target_missing') {
+    return t('Target unavailable');
   }
-  const match = agents.find((agent) => agent.agentId === automation.agentId);
-  return match?.displayName || automation.agentId || 'Claude';
+  const resolvedAgentId = automation.effectiveAgentId?.trim()
+    || automation.agentId?.trim()
+    || '';
+  if (!resolvedAgentId) {
+    return automation.agentResolution === 'follow_thread'
+      ? t('Follows target thread')
+      : null;
+  }
+  const match = agents.find((agent) => agent.agentId === resolvedAgentId);
+  const label = match?.displayName || resolvedAgentId;
+  return automation.agentResolution === 'follow_thread'
+    ? t('Follows thread · {agent}', { agent: label })
+    : label;
 }
 
 function formatOneTimeSchedule(value: string): string {
@@ -115,6 +116,9 @@ function formatSchedule(schedule: DesktopAutomationSchedule, t: Translate): stri
 }
 
 function statusInfo(automation: DesktopAutomationSummary) {
+  if (automation.validationState === 'invalid') {
+    return { label: 'Invalid', pillClass: 'fail' as const };
+  }
   if (
     automation.schedule.kind === 'once'
     && !automation.enabled
@@ -209,7 +213,7 @@ export function AutomationListPage({
           {automations.map((automation) => {
             const wsLabel = getWorkspaceLabel(desktopState, automation, t);
             const targetLabel = getTargetLabel(desktopState, automation, wsLabel, t);
-            const agentLabel = getAgentLabel(desktopState, agents, automation);
+            const agentLabel = getAgentLabel(agents, automation, t);
             const workspace = selectedWorkspace(desktopState, automation.workspacePath);
             const nextTitle = automation.schedule.kind === 'once' ? t('Run At') : t('Next');
             const nextRunLabel = automation.schedule.kind === 'once'
@@ -236,6 +240,11 @@ export function AutomationListPage({
                   </div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                     <span className={`codex-sync-pill ${status.pillClass}`}>{t(status.label)}</span>
+                    {automation.validationState === 'invalid' && automation.validationError ? (
+                      <span className="codex-sync-pill fail" title={automation.validationError}>
+                        {automation.validationError}
+                      </span>
+                    ) : null}
                     {agentLabel ? (
                       <span className="codex-sync-pill">{agentLabel}</span>
                     ) : null}

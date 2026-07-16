@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
+  DesktopAgentCatalog,
   DesktopCustomAgent,
   DesktopProviderModels,
   DesktopWorkspace,
@@ -34,6 +35,7 @@ import {
   TableRow,
 } from '../../components/ui/table';
 import { Input } from '../../components/ui/input';
+import { Switch } from '../../components/ui/switch';
 import { useI18n } from '../../i18n';
 import { AgentAvatarEditor, AvatarStyleDialog } from './AgentAvatarEditor';
 import {
@@ -66,12 +68,22 @@ import {
   sortedAgents,
   stopEvent,
 } from './agents-hub-helpers';
+import {
+  agentManagementActionState,
+  defaultBadgeForAgent,
+} from '../agent-availability-model';
 import type {
   AgentDialogMode,
   AgentDraft,
   AvatarStyleId,
   ProviderType,
 } from './agents-hub-helpers';
+
+const EMPTY_AGENT_CATALOG: DesktopAgentCatalog = {
+  agents: [],
+  defaultAgentId: null,
+  effectiveDefaultAgentId: null,
+};
 
 type AgentsHubPanelProps = {
   gatewayScope?: string;
@@ -95,7 +107,10 @@ export function AgentsHubPanel({
   const { t } = useI18n();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [agents, setAgents] = useState<DesktopCustomAgent[]>([]);
+  const [catalog, setCatalog] = useState<DesktopAgentCatalog>(EMPTY_AGENT_CATALOG);
+  const agents = catalog.agents;
+  const [availabilityMutationAgentId, setAvailabilityMutationAgentId] =
+    useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
 
@@ -134,11 +149,11 @@ export function AgentsHubPanel({
       setLoadError(null);
     }
     try {
-      const nextAgents = await window.garyxDesktop.listCustomAgents();
-      setAgents(sortedAgents(nextAgents));
+      const nextCatalog = await window.garyxDesktop.listCustomAgents();
+      setCatalog({ ...nextCatalog, agents: sortedAgents(nextCatalog.agents) });
     } catch (error) {
       if (!silent) {
-        setAgents([]);
+        setCatalog(EMPTY_AGENT_CATALOG);
         const message = error instanceof Error ? error.message : 'Failed to load agents.';
         setLoadError(message);
         onToast?.(message, 'error');
@@ -508,6 +523,43 @@ export function AgentsHubPanel({
     }
   }
 
+  async function handleToggleAgent(agent: DesktopCustomAgent, enabled: boolean) {
+    setAvailabilityMutationAgentId(agent.agentId);
+    try {
+      await window.garyxDesktop.toggleCustomAgent({
+        agentId: agent.agentId,
+        enabled,
+      });
+      await loadData({ silent: true });
+      await onRefreshAgentTargets?.();
+      onToast?.(enabled ? t('Agent enabled') : t('Agent disabled'), 'success');
+    } catch (error) {
+      onToast?.(
+        error instanceof Error ? error.message : t('Failed to update agent'),
+        'error',
+      );
+    } finally {
+      setAvailabilityMutationAgentId(null);
+    }
+  }
+
+  async function handleSetDefaultAgent(agent: DesktopCustomAgent) {
+    setAvailabilityMutationAgentId(agent.agentId);
+    try {
+      await window.garyxDesktop.setDefaultCustomAgent({ agentId: agent.agentId });
+      await loadData({ silent: true });
+      await onRefreshAgentTargets?.();
+      onToast?.(t('Default agent updated'), 'success');
+    } catch (error) {
+      onToast?.(
+        error instanceof Error ? error.message : t('Failed to update default agent'),
+        'error',
+      );
+    } finally {
+      setAvailabilityMutationAgentId(null);
+    }
+  }
+
   const visibleAgents = filteredAgents;
 
   return (
@@ -557,17 +609,22 @@ export function AgentsHubPanel({
         <Table className="agents-hub-table">
           <TableHeader>
             <TableRow>
-              <TableHead style={{ width: '40%' }}>{t('Name')}</TableHead>
-              <TableHead style={{ width: '20%' }}>{t('Provider')}</TableHead>
-              <TableHead style={{ width: '20%' }}>{t('Type')}</TableHead>
-              <TableHead style={{ width: '20%' }} className="text-right">
+              <TableHead style={{ width: '34%' }}>{t('Name')}</TableHead>
+              <TableHead style={{ width: '16%' }}>{t('Provider')}</TableHead>
+              <TableHead style={{ width: '14%' }}>{t('Type')}</TableHead>
+              <TableHead style={{ width: '12%' }}>{t('Enabled')}</TableHead>
+              <TableHead style={{ width: '24%' }} className="text-right">
                 {t('Actions')}
               </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {visibleAgents.length ? (
-                visibleAgents.map((agent) => (
+              visibleAgents.map((agent) => {
+                const defaultBadge = defaultBadgeForAgent(catalog, agent);
+                const actionState = agentManagementActionState(catalog, agent);
+                const mutatingAvailability = availabilityMutationAgentId === agent.agentId;
+                return (
                   <TableRow
                     className="cursor-pointer"
                     key={agent.agentId}
@@ -585,7 +642,23 @@ export function AgentsHubPanel({
                           providerType={agent.providerType}
                         />
                         <div>
-                          <div className="agents-hub-cell-name">{agent.displayName}</div>
+                          <div className="agents-hub-cell-name">
+                            {agent.displayName}
+                            {defaultBadge ? (
+                              <Badge
+                                className={`agents-hub-default-badge${defaultBadge === 'default' ? '' : ' is-muted'}`}
+                                variant="outline"
+                              >
+                                {defaultBadge === 'default'
+                                  ? t('Default')
+                                  : defaultBadge === 'default-inactive'
+                                    ? t('Default (inactive)')
+                                    : defaultBadge === 'acting-default'
+                                      ? t('Acting default')
+                                      : t('Default (auto)')}
+                              </Badge>
+                            ) : null}
+                          </div>
                           <div className="agents-hub-cell-id">{agent.agentId}</div>
                         </div>
                       </div>
@@ -594,15 +667,40 @@ export function AgentsHubPanel({
                     <TableCell>
                       <Badge variant="outline">{agent.builtIn ? t('Built-in') : t('Custom')}</Badge>
                     </TableCell>
+                    <TableCell>
+                      <Switch
+                        aria-label={t('{name} enabled', { name: agent.displayName || agent.agentId })}
+                        checked={agent.enabled}
+                        disabled={mutatingAvailability}
+                        onCheckedChange={(enabled) => {
+                          void handleToggleAgent(agent, enabled);
+                        }}
+                        onClick={stopEvent}
+                      />
+                    </TableCell>
                     <TableCell className="text-right">
                       <div className="agents-hub-row-actions">
                         <Button
+                          disabled={!actionState.chatEnabled}
                           onClick={(e) => { stopEvent(e); onStartThread?.(agent.agentId); }}
                           size="sm"
                           variant="outline"
                         >
                           {t('Chat')}
                         </Button>
+                        {actionState.setDefaultVisible ? (
+                          <Button
+                            disabled={mutatingAvailability}
+                            onClick={(event) => {
+                              stopEvent(event);
+                              void handleSetDefaultAgent(agent);
+                            }}
+                            size="sm"
+                            variant="ghost"
+                          >
+                            {t('Set default')}
+                          </Button>
+                        ) : null}
                         {!agent.builtIn ? (
                           <Button
                             onClick={(e) => { stopEvent(e); openEditAgentDialog(agent); }}
@@ -654,14 +752,15 @@ export function AgentsHubPanel({
                       </div>
                     </TableCell>
                   </TableRow>
-                ))
-              ) : search.trim() ? (
-                <TableRow>
-                  <TableCell className="text-center text-muted-foreground" colSpan={4}>
-                    {t('No agents matching "{query}"', { query: search.trim() })}
-                  </TableCell>
-                </TableRow>
-              ) : null}
+                );
+              })
+            ) : search.trim() ? (
+              <TableRow>
+                <TableCell className="text-center text-muted-foreground" colSpan={5}>
+                  {t('No agents matching "{query}"', { query: search.trim() })}
+                </TableCell>
+              </TableRow>
+            ) : null}
           </TableBody>
         </Table>
       )}
@@ -717,7 +816,10 @@ export function AgentsHubPanel({
         envText={envText}
         envViewMode={envViewMode}
         handleAvatarFileChange={handleAvatarFileChange}
-        loadData={loadData}
+        loadData={async () => {
+          await loadData();
+          await onRefreshAgentTargets?.();
+        }}
         onAddWorkspace={onAddWorkspace}
         onOpenMemory={onOpenMemory}
         onStartThread={onStartThread}

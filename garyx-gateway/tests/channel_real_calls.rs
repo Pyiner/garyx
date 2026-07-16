@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use garyx_bridge::MultiProviderBridge;
-use garyx_bridge::provider_trait::{ProviderRuntime, BridgeError, StreamCallback};
+use garyx_bridge::provider_trait::{BridgeError, ProviderRuntime, StreamCallback};
 use garyx_gateway::api::thread_history;
 use garyx_gateway::automation::{
     automation_activity, create_automation, delete_automation, get_automation, list_automations,
@@ -299,7 +299,7 @@ async fn make_state_with_recording_provider(provider: Arc<RecordingProvider>) ->
         ApiAccount {
             enabled: true,
             name: None,
-            agent_id: "claude".to_owned(),
+            agent_id: Some("claude".to_owned()),
             workspace_dir: None,
             workspace_mode: None,
         },
@@ -315,7 +315,7 @@ async fn make_state_with_recording_provider(provider: Arc<RecordingProvider>) ->
                 token: "fake-token".to_owned(),
                 enabled: true,
                 name: None,
-                agent_id: "claude".to_owned(),
+                agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
                 owner_target: None,
                 groups: Default::default(),

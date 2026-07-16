@@ -646,12 +646,14 @@ mod forum_thread_tests {
 mod dispatch_tests {
     use super::*;
     use garyx_bridge::provider_trait::StreamCallback;
-    use garyx_bridge::{ProviderRuntime, BridgeError, MultiProviderBridge};
+    use garyx_bridge::{BridgeError, MultiProviderBridge, ProviderRuntime};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
     };
-    use garyx_router::{InMemoryThreadStore, MessageRouter};
+    use garyx_router::{
+        AdmittedRun, AgentDispatcher, InMemoryThreadStore, MessageRouter, ThreadStore,
+    };
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// Mock provider that tracks calls.
@@ -736,6 +738,13 @@ mod dispatch_tests {
         bridge
     }
 
+    async fn admit_test_run(request: garyx_models::provider::AgentRunRequest) -> AdmittedRun {
+        let thread_id = request.thread_id.clone();
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        store.set(&thread_id, serde_json::json!({})).await.unwrap();
+        AdmittedRun::thread_bound(store, request).await.unwrap()
+    }
+
     #[tokio::test]
     async fn test_thread_resolution_dm() {
         let router = make_router();
@@ -807,19 +816,16 @@ mod dispatch_tests {
         assert!(is_thread_key(&thread_id));
 
         // Dispatch to bridge
-        let result = bridge
-            .start_agent_run(
-                garyx_models::provider::AgentRunRequest::new(
-                    &thread_id,
-                    "hello world",
-                    "run-test-1",
-                    "telegram",
-                    "bot1",
-                    HashMap::new(),
-                ),
-                None,
-            )
-            .await;
+        let admitted = admit_test_run(garyx_models::provider::AgentRunRequest::new(
+            &thread_id,
+            "hello world",
+            "run-test-1",
+            "telegram",
+            "bot1",
+            HashMap::new(),
+        ))
+        .await;
+        let result = bridge.dispatch(admitted, None).await;
         assert!(result.is_ok());
 
         // Give the task time to complete
@@ -847,49 +853,21 @@ mod dispatch_tests {
             }
         });
 
-        let result = bridge
-            .start_agent_run(
-                garyx_models::provider::AgentRunRequest::new(
-                    &session_key,
-                    "hello",
-                    "run-cb-1",
-                    "telegram",
-                    "bot1",
-                    HashMap::new(),
-                ),
-                Some(callback),
-            )
-            .await;
+        let admitted = admit_test_run(garyx_models::provider::AgentRunRequest::new(
+            &session_key,
+            "hello",
+            "run-cb-1",
+            "telegram",
+            "bot1",
+            HashMap::new(),
+        ))
+        .await;
+        let result = bridge.dispatch(admitted, Some(callback)).await;
         assert!(result.is_ok());
 
         // Give the task time to complete
         tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
         assert!(callback_called.load(Ordering::Relaxed));
-    }
-
-    #[tokio::test]
-    async fn test_reply_routing_records_and_resolves() {
-        let router = make_router();
-
-        // Record an outbound message
-        {
-            let mut r = router.lock().await;
-            r.record_outbound_message("session_x", "telegram", "bot1", "msg100");
-        }
-
-        // Resolve via reply routing
-        {
-            let r = router.lock().await;
-            let thread_id = r.resolve_reply_thread("telegram", "bot1", "msg100");
-            assert_eq!(thread_id, Some("session_x"));
-        }
-
-        // Non-existent reply should return None
-        {
-            let r = router.lock().await;
-            let thread_id = r.resolve_reply_thread("telegram", "bot1", "msg999");
-            assert_eq!(thread_id, None);
-        }
     }
 
     #[tokio::test]
@@ -994,7 +972,7 @@ mod dispatch_tests {
 mod e2e_tests {
     use super::*;
     use crate::test_helpers::*;
-    use garyx_bridge::{ProviderRuntime, BridgeError};
+    use garyx_bridge::{BridgeError, ProviderRuntime};
     use garyx_models::config::{GaryxConfig, TelegramAccount};
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent,
@@ -1016,7 +994,7 @@ mod e2e_tests {
             token: "fake-token".into(),
             enabled: true,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             groups: HashMap::new(),
@@ -2896,20 +2874,16 @@ mod e2e_tests {
         let image_path = temp.path().join("shot.png");
         std::fs::write(&image_path, b"fake image bytes").expect("image");
 
-        let (callback, thread_id_tx) =
-            super::streaming::build_response_callback(StreamingCallbackConfig {
-                http,
-                token: "fake-token".to_owned(),
-                router: make_router(),
-                account_id: "bot1".to_owned(),
-                chat_id: 42,
-                api_base,
-                reply_to_mode: garyx_models::config::ReplyToMode::Off,
-                reply_to: None,
-                outbound_thread_id: None,
-                outbound_thread_scope: None,
-            });
-        let _ = thread_id_tx.send("thread::test-markdown-image".to_owned());
+        let callback = super::streaming::build_response_callback(StreamingCallbackConfig {
+            http,
+            token: "fake-token".to_owned(),
+            account_id: "bot1".to_owned(),
+            chat_id: 42,
+            api_base,
+            reply_to_mode: garyx_models::config::ReplyToMode::Off,
+            reply_to: None,
+            outbound_thread_id: None,
+        });
 
         callback(StreamEvent::Delta {
             text: format!("截图在这里：\n\n![Demo shot]({})", image_path.display()),
@@ -2947,6 +2921,35 @@ mod e2e_tests {
             body.contains("fake image bytes"),
             "multipart photo upload should include the image bytes"
         );
+    }
+
+    #[tokio::test]
+    async fn test_streaming_callback_preserves_outbound_topic_thread_id() {
+        let (server, capture) = setup_tg_capture_mock(false).await;
+        let callback = super::streaming::build_response_callback(StreamingCallbackConfig {
+            http: reqwest::Client::new(),
+            token: "fake-token".to_owned(),
+            account_id: "bot1".to_owned(),
+            chat_id: -100123,
+            api_base: unique_api_base(&server),
+            reply_to_mode: garyx_models::config::ReplyToMode::Off,
+            reply_to: None,
+            outbound_thread_id: Some(555),
+        });
+
+        callback(StreamEvent::Delta {
+            text: "topic response".to_owned(),
+        });
+        callback(StreamEvent::Done);
+
+        let send_bodies = wait_for_json_capture_quiet_window(
+            &capture.send_messages,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+        )
+        .await;
+        assert_eq!(send_bodies[0]["message_thread_id"], 555);
     }
 
     #[tokio::test]
@@ -3939,7 +3942,7 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_telegram_reply_routing() {
+    async fn test_e2e_telegram_reply_uses_current_thread_and_preserves_quote() {
         let server = setup_tg_mock().await;
         let api_base = unique_api_base(&server);
         let provider = Arc::new(ConfigurableTestProvider::echo());
@@ -3975,35 +3978,7 @@ mod e2e_tests {
         )
         .await;
 
-        let initial_thread = {
-            let calls = provider.calls.lock().unwrap();
-            calls[0].thread_id.clone()
-        };
-        let thread_from_reply = {
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                let resolved = {
-                    let r = router.lock().await;
-                    r.resolve_reply_thread_for_chat("telegram", "bot1", Some("42"), None, "999")
-                        .map(|s| s.to_owned())
-                };
-                if resolved.is_some() {
-                    break resolved;
-                }
-                assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "outbound message should be recorded for reply routing"
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-        };
-        assert_eq!(
-            thread_from_reply.as_deref(),
-            Some(initial_thread.as_str()),
-            "outbound message should be recorded for reply routing"
-        );
-
-        // Step 2: Create a reply message that references the bot's response (msg_id=999)
+        // Step 2: Reply to the bot's response while the original binding is current.
         let bot_reply_msg = TgMessage {
             message_id: 999,
             chat: TgChat {
@@ -4055,16 +4030,18 @@ mod e2e_tests {
 
         wait_for_counter_at_least(&provider.call_count, 2).await;
 
-        // Both messages should have routed to the same thread
+        // The native reply triggers delivery, stays on the current binding, and
+        // preserves quoted content in the provider prompt.
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 2);
         let calls = provider.calls.lock().unwrap();
         assert_eq!(calls[0].thread_id, calls[1].thread_id);
         assert!(calls[0].thread_id.starts_with("thread::"));
+        assert!(calls[1].message.contains("echo: first message"));
+        assert!(calls[1].message.contains("follow up"));
     }
 
     #[tokio::test]
-    async fn test_e2e_telegram_reply_routing_after_endpoint_rebind_keeps_old_thread_without_switching_current()
-     {
+    async fn test_e2e_telegram_reply_after_endpoint_rebind_uses_current_thread() {
         let server = setup_tg_mock().await;
         let api_base = unique_api_base(&server);
         let provider = Arc::new(ConfigurableTestProvider::echo());
@@ -4196,7 +4173,9 @@ mod e2e_tests {
 
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 2);
         let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[1].thread_id, old_thread);
+        assert_eq!(calls[1].thread_id, new_thread);
+        assert_ne!(calls[1].thread_id, old_thread);
+        assert!(calls[1].message.contains("echo: first message"));
         drop(calls);
 
         let current = {
@@ -4216,139 +4195,7 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_telegram_reply_routing_falls_back_when_old_thread_is_gone() {
-        let server = setup_tg_mock().await;
-        let api_base = unique_api_base(&server);
-        let provider = Arc::new(ConfigurableTestProvider::echo());
-        let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
-        let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
-        let router = make_router_with_store(store.clone());
-        let http = reqwest::Client::new();
-
-        let update1 = TgUpdateBuilder::dm(42, "first message")
-            .with_message_id(3201)
-            .build();
-        dispatch_update(
-            &http,
-            "bot1",
-            "fake-token",
-            "garyx",
-            999,
-            &default_account(),
-            &update1,
-            &router,
-            &bridge,
-            &api_base,
-        )
-        .await;
-        wait_for_counter_at_least(&provider.call_count, 1).await;
-        wait_for_provider_calls(provider.as_ref(), 1).await;
-
-        let old_thread = {
-            let calls = provider.calls.lock().unwrap();
-            calls[0].thread_id.clone()
-        };
-        wait_for_thread_delivery_persistence(&store, &old_thread).await;
-
-        let (new_thread, _) = create_thread_record(
-            &store,
-            ThreadEnsureOptions {
-                label: Some("Fallback".to_owned()),
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("thread should be created");
-        router
-            .lock()
-            .await
-            .bind_endpoint_runtime(
-                &new_thread,
-                ChannelBinding {
-                    channel: "telegram".to_owned(),
-                    account_id: "bot1".to_owned(),
-                    binding_key: "42".to_owned(),
-                    chat_id: "42".to_owned(),
-                    delivery_target_type: "chat_id".to_owned(),
-                    delivery_target_id: "42".to_owned(),
-                    display_label: "42".to_owned(),
-                    last_inbound_at: None,
-                    last_delivery_at: None,
-                },
-            )
-            .await
-            .expect("bind should succeed");
-        assert!(
-            store.delete(&old_thread).await.unwrap(),
-            "old thread should be deleted"
-        );
-        {
-            // Mirror the production detach route: the write-path purge
-            // clears this endpoint's router context incrementally
-            // (startup rebuild is retired, #TASK-2099).
-            let mut router_guard = router.lock().await;
-            router_guard.purge_endpoint_binding("telegram::bot1::42");
-        }
-
-        let bot_reply_msg = TgMessage {
-            message_id: 999,
-            chat: TgChat {
-                id: 42,
-                chat_type: "private".to_string(),
-                title: None,
-                is_forum: None,
-            },
-            from: Some(TgUser {
-                id: 999,
-                is_bot: true,
-                first_name: "Gary".to_string(),
-                last_name: None,
-                username: Some("garyx".to_string()),
-            }),
-            text: Some("echo: first message".to_string()),
-            caption: None,
-            date: 1700000000,
-            message_thread_id: None,
-            media_group_id: None,
-            reply_to_message: None,
-            entities: None,
-            photo: None,
-            voice: None,
-            audio: None,
-            document: None,
-            video: None,
-            animation: None,
-            sticker: None,
-        };
-
-        let update2 = TgUpdateBuilder::dm(42, "follow missing thread")
-            .with_message_id(3202)
-            .with_reply_to(bot_reply_msg)
-            .build();
-        dispatch_update(
-            &http,
-            "bot1",
-            "fake-token",
-            "garyx",
-            999,
-            &default_account(),
-            &update2,
-            &router,
-            &bridge,
-            &api_base,
-        )
-        .await;
-        wait_for_counter_at_least(&provider.call_count, 1).await;
-        wait_for_provider_calls(provider.as_ref(), 2).await;
-
-        assert_eq!(provider.call_count.load(Ordering::Relaxed), 2);
-        let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[1].thread_id, new_thread);
-        assert_ne!(calls[1].thread_id, old_thread);
-    }
-
-    #[tokio::test]
-    async fn test_e2e_telegram_reply_routing_switches_scheduled_thread() {
+    async fn test_e2e_telegram_scheduled_notification_reply_stays_on_current_binding() {
         let server = setup_tg_mock().await;
         let api_base = unique_api_base(&server);
         let provider = Arc::new(ConfigurableTestProvider::echo());
@@ -4367,7 +4214,17 @@ mod e2e_tests {
                     Some("cron::daily_summary"),
                 )
                 .await;
-            router_guard.record_outbound_message("cron::daily_summary", "telegram", "bot1", "999");
+            router_guard
+                .ensure_thread_entry(
+                    "thread::current-telegram",
+                    "telegram",
+                    "bot1",
+                    "42",
+                    Some("Current"),
+                )
+                .await;
+            let binding_key = MessageRouter::build_binding_context_key("telegram", "bot1", "42");
+            router_guard.switch_to_thread(&binding_key, "thread::current-telegram");
         }
 
         let bot_reply_msg = TgMessage {
@@ -4431,230 +4288,20 @@ mod e2e_tests {
 
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
         let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].thread_id, "cron::daily_summary");
+        assert_eq!(calls[0].thread_id, "thread::current-telegram");
+        assert!(calls[0].message.contains("scheduled ping"));
+        assert!(calls[0].message.contains("follow scheduled context"));
         drop(calls);
 
-        let switched_thread = {
+        let current_thread = {
             let router_guard = router.lock().await;
             router_guard
                 .get_current_thread_id_for_binding("telegram", "bot1", "42")
                 .map(|s| s.to_owned())
         };
-        assert_eq!(switched_thread.as_deref(), Some("cron::daily_summary"));
+        assert_eq!(current_thread.as_deref(), Some("thread::current-telegram"));
 
         assert!(!send_reqs.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_e2e_telegram_group_reply_routing_scheduled_switch_scoped_to_group() {
-        let server = setup_tg_mock().await;
-        let api_base = unique_api_base(&server);
-        let provider = Arc::new(ConfigurableTestProvider::echo());
-        let bridge = make_bridge_with(provider.clone()).await;
-        let router = make_router();
-        let http = reqwest::Client::new();
-
-        {
-            let mut router_guard = router.lock().await;
-            router_guard
-                .ensure_thread_entry(
-                    "cron::daily_summary",
-                    "telegram",
-                    "bot1",
-                    "42",
-                    Some("cron::daily_summary"),
-                )
-                .await;
-            router_guard.record_outbound_message("cron::daily_summary", "telegram", "bot1", "999");
-        }
-
-        let bot_reply_msg = TgMessage {
-            message_id: 999,
-            chat: TgChat {
-                id: -100123,
-                chat_type: "supergroup".to_string(),
-                title: Some("test".to_string()),
-                is_forum: Some(false),
-            },
-            from: Some(TgUser {
-                id: 999,
-                is_bot: true,
-                first_name: "Gary".to_string(),
-                last_name: None,
-                username: Some("garyx".to_string()),
-            }),
-            text: Some("#cron::daily_summary\nscheduled ping".to_string()),
-            caption: None,
-            date: 1700000000,
-            message_thread_id: None,
-            media_group_id: None,
-            reply_to_message: None,
-            entities: None,
-            photo: None,
-            voice: None,
-            audio: None,
-            document: None,
-            video: None,
-            animation: None,
-            sticker: None,
-        };
-
-        let update = TgUpdateBuilder::group(42, -100123, "group follow scheduled context")
-            .with_message_id(1101)
-            .with_mention("garyx")
-            .with_reply_to(bot_reply_msg)
-            .build();
-
-        dispatch_update(
-            &http,
-            "bot1",
-            "fake-token",
-            "garyx",
-            999,
-            &default_account(),
-            &update,
-            &router,
-            &bridge,
-            &api_base,
-        )
-        .await;
-
-        wait_for_counter_at_least(&provider.call_count, 1).await;
-        wait_for_request_quiet_window(
-            &server,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-        )
-        .await;
-
-        assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
-        let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].thread_id, "cron::daily_summary");
-        drop(calls);
-
-        let (group_switched, dm_switched) = {
-            let router_guard = router.lock().await;
-            let group_switched = router_guard
-                .get_current_thread_id_for_binding("telegram", "bot1", "-100123")
-                .map(|s| s.to_owned());
-            let dm_switched = router_guard
-                .get_current_thread_id_for_binding("telegram", "bot1", "42")
-                .map(|s| s.to_owned());
-            (group_switched, dm_switched)
-        };
-
-        assert_eq!(group_switched.as_deref(), Some("cron::daily_summary"));
-        assert_eq!(dm_switched, None);
-
-        let send_reqs = wait_for_matching_requests_quiet_window(
-            &server,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-            |r| r.url.path().contains("sendMessage"),
-        )
-        .await;
-        assert!(!send_reqs.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_e2e_telegram_reply_routing_switches_cron_session() {
-        let (server, capture) = setup_tg_capture_mock(false).await;
-        let api_base = unique_api_base(&server);
-        let provider = Arc::new(ConfigurableTestProvider::echo());
-        let bridge = make_bridge_with(provider.clone()).await;
-        let router = make_router();
-        let http = reqwest::Client::new();
-
-        {
-            let mut router_guard = router.lock().await;
-            router_guard
-                .ensure_thread_entry(
-                    "cron::daily::42",
-                    "telegram",
-                    "bot1",
-                    "42",
-                    Some("cron::daily::42"),
-                )
-                .await;
-            router_guard.record_outbound_message("cron::daily::42", "telegram", "bot1", "888");
-        }
-
-        let bot_reply_msg = TgMessage {
-            message_id: 888,
-            chat: TgChat {
-                id: 42,
-                chat_type: "private".to_string(),
-                title: None,
-                is_forum: None,
-            },
-            from: Some(TgUser {
-                id: 999,
-                is_bot: true,
-                first_name: "Gary".to_string(),
-                last_name: None,
-                username: Some("garyx".to_string()),
-            }),
-            text: Some("#cron::daily::42\nscheduled ping".to_string()),
-            caption: None,
-            date: 1700000000,
-            message_thread_id: None,
-            media_group_id: None,
-            reply_to_message: None,
-            entities: None,
-            photo: None,
-            voice: None,
-            audio: None,
-            document: None,
-            video: None,
-            animation: None,
-            sticker: None,
-        };
-
-        let update = TgUpdateBuilder::dm(42, "follow scheduled context")
-            .with_reply_to(bot_reply_msg)
-            .build();
-
-        dispatch_update(
-            &http,
-            "bot1",
-            "fake-token",
-            "garyx",
-            999,
-            &default_account(),
-            &update,
-            &router,
-            &bridge,
-            &api_base,
-        )
-        .await;
-        wait_for_counter_at_least(&provider.call_count, 1).await;
-
-        assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
-        let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].thread_id, "cron::daily::42");
-        drop(calls);
-
-        let switched_thread = {
-            let router_guard = router.lock().await;
-            router_guard
-                .get_current_thread_id_for_binding("telegram", "bot1", "42")
-                .map(|s| s.to_owned())
-        };
-        assert_eq!(switched_thread.as_deref(), Some("cron::daily::42"));
-
-        let send_bodies = wait_for_json_capture_quiet_window(
-            &capture.send_messages,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_secs(5),
-            1,
-        )
-        .await;
-        assert!(
-            !send_bodies.is_empty(),
-            "cron reply routing should emit a Telegram reply"
-        );
     }
 
     #[tokio::test]
@@ -4996,7 +4643,8 @@ mod e2e_tests {
             let calls = provider.calls.lock().unwrap();
             calls[2].thread_id.clone()
         };
-        assert_eq!(detached_reply_thread, first_thread);
+        assert_eq!(detached_reply_thread, second_thread);
+        assert_ne!(detached_reply_thread, first_thread);
         let rebound_after_detached_reply = {
             let mut router_guard = router.lock().await;
             router_guard

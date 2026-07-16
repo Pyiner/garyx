@@ -3,6 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::ThreadRunCoordinator;
 use crate::endpoint_projection::ChannelEndpointProjection;
 use crate::tasks::TaskProjectionReader;
 
@@ -25,6 +26,18 @@ pub struct AtomicRecordMerge {
 
 #[async_trait]
 pub trait ThreadStore: Send + Sync {
+    /// The store-owned run/mutation linearization domain. Production stores
+    /// override this with a per-store coordinator; the shared fallback keeps
+    /// small test doubles fail-closed without expanding every fixture.
+    fn run_coordinator(&self) -> Arc<ThreadRunCoordinator> {
+        ThreadRunCoordinator::shared_fallback()
+    }
+
+    /// Whether the canonical record has a durable archive tombstone.
+    async fn is_archived(&self, _thread_id: &str) -> Result<bool, ThreadStoreError> {
+        Ok(false)
+    }
+
     /// Retrieve thread data by key. `Ok(None)` means the thread does not
     /// exist; backend/parse failures are errors, never `None`.
     async fn get(&self, thread_id: &str) -> Result<Option<Value>, ThreadStoreError>;

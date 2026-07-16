@@ -1111,6 +1111,39 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn cmd_task_create_preserves_disabled_agent_gateway_error() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) = spawn_disabled_agent_rejection_server(requests.clone()).await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        let error = cmd_task_create(
+            config_path.to_str().expect("config path"),
+            Some("Rejected task".to_owned()),
+            Some("Do not fall back".to_owned()),
+            None,
+            false,
+            Some("codex".to_owned()),
+            vec!["none".to_owned()],
+        )
+        .await
+        .expect_err("disabled explicit agent must be rejected");
+
+        handle.abort();
+        let gateway_error = error
+            .downcast_ref::<GatewayCliError>()
+            .expect("gateway rejection must remain typed");
+        assert_eq!(gateway_error.kind, GatewayErrorKind::Rejected);
+        assert_eq!(
+            gateway_error.message,
+            "gateway request failed: 400 Bad Request: agent is disabled: codex"
+        );
+        let records = requests.lock().expect("request lock");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].body["executor"]["agentId"], "codex");
+    }
+
     #[test]
     fn task_notification_target_accepts_bot_and_none() {
         assert_eq!(

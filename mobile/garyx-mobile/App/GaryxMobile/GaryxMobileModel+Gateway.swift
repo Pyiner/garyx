@@ -45,12 +45,15 @@ extension GaryxMobileModel {
         activeGatewayScopeId = currentGatewayScopeId
         activeGatewayRuntimeIdentity = currentGatewayRuntimeIdentity
         catalogSnapshotRestored = false
-        let agentKey = scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId)
         let workspaceKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
         let workspaceModeKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
-        selectedAgentTargetId = defaults.string(forKey: agentKey)
-            ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.selectedAgentTargetId) : nil)
-            ?? "claude"
+        selectedAgentTargetId = nil
+        gatewayDefaultAgentId = nil
+        effectiveDefaultAgentId = nil
+        defaults.removeObject(forKey: scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId))
+        if fallbackToLegacy {
+            defaults.removeObject(forKey: GaryxMobileSettingsKeys.selectedAgentTargetId)
+        }
         newThreadWorkspace = defaults.string(forKey: workspaceKey)
             ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspace) : nil)
             ?? ""
@@ -68,7 +71,8 @@ extension GaryxMobileModel {
     }
 
     func saveGatewayScopedUserState() {
-        defaults.set(selectedAgentTargetId, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId))
+        defaults.removeObject(forKey: scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId))
+        defaults.removeObject(forKey: GaryxMobileSettingsKeys.selectedAgentTargetId)
         defaults.set(
             newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines),
             forKey: scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
@@ -145,6 +149,8 @@ extension GaryxMobileModel {
         clearAllComposerDrafts()
         draftThreadTitle = ""
         agents = []
+        gatewayDefaultAgentId = nil
+        effectiveDefaultAgentId = nil
         skills = []
         galleryFocusedCapsule = nil
         conversationCapsulePreview = nil
@@ -500,7 +506,7 @@ extension GaryxMobileModel {
         }
         do {
             let gateway = try client()
-            let agentsOutcome = await garyxCaptureCatalog { try await gateway.listAgents() }
+            let agentsOutcome = await garyxCaptureCatalog { try await gateway.listAgentCatalog() }
             guard isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             agentTargetsRefreshRequestId = nil
             if agentTargetsStateRequestId == requestId {
@@ -508,7 +514,7 @@ extension GaryxMobileModel {
             }
             let nextAgents = agentsOutcome.successValue
             if let nextAgents {
-                applyAgentTargets(agents: nextAgents)
+                applyAgentCatalog(nextAgents)
             }
             if agentsOutcome.isFailure {
                 let message = catalogRefreshFailureMessage(
@@ -552,7 +558,7 @@ extension GaryxMobileModel {
         }
         do {
             let gateway = try client()
-            async let agentsResult = garyxCaptureCatalog { try await gateway.listAgents() }
+            async let agentsResult = garyxCaptureCatalog { try await gateway.listAgentCatalog() }
             async let skillsResult = garyxCaptureCatalog { try await gateway.listSkills() }
             async let capsulesResult = refreshCapsules(reportFailure: false)
             async let gatewaySettingsResult: [String: GaryxJSONValue]? = try? gateway.gatewaySettings()
@@ -581,8 +587,8 @@ extension GaryxMobileModel {
             let nextAgents = await agentsResult
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             let ownsAgentTargetsState = agentTargetsStateRequestId == requestId
-            if ownsAgentTargetsState, let agents = nextAgents.successValue {
-                applyAgentTargets(agents: agents)
+            if ownsAgentTargetsState, let catalog = nextAgents.successValue {
+                applyAgentCatalog(catalog)
             }
 
             let nextSkills = await skillsResult

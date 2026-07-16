@@ -493,12 +493,14 @@ fn test_permission_notice_cooldown() {
 mod dispatch_tests {
     use super::*;
     use garyx_bridge::provider_trait::StreamCallback;
-    use garyx_bridge::{ProviderRuntime, BridgeError, MultiProviderBridge};
+    use garyx_bridge::{BridgeError, MultiProviderBridge, ProviderRuntime};
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
     };
-    use garyx_router::{InMemoryThreadStore, MessageRouter};
+    use garyx_router::{
+        AdmittedRun, AgentDispatcher, InMemoryThreadStore, MessageRouter, ThreadStore,
+    };
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// Mock provider that tracks calls.
@@ -597,6 +599,13 @@ mod dispatch_tests {
         (bridge, provider)
     }
 
+    async fn admit_test_run(request: garyx_models::provider::AgentRunRequest) -> AdmittedRun {
+        let thread_id = request.thread_id.clone();
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        store.set(&thread_id, serde_json::json!({})).await.unwrap();
+        AdmittedRun::thread_bound(store, request).await.unwrap()
+    }
+
     #[tokio::test]
     async fn test_feishu_session_resolution_dm() {
         let router = make_router();
@@ -628,41 +637,20 @@ mod dispatch_tests {
         };
         assert!(thread_id.starts_with("thread::"), "{thread_id}");
 
-        let result = bridge
-            .start_agent_run(
-                garyx_models::provider::AgentRunRequest::new(
-                    &thread_id,
-                    "hello from feishu",
-                    "feishu-run-1",
-                    "feishu",
-                    "app1",
-                    HashMap::new(),
-                ),
-                None,
-            )
-            .await;
+        let admitted = admit_test_run(garyx_models::provider::AgentRunRequest::new(
+            &thread_id,
+            "hello from feishu",
+            "feishu-run-1",
+            "feishu",
+            "app1",
+            HashMap::new(),
+        ))
+        .await;
+        let result = bridge.dispatch(admitted, None).await;
         assert!(result.is_ok());
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert!(!bridge.is_run_active("feishu-run-1").await);
-    }
-
-    #[tokio::test]
-    async fn test_feishu_reply_routing() {
-        let router = make_router();
-
-        // Record outbound message
-        {
-            let mut r = router.lock().await;
-            r.record_outbound_message("app1::main::ou_user123", "feishu", "app1", "om_reply_msg");
-        }
-
-        // Resolve via reply
-        {
-            let r = router.lock().await;
-            let thread_id = r.resolve_reply_thread("feishu", "app1", "om_reply_msg");
-            assert_eq!(thread_id, Some("app1::main::ou_user123"));
-        }
     }
 
     #[tokio::test]
@@ -689,19 +677,16 @@ mod dispatch_tests {
             }
         });
 
-        let result = bridge
-            .start_agent_run(
-                garyx_models::provider::AgentRunRequest::new(
-                    &session_key,
-                    "test message",
-                    "feishu-cb-1",
-                    "feishu",
-                    "app1",
-                    HashMap::new(),
-                ),
-                Some(callback),
-            )
-            .await;
+        let admitted = admit_test_run(garyx_models::provider::AgentRunRequest::new(
+            &session_key,
+            "test message",
+            "feishu-cb-1",
+            "feishu",
+            "app1",
+            HashMap::new(),
+        ))
+        .await;
+        let result = bridge.dispatch(admitted, Some(callback)).await;
         assert!(result.is_ok());
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -812,7 +797,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: true,
@@ -906,7 +891,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: true,
@@ -968,7 +953,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: true,
@@ -1021,7 +1006,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: false,
@@ -1086,7 +1071,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: false,
@@ -1137,7 +1122,7 @@ mod dispatch_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: false,
@@ -1184,21 +1169,35 @@ mod e2e_tests {
     use crate::test_helpers::*;
     use async_trait::async_trait;
     use garyx_bridge::provider_trait::StreamCallback;
-    use garyx_bridge::{ProviderRuntime, BridgeError};
+    use garyx_bridge::{BridgeError, ProviderRuntime};
+    use garyx_models::AgentBindingError;
     use garyx_models::config::GaryxConfig;
     use garyx_models::provider::{
         ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind,
         StreamEvent,
     };
     use garyx_router::{
-        ChannelBinding, InMemoryThreadStore, MessageRouter, ThreadEnsureOptions, ThreadStore,
-        bindings_from_value, create_thread_record, is_thread_key,
+        ChannelBinding, InMemoryThreadStore, MessageRouter, ThreadCreationError, ThreadCreator,
+        ThreadEnsureOptions, ThreadStore, bindings_from_value, create_thread_record, is_thread_key,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use wiremock::matchers::{method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     struct FeishuUserAckBoundaryProvider;
+
+    struct NoEnabledThreadCreator;
+
+    #[async_trait]
+    impl ThreadCreator for NoEnabledThreadCreator {
+        async fn create_thread(
+            &self,
+            _thread_store: Arc<dyn ThreadStore>,
+            _options: ThreadEnsureOptions,
+        ) -> Result<(String, Value), ThreadCreationError> {
+            Err(AgentBindingError::NoEnabledAgent.into())
+        }
+    }
 
     #[async_trait]
     impl ProviderRuntime for FeishuUserAckBoundaryProvider {
@@ -1884,7 +1883,7 @@ mod e2e_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: false,
@@ -2136,6 +2135,48 @@ mod e2e_tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn test_e2e_feishu_no_enabled_agent_sends_visible_error_reply() {
+        let (server, client) = setup_feishu_mock().await;
+        let provider = Arc::new(ConfigurableTestProvider::echo());
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let bridge = make_bridge_with_store(provider.clone(), store.clone()).await;
+        let router = make_router_with_store(store);
+        router
+            .lock()
+            .await
+            .set_thread_creator(Arc::new(NoEnabledThreadCreator));
+        let account = make_default_account();
+        let event = FeishuEventBuilder::dm("ou_user123", "hello")
+            .with_message_id("om_no_enabled_001")
+            .build();
+
+        dispatch_im_message_event(
+            "app1",
+            &event,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+
+        assert_eq!(provider.call_count.load(Ordering::Relaxed), 0);
+        let requests = server.received_requests().await.unwrap_or_default();
+        let reply = requests
+            .iter()
+            .find(|request| request.url.path() == "/im/v1/messages/om_no_enabled_001/reply")
+            .expect("routing gate error reply");
+        let body: Value = serde_json::from_slice(&reply.body).unwrap();
+        let content: Value = serde_json::from_str(body["content"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            content["text"],
+            "Error: no enabled standalone agent is available"
+        );
     }
 
     #[tokio::test]
@@ -3559,8 +3600,22 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_feishu_reply_routing() {
-        let (_server, client) = setup_feishu_mock().await;
+    async fn test_e2e_feishu_reply_uses_current_thread_and_includes_quote_prefix() {
+        let (server, client) = setup_feishu_mock().await;
+        Mock::given(method("GET"))
+            .and(path("/im/v1/messages/om_mock_reply_dm"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok",
+                "data": {
+                    "items": [{
+                        "msg_type": "text",
+                        "body": { "content": "{\"text\":\"echo: first msg\"}" }
+                    }]
+                }
+            })))
+            .mount(&server)
+            .await;
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let bridge = make_bridge_with(provider.clone()).await;
         let router = make_router();
@@ -3580,40 +3635,6 @@ mod e2e_tests {
         )
         .await;
         wait_for_counter_at_least(&provider.call_count, 1).await;
-        let initial_thread = {
-            let calls = provider.calls.lock().unwrap();
-            calls[0].thread_id.clone()
-        };
-        let thread_from_reply = {
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                let resolved = {
-                    let r = router.lock().await;
-                    r.resolve_reply_thread_for_chat(
-                        "feishu",
-                        "app1",
-                        Some("oc_dm_ou_user123"),
-                        None,
-                        "om_mock_reply_dm",
-                    )
-                    .map(|s| s.to_owned())
-                };
-                if resolved.is_some() {
-                    break resolved;
-                }
-                assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "outbound message should be recorded for reply routing"
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-        };
-        assert_eq!(
-            thread_from_reply.as_deref(),
-            Some(initial_thread.as_str()),
-            "outbound message should be recorded for reply routing"
-        );
-
         // Step 2: Send second message as a reply to the bot's message
         let event2 = FeishuEventBuilder::dm("ou_user123", "follow up")
             .with_message_id("om_test_msg_002")
@@ -3632,16 +3653,20 @@ mod e2e_tests {
         .await;
         wait_for_counter_at_least(&provider.call_count, 2).await;
 
-        // Both should route to the same thread
+        // The reply stays on the current binding and always carries a quote
+        // prefix, even when fetching the referenced message fails.
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 2);
         let calls = provider.calls.lock().unwrap();
         assert_eq!(calls[0].thread_id, calls[1].thread_id);
         assert!(calls[0].thread_id.starts_with("thread::"));
+        assert_eq!(
+            calls[1].message,
+            "[Replying to: \"echo: first msg\"]\n\nou_user123: follow up"
+        );
     }
 
     #[tokio::test]
-    async fn test_e2e_feishu_reply_routing_after_endpoint_rebind_keeps_old_thread_without_switching_current()
-     {
+    async fn test_e2e_feishu_reply_after_endpoint_rebind_uses_current_thread() {
         let (_server, client) = setup_feishu_mock().await;
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let store: Arc<dyn garyx_router::ThreadStore> = Arc::new(InMemoryThreadStore::new());
@@ -3716,11 +3741,11 @@ mod e2e_tests {
         )
         .await;
         wait_for_provider_calls(provider.as_ref(), 2).await;
-        wait_for_provider_calls(provider.as_ref(), 2).await;
 
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 2);
         let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[1].thread_id, old_thread);
+        assert_eq!(calls[1].thread_id, new_thread);
+        assert_ne!(calls[1].thread_id, old_thread);
         drop(calls);
 
         let current = {
@@ -4201,8 +4226,22 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_feishu_reply_routing_switches_scheduled_thread() {
+    async fn test_e2e_feishu_scheduled_notification_reply_stays_on_current_binding() {
         let (server, client) = setup_feishu_mock().await;
+        Mock::given(method("GET"))
+            .and(path("/im/v1/messages/om_cron_reply_001"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok",
+                "data": {
+                    "items": [{
+                        "msg_type": "text",
+                        "body": { "content": "{\"text\":\"scheduled ping\"}" }
+                    }]
+                }
+            })))
+            .mount(&server)
+            .await;
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let bridge = make_bridge_with(provider.clone()).await;
         let router = make_router();
@@ -4210,12 +4249,27 @@ mod e2e_tests {
 
         {
             let mut router_guard = router.lock().await;
-            router_guard.record_outbound_message(
-                "cron::daily_summary",
-                "feishu",
-                "app1",
-                "om_cron_reply_001",
-            );
+            router_guard
+                .ensure_thread_entry(
+                    "cron::daily_summary",
+                    "feishu",
+                    "app1",
+                    "ou_user123",
+                    Some("cron::daily_summary"),
+                )
+                .await;
+            router_guard
+                .ensure_thread_entry(
+                    "thread::current-feishu",
+                    "feishu",
+                    "app1",
+                    "ou_user123",
+                    Some("Current"),
+                )
+                .await;
+            let binding_key =
+                MessageRouter::build_binding_context_key("feishu", "app1", "ou_user123");
+            router_guard.switch_to_thread(&binding_key, "thread::current-feishu");
         }
 
         let event = FeishuEventBuilder::dm("ou_user123", "follow scheduled context")
@@ -4237,16 +4291,20 @@ mod e2e_tests {
 
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
         let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].thread_id, "cron::daily_summary");
+        assert_eq!(calls[0].thread_id, "thread::current-feishu");
+        assert_eq!(
+            calls[0].message,
+            "[Replying to: \"scheduled ping\"]\n\nou_user123: follow scheduled context"
+        );
         drop(calls);
 
-        let switched_thread = {
+        let current_thread = {
             let router_guard = router.lock().await;
             router_guard
                 .get_current_thread_id_for_binding("feishu", "app1", "ou_user123")
                 .map(|s| s.to_owned())
         };
-        assert_eq!(switched_thread.as_deref(), Some("cron::daily_summary"));
+        assert_eq!(current_thread.as_deref(), Some("thread::current-feishu"));
 
         let requests = server.received_requests().await.unwrap();
         let notice_calls: Vec<_> = requests
@@ -4259,132 +4317,7 @@ mod e2e_tests {
                         .unwrap_or(false)
             })
             .collect();
-        assert_eq!(
-            notice_calls.len(),
-            1,
-            "should send thread switch notice once"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_e2e_feishu_group_reply_routing_scheduled_switch_scoped_to_group() {
-        let (_server, client) = setup_feishu_mock().await;
-        let provider = Arc::new(ConfigurableTestProvider::echo());
-        let bridge = make_bridge_with(provider.clone()).await;
-        let router = make_router();
-        let account = make_default_account();
-
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.record_outbound_message(
-                "cron::daily_summary",
-                "feishu",
-                "app1",
-                "om_cron_reply_group_001",
-            );
-        }
-
-        let event = FeishuEventBuilder::group(
-            "ou_user123",
-            "oc_group456",
-            "group follow scheduled context",
-        )
-        .with_message_id("om_test_msg_switch_group_001")
-        .with_parent_id("om_cron_reply_group_001")
-        .build();
-        dispatch_im_message_event(
-            "app1",
-            &event,
-            &router,
-            &bridge,
-            &client,
-            &account,
-            "",
-            &account.app_id,
-        )
-        .await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
-        let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].thread_id, "cron::daily_summary");
-        drop(calls);
-
-        let (group_switched, dm_switched) = {
-            let router_guard = router.lock().await;
-            let group_switched = router_guard
-                .get_current_thread_id_for_binding("feishu", "app1", "oc_group456")
-                .map(|s| s.to_owned());
-            let dm_switched = router_guard
-                .get_current_thread_id_for_binding("feishu", "app1", "ou_user123")
-                .map(|s| s.to_owned());
-            (group_switched, dm_switched)
-        };
-
-        assert_eq!(group_switched.as_deref(), Some("cron::daily_summary"));
-        assert_eq!(dm_switched, None);
-    }
-
-    #[tokio::test]
-    async fn test_e2e_feishu_reply_routing_switches_cron_session() {
-        let (server, client) = setup_feishu_mock().await;
-        let provider = Arc::new(ConfigurableTestProvider::echo());
-        let bridge = make_bridge_with(provider.clone()).await;
-        let router = make_router();
-        let account = make_default_account();
-
-        {
-            let mut router_guard = router.lock().await;
-            router_guard.record_outbound_message(
-                "cron::daily::ou_user123",
-                "feishu",
-                "app1",
-                "om_cron_reply_001",
-            );
-        }
-
-        let event = FeishuEventBuilder::dm("ou_user123", "follow scheduled context")
-            .with_message_id("om_test_cron_switch_001")
-            .with_parent_id("om_cron_reply_001")
-            .build();
-        dispatch_im_message_event(
-            "app1",
-            &event,
-            &router,
-            &bridge,
-            &client,
-            &account,
-            "",
-            &account.app_id,
-        )
-        .await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
-        let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].thread_id, "cron::daily::ou_user123");
-        drop(calls);
-
-        let switched_thread = {
-            let router_guard = router.lock().await;
-            router_guard
-                .get_current_thread_id_for_binding("feishu", "app1", "ou_user123")
-                .map(|s| s.to_owned())
-        };
-        assert_eq!(switched_thread.as_deref(), Some("cron::daily::ou_user123"));
-
-        let requests = server.received_requests().await.unwrap();
-        let notice_calls: Vec<_> = requests
-            .iter()
-            .filter(|r| {
-                r.url.path() == "/im/v1/messages/om_test_cron_switch_001/reply"
-                    && r.method.as_str() == "POST"
-                    && std::str::from_utf8(&r.body)
-                        .map(|body| body.contains("你已经切换到 thread:cron::daily::ou_user123"))
-                        .unwrap_or(false)
-            })
-            .collect();
-        assert_eq!(notice_calls.len(), 1);
+        assert!(notice_calls.is_empty());
     }
 
     #[tokio::test]
@@ -4497,7 +4430,7 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_feishu_reply_quote_fallback() {
+    async fn test_e2e_feishu_reply_always_includes_fetched_quote() {
         let (server, client) = setup_feishu_mock().await;
         Mock::given(method("GET"))
             .and(path("/im/v1/messages/om_parent_quote_001"))
@@ -5082,7 +5015,7 @@ mod policy_tests {
             enabled: true,
             domain: FeishuDomain::Feishu,
             name: None,
-            agent_id: "claude".into(),
+            agent_id: Some("claude".into()),
             workspace_dir: None,
             owner_target: None,
             require_mention: true,

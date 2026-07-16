@@ -94,10 +94,7 @@ pub(crate) fn accept_stream_line(
     }
 }
 
-fn finish_accumulated(
-    json_buffer: &mut String,
-    max_buffer_size: usize,
-) -> StreamLineOutcome {
+fn finish_accumulated(json_buffer: &mut String, max_buffer_size: usize) -> StreamLineOutcome {
     if json_buffer.len() > max_buffer_size {
         let len = json_buffer.len();
         json_buffer.clear();
@@ -111,7 +108,6 @@ fn finish_accumulated(
         Err(_) => StreamLineOutcome::Pending,
     }
 }
-
 
 /// Spawns the `claude` CLI as a child process and communicates via JSONL on
 /// stdin/stdout.
@@ -534,7 +530,7 @@ mod tests;
 
 #[cfg(test)]
 mod stream_line_tests {
-    use super::{accept_stream_line, StreamLineOutcome};
+    use super::{StreamLineOutcome, accept_stream_line};
     use serde_json::Value;
 
     fn feed(buffer: &mut String, line: &str) -> StreamLineOutcome {
@@ -581,10 +577,7 @@ mod stream_line_tests {
         ));
         match feed(&mut buffer, "\"assistant\"}\n") {
             StreamLineOutcome::Message(value) => {
-                assert_eq!(
-                    value.get("type").and_then(Value::as_str),
-                    Some("assistant")
-                );
+                assert_eq!(value.get("type").and_then(Value::as_str), Some("assistant"));
             }
             other => panic!("expected accumulated message, got {other:?}"),
         }

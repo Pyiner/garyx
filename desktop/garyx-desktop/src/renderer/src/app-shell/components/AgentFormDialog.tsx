@@ -680,6 +680,7 @@ export function AgentFormDialog({
             <DialogFooter className="agents-hub-dialog-actions">
               {selectedAgent ? (
                 <Button
+                  disabled={!selectedAgent.enabled}
                   onClick={() => {
                     closeAgentDialog();
                     onStartThread?.(selectedAgent.agentId);

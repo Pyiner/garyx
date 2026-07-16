@@ -1951,16 +1951,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn full_success_retires_both_directories_and_reboot_is_fs_free() {
+    async fn full_success_preserves_old_outbound_ids_without_recreating_retired_projection() {
         let data_dir = TempDir::new().expect("temp data dir");
         prepare_archive_dirs(data_dir.path()).await;
         seed_legacy_archive_record(
             data_dir.path(),
             "thread::retire-success",
-            &json!({"thread_id": "thread::retire-success", "label": "legacy"}),
+            &json!({
+                "thread_id": "thread::retire-success",
+                "label": "legacy",
+                "outbound_message_ids": ["legacy-outbound-1"]
+            }),
         )
         .await;
-        let db = test_db();
+        let db_path = data_dir.path().join("garyx.sqlite");
+        let retired_table_name = ["thread", "message", "routes"].join("_");
+        let legacy_connection = rusqlite::Connection::open(&db_path).expect("legacy database");
+        legacy_connection
+            .execute(
+                &format!(
+                    "CREATE TABLE {retired_table_name} (message_id TEXT NOT NULL)"
+                ),
+                [],
+            )
+            .expect("legacy projection table");
+        drop(legacy_connection);
+        let db = Arc::new(GaryxDbService::open(&db_path).expect("file db"));
+        db.run_thread_data_startup_migrations()
+            .expect("startup migrations");
         let transcripts = Arc::new(ThreadTranscriptStore::memory());
         let target = sqlite_target(&db, &transcripts);
         let archive_fs = RecordingArchiveFs::default();
@@ -1980,6 +1998,27 @@ mod tests {
         };
         assert_eq!(summary.imported, 1);
         assert_markers_and_generation(&db, (true, true), 1);
+        let imported = target
+            .get("thread::retire-success")
+            .await
+            .expect("imported record read")
+            .expect("imported record");
+        assert_eq!(
+            imported["outbound_message_ids"],
+            json!(["legacy-outbound-1"]),
+            "legacy body data is retained without being scanned or rewritten"
+        );
+        let projection_exists: bool = rusqlite::Connection::open(&db_path)
+            .expect("inspection connection")
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1
+                 )",
+                [retired_table_name.as_str()],
+                |row| row.get(0),
+            )
+            .expect("projection table existence query");
+        assert!(!projection_exists);
         let backup = data_dir.path().join("backups").join(RETIREMENT_BACKUP_DIR);
         assert!(backup.join("threads").is_dir());
         assert!(backup.join("sessions").is_dir());
@@ -2003,6 +2042,17 @@ mod tests {
         assert_eq!(archive_fs.calls().len(), calls_after_first);
         assert!(!data_dir.path().join("threads").exists());
         assert!(!data_dir.path().join("sessions").exists());
+        let projection_exists_after_reboot: bool = rusqlite::Connection::open(&db_path)
+            .expect("reboot inspection connection")
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1
+                 )",
+                [retired_table_name.as_str()],
+                |row| row.get(0),
+            )
+            .expect("reboot projection table existence query");
+        assert!(!projection_exists_after_reboot);
     }
 
     #[tokio::test]

@@ -765,23 +765,16 @@ impl TelegramChannel {
             }
         }
 
-        let (response_callback, session_key_tx) =
-            build_response_callback(StreamingCallbackConfig {
-                http: context.http.clone(),
-                token: context.token.to_owned(),
-                router: context.router.clone(),
-                account_id: context.account_id.to_owned(),
-                chat_id,
-                api_base: context.api_base.to_owned(),
-                reply_to_mode,
-                reply_to,
-                outbound_thread_id,
-                outbound_thread_scope: if is_group {
-                    Some(group_thread_key.clone())
-                } else {
-                    None
-                },
-            });
+        let response_callback = build_response_callback(StreamingCallbackConfig {
+            http: context.http.clone(),
+            token: context.token.to_owned(),
+            account_id: context.account_id.to_owned(),
+            chat_id,
+            api_base: context.api_base.to_owned(),
+            reply_to_mode,
+            reply_to,
+            outbound_thread_id,
+        });
 
         let request = InboundRequest {
             channel: "telegram".to_owned(),
@@ -795,10 +788,6 @@ impl TelegramChannel {
             },
             message: dispatch_message,
             run_id,
-            reply_to_message_id: msg
-                .reply_to_message
-                .as_ref()
-                .map(|reply| reply.message_id.to_string()),
             images: Vec::new(),
             extra_metadata: metadata,
             file_paths,
@@ -907,7 +896,6 @@ impl TelegramChannel {
                         "native command handled by router"
                     );
                 } else {
-                    let _ = session_key_tx.send(result.thread_id.clone());
                     info!(
                         context.account_id,
                         chat_id,

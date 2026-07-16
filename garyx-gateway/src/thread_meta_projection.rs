@@ -8,7 +8,7 @@ use garyx_router::{
 };
 use serde_json::Value;
 
-use crate::garyx_db::{ThreadMessageRouteDraft, ThreadMetaDraft, ThreadMetaProjectionDraft};
+use crate::garyx_db::{ThreadMetaDraft, ThreadMetaProjectionDraft};
 use crate::thread_runtime::selected_model_cells_from_thread_value;
 use crate::thread_type::thread_summary_type_from_record;
 
@@ -79,13 +79,10 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
         default_list_hidden: is_default_thread_list_hidden(data),
     };
     let channel_endpoints = channel_endpoints_from_thread_data(thread_id, data);
-    let message_routes = message_routes_from_thread_data(thread_id, data);
-
     Some(ThreadMetaProjectionDraft {
         thread_id: thread_id.to_owned(),
         thread_meta,
         channel_endpoints,
-        message_routes,
     })
 }
 
@@ -129,55 +126,6 @@ pub(crate) fn channel_endpoints_from_thread_data(
             }
         })
         .collect::<Vec<_>>()
-}
-
-fn message_routes_from_thread_data(thread_id: &str, data: &Value) -> Vec<ThreadMessageRouteDraft> {
-    let Some(records) = data.get("outbound_message_ids").and_then(Value::as_array) else {
-        return Vec::new();
-    };
-    records
-        .iter()
-        .filter_map(|record| {
-            let obj = record.as_object()?;
-            let message_id = obj
-                .get("message_id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())?;
-            let channel = obj
-                .get("channel")
-                .and_then(Value::as_str)
-                .or_else(|| data.get("channel").and_then(Value::as_str))
-                .map(str::trim)
-                .filter(|value| !value.is_empty())?;
-            let account_id = obj
-                .get("account_id")
-                .and_then(Value::as_str)
-                .or_else(|| data.get("account_id").and_then(Value::as_str))
-                .map(str::trim)
-                .unwrap_or_default();
-            let chat_id = obj
-                .get("chat_id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or_default();
-            let thread_binding_key = obj
-                .get("thread_binding_key")
-                .or_else(|| obj.get("thread_scope"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned);
-            Some(ThreadMessageRouteDraft {
-                thread_id: thread_id.to_owned(),
-                channel: channel.to_owned(),
-                account_id: account_id.to_owned(),
-                chat_id: chat_id.to_owned(),
-                thread_binding_key,
-                message_id: message_id.to_owned(),
-            })
-        })
-        .collect()
 }
 
 fn delivery_context_from_thread_data(data: &Value) -> Option<(String, Option<String>)> {

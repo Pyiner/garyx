@@ -2,6 +2,7 @@ import { startTransition, useEffect, useRef, useState } from "react";
 
 import type {
   ConnectionStatus,
+  DesktopAgentCatalog,
   DesktopCustomAgent,
   DesktopSettings,
   DesktopState,
@@ -39,12 +40,18 @@ function isConnectionValidForSettings(
 }
 
 function agentCatalogReferencesEqual(
-  current: readonly DesktopCustomAgent[],
-  next: readonly DesktopCustomAgent[],
+  current: DesktopAgentCatalog,
+  next: {
+    readonly agents: readonly DesktopCustomAgent[];
+    readonly defaultAgentId: string | null;
+    readonly effectiveDefaultAgentId: string | null;
+  },
 ): boolean {
   return (
-    current.length === next.length &&
-    current.every((agent, index) => agent === next[index])
+    current.defaultAgentId === next.defaultAgentId &&
+    current.effectiveDefaultAgentId === next.effectiveDefaultAgentId &&
+    current.agents.length === next.agents.length &&
+    current.agents.every((agent, index) => agent === next.agents[index])
   );
 }
 
@@ -70,7 +77,7 @@ type UseGatewayConnectionControllerArgs = {
   selectedThreadId: string | null;
   selectedThreadIdRef: React.MutableRefObject<string | null>;
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
-  setDesktopAgents: React.Dispatch<React.SetStateAction<DesktopCustomAgent[]>>;
+  setDesktopAgentCatalog: React.Dispatch<React.SetStateAction<DesktopAgentCatalog>>;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setGatewaySettingsStatus: React.Dispatch<
@@ -97,7 +104,7 @@ export function useGatewayConnectionController({
   selectedThreadId,
   selectedThreadIdRef,
   setConnection,
-  setDesktopAgents,
+  setDesktopAgentCatalog,
   setDesktopState,
   setError,
   setGatewaySettingsStatus,
@@ -141,16 +148,20 @@ export function useGatewayConnectionController({
   useEffect(
     () =>
       mirror.subscribeCatalog(() => {
-        const nextAgents = mirror.getCatalogSnapshot().agents;
+        const nextCatalog = mirror.getCatalogSnapshot();
         startTransition(() => {
-          setDesktopAgents((current) =>
-            agentCatalogReferencesEqual(current, nextAgents)
+          setDesktopAgentCatalog((current) =>
+            agentCatalogReferencesEqual(current, nextCatalog)
               ? current
-              : [...nextAgents],
+              : {
+                  agents: [...nextCatalog.agents],
+                  defaultAgentId: nextCatalog.defaultAgentId,
+                  effectiveDefaultAgentId: nextCatalog.effectiveDefaultAgentId,
+                },
           );
         });
       }),
-    [mirror, setDesktopAgents],
+    [mirror, setDesktopAgentCatalog],
   );
 
   useEffect(() => {
@@ -373,10 +384,14 @@ export function useGatewayConnectionController({
     const catalog = mirror.getCatalogSnapshot();
     startTransition(() => {
       setDesktopState(nextState);
-      setDesktopAgents((current) =>
-        agentCatalogReferencesEqual(current, catalog.agents)
+      setDesktopAgentCatalog((current) =>
+        agentCatalogReferencesEqual(current, catalog)
           ? current
-          : [...catalog.agents],
+          : {
+              agents: [...catalog.agents],
+              defaultAgentId: catalog.defaultAgentId,
+              effectiveDefaultAgentId: catalog.effectiveDefaultAgentId,
+            },
       );
     });
     return nextState;

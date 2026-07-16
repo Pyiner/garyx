@@ -36,7 +36,7 @@ use crate::provider_common::{
     normalize_non_empty, resolve_run_id_with, runtime_env_overlay,
 };
 use crate::provider_trait::{
-    ProviderRuntime, BridgeError, ProviderModelDefaults, ProviderRuntimeSelection, StreamCallback,
+    BridgeError, ProviderModelDefaults, ProviderRuntime, ProviderRuntimeSelection, StreamCallback,
 };
 
 const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
@@ -591,11 +591,7 @@ impl CodexTurnUsageTracker {
     /// `stored_baseline` is the totals remembered from the previous in-process
     /// turn on this thread; `thread_was_resumed` reports whether this run
     /// attached to an existing Codex thread (resume or fork).
-    fn finish(
-        &self,
-        stored_baseline: Option<(i64, i64)>,
-        thread_was_resumed: bool,
-    ) -> (i64, i64) {
+    fn finish(&self, stored_baseline: Option<(i64, i64)>, thread_was_resumed: bool) -> (i64, i64) {
         let Some(latest) = self.latest.as_ref() else {
             return (0, 0);
         };
@@ -814,12 +810,9 @@ fn build_codex_thread_config(
         Some(Value::Object(obj)) => obj,
         _ => serde_json::Map::new(),
     };
-    if let Some(server) = garyx_mcp_server(
-        &provider_config.mcp_base_url,
-        thread_id,
-        run_id,
-        metadata,
-    ) {
+    if let Some(server) =
+        garyx_mcp_server(&provider_config.mcp_base_url, thread_id, run_id, metadata)
+    {
         // Reserve `garyx` for the built-in local gateway endpoint so runtime
         // metadata cannot shadow it with a stale or malformed URL.
         mcp_servers.insert(
@@ -1014,10 +1007,7 @@ fn tool_session_messages_for_completed_item(
         return Vec::new();
     };
     let mut messages = Vec::with_capacity(2);
-    if let Some(id) = completed
-        .tool_use_id
-        .as_deref()
-        .filter(|id| !id.is_empty())
+    if let Some(id) = completed.tool_use_id.as_deref().filter(|id| !id.is_empty())
         && !started_item_ids.contains(id)
     {
         // Mark as started so a duplicate completion cannot re-synthesize.
@@ -1226,12 +1216,7 @@ fn build_thread_start_params(
 
     ThreadStartParams {
         cwd: cwd.clone(),
-        config: build_codex_thread_config(
-            config,
-            metadata,
-            thread_id,
-            run_id,
-        ),
+        config: build_codex_thread_config(config, metadata, thread_id, run_id),
         model,
         model_reasoning_effort,
         service_tier,
@@ -2080,10 +2065,8 @@ impl CodexAgentProvider {
                 // turn affinity), so log them before the turn-affinity gate
                 // would silently drop them.
                 if let Some(advisory) = codex_advisory_notification_message(method, params) {
-                    let codex_thread_id = params
-                        .get("threadId")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
+                    let codex_thread_id =
+                        params.get("threadId").and_then(Value::as_str).unwrap_or("");
                     tracing::warn!(
                         method = %method,
                         thread_id = %options.thread_id,
@@ -2161,9 +2144,10 @@ impl CodexAgentProvider {
                                     live_callback.as_ref(),
                                 );
                             }
-                            if let Some(msg) =
-                                tool_session_message_for_started_item(item, &mut started_tool_item_ids)
-                            {
+                            if let Some(msg) = tool_session_message_for_started_item(
+                                item,
+                                &mut started_tool_item_ids,
+                            ) {
                                 emit_tool_stream_event(&msg, live_callback.as_ref());
                                 session_messages.push(msg);
                             }

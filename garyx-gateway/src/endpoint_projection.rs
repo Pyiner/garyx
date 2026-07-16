@@ -216,10 +216,7 @@ mod tests {
         );
 
         // Task condition queries fall back to the scan reader the same way.
-        let service = garyx_router::TaskService::new(
-            store.clone(),
-            Arc::new(garyx_router::InMemoryTaskCounterStore::new()),
-        );
+        let service = crate::tasks::task_service(&state);
         let (thread_id, task) = service
             .create_task(garyx_router::CreateTaskInput {
                 title: Some("Injected".to_owned()),

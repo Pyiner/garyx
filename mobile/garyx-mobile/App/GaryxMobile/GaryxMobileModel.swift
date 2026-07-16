@@ -296,7 +296,11 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var remoteStateLoadPhase: GaryxMobileLoadPhase = .idle
     @Published var agentTargetsLoadPhase: GaryxMobileLoadPhase = .idle
-    @Published var selectedAgentTargetId: String
+    /// One-off override for the current new-thread draft. Global default state
+    /// is gateway-owned and cached separately below.
+    @Published var selectedAgentTargetId: String?
+    @Published var gatewayDefaultAgentId: String?
+    @Published var effectiveDefaultAgentId: String?
     @Published var newThreadWorkspace: String
     @Published var newThreadWorkspaceMode: String
     /// Per-thread overrides for the new-thread draft; empty means agent default.
@@ -485,7 +489,6 @@ final class GaryxMobileModel: ObservableObject {
     var pendingBotWorkspace: String?
     var pendingBotAgentId: String?
     var pendingBotDraftGeneration: UUID?
-    var pendingNewThreadAgentTargetId: String?
     var pendingNewThreadAgentTargetGeneration: UUID?
     var selectedThreadDraftGeneration = UUID()
     var threadOpenState = GaryxMobileThreadOpenState()
@@ -535,7 +538,9 @@ final class GaryxMobileModel: ObservableObject {
             defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayToken)
         }
         gatewayProfiles = GaryxGatewayProfileStorage.load(defaults: defaults, key: GaryxMobileSettingsKeys.gatewayProfiles)
-        selectedAgentTargetId = defaults.string(forKey: GaryxMobileSettingsKeys.selectedAgentTargetId) ?? "claude"
+        selectedAgentTargetId = nil
+        gatewayDefaultAgentId = nil
+        effectiveDefaultAgentId = nil
         newThreadWorkspace = defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspace) ?? ""
         newThreadWorkspaceMode = Self.normalizedWorkspaceMode(
             defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspaceMode)

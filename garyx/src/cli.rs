@@ -863,6 +863,30 @@ pub(crate) enum AgentAction {
         #[arg(long)]
         json: bool,
     },
+    /// Enable an agent for new bindings
+    Enable {
+        /// Agent id
+        agent_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Disable an agent for new bindings
+    Disable {
+        /// Agent id
+        agent_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show or set the global default agent
+    Default {
+        /// Agent id. Omit to show the configured and effective defaults.
+        agent_id: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Get a custom agent
     Get {
         /// Agent id

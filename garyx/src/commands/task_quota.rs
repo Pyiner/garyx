@@ -58,6 +58,13 @@ async fn check_agent_quota_inner(
     )
     .await?;
 
+    // Availability is enforced by the gateway's new-binding gate. Do not let
+    // a provider quota result mask its typed AgentDisabled rejection; submit
+    // the task request so the authoritative, race-safe gate decides.
+    if !profile.enabled {
+        return Ok(QuotaStatus::Unsupported);
+    }
+
     let credential_scope = if profile.provider_env.is_empty() {
         QuotaCredentialScope::DefaultLocal
     } else {
@@ -412,9 +419,7 @@ mod tests {
                 )
                 .await
             }
-            None => {
-                cmd_task_create(args.0, args.1, args.2, args.3, args.4, args.5, args.6).await
-            }
+            None => cmd_task_create(args.0, args.1, args.2, args.3, args.4, args.5, args.6).await,
         };
         handle.abort();
         let records = requests.lock().expect("request lock").clone();
@@ -555,6 +560,22 @@ mod tests {
         )
         .await;
         result.expect_err("task route should retain its existing rejection");
+        assert_eq!(count_requests(&records, "GET", "/api/usage/coding"), 0);
+        assert_eq!(count_requests(&records, "POST", "/api/tasks"), 1);
+    }
+
+    #[tokio::test]
+    async fn disabled_agent_skips_quota_so_gateway_binding_error_wins() {
+        let mut disabled_profile = profile("codex_app_server", "", false);
+        disabled_profile["enabled"] = Value::Bool(false);
+        let (result, records) = run_task_create(
+            MockReply::Json(StatusCode::OK, disabled_profile),
+            MockReply::Json(StatusCode::OK, window_usage("codex", 0.0, false)),
+            StatusCode::BAD_REQUEST,
+            None,
+        )
+        .await;
+        result.expect_err("gateway new-binding gate should reject disabled agent");
         assert_eq!(count_requests(&records, "GET", "/api/usage/coding"), 0);
         assert_eq!(count_requests(&records, "POST", "/api/tasks"), 1);
     }

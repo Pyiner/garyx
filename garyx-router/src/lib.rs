@@ -3,9 +3,9 @@ pub mod endpoint_projection;
 pub mod file_store;
 pub mod memory_store;
 pub mod message_ledger;
-pub mod message_routing;
 pub mod recent_threads;
 pub mod router;
+pub mod run_admission;
 pub mod runtime_context;
 pub mod store;
 pub mod task_counter;
@@ -21,8 +21,8 @@ pub mod inbound {
 
 pub mod routing {
     pub use crate::router::{
-        AgentDispatcher, InboundRequest, InboundResult, MessageRouter, ThreadCreator,
-        ThreadMessageRequest,
+        AgentDispatcher, InboundRequest, InboundResult, MessageRouter, ThreadCreationError,
+        ThreadCreator, ThreadMessageRequest,
     };
 }
 
@@ -31,9 +31,6 @@ pub mod storage {
     pub use crate::memory_store::InMemoryThreadStore;
     pub use crate::message_ledger::{
         MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore,
-    };
-    pub use crate::message_routing::{
-        MessageRoutingIndex, MessageRoutingStats, OutboundMessageRecord,
     };
     pub use crate::store::{ThreadStore, ThreadStoreError};
     pub use crate::thread_history::{
@@ -71,18 +68,21 @@ pub use endpoint_projection::{
 pub use file_store::FileThreadStore;
 pub use memory_store::InMemoryThreadStore;
 pub use message_ledger::{MessageLedgerError, MessageLedgerStore, SharedMessageLedgerStore};
-pub use message_routing::{MessageRoutingIndex, MessageRoutingStats, OutboundMessageRecord};
 pub use router::{
     AgentDispatcher, InboundRequest, InboundResult, MessageRouter,
-    NATIVE_COMMAND_TEXT_METADATA_KEY, ThreadCreator, ThreadMessageRequest,
+    NATIVE_COMMAND_TEXT_METADATA_KEY, ThreadCreationError, ThreadCreator, ThreadMessageRequest,
     command_catalog_for_config, is_native_command_text, reserved_command_names,
+};
+pub use run_admission::{
+    AdmittedRun, ArchiveReservationError, CoordinatedDeleteError, RunAdmissionError,
+    ThreadRunAborter, ThreadRunCoordinator, ThreadRunLease,
 };
 pub use runtime_context::build_runtime_context_metadata;
 pub use store::{AtomicRecordMerge, ThreadStore, ThreadStoreError, ThreadStoreExt};
 pub use task_counter::{InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore};
 pub use tasks::{
-    CreateTaskInput, EnterReview, ScanTaskProjectionReader, TaskHistoryPage, TaskId,
-    TaskListFilter, TaskProjectionReader, TaskRuntimeInput, TaskService, TaskServiceError,
+    CreateTaskInput, EnterReview, NewTaskAgentGate, ScanTaskProjectionReader, TaskHistoryPage,
+    TaskId, TaskListFilter, TaskProjectionReader, TaskRuntimeInput, TaskService, TaskServiceError,
     TaskSummary, UpdateTaskStatusInput, mark_thread_task_in_progress_on_wake,
     mark_thread_task_in_review_if_in_progress, task_projection_reader_for,
 };

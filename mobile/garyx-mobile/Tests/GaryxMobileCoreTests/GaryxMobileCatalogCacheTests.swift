@@ -2,6 +2,44 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobileCatalogCacheTests: XCTestCase {
+    func testSnapshotPreservesNullableAutomationAgentResolutionAndValidation() throws {
+        let automation = GaryxAutomationSummary(
+            id: "cron::target",
+            label: "Target job",
+            prompt: "Continue",
+            agentId: nil,
+            agentResolution: .followThread,
+            effectiveAgentId: "codex",
+            workspacePath: "",
+            targetThreadId: "thread::target",
+            validationState: .invalid,
+            validationError: "target has no canonical binding"
+        )
+        let snapshot = GaryxMobileCatalogCacheSnapshot(
+            agents: [],
+            workspacePaths: [],
+            skills: [],
+            automations: [automation],
+            slashCommands: [],
+            mcpServers: [],
+            channelEndpoints: [],
+            configuredBots: [],
+            configuredBotAccounts: [],
+            botConsoles: [],
+            channelPlugins: []
+        )
+
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(GaryxMobileCatalogCacheSnapshot.self, from: data)
+        XCTAssertEqual(decoded.version, 5)
+        let restored = try XCTUnwrap(decoded.automations.first?.model)
+        XCTAssertNil(restored.agentId)
+        XCTAssertEqual(restored.agentResolution, .followThread)
+        XCTAssertEqual(restored.effectiveAgentId, "codex")
+        XCTAssertEqual(restored.validationState, .invalid)
+        XCTAssertEqual(restored.validationError, "target has no canonical binding")
+    }
+
     func testSnapshotRestoresCatalogFieldsWithoutHiddenAgentConfiguration() throws {
         let agent = GaryxAgentSummary(
             id: "agent-alpha",
@@ -16,6 +54,8 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [agent],
+            gatewayDefaultAgentId: "disabled-agent",
+            effectiveDefaultAgentId: "agent-alpha",
             workspacePaths: ["/Users/test/project-alpha"],
             skills: [],
             automations: [],
@@ -37,11 +77,14 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         let decoded = try JSONDecoder().decode(GaryxMobileCatalogCacheSnapshot.self, from: data)
         XCTAssertEqual(decoded.version, GaryxMobileCatalogCacheSnapshot.currentVersion)
         XCTAssertEqual(decoded.workspacePaths, ["/Users/test/project-alpha"])
+        XCTAssertEqual(decoded.gatewayDefaultAgentId, "disabled-agent")
+        XCTAssertEqual(decoded.effectiveDefaultAgentId, "agent-alpha")
         let restoredAgent = try XCTUnwrap(decoded.agents.first?.model)
         XCTAssertEqual(restoredAgent.id, "agent-alpha")
         XCTAssertEqual(restoredAgent.displayName, "Agent Alpha")
         XCTAssertEqual(restoredAgent.providerType, "codex")
         XCTAssertEqual(restoredAgent.model, "gpt-test")
+        XCTAssertTrue(restoredAgent.enabled)
         XCTAssertEqual(restoredAgent.providerEnv, [:])
         XCTAssertEqual(restoredAgent.systemPrompt, "")
     }
@@ -68,6 +111,8 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
             channel: "telegram",
             accountId: "bot",
             title: "Telegram Bot",
+            agentId: nil,
+            effectiveAgentId: "agent-alpha",
             conversationNodes: [
                 GaryxBotConversationNode(
                     id: "old-node",
@@ -108,6 +153,8 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         XCTAssertEqual(restoredServer.headers, [:])
         let restoredConsole = try XCTUnwrap(decoded.botConsoles.first?.model)
         XCTAssertEqual(restoredConsole.title, "Telegram Bot")
+        XCTAssertNil(restoredConsole.agentId)
+        XCTAssertEqual(restoredConsole.effectiveAgentId, "agent-alpha")
         XCTAssertEqual(restoredConsole.conversationNodes, [])
     }
 
@@ -117,6 +164,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
             accountId: "bot-main",
             displayName: "Telegram Main",
             agentId: "agent-alpha",
+            effectiveAgentId: "agent-alpha",
             workspaceDir: "/Users/test/project-alpha",
             workspaceMode: "worktree"
         )
@@ -150,6 +198,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         let restoredBot = try XCTUnwrap(decoded.configuredBots.first?.model)
         XCTAssertEqual(restoredBot.workspaceMode, "worktree")
         XCTAssertEqual(restoredBot.workspaceDir, "/Users/test/project-alpha")
+        XCTAssertEqual(restoredBot.effectiveAgentId, "agent-alpha")
         let restoredAccount = try XCTUnwrap(decoded.configuredBotAccounts.first?.model)
         XCTAssertEqual(restoredAccount.config, ["token": .string("${TOKEN}")])
         XCTAssertEqual(restoredAccount.workspaceMode, "worktree")
@@ -197,6 +246,22 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         let restored = try XCTUnwrap(decoded.capsules.first?.model)
         XCTAssertEqual(restored, capsule)
         XCTAssertEqual(restored.favoritedAt, "2026-06-28T11:30:00Z")
+    }
+
+    func testLegacyCachedAgentDefaultsEnabledButOldSnapshotVersionIsDiscarded() throws {
+        let legacyAgent = try JSONDecoder().decode(
+            GaryxCachedAgent.self,
+            from: Data(
+                #"{"id":"agent-test","displayName":"Test Agent","providerType":"codex","modelName":"","defaultWorkspaceDir":"","avatarDataUrl":"","builtIn":false,"standalone":true}"#.utf8
+            )
+        )
+        XCTAssertTrue(legacyAgent.enabled)
+        XCTAssertFalse(GaryxMobileCatalogCachePolicy.shouldRestore(version: 4))
+        XCTAssertTrue(
+            GaryxMobileCatalogCachePolicy.shouldRestore(
+                version: GaryxMobileCatalogCacheSnapshot.currentVersion
+            )
+        )
     }
 
 }

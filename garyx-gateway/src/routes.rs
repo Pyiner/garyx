@@ -24,9 +24,9 @@ use garyx_models::provider::{
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::ThreadStoreExt;
 use garyx_router::{
-    ChannelBinding, KnownChannelEndpoint, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadEnsureOptions,
-    ThreadTranscriptRecord, WorkspaceMode, bindings_from_value, history_message_count,
-    is_thread_key, update_thread_record, workspace_dir_from_value,
+    ChannelBinding, KnownChannelEndpoint, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadCreationError,
+    ThreadEnsureOptions, ThreadTranscriptRecord, WorkspaceMode, bindings_from_value,
+    history_message_count, is_thread_key, update_thread_record, workspace_dir_from_value,
     workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
@@ -1137,7 +1137,6 @@ async fn hard_delete_thread_record(
     state: &Arc<AppState>,
     thread_id: &str,
     thread_data: &Value,
-    abort_active_runs: bool,
 ) -> Result<(), (StatusCode, Json<Value>)> {
     let provider_key = thread_data
         .get("provider_key")
@@ -1146,9 +1145,8 @@ async fn hard_delete_thread_record(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
 
-    if abort_active_runs {
-        let _ = state.integration.bridge.abort_thread_runs(thread_id).await;
-    }
+    // `ThreadStore::delete` owns deleting admission, token invalidation,
+    // bridge abort-and-drain, and the final storage mutation.
     match state.threads.thread_store.delete(thread_id).await {
         Ok(true) => {}
         Ok(false) => {
@@ -1193,7 +1191,6 @@ async fn clear_deleted_thread_runtime_state(
     {
         let mut router = state.threads.router.lock().await;
         router.clear_last_delivery(thread_id);
-        router.message_routing_index_mut().clear_thread(thread_id);
     }
     let _ = state.threads.history.delete_thread_history(thread_id).await;
     let _ = state.ops.thread_logs.delete_thread(thread_id).await;
@@ -1330,15 +1327,6 @@ pub(crate) async fn detach_channel_endpoint_key(
                 let delivery_thread_id =
                     binding_delivery_thread_id(&binding.binding_key, &binding.chat_id);
                 let mut router = state.threads.router.lock().await;
-                router
-                    .clear_reply_routing_for_chat_with_persistence(
-                        thread_id,
-                        &binding.channel,
-                        &binding.account_id,
-                        &binding.chat_id,
-                        delivery_thread_id.as_deref(),
-                    )
-                    .await;
                 router
                     .clear_last_delivery_for_chat_with_known_thread_persistence(
                         thread_id,
@@ -2725,6 +2713,7 @@ pub async fn create_thread(
     };
 
     let mut metadata = body.metadata.clone();
+    garyx_models::strip_server_owned_agent_metadata(&mut metadata);
     // Seed the thread's single runtime cells (metadata.model & co.), the keys
     // the run path and runtime summary read. The legacy dual-track
     // `*_override` keys are read-compat only and are never written anymore.
@@ -2809,11 +2798,19 @@ pub async fn create_thread(
         is_group: None,
     };
 
+    let binding_intent = if recovered_session.is_some() {
+        crate::agent_identity::AgentBindingIntent::RecoverExistingSession
+    } else if fork_source.is_some() {
+        crate::agent_identity::AgentBindingIntent::Fork
+    } else {
+        crate::agent_identity::AgentBindingIntent::Fresh
+    };
     match create_thread_for_agent_reference(
         state.threads.thread_store.clone(),
         state.integration.bridge.clone(),
         state.ops.custom_agents.clone(),
         options,
+        binding_intent,
     )
     .await
     {
@@ -2884,16 +2881,24 @@ pub async fn create_thread(
             state.invalidate_gateway_sync_caches().await;
             (StatusCode::CREATED, Json(thread_summary(&thread_id, &data)))
         }
-        Err(error)
+        Err(ThreadCreationError::AgentBinding(error)) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": error.to_string() })),
+        ),
+        Err(ThreadCreationError::Other(error))
             if error.starts_with("unknown agent_id:")
                 || error.starts_with("agent_id is not standalone:")
                 || error.starts_with("workspace_mode=worktree") =>
         {
             (StatusCode::BAD_REQUEST, Json(json!({ "error": error })))
         }
-        Err(error) => (
+        Err(ThreadCreationError::Storage(error)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error })),
+        ),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
         ),
     }
 }
@@ -2972,37 +2977,6 @@ fn active_run_conflict_response(
             "error": "cannot archive thread with active run",
         })),
     )
-}
-
-async fn active_run_for_archive_conflict(
-    state: &Arc<AppState>,
-    thread_id: &str,
-) -> Option<Option<String>> {
-    match state
-        .threads
-        .history
-        .transcript_store()
-        .run_state(thread_id)
-        .await
-    {
-        Ok(run_state) => {
-            let active_run_id = run_state
-                .active_run_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned);
-            if run_state.busy || active_run_id.is_some() {
-                Some(active_run_id)
-            } else {
-                None
-            }
-        }
-        Err(error) => {
-            tracing::warn!(thread_id, error = %error, "failed to read thread run_state before archive");
-            None
-        }
-    }
 }
 
 fn cron_target_thread_id(value: &str) -> Option<String> {
@@ -3106,93 +3080,108 @@ pub async fn archive_thread(
         );
     }
     let thread_data = match state.threads.thread_store.get(trimmed).await {
-        Ok(Some(thread_data)) => thread_data,
-        Ok(None) => {
-            // No record: the atomic archive still writes the tombstone
-            // (and is a no-op on projections, which died with the record).
-            let archive_id = trimmed.to_owned();
-            if let Err(error) = state
-                .ops
-                .garyx_db
-                .run_blocking(move |db| db.archive_thread_record(&archive_id).map(|_| ()))
-                .await
-            {
-                return archive_internal_error(error);
-            }
-            clear_deleted_thread_runtime_state(&state, trimmed, None).await;
-            purge_thread_from_indexes(&state, trimmed).await;
-            state.invalidate_gateway_sync_caches().await;
-            return (
-                StatusCode::OK,
-                Json(json!({
-                    "archived": true,
-                    "deleted": true,
-                    "thread_id": trimmed,
-                })),
-            );
-        }
+        Ok(value) => value,
         Err(error) => return archive_internal_error(error),
     };
 
-    if let Some(active_run_id) = active_run_for_archive_conflict(&state, trimmed).await {
-        return active_run_conflict_response(trimmed, active_run_id);
-    }
-    if let Some(automation_id) = automation_job_for_archive_conflict(&state, trimmed).await {
+    if thread_data.is_some()
+        && let Some(automation_id) = automation_job_for_archive_conflict(&state, trimmed).await
+    {
         return automation_conflict_response(trimmed, automation_id);
     }
 
-    let endpoint_keys =
-        match endpoint_keys_for_archive(&state, trimmed, &thread_data, body.endpoint_keys).await {
-            Ok(endpoint_keys) => endpoint_keys,
-            Err(error) => return archive_internal_error(error),
-        };
-    let mut detached_endpoint_keys = Vec::new();
-    for endpoint_key in endpoint_keys {
-        match detach_channel_endpoint_key(&state, &endpoint_key).await {
-            Ok(result) => detached_endpoint_keys.push(result.endpoint_key),
-            Err(error) => {
-                return (
-                    error.status,
-                    Json(json!({
-                        "archived": false,
-                        "thread_id": trimmed,
-                        "error": error.message,
-                    })),
-                );
+    let endpoint_keys = match thread_data.as_ref() {
+        Some(thread_data) => {
+            match endpoint_keys_for_archive(&state, trimmed, thread_data, body.endpoint_keys).await
+            {
+                Ok(endpoint_keys) => endpoint_keys,
+                Err(error) => return archive_internal_error(error),
             }
         }
-    }
+        None => Vec::new(),
+    };
+    let provider_key = thread_data.as_ref().and_then(|thread_data| {
+        thread_data
+            .get("provider_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    });
+    let thread_id = trimmed.to_owned();
+    let mutation_state = state.clone();
+    let archive_id = thread_id.clone();
+    let operation = async move {
+        let mut detached_endpoint_keys = Vec::new();
+        for endpoint_key in endpoint_keys {
+            match detach_channel_endpoint_key(&mutation_state, &endpoint_key).await {
+                Ok(result) => detached_endpoint_keys.push(result.endpoint_key),
+                Err(error) => {
+                    return Err((
+                        error.status,
+                        Json(json!({
+                            "archived": false,
+                            "thread_id": archive_id,
+                            "error": error.message,
+                        })),
+                    ));
+                }
+            }
+        }
 
-    // Tombstone + record + projections + pin go in one transaction; a
-    // write racing the archive is rejected by the in-transaction
-    // tombstone check on the record-write path.
-    let provider_key = thread_data
-        .get("provider_key")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let archive_id = trimmed.to_owned();
-    if let Err(error) = state
-        .ops
-        .garyx_db
-        .run_blocking(move |db| db.archive_thread_record(&archive_id).map(|_| ()))
-        .await
+        // This blocking transaction is owned by the coordinator task. If the
+        // HTTP future is dropped, `archiving` remains until the transaction is
+        // known to have committed or failed.
+        let db = mutation_state.ops.garyx_db.clone();
+        let raw_archive_id = archive_id.clone();
+        if let Err(error) = db
+            .run_blocking(move |db| db.archive_thread_record(&raw_archive_id).map(|_| ()))
+            .await
+        {
+            return Err(archive_internal_error(error));
+        }
+        clear_deleted_thread_runtime_state(&mutation_state, &archive_id, provider_key.as_deref())
+            .await;
+        purge_thread_from_indexes(&mutation_state, &archive_id).await;
+        mutation_state.invalidate_gateway_sync_caches().await;
+        Ok(detached_endpoint_keys)
+    };
+
+    let handle = match state
+        .threads
+        .thread_store
+        .run_coordinator()
+        .start_archive(thread_id.clone(), operation)
     {
-        return archive_internal_error(error);
+        Ok(handle) => handle,
+        Err(garyx_router::ArchiveReservationError::ActiveLease) => {
+            return active_run_conflict_response(&thread_id, None);
+        }
+        Err(garyx_router::ArchiveReservationError::Unavailable) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "archived": false,
+                    "thread_id": thread_id,
+                    "error": "thread is already being archived or deleted",
+                })),
+            );
+        }
+    };
+
+    match handle.await {
+        Ok(Ok(detached_endpoint_keys)) => (
+            StatusCode::OK,
+            Json(json!({
+                "archived": true,
+                "deleted": true,
+                "thread_id": thread_id,
+                "detached_endpoint_keys": detached_endpoint_keys,
+            })),
+        ),
+        Ok(Err(response)) => response,
+        Err(error) => archive_internal_error(format!("archive coordinator task failed: {error}")),
     }
-    clear_deleted_thread_runtime_state(&state, trimmed, provider_key.as_deref()).await;
-    purge_thread_from_indexes(&state, trimmed).await;
-    state.invalidate_gateway_sync_caches().await;
-    (
-        StatusCode::OK,
-        Json(json!({
-            "archived": true,
-            "deleted": true,
-            "thread_id": trimmed,
-            "detached_endpoint_keys": detached_endpoint_keys,
-        })),
-    )
 }
 
 /// DELETE /api/threads/:key - delete thread
@@ -3255,8 +3244,27 @@ pub async fn delete_thread(
         }
     }
 
-    if let Err(response) = hard_delete_thread_record(&state, &thread_id, &thread_data, true).await {
-        return response;
+    // Keep the complete delete lifecycle (coordinator-owned storage mutation
+    // plus provider/session/index cleanup) independent of the HTTP future.
+    // Dropping a disconnected request must not strand stale runtime state
+    // after the coordinator finishes the non-cancellable SQLite closure.
+    let delete_state = state.clone();
+    let delete_thread_id = thread_id.clone();
+    let deletion = tokio::spawn(async move {
+        hard_delete_thread_record(&delete_state, &delete_thread_id, &thread_data).await
+    });
+    match deletion.await {
+        Ok(Ok(())) => {}
+        Ok(Err(response)) => return response,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "deleted": false,
+                    "error": format!("delete coordinator task failed: {error}"),
+                })),
+            );
+        }
     }
     (
         StatusCode::OK,
@@ -3317,6 +3325,9 @@ pub async fn list_configured_bots(
     Query(params): Query<BotListParams>,
 ) -> axum::response::Response {
     let config = state.config_snapshot();
+    let global_effective_agent_id =
+        garyx_models::resolve_effective_default(&state.ops.custom_agents.snapshot().await)
+            .map(|binding| binding.agent_id);
     let endpoints = if params.include_endpoints {
         match state.channel_endpoints_fresh().await {
             Ok(endpoints) => endpoints,
@@ -3367,13 +3378,18 @@ pub async fn list_configured_bots(
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         let display_name = bot_display_name(account.name.as_deref(), &account.account_id);
+        let effective_agent_id = account
+            .agent_id
+            .clone()
+            .or_else(|| global_effective_agent_id.clone());
         bots.push(json!({
             "channel": account.channel,
             "account_id": account.account_id,
             "display_name": display_name,
             "name": account.name.as_deref(),
             "enabled": account.enabled,
-            "agent_id": account.agent_id.as_deref().unwrap_or(""),
+            "agent_id": account.agent_id.as_deref(),
+            "effective_agent_id": effective_agent_id,
             "workspace_dir": account.workspace_dir.as_deref(),
             "workspace_mode": public_workspace_mode(account.workspace_mode.as_deref()),
             "root_behavior": root_behavior,
@@ -3394,6 +3410,9 @@ pub async fn list_bot_consoles(
     Query(_params): Query<BotListParams>,
 ) -> axum::response::Response {
     let config = state.config_snapshot();
+    let global_effective_agent_id =
+        garyx_models::resolve_effective_default(&state.ops.custom_agents.snapshot().await)
+            .map(|binding| binding.agent_id);
     let endpoints = match state.channel_endpoints_fresh().await {
         Ok(endpoints) => endpoints,
         Err(error) => return thread_store_error_response(&error).into_response(),
@@ -3436,6 +3455,10 @@ pub async fn list_bot_consoles(
             .as_ref()
             .and_then(|endpoint| endpoint.thread_id.clone());
         let display_name = bot_display_name(account.name.as_deref(), &account.account_id);
+        let effective_agent_id = account
+            .agent_id
+            .clone()
+            .or_else(|| global_effective_agent_id.clone());
         group_indexes.insert(id.clone(), groups.len());
         groups.push(json!({
             "id": id,
@@ -3445,7 +3468,8 @@ pub async fn list_bot_consoles(
             "name": account.name.as_deref(),
             "title": bot_title(&account.channel, &account.account_id, account.name.as_deref()),
             "subtitle": bot_subtitle(&account.channel, &account.account_id),
-            "agent_id": account.agent_id.as_deref().unwrap_or(""),
+            "agent_id": account.agent_id.as_deref(),
+            "effective_agent_id": effective_agent_id,
             "workspace_dir": account.workspace_dir.as_deref(),
             "workspace_mode": public_workspace_mode(account.workspace_mode.as_deref()),
             "root_behavior": root_behavior,

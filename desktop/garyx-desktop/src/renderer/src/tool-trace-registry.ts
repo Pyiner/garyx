@@ -539,7 +539,11 @@ export function resolveMergedToolTrace(
     return genericToolFallback(toolUse, toolResult);
   }
 
-  const projectedCall = projectionDisplayValue(toolUse, projection.call);
+  // Completion may contribute call-side detail that was not known when the
+  // paired tool use was committed, so resolve the selector across both bodies.
+  const projectedCall =
+    projectionDisplayValue(toolUse, projection.call) ??
+    projectionDisplayValue(toolResult, projection.call);
   const projectedResult = projectionDisplayValue(toolResult, projection.result);
   const projectedSummary = truncateSingleLine(firstProjectedMeaningfulLine(projectedCall), 132);
   const projectedPathBadge =

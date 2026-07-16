@@ -2,9 +2,12 @@ import type {
   CancelCustomAgentAvatarInput,
   CreateCustomAgentInput,
   DeleteCustomAgentInput,
+  DesktopAgentCatalog,
   DesktopCustomAgent,
   GenerateCustomAgentAvatarInput,
   GenerateCustomAgentAvatarResult,
+  SetDefaultCustomAgentInput,
+  ToggleCustomAgentInput,
   UpdateCustomAgentInput,
 } from "./agent.ts";
 import type {
@@ -282,7 +285,7 @@ export interface GaryxDesktopApi {
     input: SetCapsuleFavoriteInput,
   ) => Promise<SetCapsuleFavoriteResult>;
   listSkills: () => Promise<DesktopSkillInfo[]>;
-  listCustomAgents: () => Promise<DesktopCustomAgent[]>;
+  listCustomAgents: () => Promise<DesktopAgentCatalog>;
   listProviderModels: (
     providerType: DesktopApiProviderType,
   ) => Promise<DesktopProviderModels>;
@@ -294,6 +297,12 @@ export interface GaryxDesktopApi {
     input: UpdateCustomAgentInput,
   ) => Promise<DesktopCustomAgent>;
   deleteCustomAgent: (input: DeleteCustomAgentInput) => Promise<void>;
+  toggleCustomAgent: (
+    input: ToggleCustomAgentInput,
+  ) => Promise<DesktopCustomAgent>;
+  setDefaultCustomAgent: (
+    input: SetDefaultCustomAgentInput,
+  ) => Promise<DesktopCustomAgent>;
   generateCustomAgentAvatar: (
     input: GenerateCustomAgentAvatarInput,
   ) => Promise<GenerateCustomAgentAvatarResult>;

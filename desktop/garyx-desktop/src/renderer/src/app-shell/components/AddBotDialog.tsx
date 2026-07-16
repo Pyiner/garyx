@@ -58,6 +58,13 @@ import { DirectoryInput } from "../../components/DirectoryInput";
 import { JsonSchemaForm } from "../../channel-plugins/JsonSchemaForm";
 import { useChannelPluginCatalog } from "../../channel-plugins/useChannelPluginCatalog";
 import { useI18n } from "../../i18n";
+import {
+  channelAgentIdFromSelectValue,
+  channelAgentSelectValue,
+  explicitChannelAgentUnavailable,
+  FOLLOW_GLOBAL_AGENT_SELECT_VALUE,
+  suggestedChannelAgentId,
+} from "../channel-agent-selection";
 
 type FeishuDomain = "feishu" | "lark";
 type AddBotStep = 1 | 2;
@@ -73,6 +80,7 @@ type AddBotDialogProps = {
     baseUrl?: string;
   } | null;
   agentTargets: AgentTargetOption[];
+  effectiveDefaultAgentId?: string | null;
   workspaces?: DesktopWorkspace[];
   onClose: () => void;
   onCreateChannel: (input: {
@@ -205,7 +213,16 @@ function channelInitials(entry: ChannelPluginCatalogEntry | null): string {
 
 export function AddBotDialog(props: AddBotDialogProps) {
   const { t } = useI18n();
-  const { open, initialValues, onClose, onCreateChannel, agentTargets, workspaces = [], onAddWorkspace } = props;
+  const {
+    open,
+    initialValues,
+    onClose,
+    onCreateChannel,
+    agentTargets,
+    effectiveDefaultAgentId = null,
+    workspaces = [],
+    onAddWorkspace,
+  } = props;
   const { entries: allEntries, loading: catalogLoading, error: catalogError } =
     useChannelPluginCatalog();
 
@@ -221,16 +238,20 @@ export function AddBotDialog(props: AddBotDialogProps) {
   const [name, setName] = useState("");
   const [workspaceDir, setWorkspaceDir] = useState("");
   const [workspaceMode, setWorkspaceMode] = useState<DesktopWorkspaceMode>("local");
-  const [agentId, setAgentId] = useState("claude");
+  const [agentId, setAgentId] = useState<string | null>(null);
   const [pluginConfig, setPluginConfig] = useState<Record<string, unknown>>({});
   const [generatedAccountId, setGeneratedAccountId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const preferredAgentId = useMemo(() => {
-    return agentTargets.find((target) => target.value === "claude")?.value
-      || agentTargets[0]?.value
-      || "claude";
-  }, [agentTargets]);
+    return suggestedChannelAgentId(agentTargets, effectiveDefaultAgentId);
+  }, [agentTargets, effectiveDefaultAgentId]);
+  const followGlobalLabel = useMemo(() => {
+    const current = agentTargets.find((target) => target.value === effectiveDefaultAgentId);
+    return current
+      ? t("Follow global default (currently {agent})", { agent: current.label })
+      : t("Follow global default (currently no enabled agent)");
+  }, [agentTargets, effectiveDefaultAgentId, t]);
 
   // Apply initialValues when the dialog opens so the user sees the
   // channel they clicked "edit" on pre-selected with any typed
@@ -273,9 +294,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
       null
     );
   }, [entries, pluginId]);
-  const selectedAgentMissing = Boolean(
-    agentId && agentTargets.length > 0 && !agentTargets.some((target) => target.value === agentId),
-  );
+  const selectedAgentMissing = explicitChannelAgentUnavailable(agentTargets, agentId);
   const selectedMethods = useMemo(() => {
     return selectedEntry ? resolveConfigMethods(selectedEntry) : null;
   }, [selectedEntry]);
@@ -362,7 +381,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
         name: name.trim() || null,
         workspaceDir: workspaceDir.trim() || null,
         workspaceMode,
-        agentId: agentId.trim() || null,
+        agentId,
         config: pluginConfig,
       });
       onClose();
@@ -498,9 +517,8 @@ export function AddBotDialog(props: AddBotDialogProps) {
                     Agent
                   </Label>
                   <Select
-                    value={agentId}
-                    onValueChange={setAgentId}
-                    disabled={agentTargets.length === 0}
+                    value={channelAgentSelectValue(agentId)}
+                    onValueChange={(value) => setAgentId(channelAgentIdFromSelectValue(value))}
                   >
                     <SelectTrigger className="add-bot-control" id="add-bot-agent">
                       <SelectValue placeholder={t("Choose agent")} />
@@ -508,6 +526,14 @@ export function AddBotDialog(props: AddBotDialogProps) {
                     <SelectContent>
                       <SelectGroup>
                         <SelectLabel>{t("Agents")}</SelectLabel>
+                        <SelectItem value={FOLLOW_GLOBAL_AGENT_SELECT_VALUE}>
+                          {followGlobalLabel}
+                        </SelectItem>
+                        {selectedAgentMissing && agentId ? (
+                          <SelectItem disabled value={agentId}>
+                            {t('{id} (disabled or unavailable)', { id: agentId })}
+                          </SelectItem>
+                        ) : null}
                         {agentTargets.map((target) => (
                           <SelectItem key={target.value} value={target.value}>
                             <AgentOptionRow
@@ -520,7 +546,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
                   </Select>
                   {selectedAgentMissing ? (
                     <span className="add-bot-field-warning">
-                      {t('Agent "{id}" no longer exists. Choose again.', { id: agentId })}
+                      {t('Agent "{id}" is disabled or unavailable. Choose again or follow the global default.', { id: agentId })}
                     </span>
                   ) : null}
                 </div>

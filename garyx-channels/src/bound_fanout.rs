@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
-use garyx_models::provider::{AgentRunRequest, StreamEvent};
+use garyx_models::provider::StreamEvent;
 use garyx_router::{
-    AgentDispatcher, MessageRouter, ThreadStore, ThreadStoreExt, bindings_from_value,
+    AdmittedRun, AgentDispatcher, MessageRouter, ThreadStore, ThreadStoreExt, bindings_from_value,
 };
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -156,7 +156,6 @@ impl DeferredBoundStreamFanout {
                 let callback = build_stream_dispatch_callback(
                     self.inner.dispatcher.clone(),
                     target.clone(),
-                    self.inner.router.clone(),
                     StreamDispatchRole::BoundTarget,
                 );
                 if callback.is_none() {
@@ -223,13 +222,13 @@ impl<'a> DeferredFanoutAgentDispatcher<'a> {
 impl AgentDispatcher for DeferredFanoutAgentDispatcher<'_> {
     async fn dispatch(
         &self,
-        request: AgentRunRequest,
+        run: AdmittedRun,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
     ) -> Result<garyx_models::provider::AgentDispatchOutcome, String> {
         self.fanout
-            .attach_thread_from_store(self.thread_store.clone(), &request.thread_id)
+            .attach_thread_from_store(self.thread_store.clone(), run.thread_id())
             .await;
-        self.inner.dispatch(request, response_callback).await
+        self.inner.dispatch(run, response_callback).await
     }
 }
 
@@ -265,12 +264,13 @@ mod tests {
     use std::collections::HashMap;
 
     use garyx_models::config::GaryxConfig;
+    use garyx_models::provider::AgentRunRequest;
     use garyx_router::{InMemoryThreadStore, MessageRouter, ThreadStore};
     use serde_json::json;
 
     #[derive(Default)]
     struct RecordingDispatcher {
-        events: Arc<StdMutex<Vec<(String, StreamEvent)>>>,
+        events: Arc<StdMutex<Vec<(String, Option<String>, StreamEvent)>>>,
     }
 
     #[async_trait]
@@ -290,14 +290,17 @@ mod tests {
         fn build_stream_event_callback(
             &self,
             _target: StreamingDispatchTarget,
-            _router: Arc<Mutex<MessageRouter>>,
         ) -> Option<crate::dispatcher::StreamDispatchCallback> {
             let events = self.events.clone();
             Some(Arc::new(move |envelope| {
                 events
                     .lock()
                     .expect("events lock")
-                    .push((envelope.endpoint_identity.clone(), envelope.event));
+                    .push((
+                        envelope.endpoint_identity.clone(),
+                        envelope.delivery_thread_id.clone(),
+                        envelope.event,
+                    ));
             }))
         }
     }
@@ -310,12 +313,12 @@ mod tests {
     impl AgentDispatcher for MutatingAgentDispatcher {
         async fn dispatch(
             &self,
-            request: AgentRunRequest,
+            run: AdmittedRun,
             response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
         ) -> Result<garyx_models::provider::AgentDispatchOutcome, String> {
             self.store
                 .set(
-                    &request.thread_id,
+                    run.thread_id(),
                     json!({
                         "channel_bindings": [
                             {
@@ -373,7 +376,7 @@ mod tests {
                             "delivery_target_id": "chat-a"
                         },
                         {
-                            "channel": "discord",
+                            "channel": "test-plugin",
                             "account_id": "bot2",
                             "binding_key": "other",
                             "chat_id": "chat-b",
@@ -413,14 +416,16 @@ mod tests {
 
         let delivered = dispatcher.events.lock().expect("events lock").clone();
         assert_eq!(delivered.len(), 1);
-        assert_eq!(delivered[0].0, "discord::bot2::other");
-        assert!(matches!(delivered[0].1, StreamEvent::Delta { ref text } if text == "hi"));
+        assert_eq!(delivered[0].0, "test-plugin::bot2::other");
+        assert_eq!(delivered[0].1.as_deref(), Some("other"));
+        assert!(matches!(delivered[0].2, StreamEvent::Delta { ref text } if text == "hi"));
 
         consumer(StreamEvent::Done);
         let delivered = dispatcher.events.lock().expect("events lock").clone();
         assert_eq!(delivered.len(), 2);
-        assert_eq!(delivered[1].0, "discord::bot2::other");
-        assert!(matches!(delivered[1].1, StreamEvent::Done));
+        assert_eq!(delivered[1].0, "test-plugin::bot2::other");
+        assert_eq!(delivered[1].1.as_deref(), Some("other"));
+        assert!(matches!(delivered[1].2, StreamEvent::Done));
     }
 
     #[tokio::test]
@@ -469,28 +474,33 @@ mod tests {
             store: store.clone(),
         };
         let attaching_dispatcher =
-            DeferredFanoutAgentDispatcher::new(&inner, fanout.clone(), store);
+            DeferredFanoutAgentDispatcher::new(&inner, fanout.clone(), store.clone());
+
+        let admitted = AdmittedRun::thread_bound(
+            store,
+            AgentRunRequest::new(
+                "thread::bound",
+                "hello",
+                "run-1",
+                "telegram",
+                "bot1",
+                HashMap::new(),
+            ),
+        )
+        .await
+        .unwrap();
 
         attaching_dispatcher
-            .dispatch(
-                AgentRunRequest::new(
-                    "thread::bound",
-                    "hello",
-                    "run-1",
-                    "telegram",
-                    "bot1",
-                    HashMap::new(),
-                ),
-                Some(consumer),
-            )
+            .dispatch(admitted, Some(consumer))
             .await
             .unwrap();
 
         let delivered = dispatcher.events.lock().expect("events lock").clone();
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].0, "discord::bot2::first");
+        assert_eq!(delivered[0].1.as_deref(), Some("first"));
         assert!(
-            matches!(delivered[0].1, StreamEvent::Delta { ref text } if text == "after attach")
+            matches!(delivered[0].2, StreamEvent::Delta { ref text } if text == "after attach")
         );
     }
 }

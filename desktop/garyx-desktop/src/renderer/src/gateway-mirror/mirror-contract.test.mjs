@@ -88,7 +88,7 @@ function desktopStateServices(states) {
       },
       listCustomAgents() {
         agentCalls += 1;
-        return Promise.resolve([]);
+        return Promise.resolve({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null });
       },
       getThreadHistory() {
         return Promise.reject(new Error("unused in desktop-state test"));
@@ -402,7 +402,11 @@ test("root and catalog snapshots are stable and refresh atomically per domain", 
   const desktopState = { threads: [], endpoints: [], configuredBots: [], automations: [] };
   const services = {
     getState: async () => desktopState,
-    listCustomAgents: async () => [{ id: "agent-a" }],
+    listCustomAgents: async () => ({
+      agents: [{ id: "agent-a" }],
+      defaultAgentId: "agent-a",
+      effectiveDefaultAgentId: "agent-a",
+    }),
   };
   const mirror = new GatewayMirror(services);
 
@@ -426,6 +430,8 @@ test("root and catalog snapshots are stable and refresh atomically per domain", 
 
   const catalog2 = mirror.getCatalogSnapshot();
   assert.equal(catalog2.agents.length, 1);
+  assert.equal(catalog2.defaultAgentId, "agent-a");
+  assert.equal(catalog2.effectiveDefaultAgentId, "agent-a");
   assert.ok(rootNotified >= 1);
   assert.ok(catalogNotified >= 1);
 
@@ -523,7 +529,7 @@ test("syncThreadUiMessages bridges local rows and applyRemote preserves them via
   const intents = { [intent.intentId]: intent };
   const mirror = new GatewayMirror({
     getState: async () => ({}),
-    listCustomAgents: async () => [],
+    listCustomAgents: async () => ({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null }),
     getThreadHistory: async () => {
       throw new Error("unused");
     },
@@ -840,7 +846,7 @@ test("dual-run: a committed rewrite control skips mapping and triggers the lifec
   const refetched = [];
   const mirror = new GatewayMirror({
     getState: async () => ({}),
-    listCustomAgents: async () => [],
+    listCustomAgents: async () => ({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null }),
     getThreadHistory: async () => {
       throw new Error("unused");
     },
@@ -944,7 +950,7 @@ test("dual-run: fetchOlderThreadHistoryPage matches the legacy older-page apply"
   const historyCalls = [];
   const mirror = new GatewayMirror({
     getState: async () => ({}),
-    listCustomAgents: async () => [],
+    listCustomAgents: async () => ({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null }),
     getThreadHistory: async (input) => {
       historyCalls.push(input);
       return olderPage;
@@ -1063,7 +1069,7 @@ test("applyOlderHistoryPage (dual-write entry) matches the fetch-owning path", a
   // injected services and applies the same page.
   const fetchMirror = new GatewayMirror({
     getState: async () => ({}),
-    listCustomAgents: async () => [],
+    listCustomAgents: async () => ({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null }),
     getThreadHistory: async () => olderPage,
   });
   fetchMirror.applyRemoteTranscript(threadId, fullTranscript);
@@ -1083,7 +1089,7 @@ test("fetchOlderThreadHistoryPage guards: no pagination, in-flight, and fetch er
   let calls = 0;
   const mirror = new GatewayMirror({
     getState: async () => ({}),
-    listCustomAgents: async () => [],
+    listCustomAgents: async () => ({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null }),
     getThreadHistory: () => {
       calls += 1;
       return new Promise((resolve) => {
@@ -1146,7 +1152,7 @@ test("fetchOlderThreadHistoryPage guards: no pagination, in-flight, and fetch er
   // Fetch error: loadingBefore resets and the error propagates.
   const errorMirror = new GatewayMirror({
     getState: async () => ({}),
-    listCustomAgents: async () => [],
+    listCustomAgents: async () => ({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null }),
     getThreadHistory: async () => {
       throw new Error("history endpoint down");
     },
@@ -1881,7 +1887,7 @@ test("older-page fetch retains its entry across await while LRU churns", async (
   });
   const mirror = new GatewayMirror({
     getState: async () => ({}),
-    listCustomAgents: async () => [],
+    listCustomAgents: async () => ({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null }),
     getThreadHistory: async () => olderPage,
   });
   const threadId = "thread::lru-retained-fetch";
@@ -1967,7 +1973,7 @@ test("an evicted thread reopens through disk cache, authoritative paging, and st
   const pageRequests = [];
   const mirror = new GatewayMirror({
     getState: async () => ({ threads: [], sessions: [] }),
-    listCustomAgents: async () => [],
+    listCustomAgents: async () => ({ agents: [], defaultAgentId: null, effectiveDefaultAgentId: null }),
     getThreadHistory: async (input) => {
       pageRequests.push(input);
       return {

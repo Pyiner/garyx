@@ -284,6 +284,7 @@ async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_me
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::ClaudeCode,
+            enabled: None,
             model: Some("claude-sonnet-4-6".to_owned()),
             model_reasoning_effort: Some("xhigh".to_owned()),
             model_service_tier: Some(String::new()),
@@ -305,7 +306,7 @@ async fn test_dispatch_internal_message_to_thread_expands_bound_agent_runtime_me
     // Production keeps the bridge's profile registry in sync on bootstrap and
     // on every agent write; the bridge chokepoint backfill reads from it.
     bridge
-        .replace_agent_profiles(state.ops.custom_agents.list_agents().await)
+        .replace_agent_profiles(state.ops.custom_agents.snapshot().await)
         .await;
 
     state

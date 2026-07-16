@@ -1,11 +1,13 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
-use garyx_models::provider::{AgentDispatchOutcome, AgentRunRequest, StreamEvent};
+use garyx_models::provider::{AgentDispatchOutcome, StreamEvent};
 use garyx_models::thread_logs::ThreadLogSink;
-use garyx_models::CustomAgentProfile;
-use garyx_router::{AgentDispatcher, ThreadHistoryRepository, ThreadStore};
+use garyx_models::{AgentAvailabilitySnapshot, CustomAgentProfile};
+use garyx_router::{
+    AdmittedRun, AgentDispatcher, ThreadHistoryRepository, ThreadRunAborter, ThreadStore,
+};
 use tokio::sync::broadcast;
 
 mod lifecycle;
@@ -25,8 +27,26 @@ use state::{Inner, default_max_concurrent_runs};
 ///
 /// Rust port of `MultiProviderBridge` from
 /// `src/garyx/agent_bridge/multi_provider_bridge.py`.
+#[derive(Clone)]
 pub struct MultiProviderBridge {
-    inner: Inner,
+    inner: Arc<Inner>,
+}
+
+struct WeakBridgeThreadRunAborter {
+    inner: Weak<Inner>,
+}
+
+#[async_trait]
+impl ThreadRunAborter for WeakBridgeThreadRunAborter {
+    async fn abort_and_drain_thread(&self, thread_id: &str) -> Result<(), String> {
+        let Some(inner) = self.inner.upgrade() else {
+            return Ok(());
+        };
+        MultiProviderBridge { inner }
+            .abort_thread_runs_and_wait(thread_id)
+            .await;
+        Ok(())
+    }
 }
 
 impl MultiProviderBridge {
@@ -38,7 +58,7 @@ impl MultiProviderBridge {
     /// Create a bridge with an explicit global run-concurrency limit.
     pub fn new_with_max_concurrent_runs(max_concurrent_runs: usize) -> Self {
         Self {
-            inner: Inner::new(max_concurrent_runs),
+            inner: Arc::new(Inner::new(max_concurrent_runs)),
         }
     }
 
@@ -54,10 +74,20 @@ impl MultiProviderBridge {
 
     /// Set the thread store for persisting messages after agent runs.
     pub async fn set_thread_store(&self, store: Arc<dyn ThreadStore>) {
+        store
+            .run_coordinator()
+            .set_aborter(Arc::new(WeakBridgeThreadRunAborter {
+                inner: Arc::downgrade(&self.inner),
+            }));
         *self.inner.thread_store.write().await = Some(store);
     }
 
     pub fn set_thread_store_blocking(&self, store: Arc<dyn ThreadStore>) {
+        store
+            .run_coordinator()
+            .set_aborter(Arc::new(WeakBridgeThreadRunAborter {
+                inner: Arc::downgrade(&self.inner),
+            }));
         if let Ok(mut guard) = self.inner.thread_store.try_write() {
             *guard = Some(store);
         }
@@ -115,12 +145,21 @@ impl MultiProviderBridge {
         *self.inner.thread_workspace_bindings.write().await = bindings;
     }
 
-    pub async fn replace_agent_profiles(&self, profiles: Vec<CustomAgentProfile>) {
+    /// Apply one atomically captured agent-store snapshot. Late delivery of an
+    /// older revision is ignored; enabled/default remain gateway-only policy
+    /// and are not consulted by bridge routing.
+    pub async fn replace_agent_profiles(&self, snapshot: AgentAvailabilitySnapshot) -> bool {
+        let mut state = self.inner.agent_profiles.write().await;
+        if snapshot.agent_state_revision < state.revision {
+            return false;
+        }
         let mut next = HashMap::new();
-        for profile in profiles {
+        for profile in snapshot.agents {
             next.insert(profile.agent_id.clone(), profile);
         }
-        *self.inner.agent_profiles.write().await = next;
+        state.revision = snapshot.agent_state_revision;
+        state.profiles = next;
+        true
     }
 
     pub async fn agent_profile(&self, agent_id: &str) -> Option<CustomAgentProfile> {
@@ -128,6 +167,7 @@ impl MultiProviderBridge {
             .agent_profiles
             .read()
             .await
+            .profiles
             .get(agent_id)
             .cloned()
     }
@@ -228,10 +268,11 @@ impl Default for MultiProviderBridge {
 impl AgentDispatcher for MultiProviderBridge {
     async fn dispatch(
         &self,
-        request: AgentRunRequest,
+        run: AdmittedRun,
         response_callback: Option<Arc<dyn Fn(StreamEvent) + Send + Sync>>,
     ) -> Result<AgentDispatchOutcome, String> {
-        self.start_agent_run(request, response_callback)
+        let (request, lease) = run.into_dispatch_parts();
+        self.start_admitted_run(request, lease, response_callback)
             .await
             .map_err(|e| e.to_string())
     }

@@ -82,6 +82,7 @@ async fn state_with_agent_default_workspace() -> Arc<AppState> {
             agent_id: "reviewer".to_owned(),
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::CodexAppServer,
+            enabled: None,
             model: Some("gpt-5".to_owned()),
             model_reasoning_effort: Some(String::new()),
             model_service_tier: Some(String::new()),
@@ -106,6 +107,7 @@ async fn state_with_task_agents() -> Arc<AppState> {
                 agent_id: agent_id.to_owned(),
                 display_name: agent_id.to_owned(),
                 provider_type: ProviderType::CodexAppServer,
+                enabled: None,
                 model: Some("gpt-5".to_owned()),
                 model_reasoning_effort: Some(String::new()),
                 model_service_tier: Some(String::new()),
@@ -120,6 +122,50 @@ async fn state_with_task_agents() -> Arc<AppState> {
     AppStateBuilder::new(config)
         .with_custom_agent_store(custom_agents)
         .build()
+}
+
+async fn state_with_disabled_task_agent() -> Arc<AppState> {
+    let custom_agents = Arc::new(CustomAgentStore::new());
+    custom_agents
+        .upsert_agent_for_test(crate::custom_agents::UpsertCustomAgentRequest {
+            agent_id: "disabled-reviewer".to_owned(),
+            display_name: "Disabled Reviewer".to_owned(),
+            provider_type: ProviderType::CodexAppServer,
+            enabled: Some(false),
+            model: Some("gpt-5".to_owned()),
+            model_reasoning_effort: Some(String::new()),
+            model_service_tier: Some(String::new()),
+            provider_env: None,
+            default_workspace_dir: None,
+            avatar_data_url: None,
+            system_prompt: Some("Review carefully.".to_owned()),
+        })
+        .await
+        .expect("disabled custom agent");
+    AppStateBuilder::new(GaryxConfig::default())
+        .with_custom_agent_store(custom_agents)
+        .build()
+}
+
+async fn create_task_for_assignment_test(state: &Arc<AppState>) -> (String, String) {
+    let service = task_service(state);
+    let (thread_id, task) = service
+        .create_task(CreateTaskInput {
+            title: Some("Assignment gate".to_owned()),
+            body: None,
+            assignee: None,
+            notification_target: Some(TaskNotificationTarget::None),
+            source: None,
+            executor: None,
+            start: false,
+            actor: None,
+            workspace_dir: None,
+            runtime: None,
+        })
+        .await
+        .expect("create task");
+    let task_id = garyx_router::tasks::canonical_task_id(&task);
+    (thread_id, task_id)
 }
 
 #[tokio::test]
@@ -657,6 +703,87 @@ async fn task_runtime_without_agent_default_keeps_workspace_unset() {
         .expect("runtime");
 
     assert!(runtime.is_none());
+}
+
+#[tokio::test]
+async fn assignment_rejects_disabled_new_binding_but_allows_existing_same_agent() {
+    let state = state_with_disabled_task_agent().await;
+    let (thread_id, task_id) = create_task_for_assignment_test(&state).await;
+    let mut record = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .unwrap()
+        .expect("task thread");
+    let object = record.as_object_mut().expect("task record object");
+    object.remove("agent_id");
+    object.remove("provider_type");
+    state
+        .threads
+        .thread_store
+        .set(&thread_id, record.clone())
+        .await
+        .expect("persist unbound legacy task");
+
+    let assignee = Principal::Agent {
+        agent_id: "disabled-reviewer".to_owned(),
+    };
+    let (status, Json(payload)) = assign_task(
+        State(state.clone()),
+        Path(task_id.clone()),
+        HeaderMap::new(),
+        Json(AssignTaskBody {
+            to: assignee.clone(),
+            actor: Some(assignee.clone()),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(payload["code"], "AgentDisabled");
+    assert!(
+        payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("disabled-reviewer")
+    );
+
+    let object = record.as_object_mut().expect("task record object");
+    object.insert(
+        "agent_id".to_owned(),
+        Value::String("disabled-reviewer".to_owned()),
+    );
+    object.insert(
+        "provider_type".to_owned(),
+        json!(ProviderType::CodexAppServer),
+    );
+    state
+        .threads
+        .thread_store
+        .set(&thread_id, record)
+        .await
+        .expect("persist existing disabled binding");
+
+    let (status, Json(payload)) = assign_task(
+        State(state.clone()),
+        Path(task_id),
+        HeaderMap::new(),
+        Json(AssignTaskBody {
+            to: assignee.clone(),
+            actor: Some(assignee),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{payload}");
+    assert_eq!(payload["task"]["assignee"]["agent_id"], "disabled-reviewer");
+    let stored = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .unwrap()
+        .expect("task thread after assignment");
+    assert_eq!(stored["agent_id"], "disabled-reviewer");
 }
 
 #[tokio::test]

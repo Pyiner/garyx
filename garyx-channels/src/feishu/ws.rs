@@ -27,8 +27,8 @@ use super::{
     FeishuClient, FeishuError, FeishuEventEnvelope, FeishuResponseStreamState,
     ImMessageReceiveEvent, MENTION_CONTEXT_LIMIT, PROCESSING_REACTION_EMOJI, SENDER_NAME_CACHE_TTL,
     TopicSessionMode, WS_MAX_RECONNECT_DELAY, WS_RECONNECT_DELAY, append_pending_history,
-    build_card_content, build_text_content, clear_pending_history, extract_message_text,
-    get_pending_history, is_duplicate_event, is_mentioned, notify_permission_error_if_needed,
+    build_card_content, clear_pending_history, extract_message_text, get_pending_history,
+    is_duplicate_event, is_mentioned, notify_permission_error_if_needed,
     prune_sender_name_cache_locked, record_policy_block, requires_group_mention,
     resolve_topic_session_mode, send_native_command_reply, sender_name_cache, strip_mention_tokens,
 };
@@ -70,7 +70,6 @@ impl<'a> FeishuRuntimeContext<'a> {
 
 pub(crate) struct FeishuStreamingCallbackConfig {
     pub(crate) client: FeishuClient,
-    pub(crate) router: Arc<Mutex<MessageRouter>>,
     pub(crate) account_id: String,
     pub(crate) receive_id_type: String,
     pub(crate) chat_id: String,
@@ -78,7 +77,6 @@ pub(crate) struct FeishuStreamingCallbackConfig {
     pub(crate) reply_in_thread: bool,
     pub(crate) is_group_reply: bool,
     pub(crate) mention_prefix: String,
-    pub(crate) native_thread_scope: Option<String>,
     pub(crate) processing_reaction_id: Option<String>,
 }
 
@@ -102,33 +100,8 @@ async fn notify_feishu_stream_error(
     .await;
 }
 
-async fn record_feishu_stream_outbound(
-    router: &Arc<Mutex<MessageRouter>>,
-    canonical_thread_id: &str,
-    account_id: &str,
-    chat_id: &str,
-    native_thread_scope: Option<&str>,
-    outbound_msg_id: &str,
-) {
-    if outbound_msg_id.is_empty() || canonical_thread_id.is_empty() {
-        return;
-    }
-    let mut router = router.lock().await;
-    router
-        .record_outbound_message_with_persistence(
-            canonical_thread_id,
-            "feishu",
-            account_id,
-            chat_id,
-            native_thread_scope,
-            outbound_msg_id,
-        )
-        .await;
-}
-
 async fn send_feishu_stream_text(
     cfg: &FeishuStreamingCallbackConfig,
-    canonical_thread_id: &str,
     text: &str,
 ) -> Result<String, FeishuError> {
     let content = build_card_content(text);
@@ -153,23 +126,11 @@ async fn send_feishu_stream_text(
             .await
     };
 
-    if let Ok(outbound_msg_id) = result.as_ref() {
-        record_feishu_stream_outbound(
-            &cfg.router,
-            canonical_thread_id,
-            &cfg.account_id,
-            &cfg.chat_id,
-            cfg.native_thread_scope.as_deref(),
-            outbound_msg_id,
-        )
-        .await;
-    }
     result
 }
 
 async fn send_feishu_stream_image(
     cfg: &FeishuStreamingCallbackConfig,
-    canonical_thread_id: &str,
     image_path: &std::path::Path,
 ) -> Result<String, FeishuError> {
     let result = if let Some(reply_message_id) = cfg.reply_message_id.as_deref() {
@@ -188,17 +149,6 @@ async fn send_feishu_stream_image(
             .await
     };
 
-    if let Ok(outbound_msg_id) = result.as_ref() {
-        record_feishu_stream_outbound(
-            &cfg.router,
-            canonical_thread_id,
-            &cfg.account_id,
-            &cfg.chat_id,
-            cfg.native_thread_scope.as_deref(),
-            outbound_msg_id,
-        )
-        .await;
-    }
     result
 }
 
@@ -254,9 +204,7 @@ pub(crate) fn build_feishu_response_callback(
                         drop(state);
 
                         if !boundary_text.is_empty()
-                            && let Err(error) =
-                                send_feishu_stream_text(&cfg, &canonical_thread_id, &boundary_text)
-                                    .await
+                            && let Err(error) = send_feishu_stream_text(&cfg, &boundary_text).await
                         {
                             error!(
                                 account_id = %cfg.account_id,
@@ -352,8 +300,7 @@ pub(crate) fn build_feishu_response_callback(
                             continue;
                         }
                     };
-                    let image_send_result =
-                        send_feishu_stream_image(&cfg, &canonical_thread_id, &image_path).await;
+                    let image_send_result = send_feishu_stream_image(&cfg, &image_path).await;
                     let _ = tokio::fs::remove_file(&image_path).await;
 
                     match image_send_result {
@@ -415,8 +362,7 @@ pub(crate) fn build_feishu_response_callback(
             }
 
             if !text_to_send.is_empty() {
-                send_result =
-                    Some(send_feishu_stream_text(&cfg, &canonical_thread_id, &text_to_send).await);
+                send_result = Some(send_feishu_stream_text(&cfg, &text_to_send).await);
             }
 
             if !state.processing_reaction_removed {
@@ -1240,43 +1186,10 @@ pub(super) async fn handle_im_message_event(
             "\n\n[System: Your reply will automatically @mention: {target_names}. Do not write @xxx yourself.]"
         ));
     }
-    // Resolve thread context, then dispatch through router one-call path.
-    let reply_thread_id = if message.parent_id.is_empty() {
-        None
-    } else {
-        let router_guard = runtime.router.lock().await;
-        router_guard
-            .resolve_reply_thread_for_chat(
-                "feishu",
-                runtime.account_id,
-                Some(&message.chat_id),
-                native_thread_scope.as_deref(),
-                &message.parent_id,
-            )
-            .map(|s| s.to_owned())
-    };
-    if reply_thread_id.is_none()
-        && !message.parent_id.is_empty()
+    if !message.parent_id.is_empty()
         && let Ok(Some(quoted)) = runtime.client.fetch_message_text(&message.parent_id).await
     {
         route_text = format!("[Replying to: \"{quoted}\"]\n\n{route_text}");
-    }
-
-    let mut switched_thread_id_for_notice: Option<String> = None;
-    if let Some(reply_thread_id) = reply_thread_id
-        && MessageRouter::is_scheduled_thread(&reply_thread_id)
-    {
-        let thread_binding_key = native_thread_scope.as_deref().unwrap_or(&from_id);
-        let binding_context_key = MessageRouter::build_binding_context_key(
-            "feishu",
-            runtime.account_id,
-            thread_binding_key,
-        );
-        {
-            let mut router_guard = runtime.router.lock().await;
-            router_guard.switch_to_thread(&binding_context_key, &reply_thread_id);
-        }
-        switched_thread_id_for_notice = Some(reply_thread_id);
     }
 
     let run_id = uuid::Uuid::new_v4().to_string();
@@ -1372,7 +1285,6 @@ pub(super) async fn handle_im_message_event(
     let (response_callback, thread_id_tx) =
         build_feishu_response_callback(FeishuStreamingCallbackConfig {
             client: runtime.client.clone(),
-            router: runtime.router.clone(),
             account_id: runtime.account_id.to_owned(),
             receive_id_type: "chat_id".to_owned(),
             chat_id: message.chat_id.clone(),
@@ -1380,7 +1292,6 @@ pub(super) async fn handle_im_message_event(
             reply_in_thread: false,
             is_group_reply: is_group,
             mention_prefix: mention_prefix.clone(),
-            native_thread_scope: native_thread_scope.clone(),
             processing_reaction_id,
         });
 
@@ -1392,11 +1303,6 @@ pub(super) async fn handle_im_message_event(
         thread_binding_key: native_thread_scope.unwrap_or_else(|| from_id.clone()),
         message: route_text,
         run_id,
-        reply_to_message_id: if message.parent_id.is_empty() {
-            None
-        } else {
-            Some(message.parent_id.clone())
-        },
         images: Vec::new(),
         extra_metadata: metadata,
         file_paths,
@@ -1524,41 +1430,36 @@ pub(super) async fn handle_im_message_event(
                     thread_id = %result.thread_id,
                     "resolved thread for Feishu message"
                 );
-                if let Some(switched_thread_id) = switched_thread_id_for_notice {
-                    let notice_content =
-                        build_text_content(&format!("你已经切换到 thread:{switched_thread_id}"));
-                    if let Err(err) = runtime
-                        .client
-                        .reply_message(&message.message_id, &notice_content, "text")
-                        .await
-                    {
-                        warn!(
-                            account_id = %runtime.account_id,
-                            chat_id = %message.chat_id,
-                            message_id = %message.message_id,
-                            thread_id = %switched_thread_id,
-                            error = %err,
-                            "failed to send scheduled-thread switch notice"
-                        );
-                    }
-                }
             }
         }
         Err(e) => {
+            replay_subscription.abort();
             error!(
                 account_id = %runtime.account_id,
                 chat_id = %message.chat_id,
                 error = %e,
                 "failed to route+dispatch Feishu message"
             );
-            notify_permission_error_if_needed(
-                runtime.client,
-                runtime.account_id,
-                &message.chat_id,
-                &message.message_id,
-                &e,
-            )
-            .await;
+            let reply = format!("Error: {e}");
+            if let Err(send_error) =
+                send_native_command_reply(runtime.client, &message.message_id, &reply).await
+            {
+                error!(
+                    account_id = %runtime.account_id,
+                    chat_id = %message.chat_id,
+                    message_id = %message.message_id,
+                    error = %send_error,
+                    "failed to send Feishu routing error reply"
+                );
+                notify_permission_error_if_needed(
+                    runtime.client,
+                    runtime.account_id,
+                    &message.chat_id,
+                    &message.message_id,
+                    &send_error.to_string(),
+                )
+                .await;
+            }
         }
     }
 }

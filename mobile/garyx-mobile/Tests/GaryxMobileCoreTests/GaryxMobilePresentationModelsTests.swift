@@ -196,6 +196,77 @@ final class GaryxMobilePresentationModelsTests: XCTestCase {
         XCTAssertEqual(draft.workspacePath, "/workspace/missing-current")
     }
 
+    func testAutomationDraftPreservesDisabledGeneratedAgentUntilExplicitlyChanged() {
+        var draft = GaryxAutomationDraft(
+            label: "Daily summary",
+            prompt: "Summarize updates",
+            agentTargetId: "disabled-agent",
+            workspacePath: "/workspace/project",
+            originalTargetsExistingThread: false,
+            originalAgentTargetId: "disabled-agent"
+        )
+
+        XCTAssertTrue(
+            draft.canSubmit(
+                workspacePaths: [],
+                threadOptions: [],
+                enabledAgentIds: ["codex"]
+            )
+        )
+        XCTAssertNil(draft.updateAgentId)
+
+        draft.selectAgentTarget("codex")
+        XCTAssertTrue(draft.agentChanged)
+        XCTAssertEqual(draft.updateAgentId, "codex")
+        XCTAssertTrue(
+            draft.canSubmit(
+                workspacePaths: [],
+                threadOptions: [],
+                enabledAgentIds: ["codex"]
+            )
+        )
+    }
+
+    func testAutomationTargetToGeneratedRequiresEnabledAgentButCanDeferLiveCurrent() {
+        var draft = GaryxAutomationDraft(
+            label: "Continue thread",
+            prompt: "Continue",
+            agentTargetId: "codex",
+            targetsExistingThread: false,
+            targetThreadId: "thread::target",
+            workspacePath: "/workspace/project",
+            originalTargetsExistingThread: true,
+            originalAgentTargetId: "codex"
+        )
+
+        XCTAssertFalse(
+            draft.canSubmit(
+                workspacePaths: [],
+                threadOptions: [],
+                enabledAgentIds: []
+            )
+        )
+        XCTAssertTrue(
+            draft.canSubmit(
+                workspacePaths: [],
+                threadOptions: [],
+                enabledAgentIds: ["codex"]
+            )
+        )
+        XCTAssertNil(draft.updateAgentId, "the server re-resolves the target thread's live binding")
+
+        draft.agentTargetId = ""
+        XCTAssertFalse(
+            draft.canSubmit(
+                workspacePaths: [],
+                threadOptions: [],
+                enabledAgentIds: ["codex"]
+            )
+        )
+        draft.selectAgentTarget("codex")
+        XCTAssertEqual(draft.updateAgentId, "codex")
+    }
+
     func testAutomationScheduleDraftRoundTripsWeekdaysAndMonthlyClamp() {
         let weekdays = GaryxAutomationScheduleDraft(
             schedule: .daily(time: "09:30", weekdays: ["mo", "tu", "we", "th", "fr"], timezone: "UTC")

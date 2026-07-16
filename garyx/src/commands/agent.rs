@@ -18,11 +18,42 @@ pub(crate) async fn cmd_agent_list(
         println!("Agents: (none)");
         return Ok(());
     }
+    let raw_default_agent_id = payload["default_agent_id"].as_str();
+    let effective_default_agent_id = payload["effective_default_agent_id"].as_str();
     for a in &agents {
         print_agent_summary(a);
+        if let Some(marker) =
+            agent_default_marker(a, raw_default_agent_id, effective_default_agent_id)
+        {
+            println!("Default: {marker}");
+        }
         println!();
     }
     Ok(())
+}
+
+fn agent_default_marker(
+    agent: &Value,
+    raw_default_agent_id: Option<&str>,
+    effective_default_agent_id: Option<&str>,
+) -> Option<&'static str> {
+    let agent_id = agent["agent_id"].as_str()?;
+    let enabled = agent["enabled"].as_bool().unwrap_or(true);
+    if raw_default_agent_id == Some(agent_id) {
+        return if enabled && effective_default_agent_id == Some(agent_id) {
+            Some("Default")
+        } else {
+            Some("Default (inactive)")
+        };
+    }
+    if effective_default_agent_id == Some(agent_id) {
+        return if raw_default_agent_id.is_none() {
+            Some("Default (auto)")
+        } else {
+            Some("Acting default")
+        };
+    }
+    None
 }
 
 fn sort_agents_builtin_first(agents: &mut [Value]) {
@@ -100,6 +131,74 @@ pub(crate) async fn cmd_agent_get(
         return print_agent_json(payload);
     }
     print_agent_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_agent_set_enabled(
+    config_path: &str,
+    agent_id: &str,
+    enabled: bool,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let agent_id = agent_id.trim();
+    if agent_id.is_empty() {
+        return Err("agent_id cannot be empty".into());
+    }
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = patch_gateway_json(
+        &gateway,
+        &format!(
+            "/api/custom-agents/{}/toggle",
+            urlencoding::encode(agent_id)
+        ),
+        &json!({ "enabled": enabled }),
+    )
+    .await?;
+    if json {
+        return print_agent_json(payload);
+    }
+    print_agent_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_agent_default(
+    config_path: &str,
+    agent_id: Option<&str>,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    if let Some(agent_id) = agent_id {
+        let agent_id = agent_id.trim();
+        if agent_id.is_empty() {
+            return Err("agent_id cannot be empty".into());
+        }
+        let payload = patch_gateway_json(
+            &gateway,
+            &format!(
+                "/api/custom-agents/{}/default",
+                urlencoding::encode(agent_id)
+            ),
+            &json!({}),
+        )
+        .await?;
+        if json {
+            return print_agent_json(payload);
+        }
+        print_agent_summary(&payload);
+        println!("Default: Default");
+        return Ok(());
+    }
+
+    let payload = fetch_gateway_json(&gateway, "/api/custom-agents").await?;
+    if json {
+        return print_agent_json(decorate_agent_list_json(payload));
+    }
+    let raw = payload["default_agent_id"].as_str().unwrap_or("(auto)");
+    let effective = payload["effective_default_agent_id"]
+        .as_str()
+        .unwrap_or("(none available)");
+    println!("Configured default: {raw}");
+    println!("Effective default: {effective}");
     Ok(())
 }
 
@@ -490,6 +589,14 @@ fn print_agent_summary(a: &Value) {
     );
     println!("Name: {name}");
     println!("Provider: {provider}");
+    println!(
+        "Status: {}",
+        if a["enabled"].as_bool().unwrap_or(true) {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
     if !model.is_empty() {
         println!("Model: {model}");
     }
@@ -537,7 +644,7 @@ mod tests {
         Json, Router,
         extract::Path as AxumPath,
         http::StatusCode,
-        routing::{get, post},
+        routing::{get, patch, post},
     };
     use std::sync::{Arc as StdArc, Mutex};
     use tempfile::tempdir;
@@ -757,6 +864,242 @@ mod tests {
             axum::serve(listener, app).await.expect("serve test router");
         });
         (format!("http://{addr}"), handle)
+    }
+
+    async fn spawn_agent_availability_http_test_server(
+        requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+    ) -> (String, JoinHandle<()>) {
+        let list_requests = requests.clone();
+        let toggle_requests = requests.clone();
+        let default_requests = requests;
+        let app = Router::new()
+            .route(
+                "/api/custom-agents",
+                get(move || {
+                    let requests = list_requests.clone();
+                    async move {
+                        requests
+                            .lock()
+                            .expect("request lock")
+                            .push(RecordedRequest {
+                                method: "GET".to_owned(),
+                                path: "/api/custom-agents".to_owned(),
+                                body: Value::Null,
+                            });
+                        Json(json!({
+                            "agents": [
+                                {
+                                    "agent_id": "claude",
+                                    "display_name": "Claude",
+                                    "provider_type": "claude_code",
+                                    "built_in": true,
+                                    "standalone": true,
+                                    "enabled": true
+                                },
+                                {
+                                    "agent_id": "reviewer",
+                                    "display_name": "Reviewer",
+                                    "provider_type": "codex_app_server",
+                                    "built_in": false,
+                                    "standalone": true,
+                                    "enabled": true
+                                }
+                            ],
+                            "default_agent_id": "reviewer",
+                            "effective_default_agent_id": "reviewer"
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/api/custom-agents/{agent_id}/toggle",
+                patch(
+                    move |AxumPath(agent_id): AxumPath<String>, Json(payload): Json<Value>| {
+                        let requests = toggle_requests.clone();
+                        async move {
+                            requests
+                                .lock()
+                                .expect("request lock")
+                                .push(RecordedRequest {
+                                    method: "PATCH".to_owned(),
+                                    path: format!("/api/custom-agents/{agent_id}/toggle"),
+                                    body: payload.clone(),
+                                });
+                            Json(json!({
+                                "agent_id": agent_id,
+                                "display_name": "Reviewer",
+                                "provider_type": "codex_app_server",
+                                "built_in": false,
+                                "standalone": true,
+                                "enabled": payload["enabled"]
+                            }))
+                        }
+                    },
+                ),
+            )
+            .route(
+                "/api/custom-agents/{agent_id}/default",
+                patch(
+                    move |AxumPath(agent_id): AxumPath<String>, Json(payload): Json<Value>| {
+                        let requests = default_requests.clone();
+                        async move {
+                            requests
+                                .lock()
+                                .expect("request lock")
+                                .push(RecordedRequest {
+                                    method: "PATCH".to_owned(),
+                                    path: format!("/api/custom-agents/{agent_id}/default"),
+                                    body: payload,
+                                });
+                            if agent_id == "disabled" {
+                                (
+                                    StatusCode::BAD_REQUEST,
+                                    Json(json!({"error": "agent is disabled: disabled"})),
+                                )
+                            } else {
+                                (
+                                    StatusCode::OK,
+                                    Json(json!({
+                                        "agent_id": agent_id,
+                                        "display_name": "Reviewer",
+                                        "provider_type": "codex_app_server",
+                                        "built_in": false,
+                                        "standalone": true,
+                                        "enabled": true
+                                    })),
+                                )
+                            }
+                        }
+                    },
+                ),
+            );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test router");
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn agent_list_reads_enabled_raw_and_effective_contract() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) = spawn_agent_availability_http_test_server(requests.clone()).await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        cmd_agent_list(config_path.to_str().expect("config path"), true)
+            .await
+            .expect("agent list should succeed");
+
+        handle.abort();
+        let records = requests.lock().expect("request lock");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].method, "GET");
+        assert_eq!(records[0].path, "/api/custom-agents");
+    }
+
+    #[tokio::test]
+    async fn agent_enable_and_disable_patch_exact_enabled_state() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) = spawn_agent_availability_http_test_server(requests.clone()).await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        cmd_agent_set_enabled(
+            config_path.to_str().expect("config path"),
+            "reviewer",
+            false,
+            true,
+        )
+        .await
+        .expect("disable should succeed");
+        cmd_agent_set_enabled(
+            config_path.to_str().expect("config path"),
+            "reviewer",
+            true,
+            true,
+        )
+        .await
+        .expect("enable should succeed");
+
+        handle.abort();
+        let records = requests.lock().expect("request lock");
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].path, "/api/custom-agents/reviewer/toggle");
+        assert_eq!(records[0].body, json!({"enabled": false}));
+        assert_eq!(records[1].path, "/api/custom-agents/reviewer/toggle");
+        assert_eq!(records[1].body, json!({"enabled": true}));
+    }
+
+    #[tokio::test]
+    async fn agent_default_sets_when_id_present_and_only_reads_when_omitted() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) = spawn_agent_availability_http_test_server(requests.clone()).await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        cmd_agent_default(
+            config_path.to_str().expect("config path"),
+            Some("reviewer"),
+            true,
+        )
+        .await
+        .expect("set default should succeed");
+        cmd_agent_default(config_path.to_str().expect("config path"), None, true)
+            .await
+            .expect("read default should succeed");
+
+        handle.abort();
+        let records = requests.lock().expect("request lock");
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.method == "PATCH")
+                .count(),
+            1
+        );
+        assert_eq!(records[0].path, "/api/custom-agents/reviewer/default");
+        assert_eq!(records[0].body, json!({}));
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.method == "GET")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_default_preserves_disabled_rejection_without_fallback_read() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) = spawn_agent_availability_http_test_server(requests.clone()).await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        let error = cmd_agent_default(
+            config_path.to_str().expect("config path"),
+            Some("disabled"),
+            true,
+        )
+        .await
+        .expect_err("disabled agent cannot become default");
+
+        handle.abort();
+        let gateway_error = error
+            .downcast_ref::<GatewayCliError>()
+            .expect("gateway rejection must remain typed");
+        assert_eq!(gateway_error.kind, GatewayErrorKind::Rejected);
+        assert!(
+            gateway_error
+                .message
+                .ends_with("agent is disabled: disabled")
+        );
+        let records = requests.lock().expect("request lock");
+        assert_eq!(records.len(), 1, "rejection must not fall through to GET");
+        assert_eq!(records[0].path, "/api/custom-agents/disabled/default");
     }
 
     #[tokio::test]
@@ -1340,7 +1683,39 @@ mod tests {
             "display_name": agent_id,
             "provider_type": "claude_code",
             "built_in": built_in,
+            "enabled": true,
         })
+    }
+
+    #[test]
+    fn default_markers_cover_raw_inactive_acting_and_auto_states() {
+        let enabled_raw = agent_value("reviewer", false);
+        assert_eq!(
+            agent_default_marker(&enabled_raw, Some("reviewer"), Some("reviewer")),
+            Some("Default")
+        );
+
+        let mut disabled_raw = enabled_raw.clone();
+        disabled_raw["enabled"] = Value::Bool(false);
+        assert_eq!(
+            agent_default_marker(&disabled_raw, Some("reviewer"), Some("codex")),
+            Some("Default (inactive)")
+        );
+        let acting = agent_value("codex", true);
+        assert_eq!(
+            agent_default_marker(&acting, Some("reviewer"), Some("codex")),
+            Some("Acting default")
+        );
+        let automatic = agent_value("claude", true);
+        assert_eq!(
+            agent_default_marker(&automatic, None, Some("claude")),
+            Some("Default (auto)")
+        );
+        assert_eq!(
+            agent_default_marker(&automatic, None, None),
+            None,
+            "all-disabled catalogs have no default marker"
+        );
     }
 
     #[test]
@@ -1393,11 +1768,13 @@ mod tests {
     fn decorate_agent_list_json_adds_kind_and_sorts_in_place() {
         let payload = json!({
             "agents": [
-                { "agent_id": "novelist", "display_name": "Novelist", "built_in": false, "model": "gpt-5" },
-                { "agent_id": "codex", "display_name": "Codex", "built_in": true },
-                { "agent_id": "gary", "display_name": "Gary", "built_in": false },
-                { "agent_id": "claude", "display_name": "Claude", "built_in": true },
+                { "agent_id": "novelist", "display_name": "Novelist", "built_in": false, "enabled": false, "model": "gpt-5" },
+                { "agent_id": "codex", "display_name": "Codex", "built_in": true, "enabled": true },
+                { "agent_id": "gary", "display_name": "Gary", "built_in": false, "enabled": true },
+                { "agent_id": "claude", "display_name": "Claude", "built_in": true, "enabled": true },
             ],
+            "default_agent_id": "novelist",
+            "effective_default_agent_id": "claude",
         });
 
         let decorated = decorate_agent_list_json(payload);
@@ -1419,6 +1796,9 @@ mod tests {
         assert_eq!(agents[0]["built_in"], true);
         assert_eq!(agents[3]["model"], "gpt-5");
         assert_eq!(agents[3]["built_in"], false);
+        assert_eq!(agents[3]["enabled"], false);
+        assert_eq!(decorated["default_agent_id"], "novelist");
+        assert_eq!(decorated["effective_default_agent_id"], "claude");
     }
 
     #[test]

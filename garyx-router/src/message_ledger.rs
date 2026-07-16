@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use garyx_models::{
-    BotThreadProblemSummary, MessageLedgerEvent, MessageLedgerRecord,
-};
+use garyx_models::{BotThreadProblemSummary, MessageLedgerEvent, MessageLedgerRecord};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;

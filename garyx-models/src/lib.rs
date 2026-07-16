@@ -1,5 +1,7 @@
 pub mod agent;
+pub mod agent_availability;
 pub mod agent_reference;
+pub mod agent_store;
 pub mod channel_outbound;
 pub mod codex_models;
 pub mod command_catalog;
@@ -25,9 +27,18 @@ pub mod transcript_run_state;
 
 // Re-export commonly used types at the crate root.
 pub use agent::RunState;
+pub use agent_availability::{
+    AgentAvailabilitySnapshot, AgentBindingError, ResolvedAgentBinding,
+    SERVER_OWNED_AGENT_METADATA_KEYS, ensure_enabled_for_new_binding, resolve_agent_binding,
+    resolve_effective_default, strip_server_owned_agent_metadata,
+};
 pub use agent_reference::{
     AgentReference, agent_runtime_metadata, agent_runtime_snapshot_metadata,
     merge_thread_agent_runtime_snapshot, resolve_agent_reference,
+};
+pub use agent_store::{
+    AGENT_STORE_VERSION, AgentStoreDocumentError, ParsedAgentStoreDocument,
+    parse_agent_store_document, serialize_agent_store_document,
 };
 pub use channel_outbound::ChannelOutboundContent;
 pub use command_catalog::{
@@ -53,12 +64,12 @@ pub use message_lifecycle::{
 };
 pub use messages::MessageMetadata;
 pub use provider::{
-    ATTACHMENTS_METADATA_KEY, AntigravityCliConfig, FilePayload, ImagePayload,
-    PromptAttachment, PromptAttachmentKind, ProviderMessage, ProviderMessageRole,
-    ProviderRunOptions, ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent,
-    attachments_from_metadata, attachments_to_metadata_value,
-    build_prompt_message_with_attachments, build_user_content_from_parts,
-    file_attachments_from_paths, stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
+    ATTACHMENTS_METADATA_KEY, AntigravityCliConfig, FilePayload, ImagePayload, PromptAttachment,
+    PromptAttachmentKind, ProviderMessage, ProviderMessageRole, ProviderRunOptions,
+    ProviderRunResult, ProviderType, StreamBoundaryKind, StreamEvent, attachments_from_metadata,
+    attachments_to_metadata_value, build_prompt_message_with_attachments,
+    build_user_content_from_parts, file_attachments_from_paths, stage_file_payloads_for_prompt,
+    stage_image_payloads_for_prompt,
 };
 pub use quota::{
     CodingModelUsage, CodingProviderUsage, CodingUsageSnapshot, CodingUsageWindow, QuotaCheckError,

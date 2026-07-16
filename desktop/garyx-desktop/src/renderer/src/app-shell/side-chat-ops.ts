@@ -11,7 +11,7 @@ import type {
 } from "@shared/contracts";
 
 import type { GatewayMirror } from "../gateway-mirror/mirror";
-import { requestDesktopStateResult } from "../pinned-order-ingress";
+import { requestDesktopStateResult } from "../pinned-order-ingress.ts";
 import type { MessageMap } from "./types";
 import type { SideChatSessions } from "./side-chat-sessions";
 
@@ -22,9 +22,14 @@ export interface SideChatOpsContext {
   sourceThreadId: string | null;
   activeThread: DesktopThreadSummary | null;
   threadSummaryById: Map<string, DesktopThreadSummary>;
-  pendingAgentId: string | null;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
   setError: (error: string | null) => void;
+}
+
+export function sideChatForkAgentId(
+  sourceThread: Pick<DesktopThreadSummary, "agentId"> | null | undefined,
+): string | null {
+  return sourceThread?.agentId?.trim() || null;
 }
 
 /**
@@ -41,7 +46,6 @@ export async function ensureSideChatThread(
     mirror,
     activeThread,
     threadSummaryById,
-    pendingAgentId,
     setDesktopState,
     setError,
   } = ctx;
@@ -81,7 +85,7 @@ export async function ensureSideChatThread(
       const created = await requestDesktopStateResult(
         () => window.garyxDesktop.createThread({
           title: "Side chat",
-          agentId: sourceThread?.agentId || pendingAgentId || "claude",
+          agentId: sideChatForkAgentId(sourceThread),
           forkFromThreadId: sourceThreadId,
           metadata: {
             source: "side_chat",

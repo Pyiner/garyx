@@ -566,7 +566,9 @@ extension GaryxMobileModel {
         selectedThread = threads.first
         draftThreadTitle = selectedThread?.title ?? ""
         pinnedThreadIds = ["thread-task-board"]
-        selectedAgentTargetId = "codex"
+        selectedAgentTargetId = nil
+        gatewayDefaultAgentId = "codex"
+        effectiveDefaultAgentId = "codex"
         newThreadWorkspace = "/workspace/garyx"
         newThreadWorkspaceMode = "local"
         replaceWorkspaceCatalogPaths(["/workspace/garyx"])

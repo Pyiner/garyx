@@ -7,7 +7,12 @@ import type {
 
 import { cloneJson, stringifyJsonBlock } from '@renderer/gateway-settings';
 
-import { fetchBotConsoles, fetchGatewaySettings, saveGatewaySettings } from './web-api';
+import {
+  fetchAgentCatalogDefaults,
+  fetchBotConsoles,
+  fetchGatewaySettings,
+  saveGatewaySettings,
+} from './web-api';
 import type { WebRoute } from './web-route';
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -48,7 +53,10 @@ function ensureChannelAccount(
   const account = asRecord(accounts[accountId]);
   account.enabled = typeof account.enabled === 'boolean' ? account.enabled : true;
   account.name = typeof account.name === 'string' ? account.name : '';
-  account.agent_id = typeof account.agent_id === 'string' ? account.agent_id : 'claude';
+  const explicitAgentId = typeof account.agent_id === 'string'
+    ? account.agent_id.trim()
+    : '';
+  account.agent_id = explicitAgentId || null;
   account.workspace_dir = typeof account.workspace_dir === 'string' ? account.workspace_dir : '';
   account.config = {
     ...defaultConfig,
@@ -61,6 +69,7 @@ function ensureChannelAccount(
 export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' }>) {
   const [payload, setPayload] = useState<GatewaySettingsPayload | null>(null);
   const [focusedBotSummary, setFocusedBotSummary] = useState<DesktopBotConsoleSummary | null>(null);
+  const [effectiveDefaultAgentId, setEffectiveDefaultAgentId] = useState<string | null>(null);
   const [jsonDraft, setJsonDraft] = useState('{}');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -72,11 +81,15 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
     setError(null);
     setStatus(null);
     try {
-      const nextPayload = await fetchGatewaySettings();
+      const [nextPayload, agentDefaults, botSummaries] = await Promise.all([
+        fetchGatewaySettings(),
+        fetchAgentCatalogDefaults(),
+        route.botId ? fetchBotConsoles() : Promise.resolve([]),
+      ]);
       setPayload(nextPayload);
+      setEffectiveDefaultAgentId(agentDefaults.effectiveDefaultAgentId);
       setJsonDraft(stringifyJsonBlock(nextPayload.config));
       if (route.botId) {
-        const botSummaries = await fetchBotConsoles();
         setFocusedBotSummary(botSummaries.find((item) => item.id === route.botId) || null);
       } else {
         setFocusedBotSummary(null);
@@ -196,7 +209,7 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
     enabled?: boolean;
     token?: string;
     name?: string;
-    agentId?: string;
+    agentId?: string | null;
     workspaceDir?: string;
   }) => {
     try {
@@ -219,8 +232,10 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
       if (typeof patch.name === 'string') {
         account.name = patch.name;
       }
-      if (typeof patch.agentId === 'string') {
-        account.agent_id = patch.agentId;
+      if (patch.agentId !== undefined) {
+        account.agent_id = typeof patch.agentId === 'string'
+          ? patch.agentId.trim() || null
+          : null;
       }
       if (typeof patch.workspaceDir === 'string') {
         account.workspace_dir = patch.workspaceDir;
@@ -279,7 +294,7 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
     requireMention?: boolean;
     topicSessionMode?: string;
     name?: string;
-    agentId?: string;
+    agentId?: string | null;
     workspaceDir?: string;
   }) => {
     try {
@@ -320,8 +335,10 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
       if (typeof patch.name === 'string') {
         account.name = patch.name;
       }
-      if (typeof patch.agentId === 'string') {
-        account.agent_id = patch.agentId;
+      if (patch.agentId !== undefined) {
+        account.agent_id = typeof patch.agentId === 'string'
+          ? patch.agentId.trim() || null
+          : null;
       }
       if (typeof patch.workspaceDir === 'string') {
         account.workspace_dir = patch.workspaceDir;
@@ -338,6 +355,7 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
   return {
     payload,
     focusedBotSummary,
+    effectiveDefaultAgentId,
     jsonDraft,
     setJsonDraft,
     loading,

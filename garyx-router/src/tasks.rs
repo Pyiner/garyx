@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use async_trait::async_trait;
 use chrono::Utc;
 use garyx_models::{
-    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskExecutor,
-    TaskNotificationTarget, TaskSource, TaskStatus, ThreadTask,
+    AgentBindingError, Principal, ResolvedAgentBinding, SERVER_OWNED_AGENT_METADATA_KEYS,
+    TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskExecutor, TaskNotificationTarget,
+    TaskSource, TaskStatus, ThreadTask,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,7 +17,6 @@ use crate::{ThreadEnsureOptions, ThreadStore, WorkspaceMode, create_thread_recor
 
 const DEFAULT_TASK_LIST_LIMIT: usize = 50;
 const MAX_TASK_LIST_LIMIT: usize = 200;
-const DEFAULT_TASK_AGENT_ID: &str = "claude";
 const TASK_THREAD_TITLE_SOURCE: &str = "task";
 type TaskThreadLock = Arc<tokio::sync::Mutex<()>>;
 
@@ -36,6 +36,8 @@ pub enum TaskServiceError {
     UnknownPrincipal(String),
     #[error("UnknownAgent: {0}")]
     UnknownAgent(String),
+    #[error(transparent)]
+    AgentBinding(#[from] AgentBindingError),
     #[error("store error: {0}")]
     Store(String),
     #[error(transparent)]
@@ -155,6 +157,25 @@ pub trait TaskProjectionReader: Send + Sync {
         &self,
         filter: &TaskListFilter,
     ) -> Result<(Vec<TaskSummary>, usize, bool), String>;
+}
+
+/// Mandatory fail-closed gate for every task thread that acquires a new agent
+/// binding. Gateway supplies the store-backed implementation; TaskService
+/// never resolves or defaults an agent on its own.
+#[async_trait]
+pub trait NewTaskAgentGate: Send + Sync {
+    async fn resolve_new_task_agent(
+        &self,
+        requested_agent_id: Option<&str>,
+    ) -> Result<ResolvedAgentBinding, AgentBindingError>;
+
+    /// Resolve an already-bound task agent without applying the enabled gate.
+    /// This is the assign/rework exemption: only the same canonical agent may
+    /// be returned for an existing binding.
+    async fn resolve_existing_task_agent(
+        &self,
+        current_agent_id: &str,
+    ) -> Result<ResolvedAgentBinding, AgentBindingError>;
 }
 
 /// Scan-backed task projection for stores without SQL projections.
@@ -371,17 +392,20 @@ pub struct TaskService {
     thread_store: Arc<dyn ThreadStore>,
     counter_store: Arc<dyn TaskCounterStore>,
     projection_reader: Option<Arc<dyn TaskProjectionReader>>,
+    new_task_agent_gate: Arc<dyn NewTaskAgentGate>,
 }
 
 impl TaskService {
     pub fn new(
         thread_store: Arc<dyn ThreadStore>,
         counter_store: Arc<dyn TaskCounterStore>,
+        new_task_agent_gate: Arc<dyn NewTaskAgentGate>,
     ) -> Self {
         Self {
             thread_store,
             counter_store,
             projection_reader: None,
+            new_task_agent_gate,
         }
     }
 
@@ -409,7 +433,7 @@ impl TaskService {
         let source = normalize_task_source(input.source);
         let runtime = input.runtime.clone();
         let auto_start = input.start || input.assignee.is_some() || input.executor.is_some();
-        let thread_agent_id = runtime
+        let requested_agent_id = runtime
             .as_ref()
             .and_then(|runtime| normalized_nonempty_string(runtime.agent_id.as_deref()))
             .or_else(|| match &input.executor {
@@ -422,13 +446,28 @@ impl TaskService {
             })
             .or_else(|| match (&actor, auto_start) {
                 (Principal::Agent { agent_id }, true) => Some(agent_id.clone()),
-                (Principal::Human { .. }, true) => Some(DEFAULT_TASK_AGENT_ID.to_owned()),
+                (Principal::Human { .. }, true) => None,
                 (_, false) => None,
             });
+        let should_bind_agent = auto_start || requested_agent_id.is_some();
+        let resolved_binding = if should_bind_agent {
+            Some(
+                self.new_task_agent_gate
+                    .resolve_new_task_agent(requested_agent_id.as_deref())
+                    .await?,
+            )
+        } else {
+            None
+        };
         let workspace_dir = runtime
             .as_ref()
             .and_then(|runtime| normalized_nonempty_string(runtime.workspace_dir.as_deref()))
-            .or_else(|| normalized_nonempty_string(input.workspace_dir.as_deref()));
+            .or_else(|| normalized_nonempty_string(input.workspace_dir.as_deref()))
+            .or_else(|| {
+                resolved_binding
+                    .as_ref()
+                    .and_then(|binding| binding.default_workspace_dir.clone())
+            });
         let workspace_mode = runtime
             .as_ref()
             .map(|runtime| runtime.workspace_mode)
@@ -444,7 +483,16 @@ impl TaskService {
                 workspace_dir,
                 workspace_mode,
                 worktree_base_dir,
-                agent_id: thread_agent_id,
+                agent_id: resolved_binding
+                    .as_ref()
+                    .map(|binding| binding.agent_id.clone()),
+                provider_type: resolved_binding
+                    .as_ref()
+                    .map(|binding| binding.provider_type.clone()),
+                metadata: resolved_binding
+                    .as_ref()
+                    .map(|binding| binding.runtime_metadata.clone())
+                    .unwrap_or_default(),
                 thread_kind: Some("task".to_owned()),
                 ..Default::default()
             },
@@ -562,35 +610,106 @@ impl TaskService {
         to: Principal,
         actor: Option<Principal>,
     ) -> Result<ThreadTask, TaskServiceError> {
+        self.assign_task_with_record(task_id, to, actor)
+            .await
+            .map(|(_, _, task)| task)
+    }
+
+    /// Assign and, when required, stamp the task thread's first agent binding
+    /// in the same per-thread critical section and record write. The returned
+    /// record is the exact committed state used by gateway dispatch.
+    pub async fn assign_task_with_record(
+        &self,
+        task_id: &str,
+        to: Principal,
+        actor: Option<Principal>,
+    ) -> Result<(String, Value, ThreadTask), TaskServiceError> {
         validate_principal(&to)?;
         let actor = actor.unwrap_or_else(default_actor);
         validate_principal(&actor)?;
-        self.mutate_task(task_id, move |task| {
-            let previous = task.assignee.clone();
-            task.assignee = Some(to.clone());
-            let previous_status = task.status;
+        let (thread_id, _) = self.resolve_task_record(task_id).await?;
+        let lock = task_thread_lock(&thread_id);
+        let _guard = lock.lock().await;
+        let mut record = self
+            .thread_store
+            .get(&thread_id)
+            .await
+            .map_err(store_error)?
+            .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
+        let mut task = task_from_record(&record)?
+            .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
+
+        if let Principal::Agent { agent_id } = &to {
+            let requested_agent_id = agent_id.trim();
+            let current_agent_id = crate::agent_id_from_value(&record);
+            let (binding, is_new_binding) = if let Some(current_agent_id) = current_agent_id {
+                let binding = self
+                    .new_task_agent_gate
+                    .resolve_existing_task_agent(&current_agent_id)
+                    .await?;
+                if binding.agent_id != requested_agent_id {
+                    return Err(TaskServiceError::BadRequest(format!(
+                        "task thread {thread_id} is bound to agent {}; cannot assign it to agent {requested_agent_id}",
+                        binding.agent_id
+                    )));
+                }
+                (binding, false)
+            } else {
+                (
+                    self.new_task_agent_gate
+                        .resolve_new_task_agent(Some(requested_agent_id))
+                        .await?,
+                    true,
+                )
+            };
+            if binding.agent_id != requested_agent_id {
+                return Err(TaskServiceError::BadRequest(format!(
+                    "task thread {thread_id} resolved agent {}; cannot assign it to agent {requested_agent_id}",
+                    binding.agent_id
+                )));
+            }
+            if let Some(thread_provider_type) = record
+                .get("provider_type")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<garyx_models::ProviderType>(value).ok())
+                && thread_provider_type != binding.provider_type
+            {
+                return Err(TaskServiceError::BadRequest(format!(
+                    "task thread {thread_id} is bound to provider {thread_provider_type:?}; cannot assign it to provider {:?}",
+                    binding.provider_type
+                )));
+            }
+            apply_assignment_agent_binding(&mut record, &binding, is_new_binding)?;
+        }
+
+        let previous = task.assignee.clone();
+        task.assignee = Some(to.clone());
+        let previous_status = task.status;
+        push_event(
+            &mut task,
+            actor.clone(),
+            TaskEventKind::Assigned { from: previous, to },
+            None,
+        );
+        if previous_status == TaskStatus::Todo {
+            task.status = TaskStatus::InProgress;
             push_event(
-                task,
-                actor.clone(),
-                TaskEventKind::Assigned { from: previous, to },
+                &mut task,
+                actor,
+                TaskEventKind::StatusChanged {
+                    from: previous_status,
+                    to: TaskStatus::InProgress,
+                    note: Some("assigned".to_owned()),
+                },
                 None,
             );
-            if previous_status == TaskStatus::Todo {
-                task.status = TaskStatus::InProgress;
-                push_event(
-                    task,
-                    actor,
-                    TaskEventKind::StatusChanged {
-                        from: previous_status,
-                        to: TaskStatus::InProgress,
-                        note: Some("assigned".to_owned()),
-                    },
-                    None,
-                );
-            }
-            Ok(())
-        })
-        .await
+        }
+        set_task_on_record(&mut record, &task)?;
+        self.thread_store
+            .set(&thread_id, record.clone())
+            .await
+            .map_err(store_error)?;
+        Ok((thread_id, record, task))
     }
 
     pub async fn unassign_task(
@@ -1043,6 +1162,56 @@ fn is_task_thread_title_managed(record: &Value, task: &ThreadTask) -> bool {
         .get("label")
         .and_then(Value::as_str)
         .is_some_and(|label| label == task_thread_title(task))
+}
+
+fn apply_assignment_agent_binding(
+    record: &mut Value,
+    binding: &ResolvedAgentBinding,
+    is_new_binding: bool,
+) -> Result<(), TaskServiceError> {
+    let should_fill_workspace = crate::workspace_dir_from_value(record).is_none();
+    let obj = record
+        .as_object_mut()
+        .ok_or_else(|| TaskServiceError::Store("thread record is not an object".to_owned()))?;
+    if is_new_binding {
+        obj.insert(
+            "agent_id".to_owned(),
+            Value::String(binding.agent_id.clone()),
+        );
+        obj.insert(
+            "provider_type".to_owned(),
+            serde_json::to_value(&binding.provider_type)?,
+        );
+        let metadata = obj
+            .entry("metadata".to_owned())
+            .or_insert_with(|| Value::Object(Default::default()));
+        if !metadata.is_object() {
+            *metadata = Value::Object(Default::default());
+        }
+        let metadata = metadata.as_object_mut().ok_or_else(|| {
+            TaskServiceError::Store("thread metadata is not an object".to_owned())
+        })?;
+        for (key, value) in &binding.runtime_metadata {
+            if SERVER_OWNED_AGENT_METADATA_KEYS.contains(&key.as_str()) {
+                metadata.insert(key.clone(), value.clone());
+            } else {
+                metadata.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
+    }
+    if should_fill_workspace
+        && let Some(workspace_dir) = binding
+            .default_workspace_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    {
+        obj.insert(
+            "workspace_dir".to_owned(),
+            Value::String(workspace_dir.to_owned()),
+        );
+    }
+    Ok(())
 }
 
 fn remove_task_from_record(record: &mut Value) -> Result<(), TaskServiceError> {
