@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 16 — complete self-contained specification (no references
+Status: revision 17 — complete self-contained specification (no references
 to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–15.
+rounds 1–16.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -507,11 +507,10 @@ as follows:
   — a crash between abort CAS and the leave attempt simply skips it; a
   hanging platform call cannot hold the entity in `aborting`). It is **not** attempted from `joining` aborts: at that point no
   meeting id exists locally (the join response was cancelled or never
-  arrived), so there is nothing to leave with. The full residual risks
-  are product sign-offs under S2: a joining-abort that races a late
-  remote join leaves the bot in the meeting without capture until
-  removed manually; a no-client live abort terminates locally only; a
-  crash-skipped leave has the same effect.
+  arrived), so there is nothing to leave with. The complete accepted
+  residual-risk list lives **only** in S2 (four items — joining late
+  join, no-client abort, crash-skipped leave, leave timeout/failure);
+  this section intentionally does not duplicate it.
 
 On success — CAS `joining→live`, backfill `feishu_meeting_id`
 (normalized) and `topic` (normalized per 4.1 bounds); on deadline →
@@ -580,7 +579,9 @@ CLI:
   and its own mode. Mismatches (token for another entity, token mode vs
   body mode, expired) are named 400s. Headers print the exact resume
   command: `garyx meeting read <id> --continue <token>`.
-- `garyx meeting abort <id>` (admin; joining|live)
+- `garyx meeting abort <id>` (admin; initiates from joining|live;
+  idempotent `200` on aborting/aborted; refused `409` on
+  finalizing/finalized — full table in 4.3)
 - `garyx meeting delete <id>` (terminal only)
 
 API:
@@ -627,18 +628,43 @@ or `--thread`; missing both → error naming both remedies). `--full` and
 ever created or touched. Only a successful incremental fetch creates a
 cursor row.
 
-**Response budget (R7-02, RR8-01, RR15-01):** the **single normative
-budget algebra is the serialized byte length of the structured JSON
-response body** — the `{meta, segments[]}` DTO defined above, measured
-at serialization time on the exact bytes sent. `meta` fields (all
-non-null unless noted): `mode`, `entity_id`, `log_epoch`, `status`,
-`span_from`/`span_to` (null for empty increments), `closed_total`,
-`receipt?` (incremental only), `continue_token?` (stateless only),
-`notes[]`. There is **no render-mode input to claim sizing**: human
-formatting is CLI-local presentation and its stdout may legitimately
-exceed the JSON budget (framing/prefix inflation affects the terminal,
-never the claim or the pending span). `--max-bytes` (floor 4096; below
-→ CLI error) is the client's requested value for this JSON budget. Two
+**Response budget (R7-02, RR8-01, RR15-01, RR16-01):** the **single
+normative budget algebra is the serialized byte length of the
+structured JSON response body**, measured on the exact HTTP body bytes
+sent. Success DTO (complete; `?` = nullable):
+
+```
+meta: {
+  mode: string, entity_id: string, log_epoch: int,
+  status: string, status_detail: string, end_source: string,
+  stalled_reason: string, content_state: string,
+  topic: string,                       // normalized per 4.1 bounds
+  started_at: string, ended_at: string?, finalized_at: string?,
+  content_lost_at: string?, updated_at: string,
+  span_from: int?, span_to: int?,      // null for empty increments
+  closed_total: int,
+  receipt: string?,                    // incremental only
+  continue_token: string?,             // stateless, more pages
+  notes: [string]                      // e.g. overshoot / pending-replay notes
+}
+segments: [ … ]   // isomorphic to the canonical `seg` line schema of 4.2
+                  // (same fields, same types, same bounds), minus the "t" tag
+```
+
+There is **no render-mode input anywhere on the server**: claims,
+budgets, and replay are functions of the JSON body alone; human
+formatting is CLI-local presentation whose stdout may legitimately
+exceed the JSON budget. The single-segment minimum-progress exception
+is defined on the same algebra: a response whose serialized JSON —
+containing exactly one segment plus `meta` — exceeds the budget is
+still served, with an explanatory entry in `meta.notes`. `--max-bytes`
+(floor 4096; below → CLI error) is the client's requested value for
+this JSON budget. **Multi-page accumulation** (stateless modes): the
+CLI counts consumed HTTP body bytes; each subsequent request sends
+`max_bytes = clamp(requested_total - consumed, 0…)`; when the
+remainder falls below 4096 the CLI stops and prints the resume command
+(no sub-floor request is ever sent), except that the very first page
+may overshoot under the single-segment exception. Two
 rules govern its interaction with pending spans:
 
 - **Every newly produced page is budget-bounded server-side:** the
@@ -647,15 +673,14 @@ rules govern its interaction with pending spans:
   is the **server-side hard cap** on any newly produced page (RR9-03: a
   huge `--max-bytes` cannot bypass server pagination), so no caller can
   mint an arbitrarily large pending span or response — with the single-segment
-  minimum-progress exception (a lone segment whose rendered form exceeds
-  the budget is still claimed and served, with the explicit header note
-  `single segment exceeds requested budget`).
+  minimum-progress exception (a lone segment whose single-segment JSON response exceeds the budget
+  is still claimed and served, with a `meta.notes` entry).
 - **Pending replay is indivisible:** an existing pending span is the
   atomic delivery unit. A re-serve returns the **entire pending span**
-  regardless of the current request's budget or render mode (header
-  note: `pending replay exceeds requested budget`), because serving a
-  subset while confirming the original receipt would silently skip the
-  remainder. Budget and mode apply to *new* claims only.
+  regardless of the current request's budget (`meta.notes` carries
+  `pending replay exceeds requested budget` when applicable), because
+  serving a subset while confirming the original receipt would silently
+  skip the remainder. Budgets apply to *new* claims only.
 
 A zero-progress response or non-advancing continuation token is never
 returned; response
@@ -768,8 +793,10 @@ inactivity expiry. Tokens are base64url (shell-safe) encoding
 The CLI loops within one invocation streaming pages to stdout until
 exhausted, or stops once **cumulative fetched JSON bytes** reach
 `--max-bytes` (the same single algebra; human stdout size does not
-gate) and prints the resume command with the latest token. Inactivity >10 min → the read restarts from the
-beginning (stateless by design; stated in output). Appends beyond the
+gate) and prints the resume command with the latest token. Inactivity >10 min → the server returns a typed `token_expired` 400;
+the CLI does **not** auto-restart — it prints the original full/range
+command for the user/agent to re-run explicitly (predictability over
+convenience; unified with the named-400 rule of 6.1). Appends beyond the
 snapshot are invisible to that snapshot's pages.
 
 ### 6.6 Self-describing output and untrusted framing
@@ -1046,10 +1073,25 @@ token-vs-path-entity and token-mode mismatches; pending claimed via
 JSON re-served under human rendering (same span — format is not part
 of the claim); NDJSON paging in `--json`.
 
-**Abort response (RR15-03):** end-to-end through the real CLI helper —
-abort during a 10 s page + hanging leave still returns 200 at the
-intent CAS; timeout-and-retry hits the idempotent no-op; entity
-converges to aborted within the leave bound.
+**Abort response (RR15-03, RR16-02):** end-to-end through the real CLI
+helper — full state/response table exercised (200 CAS / 200 no-op /
+409 finalizing / 404 deleted / end-wins 409); slow page (9.9 s fetch +
+delayed fdatasync + SQLite busy) → first request times out at the CLI,
+retry returns idempotent 200; HTTP disconnect does not cancel the
+admitted command; waiting duplicate aborts answered before the leave
+attempt; entity converges to aborted within the leave bound.
+
+**Budget accumulation (RR16-01):** full-DTO round-trip (every meta
+field asserted, segment DTO isomorphic to the seg schema); two-page
+cumulative budget (50 KiB page then remaining 14 KiB — second request
+carries the remainder); remainder < 4096 stops with resume command;
+first-page single-segment overshoot allowed; the 48 KiB-JSON /
+96 KiB-human counterexample pinned (both segments claimed; stdout
+exceeds JSON budget legally).
+
+**Token expiry (RR16-03):** expired range token → typed 400 → CLI
+prints the original command and exits nonzero; checksum/path/mode
+validation precedes expiry check.
 
 **Leave bound (RR14-04):** a never-returning `leave()` — entity reaches
 `aborted` within the timeout bound, exactly one attempt observed.
