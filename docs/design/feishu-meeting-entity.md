@@ -1,95 +1,94 @@
 # Feishu meeting entity
 
-Status: revision 3, addressing adversarial review #TASK-2337 rounds 1–2
+Status: revision 4, addressing adversarial review #TASK-2337 rounds 1–3
 Author: gary (design)
 Supersedes: `docs/design/feishu-group-listen-mode.md` (group listening product
-surface is cancelled). Meeting **content** never enters thread ledgers; the
-foreign-tail hazard that design documented is honored by shipping zero
-background ledger writes in Phase 1 (Section 7.3).
+surface is cancelled). Meeting **content** never enters thread ledgers; Phase
+1 ships zero background ledger writes (Section 7.3).
 
 ## 1. Summary
 
 When someone invites the Garyx bot into an ongoing Feishu meeting, the bot
 joins, polls in-meeting events, and materializes a first-class **meeting
-entity**. Live entities grow tick by tick; every poll tick durably closes
-everything it produced before the watermark advances, so a crash never loses
-captured content. When the meeting ends, capture drains the platform's grace
+entity**. Capture is durably checkpointed at bounded tick granularity; a
+crash never loses closed content and never loses more than the current
+bounded tick. When the meeting ends, capture drains the platform's grace
 window and the entity becomes immutable.
 
-Agents read entities only through `garyx meeting read`. The CLI resolves the
-calling thread from `GARYX_THREAD_ID`; the server keeps a per-(entity,
-thread) cursor with a **fetch/confirm two-phase protocol executed inside the
-single CLI invocation**, so delivery is at-least-once (duplicates possible on
-failure, silent skips impossible) while the agent experience stays "run one
-command, get the increment, told exactly what it is".
+Agents read entities only through `garyx meeting read`. The server keeps a
+per-(entity, thread) integer segment cursor with a fetch/confirm two-phase
+protocol executed inside the single CLI invocation: delivery is
+at-least-once for unconfirmed spans, silent skips are impossible, and
+oversized content is split into independent segments **at write time** so
+the cursor's unit is always a whole segment.
 
-All lifecycle transitions run through one per-entity coordinator over
-durable CAS states with persisted intent stages, so every path — including
-abort and finalize — is crash-resumable.
+All user-turn entry paths — fresh runs, queued follow-ups, and the direct
+`/api/chat/stream-input` route used by desktop and iOS — share one
+`prepare_user_turn` seam in the bridge, which injects the meeting context
+block into provider input and stamps server-owned refs into acknowledged
+user metadata.
 
 ## 2. Product contract (user-approved, 2026-07-16)
 
-1. Meetings only. No group-chat listening product surface.
-2. Start: an in-meeting invite (`vc.bot.meeting_invited_v1`) admits, joins,
-   and starts polling. Manual `garyx meeting join` is a debug path.
-3. Live: the entity accumulates content in near-real-time (~30 s transcript
-   latency is a platform property).
-4. Read protocol: CLI-only content access; per-thread server cursors;
-   incremental by default; self-describing output.
+1. Meetings only.
+2. Start: an in-meeting invite admits, joins, and starts polling. Manual
+   `garyx meeting join` is a debug path.
+3. Live: near-real-time accumulation (~30 s transcript latency is a
+   platform property).
+4. Read protocol: CLI-only access; per-thread server cursors; incremental
+   by default; self-describing output.
 5. End: the meeting-ended signal stops capture and freezes the entity.
-6. Reference continuity: threads that referenced an entity keep getting
-   incremental reads; recognition is server state.
+6. Reference continuity: recognition of prior references is server state.
 
 Product sign-off items (accepted limits):
 
-- Feishu WS ACKs before processing. An invite is lost if the process dies,
-  or the admission insert fails after bounded retries (3 attempts with
-  backoff; disk-full/DB-error is logged at error level), in the window
-  between ACK and durable admission. After admission everything is
-  crash-recoverable.
-- Re-inviting the bot to the same meeting after its entity reached a
-  terminal state (or was deleted) creates a **new** entity capturing from
-  that point on. One entity per admission, by design.
-- A meeting's final ~30 s of speech becomes readable during the post-end
-  grace drain, not instantly.
+- Feishu WS ACKs before processing. An invite is lost iff the process dies
+  or the admission insert exhausts bounded retries (3 attempts with
+  backoff, error-logged) in the ACK→admission window.
+- One entity per admission: re-inviting after terminal/deletion creates a
+  new entity capturing from that point.
+- A meeting's final ~30 s of speech becomes readable during the grace
+  drain.
+- A crash can lose at most the current in-memory tick, which is bounded
+  (Section 4.2); such loss is detectable (checkpoint chain gap vs platform
+  re-pull) and healed by the idempotent re-pull.
 
 ## 3. Verified repository baseline
 
-B1–B12 as re-verified in review round 2 (all CONFIRMED there):
+B1–B12 as confirmed by review rounds 2–3:
 
 | # | Fact | Evidence |
 |---|---|---|
-| B1 | WS ACKs before processing; only `im.message.receive_v1` handled; 30 min event-id dedup cache | `garyx-channels/src/feishu/ws.rs:968,1040,1049-1072`, `feishu.rs:95` |
-| B2 | `FeishuChannel::new(config, router, bridge, dispatcher, public_url)` → `FeishuRuntimeContext` | `feishu.rs:370`, `ws.rs:38-69` |
-| B3 | gateway depends on channels (never reverse); a trait defined in channels and implemented in gateway compiles. This design introduces the **first** gateway→channels injected trait, threaded like `dispatcher` | `garyx-gateway/Cargo.toml:20`, `plugin.rs:3235,3322` |
-| B4 | `FeishuClient` is `Clone` but `pub(crate)` — gateway cannot name it; cross-crate use requires a public trait object | `client.rs:127` |
-| B5 | `CronService`: select loop, stop channel, `Weak<AppState>`, stale-state reset on boot | `cron.rs:633,713-796,799-851` |
-| B6 | Capsule precedent: disk content + SQLite STRICT metadata + PRAGMA migration (storage shape only) | `capsules.rs:158,273`, `garyx_db/mod.rs:2645,3559` |
-| B7 | Control records are produced inside provider-run persistence ordering; foreign rows at a run tail trigger reconcile re-append — no safe background control seam | `persistence.rs:364`, `store.rs:521` |
-| B8 | `GARYX_THREAD_ID` injected into agent env from runtime metadata | `gary_prompt.rs:148-154`, `commands/task.rs:233` |
-| B9 | CLI mutation timeout 10 s — all reads must fit a page budget | `gateway_client.rs:15` |
-| B10 | `gary_prompt` is a synchronous formatter; meeting context must be resolved earlier and carried in metadata | `gary_prompt.rs:36,73,125` |
-| B11 | Per-thread SSE forwards only matching `committed_message`; no global client event route → no meeting SSE in Phase 1 | `event_stream_hub.rs:6-49`, `routes.rs:2369` |
-| B12 | Thread delete/archive are their own transaction paths; the workflow purge is one-shot, not a hook | `garyx_db/mod.rs:650,2036` |
-| B13 | The one seam every user-turn entry path (channel, app/API, queued follow-up, internal dispatch) truly shares is bridge `start_agent_run`, including the queued branch | `run_management.rs:439,491` |
+| B1 | WS ACKs before processing; only `im.message.receive_v1` handled; 30 min event-id dedup | `ws.rs:968,1040,1049-1072`, `feishu.rs:95` |
+| B2 | `FeishuChannel::new(...)` → `FeishuRuntimeContext` injection | `feishu.rs:370`, `ws.rs:38-69` |
+| B3 | gateway depends on channels; channels-defined/gateway-implemented trait compiles; this is the first such trait | `garyx-gateway/Cargo.toml:20`, `plugin.rs:3235,3322` |
+| B4 | `FeishuClient` is `Clone` but `pub(crate)` | `client.rs:127` |
+| B5 | `CronService` background-service shape | `cron.rs:633,713-796,799-851` |
+| B6 | Capsule storage precedent | `capsules.rs:158,273`, `garyx_db/mod.rs:2645,3559` |
+| B7 | No safe background control-record seam; foreign tail rows trigger reconcile re-append | `persistence.rs:364`, `store.rs:521` |
+| B8 | `GARYX_THREAD_ID` env injection | `gary_prompt.rs:148-154` |
+| B9 | CLI mutation timeout 10 s | `gateway_client.rs:15` |
+| B10 | `gary_prompt` is a synchronous formatter | `gary_prompt.rs:36,73,125` |
+| B11 | No global client event route; no meeting SSE in Phase 1 | `event_stream_hub.rs:6-49`, `routes.rs:2369` |
+| B12 | Thread delete/archive are their own transaction paths | `garyx_db/mod.rs:650,2036` |
+| B13 (corrected, round 3) | `start_agent_run` is NOT a universal seam: `/api/chat/stream-input` calls `add_streaming_input` directly (used by desktop and iOS), and the queued branch forwards only a five-field attribution allowlist to the provider | `application/chat/control.rs:30`, `desktop .../stream.ts:944`, `GaryxMobileModel+Composer.swift:298`, `run_management.rs:94,254` |
 
-External platform facts: as revision 2 (join/events endpoints, `page_token`
-continuation documented by the official manual, event types, ~30 s
-transcript latency in 5 s/100-item batches, multi-party only, per-meeting
-owner switch, `10005` not-in-meeting, 5-minute post-end window, `20001`
-after it, minutes not auto-authorized, console event subscription
-prerequisite). `page_token` is treated as an **opaque** continuation token:
-never compared, never ordered, only stored and resumed from (RR2-01).
+External platform facts: as prior revisions. `page_token` is opaque —
+stored and resumed from, never compared. Error typing (RR3-05):
+`MeetingApiError = NotInMeeting (10005) | GraceExpired (20001) |
+RetriableTransport | Other(code, msg)`. `20001` means the post-end window
+is already over. Whether an in-band "meeting ended" page item exists is
+**pinned by the sample gate** (3.1); if the fixtures show none, the only
+end sources are the push event and `GraceExpired`.
 
 ### 3.1 Sample-pinning gate
 
-Slice 2 starts by capturing sanitized real samples (invite/ended envelopes,
-join response, events pages) and committing them as fixtures. Two facts must
-be pinned before ingestion code: (a) invite payload fields and the identity
-usable at joining time; (b) whether the ended event's meeting identity can
-be correlated to a joining-stage entity (Section 5.4 end-during-joining).
-A mismatch with this design stops slice 2 for a design amendment. Slice 1
-has no Feishu dependency.
+Slice 2 opens by capturing sanitized fixtures: invite/ended envelopes, join
+response, events pages (including, if reproducible, pages read during the
+grace window and the `20001` response). Pinned facts: invite payload
+fields; joining-stage identity; existence or absence of an in-band ended
+item; grace-window read behavior. Mismatch with this design stops slice 2
+for an amendment. Slice 1 has no Feishu dependency.
 
 ## 4. Entity model and storage
 
@@ -98,51 +97,34 @@ has no Feishu dependency.
 `meetings` (STRICT; all timestamps UTC RFC3339 `Z`):
 
 ```
-id                 TEXT PRIMARY KEY
-account_id         TEXT NOT NULL
-meeting_no         TEXT NOT NULL
-feishu_meeting_id  TEXT NOT NULL DEFAULT ''
-invite_event_id    TEXT NOT NULL
-call_id            TEXT NOT NULL DEFAULT ''
-topic              TEXT NOT NULL DEFAULT ''
-invited_by         TEXT NOT NULL DEFAULT ''
-status             TEXT NOT NULL CHECK(status IN
-                     ('joining','live','finalizing','aborting','finalized','aborted'))
-status_detail      TEXT NOT NULL DEFAULT ''
-end_source         TEXT NOT NULL DEFAULT '' -- 'push' | 'poll_ended' | 'grace_expired' | ''
-join_deadline_at   TEXT NOT NULL
-grace_deadline_at  TEXT
-poll_cursor        TEXT NOT NULL DEFAULT ''  -- cache; checkpoint chain in the log is truth
-closed_segment_count INTEGER NOT NULL DEFAULT 0 -- checkpoint cache; log is truth
-byte_size          INTEGER NOT NULL DEFAULT 0
-started_at         TEXT NOT NULL
-ended_at           TEXT
-finalized_at       TEXT
-created_at / updated_at TEXT NOT NULL
+id / account_id / meeting_no / feishu_meeting_id ('' until join)
+invite_event_id / call_id / topic / invited_by
+status CHECK(status IN ('joining','live','finalizing','aborting','finalized','aborted'))
+status_detail TEXT NOT NULL DEFAULT ''
+stalled_reason TEXT NOT NULL DEFAULT ''  -- '' | 'no_client' | 'auth_failed' | 'transport'
+end_source TEXT NOT NULL DEFAULT ''      -- '' | 'push' | 'poll_ended'(if pinned) | 'grace_expired'
+join_deadline_at / grace_deadline_at
+poll_cursor (cache; log checkpoint chain is truth)
+closed_segment_count / byte_size (caches)
+started_at / ended_at / finalized_at / created_at / updated_at
 ```
 
-Uniqueness (RR2-05, RR2-11):
-
-- `UNIQUE(invite_event_id)` — WS redelivery idempotence.
-- Partial unique `(account_id, meeting_no) WHERE status IN
-  ('joining','live','finalizing','aborting')` — at most one **active**
-  entity per meeting per account. Terminal/deleted entities do not block a
-  fresh admission: one entity per admission is the product rule (§2).
-- Partial unique `(account_id, feishu_meeting_id) WHERE
-  feishu_meeting_id <> '' AND status IN
-  ('joining','live','finalizing','aborting')` — long-id variant, empty
-  strings excluded.
+Uniqueness: `UNIQUE(invite_event_id)`; partial unique
+`(account_id, meeting_no)` and `(account_id, feishu_meeting_id) WHERE
+feishu_meeting_id <> ''`, both over
+`status IN ('joining','live','finalizing','aborting')` — one **active**
+entity per meeting per account; terminal/deleted never blocks a fresh
+admission (§2).
 
 `meeting_read_cursors` (STRICT):
 
 ```
-meeting_id     TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE
-thread_id      TEXT NOT NULL
-confirmed_seq  INTEGER NOT NULL DEFAULT 0
-pending_from   INTEGER
-pending_to     INTEGER
-receipt        TEXT              -- opaque token for the pending span
-updated_at     TEXT NOT NULL
+meeting_id REFERENCES meetings(id) ON DELETE CASCADE
+thread_id
+confirmed_seq INTEGER NOT NULL DEFAULT 0
+pending_from / pending_to INTEGER
+receipt TEXT
+updated_at
 PRIMARY KEY (meeting_id, thread_id)
 CHECK ((pending_from IS NULL) = (pending_to IS NULL)
    AND (pending_from IS NULL) = (receipt IS NULL)
@@ -150,471 +132,357 @@ CHECK ((pending_from IS NULL) = (pending_to IS NULL)
         (pending_from > confirmed_seq AND pending_to >= pending_from)))
 ```
 
-`meeting_thread_refs` (STRICT) — a **canonical relation**, not a projection:
-the ref is created by an explicit attach API and this table is its single
-source of truth (mirroring `thread_channel_endpoints`' standing). Condition
-queries about refs therefore read this table directly, satisfying the
-no-body-scan rule.
+Cursors are whole-segment integers only; there is no sub-segment position
+anywhere in the protocol (RR3-02 resolved at write time, 4.2).
+
+`meeting_thread_refs` (STRICT) — a **canonical relation** (the attach API
+is its single writer; it is the source of truth for "which threads hold a
+ref", satisfying the no-body-scan rule):
 
 ```
-meeting_id  TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE
-thread_id   TEXT NOT NULL
-attached_at TEXT NOT NULL
+meeting_id REFERENCES meetings(id) ON DELETE CASCADE
+thread_id / attached_at
 PRIMARY KEY (meeting_id, thread_id)
 ```
 
-Indexes: `idx_meetings_updated(updated_at DESC)`,
-`idx_meetings_status(status)`, `idx_refs_thread(thread_id, attached_at DESC)`.
+Indexes: `idx_meetings_updated(updated_at DESC, id)` (keyset pagination,
+RR3-09), `idx_meetings_status(status)`,
+`idx_refs_thread(thread_id, attached_at DESC)`.
 
-Thread delete/archive transactions (B12) additionally
-`DELETE FROM meeting_read_cursors / meeting_thread_refs WHERE thread_id=?`;
-`/read` validates thread existence inside the cursor transaction so deleted
-threads cannot resurrect cursors.
+Thread delete/archive transactions also delete this thread's cursor and
+ref rows; `/read` and `/refs` validate thread existence (and non-archived
+state, for attach) inside their transactions (RR3-08).
 
-### 4.2 Content: checkpointed segment log (RR2-01)
+### 4.2 Content: bounded-tick checkpointed segment log
 
-`~/.garyx/meetings/{entity_id}/segments.jsonl` is the single content truth.
-Two line kinds:
+`~/.garyx/meetings/{entity_id}/segments.jsonl`, two line kinds:
 
 ```
 {"t":"seg","seq":12,"kind":"transcript","speaker":"张三","start":"…","end":"…",
  "text":"…","sources":["sent_8813","sent_8814"]}
-{"t":"ckpt","cursor_out":"pt_x9y8…","at":"2026-07-16T02:35:12Z"}
+{"t":"ckpt","cursor_out":"pt_x9y8…","at":"…"}
 ```
 
-**Tick protocol (the crash-safety core):**
+**Write-time size splitting (RR3-02):** before a segment is appended, text
+larger than 32 KiB (half the default response budget) is split at UTF-8
+boundaries into consecutive independent segments, each with its own seq
+(`"cont":true` marks continuations for rendering). The read protocol,
+cursors, and receipts therefore only ever address whole integer segments.
 
-1. A poll tick pages from the persisted cursor until `has_more=false`,
-   pausing between pages to service terminal signals (Section 5.4).
-2. All items produced by the tick are **closed at tick end** — speaker
-   coalescing operates within a single tick only; nothing stays open across
-   ticks, so there is no open-segment durability problem by construction.
-   (Cost: an utterance spanning two ticks becomes two segments. Correctness
-   over cosmetics.)
-3. Write order, under the entity I/O lock: append all `seg` lines → append
-   one `ckpt` line with the tick's final `cursor_out` (written for **every**
-   tick, including empty or all-duplicate ones) → `fdatasync` the file →
-   update SQLite caches (`poll_cursor`, `closed_segment_count`,
-   `byte_size`, `updated_at`) in one transaction.
-4. Dedup on replay/re-pull is by `sources` platform ids (sentence ids, chat
-   message ids, share event ids) — re-materializing a re-pulled page is a
-   no-op.
+**Bounded tick protocol (RR3-04):** a tick pages from the persisted
+cursor. The tick **closes** — mandatorily — when any bound is hit:
+`has_more=false`, 10 pages, 1000 items, 1 MiB accumulated text, or 10 s
+wall time. Closing a tick is the single durability sequence, under the
+entity I/O lock:
 
-**Boot repair:** validate the log line by line, truncating a torn tail; the
-last valid `ckpt` line is the authoritative resume cursor (SQLite
-`poll_cursor` is only a cache and is corrected from the log); `seg` lines
-after the last `ckpt` (crash mid-step-3) are kept — re-pulling their page is
-idempotent by `sources`. Segment count/byte size recompute from the log.
-Opaque tokens are never compared for freshness — the chain position defines
-recency (RR2-01).
+1. close all open coalescing (coalescing never crosses a tick close);
+2. append `seg` lines → append one `ckpt` line (every tick closes with a
+   ckpt, including empty/all-duplicate ticks) → `fdatasync`;
+3. update SQLite caches in one transaction.
 
-Markdown is a render format produced from structured segments at response
-time; no Markdown lives on disk. There are no header or end-marker segments
-— entity metadata renders headers/footers (RR2-02 simplification).
+If bounds forced the close with `has_more=true`, the coordinator
+immediately schedules the next tick (continuous small ticks under high
+volume — content becomes durable and readable incrementally). Terminal
+signals and all queue commands are serviced **only at tick closes**
+(RR3-04/RR3-05 arbitration point); a signal arriving mid-tick waits for
+the bounded close (≤ 10 s).
 
-### 4.3 Entity deletion (RR2-07)
+Dedup on replay/re-pull is by `sources` ids. **Boot repair** (only for
+non-terminal entities or logs marked dirty): validate line by line,
+truncate a torn tail, take the last valid `ckpt` as the resume cursor
+(SQLite cache corrected from it), keep `seg` lines after it (re-pull is
+idempotent), rebuild counters, and build the in-memory offset index in the
+same pass (RR3-09). Terminal logs are not scanned at boot.
+
+Markdown is a render format; no header/end-marker segments exist.
+
+### 4.3 Entity deletion
 
 Only terminal entities are deletable. Under the entity I/O lock:
+`rename → tombstone`, DB delete (cascades), remove tombstone. **A missing
+content dir is a legal empty entity** (a joining-deadline abort may never
+have appended anything): delete then skips the rename and runs only the DB
+protocol (RR3-07). Boot order: **reconcile tombstones first, then repair
+logs** (RR3-07) — tombstone+row → rename back; tombstone without row →
+remove; bare orphan dir without row → logged, removed.
 
-1. atomically `rename {id}/ → {id}.tombstone/`;
-2. DB transaction deletes the `meetings` row (cascading cursors/refs);
-3. remove the tombstone dir.
-
-Boot sweep: `tombstone` **with** a surviving row → rename back (delete
-never happened); `tombstone` without a row → remove it; an ordinary dir
-without a row (legacy orphan) → logged and removed. Every crash point lands
-in one of these three recoveries.
-
-API: `DELETE /api/meetings/{id}` (409 for non-terminal entities) + CLI
-`garyx meeting delete <id>`.
+API: `DELETE /api/meetings/{id}` (409 non-terminal) + `garyx meeting
+delete`.
 
 ## 5. Ingestion
 
-### 5.1 Platform client seam and registry lifecycle (RR2-06)
+### 5.1 Platform client seam and registry
 
-`garyx-channels` defines (new `meeting_sink.rs`):
+As revision 3 (`MeetingPlatformClient` + `MeetingEventSink` with
+`register_client`/`unregister_client`, adapter inside garyx-channels,
+non-blocking admission insert with 3 bounded retries, typed errors — now
+including `GraceExpired`).
 
-```rust
-#[async_trait]
-pub trait MeetingPlatformClient: Send + Sync {
-    async fn join(&self, meeting_no: &str, call_id: Option<&str>) -> Result<JoinedMeeting, MeetingApiError>;
-    async fn poll_events(&self, feishu_meeting_id: &str, page_token: &str) -> Result<EventsPage, MeetingApiError>;
-}
+**Stalled semantics, per state (RR3-06):**
 
-pub trait MeetingEventSink: Send + Sync {
-    fn register_client(&self, account_id: &str, client: Arc<dyn MeetingPlatformClient>);
-    fn unregister_client(&self, account_id: &str);
-    fn on_meeting_invited(&self, invite: MeetingInvite);
-    fn on_meeting_ended(&self, account_id: &str, feishu_meeting_id: &str);
-}
-```
+- `stalled_reason` is persisted and shown by `garyx meeting list`
+  (`no_client` — registry has no client for the account; `auth_failed` —
+  client present but calls fail with auth-class `Other`; `transport` —
+  continuous transport failure > 15 min).
+- **joining**: the absolute `join_deadline_at` always applies — it models
+  invite validity, and a meeting will not wait for our client registry.
+  Deadline expiry aborts even while stalled (single rule, no pause).
+- **live**: never auto-aborted for stalled reasons (content is safe;
+  capture may resume). `NotInMeeting` remains the only automatic abort.
+- **finalizing**: abort is refused entirely. If the drain cannot run
+  (stalled), the entity still transitions to `finalized` at
+  `grace_deadline_at` — the drain window has passed either way, and the
+  endgame of finalizing is always `finalized` (this also removes the
+  "admin abort of stalled-finalizing" contradiction).
+- Admin `garyx meeting abort <id>` / `POST /api/meetings/{id}/abort`
+  applies to `joining` and `live` only.
 
-- `FeishuChannel::start` registers one adapter per enabled account (adapter
-  lives in garyx-channels where `FeishuClient` is nameable); `stop` and
-  account disable/removal unregister; re-register replaces (restart-safe).
-- A coordinator that finds no client for its account **stays in its
-  persisted state** and retries every 60 s; `garyx meeting list` marks such
-  entities `stalled (no platform client)`. Permanent situations (account
-  deleted, `meeting_entities=false`, dead credentials) are resolved by the
-  administrative terminator `garyx meeting abort <id>` /
-  `POST /api/meetings/{id}/abort`, which runs the normal abort path. This
-  cleanly distinguishes startup races (self-heal) from permanent loss
-  (explicit, auditable action).
-- `on_meeting_invited` performs the admission insert (bounded: 3 attempts
-  with 100 ms/1 s backoff) plus a coordinator nudge, and nothing else — no
-  network, no long waits on the WS loop. Persistent insert failure is
-  logged at error level (product sign-off, §2).
-- `MeetingApiError` is typed: `NotInMeeting`, `MeetingEnded`,
-  `RetriableTransport`, `Other(code, msg)`.
+### 5.2 Coordinator, admission, joining
 
-### 5.2 Per-entity coordinator over durable intents (RR2-02)
+As revision 3 (per-entity coordinator; durable CAS; intent stages
+`aborting`/`finalizing`; admission insert = the only sink work; lazy
+`ensure_dir`; join retry every 20 s to the absolute deadline), with one
+arbitration refinement (RR3-05): terminal-affecting commands
+(`EndedSignal`, `AbortRequest`, `NotInMeeting`) are collected and resolved
+at tick closes with deterministic priority **end > abort**; if both are
+queued, the end path wins and the abort is dropped as subsumed.
 
-`MeetingService` (gateway; CronService shape) runs one coordinator task per
-non-terminal entity, consuming a command queue (`Nudge`, `EndedSignal`,
-`AbortRequest`, `PollTick`, `Shutdown`). Every transition is a durable CAS
-on `status`; CAS losers are no-ops. **Terminal states are reached only
-through persisted intent stages**, so every flush is resumable:
+Join succeeding during the grace window is legal: subsequent polls return
+events until the window closes with `GraceExpired`, which finalizes (the
+"end during joining" case needs no cross-identity correlation; corrected
+per RR3-05 — polls during grace do return data, the end comes from
+`GraceExpired`, or earlier from a pinned in-band ended item if fixtures
+show one).
 
-- **finalize**: `live → finalizing` (intent; drain runs here) →
-  [drain complete] → `finalizing → finalized` (pure CAS, no I/O between
-  drain end and CAS; the drain's last tick already checkpointed).
-- **abort**: `joining|live → aborting` (intent, with `status_detail`) →
-  flush: close nothing (segments only close at tick end; there is nothing
-  open between ticks), write final `ckpt` if a tick was interrupted →
-  `aborting → aborted`.
-- Boot resumes `finalizing` (drain until `grace_deadline_at`) and
-  `aborting` (finish flush, CAS terminal) exactly where they stopped.
-- `finalized` and `aborted` both refuse appends (writer checks status under
-  the I/O lock).
-- Priority: once `finalizing` is entered, `AbortRequest` is refused
-  (drain owns the endgame); `NotInMeeting` during finalizing means no more
-  data is readable → complete the drain early and CAS to `finalized`
-  (RR2-02, RR2-04). The administrative abort (5.1) applies to
-  `joining|live|stalled-finalizing` where stalled means no client.
+### 5.3 End path and grace drain
 
-**Admission (K1):** the sink's insert creates
-`status='joining'` with `join_deadline_at = now + join_retry_window`
-(absolute). Unique indexes make duplicate invites no-ops (§4.1). The
-content dir is created lazily by the writer (`ensure_dir` before first
-append — idempotent, self-healing for a missing dir; no file work sits
-between any CAS pair, RR2-02).
-
-**Joining:** retry `join` every 20 s until success or the absolute
-deadline. Success: CAS `joining → live` + backfill `feishu_meeting_id`,
-`topic`. Deadline: abort path (entity remains as the durable record).
-Restart: resume retrying to the same deadline. If the meeting had already
-ended, `join` keeps failing and the deadline aborts — acceptable; and if
-join succeeds during the grace window, the first poll returns
-`MeetingEnded` and the normal end path runs (this also covers
-"end-during-joining": no cross-identity correlation is needed because the
-poll bootstraps the end, RR2-04).
-
-**Live:** `PollTick` every `poll_interval_secs` (default 30, jittered),
-executing the tick protocol of §4.2. Between pages the coordinator services
-its queue; a terminal signal interrupts pagination after the current page
-completes its checkpointed write (RR2-04 starvation fix). Transport errors
-back off 30→60→120 s. `NotInMeeting` with no end signal → abort path (bot
-removed). `MeetingEnded` → end path.
-
-### 5.3 End path and grace drain (RR2-04)
-
-On `EndedSignal(source)`:
-
-- `source=push` or `poll_ended` (API returned MeetingEnded): CAS
-  `live → finalizing`, `ended_at = now`,
-  `grace_deadline_at = now + 4 min`, `end_source` recorded. Drain: keep
-  polling on normal cadence **until the deadline** — no quiescence
-  shortcut; the platform gives no completeness watermark, so we spend the
-  window we are given (RR2-04). Then CAS to `finalized`.
-- `source=grace_expired` (`20001`): the platform says the window is over —
-  nothing to drain. CAS `live → finalizing` (recording `end_source`) and
-  immediately complete: final `ckpt`, CAS `finalized`.
-- `EndedSignal` for an unknown `(account_id, feishu_meeting_id)` — e.g. the
-  entity is still `joining` with an empty long id — is logged and dropped;
-  the joining→live→first-poll bootstrap covers it (5.2).
-- Duplicate/racing signals lose the `live → finalizing` CAS and vanish.
+- `EndedSignal(push)` (or `poll_ended` if pinned): CAS `live→finalizing`,
+  `ended_at=now`, `grace_deadline_at = now + 4 min`, drain on normal
+  cadence **to the deadline** (no quiescence shortcut), then CAS
+  `finalized`.
+- `GraceExpired` while live: window already over — CAS `live→finalizing`
+  with `end_source='grace_expired'` and complete immediately (final ckpt,
+  CAS `finalized`).
+- `GraceExpired` while **finalizing**: accelerates completion — the drain
+  stops now and finalization completes (not a dropped CAS loser, RR3-05).
+- `NotInMeeting` while finalizing: complete early (no more data readable).
+- Unknown-entity end signals: logged, dropped (the grace-window poll
+  behavior above is the correlation-free backstop).
 
 ### 5.4 Lifecycle state machine
 
 ```
- invite ──admission insert (unique invite_event_id;
-    │      unique active (account,meeting_no))──> JOINING
-    │                                               │  join ok (CAS)
-    │              deadline exhausted (→ABORTING)   v
-    │                                             LIVE ──PollTick: paged pull,
-    │                                               │      close-at-tick-end,
-    │                                               │      seg*+ckpt+fdatasync,
-    │                                               │      SQLite cache update
-    │       10005 while live (→ABORTING)            │
-    │                                               │ EndedSignal(push|poll_ended)
-    │                                               │  (CAS live→finalizing)
-    v                                               v
- ABORTING ──flush ckpt──> ABORTED           FINALIZING ── drain to grace_deadline_at
- (intent)              (terminal)            (intent)      (20001 ⇒ complete now;
-                                                 │          10005 ⇒ complete early;
-                                                 │          abort refused here)
-                                                 v  (CAS)
-                                            FINALIZED (terminal)
-
- boot: JOINING/LIVE resume their loops; FINALIZING resumes drain to its
- persisted deadline; ABORTING finishes flush→terminal. Missing client ⇒
- stalled + retry, admin abort available. Terminal rows never spawn
- coordinators; reads/deletes go through the entity I/O lock (6.2).
+ invite ─admission insert─> JOINING ─join ok─> LIVE ─bounded ticks─┐
+   │        (unique keys)      │(deadline,       │                  │ (commands
+   │                           │ incl. stalled)  │ EndedSignal/     │  resolved at
+   │                           v                 │ GraceExpired     │  tick closes;
+   │                       ABORTING ─flush─> ABORTED                │  end > abort)
+   │                           ^                 │                  │
+   │                           └──10005 live─────┤                  │
+   │                                             v                  │
+   │                                        FINALIZING ─drain to────┘
+   │                                             │  deadline; GraceExpired/
+   │                                             │  10005 ⇒ complete early;
+   │                                             │  abort refused; stalled ⇒
+   │                                             v  finalize at deadline
+   │                                        FINALIZED
+ boot: tombstone reconcile → log repair (non-terminal only, builds offset
+ index) → coordinators resume persisted stages.
 ```
-
-### 5.5 Restart recovery
-
-Boot order: repair logs (4.2) → sweep tombstones (4.3) → spawn coordinators
-for all non-terminal rows into their persisted stage. No in-flight memory is
-needed: deadlines are absolute columns, the resume cursor is the log's
-checkpoint chain, and clients arrive via the startup registry.
 
 ## 6. Read protocol
 
 ### 6.1 CLI surface
 
-- `garyx meeting list [--json]` — paged (`limit` 50 default,
-  server-paginated for unbounded retention, RR2-08); shows id, topic,
-  status (+`stalled` marker), closed segments, updated_at.
-- `garyx meeting read <entity_id> [--full] [--range A..B] [--again]
-  [--thread <id>] [--json]`
-- `garyx meeting join <meeting_no> [--account <id>]` — debug.
-- `garyx meeting abort <id>` / `garyx meeting delete <id>` — admin.
+- `garyx meeting list [--json]` — keyset-paged (`(updated_at, id)` cursor
+  with a snapshot boundary token; stable under live-row updates, RR3-09).
+- `garyx meeting read <entity_id> [--full] [--range A..B] [--thread <id>] [--json]`
+  — incremental (default; requires thread identity via `GARYX_THREAD_ID`
+  or `--thread`) or stateless paged snapshot (`--full`, `--range`; no
+  identity, no cursor interaction). `--again` is removed (RR3-03): the
+  header always names the exact span just delivered, so re-reading any
+  span is `--range` — one mechanism instead of two.
+- `garyx meeting join <no>` / `abort <id>` / `delete <id>`.
 
-Identity rules: `incremental` (default) requires thread identity
-(`GARYX_THREAD_ID` or `--thread`; missing both errors with both remedies).
-`--full` and `--range` are **stateless paged peeks**: no thread identity
-needed, no cursor interaction ever (RR2-03 simplification: full no longer
-touches cursors; a thread that wants "caught up to everything" reads
-increments to exhaustion, which the header makes a short loop).
+### 6.2 Gateway API, locking, index
 
-### 6.2 Gateway API and locking
+Routes as revision 3 plus `snapshot`/continuation parameters on `/read`.
 
-```
-GET    /api/meetings?limit&page_token        -> paged list
-GET    /api/meetings/{id}                    -> metadata
-POST   /api/meetings/{id}/read               -> fetch (incremental|full|range)
-POST   /api/meetings/{id}/read/confirm       -> confirm {receipt}
-POST   /api/meetings/{id}/refs               -> attach ref {thread_id} (idempotent upsert)
-POST   /api/meetings/{id}/abort              -> admin abort
-DELETE /api/meetings/{id}                    -> delete (terminal only)
-POST   /api/meetings/{id}/join-debug         -> manual trigger
-```
+- **Entity I/O lock**: per-entity `RwLock` covering all states including
+  terminal (read vs append vs finalize-flush vs delete-rename all
+  serialize here; terminal entities take it directly, live via
+  coordinator).
+- **Offset index (RR3-09)**: sparse (every 64th segment → byte offset).
+  Live entities: built during boot repair and maintained per append.
+  Terminal entities: persisted as a derived, rebuildable
+  `{id}/index.bin` written at finalize; if missing on first read it is
+  rebuilt once and re-persisted. Boot never scans terminal logs; cold
+  high-seq reads are O(span) via the persisted index.
+- **Stateless snapshot continuation (RR3-03)**: the first `--full`/
+  `--range` response fixes a snapshot `(closed_latest, log_offset)` and
+  returns an opaque continuation token binding
+  `{entity_id, snapshot, next_seq, mode, range_end, checksum, expiry 10 min}`.
+  The CLI loops within one invocation, streaming pages to stdout until the
+  snapshot is exhausted (or `--max-bytes` stops it early, printing the
+  resume command with the token). Live appends beyond the snapshot are
+  invisible to that snapshot's pages.
 
-**Entity I/O lock (RR2-08):** a per-entity `RwLock` in a service-level map
-covers every state including terminal: writers (tick appends, finalize
-flush, delete rename) take write; reads take read and capture a snapshot
-`(closed_latest, log_byte_offset)` so slicing never sees torn appends;
-delete vs read is serialized by the same lock. Live entities' snapshots are
-requested through the coordinator; terminal entities take the lock
-directly.
+### 6.3 Fetch/confirm two-phase (incremental)
 
-**Offset index (RR2-08):** an in-memory sparse index (every 64th segment →
-byte offset), built lazily on first read and extended per append, makes
-high-seq slicing O(segment span), not O(file). Rebuilt from the log on
-demand; never persisted.
+As revision 3: fetch never advances `confirmed_seq`; it re-serves an
+existing pending span or creates one (up to the page cap) with a fresh
+opaque receipt. Confirm CAS-matches
+`(confirmed_seq, pending_from, pending_to, receipt)`, advances, clears.
+The CLI runs fetch → render → stdout flush → confirm inside one
+invocation.
 
-**Oversized segments:** a rendered response is capped (default 64 KiB /
-200 segments; `page_bytes` may lower). A single segment larger than the
-byte cap is split at UTF-8 boundaries into deterministic continuation
-chunks labeled `[seq 12 part 2/3]`; pagination state is
-`(seq, part)`-addressed so the budget holds for any input (RR2-08).
+Corrected failure statements (RR3-03):
 
-### 6.3 Fetch/confirm two-phase (RR2-03)
-
-Cursor state: `confirmed_seq` + `pending(from,to)` + `receipt` (opaque,
-server-generated per fetch).
-
-- **fetch** (`/read`, incremental): if a pending span exists → re-serve
-  exactly that span with its stored receipt (at-least-once). Else slice
-  `(confirmed_seq, min(latest, page cap)]`, persist it as pending with a
-  fresh receipt, serve it. Fetch **never** advances `confirmed_seq`.
-- **confirm** (`/read/confirm {receipt}`): CAS guarded by
-  `(confirmed_seq, pending_from, pending_to, receipt)` — advances
-  `confirmed_seq = pending_to`, clears pending. Unknown/stale receipt is a
-  no-op success (idempotent).
-- **The CLI performs both inside one invocation**: fetch → render to
-  stdout → flush successfully → confirm → exit. A crash or broken pipe
-  before flush leaves pending un-confirmed, so the span re-serves next
-  time. A lost confirm response leaves pending; the next fetch re-serves
-  the same span (duplicate, never a skip). `--again` re-serves pending and
-  skips the confirm call.
-- The agent-visible experience is unchanged: run the command, get content;
-  re-running after a failure repeats the last chunk. The header states
-  confirmation status explicitly.
-
-Cursors never regress; concurrent reads from one thread serialize on the
-row CAS, stale writers lose harmlessly.
+- Crash/broken pipe **before** stdout flush → no confirm sent → pending
+  survives → the same span re-serves next time (at-least-once).
+- Confirm **committed but its response lost** → pending is already
+  cleared; the next read serves the *next* span. This is safe — the
+  content was fully flushed to stdout before confirm was attempted — and
+  is distinct from the previous case in the test matrix.
+- Cursors never regress; row CAS serializes concurrent readers.
 
 ### 6.4 Self-describing output
 
-```
-── meeting entity 019f… ─ 《Q3 规划会》 ─ LIVE, updated 10:35:12 ──
-Increment for this thread: segments 12–18 of 23 closed (5 more after this)
-Delivered & confirmed on success; if this command failed midway, rerunning
-re-serves the same span.  Re-serve without confirming: --again
-Everything (stateless, paged): --full     Peek a span: --range 5..9
-────────────────────────────────────────────
-[12] 10:32:05 张三 (transcript)
-…
-```
-
-Finalized/aborted entities state so with timestamps, `end_source`, and
-abort reason. Empty increments return the header plus "no new segments
-since [confirmed 18]". Live entities note the meeting is in progress.
+As revision 3, minus `--again` (the header's "re-read this span:
+`--range 12..18`" line replaces it). Every response names: mode, exact
+span, totals, live/terminal status + `end_source`/`stalled_reason` when
+set, and the follow-up commands.
 
 ## 7. Pointer injection and references
 
-### 7.1 Resolver in the bridge (RR2-09)
+### 7.1 One seam: `prepare_user_turn` in the bridge (RR3-01)
 
-The only seam all four entry paths share is bridge `start_agent_run`
-(B13). Therefore:
+B13 correction makes the seam explicit. `garyx-bridge` gains one internal
+choke point through which **every** provider-bound user turn passes:
 
-- `garyx-bridge` defines `#[async_trait] MeetingContextResolver` (bridge
-  cannot depend on gateway; gateway implements and injects at assembly,
-  like other gateway-owned services).
-- `start_agent_run` invokes it inside the thread dispatch guard, before
-  provider resolve and before the queued-input decision, for both fresh and
-  queued turns. It point-reads `meeting_thread_refs` (newest 3 by
-  `attached_at`, documented cap), entity metadata, and this thread's cursor.
-- The result is written into run metadata as a **server-owned** field: any
-  caller-supplied `meeting_context` metadata is discarded and overwritten
-  (spoof-proof). Topic and all platform-derived text are XML-escaped and
-  length-capped (topic 200 chars) before formatting.
-- Failure semantics: if the resolver errors, it degrades to a stub block
-  listing entity ids only, marked `context: unavailable (retryable)` — the
-  agent still learns the refs exist and can use the CLI; the block is never
-  silently omitted when refs exist (RR2-09).
-- `gary_prompt` stays synchronous: it formats the metadata value into
-  `<garyx_meeting_context>` beside `<garyx_thread_metadata>`.
+```rust
+async fn prepare_user_turn(&self, thread_id, text, metadata) -> PreparedUserTurn
+// PreparedUserTurn { provider_input, acknowledged_metadata }
+```
 
-### 7.2 Ref attach (RR2-10)
+Callers: `start_agent_run` (fresh turns) **and** `add_streaming_input`
+(both its `start_agent_run`-internal queued branch and the direct
+`/api/chat/stream-input` route used by desktop/iOS — the route's bridge
+entry is `add_streaming_input`, so instrumenting the bridge method covers
+HTTP/WS, desktop, and iOS without touching clients).
 
-`POST /api/meetings/{id}/refs {thread_id}` is an idempotent upsert into the
-canonical `meeting_thread_refs` relation (4.1). The desktop/iOS "chat about
-this meeting" action: create/locate the thread (existing APIs) → attach ref
-→ send the first message. Attach-then-send makes a crash between the two
-harmless (a ref without a message just injects context on the next turn).
+`prepare_user_turn`:
+
+1. invokes the `MeetingContextResolver` (bridge-defined trait,
+   gateway-implemented, assembly-injected);
+2. builds `provider_input` = context block + original text — the
+   transcript-persisted text stays exactly what the user wrote;
+3. stamps server-owned `meeting_ref` entries into the metadata that will
+   be acknowledged/committed for the user message — the queued-input
+   attribution allowlist (`run_management.rs:94`) is extended with this
+   server-owned field so queued turns carry it too (RR3-01);
+4. discards any caller-supplied `meeting_context`/`meeting_ref` metadata
+   (spoof-proof: `/api/chat/stream-input` has no metadata surface and
+   ChatRequest metadata is untrusted — refs come only from the canonical
+   relation).
+
+Resolver failure semantics (RR3-08): if the initial
+`meeting_thread_refs` point-read fails, the turn fails **retryably**
+(surfaced like other transient dispatch errors) — recognition of existing
+refs is a product contract and silently proceeding would break it. If refs
+load but entity/cursor point-reads fail, a degraded stub block with entity
+ids and `context: unavailable (retryable)` is injected. Topic and all
+platform text are encoded as deterministic JSON strings (quotes CR/LF and
+control characters — no line-injection surface) and length-capped
+(RR3-08).
+
+### 7.2 Ref attach
+
+`POST /api/meetings/{id}/refs {thread_id}`: idempotent upsert, in one
+transaction that validates the meeting exists and the thread exists and is
+not archived (RR3-08). Client flow: create/locate thread → attach → send.
 CLI reads never create refs.
 
-### 7.3 Chips without ledger writes (RR2-10)
+### 7.3 Chips without ledger writes
 
-Phase 1 writes **no** background rows into thread ledgers (B7 hazard). The
-"chat about this meeting" first message carries
-`meeting_ref: {entity_id}` in its user-message metadata; the
-`garyx-models` render-state reducer derives a `meeting_refs` field on the
-user turn row from committed metadata, and desktop/iOS dumb-render the chip
-from `render_state` per the transcript contract — no client-side metadata
-parsing, no new control kinds. A deleted entity renders the chip in a
-disabled/tombstone style resolved at render time by the client's normal
-catalog lookup; the resolver likewise reports `entity: deleted` in the
-context block if a ref outlives its entity.
+The first message of "chat about this meeting" carries **server-stamped**
+`meeting_ref` metadata (7.1 step 3 — never client-supplied). The
+`garyx-models` reducer derives a `meeting_refs` field on the user-turn row
+from committed metadata; clients dumb-render the chip from `render_state`.
+A chip whose entity no longer exists renders in a missing/tombstone style
+via the client's normal catalog lookup; since FK cascade removes refs on
+entity deletion, the resolver does not report deleted entities (the
+"entity: deleted" behavior from revision 3 is withdrawn, RR3-08).
 
 ## 8. UI surfaces (slice 3)
 
-- Desktop gallery ("Meetings", left rail): refresh on open + 30 s polling
-  while visible; paged list API. Actions: chat-about (7.2), admin abort for
-  stalled entities, delete for terminal. No SSE in Phase 1 (B11).
-- iOS: catalog via stale-while-refresh; logic in `GaryxMobileCore` with
-  SwiftPM tests; packaged `xcodebuild` validation.
-- Chip rendering via render_state only (7.3).
+As revision 3 (galleries, 30 s visible polling, keyset-paged list, chips
+via render_state, packaged validation).
 
 ## 9. Configuration and deployment prerequisites
 
-- `FeishuAccount.meeting_entities: bool` (`default_true`). Disabling stops
-  new admissions and unregisters the client; existing non-terminal entities
-  become `stalled` and are resolved by admin abort (5.1).
-- `GatewayConfig.meetings: MeetingConfig` — `poll_interval_secs` (30, clamp
-  10–120), `join_retry_window_secs` (300), `read_page_bytes` (65536).
-- Developer console (blocks slice 2): subscribe `vc.bot.meeting_invited_v1`
-  + `vc.bot.meeting_ended_v1`, publish app version. Scopes already live.
-- Fixtures sanitized; no real ids anywhere.
+As revision 3, plus: disabling `meeting_entities` stops new admissions and
+unregisters the client; existing entities follow the per-state stalled
+rules of 5.1 (joining aborts at its deadline; live stalls visibly;
+finalizing finalizes at its deadline).
 
 ## 10. Failure and observability
 
-- Lifecycle transitions log info (entity, feishu id, CAS from→to, source).
-- Typed poll/join errors with backoff state; `status_detail` and
-  `end_source` surface in `garyx meeting list --json`.
-- Boot repair logs truncated bytes, replayed lines, cursor corrections,
-  tombstone dispositions.
+As revision 3, plus `stalled_reason` in list output and logs, and
+checkpoint-gap detection logged at boot repair.
 
 ## 11. Implementation impact map
 
-As revision 2, plus: `meeting_sink.rs` gains `unregister_client`;
-`garyx-gateway/src/meetings/` gains the I/O-lock map, offset index, confirm
-route, refs route, abort/delete routes; `garyx-bridge` gains the
-`MeetingContextResolver` trait + `start_agent_run` call; `garyx-models`
-gains the user-turn `meeting_refs` render field; CLI gains
-`confirm` flow, `--again`, `abort`, `delete`.
+Revision 3's map, plus: `garyx-bridge` `prepare_user_turn` choke point +
+allowlist extension (`run_management.rs:94,254` area); write-time segment
+splitting in the log writer; `index.bin` persistence at finalize; snapshot
+continuation tokens on `/read`; keyset pagination on `/api/meetings`;
+`--again` removed from CLI.
 
-## 12. Test plan (delta on top of revision 2's matrix, per RR2-12)
+## 12. Test plan (delta per RR3-10)
 
-**Storage/watermark:** crash after seg lines before ckpt (re-pull dedups);
-crash after ckpt before SQLite (cache corrected from log); empty and
-dedup-only ticks still checkpoint; cross-tick utterance split; opaque-token
-resume (never compared); torn-line truncation; fdatasync ordering asserted
-via fault injection.
-
-**Lifecycle:** join CAS with no dir (lazy ensure_dir); end-during-joining
-via join-succeeds-then-first-poll-ended fixture and via join-fails-to-
-deadline; EndedSignal(push) vs poll_ended race (CAS loser no-op); `20001`
-immediate finalize; `10005` during finalizing completes early; AbortRequest
-refused in finalizing; abort intent crash-resume (`aborting` on boot);
-transcript arriving after two empty pulls but before deadline is captured
-(no quiescence); pagination interrupted by terminal signal at a page
-boundary; distinct-event reinvite after terminal and after delete creates a
-fresh entity; admission insert failure path (bounded retries, error log).
-
-**Registry:** unregister on stop/disable; replace on re-register; stalled
-marker; admin abort of stalled entities; startup race (client arrives after
-recovery began).
-
-**Deletion:** crash between rename and DB commit (tombstone+row → restore);
-between commit and tombstone removal (tombstone, no row → sweep); legacy
-ordinary orphan sweep; delete vs concurrent read under the I/O lock; 409 on
-non-terminal delete.
-
-**Read protocol:** fetch/confirm sequences with dropped fetch response,
-dropped confirm response, crash between render and confirm (span
-re-served); `--again` never confirms; receipt CAS with stale receipt;
-concurrent incremental + `--full` (full is stateless, cursor untouched);
-high-confirmed thread running `--full` from 1 (no cursor effect); oversized
-segment split determinism; high-seq read via offset index (perf bound);
-list pagination.
-
-**Resolver/render:** resolver on all four entry paths (channel, app, queued,
-internal); degraded stub block on resolver failure (never omitted with refs
-present); caller `meeting_context` metadata discarded; XML escape of
-hostile topic; reducer derives `meeting_refs` from committed metadata;
-clients dumb-render (contract test against render_state snapshot); chip for
-deleted entity.
-
-**Scope:** `cargo test --all-targets` for `garyx-channels`, `garyx-gateway`,
-`garyx-bridge`, `garyx-models`, `garyx-router`, and `garyx` (CLI); tier1
-fast loop; slice 3 adds SwiftPM + `xcodebuild` + packaged desktop check.
+- **Seam**: real `/api/chat/stream-input` HTTP/WS requests (and the
+  desktop/iOS client paths in integration fixtures) assert the queued
+  provider input contains the context block and the acknowledged user
+  metadata carries the server-owned ref; caller-supplied ref/context
+  metadata is dropped on every entry path.
+- **Write-time splitting**: >32 KiB item becomes N independent seqs;
+  fetch/confirm across the split; no sub-segment state anywhere.
+- **Snapshot continuation**: live `--full` across pages pinned to one
+  snapshot; token expiry; checksum mismatch; `--max-bytes` resume.
+- **Confirm failures**: confirm-not-committed vs confirm-committed-
+  response-lost (distinct assertions per 6.3).
+- **Bounded ticks**: sustained `has_more=true` closes at each bound
+  (pages/items/bytes/time) with ckpt per close; terminal signal serviced
+  at the forced close; content readable between closes.
+- **Arbitration**: EndedSignal + AbortRequest queued together → end wins;
+  GraceExpired during finalizing accelerates completion; 10005 during
+  finalizing completes early.
+- **Stalled matrix**: joining stalled past deadline → aborts; live
+  stalled (all three reasons) → never auto-aborts; finalizing stalled →
+  finalizes at deadline; registered-but-auth-dead shows `auth_failed`.
+- **Deletion**: terminal entity without content dir (joining-deadline
+  abort) reads and deletes cleanly; tombstone reconcile ordered before log
+  repair; all rename/commit/remove crash points.
+- **Index/perf**: cold high-seq first read on a terminal entity via
+  persisted index within budget; missing `index.bin` rebuild-once; boot
+  does not scan terminal logs.
+- **Refs**: attach validates thread live-ness in-transaction; attach vs
+  thread-delete race; refs-query failure → retryable dispatch failure;
+  entity/cursor failure → degraded stub; JSON-string encoding defeats
+  CR/LF injection via topic.
+- **List**: keyset pagination stability while live rows update.
+- Scope: six-crate `--all-targets` + tier1 + SwiftPM + `xcodebuild` +
+  packaged desktop (unchanged).
 
 ## 13. Delivery slices
 
-1. **Entity core + read protocol** (no Feishu): tables, checkpointed log +
-   repair, I/O lock + offset index, fetch/confirm cursors, list/read/
-   delete CLI + routes, resolver + context block + reducer field, fixture
-   tests. Gate: read-protocol, storage-fault, and deletion suites green;
-   hand-seeded entity readable incrementally from two threads with
-   independent receipt-confirmed cursors, including forced-failure
-   re-serves.
-2. **Ingestion**: sample capture gate (3.1) → event structs, sink +
-   registry lifecycle, coordinator with intent CAS lifecycle, tick
-   protocol, grace drain, recovery, admin abort, console subscriptions.
-   Gate: real meeting live→finalizing→finalized with correct segments;
-   restarts mid-joining/mid-live/mid-finalizing/mid-aborting all resume;
-   lifecycle suite green.
-3. **Experience**: galleries, ref attach + chips, polling refresh. Gate:
-   card → chat → agent reads increment → answer cites new segments, end to
-   end on packaged desktop + simulator.
+As revision 3, with slice 1 additionally gated on the seam tests (bridge
+`prepare_user_turn` on all entry paths) since the resolver ships in
+slice 1.
 
 ## 14. Open questions (defaults chosen, non-blocking)
 
 - Retention: manual deletion only.
-- One entity per admission (terminal re-invites create new entities) — now
-  an explicit product rule (§2).
+- One entity per admission (explicit product rule, §2).
 - `meeting_activity_v1` ignored in Phase 1.
