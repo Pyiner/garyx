@@ -780,6 +780,7 @@ mod tests {
             before,
             "failed online rotate must not mutate store identity"
         );
+    }
 
     struct ReloadMeetingClient {
         hang: bool,
