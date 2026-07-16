@@ -1,14 +1,17 @@
 # Feishu meeting entity
 
-Status: revision 11 — complete self-contained specification (no references
+Status: revision 12 — complete self-contained specification (no references
 to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–10.
+rounds 1–11.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
 plain text; read cursors live on the read side.
 Supersedes: `docs/design/feishu-group-listen-mode.md` (group listening
-cancelled; meeting content never enters thread ledgers).
+cancelled). The subsystem never automatically copies or injects the
+canonical meeting log into thread ledgers; ordinary user, tool-result,
+and assistant turns may of course quote meeting content through existing
+flows — that is normal conversation, not a subsystem write.
 
 ## 1. Summary
 
@@ -25,7 +28,7 @@ self-describing output, and untrusted handling of all platform text.
 
 ## 2. Product contract (user-approved 2026-07-16; scope reset same day)
 
-1. Meetings only. 2. Invite-driven join (+ debug `garyx meeting join`).
+1. Meetings only. 2. Invite-driven join only (the manual debug-join CLI was cut in review round 11: it cannot map onto the invite-keyed admission contract without synthetic-event machinery that Phase 1 does not need; slice-2 testing uses real invites against a scratch meeting).
 3. Live near-real-time accumulation (~30 s platform latency). 4. CLI-only
 reads, per-reader cursors, incremental default, self-describing. 5. End
 signal freezes the entity. 6. The cursor row is the recognition of prior
@@ -35,12 +38,17 @@ Product sign-off items (explicit, owner-revocable):
 
 - **S1** On the Feishu WS **protobuf data-event path**, an ACK send is
   **attempted** before processing; a send failure is logged and
-  processing continues anyway (admission proceeds; the platform's
-  redelivery of an un-ACKed event is absorbed by the
-  `invite_event_id` unique key). An invite on that path is lost iff the
-  process dies or the admission insert exhausts 3 bounded retries
-  (100 ms / 1 s backoff, error-logged) in the ACK-attempt→admission
-  window. The raw-text
+  processing continues. Meeting invite/ended events **bypass the
+  generic 30-minute in-memory event dedup cache** (their idempotence is
+  owned by the durable `invite_event_id` unique key and end-path CAS,
+  which absorb platform redelivery correctly even after an admission
+  failure — the in-memory cache would wrongly swallow a redelivery that
+  arrives after a failed admission insert). Loss bounds by case: ACK
+  succeeded → the invite is lost iff the admission insert exhausts 3
+  bounded retries (100 ms / 1 s backoff, error-logged); ACK send failed
+  → the platform may redeliver and the durable key dedups, so the
+  invite is lost only if the process additionally dies before any
+  redelivery is admitted. The raw-text
   fallback path has no equivalent ACK evidence; the sample gate (3.1)
   pins which path carries invite/ended events; if the raw-text path can
   carry them, slice 2 halts for a design amendment.
@@ -274,6 +282,7 @@ metadata endpoints surface both columns.
 | `sources` | array of item ids; each stored id ≤**71 bytes** — raw ids ≤64 bytes pass through; longer ids are replaced by `sha256:<hex>` (7-byte prefix + 64 hex = exactly 71 bytes; deterministic, domain-separated, collision-safe for dedup); array bounded by page item count. Property tests assert the normalized field's own byte length, not merely the whole-line bound |
 | `cont` | boolean |
 | `cursor_out` | opaque token, ≤1 KiB (longer is a platform-contract violation → tick fails as `Other`) |
+| `epoch` (ckpt lines, tokens, spans) | non-negative 64-bit integer (`0..=i64::MAX`), starts at 0, +1 per content-loss rollover |
 | share titles / URLs (inside `text` for share kinds) | title ≤256 bytes UTF-8-boundary truncated; URL ≤1 KiB |
 
 **Segmentation (order matters, R7-03):** items are first mapped 1:1 to
@@ -427,10 +436,15 @@ are no-ops. Intent stages make terminals crash-resumable:
 **Admission → joining:** the sink insert creates `status='joining'`,
 `join_deadline_at = now + join_retry_window` (absolute). Unique indexes
 make duplicate invites no-ops (S2). Content dir is created lazily by the
-writer (`ensure_dir` before first append). Join retries every 20 s until
-success — CAS `joining→live`, backfill `feishu_meeting_id` (normalized)
-and `topic` (normalized per 4.1 bounds) — or until the deadline → abort
-path. The deadline applies **even while stalled** (it models invite
+writer (`ensure_dir` before first append). Join attempts run inside the
+coordinator's `tokio::select!` alongside the command queue and the
+absolute deadline (RR11-03): each attempt carries its own timeout of
+`min(20 s, remaining window)`; a deadline expiry, `AbortRequest`,
+`Shutdown`, or registry replacement wins the select and **cancels the
+in-flight join future** — a hanging platform call can never wedge the
+coordinator past its deadline or block admin commands. On success — CAS
+`joining→live`, backfill `feishu_meeting_id` (normalized) and `topic`
+(normalized per 4.1 bounds); on deadline → abort path. The deadline applies **even while stalled** (it models invite
 validity). Join succeeding during the grace window is legal; polls then
 return data until `GraceExpired` finalizes.
 
@@ -483,9 +497,14 @@ drain to the persisted deadline.
 CLI:
 
 - `garyx meeting list [--json]`
-- `garyx meeting read <id> [--full | --range A..B] [--thread <id>]
-  [--json] [--max-bytes N]`
-- `garyx meeting join <meeting_no> [--account <id>]` (debug)
+- `garyx meeting read <id> [--full | --range A..B [--epoch E]]
+  [--continue <token>] [--thread <id>] [--json] [--max-bytes N]` —
+  `--epoch` is valid only with `--range` (the parser rejects it with
+  `--full` or incremental mode) and defaults to the entity's current
+  epoch; a non-current value returns the content-loss error (old spans
+  are never silently re-mapped onto new content). `--continue <token>`
+  resumes a stateless snapshot stream from a printed continuation token
+  (valid only with the mode that produced it).
 - `garyx meeting abort <id>` (admin; joining|live)
 - `garyx meeting delete <id>` (terminal only)
 
@@ -494,11 +513,10 @@ API:
 ```
 GET    /api/meetings?limit&page_token      -> keyset-paged list
 GET    /api/meetings/{id}                  -> metadata
-POST   /api/meetings/{id}/read             -> fetch (incremental|full|range)
-POST   /api/meetings/{id}/read/confirm     -> confirm {receipt}
+POST   /api/meetings/{id}/read             -> fetch {mode, reader_id?, epoch?, continue_token?, max_bytes?}
+POST   /api/meetings/{id}/read/confirm     -> confirm {reader_id, receipt, log_epoch}
 POST   /api/meetings/{id}/abort            -> admin abort
 DELETE /api/meetings/{id}                  -> delete
-POST   /api/meetings/{id}/join-debug       -> manual trigger
 ```
 
 Incremental (default) requires a reader identity (`GARYX_THREAD_ID` env
@@ -546,9 +564,11 @@ do not appear in an in-progress traversal. Updates never move rows
 - **Entity I/O lock:** per-entity `RwLock` in a service map, covering all
   states. Writers (page commits, terminal flush/barrier, delete) take
   write; reads take read and capture a snapshot
-  `(closed_latest, log_byte_offset)`; slicing never scans past the
-  snapshot offset. Terminal entities take the lock directly; live
-  entities' snapshots are requested through the coordinator.
+  `(log_epoch, closed_latest, log_byte_offset)`; slicing never scans
+  past the snapshot offset, and every downstream span, token, and
+  response carries the snapshot's epoch. Terminal entities take the
+  lock directly; live entities' snapshots are requested through the
+  coordinator.
 - **Sparse offset index** (every 64th seq → byte offset). Live: built
   during boot repair, maintained per append, memory-only. Terminal:
   persisted `{id}/index.bin` written inside the terminal barrier
@@ -572,12 +592,27 @@ Cursor algebra (single SQLite transactions):
    exits here — a failed first read creates no recognition state. (Once
    a pending span exists, a later lost response of course leaves the row
    in place — that is the at-least-once path, not a failed first read.)
-1. **Ensure row:** `INSERT INTO meeting_read_cursors (meeting_id,
-   reader_id, log_epoch, confirmed_seq, updated_at)
-   VALUES (…, :snapshot_epoch, 0, now) ON CONFLICT DO NOTHING` — the
-   epoch is always written explicitly from the preflight snapshot's
-   epoch; created on the first incremental fetch that passes preflight,
-   even if the increment is empty (the row is the recognition state).
+   **The entity read lock is held from preflight through step 3's
+   response assembly** (RR11-01), so a rollover (which takes the write
+   lock) cannot interleave between preflight and any cursor write; the
+   epoch triple-check below is defense in depth against lock bugs, not
+   the primary guard.
+   Before serving **any** branch — pending re-serve, empty span, or new
+   claim — the transaction verifies
+   `meetings.log_epoch == cursor.log_epoch == snapshot_epoch`; any
+   mismatch returns the content-loss error (the caller re-runs
+   preflight).
+1. **Ensure row (epoch-guarded):**
+   `INSERT INTO meeting_read_cursors (meeting_id, reader_id, log_epoch,
+   confirmed_seq, updated_at)
+   SELECT :m, :rd, log_epoch, 0, :now FROM meetings
+   WHERE id = :m AND log_epoch = :snapshot_epoch
+   ON CONFLICT DO NOTHING` — the insert derives the epoch from the
+   entity row **and** requires it to still equal the snapshot epoch;
+   zero rows inserted with no existing cursor row means the rollover
+   raced (content-loss error). Created on the first incremental fetch
+   that passes preflight, even if the increment is empty (the row is
+   the recognition state).
 2. **Fetch:** read the row. Pending exists → re-serve exactly
    `(pending_from..pending_to)` with the stored receipt (at-least-once;
    receipts are shared, not per-caller). Else compute the next span
@@ -837,8 +872,20 @@ epoch>0 ordinary fetch/confirm round-trip; header-printed
 returns content-loss, not new-epoch content; token/range epoch
 consistency. **S4(b) tail loss:** 3-page backlog, crash before P1
 commit, recovery at GraceExpired → all three pages lost, no corruption,
-loss logged. **ACK failure (RR10-04):** ACK send failure → processing
-continues → duplicate redelivery absorbed by unique key.
+loss logged. **ACK/dedup (RR10-04, RR11-04):** ACK send failure → processing
+continues; invite/ended bypass the in-memory dedup cache; immediate
+redelivery after a failed admission insert is admitted by the durable
+key (not swallowed by the cache); redelivery after successful admission
+is a unique-key no-op. **Epoch guards (RR11-01):** no-cursor-row
+rollover between preflight and ensure → guarded INSERT inserts nothing →
+content-loss; pending re-serve and empty-span branches verify the epoch
+triple before serving; rollover with an existing new-epoch pending is
+untouched by stale requests. **CLI parser (RR11-02):** header-printed
+range/epoch and continuation commands parse and execute verbatim;
+`--epoch` rejected with `--full`/incremental. **Hanging join
+(RR11-03):** a never-returning join future is cancelled by deadline
+abort, admin abort, and registry replacement; restart during a hung
+attempt resumes retrying to the same absolute deadline.
 **content_state pairing:** both illegal combinations rejected by
 CHECK.
 
