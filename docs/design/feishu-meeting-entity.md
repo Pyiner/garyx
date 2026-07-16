@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 14 — complete self-contained specification (no references
+Status: revision 15 — complete self-contained specification (no references
 to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–13.
+rounds 1–14.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -65,10 +65,13 @@ Product sign-off items (explicit, owner-revocable):
   entity was deleted will be admitted as a fresh entity — accepted (the
   realistic window is minutes; manual deletion of a meeting whose stale
   invite is still in flight is an owner action on their own data) rather
-  than adding a tombstone key table. Residual risk from best-effort
-  leave compensation (bot lingering in a meeting without capture after
-  an abort raced a late remote join, until removed manually) is likewise
-  accepted.
+  than adding a tombstone key table. Three leave-related residual risks are likewise
+  accepted (RR14-04): ① a **joining** abort never attempts leave (no
+  meeting id exists locally), so a late remote join can leave the bot
+  in the meeting without capture until removed manually; ② a
+  **no-client** live abort terminates locally only; ③ a crash between
+  the abort CAS and the single leave attempt skips it. In all three
+  the meeting owner can always remove the bot manually.
 - **S3** The final ~30 s of speech becomes readable during the grace
   drain, not instantly.
 - **S4** Two distinct loss bounds (both only when the platform becomes
@@ -161,7 +164,7 @@ dependency.
 ### 4.1 SQLite DDL (normative)
 
 ```sql
-CREATE TABLE meetings (
+CREATE TABLE IF NOT EXISTS meetings (
   id                   TEXT NOT NULL PRIMARY KEY,      -- uuid_v7
   account_id           TEXT NOT NULL,
   meeting_no           TEXT NOT NULL,
@@ -196,18 +199,24 @@ CREATE TABLE meetings (
   CHECK ((failure_kind = '') = (failure_since IS NULL)),
   CHECK ((content_state = 'lost') = (content_lost_at IS NOT NULL))
 ) STRICT;
-CREATE UNIQUE INDEX idx_meetings_invite ON meetings(invite_event_id);
-CREATE UNIQUE INDEX idx_meetings_active_no
+CREATE TABLE IF NOT EXISTS meeting_invite_keys (
+  invite_event_id TEXT NOT NULL PRIMARY KEY,
+  meeting_id      TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  observed_at     TEXT NOT NULL
+) STRICT;
+-- meetings.invite_event_id remains as "first admitting event" provenance;
+-- durable admission idempotency is owned by meeting_invite_keys (RR14-02).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_active_no
   ON meetings(account_id, meeting_no)
   WHERE status IN ('joining','live','finalizing','aborting');
-CREATE UNIQUE INDEX idx_meetings_active_fid
+CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_active_fid
   ON meetings(account_id, feishu_meeting_id)
   WHERE feishu_meeting_id <> ''
     AND status IN ('joining','live','finalizing','aborting');
-CREATE INDEX idx_meetings_created ON meetings(created_at DESC, id DESC);
-CREATE INDEX idx_meetings_status  ON meetings(status);
+CREATE INDEX IF NOT EXISTS idx_meetings_created ON meetings(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_meetings_status  ON meetings(status);
 
-CREATE TABLE meeting_read_cursors (
+CREATE TABLE IF NOT EXISTS meeting_read_cursors (
   meeting_id    TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
   reader_id     TEXT NOT NULL
     CHECK (length(CAST(reader_id AS BLOB)) BETWEEN 1 AND 128),  -- bytes, not chars
@@ -455,9 +464,16 @@ are no-ops. Intent stages make terminals crash-resumable:
 - Boot resumes each persisted stage (joining retries; live polls;
   finalizing drains to its deadline; aborting finishes its flush).
 
-**Admission → joining:** the sink insert creates `status='joining'`,
-`join_deadline_at = now + join_retry_window` (absolute). Unique indexes
-make duplicate invites no-ops (S2). Content dir is created lazily by the
+**Admission → joining (one atomic transaction, RR14-02):**
+① if `invite_event_id` exists in `meeting_invite_keys` → no-op (exact
+redelivery); ② else find an active entity for
+`(account_id, meeting_no)` — found → insert a key row linking this
+event id to it (a *distinct* event for an already-active meeting is
+thereby durably recorded; its redelivery stays a no-op even after the
+entity later reaches a terminal state); ③ else create the entity
+(`status='joining'`, `join_deadline_at = now + join_retry_window`,
+absolute) and its key row. Entity deletion cascades its key rows,
+preserving S2's delete-resets-idempotency semantics. Content dir is created lazily by the
 writer (`ensure_dir` before first append). Join attempts run inside the
 coordinator's `tokio::select!` alongside the command queue and the
 absolute deadline (RR11-03): attempts are paced at 20 s intervals
@@ -481,9 +497,11 @@ as follows:
   meeting identity, else slice 2 halts for an amendment.
 - **Leave compensation applies only to `live → aborting`** with a
   registered client and a non-empty `feishu_meeting_id`: one
-  best-effort `bots/leave` (failure logged, never retried; no persisted
-  marker — a crash between abort CAS and the leave attempt simply skips
-  it). It is **not** attempted from `joining` aborts: at that point no
+  best-effort `bots/leave` under a **20 s timeout** (RR14-04 — timeout
+  or failure is logged and the barrier→aborted path continues
+  immediately; exactly one attempt, never retried; no persisted marker
+  — a crash between abort CAS and the leave attempt simply skips it; a
+  hanging platform call cannot hold the entity in `aborting`). It is **not** attempted from `joining` aborts: at that point no
   meeting id exists locally (the join response was cancelled or never
   arrived), so there is nothing to leave with. The full residual risks
   are product sign-offs under S2: a joining-abort that races a late
@@ -562,11 +580,38 @@ API:
 ```
 GET    /api/meetings?limit&page_token      -> keyset-paged list
 GET    /api/meetings/{id}                  -> metadata
-POST   /api/meetings/{id}/read             -> fetch {mode, reader_id?, epoch?, continue_token?, max_bytes?}
+POST   /api/meetings/{id}/read             -> fetch (wire schema below)
 POST   /api/meetings/{id}/read/confirm     -> confirm {reader_id, receipt, log_epoch}
 POST   /api/meetings/{id}/abort            -> admin abort
 DELETE /api/meetings/{id}                  -> delete
 ```
+
+**Read wire schema (RR14-03):**
+
+```
+{
+  mode:           "incremental" | "full" | "range",
+  reader_id?:     string,        // required iff mode=incremental
+  range_start?:   int, range_end?: int,  // required iff mode=range; closed interval [start, end]
+  epoch?:         int,           // valid iff mode=range; default current
+  continue_token?: string,       // valid iff mode=full|range; mutually exclusive
+                                 // with range_start/range_end/epoch (token carries them)
+  max_bytes?:     int            // floor 4096
+}
+```
+
+Field-combination violations are 400s named after the offending field.
+**Responses are always structured JSON** — `{meta, segments[]}` where
+`meta` carries mode, span, totals, status, epoch, receipt/continuation,
+and notes; budgets are measured on this serialized JSON response
+(single, format-independent budget algebra — claim sizing no longer
+depends on presentation). The CLI's human format is a **pure local
+presentation layer** over the structured response: the `│ ` framing,
+control-character stripping, and U+2028/2029 normalization of 6.6 are
+CLI rendering rules; `--json` mode prints each page's structured
+response as one NDJSON line. A pending span claimed under any format
+re-serves identically under any other (spans are segment ranges;
+format was never part of the claim).
 
 Incremental (default) requires a reader identity (`GARYX_THREAD_ID` env
 or `--thread`; missing both → error naming both remedies). `--full` and
@@ -957,10 +1002,27 @@ crash-before-insert with ACK success / ACK error / ACK in-flight ×
 redelivery / no-redelivery matrices; insert-retries-exhausted;
 redelivery after committed insert (no-op).
 
-**Normative DDL execution (RR13-01):** the DDL block is extracted
-verbatim from this document and executed against the target SQLite;
-the same test exercises both pairing CHECKs, the reader byte-length
-CHECK, and FK cascade behavior.
+**Normative DDL execution (RR13-01, RR14-01):** the DDL block is
+extracted verbatim from this document and executed against the target
+SQLite **twice on the same database** (idempotent boot), plus a real
+`GaryxDbService` reopen; the same test exercises both pairing CHECKs,
+the reader byte-length CHECK, and FK cascade (meetings → cursors and
+invite keys).
+
+**Invite keys (RR14-02):** distinct event id folded into an active
+entity → terminal → same event redelivered → no-op (key row survives
+entity lifecycle until deletion); post-delete redelivery creates a
+fresh entity; two distinct events admitted concurrently (one entity,
+two key rows).
+
+**Wire schema (RR14-03):** real CLI→HTTP body assertions for all three
+modes; field-combination 400s (epoch with full; token with explicit
+range; missing reader_id for incremental); JSON-claimed pending
+re-served identically under human rendering (same span, same budget
+algebra); NDJSON paging in `--json`.
+
+**Leave bound (RR14-04):** a never-returning `leave()` — entity reaches
+`aborted` within the timeout bound, exactly one attempt observed.
 
 **Hot reload (RR13-04):** real `rebuild_channel_plugins` cycle — old
 channel unregisters, new channel registers/replaces, existing
