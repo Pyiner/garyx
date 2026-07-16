@@ -1,53 +1,62 @@
 # Thread Favorites (线程收藏)
 
-Status: draft v11 (addressing review round 10 — 7×P1 + 2×P2)
+Status: draft v12 (addressing review round 11 — 10 findings)
 Date: 2026-07-16
 
 ## 0. 修订记录
 
-### v11 两个结构性减法
+### v12 两个结构性决定
 
-1. **Favorites feed 取消分页**：收藏是用户人工精选集（现实量级个位~两位数），
-   给它做通用 cursor 分页是 round 8–10 反复漏水的复杂度来源。v11：snapshot
-   端点一次返回全部收藏行（cap 500 + `truncated` 标记），feed 协议 = 整列表
-   原子替换，**favorites cursor / reset 协议 / 排序域围栏 / favorites 分页
-   并发全部消失**；`/api/recent-threads` 的 `favorites=only` 滤镜参数一并
-   删除（无消费者）。round10-1 与 round10-6 的 reset 分支随之无对象。
-2. **All/Chats gap-fill 锚点改单调排序键 range-fill**：round10-2 证明「任意
-   已知 ID 交集」是不稳定锚点。v11 利用排序键单调性（`last_active_at` 只增
-   不减 → 行只上移不下移）：refresh 链式拉取**恰好填满 [新头 → 旧头排序键]
-   区间**（页尾键 ≤ 旧头键即止），区间外的旧尾仍有效（除幽灵行，见下）。
-   移动行必在区间内出现 → dedup 从旧尾移除；盲区结构性不存在。
+1. **All/Chats 排序改数据库分配的全局活动序号 `activity_seq`**（round11-1/2/3
+   根因）：round 11 证明 `last_active_at` 在现码里不单调（RMW 竞态可写回旧
+   时间戳，navigation.rs:151 + sqlite_thread_store.rs:166 的锁只包 set 不包
+   read-modify-write），且时间戳并列在页边界必漏行、多页链跨快照无围栏。
+   v12：`recent_threads` 新增 `activity_seq INTEGER NOT NULL`，**在投影写
+   事务内从 meta 计数器单调分配**（单 writer 串行化 ⇒ 构造性单调、全局唯一、
+   无并列）；排序、keyset、range-fill 锚点全部改用 seq；`last_active_at`
+   仅作展示字段。三条 finding 的反例（时钟倒退 / 并列键边界 / 链间移动）
+   全部结构性消灭或收敛为「≤1 个刷新周期的有界陈旧」（§4.2、§7.4）。
+2. **R4（生命周期端点幂等化）从本设计移除，拆为独立后续任务**（round11-5/
+   6/10）：round 11 证明 ensure-absent 远不够——409 不能结算整个操作（检查
+   与提交间有异步窗口）、delete 无 tombstone 可被旧 writer 复活、两阶段清理
+   崩溃后 already-gone 误判完成。这是独立于收藏的系统工程（operation token +
+   结果日志 + tombstone + 清理 outbox），塞进本设计只会持续扩张边界。v12
+   回到 round 9 评审明示可接受的「**明确的人工重试政策**」= 今日 parity：
+   ambiguous archive/delete → 报错给用户 + 触发 feed refresh，不做新承诺。
+   **收藏正确性不依赖生命周期结局**：分页安全靠 seq-keyset（删除不移位）、
+   收藏行清理靠服务端事务（清 favorites 行 + bump revision → 下次 snapshot
+   消失）、幽灵行靠整替触发点有界收敛。幂等化已立独立后续任务另行设计评审。
 
-### Round 10 findings → v11 处置
+### Round 11 findings → v12 处置
 
 | # | Finding | 处置 |
 |---|---|---|
-| 1 | P1 favorites cursor 只围栏 membership，不围栏排序域（活动重投影 last_active_at 不 bump favorites_revision） | Favorites 取消分页（减法 1）：无 cursor 即无围栏问题；每次 snapshot 整列表替换，排序天然最新 |
-| 2 | P1 gap-fill「任意已知 ID 交集即停」两个永久错误（moved-known 假锚点；远端删除幽灵尾行） | 锚点改**旧头排序键 range-fill**（减法 2）：键单调 → 所有变动行都上移进区间，假锚点不存在。幽灵尾行（远端删除/滤镜退出）：range-fill 不解决，**由全量替换触发点收敛**——下拉刷新、app 前台/页面出现、K 超限、每 M=30 个周期（约 5 分钟）强制整替。此为对今日现状的严格改进（今日 offset feed 同样幽灵且无强制整替）；声明为有界陈旧而非永久（§7.4） |
-| 3 | P1 gap-fill 多请求链无原子结算与并发围栏（K 整替 vs 旧 load-more 竞争 cursor） | **每 feed 单飞行道**：refresh 链与 load-more 互斥（链在途拒/延后 load-more，反之亦然）；链 = 单 ticket，**全链成功才一次性原子提交**（拼接 + dedup + cursor 归属），任一页失败整链丢弃（旧状态原样）；K 超限整替 bump epoch 废弃一切在途；两种完成顺序进测试（§7.4） |
-| 4 | P1 reducer 类型不足：awaitVerify 无 effectToken；inFlight 无 origin，普通派发与 probe 的 notSent 不可区分（probe 必须保留 orphan fence）；active+mismatch 的「等 effect」无 effect 可等 | 类型补齐：`inFlight{..., origin: ordinary \| verify(fence)}`；`awaitVerify(fence, effectToken)`；probe notSent 从 `inFlight.origin` 取回 fence 进 `retryScheduled(…, verificationFence)`；`rawAccepted` 的 active+mismatch **立即产生 drain effect**（无 inFlight 即派发）（§7.2） |
-| 5 | P1 终端拒绝（400/401/403）无条件退休整个 latestDesired，吞掉更新代意图 | 终端拒绝只结算 `flightGeneration`：`latestDesired.generation > flightGeneration` → 保留 + drain 独立派发（其自身失败独立结算）；仅同代退休 + surface error（§7.2） |
-| 6 | P1 presented 依赖 raw 与 feed 同权威：404 不带页 → 旧 raw 仍含则行复活；favorites reset 首页可能含旧 raw 没有的行被过滤 | favorites **404 改为携带同快照 membership 页**（`{favorited:false, error, thread_ids, favorites, revision}`，与 409 同构）→ notFound settle 接受页入 raw；reset 路径随减法 1 消失（snapshot 本身就是 membership+rows 同快照，presented 一致性由构造保证）（§4.1、§7.2） |
-| 7 | P1 point GET 走独立 WAL reader 越过 pending writer，不是提交消歧屏障 | 根因修改：**生命周期端点改幂等 ensure-absent**——archive/delete 对已归档/已不存在的目标返回 200 `{ok:true, changed:false}`（而非 404 错误）；ambiguity 所有者 = 编排层状态机**显式重派同一操作**（每次 mutationSingleAttempt，退避）直至确定性结局：200（changed 或 already-gone）= 成功、结构化 409（active run/binding）= 确定失败。point-GET 屏障方案废弃（§4.4、§6.2） |
-| 8 | P2 「本端点结构化响应」无可判别 wire schema，代理 JSON 可误配宽松 error DTO | 非 200 响应定义**严格 tagged union**：`{ kind: "garyx_api_error", operation: "<端点操作名>", code: "conflict\|not_found\|invalid_request\|…", …payload }`；客户端 definitive 判定要求 kind+operation 双匹配，缺失/未知一律 ambiguous；补「JSON 但非端点响应」测试（§4.1、§5） |
-| 9 | P2 R1 迁移面漏 desktop web surface 的 `requestJson`（web-api.ts:97/:295 直接 fetch） | R1 迁移清单纳入 `web-api.ts` helper（semantic mode 必填同规则）；实现 PR 的 grep 清单以「一切直接 fetch/URLSession 调用」为界，不以目录为界（§5） |
+| 1 | P1 「last_active_at 只增不减」与现码不符（RMW 竞态倒退） | `activity_seq` 事务内分配（决定 1）：排序键单调由 DB 构造保证，与时间戳载荷无关 |
+| 2 | P1 逐线程单调推不出全局界；并列键页边界漏行；DESC/ASC 混合比较器未定义 | seq 全局唯一严格递增：无并列、无混合比较器；range-fill 锚点 = 旧头 seq，「页尾 seq ≤ 旧头 seq 即止」精确；「刷新前新增行必有 seq > 旧头 seq」由全局分配直接成立 |
+| 3 | P1 多页链非同一快照，页间移动漏行 | seq 下形式化边界：链中/链后上移的行获得新的全局最大 seq，本轮链最多错过其**一个刷新周期**（下轮 range-fill 的旧头 seq 必小于其新 seq → 必被捕获）；期间该行要么仍在旧尾显示（位置陈旧）、要么属未加载区（今日 parity）。「永久漏行」类消灭，边界写入测试（§7.4） |
+| 4 | P1 snapshot 缺 membership+rows 原子接受门控（旧 snapshot 晚到 vs 更新的写响应 raw） | snapshot 定义为**原子接受单元** `(scope, epoch, ticket, revision)`：`revision < highestObserved` → **整包丢弃**（membership 与 rows 一起弃）+ 置 trailing-dirty；接受则 raw 与 rows 一次事务性替换。飞行期间新触发 → trailing-dirty，settle 后补拉一次（§7.4） |
+| 5 | P1 R4 的 409 只结算当前 attempt，不能结算用户操作 | R4 移除（决定 2）：今日 parity 人工重试；幂等化独立任务 |
+| 6 | P1 delete 无 tombstone 可复活；already-gone 清理完成条件未定义 | 同上：R4 移除，本设计不改 delete 语义 |
+| 7 | P1 toggle 覆盖 phase 会丢未消歧 orphan fence（gen2 notSent 后被 raw@E 等值退休，orphan 后提交反向） | **`unresolvedFence` 提为正交 per-thread 状态**（独立于 generation/phase）：ambiguous settle 置 `min(现值, flight.E)`；清除条件 = 观察到 `revision > fence` 或本端后续 CAS 写被接受（其返回 revision 必 > fence）。**一切等值退休捷径（raw == desired → 退休）都要求 `raw.revision > unresolvedFence`**，否则保持等待（§7.2） |
+| 8 | P1 rawAccepted 的立即 drain 绕过 429/503 退避 | `retryScheduled`（fence 有无皆然）在 raw ≠ desired 时**保持原 effectToken 等 timer**，仅 raw == desired（且过 fence 门）才退休；只有真 `active` 才即时 drain（§7.2） |
+| 9 | P1 tagged schema 只迁移消费者未迁移生产者；auth 401 无 kind/operation → 永久 ambiguous 循环 | **生产者迁移清单**：①gateway auth middleware（gateway_auth.rs:143）改 tagged（operation="gateway_auth"，code=unauthorized/forbidden）——favorites reducer 的终端 401/403 分支由此成立；②favorites 端点全 tagged（新建即 tagged）；③**遗留端点不在本设计迁移**——策略明示：untagged 错误在新传输契约下恒 ambiguous，仅影响使用新 reducer 的调用方（= favorites），遗留 mutation 调用方保持既有粗粒度处理、不依赖 definitive 分类（§4.0、§5） |
+| 10 | P1/P2 R4 重试无 scope/epoch 身份、未入 Core、漏 automation 冲突 | R4 移除后无重试机；今日 archive 编排（runtimeGeneration 校验等）原样保留 |
 
-### 已确认（round 10）
+### 已确认（round 11）
 
-独立 favorites SQL 投影/JOIN 合规；CAS 恒 bump、409 同快照页、组合 snapshot
-方向正确；LIMIT N+1、keyset 谓词、复合索引修正合理。
+独立 SQL favorites 投影/JOIN 合规；Favorites 取消分页 + cap 500/truncated 为
+明确产品边界；CAS 恒 bump、409/404 同快照页、snapshot 单读事务方向正确。
 
 ### 历史轮次（要点）
 
-- **R9→v10**：gap-fill 初版（v11 改 range-fill）；七分支结算矩阵；presented
-  谓词统一；bot reader 保留内部 offset；LIMIT N+1；索引事实修正。
-- **R8→v9**：根因三件套（R1 传输契约 / R2 组合快照 / R3 keyset），删除
-  marker/gate 体系。
-- **R7→v8**：awaitVerify 意图验证循环。**R5→v6**：服务端 CAS 写围栏
-  （CONFIRMED）。**R4→v5**：三元组围栏。**R3→v4**：flight/desired 双身份、
-  main 纯 raw。**R2→v3**：meta singleton、同快照组页、清理点三处
-  （CONFIRMED）。**R1→v2**：守卫插入、判别联合、双端入口。
+- **R10→v11**：Favorites 取消分页；range-fill 初版（v12 改 seq）；reducer
+  类型补齐；404 带页；tagged union。
+- **R9→v10**：七分支结算矩阵；presented 谓词；bot reader 内部 offset；
+  LIMIT N+1。**R8→v9**：根因三件套 R1/R2/R3，删除 marker/gate 体系。
+- **R7→v8**：awaitVerify 验证循环。**R5→v6**：CAS 写围栏（CONFIRMED）。
+  **R4→v5**：三元组围栏。**R3→v4**：双身份、main 纯 raw。**R2→v3**：meta
+  singleton、同快照组页、清理点三处（CONFIRMED）。**R1→v2**：守卫插入、
+  判别联合、双端入口。
 
 ## 1. 需求
 
@@ -59,297 +68,307 @@ Date: 2026-07-16
    右上角过滤器增加「收藏」类别。
 4. Mac：收藏触发点与置顶一致；筛选处新增「收藏」tab。
 
-**系统级连带改造（用户 scope 裁决授权）**：R1 传输契约、R2 组合快照端点、
-R3 All/Chats keyset 分页、**R4（v11 新增）生命周期端点幂等化**。
+**系统级连带改造（用户 scope 裁决授权，改根因并说清楚）**：
+R1 传输契约（+auth middleware tagged）、R2 组合快照端点、
+R3 All/Chats keyset 分页 + **activity_seq 排序**（v12）。
+（原 R4 生命周期幂等化已拆出为独立后续任务。）
 
 ## 2. 目标 / 非目标
 
-**目标**：收藏标记 + 双端入口 + 三分类筛选；R1–R4 系统级根治；客户端只保留
+**目标**：收藏标记 + 双端入口 + 三分类筛选；R1–R3 系统级根治；客户端只保留
 意图状态机（§7.2）+ presented 后置过滤（§7.3）+ All/Chats range-fill（§7.4）。
 
-**非目标**：收藏排序/重排；**收藏分页**（cap 500 + truncated 标记，超限
-展示不完整属可接受产品边界）；首页独立收藏段；All/Chats 行星标；SSE；bot
-命令面收藏筛选（bot reader 保留内部 offset，UX 不动）；收藏意图跨进程持久化；
-`serverIdempotencyKey`（预留位）。
+**非目标**：收藏排序/重排；收藏分页（cap 500 + truncated）；首页独立收藏段；
+All/Chats 行星标；SSE；bot 命令面收藏筛选（bot reader 保留内部 offset）；
+收藏意图跨进程持久化；`serverIdempotencyKey`（预留位）；**生命周期端点
+幂等化**（独立后续任务；本设计对 archive/delete 保持今日行为与今日错误
+处理，仅在 ambiguous 报错后追加一次 feed refresh 触发）。
 
-## 3. 数据模型（gateway SQLite）——round 6 起 CONFIRMED
+## 3. 数据模型（gateway SQLite）
 
-（同 v10：`thread_favorites` + `thread_favorites_meta`；meta 初始化早于启动
+### 3.1 favorites（round 6 起 CONFIRMED）
+
+（同 v11：`thread_favorites` + `thread_favorites_meta`；meta 初始化早于启动
 purge；条件写接受即恒 bump 含 no-op、清理点删除变更时 bump；守卫式单事务
-插入；不用 FK；清理点三处 mod.rs:669/2045/2785；条件查询全 SQL。）
+插入；不用 FK；清理点三处 mod.rs:669/2045/2785。）
 
-索引动作：普通 `idx_recent_threads_last_active` 升级为复合
-`(last_active_at DESC, thread_id ASC)`（task/non-task partial 已含两列）；
-EXPLAIN QUERY PLAN 契约测试。
+### 3.2 activity_seq（v12 新增，round11-1/2/3 根因）
+
+```sql
+ALTER TABLE recent_threads ADD COLUMN activity_seq INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS recent_threads_meta (
+  id           INTEGER PRIMARY KEY CHECK (id = 1),
+  activity_seq INTEGER NOT NULL CHECK (activity_seq >= 0)
+) STRICT;
+CREATE INDEX … ON recent_threads (activity_seq DESC);        -- 全量
+-- task / non-task partial 索引同步改为 (activity_seq DESC)
+```
+
+- **分配**：`upsert_recent_thread_tx` 在**同一投影写事务**内 `activity_seq =
+  ++meta.activity_seq`（单 writer mutex + writer 串行化 ⇒ 严格递增、全局
+  唯一）。每次行 upsert 都分配新 seq（行有任何投影变化即前移，与今日
+  「活动即上浮」语义一致）。
+- **一次性迁移**：现有行按 `(last_active_at ASC, thread_id DESC)` 顺序回填
+  seq（保持现有展示顺序），meta 计数器置为最大值；启动 cutover 模式对齐
+  `recent_task_thread_kind_v1` 先例。
+- **排序与分页键 = `activity_seq DESC`**；`last_active_at` 降级为纯展示
+  字段（客户端行内时间显示不变）。时间戳载荷的任何倒退（round11-1 的 RMW
+  竞态）不再影响排序正确性；该 RMW 竞态本身留存为展示层小误差（今日已
+  存在，非本设计扩大面）。
 
 ## 4. Gateway API
 
-### 4.0 错误响应 tagged schema（round10-8，新增，favorites/生命周期端点适用）
+### 4.0 错误响应 tagged schema（round10-8 + round11-9 生产者清单）
 
-一切非 200 结构化响应：
+`{ "kind": "garyx_api_error", "operation": "…", "code": "…", …payload }`
 
-```json
-{ "kind": "garyx_api_error", "operation": "thread_favorites_put",
-  "code": "conflict", …操作相关负载… }
-```
+- **生产者迁移（本设计内）**：①**gateway auth middleware**
+  （gateway_auth.rs:143）——401/403 改 tagged（operation="gateway_auth"）；
+  ②favorites 全部端点（新建即 tagged）；③`/api/recent-threads` 参数错误
+  （改造中顺带）。
+- **遗留端点策略（明示）**：其余 route 的普通 `{ok,error}` 错误**不在本设计
+  迁移**；新传输契约下 untagged 错误恒 ambiguous——只影响使用新 reducer 的
+  调用方（favorites）；遗留 mutation 调用方不使用 definitive 分类，保持
+  既有处理，无行为回退。favorites reducer 需要的 definitive 生产者
+  （401/403 = middleware，400/404/409 = favorites 端点）在本设计内全部
+  tagged 化，无 ambiguous 循环（round11-9 反例消灭）。
+- 客户端判定：kind + operation 双匹配才 definitive；否则 ambiguous。
 
-`operation` 每端点唯一；`code` 枚举（`conflict` / `not_found` /
-`invalid_request` / `unauthorized` / `forbidden` / `rate_limited` /
-`unavailable` / …）。客户端 definitive 判定要求 **kind + operation 双匹配**；
-解码失败、kind 缺失、operation 不符 → 一律 ambiguous。
+### 4.1 收藏读写（CAS；404/409 带同快照页）——CONFIRMED，未改动
 
-### 4.1 收藏读写（写侧 CAS；v11：404 带页）
+（同 v11：GET / PUT / DELETE + `expected_revision` 必填；200 接受即 bump 含
+no-op；409/404 tagged + 同快照 membership 页；400 tagged；
+`FavoriteThreadResult::{Updated|Conflict|NotFound}(page)`。）
 
-| 方法 & 路径 | 行为 |
-|---|---|
-| `GET /api/thread-favorites` | 200 `{ thread_ids, favorites, revision }` |
-| `PUT /api/thread-favorites/{key}?expected_revision=N` | 200 整页（接受即 bump 含 no-op）；失配 409 tagged + **同快照整页**；**404 tagged + 同快照整页**（round10-6：`{kind, operation, code:"not_found", thread_ids, favorites, revision}`）；400 tagged |
-| `DELETE /api/thread-favorites/{key}?expected_revision=N` | 同上（`removed` 字段） |
+### 4.2 `/api/recent-threads`（仅 All/Chats；v12 seq keyset）
 
-同快照组页不变量扩展到 404（同一读/写事务内回读 membership 页）。
-`FavoriteThreadResult::{Updated(page) | Conflict(page) | NotFound(page)}`。
-
-### 4.2 `/api/recent-threads` keyset cursor（仅 All/Chats）
-
-- **`favorites` 滤镜参数删除**（减法 1，无消费者）；`tasks` 参数与语义不变。
-- cursor-only（HTTP 面）；`limit` 1..cap，0/负/超限 400；cursor opaque
-  base64url，绑定滤镜，解码失败 400。
-- keyset 谓词 + `(last_active_at DESC, thread_id ASC)`；LIMIT N+1 探测；
-  `next_cursor` 从末条实际返回行签发；`total` 同快照 count 仅展示。
+- cursor-only；`tasks` 参数不变；`favorites` 参数不存在（v11 删除）。
+- `limit` 1..cap；cursor = opaque base64url `{ v, filter, activity_seq }`，
+  绑定滤镜；解码失败/跨滤镜 400（tagged）。
+- keyset 谓词：`WHERE <filter> AND activity_seq < :seq ORDER BY activity_seq
+  DESC LIMIT N+1`；`next_cursor` 从末条实际返回行的 seq 签发；
+  `has_more = 取到 N+1`；`total` 同快照 count 仅展示。
 - bot `RecentThreadPageReader` 保留内部 offset（internal-only，行为=今日）。
 
-### 4.3 组合快照端点（R2；v11：非分页整列表）
+### 4.3 组合快照端点（R2；非分页）——CONFIRMED
 
-`GET /api/thread-favorites/snapshot`
+`GET /api/thread-favorites/snapshot`：单读事务返回
+`{ revision, thread_ids, favorites, recent: { threads, total, truncated } }`；
+`recent.threads` = 全部收藏线程 recent 行按 `activity_seq DESC`，cap 500。
 
-单读事务返回：
+### 4.4 生命周期操作（v12：今日 parity，无新语义）
 
-```json
-{ "revision": 7, "thread_ids": ["…"], "favorites": [{…}],
-  "recent": { "threads": […], "total": 3, "truncated": false } }
-```
-
-- `recent.threads` = 全部收藏线程的 recent 行（JOIN，`last_active_at DESC,
-  thread_id ASC`），**cap 500**，超限 `truncated: true`（展示前 500，产品
-  可接受边界）。无 cursor。
-- membership、revision、rows 同快照由构造保证 → presented 一致性无错位
-  （round10-6 第二支消灭）。
-
-### 4.4 生命周期端点幂等化（R4，round10-7 根因）
-
-- **archive / delete 改 ensure-absent 语义**：目标已归档/已不存在 → 200
-  `{ ok: true, changed: false }`（不再 404 错误）；实际执行 → 200
-  `{ ok: true, changed: true }`；业务冲突（active run / active binding，
-  routes.rs:3137/:3247）→ 结构化 409 tagged（确定性失败）。
-- ambiguity 所有者 = 客户端编排状态机：ambiguous → **退避显式重派同一操作**
-  （每次 mutationSingleAttempt）直至确定性结局——200（changed 任意值）=
-  成功收尾（本地删行 + snapshot/refresh）；结构化 409 = 确定失败报错。
-  重派对 ensure-absent 幂等安全；早先超时 attempt 的延迟提交与重派结果
-  语义一致。point-GET 屏障方案废弃（reader 越过 pending writer，
-  mod.rs:2051，不能证明未来不提交）。
-- 影响面：gateway 两个 route 的响应语义 + 双端 archive/delete 编排
-  （Bots.swift:270 catch 路径、ThreadLifecycle.swift:318、desktop 对应）。
-  既有「404 视为失败」的调用方随迁移清单更新。
+archive/delete 的服务端行为与错误契约**完全不动**。客户端编排唯一追加：
+ambiguous 结局在既有报错之后**触发一次 feed refresh/snapshot**（若操作实际
+已提交，行随之消失；未提交则列表不变）。幂等化见独立后续任务。
 
 ### 4.5 已知边界
 
-automation/hidden 不进投影；归档清 favorites 行 + bump（收藏行随下次
-snapshot 消失）。
+automation/hidden 不进投影；归档清 favorites 行 + bump（行随下次 snapshot
+消失）。
 
 ## 5. 传输契约重构（R1）
 
-- semantic mode **全请求 helper 必填**（GET/PUT/POST/DELETE/PATCH，无默认，
-  编译期强制）：`readRetryable` / `mutationSingleAttempt`。
-- mutation 结果：`ok(decoded)` / `definitiveEndpointResponse(decoded tagged)`
-  （kind+operation 双匹配才算，round10-8）/ `ambiguous`（task 创建后其它
-  一切，含裸 5xx、代理 JSON、解码失败）/ `notSent`（task 未创建）。
-- **迁移面以「一切直接 HTTP 调用」为界**（round10-9）：iOS
-  `GaryxGatewayClient` 全调用点（含 PATCH :938/:1054）；desktop
-  `garyx-client` + main 内其它 fetch（agent-avatar.ts:71）+ **web surface
-  `web-api.ts` requestJson（:97，settings PUT :295）**。实现 PR 附 grep
-  全量清单（fetch/URLSession/requestJson 穷举）。
-- 契约测试：attempt 计数；分类矩阵（解码 tagged 各 code、裸 5xx→ambiguous、
-  「JSON 但非端点响应」→ambiguous、PATCH、notSent）；无默认语义编译断言。
+（同 v11 + round11-9 修订）semantic mode 全 helper 必填（含 PATCH 与
+web-api.ts requestJson）；mutation 结果四分类；**definitive 仅认 tagged
+双匹配**——本设计内 tagged 生产者 = auth middleware + favorites 端点；
+untagged 错误恒 ambiguous 且明示只影响 favorites reducer（遗留调用方不依赖
+分类）。迁移清单以「一切直接 HTTP 调用」为界，实现 PR 附 grep 全量清单。
 
 ## 6. Desktop / iOS 落点
 
 ### 6.1 Desktop
 
 - main 发布纯 raw（revision 单调、写 in-flight 不变、按 `entitiesGatewayUrl`
-  归一化）；判别联合 `RecentThreadListFilter = "all" | "chats" | "favorites"`
-  （favorites 走 snapshot，不走 recent-threads）；`garyx-client`：favorites
-  三端点 + snapshot + cursor 版 `fetchRecentThreads`；IPC 带 scope stamp。
+  归一化）；判别联合 `"all" | "chats" | "favorites"`（favorites 走
+  snapshot）；`garyx-client`：favorites 三端点 + snapshot + seq-cursor 版
+  `fetchRecentThreads`；IPC 带 scope stamp。
 - renderer：`favorites-ingress`（§7）；入口 1 = `ConversationHeaderTitle.tsx`
-  紧邻 Pin（lucide `Star`/`StarOff`，无快捷键）；入口 2 = Favorites tab 行内
-  取消（`ThreadRailRow` accessory 契约扩展，`[Unfavorite, Archive]`）；
-  第三 tab + 方向键 + 空态 "No favorite threads"；All/Chats feed cursor 化 +
-  range-fill（§7.4）；Favorites feed = snapshot 整替；i18n 四条。
+  紧邻 Pin（lucide `Star`/`StarOff`）；入口 2 = Favorites tab 行内取消
+  （`ThreadRailRow` accessory 扩展，`[Unfavorite, Archive]`）；第三 tab +
+  方向键 + 空态；All/Chats feed seq-cursor + range-fill；Favorites =
+  snapshot 整替（§7.4 原子接受单元）；i18n 四条。
 
 ### 6.2 iOS
 
-- Core：`GaryxFavoritesState`（§7 reducer + 退避 effect，SwiftPM 全测）；
-  transport 按 §5；`GaryxRecentThreadFeeds`/Pager：All/Chats cursor +
-  range-fill 迁移，Favorites = snapshot 整替（无分页态）；`.favorites` case
-  全链（Filter/Storage/Reducer/Actor/Presentation）；snapshot 客户端。
+- Core：`GaryxFavoritesState`（§7 reducer + 退避 effect）；transport 按 §5；
+  Feeds/Pager：All/Chats seq-cursor + range-fill，Favorites snapshot 整替；
+  `.favorites` case 全链；snapshot 客户端。
 - App：入口 1 长按（紧邻 Pin，`star`/`star.slash`）、入口 2 线程内 title
-  菜单（:942 附近）、入口 3 过滤器自动带出；`+ThreadPersistence` IO 薄层
-  （runtime UUID 围栏对齐 pin :92）；`+ThreadList` refresh 增拉 favorites +
-  All feed 辅助刷新穷尽 switch（RefreshCommitTests :523）；`+Gateway`（:55）
-  切换全清；**Archive/Delete 编排改 R4 重派协议**（§4.4；catch 分支升级为
-  ambiguous → 退避重派至确定性结局）。
+  菜单（:942 附近）、入口 3 过滤器自动带出；`+ThreadPersistence` IO 薄层；
+  `+ThreadList` refresh 增拉 favorites + All feed 辅助刷新穷尽 switch
+  （RefreshCommitTests :523）；`+Gateway`（:55）切换全清；archive/delete
+  编排 = 今日行为 + ambiguous 报错后触发 refresh（§4.4）。
 - 新 Core 文件 `xcodegen generate` + 提交 pbxproj；验证 `xcodebuild`。
 
 ## 7. 客户端收藏状态机规格（双端共同契约）
 
-### 7.1 全局状态与身份围栏（同 v10）
+### 7.1 全局状态与身份围栏
 
-raw（revision 单调 + scope 围栏；来源 GET/写响应/409 页/404 页/snapshot）；
-写派发前置；flight 三元组，token allocator 永不重置；transport = §5；
-`presented(id) = latestDesired[id]?.desired ?? raw.contains(id)`。
+- `raw`（revision 单调 + scope 围栏；来源 GET/写响应/409 页/404 页/
+  snapshot）；写派发前置；flight 三元组，token allocator 永不重置；
+  transport = §5；`presented(id) = latestDesired[id]?.desired ??
+  raw.contains(id)`。
+- **`unresolvedFence[id]: Option<revision>`（round11-7 新增，正交状态）**：
+  该线程存在「未消歧的可能已提交写」时的围栏水位。置位：ambiguous settle →
+  `min(现值, flight.expectedRevision)`。清除：观察到 accepted revision >
+  fence，或本端该线程的后续 CAS 写被接受（返回 revision 必 > fence）。
+  **不随 toggle / phase 覆盖而清除**（独立于 generation 与 phase 生存）。
 
-### 7.2 意图 reducer（v11 类型补齐）
+### 7.2 意图 reducer（v12 修订）
 
 ```
 inFlight      = { requestToken, target, flightGeneration, expectedRevision,
-                  origin: ordinary | verify(fence) }
+                  origin: ordinary | verify }
 latestDesired = { generation, desired,
                   phase: active
-                       | retryScheduled(effectToken, cause, verificationFence?)
-                       | awaitVerify(fence, effectToken) }
+                       | retryScheduled(effectToken, cause)
+                       | awaitVerify(effectToken) }
+unresolvedFence[id]（§7.1，正交）
 ```
 
-**事件与转移（穷尽）：**
+（v11 的 phase 内嵌 fence 移除——fence 统一由正交的 `unresolvedFence`
+承担，v11 round10-4 的「probe 保留 fence」由此自然成立且不再依赖 origin
+传递。）
 
-- `toggle(desired)`：generation += 1；latestDesired = {generation, desired,
-  active}（旧 effectToken 自然失配）；无 inFlight 且 raw 就绪 → dispatch。
-- `dispatch`：inFlight = {新 token, desired, generation, E = raw.revision,
-  origin: ordinary}；probe 重派用 origin: verify(原 fence)。单飞行。
-- `settle(ok, page)`：页入 raw。gen ≤ flightGen → 退休；否则 desired ≠ raw →
-  active + **drain effect**；相等 → 退休。
+**等值退休门（贯穿所有分支）**：任何「raw == desired → 退休」的判定，
+**要求 `raw.revision > unresolvedFence[id]`（或 fence 为空）**；未过门 →
+保持当前相位继续等待（round11-7 反例封闭：GET false@E 不能在 fence=E 未过
+时退休意图）。
+
+**事件与转移：**
+
+- `toggle(desired)`：generation += 1；latestDesired = {gen, desired, active}
+  （旧 effectToken 自然失配；**unresolvedFence 不动**）；无 inFlight 且 raw
+  就绪 → dispatch。
+- `dispatch`：inFlight = {新 token, desired, gen, E = raw.revision, origin}；
+  单飞行。
+- `settle(ok, page)`：页入 raw（其 revision > 派发时 E ≥ fence ⇒ fence
+  清除）。gen ≤ flightGen → 退休；否则 desired ≠ raw → active + drain；
+  相等 → 退休（fence 已清，门自动通过）。
 - `settle(conflict, page)`：409 页入 raw；desired ≠ raw → active + drain
-  （新 E）；相等 → 退休。
-- `settle(notFound, page)`（v11：404 带页）：**页入 raw**（raw 已不含该
-  线程）→ 退休。presented 立即 false，无复活（round10-6 第一支消灭）。
-- `settle(definitiveRejected, retryable=false)`（解码 400/401/403）：
-  **只结算 flightGeneration**（round10-5）：gen == flightGen → 退休 +
-  surface error；gen > flightGen → 保留 active + drain（新代意图独立派发、
-  独立结算）。
-- `settle(definitiveRejected, retryable=true)`（解码 429/unavailable）：
-  → retryScheduled(新 effectToken, .rejected, fence: origin 为 verify 时
-  保留原 fence)。
-- `settle(ambiguous)`：→ awaitVerify(fence = flight.expectedRevision
-  （origin 为 verify 时取原 fence，取更小者以保守），新 effectToken) +
-  退避 effect。
-- `settle(notSent)`：origin ordinary → retryScheduled(新 effectToken,
-  .notSent, fence: nil)；**origin verify(fence) → retryScheduled(新
-  effectToken, .probeNotSent, verificationFence = fence)**（round10-4：
-  probe 的 orphan fence 从 inFlight.origin 取回，不丢失）。
-- `rawAccepted(page)`：更新 raw。对一切无 inFlight 的意图：
-  - awaitVerify(fence, _) / retryScheduled(_, _, fence≠nil)：page.revision >
-    fence → verify（raw == desired → 退休；≠ → active + **立即 drain
-    effect**）；
-  - active / retryScheduled(fence=nil)：raw == desired → 退休；≠ →
-    **立即产生 drain effect**（无 inFlight 即派发；round10-4「无 effect 可
-    等」消除）。
-- `backoffFired(stamp)`：stamp = (scope, epoch, generation, effectToken)
-  四元全匹配（awaitVerify/retryScheduled 均持有 effectToken，可匹配）→
-  重派（同 desired，E = 当前 raw.revision，origin 按相位）。
-- `gatewayScopeCleared`：全清 + epoch bump。
-- 退避 effect 由 Core 产生并校验；宿主只做定时器。
+  （新 E）；相等 → **过等值门才退休**，未过门 → awaitVerify(新
+  effectToken) + 退避 effect。
+- `settle(notFound, page)`：404 页入 raw → 线程已不存在，退休（presented
+  false，无复活）。
+- `settle(definitiveRejected, retryable=false)`（tagged 400/401/403）：只
+  结算 flightGeneration——同代退休 + surface error；更新代保留 active +
+  drain。
+- `settle(definitiveRejected, retryable=true)`（tagged 429/unavailable）：
+  → retryScheduled(新 effectToken, .rejected)。
+- `settle(ambiguous)`：**置 unresolvedFence** → awaitVerify(新 effectToken)
+  + 退避 effect。
+- `settle(notSent)`：→ retryScheduled(新 effectToken, .notSent)（fence 如有
+  则已在正交状态，不丢失——round10-4/round11-7 一并成立）。
+- `rawAccepted(page)`：更新 raw；`revision > fence` → 清 fence。对无
+  inFlight 的意图：
+  - **active**：desired == raw 且过等值门 → 退休；≠ → **立即 drain**；
+  - **awaitVerify**：fence 已清 → desired == raw → 退休、≠ → active +
+    drain；fence 未清 → 保持等 timer；
+  - **retryScheduled（round11-8）**：desired == raw 且过等值门 → 退休；
+    ≠ → **保持原 effectToken 等 timer**（不 drain，不绕过退避）。
+- `backoffFired(stamp)`：四元 (scope, epoch, generation, effectToken) 全
+  匹配 → 重派（同 desired，E = 当前 raw.revision，origin=verify 当来自
+  awaitVerify）。
+- `gatewayScopeCleared`：全清（含 unresolvedFence）+ epoch bump。
 
-**性质**：同 E 至多一个接受（CAS）；活性（probe 推 revision 过 fence）；
-终态恒 = 最后用户意图；七分支 × generation × 相位 × origin 矩阵穷尽。
+**round11-7 反例走查**：raw=false@E；PUT(g1,true) ambiguous → fence=E，
+awaitVerify；toggle g2=false → active（fence 仍 =E）；DELETE notSent →
+retryScheduled；GET false@E → 等值门要求 revision>E，未过 → **不退休**，
+保持等 timer；timer → 重派 DELETE(E)——CAS：DELETE 接受则 revision>E
+（fence 清、orphan 被围栏）；orphan 先提交则 DELETE 409 拿新页重派。终态
+false = 最后意图。✅
 
-### 7.3 Favorites feed 呈现过滤（round9-4，v11 不变）
+### 7.3 Favorites feed 呈现过滤（不变）
 
-**行仅当 `presented(id) == true` 才渲染**（缓存行与 in-flight 响应行一律
-后置过滤）。snapshot 的 membership 与 rows 同快照 → 无 presented 错位。
+行仅当 `presented(id) == true` 才渲染（缓存行与 in-flight 响应行一律后置
+过滤）。
 
 ### 7.4 feed 协议
 
-**Favorites**：snapshot 整列表原子替换（触发：写确认、周期 10s、下拉、切入
-tab；期间保留 display IDs 无 skeleton；失败保缓存）；单飞行（in-flight 期间
-新触发合并）。无 load-more、无 cursor、无 reset。
+**Favorites（round11-4 原子接受单元）**：snapshot 包 = `(scope, epoch,
+ticket, revision)` 门控的整体——`revision < highestObserved` 或 scope/
+epoch/ticket 失配 → **membership 与 rows 整包丢弃** + 置 trailing-dirty；
+接受 → raw 与 display rows 一次性原子替换。触发（写确认、周期 10s、下拉、
+切 tab）在 in-flight 期间 → 置 trailing-dirty，settle 后补拉一次。失败保
+缓存。无 load-more。
 
-**All/Chats（R3 + round10-2/3 重构）**：
+**All/Chats（seq range-fill）**：
 
-- **load-more**：keyset cursor（删除不移位、不跳行）。
-- **refresh = range-fill 链**（锚点 = 旧头排序键 `(last_active_at,
-  thread_id)`，键单调只增）：从首页起按 next_cursor 链式拉取，**页尾键 ≤
-  旧头键即止**；`has_more=false` 先到 → 整域尽收直接整替。终止时原子提交：
-  新区间行 + 旧列表 dedup 拼接（移动行必在新区间 → 从旧尾去重）。
-  **正确性**：键只增 ⇒ 自上次加载以来每个变动/新增行的键 > 旧头键 ⇒ 全部
-  落在拉取区间内；区间外旧尾除删除外未变。
-- **并发（round10-3）**：每 feed 单飞行道——refresh 链与 load-more 互斥
-  （一方在途，另一方拒/延后）；链 = 单 ticket，全链成功才一次原子提交，
-  任一页失败**整链丢弃**（旧状态与 cursor 原样）；**K=5 页超限 → 整替**
-  （bump epoch 废弃一切在途，cursor 重置）；整替与旧 load-more 两种完成
-  顺序：epoch 判弃 / 原子提交互斥。
-- **幽灵尾行收敛（round10-2 第二支）**：远端删除/滤镜退出的行留在旧尾 =
-  今日现状 parity；**全量替换触发点**保证有界陈旧：用户下拉刷新、app 前台
-  /页面出现、K 超限、每 M=30 个周期刷新（约 5 分钟）强制整替。相对今日
-  （offset、无强制整替、删除还会跳行）为严格改进。
-
-进程重启/切网关：feed 从头 prime；favorites 无 cursor 无遗留漂移面。
+- load-more：seq keyset（删除不移位、不跳行）。
+- refresh = range-fill 链：从首页起链式拉取，**页尾 seq ≤ 旧头 seq 即止**
+  （seq 全局唯一严格递增 ⇒ 无并列边界）；`has_more=false` 先到 → 整替。
+  终止后原子提交：新区间行 + 旧列表 dedup 拼接。
+- **正确性（v12 重述）**：自上次加载以来每个新增/变更行都获得 > 旧头 seq
+  的新 seq ⇒ 必落在拉取区间。链进行中再变更的行获得 > 本链首页头 seq 的
+  seq ⇒ 本链可能错过，但**下轮 range-fill 必捕获**（其 seq > 下轮的旧头
+  seq）——「≤1 刷新周期有界陈旧」，写入测试断言；期间该行或以旧位置显示
+  （已加载）或暂不可见（未加载，今日 parity）。
+- 并发：每 feed 单飞行道（链与 load-more 互斥）；链单 ticket 全成才原子
+  提交，任一页失败整链丢弃；K=5 超限 → 整替 bump epoch。
+- 幽灵尾行（远端删除/滤镜退出）：整替触发点有界收敛（下拉、前台、K 超限、
+  每 M=30 周期）。
 
 ## 8. 测试计划
 
 **Gateway**
 
-- CAS/meta/清理点/守卫插入/同快照组页（含 **404 带页同快照**）；孤儿写交错；
-  `favorites=only` 参数已删除（回归：传入 → 400 未知参数或忽略，按现有参数
-  校验约定定一致行为）。
-- keyset（All/Chats）：删除后不跳行；LIMIT N+1 边界；limit 校验；cursor
-  绑定滤镜/解码失败 400；EXPLAIN 契约（复合索引）；page+count 一次读快照。
-- snapshot：membership+revision+rows 同快照（commit-between 测试）；cap 500 +
-  truncated；空收藏。
-- **生命周期幂等化（R4）**：archive/delete 对已归档/已删目标 200
-  `{changed:false}`；重复执行幂等；业务冲突 409 tagged；「旧 attempt 延迟
-  提交 + 重派」交错下终态一致。
-- tagged error schema：各端点非 200 响应 kind/operation/code 断言。
+- favorites CAS/meta/清理点/守卫插入/同快照组页（含 404 带页）；孤儿写
+  交错。
+- **activity_seq**：投影写事务内分配严格递增（并发写序列断言）；一次性
+  回填迁移保序 + cutover 幂等；**round11-1 RMW 时序下排序仍单调**（旧
+  时间戳写回不影响 seq 序）；索引迁移 EXPLAIN 契约。
+- seq keyset：删除后不跳行；LIMIT N+1 边界；limit/cursor 校验 400
+  tagged；page+count 一次读快照。
+- snapshot：同快照（commit-between）；cap 500/truncated；空收藏。
+- **auth middleware tagged**：401/403 kind/operation 断言；favorites 端点
+  非 200 全 tagged；遗留端点 untagged 现状回归（不迁移）。
 
 **传输契约（R1）**
 
-- attempt 计数；分类矩阵（tagged 双匹配、「JSON 但非端点响应」→ambiguous、
-  裸 5xx、PATCH、notSent）；web-api.ts helper 迁移；无默认语义编译断言；
-  全调用点清单核对。
+- attempt 计数；分类矩阵（tagged 双匹配、untagged 401 → ambiguous 在
+  middleware 迁移后不再出现于 favorites 路径、「JSON 但非端点响应」→
+  ambiguous、PATCH、web-api.ts、notSent）；无默认语义编译断言。
 
 **意图 reducer（双端）**
 
-- 七分支 × generation × 相位 × origin 矩阵；R5 双序 / R7 丢失 409 / R9 搁浅
-  / **R10 全反例**：probe notSent 保留 fence（origin 区分两个同形历史）、
-  终端拒绝不吞新代意图（gen1 400 后 gen3 仍派发）、404 带页后 presented
-  false 不复活、active+mismatch 立即 drain；backoffFired 四元失配；活性；
-  不同 ID 隔离；desktop raw 纯度；切网关全清。
+- 全分支 × generation × 相位矩阵 + **等值退休门**：R11-7 走查（fence 存续
+  跨 toggle/notSent，GET@E 不退休，timer 重派收敛）；R11-8（retryScheduled
+  在 raw≠desired 时不被 rawAccepted drain，等 timer）；R10 全反例回归
+  （probe fence 经正交状态自然保留）；R5 双序 / R7 丢失 409 / R9 搁浅；
+  终端拒绝不吞新代；404 带页无复活；backoff 四元失配；活性；切网关全清
+  （含 fence）。
 
 **feed（双端）**
 
-- **range-fill**：多页新增全收敛；**moved-known 场景**（旧行升头不再假锚，
-  新增行全部进区间）；has_more=false 提前整替；K 超限整替；链任一页失败
-  整链丢弃旧态原样；refresh 链与 load-more 互斥两方向 + 两种完成顺序；
-  幽灵尾行在整替触发点消失（下拉/前台/周期 M）。
-- Favorites snapshot 整替：原子替换、无 skeleton、失败保缓存、单飞行合并；
-  presented 过滤（409/404 收敛不复活、他端删除 snapshot 前已隐藏、确定性
-  失败重现、重新收藏重现、in-flight 响应行同过滤）。
-- **Archive/Delete 重派协议（R4）**：ambiguous → 重派至 200/409 确定性
-  结局三路径；重派期间行呈现策略（沿现有 transition 语义）。
+- **snapshot 原子接受单元（R11-4）**：旧 snapshot 晚到（revision 低）→
+  整包丢弃 + trailing-dirty 补拉；写响应先接受 raw 后旧 snapshot 到 →
+  不撕裂（B 不消失）；in-flight 触发合并 → settle 后补拉。
+- range-fill：多页新增收敛；**链中移动行 ≤1 周期捕获**（R11-3 边界断言）；
+  has_more=false 整替；K 超限；链失败整链丢弃；互斥两方向 + 两种完成顺序；
+  幽灵行在整替触发点消失。
+- presented 过滤全场景；Favorites 整替无 skeleton/失败保缓存。
+- **archive/delete 今日 parity**：ambiguous 报错后触发 refresh 的三路径
+  （已提交 → 行消失；未提交 → 列表不变；refresh 失败 → 下轮周期收敛）。
 
 **其余**
 
-- desktop：三 tab、方向键、空态、行 accessory；判别联合映射；store 按
-  gateway key 隔离。iOS：FilterStorage 往返；Reducer/Actor/Presentation；
-  RefreshCommitTests。端到端：curl 三端点 + snapshot + cursor 翻页 +
-  range-fill 场景 + 生命周期幂等；双端 UI 按 `garyx-product-ui` 走查两处
-  入口 + 筛选切换 + 行内取消。
+- desktop：三 tab、方向键、空态、行 accessory；判别联合映射；store 隔离。
+  iOS：FilterStorage；Reducer/Actor/Presentation；RefreshCommitTests。
+  端到端：curl 三端点 + snapshot + seq 翻页 + range-fill；双端 UI 按
+  `garyx-product-ui` 走查两处入口 + 筛选切换 + 行内取消。
 
 ## 9. 实现切分（五步提交，同仓同发无跨版本兼容）
 
-1. **gateway-favorites**：表/CAS/API（404 带页 + tagged errors）+ snapshot
-   （非分页）+ 服务端测试。
-2. **gateway-recent**：All/Chats keyset cursor + 复合索引 + bot reader 内部
-   offset 保留 + R4 生命周期幂等化。
+1. **gateway-favorites**：表/CAS/API（404 带页 + tagged）+ snapshot +
+   auth middleware tagged + 服务端测试。
+2. **gateway-recent**：activity_seq（列 + meta + 分配 + 回填迁移 + 索引）+
+   seq keyset cursor + bot reader 内部 offset 保留。
 3. **传输契约**：iOS + desktop（含 web-api.ts）语义重构。
-4. **双端状态机与 feed**：`GaryxFavoritesState` / `favorites-ingress` +
-   All/Chats range-fill + Favorites snapshot 整替 + Archive/Delete 重派编排
-   （先测后 UI）。
+4. **双端状态机与 feed**：`GaryxFavoritesState` / `favorites-ingress`
+   （unresolvedFence + 等值门）+ All/Chats range-fill + Favorites snapshot
+   原子接受（先测后 UI）。
 5. **UI**：desktop renderer / iOS App 入口与 tab + xcodegen。
+
+**独立后续任务（已立项）**：生命周期端点幂等化（operation token / delete
+tombstone / 清理 outbox / Core 重试状态机）——另行设计与评审。
