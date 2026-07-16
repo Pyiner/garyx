@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 9 — complete self-contained specification (no references to
-prior revisions anywhere), addressing adversarial review #TASK-2337 rounds
-1–8.
+Status: revision 10 — complete self-contained specification (no references
+to prior revisions anywhere), addressing adversarial review #TASK-2337
+rounds 1–9.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -134,6 +134,8 @@ CREATE TABLE meetings (
   status               TEXT NOT NULL CHECK (status IN
     ('joining','live','finalizing','aborting','finalized','aborted')),
   status_detail        TEXT NOT NULL DEFAULT '',        -- ≤256 bytes
+  content_state        TEXT NOT NULL DEFAULT 'ok' CHECK (content_state IN ('ok','lost')),
+  content_lost_at      TEXT,
   failure_kind         TEXT NOT NULL DEFAULT '' CHECK (failure_kind IN
     ('','auth','transport')),
   failure_since        TEXT,
@@ -168,6 +170,7 @@ CREATE TABLE meeting_read_cursors (
   meeting_id    TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
   reader_id     TEXT NOT NULL
     CHECK (length(CAST(reader_id AS BLOB)) BETWEEN 1 AND 128),  -- bytes, not chars
+  log_epoch     INTEGER NOT NULL DEFAULT 0 CHECK (log_epoch >= 0),   -- RR9-01
   confirmed_seq INTEGER NOT NULL DEFAULT 0 CHECK (confirmed_seq >= 0),
   pending_from  INTEGER,
   pending_to    INTEGER,
@@ -206,20 +209,43 @@ kinds:
 {"t":"ckpt","epoch":1,"cursor_out":"pt_x9y8…","at":"2026-07-16T02:35:12.123Z"}
 ```
 
-**Log epoch (RR8-02):** a log file's lifetime is one epoch. When boot (or
-a writer's `ensure_dir`) finds the log **missing** for an entity whose DB
-row says `cache_generation > 0`, the loss is explicit: increment
-`log_epoch`, reset `cache_generation = 0`, `poll_cursor = ''`,
-`closed_segment_count = 0`, `byte_size = 0` in one boot-exclusive
-transaction (logged loudly), and start a fresh log whose `ckpt` lines
-carry the new epoch. Every cache update and repair is guarded by
-`WHERE id=:id AND log_epoch = :epoch AND cache_generation < :gen`, so a
-stale-epoch writer can never touch a newer incarnation and a fresh epoch
-is never blocked by pre-loss generation numbers. A **terminal** entity
-whose non-empty log is found missing at read time is marked
-`status_detail='content_lost'`; reads return an explicit
-`content lost` error (never old totals with empty content), and metadata
-endpoints surface the marker.
+**Log epoch (RR8-02, RR9-01):** a log file's lifetime is one epoch. When
+boot (or a writer's `ensure_dir`) finds the log **missing** for an entity
+whose DB row says `cache_generation > 0`, the loss is explicit, in one
+transaction (boot-exclusive, or under the entity write lock at runtime;
+logged loudly):
+
+- increment `meetings.log_epoch`; reset `cache_generation = 0`,
+  `poll_cursor = ''`, `closed_segment_count = 0`, `byte_size = 0`;
+- **invalidate the read domain**: for every cursor row of the entity,
+  set `log_epoch = new epoch, confirmed_seq = 0, pending_from/to = NULL,
+  receipt = NULL` (recognition survives; positions do not — old seqs
+  name content that no longer exists);
+- at runtime additionally reset the coordinator's in-memory poll cursor,
+  next-seq counter, coalescing state, and offset index.
+
+Every cache update and repair is guarded by
+`WHERE id=:id AND log_epoch = :epoch AND cache_generation < :gen`.
+Seqs restart at 1 in a new epoch (seq alone is never a cross-epoch
+identity): snapshot tokens, `index.bin` headers, read snapshots, and
+every rendered span carry the epoch; confirm CAS matches
+`(log_epoch, confirmed_seq, pending, receipt)`; a stale-epoch snapshot
+token or confirm returns an explicit `snapshot invalidated by content
+loss` error; a `--range` request may carry an optional epoch (default:
+current) and a non-current epoch returns the same content-loss error.
+Boot repair verifies every `ckpt` line's epoch equals the DB's current
+epoch (foreign-epoch lines are treated as an invalid tail). Field-bound
+table: `epoch` is a non-negative integer, bounded by rollover count.
+
+A **terminal** entity whose non-empty log is found missing at read time
+gets `content_state='lost'` + `content_lost_at=now` — **separate
+structured columns** (`content_state TEXT NOT NULL DEFAULT 'ok'
+CHECK (content_state IN ('ok','lost'))`, `content_lost_at TEXT`), never
+overwriting the lifecycle `status_detail` (RR9-04). Detection happens on
+the read path but marks idempotently **under the entity write lock**
+(serialized against delete; a deleted entity wins with 404). Reads of a
+lost entity return an explicit `content lost` error (never stale totals);
+metadata endpoints surface both columns.
 
 **Field bounds (normative; every field, R7-03):**
 
@@ -472,10 +498,12 @@ CLI error) is a **soft target measured on the final rendered response**
 (headers and framing included, per mode). Two rules govern its
 interaction with pending spans:
 
-- **New claims are budget-bounded at claim time:** the claimed span is
-  sized to `min(requested_max, read_page_bytes)` — `read_page_bytes` is
-  the **server-side hard cap** on any newly claimed span, so no caller
-  can mint an arbitrarily large pending span — with the single-segment
+- **Every newly produced page is budget-bounded server-side:** the
+  claimed span (incremental) and every `--full`/`--range` snapshot page
+  are sized to `min(requested_max, read_page_bytes)` — `read_page_bytes`
+  is the **server-side hard cap** on any newly produced page (RR9-03: a
+  huge `--max-bytes` cannot bypass server pagination), so no caller can
+  mint an arbitrarily large pending span or response — with the single-segment
   minimum-progress exception (a lone segment whose rendered form exceeds
   the budget is still claimed and served, with the explicit header note
   `single segment exceeds requested budget`).
@@ -511,7 +539,7 @@ do not appear in an in-progress traversal. Updates never move rows
   during boot repair, maintained per append, memory-only. Terminal:
   persisted `{id}/index.bin` written inside the terminal barrier
   (5.2) — temp-file → `fdatasync` → atomic rename; header
-  `{version, log_byte_len, latest_seq, crc32}`. On read, a missing,
+  `{version, log_epoch, log_byte_len, latest_seq, crc32}` (epoch mismatch = invalid, RR9-01). On read, a missing,
   torn, version-mismatched, or length/crc-mismatched index is discarded
   and rebuilt **single-flight** by a detached service-owned background
   task that holds the entity's read lock and re-verifies the entity row
@@ -542,12 +570,18 @@ Cursor algebra (single SQLite transactions):
    `UPDATE … SET pending_from=:f, pending_to=:t, receipt=:r, updated_at=now
    WHERE meeting_id=:m AND reader_id=:rd AND confirmed_seq=:expected
    AND pending_from IS NULL`. Zero rows → a concurrent fetch won →
-   re-read and re-serve the winner's span and receipt. An empty span
+   re-read the row and **re-run preflight until the snapshot covers the
+   winner's `pending_to`** (RR9-02: the loser's earlier snapshot may
+   predate the winner's claim; slicing never exceeds the snapshot, so
+   the loser refreshes rather than violating it), then re-serve the
+   winner's span and receipt. An empty span
    serves the empty-increment header without claiming pending.
 3. **Confirm** (`/read/confirm {receipt}`):
    `UPDATE … SET confirmed_seq=pending_to, pending_from=NULL,
    pending_to=NULL, receipt=NULL, updated_at=now
-   WHERE meeting_id=:m AND reader_id=:rd AND receipt=:receipt`.
+   WHERE meeting_id=:m AND reader_id=:rd AND receipt=:receipt
+   AND log_epoch=:current_epoch` (a rollover between fetch and confirm
+   fails the CAS; the CLI reports the content-loss error).
    Unknown/stale receipt → idempotent no-op success. Deleted entity →
    404.
 4. **The CLI performs fetch → render → stdout flush → confirm in one
@@ -562,7 +596,7 @@ Cursor algebra (single SQLite transactions):
 The first response pins `(closed_latest, log_offset)`; every page returns
 a **fresh token for the same snapshot** with a sliding 10-minute
 inactivity expiry. Tokens are base64url (shell-safe) encoding
-`{entity_id, snapshot, next_seq, mode, range_end, checksum, issued_at}`.
+`{entity_id, log_epoch, snapshot, next_seq, mode, range_end, checksum, issued_at}` — a token whose epoch is no longer current fails with `snapshot invalidated by content loss`.
 The CLI loops within one invocation streaming pages to stdout until
 exhausted, or stops at `--max-bytes` and prints the resume command with
 the latest token. Inactivity >10 min → the read restarts from the
@@ -755,12 +789,23 @@ header-lookalikes, ANSI/OSC, Bidi controls, C1 bytes, **U+2028/U+2029
 human output (no unprefixed line from platform text), string-encoded in
 `--json`; S6 elicitation fixture recorded as documented behavior.
 
-**Epoch/loss (RR8-02):** DB generation 7 + missing log → epoch bump +
-counter reset → new pages commit under the new epoch → restart →
-immediate finalize (barrier verifies read-back, not zero-row success);
-non-empty terminal log missing → `content_lost` error, never stale
-totals; empty-log abort persists a valid empty index; stale-epoch
-delayed repair rejected.
+**Epoch/loss (RR8-02, RR9-01, RR9-04):** DB generation 7 + missing log →
+epoch bump + counter reset → new pages commit under the new epoch →
+restart → immediate finalize (barrier verifies read-back, not zero-row
+success); non-empty terminal log missing → `content_state='lost'` error,
+never stale totals, and the aborted entity's original `status_detail`
+survives; concurrent first detection is idempotent under the write lock;
+detection-vs-delete race → 404 wins; empty-log abort persists a valid
+empty index; stale-epoch delayed repair rejected. **Read-domain
+invalidation:** rollover with existing confirmed=100 → next read starts
+at new-epoch seq 1 (no skip); rollover with existing pending + old
+receipt → pending cleared, old receipt confirm fails with content-loss
+error; old snapshot token → `snapshot invalidated by content loss`; old
+`--range` epoch → same error; mixed-epoch ckpt lines treated as invalid
+tail; loser-refresh: snapshot A (latest=10) → append to 20 → B claims
+1..20 → A re-preflights until its snapshot covers 20, then re-serves;
+`--full/--range --max-bytes 1GiB` still served in `read_page_bytes`
+pages server-side.
 
 **Recognition preflight (RR8-03):** first cold terminal read hitting
 `index_building` creates no cursor row; successful retry creates it;
