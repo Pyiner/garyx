@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 8 — complete self-contained specification (no references to
+Status: revision 9 — complete self-contained specification (no references to
 prior revisions anywhere), addressing adversarial review #TASK-2337 rounds
-1–7.
+1–8.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -137,6 +137,7 @@ CREATE TABLE meetings (
   failure_kind         TEXT NOT NULL DEFAULT '' CHECK (failure_kind IN
     ('','auth','transport')),
   failure_since        TEXT,
+  log_epoch            INTEGER NOT NULL DEFAULT 0 CHECK (log_epoch >= 0),
   cache_generation     INTEGER NOT NULL DEFAULT 0 CHECK (cache_generation >= 0),
   end_source           TEXT NOT NULL DEFAULT '' CHECK (end_source IN
     ('','push','poll_ended','grace_expired')),
@@ -202,8 +203,23 @@ kinds:
 ```
 {"t":"seg","seq":12,"kind":"transcript","speaker":"张三","start":"…","end":"…",
  "text":"…","sources":["sent_8813"],"cont":false}
-{"t":"ckpt","cursor_out":"pt_x9y8…","at":"2026-07-16T02:35:12.123Z"}
+{"t":"ckpt","epoch":1,"cursor_out":"pt_x9y8…","at":"2026-07-16T02:35:12.123Z"}
 ```
+
+**Log epoch (RR8-02):** a log file's lifetime is one epoch. When boot (or
+a writer's `ensure_dir`) finds the log **missing** for an entity whose DB
+row says `cache_generation > 0`, the loss is explicit: increment
+`log_epoch`, reset `cache_generation = 0`, `poll_cursor = ''`,
+`closed_segment_count = 0`, `byte_size = 0` in one boot-exclusive
+transaction (logged loudly), and start a fresh log whose `ckpt` lines
+carry the new epoch. Every cache update and repair is guarded by
+`WHERE id=:id AND log_epoch = :epoch AND cache_generation < :gen`, so a
+stale-epoch writer can never touch a newer incarnation and a fresh epoch
+is never blocked by pre-loss generation numbers. A **terminal** entity
+whose non-empty log is found missing at read time is marked
+`status_detail='content_lost'`; reads return an explicit
+`content lost` error (never old totals with empty content), and metadata
+endpoints surface the marker.
 
 **Field bounds (normative; every field, R7-03):**
 
@@ -215,7 +231,7 @@ kinds:
 | `speaker` | ≤256 bytes, truncated at UTF-8 character boundary |
 | `start`/`end`/`at` | fixed-width RFC3339 ms `Z` (24 bytes) |
 | `text` | split so the **final encoded JSON line** ≤ 32 KiB (escape inflation counted) |
-| `sources` | array of item ids; each id ≤64 bytes (longer ids are replaced by `sha256:<hex>` of the id — deterministic, collision-safe for dedup); array bounded by page item count |
+| `sources` | array of item ids; each stored id ≤**71 bytes** — raw ids ≤64 bytes pass through; longer ids are replaced by `sha256:<hex>` (7-byte prefix + 64 hex = exactly 71 bytes; deterministic, domain-separated, collision-safe for dedup); array bounded by page item count. Property tests assert the normalized field's own byte length, not merely the whole-line bound |
 | `cont` | boolean |
 | `cursor_out` | opaque token, ≤1 KiB (longer is a platform-contract violation → tick fails as `Other`) |
 | share titles / URLs (inside `text` for share kinds) | title ≤256 bytes UTF-8-boundary truncated; URL ≤1 KiB |
@@ -238,12 +254,13 @@ commits atomically under the entity I/O write lock:
 1. normalize the page → `seg` lines (bounded as above);
 2. append `seg` lines → append one `ckpt {cursor_out = this page's
    token}` → `fdatasync`;
-3. SQLite cache transaction guarded by a **monotonic generation**
-   (R7-04): `UPDATE meetings SET poll_cursor=…, closed_segment_count=…,
-   byte_size=…, cache_generation=:gen, updated_at=… WHERE id=:id AND
-   cache_generation < :gen` — `:gen` is the checkpoint ordinal (count of
-   ckpt lines in the log), so a delayed repair can never overwrite a
-   newer cache.
+3. SQLite cache transaction guarded by **epoch + monotonic generation**
+   (R7-04, RR8-02): `UPDATE meetings SET poll_cursor=…,
+   closed_segment_count=…, byte_size=…, cache_generation=:gen,
+   updated_at=… WHERE id=:id AND log_epoch = :epoch AND
+   cache_generation < :gen` — `:gen` is the checkpoint ordinal within the
+   current epoch, so a delayed repair can never overwrite a newer cache
+   and a stale-epoch writer can never touch a re-created log.
 
 Once the `ckpt` is fsynced the page is committed: the coordinator's
 in-memory cursor advances unconditionally; a failed cache transaction
@@ -322,9 +339,14 @@ pub trait MeetingEventSink: Send + Sync {
   unregister-observed, fresh start on next failure after re-register —
   continuity across an unregister gap is never assumed). On **any**
   successful platform call, clear `failure_kind`/`failure_since`. The
-  synthesized `stalled_reason` shown in list output is: `no_client` if
-  the registry lacks the client; else `auth_failed`/`transport` if
-  `now - failure_since > 15 min`; else empty.
+  synthesized `stalled_reason` is computed **only for states that depend
+  on a platform client — `joining`, `live`, `finalizing`** (RR8-05):
+  `no_client` if the registry lacks the client; else
+  `auth_failed`/`transport` if `now - failure_since > 15 min`; else
+  empty. Entities in `aborting` or terminal states never synthesize a
+  stalled reason, and entering `aborting` or a terminal state clears the
+  `failure_kind`/`failure_since` pair (no stale failure survives into
+  history).
 
 ### 5.2 Coordinator over durable intents
 
@@ -344,11 +366,16 @@ admin aborts instantly.
 are no-ops. Intent stages make terminals crash-resumable:
 
 - finalize: `live → finalizing` (drain runs here) → **cache/index
-  barrier** (R7-04): the final log-derived cache write (current
-  generation) and the offset-index persistence (6.3) must both succeed →
+  barrier** (R7-04, RR8-02): derive the final cache values from the
+  canonical log under the I/O lock, write them, then **read back and
+  verify** that the row's `(log_epoch, cache_generation, counts)` match
+  the derivation — a zero-row guarded UPDATE is *not* success; a
+  mismatch re-derives and retries. The offset-index persistence (6.3)
+  must also succeed (an entity whose log is legally empty — e.g. a
+  joining-deadline abort — persists a valid empty index). Only then
   `finalizing → finalized`.
 - abort: `joining|live → aborting` (`status_detail` set) → final `ckpt`
-  if a page commit was interrupted → same cache/index barrier →
+  if a page commit was interrupted → same read-back-verified barrier →
   `aborting → aborted`.
 - Terminal-affecting inputs (`EndedSignal`, `AbortRequest`,
   `NotInMeeting`) queued together resolve at the next scheduling point
@@ -440,15 +467,27 @@ or `--thread`; missing both → error naming both remedies). `--full` and
 ever created or touched. Only a successful incremental fetch creates a
 cursor row.
 
-**Response budget (R7-02):** `--max-bytes` (floor 4096; below → CLI
-error) is a **soft target measured on the final rendered response**
-(headers and framing included, per mode). A response stops adding
-segments once the budget is reached, but always includes **at least one
-complete segment** even if that single segment's rendered form exceeds
-the budget — overshoot is permitted for the minimum-progress guarantee
-and is explicitly declared in the header
-(`note: single segment exceeds requested budget`). A zero-progress
-response or non-advancing continuation token is never returned; response
+**Response budget (R7-02, RR8-01):** `--max-bytes` (floor 4096; below →
+CLI error) is a **soft target measured on the final rendered response**
+(headers and framing included, per mode). Two rules govern its
+interaction with pending spans:
+
+- **New claims are budget-bounded at claim time:** the claimed span is
+  sized to `min(requested_max, read_page_bytes)` — `read_page_bytes` is
+  the **server-side hard cap** on any newly claimed span, so no caller
+  can mint an arbitrarily large pending span — with the single-segment
+  minimum-progress exception (a lone segment whose rendered form exceeds
+  the budget is still claimed and served, with the explicit header note
+  `single segment exceeds requested budget`).
+- **Pending replay is indivisible:** an existing pending span is the
+  atomic delivery unit. A re-serve returns the **entire pending span**
+  regardless of the current request's budget or render mode (header
+  note: `pending replay exceeds requested budget`), because serving a
+  subset while confirming the original receipt would silently skip the
+  remainder. Budget and mode apply to *new* claims only.
+
+A zero-progress response or non-advancing continuation token is never
+returned; response
 metadata (headers, topic line) is counted before content.
 
 ### 6.2 List pagination
@@ -485,10 +524,17 @@ do not appear in an in-progress traversal. Updates never move rows
 
 Cursor algebra (single SQLite transactions):
 
+0. **Preflight (RR8-03):** the read snapshot and (for terminal entities)
+   a valid offset index must be available **before** any cursor write. A
+   read that would return `index_building`, `content lost`, or any error
+   exits here — a failed first read creates no recognition state. (Once
+   a pending span exists, a later lost response of course leaves the row
+   in place — that is the at-least-once path, not a failed first read.)
 1. **Ensure row:** `INSERT INTO meeting_read_cursors (meeting_id,
    reader_id, confirmed_seq, updated_at) VALUES (…, 0, now)
-   ON CONFLICT DO NOTHING` — created on first incremental fetch even if
-   the increment is empty (the row is the recognition state).
+   ON CONFLICT DO NOTHING` — created on the first incremental fetch that
+   passes preflight, even if the increment is empty (the row is the
+   recognition state).
 2. **Fetch:** read the row. Pending exists → re-serve exactly
    `(pending_from..pending_to)` with the stored receipt (at-least-once;
    receipts are shared, not per-caller). Else compute the next span
@@ -528,19 +574,24 @@ snapshot are invisible to that snapshot's pages.
 All platform-derived text (topic, speaker, transcript text, share
 titles) is **untrusted data** wherever rendered. Human format: every
 content line is prefixed `│ `; metadata/header lines never share a line
-with content; C0 (except `\n` in bodies) / C1 / ANSI CSI+OSC introducers
-are stripped from platform text at render time; Bidi controls are
-replaced by escaped codepoint forms. `--json` emits platform text only
-as JSON string values. Headers are synthesized from structured fields;
-log content cannot forge a header or segment boundary. No "trusted
-output" claim exists anywhere in this design.
+with content; **Unicode forced line breaks `U+2028`/`U+2029` are
+normalized to LF before per-line prefixing** (RR8-06), then C0 (except
+`\n` in bodies) / C1 / ANSI CSI+OSC introducers are stripped from
+platform text at render time; Bidi controls are replaced by escaped
+codepoint forms. `--json` emits platform text only as JSON string
+values. Headers are synthesized from structured fields; log content
+cannot forge a header or segment boundary — no unprefixed line can
+originate from platform text. No "trusted output" claim exists anywhere
+in this design.
 
-Every response names: mode; exact span served; totals; entity status
-(live/finalized/aborted + `end_source`, synthesized `stalled_reason`,
-timestamps); for incremental — confirmation state and "re-read any span:
-`--range A..B`"; for empty increments — "no new segments since [N]"; for
-first reads — "first read for this reader"; for budget overshoot — the
-explicit note (6.1).
+Every response names: mode; exact span served; totals; entity status —
+covering **all DDL states**: joining / live / finalizing / aborting /
+finalized / aborted (+ `end_source`, synthesized `stalled_reason` where
+applicable, `content_lost` marker, timestamps); for incremental —
+confirmation state and "re-read any span: `--range A..B`"; for empty
+increments — "no new segments since [N]"; for first reads — "first read
+for this reader"; for budget overshoot / pending replay — the explicit
+notes (6.1).
 
 ## 7. Conversation references: a text convention
 
@@ -674,11 +725,15 @@ receipt no-op; cursors never regress; empty increment creates the row;
 id from two callers shares a cursor (S6/S7 fixtures); many minted reader
 ids (S7 documented behavior + cascade cleanup).
 
-**Budget (R7-02):** `--max-bytes 4096` with a 32 KiB line → single
-segment served with the overshoot note; newline-heavy segment whose
-framed rendering exceeds raw JSON size; maximal topic/header metadata
-counted before content; floor rejection (0/1/4095); no zero-progress
-token in any case.
+**Budget (R7-02, RR8-01):** `--max-bytes 4096` with a 32 KiB line →
+single segment served with the overshoot note; newline-heavy segment
+whose framed rendering exceeds raw JSON size; maximal topic/header
+metadata counted before content; floor rejection (0/1/4095); no
+zero-progress token in any case; **pending-replay indivisibility**:
+64 KiB/JSON claim → response lost → 4 KiB/human retry re-serves the
+entire span with the replay note; concurrent winner/loser with different
+budgets both deliver the winner's full span; new claims capped by
+`read_page_bytes` regardless of requested budget.
 
 **Snapshots/index:** `--full` across pages pinned to one snapshot under
 concurrent appends; sliding renewal across >10 min total stream;
@@ -695,9 +750,27 @@ appears later; clock-skew insert); unreturned-row deletion; updates move
 nothing.
 
 **Trust/framing:** hostile topic/speaker/transcript with
-header-lookalikes, ANSI/OSC, Bidi controls, C1 bytes — stripped/framed in
-human output, string-encoded in `--json`; S6 elicitation fixture recorded
-as documented behavior.
+header-lookalikes, ANSI/OSC, Bidi controls, C1 bytes, **U+2028/U+2029
+(alone and mixed with CR/LF/ANSI/Bidi)** — stripped/normalized/framed in
+human output (no unprefixed line from platform text), string-encoded in
+`--json`; S6 elicitation fixture recorded as documented behavior.
+
+**Epoch/loss (RR8-02):** DB generation 7 + missing log → epoch bump +
+counter reset → new pages commit under the new epoch → restart →
+immediate finalize (barrier verifies read-back, not zero-row success);
+non-empty terminal log missing → `content_lost` error, never stale
+totals; empty-log abort persists a valid empty index; stale-epoch
+delayed repair rejected.
+
+**Recognition preflight (RR8-03):** first cold terminal read hitting
+`index_building` creates no cursor row; successful retry creates it;
+lost-response-after-pending keeps the row (distinct from failed first
+read).
+
+**Stalled scoping (RR8-05):** terminal + unregistered account shows no
+`no_client`; auth-failed finalizing → finalized clears the failure pair;
+joining/finalizing/aborting statuses render correctly in read/list
+output.
 
 **WS path (S1):** fixture records which path carries invite/ended;
 raw-text carriage asserts the slice-2 halt condition.
