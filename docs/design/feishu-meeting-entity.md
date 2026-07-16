@@ -1,8 +1,8 @@
 # Feishu meeting entity
 
-Status: revision 17 — complete self-contained specification (no references
+Status: revision 18 — complete self-contained specification (no references
 to prior revisions anywhere), addressing adversarial review #TASK-2337
-rounds 1–16.
+rounds 1–17.
 Author: gary (design)
 Scope ruling (user, 2026-07-16): orthogonal side-system; existing runtime
 flows are not modified; agents read via CLI; conversation references are
@@ -523,6 +523,32 @@ return data until `GraceExpired` finalizes.
 `GraceExpired` while live → finalize immediately
 (`end_source='grace_expired'`).
 
+**Abort HTTP protocol (RR15-03, RR16-02, R17-02) — normative
+state/response table for `POST /api/meetings/{id}/abort`:**
+
+| Entity state at linearization | Response |
+|---|---|
+| `joining`, `live` | command admitted to the coordinator; durable intent CAS to `aborting` commits; then `200 {status:"aborting"}` |
+| `aborting`, `aborted` | `200` idempotent no-op — served by a **handler-level DB fast path** (a point read of `status`, never enqueued to the coordinator), so a retry arriving while a 20 s leave attempt is in flight still returns immediately |
+| `finalizing`, `finalized` | `409 abort_refused_finalizing`; a queued abort that loses end>abort arbitration at the page boundary receives the same `409` |
+| deleted | `404` |
+
+Ordering and ownership rules:
+
+- A command admitted to the coordinator is owned by the service; an
+  HTTP disconnect does not cancel it.
+- After the intent CAS commits, all HTTP requests waiting on that
+  command are answered **before** the (up to 20 s) leave attempt
+  begins.
+- Timing, honestly: admission may wait for the current page commit —
+  fetch is bounded at 10 s but the durability phase (`fdatasync` +
+  SQLite with up to 5 s busy wait) is additional — so a first request
+  may exceed the shared 10 s POST budget. The `garyx meeting abort`
+  command therefore performs **one automatic retry on timeout** (its
+  own logic, not a shared-helper change): the retry lands on the fast
+  path above and returns `200` immediately. A second timeout is
+  reported to the caller.
+
 ### 5.3 End path and grace drain
 
 `EndedSignal(push)` (or `poll_ended` if pinned by 3.1): CAS
@@ -581,7 +607,8 @@ CLI:
   command: `garyx meeting read <id> --continue <token>`.
 - `garyx meeting abort <id>` (admin; initiates from joining|live;
   idempotent `200` on aborting/aborted; refused `409` on
-  finalizing/finalized — full table in 4.3)
+  finalizing/finalized; one automatic retry on timeout — full table and
+  ordering rules in 5.2)
 - `garyx meeting delete <id>` (terminal only)
 
 API:
@@ -659,13 +686,19 @@ is defined on the same algebra: a response whose serialized JSON —
 containing exactly one segment plus `meta` — exceeds the budget is
 still served, with an explanatory entry in `meta.notes`. `--max-bytes`
 (floor 4096; below → CLI error) is the client's requested value for
-this JSON budget. **Multi-page accumulation** (stateless modes): the
-CLI counts consumed HTTP body bytes; each subsequent request sends
-`max_bytes = clamp(requested_total - consumed, 0…)`; when the
+this JSON budget. **Multi-page accumulation** (stateless modes,
+R17-01): the CLI counts consumed bytes as the **exact HTTP response
+body lengths** (the shared JSON helper is extended to surface the raw
+body length alongside the parsed value — an additive change to
+`gateway_client.rs`, listed in §11); each subsequent request sends
+`max_bytes = requested_total.saturating_sub(consumed)`; when the
 remainder falls below 4096 the CLI stops and prints the resume command
-(no sub-floor request is ever sent), except that the very first page
-may overshoot under the single-segment exception. Two
-rules govern its interaction with pending spans:
+(no sub-floor request is ever sent). **Any page's first segment may
+push the final cumulative total past `requested_total`** — the
+single-segment minimum-progress exception applies per page, not only
+to the first page; the requested total is a target, and each overshoot
+is named in that page's `meta.notes`. Two rules govern the budget's
+interaction with pending spans:
 
 - **Every newly produced page is budget-bounded server-side:** the
   claimed span (incremental) and every `--full`/`--range` snapshot page
@@ -683,8 +716,8 @@ rules govern its interaction with pending spans:
   skip the remainder. Budgets apply to *new* claims only.
 
 A zero-progress response or non-advancing continuation token is never
-returned; response
-metadata (headers, topic line) is counted before content.
+returned. (There is no separate metadata budget: `meta` is part of the
+same serialized JSON body the single algebra measures.)
 
 ### 6.2 List pagination
 
@@ -789,7 +822,24 @@ The first response pins `(log_epoch, closed_latest, log_offset)`; every
 page returns
 a **fresh token for the same snapshot** with a sliding 10-minute
 inactivity expiry. Tokens are base64url (shell-safe) encoding
-`{entity_id, log_epoch, snapshot, next_seq, mode, range_end, checksum, issued_at}` — a token whose epoch is no longer current fails with `snapshot invalidated by content loss`.
+`{entity_id, log_epoch, snapshot, next_seq, mode, origin_range_start,
+range_end, checksum, issued_at}` (R17-03: `origin_range_start`
+preserves the original request's start so an expiry can name the exact
+restart command) — a token whose epoch is no longer current fails with
+`snapshot invalidated by content loss`.
+
+**Typed read errors (R17-03):** `/read` errors use a structured
+envelope `{error: {code, message, restart_command?}}` — codes include
+`token_expired`, `snapshot_invalidated_by_content_loss`,
+`index_building`, `content_lost`, and the named 400s of 6.1. The CLI
+parses this envelope from the raw response body (the generic helper's
+flattened `Rejected` text is insufficient for branching; the meeting
+CLI reads the raw body — additive, §11). `restart_command` for
+`token_expired` is server-built from the validated token
+(`garyx meeting read <id> --range <origin_range_start>..<range_end>
+--epoch <E>` or `--full`), emitted only after checksum/path/mode
+validation succeeds; the CLI prints it and exits nonzero — never an
+automatic restart.
 The CLI loops within one invocation streaming pages to stdout until
 exhausted, or stops once **cumulative fetched JSON bytes** reach
 `--max-bytes` (the same single algebra; human stdout size does not
@@ -890,7 +940,8 @@ at debug.
 | `garyx-gateway/src/garyx_db/mod.rs` | 3 tables (meetings, meeting_invite_keys, meeting_read_cursors) + CRUD incl. admission-key cascade | additive |
 | `garyx-gateway/src/route_graph.rs` | 6 routes | additive |
 | `garyx-gateway/src/composition/*` | service wiring + sink injection | additive |
-| `garyx/src/commands/meeting.rs`, `cli.rs`, `main.rs` | CLI subcommand | additive |
+| `garyx/src/commands/meeting.rs`, `cli.rs`, `main.rs` | CLI subcommand (incl. abort one-retry-on-timeout, typed-error envelope parsing from raw body) | additive |
+| `garyx/src/commands/gateway_client.rs` | surface raw response-body length alongside parsed JSON (additive helper variant for budget accounting) | additive |
 | Desktop / iOS (slice 3) | gallery + prefill action | additive |
 
 **Not touched:** bridge, providers, router dispatch, transcripts,
@@ -971,7 +1022,9 @@ budgets both deliver the winner's full span; new claims capped by
 
 **Snapshots/index:** `--full` across pages pinned to one snapshot under
 concurrent appends; sliding renewal across >10 min total stream;
-resume <10 min inactivity works; >10 min restarts with clear message;
+resume <10 min inactivity works; >10 min inactivity → typed `token_expired` with server-built restart
+command (verified for `--range 100..200`: restart names 100, not the
+token's next_seq); CLI prints it and exits nonzero (no auto-restart);
 token shell-safety; index written inside the terminal barrier (crash
 before terminal CAS → intent stage rewrites); torn/stale/version/crc
 mismatched index discarded and rebuilt once; single-flight rebuild under
@@ -1081,13 +1134,15 @@ retry returns idempotent 200; HTTP disconnect does not cancel the
 admitted command; waiting duplicate aborts answered before the leave
 attempt; entity converges to aborted within the leave bound.
 
-**Budget accumulation (RR16-01):** full-DTO round-trip (every meta
-field asserted, segment DTO isomorphic to the seg schema); two-page
-cumulative budget (50 KiB page then remaining 14 KiB — second request
-carries the remainder); remainder < 4096 stops with resume command;
-first-page single-segment overshoot allowed; the 48 KiB-JSON /
-96 KiB-human counterexample pinned (both segments claimed; stdout
-exceeds JSON budget legally).
+**Budget accumulation (RR16-01, R17-01):** full-DTO round-trip (every
+meta field asserted, segment DTO isomorphic to the seg schema);
+two-page cumulative budget (50 KiB page then remaining 14 KiB — second
+request carries the saturating remainder); **second page whose first
+segment exceeds the remainder** → served with notes entry (per-page
+exception, cumulative total overshoots the target); remainder < 4096
+stops with resume command; raw-body byte counting asserted against the
+extended helper; the 48 KiB-JSON / 96 KiB-human counterexample pinned
+(both segments claimed; stdout exceeds JSON budget legally).
 
 **Token expiry (RR16-03):** expired range token → typed 400 → CLI
 prints the original command and exits nonzero; checksum/path/mode
