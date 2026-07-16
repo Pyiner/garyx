@@ -566,7 +566,7 @@ state/response table for `POST /api/meetings/{id}/abort`:**
 |---|---|
 | `joining`, `live` | command admitted to the coordinator; durable intent CAS to `aborting` commits; then `200 {status:"aborting"}` |
 | `aborting`, `aborted` | `200` idempotent no-op — served by a **handler-level DB fast path** (a point read of `status`, never enqueued to the coordinator), so a retry arriving while a 20 s leave attempt is in flight still returns immediately |
-| `finalizing`, `finalized` | `409 abort_refused_finalizing`; a queued abort that loses end>abort arbitration at the page boundary receives the same `409` |
+| `finalizing`, `finalized` | `409 abort_refused_finalizing`; a queued abort that loses end>abort arbitration at the next scheduling point receives the same `409` |
 | deleted | `404` |
 
 Ordering and ownership rules (R18-01 — one serialization domain, no
@@ -791,7 +791,7 @@ do not appear in an in-progress traversal. Updates never move rows
 ### 6.3 Locking, snapshots, offset index
 
 - **Entity I/O lock:** per-entity `RwLock` in a service map, covering all
-  states. Writers (page commits, terminal flush/barrier, delete) take
+  states. Writers (batch commits, terminal flush/barrier, delete) take
   write; reads take read and capture a snapshot
   `(log_epoch, closed_latest, log_byte_offset)`; slicing never scans
   past the snapshot offset, and every downstream span, token, and
@@ -1231,8 +1231,8 @@ equals actual body bytes.
 
 **Abort response (RR15-03, RR16-02):** end-to-end through the real CLI
 helper — full state/response table exercised (200 CAS / 200 no-op /
-409 finalizing / 404 deleted / end-wins 409); slow page (9.9 s fetch +
-delayed fdatasync + SQLite busy) → first request times out at the CLI,
+409 finalizing / 404 deleted / end-wins 409); slow batch commit
+(delayed fdatasync + SQLite busy) → first request times out at the CLI,
 retry returns idempotent 200; HTTP disconnect does not cancel the
 admitted command; waiting duplicate aborts answered before the leave
 attempt; entity converges to aborted within the leave bound.
