@@ -28,6 +28,7 @@ pub use legacy_boot_import::{
 mod managed_mcp_metadata;
 pub mod mcp;
 pub mod mcp_config;
+pub mod meetings;
 mod optimistic_write;
 mod provider_auth;
 mod provider_models;

@@ -95,3 +95,10 @@ fn default_capsules_dir_points_to_garyx_capsules() {
 
     assert!(path.ends_with(".garyx/capsules"));
 }
+
+#[test]
+fn default_meetings_dir_points_to_garyx_meetings() {
+    let path = super::default_meetings_dir();
+
+    assert!(path.ends_with(".garyx/meetings"));
+}

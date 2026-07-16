@@ -61,6 +61,10 @@ pub fn default_capsules_dir() -> PathBuf {
     gary_home_dir().join("capsules")
 }
 
+pub fn default_meetings_dir() -> PathBuf {
+    gary_home_dir().join("meetings")
+}
+
 pub fn default_log_file_path() -> PathBuf {
     gary_home_dir().join("logs").join("stderr.log")
 }

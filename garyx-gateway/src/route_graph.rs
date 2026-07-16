@@ -7,7 +7,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use crate::server::AppState;
 use crate::{
     api, automation, capsules, chat, coding_usage, commands, dashboard, gateway_auth, mcp,
-    mcp_config, provider_auth, restart_wake, routes, tasks, tool_image, workspace_files,
+    mcp_config, meetings, provider_auth, restart_wake, routes, tasks, tool_image, workspace_files,
     workspaces,
 };
 
@@ -163,6 +163,19 @@ fn thread_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/capsules/{id}/serve",
             axum::routing::get(capsules::serve_capsule),
+        )
+        .route("/api/meetings", axum::routing::get(meetings::list_meetings))
+        .route(
+            "/api/meetings/{id}",
+            axum::routing::get(meetings::get_meeting).delete(meetings::delete_meeting),
+        )
+        .route(
+            "/api/meetings/{id}/read",
+            axum::routing::post(meetings::read_meeting),
+        )
+        .route(
+            "/api/meetings/{id}/read/confirm",
+            axum::routing::post(meetings::confirm_meeting_read),
         )
         .route(
             "/api/configured-bots",

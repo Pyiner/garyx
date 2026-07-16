@@ -25,6 +25,7 @@ use crate::event_stream_hub::EventStreamHub;
 use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
+use crate::meetings::MeetingService;
 use crate::provider_auth::ClaudeAuthSessionStore;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
@@ -56,6 +57,7 @@ pub struct OpsState {
     pub skills: Arc<SkillsService>,
     pub custom_agents: Arc<CustomAgentStore>,
     pub garyx_db: Arc<GaryxDbService>,
+    pub meetings: Arc<MeetingService>,
     pub provider_auth_sessions: Arc<ClaudeAuthSessionStore>,
     pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
 }
@@ -281,6 +283,9 @@ impl AppState {
     }
 
     pub async fn apply_runtime_config(&self, config: GaryxConfig) -> Result<(), BridgeError> {
+        self.ops
+            .meetings
+            .set_read_page_bytes(config.gateway.meetings.effective_read_page_bytes());
         self.integration
             .bridge
             .replace_agent_profiles(self.ops.custom_agents.snapshot().await)
@@ -401,6 +406,7 @@ impl AppState {
                 skills: self.ops.skills.clone(),
                 custom_agents: self.ops.custom_agents.clone(),
                 garyx_db: self.ops.garyx_db.clone(),
+                meetings: self.ops.meetings.clone(),
                 provider_auth_sessions: self.ops.provider_auth_sessions.clone(),
                 channel_endpoint_snapshot: Mutex::new(None),
             },

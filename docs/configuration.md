@@ -45,7 +45,12 @@ curl http://127.0.0.1:31337/health
     "host": "127.0.0.1",
     "port": 31337,
     "public_url": "",
-    "auth_token": ""
+    "auth_token": "",
+    "meetings": {
+      "poll_interval_secs": 30,
+      "join_retry_window_secs": 300,
+      "read_page_bytes": 65536
+    }
   }
 }
 ```
@@ -58,6 +63,9 @@ Fields:
 | `port` | `31337` | HTTP, WebSocket, and MCP port. |
 | `public_url` | `""` | Optional public URL used in channel message links. |
 | `auth_token` | `""` | Required bearer token for all protected gateway APIs. Create one on the gateway host with `garyx gateway token`; `/health` remains public. |
+| `meetings.poll_interval_secs` | `30` | Meeting event polling cadence in seconds; effective values are clamped to 10–120. |
+| `meetings.join_retry_window_secs` | `300` | Absolute retry window for joining an invited meeting. |
+| `meetings.read_page_bytes` | `65536` | Hard cap for each newly produced structured meeting-read page; effective values have a 4096-byte floor. |
 
 ## Channels
 
