@@ -72,6 +72,44 @@ export interface DesktopThreadFavoritesSnapshot
   };
 }
 
+export interface ThreadFavoritesReadInput {
+  /** Normalized Gateway URL captured by the renderer-owned request ticket. */
+  gatewayScope: string;
+}
+
+export interface SetThreadFavoriteInput extends ThreadFavoritesReadInput {
+  threadId: string;
+  favorited: boolean;
+  expectedRevision: number;
+  expectedStoreIncarnation: string;
+}
+
+export interface DesktopTaggedApiError {
+  kind: "garyx_api_error";
+  operation: string;
+  code: string;
+  message?: string;
+  [key: string]: unknown;
+}
+
+/** Serializable four-way mutation transport result crossing Electron IPC. */
+export type DesktopGatewayMutationResult<T> =
+  | { kind: "ok"; value: T; status: number }
+  | {
+      kind: "definitiveEndpointResponse";
+      status: number;
+      error: DesktopTaggedApiError;
+      value: T | null;
+      body: string;
+    }
+  | {
+      kind: "ambiguous";
+      message: string;
+      status?: number;
+      body?: string;
+    }
+  | { kind: "notSent"; message: string };
+
 export interface ThreadWorktreeInfo {
   mode?: string | null;
   enabled?: boolean | null;

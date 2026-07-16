@@ -46,10 +46,11 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         let ticket = feeds.requestRefresh(filter: .all)!
         feeds.completeRefresh(
             ticket,
-            pageIds: [],
-            pageCount: 30,
-            hasMore: true,
-            nextCursor: "cursor-30"
+            bundle: makeGaryxTestRecentRefreshBundle(
+                threadIds: ["thread-pagination"],
+                hasMore: true,
+                nextCursor: "cursor-30"
+            )
         )
         model.recentThreadFeeds = feeds
 
@@ -135,10 +136,7 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         let ticket = feeds.requestRefresh(filter: .all)!
         feeds.completeRefresh(
             ticket,
-            pageIds: ids,
-            pageCount: ids.count,
-            hasMore: false,
-            nextCursor: nil
+            bundle: makeGaryxTestRecentRefreshBundle(threadIds: ids)
         )
         model.recentThreadFeeds = feeds
     }
@@ -159,4 +157,29 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
             onChange()
         }
     }
+}
+
+func makeGaryxTestRecentRefreshBundle(
+    threadIds: [String],
+    storeIncarnationId: String = "11111111-1111-4111-8111-111111111111",
+    serverBootId: String = "22222222-2222-4222-8222-222222222222",
+    hasMore: Bool = false,
+    nextCursor: String? = nil
+) -> GaryxRecentThreadRefreshBundle {
+    let page = GaryxRecentThreadFeedPage(
+        storeIncarnationId: storeIncarnationId,
+        serverBootId: serverBootId,
+        rows: threadIds.enumerated().map { index, threadId in
+            GaryxRecentThreadFeedRow(
+                id: threadId,
+                activitySeq: Int64(threadIds.count - index)
+            )
+        },
+        hasMore: hasMore,
+        nextCursor: nextCursor
+    )
+    return GaryxRecentThreadRefreshBundle(
+        primaryPages: [page],
+        verificationPage: page
+    )
 }

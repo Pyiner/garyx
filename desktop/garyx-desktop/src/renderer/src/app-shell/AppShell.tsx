@@ -221,6 +221,7 @@ import {
   createBrowserRouteHost,
 } from "./desktop-route-store";
 import { useRecentThreadFeeds } from "./useRecentThreadFeeds";
+import { useThreadFavorites } from "./useThreadFavorites";
 import { recordTranscriptRender } from "./transcript-render-probe";
 import {
   deferConversationRailUnmount,
@@ -1838,6 +1839,11 @@ export function AppShell() {
     visibleThreadEntrySelectionSource === "workspace-conversation"
       ? visibleSelectedThreadId
       : null;
+  const threadFavorites = useThreadFavorites({
+    enabled: Boolean(desktopState?.entitiesGatewayUrl),
+    gatewayScope: desktopState?.entitiesGatewayUrl || "",
+    onError: setError,
+  });
   const recentThreadFeeds = useRecentThreadFeeds({
     enabled: shouldShowConversationRail && recentThreadsRailOpen,
     // Main owns Gateway URL normalization and stamps every entity slice with
@@ -1845,6 +1851,8 @@ export function AppShell() {
     // back to the raw settings string (trailing-slash mismatch would make an
     // otherwise valid page look cross-scope).
     gatewayScope: desktopState?.entitiesGatewayUrl || "",
+    runtimeEpoch: threadFavorites.state.runtimeEpoch,
+    observeStoreResponse: threadFavorites.observeStoreResponse,
     sharedSummaries:
       desktopState?.threads || EMPTY_DESKTOP_THREAD_SUMMARIES,
   });
@@ -3654,13 +3662,6 @@ export function AppShell() {
     await handleRemoveWorkspace(workspace.path || "");
   }
 
-  function isArchiveAlreadyApplied(error: unknown): boolean {
-    if (!(error instanceof Error)) {
-      return false;
-    }
-    return error.message.toLowerCase().includes("thread not found");
-  }
-
   async function archiveThreadOptimistically(input?: {
     threadId?: string | null;
     endpointKey?: string | null;
@@ -3723,15 +3724,28 @@ export function AppShell() {
 
     try {
       const api = getDesktopApi();
-      const archivedState = await api.archiveThread({
+      const archivedResult = await api.archiveThread({
         threadId: targetThreadId,
         endpointKeys: Array.from(endpointKeys).sort(),
       });
-      setDesktopState(desktopStateWithoutThread(archivedState, targetThreadId));
-    } catch (archiveError) {
-      if (isArchiveAlreadyApplied(archiveError)) {
+      if (archivedResult.kind !== "ok") {
+        recentThreadFeeds.rollbackRemoval(recentRollback);
+        setError(
+          archivedResult.kind === "definitiveEndpointResponse"
+            ? archivedResult.error.message || archivedResult.error.code
+            : archivedResult.message,
+        );
+        void refreshDesktopState().catch(() => null);
+        if (archivedResult.kind === "ambiguous") {
+          recentThreadFeeds.forceReplacement();
+          threadFavorites.refreshSnapshot();
+        }
         return;
       }
+      setDesktopState(
+        desktopStateWithoutThread(archivedResult.value, targetThreadId),
+      );
+    } catch (archiveError) {
       recentThreadFeeds.rollbackRemoval(recentRollback);
       setError(
         archiveError instanceof Error
@@ -3739,6 +3753,11 @@ export function AppShell() {
           : "Failed to delete the thread",
       );
       void refreshDesktopState().catch(() => null);
+      // IPC failure occurs after the renderer handed the operation to Main;
+      // whether the Gateway committed is unknowable, so reconstruct all
+      // affected feeds after preserving today's rollback/error UX.
+      recentThreadFeeds.forceReplacement();
+      threadFavorites.refreshSnapshot();
     } finally {
       setDeletingThreadId((current) =>
         current === targetThreadId ? null : current,

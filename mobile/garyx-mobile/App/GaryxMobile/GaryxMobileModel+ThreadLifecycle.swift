@@ -320,8 +320,18 @@ extension GaryxMobileModel {
             lastError = "This thread is active or managed by an automation or channel."
             return
         }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        let gatewayClient: GaryxGatewayClient
         do {
-            _ = try await client().deleteThread(threadId: thread.id)
+            gatewayClient = try client()
+        } catch {
+            lastError = displayMessage(for: error)
+            return
+        }
+        let result = await gatewayClient.deleteThread(threadId: thread.id)
+        guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+        switch result {
+        case .ok:
             removeArchivedThreadLocally(thread.id)
             if selectedThread?.id == thread.id {
                 self.selectedThread = nil
@@ -337,8 +347,13 @@ extension GaryxMobileModel {
             threadResidencyTracker.remove(thread.id)
             clearTranscriptCache(for: thread.id)
             await refreshThreads(source: .userAction)
-        } catch {
-            lastError = displayMessage(for: error)
+        case .definitiveEndpointResponse(let response):
+            lastError = response.error.message ?? response.error.code
+        case .notSent(let message):
+            lastError = message
+        case .ambiguous(let response):
+            lastError = response.message
+            await forceReplaceThreadFeedsAfterAmbiguousLifecycle()
         }
     }
 

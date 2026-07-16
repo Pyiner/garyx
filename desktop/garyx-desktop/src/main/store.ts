@@ -14,6 +14,7 @@ import {
   type ConfiguredBot,
   type DesktopGatewayProfile,
   type DesktopFollowUpBehavior,
+  type DesktopGatewayMutationResult,
   type DesktopLanguagePreference,
   type DesktopRemoteStateError,
   type DesktopThreadSummary,
@@ -1860,23 +1861,45 @@ export async function renameDesktopThread(
   return getDesktopState();
 }
 
-export async function deleteDesktopThread(threadId: string): Promise<DesktopState> {
+export async function deleteDesktopThread(
+  threadId: string,
+): Promise<DesktopGatewayMutationResult<DesktopState>> {
   const current = await getDesktopState();
-  await deleteRemoteThread(current.settings, threadId);
-  return withSortedEntities(desktopStateWithoutThread(await getDesktopState(), threadId));
+  const result = await deleteRemoteThread(current.settings, threadId);
+  if (result.kind !== 'ok') {
+    return result.kind === 'definitiveEndpointResponse'
+      ? { ...result, value: null }
+      : result;
+  }
+  return {
+    ...result,
+    value: withSortedEntities(
+      desktopStateWithoutThread(await getDesktopState(), threadId),
+    ),
+  };
 }
 
 export async function archiveDesktopThread(input: {
   threadId: string;
   endpointKeys?: string[];
-}): Promise<DesktopState> {
+}): Promise<DesktopGatewayMutationResult<DesktopState>> {
   const current = await getDesktopState();
-  await archiveRemoteThread(
+  const result = await archiveRemoteThread(
     current.settings,
     input.threadId,
     input.endpointKeys || [],
   );
-  return withSortedEntities(desktopStateWithoutThread(await getDesktopState(), input.threadId));
+  if (result.kind !== 'ok') {
+    return result.kind === 'definitiveEndpointResponse'
+      ? { ...result, value: null }
+      : result;
+  }
+  return {
+    ...result,
+    value: withSortedEntities(
+      desktopStateWithoutThread(await getDesktopState(), input.threadId),
+    ),
+  };
 }
 
 export async function recordOutgoingThreadPrompt(threadId: string, prompt: string): Promise<{

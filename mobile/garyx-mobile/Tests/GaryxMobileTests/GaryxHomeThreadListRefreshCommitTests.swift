@@ -399,10 +399,13 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         // pre-await snapshot before the app-layer commit can run.
         let completion = model.recentThreadFeeds.completeRefresh(
             ticket,
-            pageIds: page.threads.map(\.id),
-            pageCount: page.count,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor
+            bundle: makeGaryxTestRecentRefreshBundle(
+                threadIds: page.threads.map(\.id),
+                storeIncarnationId: page.storeIncarnationId,
+                serverBootId: page.serverBootId,
+                hasMore: page.hasMore,
+                nextCursor: page.nextCursor
+            )
         )
         XCTAssertEqual(completion, .abandonedLocalMutation)
 
@@ -431,12 +434,15 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let ticket = model.recentThreadFeeds.requestRefresh(filter: .all)!
         let completion = model.recentThreadFeeds.completeRefresh(
             ticket,
-            pageIds: page.threads.map(\.id),
-            pageCount: page.count,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor
+            bundle: makeGaryxTestRecentRefreshBundle(
+                threadIds: page.threads.map(\.id),
+                storeIncarnationId: page.storeIncarnationId,
+                serverBootId: page.serverBootId,
+                hasMore: page.hasMore,
+                nextCursor: page.nextCursor
+            )
         )
-        XCTAssertEqual(completion, .apply(.replaceHead))
+        XCTAssertEqual(completion, .applied)
 
         model.commitRefreshedRecentThreadsPage(
             pinsPageThreadIds: [pinned.id],
@@ -543,11 +549,12 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
             }
             let tasks = components.queryItems?.first(where: { $0.name == "tasks" })?.value
             if tasks == GaryxRecentThreadFilter.all.tasksQueryValue {
-                if allRequestCount.increment() == 1 {
+                let requestIndex = allRequestCount.increment()
+                if requestIndex == 1 {
                     auxiliaryStarted.fulfill()
-                }
-                guard auxiliaryGate.wait(timeout: .now() + 5) == .success else {
-                    throw GaryxRefreshStubError.timedOut
+                    guard auxiliaryGate.wait(timeout: .now() + 5) == .success else {
+                        throw GaryxRefreshStubError.timedOut
+                    }
                 }
                 return try garyxStubResponse(request, data: allPage)
             }
@@ -718,6 +725,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let selectedRequestStarted = expectation(description: "restored Chats request started")
+        let selectedRequestCount = GaryxLockedCounter()
         let chatsPage = try makeRecentThreadsPageData(rows: [
             (id: "thread-restored-chat", title: "Restored chat"),
         ])
@@ -737,7 +745,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
             }
             let tasks = components.queryItems?.first(where: { $0.name == "tasks" })?.value
             if tasks == GaryxRecentThreadFilter.nonTask.tasksQueryValue {
-                selectedRequestStarted.fulfill()
+                if selectedRequestCount.increment() == 1 {
+                    selectedRequestStarted.fulfill()
+                }
                 return try garyxStubResponse(request, data: chatsPage)
             }
             XCTAssertEqual(tasks, GaryxRecentThreadFilter.all.tasksQueryValue)
@@ -805,10 +815,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertEqual(
             model.recentThreadFeeds.completeRefresh(
                 staleTicket,
-                pageIds: ["stale-thread"],
-                pageCount: 1,
-                hasMore: false,
-                nextCursor: nil
+                bundle: makeGaryxTestRecentRefreshBundle(threadIds: ["stale-thread"])
             ),
             .abandonedStaleEpoch
         )
@@ -825,6 +832,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
     func testArchiveFailureKeepsListSnapshotStableUntilRemoteCommit() async throws {
         let archiveStarted = expectation(description: "archive request started")
         let archiveGate = DispatchSemaphore(value: 0)
+        let favoritesSnapshots = GaryxLockedCounter()
+        let allReplacements = GaryxLockedCounter()
+        let chatsReplacements = GaryxLockedCounter()
         let session = makeStubSession { request in
             let components = try XCTUnwrap(
                 URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
@@ -839,6 +849,16 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
                     statusCode: 500,
                     data: Data(#"{"error":"archive failed"}"#.utf8)
                 )
+            }
+            if request.httpMethod == "GET", components.path == "/api/thread-favorites/snapshot" {
+                favoritesSnapshots.increment()
+            }
+            if request.httpMethod == "GET", components.path == "/api/recent-threads" {
+                switch components.queryItems?.first(where: { $0.name == "tasks" })?.value {
+                case "include": allReplacements.increment()
+                case "exclude": chatsReplacements.increment()
+                default: break
+                }
             }
             return try garyxStubResponse(request, statusCode: 400, data: Data())
         }
@@ -871,12 +891,11 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertEqual(
             model.recentThreadFeeds.completeRefresh(
                 concurrentRefresh,
-                pageIds: [archived.id, survivor.id],
-                pageCount: 2,
-                hasMore: false,
-                nextCursor: nil
+                bundle: makeGaryxTestRecentRefreshBundle(
+                    threadIds: [archived.id, survivor.id]
+                )
             ),
-            .apply(.replaceHead)
+            .applied
         )
         model.commitRefreshedRecentThreadsPage(
             pinsPageThreadIds: [archived.id],
@@ -912,8 +931,97 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertEqual(model.pinnedThreadIds, [archived.id])
         XCTAssertEqual(model.allRecentThreadIds, [archived.id, survivor.id])
         XCTAssertEqual(model.threads, [archived, survivor])
-        XCTAssertEqual(model.homeThreadListStore.snapshot, initialSnapshot)
+        XCTAssertEqual(model.homeThreadListStore.snapshot.sections, initialSnapshot.sections)
+        XCTAssertTrue(
+            model.recentThreadFeeds.allFeed.headFailure,
+            "an ambiguous archive must force a replacement even when reconstruction fails"
+        )
+        XCTAssertTrue(
+            model.recentThreadFeeds.nonTaskFeed.headFailure,
+            "the non-selected feed must be reconstructed too"
+        )
+        let reconstructionIssued = await waitUntil {
+            favoritesSnapshots.value == 1
+                && allReplacements.value == 1
+                && chatsReplacements.value == 1
+        }
+        XCTAssertTrue(reconstructionIssued)
+        XCTAssertEqual(favoritesSnapshots.value, 1)
+        XCTAssertEqual(allReplacements.value, 1)
+        XCTAssertEqual(chatsReplacements.value, 1)
         XCTAssertEqual(model.homeThreadListStore.rowMotion(threadId: archived.id), .stable)
+    }
+
+    func testAmbiguousDeleteReconstructsFavoritesAndBothFeedsWithoutLocalDeletion() async throws {
+        let deleteAttempts = GaryxLockedCounter()
+        let favoritesSnapshots = GaryxLockedCounter()
+        let allRequests = GaryxLockedCounter()
+        let chatsRequests = GaryxLockedCounter()
+        let visibleIds = ["thread-delete", "thread-survivor"]
+        let recentData = try garyxRecentThreadsData(ids: visibleIds)
+        let session = makeStubSession { request in
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)
+            )
+            if request.httpMethod == "DELETE",
+               components.path.hasSuffix("/api/threads/thread-delete") {
+                deleteAttempts.increment()
+                throw URLError(.networkConnectionLost)
+            }
+            if request.httpMethod == "GET", components.path == "/api/thread-favorites/snapshot" {
+                favoritesSnapshots.increment()
+                return try garyxStubResponse(
+                    request,
+                    data: try garyxFavoritesSnapshotData(ids: [])
+                )
+            }
+            if request.httpMethod == "GET", components.path == "/api/recent-threads" {
+                switch components.queryItems?.first(where: { $0.name == "tasks" })?.value {
+                case "include": allRequests.increment()
+                case "exclude": chatsRequests.increment()
+                default: break
+                }
+                return try garyxStubResponse(request, data: recentData)
+            }
+            if request.httpMethod == "GET", components.path == "/api/thread-pins" {
+                return try garyxStubResponse(
+                    request,
+                    data: try garyxPinsPageData(ids: [], revision: 1)
+                )
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let deleted = makeThread(id: visibleIds[0], title: "Delete candidate")
+        let survivor = makeThread(id: visibleIds[1], title: "Survivor")
+        model.threads = [deleted, survivor]
+        model.selectedThread = deleted
+        primeRecentFeed(model, ids: visibleIds, filter: .all)
+        primeRecentFeed(model, ids: visibleIds, filter: .nonTask)
+
+        await model.deleteThread(deleted)
+        let reconstructed = await waitUntil {
+            favoritesSnapshots.value == 1
+                && allRequests.value == 2
+                && chatsRequests.value == 2
+        }
+
+        XCTAssertTrue(reconstructed)
+        XCTAssertEqual(deleteAttempts.value, 1)
+        XCTAssertEqual(favoritesSnapshots.value, 1)
+        XCTAssertEqual(allRequests.value, 2, "primary + head verification")
+        XCTAssertEqual(chatsRequests.value, 2, "primary + head verification")
+        XCTAssertEqual(model.selectedThread?.id, deleted.id)
+        XCTAssertTrue(model.threads.contains { $0.id == deleted.id })
+        XCTAssertEqual(model.allRecentThreadIds, visibleIds)
+        XCTAssertEqual(model.recentThreadFeeds.nonTaskFeed.orderedThreadIds, visibleIds)
+        XCTAssertFalse(model.recentThreadFeeds.allFeed.forceReplacementPending)
+        XCTAssertFalse(model.recentThreadFeeds.nonTaskFeed.forceReplacementPending)
     }
 
     func testArchiveSuccessMakesOneListCommitAndInvalidatesEarlierRefresh() async throws {
@@ -984,10 +1092,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
 
         let completion = model.recentThreadFeeds.completeRefresh(
             staleTicket,
-            pageIds: [archived.id, survivor.id],
-            pageCount: 2,
-            hasMore: false,
-            nextCursor: nil
+            bundle: makeGaryxTestRecentRefreshBundle(
+                threadIds: [archived.id, survivor.id]
+            )
         )
         XCTAssertEqual(completion, .abandonedLocalMutation)
         XCTAssertEqual(model.allRecentThreadIds, [survivor.id])
@@ -2173,10 +2280,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let ticket = feeds.requestRefresh(filter: filter)!
         feeds.completeRefresh(
             ticket,
-            pageIds: ids,
-            pageCount: ids.count,
-            hasMore: false,
-            nextCursor: nil
+            bundle: makeGaryxTestRecentRefreshBundle(threadIds: ids)
         )
         model.recentThreadFeeds = feeds
     }
@@ -2299,6 +2403,28 @@ private func garyxRecentThreadsData(ids: [String]) throws -> Data {
             "next_cursor": NSNull(),
             "store_incarnation_id": "11111111-1111-4111-8111-111111111111",
             "server_boot_id": "22222222-2222-4222-8222-222222222222",
+        ]
+    )
+}
+
+private func garyxFavoritesSnapshotData(ids: [String]) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: [
+            "store_incarnation_id": "11111111-1111-4111-8111-111111111111",
+            "server_boot_id": "22222222-2222-4222-8222-222222222222",
+            "revision": 1,
+            "thread_ids": ids,
+            "favorites": ids.map { id in
+                [
+                    "thread_id": id,
+                    "favorited_at": "2026-07-16T08:00:00Z",
+                ]
+            },
+            "recent": [
+                "threads": [],
+                "total": 0,
+                "truncated": false,
+            ],
         ]
     )
 }

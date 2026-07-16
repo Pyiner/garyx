@@ -153,6 +153,7 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
     }
+    @Published var threadFavoritesState = GaryxFavoritesState()
     var isLoadingThreads: Bool {
         recentThreadFeeds.selectedPresentation.showsInitialSkeleton
     }

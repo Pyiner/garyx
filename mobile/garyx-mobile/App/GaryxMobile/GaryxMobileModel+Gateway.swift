@@ -44,6 +44,10 @@ extension GaryxMobileModel {
     func loadGatewayScopedUserState(fallbackToLegacy: Bool) {
         activeGatewayScopeId = currentGatewayScopeId
         activeGatewayRuntimeIdentity = currentGatewayRuntimeIdentity
+        _ = threadFavoritesState.replaceGatewayScope(
+            normalizedGatewayURL(gatewayURL),
+            requestSnapshot: false
+        )
         catalogSnapshotRestored = false
         let workspaceKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
         let workspaceModeKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
@@ -87,6 +91,7 @@ extension GaryxMobileModel {
 
     func resetGatewayRuntimeState() {
         gatewayRuntimeGeneration = UUID()
+        clearThreadFavoritesRuntime()
         pinnedOrderReorderTask?.cancel()
         pinnedOrderReorderTask = nil
         pinnedOrderReorderTaskToken = nil
@@ -321,7 +326,7 @@ extension GaryxMobileModel {
                 startBackgroundCommittedRunReconcileLoop()
                 startSelectedThreadReconcileLoop()
                 async let agentTargetsRefresh: Void = refreshAgentTargets()
-                await refreshThreads(source: .userAction)
+                await refreshThreads(source: .userAction, forceReplacement: true)
                 await agentTargetsRefresh
                 guard !Task.isCancelled else { return }
                 if plan.resyncOpenThread, let selectedThreadId, selectedThread?.id == selectedThreadId {

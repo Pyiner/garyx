@@ -1026,9 +1026,15 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         do { _ = try await client.updateThread(threadId: "thread::patch", label: "Next") } catch {}
         XCTAssertEqual(attempts.value(), 1)
-        do { _ = try await client.archiveThread(threadId: "thread::archive") } catch {}
+        let archive = await client.archiveThread(threadId: "thread::archive")
+        guard case .ambiguous = archive else {
+            return XCTFail("Post-dispatch archive failure must be ambiguous")
+        }
         XCTAssertEqual(attempts.value(), 2)
-        do { _ = try await client.deleteThread(threadId: "thread::delete") } catch {}
+        let delete = await client.deleteThread(threadId: "thread::delete")
+        guard case .ambiguous = delete else {
+            return XCTFail("Post-dispatch delete failure must be ambiguous")
+        }
         XCTAssertEqual(attempts.value(), 3)
     }
 
@@ -1078,15 +1084,18 @@ final class GaryxGatewayClientTests: XCTestCase {
             retryPolicy: .disabled
         )
 
-        let result = try await client.archiveThread(
+        let result = await client.archiveThread(
             threadId: "thread::archive/a",
             endpointKeys: ["telegram::main::1000000001"]
         )
 
-        XCTAssertEqual(result.archived, true)
-        XCTAssertEqual(result.deleted, true)
-        XCTAssertEqual(result.threadId, "thread::archive/a")
-        XCTAssertEqual(result.detachedEndpointKeys, ["telegram::main::1000000001"])
+        guard case .ok(let archive) = result else {
+            return XCTFail("Expected a successful archive result")
+        }
+        XCTAssertEqual(archive.archived, true)
+        XCTAssertEqual(archive.deleted, true)
+        XCTAssertEqual(archive.threadId, "thread::archive/a")
+        XCTAssertEqual(archive.detachedEndpointKeys, ["telegram::main::1000000001"])
     }
 
     func testClaudeCodeAuthClientUsesProviderAuthRoutes() async throws {

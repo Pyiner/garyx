@@ -1263,16 +1263,30 @@ export async function setRemoteThreadFavorite(
     expectedStoreIncarnation: string;
   },
 ): Promise<GatewayMutationResult<DesktopThreadFavoritesPage>> {
+  const threadId = input.threadId.trim();
+  const storeIncarnation = input.expectedStoreIncarnation.trim();
+  if (
+    !threadId.startsWith("thread::") ||
+    typeof input.favorited !== "boolean" ||
+    !Number.isSafeInteger(input.expectedRevision) ||
+    input.expectedRevision < 0 ||
+    !storeIncarnation
+  ) {
+    return {
+      kind: "notSent",
+      message: "The favorites mutation is missing a valid precondition.",
+    };
+  }
   const query = new URLSearchParams({
     expected_revision: String(input.expectedRevision),
-    expected_store_incarnation: input.expectedStoreIncarnation,
+    expected_store_incarnation: storeIncarnation,
   });
   const operation = input.favorited
     ? "thread_favorites_put"
     : "thread_favorites_delete";
   return requestMutationJson<DesktopThreadFavoritesPage>(
     settings,
-    `/api/thread-favorites/${encodeURIComponent(input.threadId)}?${query.toString()}`,
+    `/api/thread-favorites/${encodeURIComponent(threadId)}?${query.toString()}`,
     "mutationSingleAttempt",
     operation,
     {
@@ -1484,15 +1498,17 @@ export async function updateRemoteThread(
 export async function deleteRemoteThread(
   settings: DesktopSettings,
   threadId: string,
-): Promise<void> {
-  await requestJson<unknown>(
+): Promise<GatewayMutationResult<unknown>> {
+  return requestMutationJson<unknown>(
     settings,
     `/api/threads/${encodeURIComponent(threadId)}`,
     "mutationSingleAttempt",
+    "thread_delete",
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
     },
+    (payload) => payload,
   );
 }
 
@@ -1500,16 +1516,18 @@ export async function archiveRemoteThread(
   settings: DesktopSettings,
   threadId: string,
   endpointKeys: string[] = [],
-): Promise<void> {
-  await requestJson<unknown>(
+): Promise<GatewayMutationResult<unknown>> {
+  return requestMutationJson<unknown>(
     settings,
     `/api/threads/${encodeURIComponent(threadId)}/archive`,
     "mutationSingleAttempt",
+    "thread_archive",
     {
       method: "POST",
       signal: AbortSignal.timeout(8000),
       body: JSON.stringify({ endpointKeys }),
     },
+    (payload) => payload,
   );
 }
 

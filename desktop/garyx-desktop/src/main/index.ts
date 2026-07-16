@@ -81,12 +81,14 @@ import type {
   SaveMemoryDocumentInput,
   SelectAutomationInput,
   SelectWorkspaceInput,
+  SetThreadFavoriteInput,
   SetDefaultCustomAgentInput,
   SetCapsuleFavoriteInput,
   RenderState,
   SendMessageInput,
   StartThreadStreamInput,
   StopThreadStreamInput,
+  ThreadFavoritesReadInput,
   ThreadTranscript,
   DeleteSlashCommandInput,
   StopTaskInput,
@@ -132,6 +134,8 @@ import {
   fetchGatewaySettings,
   fetchThreadHistory,
   fetchThreadLogs,
+  fetchThreadFavorites,
+  fetchThreadFavoritesSnapshot,
   fetchRecentThreads,
   getCodingUsage,
   getCapsule,
@@ -157,6 +161,7 @@ import {
   saveGatewaySettings,
   saveSkillFile,
   setDefaultCustomAgent,
+  setRemoteThreadFavorite,
   sendStreamingInput,
   stopTask,
   toggleMcpServer,
@@ -1218,6 +1223,41 @@ function registerIpcHandlers(): void {
       const settings = await resolveSettings();
       assertRecentThreadGatewayScope(settings, input.gatewayScope);
       return fetchRecentThreads(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:list-thread-favorites",
+    async (_event, input: ThreadFavoritesReadInput) => {
+      const settings = await resolveSettings();
+      assertRecentThreadGatewayScope(settings, input.gatewayScope);
+      return fetchThreadFavorites(settings);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:get-thread-favorites-snapshot",
+    async (_event, input: ThreadFavoritesReadInput) => {
+      const settings = await resolveSettings();
+      assertRecentThreadGatewayScope(settings, input.gatewayScope);
+      return fetchThreadFavoritesSnapshot(settings);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:set-thread-favorite",
+    async (_event, input: SetThreadFavoriteInput) => {
+      let settings: DesktopSettings;
+      try {
+        settings = await resolveSettings();
+        assertRecentThreadGatewayScope(settings, input.gatewayScope);
+      } catch (error) {
+        return {
+          kind: "notSent" as const,
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+      return setRemoteThreadFavorite(settings, input);
     },
   );
 

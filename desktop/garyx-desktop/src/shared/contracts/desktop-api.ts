@@ -116,13 +116,16 @@ import type {
   CreateThreadInput,
   DeleteThreadInput,
   DesktopDeepLinkListener,
+  DesktopGatewayMutationResult,
+  DesktopRecentThreadsPage,
+  DesktopThreadFavoritesPage,
+  DesktopThreadFavoritesSnapshot,
   DesktopThreadSummary,
   DesktopThreadPinOrderSnapshot,
   GetThreadHistoryInput,
   InterruptResult,
   ListRecentThreadsInput,
   OpenChatStreamResult,
-  DesktopRecentThreadsPage,
   RenameThreadInput,
   SendMessageInput,
   SendStreamingInputResult,
@@ -130,6 +133,8 @@ import type {
   SetThreadPinOrderInput,
   StartThreadStreamInput,
   StopThreadStreamInput,
+  SetThreadFavoriteInput,
+  ThreadFavoritesReadInput,
   ThreadLogChunk,
   ThreadTranscript,
   UpdateThreadRuntimeSettingsInput,
@@ -387,8 +392,21 @@ export interface GaryxDesktopApi {
   listRecentThreads: (
     input: ListRecentThreadsInput,
   ) => Promise<DesktopRecentThreadsPage>;
-  archiveThread: (input: ArchiveThreadInput) => Promise<DesktopState>;
-  deleteThread: (input: DeleteThreadInput) => Promise<DesktopState>;
+  listThreadFavorites: (
+    input: ThreadFavoritesReadInput,
+  ) => Promise<DesktopThreadFavoritesPage>;
+  getThreadFavoritesSnapshot: (
+    input: ThreadFavoritesReadInput,
+  ) => Promise<DesktopThreadFavoritesSnapshot>;
+  setThreadFavorite: (
+    input: SetThreadFavoriteInput,
+  ) => Promise<DesktopGatewayMutationResult<DesktopThreadFavoritesPage>>;
+  archiveThread: (
+    input: ArchiveThreadInput,
+  ) => Promise<DesktopGatewayMutationResult<DesktopState>>;
+  deleteThread: (
+    input: DeleteThreadInput,
+  ) => Promise<DesktopGatewayMutationResult<DesktopState>>;
   setThreadPinned: (input: SetThreadPinnedInput) => Promise<DesktopState>;
   setThreadPinOrder: (input: SetThreadPinOrderInput) => Promise<DesktopState>;
   getThreadPinOrderSnapshot: () => Promise<DesktopThreadPinOrderSnapshot>;

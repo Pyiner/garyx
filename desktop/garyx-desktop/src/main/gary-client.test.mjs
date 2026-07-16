@@ -1448,7 +1448,30 @@ test("favorites mutation treats a malformed 2xx page as ambiguous", async () => 
   }
 });
 
-test("archive and delete transport errors are never retried", async () => {
+test("invalid favorites preconditions are notSent before transport dispatch", async () => {
+  let attempts = 0;
+  setGatewayFetch(async () => {
+    attempts += 1;
+    throw new Error("must not dispatch");
+  });
+  try {
+    const result = await setRemoteThreadFavorite(
+      { gatewayUrl: "https://garyx.example.test", gatewayAuthToken: "" },
+      {
+        threadId: "not-a-thread",
+        favorited: true,
+        expectedRevision: -1,
+        expectedStoreIncarnation: "",
+      },
+    );
+    assert.equal(result.kind, "notSent");
+    assert.equal(attempts, 0);
+  } finally {
+    setGatewayFetch(null);
+  }
+});
+
+test("archive and delete transport errors are single-attempt ambiguous outcomes", async () => {
   const settings = {
     gatewayUrl: "https://garyx.example.test",
     gatewayAuthToken: "",
@@ -1460,8 +1483,10 @@ test("archive and delete transport errors are never retried", async () => {
     throw new TypeError("network connection lost");
   });
   try {
-    await assert.rejects(() => archiveRemoteThread(settings, "thread::archive"));
-    await assert.rejects(() => deleteRemoteThread(settings, "thread::delete"));
+    const archived = await archiveRemoteThread(settings, "thread::archive");
+    const deleted = await deleteRemoteThread(settings, "thread::delete");
+    assert.equal(archived.kind, "ambiguous");
+    assert.equal(deleted.kind, "ambiguous");
     assert.equal(attemptsByMethod.get("POST"), 1);
     assert.equal(attemptsByMethod.get("DELETE"), 1);
   } finally {

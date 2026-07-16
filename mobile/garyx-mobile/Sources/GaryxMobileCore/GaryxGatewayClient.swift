@@ -535,18 +535,37 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func deleteThread(threadId: String) async throws -> GaryxDeleteResult {
-        try await delete("/api/threads/\(threadId.urlPathEncoded)")
+    public func deleteThread(
+        threadId: String
+    ) async -> GaryxGatewayMutationResult<GaryxDeleteResult> {
+        do {
+            let request = try makeRequest(
+                path: "/api/threads/\(threadId.urlPathEncoded)",
+                method: "DELETE"
+            )
+            return await sendMutation(request, expectedOperation: "thread_delete")
+        } catch {
+            return .notSent(error.localizedDescription)
+        }
     }
 
     public func archiveThread(
         threadId: String,
         endpointKeys: [String] = []
-    ) async throws -> GaryxArchiveThreadResult {
-        try await post(
-            "/api/threads/\(threadId.urlPathEncoded)/archive",
-            body: GaryxArchiveThreadRequest(endpointKeys: endpointKeys)
-        )
+    ) async -> GaryxGatewayMutationResult<GaryxArchiveThreadResult> {
+        do {
+            var request = try makeRequest(
+                path: "/api/threads/\(threadId.urlPathEncoded)/archive",
+                method: "POST"
+            )
+            request.httpBody = try encoder.encode(
+                GaryxArchiveThreadRequest(endpointKeys: endpointKeys)
+            )
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            return await sendMutation(request, expectedOperation: "thread_archive")
+        } catch {
+            return .notSent(error.localizedDescription)
+        }
     }
 
     public func startChat(_ request: GaryxStartChatRequest) async throws -> GaryxStartChatResult {
