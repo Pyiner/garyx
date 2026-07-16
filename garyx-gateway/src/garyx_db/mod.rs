@@ -34,8 +34,11 @@ pub(crate) const THREAD_PIN_SORT_ORDER_MIGRATION_NAME: &str = "thread_pin_sort_o
 const THREAD_PIN_SORT_ORDER_MIGRATION_VERSION: i64 = 1;
 pub(crate) const DROP_THREAD_MESSAGE_ROUTES_MIGRATION_NAME: &str = "drop_thread_message_routes_v1";
 const DROP_THREAD_MESSAGE_ROUTES_MIGRATION_VERSION: i64 = 1;
+pub(crate) const RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME: &str = "recent_thread_activity_seq_v1";
+const RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION: i64 = 1;
 const LEGACY_IMPORT_GENERATION_NAME: &str = "legacy_import_generation";
 const LEGACY_IMPORT_GENERATION_VERSION: i64 = 1;
+pub(crate) const MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE: i64 = 9_007_199_254_740_991;
 
 #[cfg(any(test, feature = "test-seams"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -252,6 +255,7 @@ pub struct RecentThreadRecord {
     pub run_state: String,
     pub updated_at: Option<String>,
     pub last_active_at: String,
+    pub activity_seq: i64,
     pub recorded_at: String,
 }
 
@@ -264,6 +268,14 @@ pub(crate) enum RecentThreadTaskFilter {
 }
 
 impl RecentThreadTaskFilter {
+    pub(crate) fn cursor_value(self) -> &'static str {
+        match self {
+            Self::Include => "include",
+            Self::Exclude => "exclude",
+            Self::Only => "only",
+        }
+    }
+
     fn count_sql(self) -> &'static str {
         match self {
             Self::Include => "SELECT COUNT(*) FROM recent_threads",
@@ -277,28 +289,86 @@ impl RecentThreadTaskFilter {
             Self::Include => {
                 "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
-                        run_state, updated_at, last_active_at, recorded_at
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
-                  ORDER BY last_active_at DESC, thread_id ASC
+                  ORDER BY activity_seq DESC
                   LIMIT ?1 OFFSET ?2"
             }
             Self::Exclude => {
                 "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
-                        run_state, updated_at, last_active_at, recorded_at
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
                   WHERE thread_type <> 'task'
-                  ORDER BY last_active_at DESC, thread_id ASC
+                  ORDER BY activity_seq DESC
                   LIMIT ?1 OFFSET ?2"
             }
             Self::Only => {
                 "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
                         message_count, last_message_preview, recent_run_id, active_run_id,
-                        run_state, updated_at, last_active_at, recorded_at
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
                    FROM recent_threads
                   WHERE thread_type = 'task'
-                  ORDER BY last_active_at DESC, thread_id ASC
+                  ORDER BY activity_seq DESC
                   LIMIT ?1 OFFSET ?2"
+            }
+        }
+    }
+
+    fn keyset_page_sql(self, has_cursor: bool) -> &'static str {
+        match (self, has_cursor) {
+            (Self::Include, false) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  ORDER BY activity_seq DESC
+                  LIMIT ?1"
+            }
+            (Self::Include, true) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  WHERE activity_seq < ?1
+                  ORDER BY activity_seq DESC
+                  LIMIT ?2"
+            }
+            (Self::Exclude, false) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  WHERE thread_type <> 'task'
+                  ORDER BY activity_seq DESC
+                  LIMIT ?1"
+            }
+            (Self::Exclude, true) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  WHERE thread_type <> 'task' AND activity_seq < ?1
+                  ORDER BY activity_seq DESC
+                  LIMIT ?2"
+            }
+            (Self::Only, false) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  WHERE thread_type = 'task'
+                  ORDER BY activity_seq DESC
+                  LIMIT ?1"
+            }
+            (Self::Only, true) => {
+                "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                        message_count, last_message_preview, recent_run_id, active_run_id,
+                        run_state, updated_at, last_active_at, activity_seq, recorded_at
+                   FROM recent_threads
+                  WHERE thread_type = 'task' AND activity_seq < ?1
+                  ORDER BY activity_seq DESC
+                  LIMIT ?2"
             }
         }
     }
@@ -309,6 +379,13 @@ pub(crate) struct RecentThreadDbPage {
     pub records: Vec<RecentThreadRecord>,
     pub total: usize,
     pub offset: usize,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RecentThreadKeysetDbPage {
+    pub records: Vec<RecentThreadRecord>,
+    pub total: usize,
     pub has_more: bool,
 }
 
@@ -1183,11 +1260,12 @@ impl GaryxDbService {
                     recent.thread_type, recent.provider_type, recent.agent_id,
                     recent.message_count, recent.last_message_preview,
                     recent.recent_run_id, recent.active_run_id, recent.run_state,
-                    recent.updated_at, recent.last_active_at, recent.recorded_at
+                    recent.updated_at, recent.last_active_at, recent.activity_seq,
+                    recent.recorded_at
                FROM recent_threads AS recent
                JOIN thread_favorites AS favorite
                  ON favorite.thread_id = recent.thread_id
-              ORDER BY recent.last_active_at DESC, recent.thread_id ASC
+              ORDER BY recent.activity_seq DESC
               LIMIT ?1",
         )?;
         let rows = stmt.query_map(
@@ -1526,6 +1604,15 @@ impl GaryxDbService {
         self.list_recent_threads_page_inner(filter, limit, requested_offset, || Ok(()))
     }
 
+    pub(crate) fn list_recent_threads_keyset_page(
+        &self,
+        filter: RecentThreadTaskFilter,
+        limit: usize,
+        before_activity_seq: Option<i64>,
+    ) -> GaryxDbResult<RecentThreadKeysetDbPage> {
+        self.list_recent_threads_keyset_page_inner(filter, limit, before_activity_seq, || Ok(()))
+    }
+
     pub(crate) fn contains_selectable_recent_thread(&self, thread_id: &str) -> GaryxDbResult<bool> {
         let thread_id = normalize_thread_id(thread_id)?;
         let conn = self.read_conn()?;
@@ -1584,6 +1671,52 @@ impl GaryxDbService {
         })
     }
 
+    fn list_recent_threads_keyset_page_inner<F>(
+        &self,
+        filter: RecentThreadTaskFilter,
+        limit: usize,
+        before_activity_seq: Option<i64>,
+        after_count: F,
+    ) -> GaryxDbResult<RecentThreadKeysetDbPage>
+    where
+        F: FnOnce() -> GaryxDbResult<()>,
+    {
+        let mut conn = self.read_conn()?;
+        let tx = conn.transaction()?;
+        let total: i64 = tx.query_row(filter.count_sql(), [], |row| row.get(0))?;
+        let total = usize::try_from(total).unwrap_or(usize::MAX);
+
+        // Count and page are display metadata from one WAL snapshot. A
+        // concurrent writer may commit here, but this page must not mix it
+        // with the earlier total.
+        after_count()?;
+
+        let fetch_limit = limit.saturating_add(1);
+        let fetch_limit = i64::try_from(fetch_limit).unwrap_or(i64::MAX);
+        let mut stmt = tx.prepare(filter.keyset_page_sql(before_activity_seq.is_some()))?;
+        let mut rows = match before_activity_seq {
+            Some(activity_seq) => stmt.query(params![activity_seq, fetch_limit])?,
+            None => stmt.query(params![fetch_limit])?,
+        };
+        let mut records = Vec::with_capacity(limit.saturating_add(1));
+        while let Some(row) = rows.next()? {
+            records.push(recent_thread_record_from_row(row)?);
+        }
+        drop(rows);
+        drop(stmt);
+        tx.commit()?;
+
+        let has_more = records.len() > limit;
+        if has_more {
+            records.truncate(limit);
+        }
+        Ok(RecentThreadKeysetDbPage {
+            records,
+            total,
+            has_more,
+        })
+    }
+
     /// Startup crash recovery: the bridge run index is rebuilt empty on
     /// boot, so any projected `active_run_id`/`running` row is a dangling
     /// orphan from the previous process. One SQL pass settles both
@@ -1591,6 +1724,11 @@ impl GaryxDbService {
     /// closing batch; replaces the retired reconcile walk).
     pub fn clear_stale_active_runs(&self) -> GaryxDbResult<usize> {
         let conn = self.conn()?;
+        // Deliberately does not allocate activity_seq: merely settling a run
+        // orphan from the previous boot must not move an old thread to the
+        // head. RuntimeAssembler invokes this under the data-dir lock before
+        // listener bind; the source guard pins this as a pre-bind-only direct
+        // recent_threads UPDATE.
         let recent = conn.execute(
             "UPDATE recent_threads
                 SET active_run_id = NULL,
@@ -1770,8 +1908,130 @@ impl GaryxDbService {
         self.drop_thread_message_routes_v1()?;
         self.migrate_thread_pin_sort_order_v1()?;
         self.migrate_recent_task_thread_kind_v1()?;
+        self.migrate_recent_thread_activity_seq_v1()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         Ok(())
+    }
+
+    /// Backfill the monotonic recent-thread ordering key exactly once. This
+    /// marker is intentionally independent of legacy import generations:
+    /// recovery imports use the normal allocator and must never reset either
+    /// the marker or the meta high-water mark.
+    pub(crate) fn migrate_recent_thread_activity_seq_v1(
+        &self,
+    ) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let completed_source_count = tx
+            .query_row(
+                "SELECT source_row_count
+                   FROM projection_states
+                  WHERE projection_name = ?1 AND projection_version = ?2",
+                params![
+                    RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME,
+                    RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        let source_row_count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM recent_threads", [], |row| row.get(0))?;
+        let meta_activity_seq: i64 = tx.query_row(
+            "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let existing_max: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(activity_seq), 0) FROM recent_threads",
+            [],
+            |row| row.get(0),
+        )?;
+        let starting_activity_seq = meta_activity_seq.max(existing_max);
+        let final_activity_seq = starting_activity_seq
+            .checked_add(source_row_count)
+            .filter(|value| *value < MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE)
+            .ok_or_else(|| {
+                GaryxDbError::Configuration(
+                    "recent thread activity sequence space is exhausted".to_owned(),
+                )
+            })?;
+
+        // Re-running after an explicitly cleared marker remains deterministic
+        // and safe even if the prior unique index is still present.
+        tx.execute_batch(
+            "DROP INDEX IF EXISTS idx_recent_threads_activity_seq;
+             DROP INDEX IF EXISTS idx_recent_threads_task_activity_seq;
+             DROP INDEX IF EXISTS idx_recent_threads_non_task_activity_seq;",
+        )?;
+
+        let thread_ids = {
+            let mut stmt = tx.prepare(
+                "SELECT thread_id
+                   FROM recent_threads
+                  ORDER BY last_active_at ASC, thread_id DESC",
+            )?;
+            stmt.query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for (offset, thread_id) in thread_ids.iter().enumerate() {
+            let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+            let activity_seq = starting_activity_seq
+                .checked_add(offset)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| {
+                    GaryxDbError::Configuration(
+                        "recent thread activity sequence space is exhausted".to_owned(),
+                    )
+                })?;
+            // Pre-bind one-shot migration: this direct UPDATE is the sole
+            // backfill allow-list entry in addition to pre-bind orphan/type
+            // cleanup. Runtime projection writes always use the allocator.
+            tx.execute(
+                "UPDATE recent_threads SET activity_seq = ?1 WHERE thread_id = ?2",
+                params![activity_seq, thread_id],
+            )?;
+        }
+        tx.execute(
+            "UPDATE recent_threads_meta SET activity_seq = ?1 WHERE id = 1",
+            params![final_activity_seq],
+        )?;
+
+        tx.execute_batch(
+            "DROP INDEX IF EXISTS idx_recent_threads_last_active;
+             DROP INDEX IF EXISTS idx_recent_threads_task_last_active;
+             DROP INDEX IF EXISTS idx_recent_threads_non_task_last_active;
+             CREATE UNIQUE INDEX idx_recent_threads_activity_seq
+                 ON recent_threads(activity_seq DESC);
+             CREATE INDEX idx_recent_threads_task_activity_seq
+                 ON recent_threads(activity_seq DESC)
+                 WHERE thread_type = 'task';
+             CREATE INDEX idx_recent_threads_non_task_activity_seq
+                 ON recent_threads(activity_seq DESC)
+                 WHERE thread_type <> 'task';",
+        )?;
+        record_projection_state_tx(
+            &tx,
+            RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME,
+            RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION,
+            source_row_count,
+            None,
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count: thread_ids.len(),
+            already_completed: false,
+        })
     }
 
     pub(crate) fn drop_thread_message_routes_v1(&self) -> GaryxDbResult<OneShotMigrationSummary> {
@@ -2228,6 +2488,9 @@ impl GaryxDbService {
                 AND COALESCE(json_extract(body, '$.thread_kind'), '') <> 'task'",
             [],
         )?;
+        // Pre-bind one-shot projection correction. Changing the persisted
+        // thread kind is not user activity, so it intentionally preserves
+        // activity_seq rather than moving the row to the head.
         tx.execute(
             "UPDATE recent_threads
                 SET thread_type = 'task'
@@ -2361,8 +2624,11 @@ impl GaryxDbService {
         draft: RecentThreadDraft,
     ) -> GaryxDbResult<RecentThreadRecord> {
         let recorded_at = now_string();
-        let conn = self.conn()?;
-        upsert_recent_thread_tx(&conn, draft, &recorded_at)
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let record = upsert_recent_thread_tx(&tx, draft, &recorded_at)?;
+        tx.commit()?;
+        Ok(record)
     }
 
     pub fn remove_recent_thread(&self, thread_id: &str) -> GaryxDbResult<bool> {
@@ -2951,7 +3217,7 @@ fn list_active_recent_thread_ids(
         "SELECT thread_id
            FROM recent_threads
           WHERE {ACTIVE_RECENT_THREAD_PREDICATE}
-          ORDER BY last_active_at DESC, thread_id ASC
+          ORDER BY activity_seq DESC
           LIMIT ?1"
     );
     let limit = i64::try_from(limit).unwrap_or(i64::MAX);
@@ -3092,19 +3358,20 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             run_state TEXT NOT NULL DEFAULT 'idle',
             updated_at TEXT,
             last_active_at TEXT NOT NULL,
+            activity_seq INTEGER NOT NULL DEFAULT 0 CHECK (
+                activity_seq >= 0
+                AND activity_seq < 9007199254740991
+            ),
             recorded_at TEXT NOT NULL
         ) STRICT;
 
-        CREATE INDEX IF NOT EXISTS idx_recent_threads_last_active
-            ON recent_threads(last_active_at DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_recent_threads_task_last_active
-            ON recent_threads(last_active_at DESC, thread_id ASC)
-            WHERE thread_type = 'task';
-
-        CREATE INDEX IF NOT EXISTS idx_recent_threads_non_task_last_active
-            ON recent_threads(last_active_at DESC, thread_id ASC)
-            WHERE thread_type <> 'task';
+        CREATE TABLE IF NOT EXISTS recent_threads_meta (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            activity_seq INTEGER NOT NULL CHECK (
+                activity_seq >= 0
+                AND activity_seq < 9007199254740991
+            )
+        ) STRICT;
 
         CREATE TABLE IF NOT EXISTS projection_states (
             projection_name TEXT PRIMARY KEY,
@@ -3298,6 +3565,8 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
 
         "#,
     )?;
+    ensure_recent_threads_activity_seq_column(conn)?;
+    ensure_recent_threads_meta_row(conn)?;
     ensure_thread_pins_sort_order_column(conn)?;
     ensure_thread_pins_meta_row(conn)?;
     ensure_thread_favorites_meta_row(conn)?;
@@ -3829,7 +4098,7 @@ fn escape_like_pattern(prefix: &str) -> String {
 }
 
 fn upsert_recent_thread_tx(
-    conn: &Connection,
+    tx: &Transaction<'_>,
     draft: RecentThreadDraft,
     recorded_at: &str,
 ) -> GaryxDbResult<RecentThreadRecord> {
@@ -3846,14 +4115,15 @@ fn upsert_recent_thread_tx(
     let active_run_id = normalize_optional(draft.active_run_id.as_deref());
     let updated_at = normalize_optional(draft.updated_at.as_deref());
     let recorded_at = recorded_at.to_owned();
+    let activity_seq = allocate_recent_thread_activity_seq_tx(tx)?;
 
-    conn.execute(
+    tx.execute(
         "INSERT INTO recent_threads (
             thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
             message_count, last_message_preview, recent_run_id, active_run_id, run_state,
-            updated_at, last_active_at, recorded_at
+            updated_at, last_active_at, activity_seq, recorded_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT(thread_id) DO UPDATE SET
             title = excluded.title,
             workspace_dir = excluded.workspace_dir,
@@ -3867,6 +4137,7 @@ fn upsert_recent_thread_tx(
             run_state = excluded.run_state,
             updated_at = excluded.updated_at,
             last_active_at = excluded.last_active_at,
+            activity_seq = excluded.activity_seq,
             recorded_at = excluded.recorded_at",
         params![
             thread_id,
@@ -3882,6 +4153,7 @@ fn upsert_recent_thread_tx(
             run_state,
             updated_at,
             last_active_at,
+            activity_seq,
             recorded_at,
         ],
     )?;
@@ -3900,8 +4172,35 @@ fn upsert_recent_thread_tx(
         run_state,
         updated_at,
         last_active_at,
+        activity_seq,
         recorded_at,
     })
+}
+
+fn allocate_recent_thread_activity_seq_tx(tx: &Transaction<'_>) -> GaryxDbResult<i64> {
+    let current: i64 = tx.query_row(
+        "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let next = current
+        .checked_add(1)
+        .filter(|value| *value < MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE)
+        .ok_or_else(|| {
+            GaryxDbError::Configuration(
+                "recent thread activity sequence space is exhausted".to_owned(),
+            )
+        })?;
+    let updated = tx.execute(
+        "UPDATE recent_threads_meta SET activity_seq = ?1 WHERE id = 1",
+        params![next],
+    )?;
+    if updated != 1 {
+        return Err(GaryxDbError::Configuration(
+            "recent_threads_meta singleton is missing".to_owned(),
+        ));
+    }
+    Ok(next)
 }
 
 fn remove_recent_thread_tx(conn: &Connection, thread_id: &str) -> GaryxDbResult<bool> {
@@ -4193,6 +4492,35 @@ fn ensure_thread_pins_sort_order_column(conn: &Connection) -> GaryxDbResult<()> 
     Ok(())
 }
 
+fn ensure_recent_threads_activity_seq_column(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(recent_threads)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if columns.contains("activity_seq") {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE recent_threads
+             ADD COLUMN activity_seq INTEGER NOT NULL DEFAULT 0 CHECK (
+                 activity_seq >= 0
+                 AND activity_seq < 9007199254740991
+             )",
+        [],
+    )?;
+    Ok(())
+}
+
+fn ensure_recent_threads_meta_row(conn: &Connection) -> GaryxDbResult<()> {
+    conn.execute(
+        "INSERT INTO recent_threads_meta (id, activity_seq)
+         VALUES (1, 0)
+         ON CONFLICT(id) DO NOTHING",
+        [],
+    )?;
+    Ok(())
+}
+
 fn ensure_thread_pins_meta_row(conn: &Connection) -> GaryxDbResult<()> {
     let exists = conn
         .query_row(
@@ -4461,7 +4789,8 @@ fn recent_thread_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Re
         run_state: row.get(10)?,
         updated_at: row.get(11)?,
         last_active_at: row.get(12)?,
-        recorded_at: row.get(13)?,
+        activity_seq: row.get(13)?,
+        recorded_at: row.get(14)?,
     })
 }
 
@@ -4922,6 +5251,331 @@ mod tests {
             updated_at: None,
             last_active_at: "2026-07-08T00:00:00Z".to_owned(),
         }
+    }
+
+    #[test]
+    fn recent_activity_schema_initializes_before_writes_and_reopens_stably() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            let conn = Connection::open(&path).expect("legacy db");
+            conn.execute_batch(
+                "CREATE TABLE recent_threads (
+                     thread_id TEXT PRIMARY KEY,
+                     title TEXT NOT NULL DEFAULT '',
+                     workspace_dir TEXT,
+                     thread_type TEXT NOT NULL DEFAULT 'chat',
+                     provider_type TEXT,
+                     agent_id TEXT,
+                     message_count INTEGER NOT NULL DEFAULT 0,
+                     last_message_preview TEXT NOT NULL DEFAULT '',
+                     recent_run_id TEXT,
+                     active_run_id TEXT,
+                     run_state TEXT NOT NULL DEFAULT 'idle',
+                     updated_at TEXT,
+                     last_active_at TEXT NOT NULL,
+                     recorded_at TEXT NOT NULL
+                 ) STRICT;
+                 INSERT INTO recent_threads (
+                     thread_id, last_active_at, recorded_at
+                 ) VALUES (
+                     'thread::legacy-before-seq',
+                     '2026-07-01T00:00:00Z',
+                     '2026-07-01T00:00:00Z'
+                 );",
+            )
+            .expect("seed legacy recent table");
+        }
+
+        let db = GaryxDbService::open(&path).expect("open upgraded db");
+        let conn = db.conn().expect("writer");
+        let meta: i64 = conn
+            .query_row(
+                "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("meta initialized during schema open");
+        let legacy_seq: i64 = conn
+            .query_row(
+                "SELECT activity_seq FROM recent_threads
+                  WHERE thread_id = 'thread::legacy-before-seq'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("legacy column added during schema open");
+        assert_eq!((meta, legacy_seq), (0, 0));
+        drop(conn);
+        drop(db);
+
+        let reopened = GaryxDbService::open(&path).expect("reopen upgraded db");
+        let conn = reopened.conn().expect("writer after reopen");
+        assert_eq!(
+            conn.query_row(
+                "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0,
+            "ordinary reopen must not move the activity high-water mark"
+        );
+    }
+
+    #[test]
+    fn recent_activity_backfill_preserves_old_order_and_is_truly_one_shot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            let conn = Connection::open(&path).expect("legacy db");
+            conn.execute_batch(
+                "CREATE TABLE recent_threads (
+                     thread_id TEXT PRIMARY KEY,
+                     title TEXT NOT NULL DEFAULT '',
+                     workspace_dir TEXT,
+                     thread_type TEXT NOT NULL DEFAULT 'chat',
+                     provider_type TEXT,
+                     agent_id TEXT,
+                     message_count INTEGER NOT NULL DEFAULT 0,
+                     last_message_preview TEXT NOT NULL DEFAULT '',
+                     recent_run_id TEXT,
+                     active_run_id TEXT,
+                     run_state TEXT NOT NULL DEFAULT 'idle',
+                     updated_at TEXT,
+                     last_active_at TEXT NOT NULL,
+                     recorded_at TEXT NOT NULL
+                 ) STRICT;
+                 INSERT INTO recent_threads (
+                     thread_id, last_active_at, recorded_at
+                 ) VALUES
+                     ('thread::z-old', '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z'),
+                     ('thread::b-tie', '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z'),
+                     ('thread::a-tie', '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z');",
+            )
+            .expect("seed legacy order");
+        }
+
+        let db = GaryxDbService::open(&path).expect("open upgraded db");
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE recent_threads_meta SET activity_seq = 50 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+        let first = db
+            .migrate_recent_thread_activity_seq_v1()
+            .expect("backfill activity sequence");
+        assert_eq!(first.source_row_count, 3);
+        assert_eq!(first.updated_row_count, 3);
+        assert!(!first.already_completed);
+
+        let rows = db
+            .list_recent_threads(10, 0)
+            .expect("list migrated recent rows");
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.thread_id.as_str(), row.activity_seq))
+                .collect::<Vec<_>>(),
+            vec![
+                ("thread::a-tie", 53),
+                ("thread::b-tie", 52),
+                ("thread::z-old", 51),
+            ],
+            "descending seq must exactly preserve the former timestamp/id order"
+        );
+        let conn = db.conn().expect("writer");
+        assert_eq!(
+            conn.query_row(
+                "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            53,
+            "backfill must floor against and then advance the existing meta"
+        );
+        assert!(
+            conn.execute(
+                "INSERT INTO recent_threads (
+                     thread_id, last_active_at, activity_seq, recorded_at
+                 ) VALUES (
+                     'thread::duplicate-seq', '2026-07-03T00:00:00Z', 53,
+                     '2026-07-03T00:00:00Z'
+                 )",
+                [],
+            )
+            .is_err(),
+            "the post-backfill activity sequence index must be unique"
+        );
+        drop(conn);
+
+        let second = db
+            .migrate_recent_thread_activity_seq_v1()
+            .expect("one-shot rerun");
+        assert!(second.already_completed);
+        assert_eq!(second.source_row_count, 3);
+        assert_eq!(second.updated_row_count, 0);
+        assert_eq!(
+            db.list_recent_threads(10, 0)
+                .unwrap()
+                .iter()
+                .map(|row| row.activity_seq)
+                .collect::<Vec<_>>(),
+            vec![53, 52, 51]
+        );
+        drop(db);
+
+        let reopened = GaryxDbService::open(&path).expect("reopen migrated db");
+        assert!(
+            reopened
+                .migrate_recent_thread_activity_seq_v1()
+                .unwrap()
+                .already_completed
+        );
+        assert_eq!(
+            reopened.list_recent_threads(10, 0).unwrap()[0].activity_seq,
+            53
+        );
+    }
+
+    #[test]
+    fn recent_activity_allocator_is_transactional_strict_and_safe_integer_bounded() {
+        let db = std::sync::Arc::new(GaryxDbService::memory().expect("memory db"));
+
+        {
+            let mut conn = db.conn().expect("writer");
+            let tx = conn.transaction().expect("transaction");
+            let record = upsert_recent_thread_tx(
+                &tx,
+                sample_recent_draft("thread::rolled-back-seq"),
+                "2026-07-16T00:00:00Z",
+            )
+            .expect("upsert inside uncommitted transaction");
+            assert_eq!(record.activity_seq, 1);
+            drop(tx);
+        }
+        assert!(db.list_recent_threads(10, 0).unwrap().is_empty());
+        assert_eq!(
+            db.conn()
+                .unwrap()
+                .query_row(
+                    "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0,
+            "allocator and projection upsert must roll back together"
+        );
+
+        let handles = (0..24)
+            .map(|index| {
+                let db = std::sync::Arc::clone(&db);
+                std::thread::spawn(move || {
+                    db.upsert_recent_thread(sample_recent_draft(&format!(
+                        "thread::concurrent-seq-{index:02}"
+                    )))
+                    .expect("concurrent upsert")
+                    .activity_seq
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut allocated = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("allocator thread"))
+            .collect::<Vec<_>>();
+        allocated.sort_unstable();
+        assert_eq!(allocated, (1..=24).collect::<Vec<_>>());
+
+        let first = db
+            .upsert_recent_thread(sample_recent_draft("thread::moves-to-head"))
+            .unwrap();
+        let second = db
+            .upsert_recent_thread(sample_recent_draft("thread::other-head"))
+            .unwrap();
+        let moved = db
+            .upsert_recent_thread(sample_recent_draft("thread::moves-to-head"))
+            .unwrap();
+        assert!(first.activity_seq < second.activity_seq);
+        assert!(second.activity_seq < moved.activity_seq);
+        assert_eq!(
+            db.list_recent_threads(2, 0).unwrap()[0].thread_id,
+            "thread::moves-to-head",
+            "every read-modify-write upsert gets a fresh monotonic ordering key"
+        );
+
+        let conn = db.conn().expect("writer");
+        assert!(
+            conn.execute(
+                "UPDATE recent_threads_meta SET activity_seq = 9007199254740991 WHERE id = 1",
+                [],
+            )
+            .is_err(),
+            "meta must reject values that are not exactly representable as desktop integers"
+        );
+        assert!(
+            conn.execute(
+                "UPDATE recent_threads SET activity_seq = 9007199254740991
+                  WHERE thread_id = 'thread::moves-to-head'",
+                [],
+            )
+            .is_err(),
+            "rows must enforce the same exclusive safe-integer bound"
+        );
+    }
+
+    #[test]
+    fn recovery_generation_never_resets_activity_meta_or_one_shot_marker() {
+        let db = GaryxDbService::memory().expect("memory db");
+        db.migrate_recent_thread_activity_seq_v1()
+            .expect("mark empty backfill complete");
+        let older = db
+            .upsert_recent_thread(sample_recent_draft("thread::before-recovery-older"))
+            .unwrap();
+        let old_head = db
+            .upsert_recent_thread(sample_recent_draft("thread::before-recovery-head"))
+            .unwrap();
+        assert_eq!((older.activity_seq, old_head.activity_seq), (1, 2));
+
+        assert_eq!(db.commit_legacy_import(0, false).unwrap(), 1);
+        db.record_legacy_archive_retirement().unwrap();
+        db.clear_projection_state(crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME)
+            .unwrap();
+        assert_eq!(db.commit_legacy_import(2, true).unwrap(), 2);
+        assert!(
+            db.projection_state_exists(
+                RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME,
+                RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION,
+            )
+            .unwrap(),
+            "recovery generation changes must not clear the independent seq marker"
+        );
+
+        let recovered = db
+            .upsert_recent_thread(sample_recent_draft("thread::recovery-import"))
+            .unwrap();
+        assert_eq!(recovered.activity_seq, 3);
+        assert!(
+            db.migrate_recent_thread_activity_seq_v1()
+                .unwrap()
+                .already_completed
+        );
+        let old_cursor_page = db
+            .list_recent_threads_keyset_page(
+                RecentThreadTaskFilter::Include,
+                10,
+                Some(old_head.activity_seq),
+            )
+            .expect("old cursor remains valid");
+        assert_eq!(
+            old_cursor_page
+                .records
+                .iter()
+                .map(|row| (row.thread_id.as_str(), row.activity_seq))
+                .collect::<Vec<_>>(),
+            vec![("thread::before-recovery-older", 1)]
+        );
     }
 
     fn seed_favorite_thread(service: &GaryxDbService, thread_id: &str, recent: bool) {
@@ -5919,9 +6573,45 @@ mod tests {
                 .expect("seed row");
         }
 
+        let before = service
+            .list_recent_threads(10, 0)
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.thread_id, row.activity_seq))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let meta_before: i64 = service
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
         service.clear_stale_active_runs().expect("clear orphans");
 
         let rows = service.list_recent_threads(10, 0).expect("list");
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.thread_id.clone(), row.activity_seq))
+                .collect::<std::collections::BTreeMap<_, _>>(),
+            before,
+            "pre-bind orphan settlement must not move rows in activity order"
+        );
+        assert_eq!(
+            service
+                .conn()
+                .unwrap()
+                .query_row(
+                    "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            meta_before,
+            "pre-bind orphan settlement must not allocate a sequence"
+        );
         let state_of = |id: &str| {
             rows.iter()
                 .find(|row| row.thread_id == id)
@@ -7500,10 +8190,10 @@ mod tests {
     fn recent_threads_filtered_page_filters_before_pagination() {
         let db = GaryxDbService::memory().expect("db opens");
         for (thread_id, thread_type, timestamp) in [
-            ("thread::task-newest", "task", "2026-05-23T14:00:00Z"),
-            ("thread::chat-newer", "chat", "2026-05-23T13:00:00Z"),
             ("thread::task-middle", "task", "2026-05-23T12:00:00Z"),
             ("thread::chat-older", "chat", "2026-05-23T13:00:00Z"),
+            ("thread::chat-newer", "chat", "2026-05-23T13:00:00Z"),
+            ("thread::task-newest", "task", "2026-05-23T14:00:00Z"),
         ] {
             db.upsert_recent_thread(RecentThreadDraft {
                 thread_id: thread_id.to_owned(),
@@ -7580,6 +8270,95 @@ mod tests {
     }
 
     #[test]
+    fn recent_threads_keyset_does_not_skip_after_deletion_and_uses_n_plus_one() {
+        let db = GaryxDbService::memory().expect("db opens");
+        for thread_id in ["thread::oldest", "thread::middle", "thread::newest"] {
+            db.upsert_recent_thread(sample_recent_draft(thread_id))
+                .expect("seed recent row");
+        }
+
+        let first = db
+            .list_recent_threads_keyset_page(RecentThreadTaskFilter::Include, 1, None)
+            .expect("first keyset page");
+        assert_eq!(first.total, 3);
+        assert!(first.has_more, "N+1 must detect a second row");
+        assert_eq!(first.records.len(), 1);
+        assert_eq!(first.records[0].thread_id, "thread::newest");
+        let cursor = first.records[0].activity_seq;
+
+        db.remove_recent_thread("thread::newest")
+            .expect("delete already-returned row");
+        let second = db
+            .list_recent_threads_keyset_page(RecentThreadTaskFilter::Include, 1, Some(cursor))
+            .expect("second keyset page");
+        assert_eq!(second.total, 2);
+        assert!(second.has_more);
+        assert_eq!(
+            second.records[0].thread_id, "thread::middle",
+            "deleting a row above the cursor must not skip the next row"
+        );
+
+        let last = db
+            .list_recent_threads_keyset_page(
+                RecentThreadTaskFilter::Include,
+                1,
+                Some(second.records[0].activity_seq),
+            )
+            .expect("last keyset page");
+        assert_eq!(last.records[0].thread_id, "thread::oldest");
+        assert!(!last.has_more, "exactly N remaining rows has no next page");
+
+        let empty = db
+            .list_recent_threads_keyset_page(
+                RecentThreadTaskFilter::Include,
+                1,
+                Some(last.records[0].activity_seq),
+            )
+            .expect("empty tail page");
+        assert!(empty.records.is_empty());
+        assert!(!empty.has_more);
+    }
+
+    #[test]
+    fn recent_threads_keyset_count_and_rows_share_one_wal_snapshot() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        let db = GaryxDbService::open(&path).expect("db opens");
+        db.upsert_recent_thread(sample_recent_draft("thread::snapshot-before"))
+            .expect("seed initial row");
+
+        let page = db
+            .list_recent_threads_keyset_page_inner(
+                RecentThreadTaskFilter::Include,
+                10,
+                None,
+                || {
+                    let writer = Connection::open(&path)?;
+                    writer.execute_batch(
+                        "BEGIN IMMEDIATE;
+                         UPDATE recent_threads_meta SET activity_seq = 2 WHERE id = 1;
+                         INSERT INTO recent_threads (
+                             thread_id, title, thread_type, last_active_at,
+                             activity_seq, recorded_at
+                         ) VALUES (
+                             'thread::snapshot-after', 'After', 'chat',
+                             '2026-07-16T01:00:00Z', 2,
+                             '2026-07-16T01:00:00Z'
+                         );
+                         COMMIT;",
+                    )?;
+                    Ok(())
+                },
+            )
+            .expect("snapshot keyset page");
+
+        assert_eq!(page.total, 1);
+        assert_eq!(page.records.len(), 1);
+        assert_eq!(page.records[0].thread_id, "thread::snapshot-before");
+        assert_eq!(db.count_recent_threads().unwrap(), 2);
+    }
+
+    #[test]
     fn recent_threads_filtered_page_uses_one_read_snapshot() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("garyx-db.sqlite3");
@@ -7630,23 +8409,25 @@ mod tests {
     #[test]
     fn recent_threads_filtered_queries_use_partial_order_indexes() {
         let db = GaryxDbService::memory().expect("db opens");
+        db.migrate_recent_thread_activity_seq_v1()
+            .expect("create activity indexes");
         let conn = db.conn().expect("conn");
         for (predicate, expected_index) in [
             (
                 "thread_type = 'task'",
-                "idx_recent_threads_task_last_active",
+                "idx_recent_threads_task_activity_seq",
             ),
             (
                 "thread_type <> 'task'",
-                "idx_recent_threads_non_task_last_active",
+                "idx_recent_threads_non_task_activity_seq",
             ),
         ] {
             let sql = format!(
                 "EXPLAIN QUERY PLAN
                  SELECT thread_id FROM recent_threads
                   WHERE {predicate}
-                  ORDER BY last_active_at DESC, thread_id ASC
-                  LIMIT 10 OFFSET 0"
+                  ORDER BY activity_seq DESC
+                  LIMIT 10"
             );
             let mut stmt = conn.prepare(&sql).expect("prepare query plan");
             let details = stmt

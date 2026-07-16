@@ -7,6 +7,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
 use futures_util::StreamExt;
 use garyx_channels::plugin::{PluginAccountUi, PluginConversationEndpoint, PluginMainEndpoint};
@@ -29,7 +30,7 @@ use garyx_router::{
     history_message_count, is_thread_key, update_thread_record, workspace_dir_from_value,
     workspace_git_status as router_workspace_git_status,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap};
 use std::io;
@@ -40,8 +41,9 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::agent_identity::create_thread_for_agent_reference;
 use crate::garyx_db::{
-    FavoriteThreadResult, GaryxDbError, RecentThreadRecord, RecentThreadTaskFilter,
-    ReorderThreadPinsResult, ThreadFavoritesPage, ThreadMetaRecord, ThreadPinsPage,
+    FavoriteThreadResult, GaryxDbError, MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE,
+    RecentThreadRecord, RecentThreadTaskFilter, ReorderThreadPinsResult, ThreadFavoritesPage,
+    ThreadMetaRecord, ThreadPinsPage,
 };
 use crate::provider_session_locator::{
     list_recent_local_provider_sessions, recover_local_provider_session,
@@ -678,17 +680,18 @@ pub struct ListThreadsParams {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ListRecentThreadsParams {
     /// Maximum number of recent threads to return.
-    #[serde(default = "default_recent_thread_limit")]
-    pub limit: usize,
-    /// Offset for pagination.
     #[serde(default)]
-    pub offset: usize,
+    pub limit: Option<String>,
     /// Task membership filter. Omitting it preserves the existing unfiltered
     /// recent-thread response.
     #[serde(default)]
     pub tasks: Option<String>,
+    /// Opaque filter-bound keyset cursor returned by the preceding page.
+    #[serde(default)]
+    pub cursor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -715,21 +718,73 @@ fn default_thread_limit() -> usize {
     DEFAULT_THREAD_LIMIT
 }
 
-fn default_recent_thread_limit() -> usize {
-    DEFAULT_RECENT_THREAD_LIMIT
-}
-
-fn parse_recent_thread_task_filter(
-    value: Option<&str>,
-) -> Result<RecentThreadTaskFilter, GaryxDbError> {
+fn parse_recent_thread_task_filter(value: Option<&str>) -> Result<RecentThreadTaskFilter, String> {
     match value {
         None | Some("include") => Ok(RecentThreadTaskFilter::Include),
         Some("exclude") => Ok(RecentThreadTaskFilter::Exclude),
         Some("only") => Ok(RecentThreadTaskFilter::Only),
-        Some(_) => Err(GaryxDbError::BadRequest(
-            "tasks must be one of: include, exclude, only".to_owned(),
-        )),
+        Some(_) => Err("tasks must be one of: include, exclude, only".to_owned()),
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecentThreadsCursor {
+    v: u8,
+    filter: String,
+    activity_seq: i64,
+}
+
+fn decode_recent_threads_cursor(raw: &str, filter: RecentThreadTaskFilter) -> Result<i64, String> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(raw)
+        .map_err(|_| "cursor must be an opaque recent-threads cursor".to_owned())?;
+    let cursor: RecentThreadsCursor = serde_json::from_slice(&bytes)
+        .map_err(|_| "cursor must be an opaque recent-threads cursor".to_owned())?;
+    if cursor.v != 1 {
+        return Err("cursor version is not supported".to_owned());
+    }
+    if cursor.filter != filter.cursor_value() {
+        return Err("cursor does not belong to the requested tasks filter".to_owned());
+    }
+    if !(0..MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE).contains(&cursor.activity_seq) {
+        return Err("cursor activity_seq is outside the supported range".to_owned());
+    }
+    Ok(cursor.activity_seq)
+}
+
+fn encode_recent_threads_cursor(filter: RecentThreadTaskFilter, activity_seq: i64) -> String {
+    let encoded = serde_json::to_vec(&RecentThreadsCursor {
+        v: 1,
+        filter: filter.cursor_value().to_owned(),
+        activity_seq,
+    })
+    .expect("recent cursor serialization is infallible");
+    URL_SAFE_NO_PAD.encode(encoded)
+}
+
+fn parse_recent_threads_params(
+    query: Result<Query<ListRecentThreadsParams>, axum::extract::rejection::QueryRejection>,
+) -> Result<(RecentThreadTaskFilter, usize, Option<i64>), String> {
+    let Query(params) = query.map_err(|error| error.to_string())?;
+    let limit = match params.limit.as_deref() {
+        None => DEFAULT_RECENT_THREAD_LIMIT,
+        Some(raw) => raw
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .filter(|value| (1..=MAX_RECENT_THREAD_LIMIT).contains(value))
+            .ok_or_else(|| {
+                format!("limit must be an integer from 1 through {MAX_RECENT_THREAD_LIMIT}")
+            })?,
+    };
+    let filter = parse_recent_thread_task_filter(params.tasks.as_deref())?;
+    let before_activity_seq = params
+        .cursor
+        .as_deref()
+        .map(|cursor| decode_recent_threads_cursor(cursor, filter))
+        .transpose()?;
+    Ok((filter, limit, before_activity_seq))
 }
 
 fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<ProviderType>, String> {
@@ -1467,6 +1522,7 @@ const THREAD_FAVORITES_GET_OPERATION: &str = "thread_favorites_get";
 const THREAD_FAVORITES_PUT_OPERATION: &str = "thread_favorites_put";
 const THREAD_FAVORITES_DELETE_OPERATION: &str = "thread_favorites_delete";
 const THREAD_FAVORITES_SNAPSHOT_OPERATION: &str = "thread_favorites_snapshot";
+const RECENT_THREADS_LIST_OPERATION: &str = "recent_threads_list";
 
 fn thread_favorite_ids(page: &ThreadFavoritesPage) -> Vec<String> {
     page.favorites
@@ -1613,20 +1669,42 @@ fn parse_reorder_thread_pins_request(payload: &Value) -> Result<(Vec<String>, i6
 async fn recent_threads_payload(
     state: &Arc<AppState>,
     records: &[RecentThreadRecord],
+    filter: RecentThreadTaskFilter,
     limit: usize,
-    offset: usize,
     total: usize,
     has_more: bool,
+    store_incarnation_id: &str,
 ) -> Value {
     let threads = recent_thread_values(state, records).await;
+    let next_cursor = has_more.then(|| {
+        let last = records
+            .last()
+            .expect("a positive page limit with has_more must return a row");
+        encode_recent_threads_cursor(filter, last.activity_seq)
+    });
     json!({
+        "store_incarnation_id": store_incarnation_id,
+        "server_boot_id": state.server_boot_id(),
         "threads": threads,
         "count": records.len(),
         "limit": limit,
-        "offset": offset,
         "total": total,
         "has_more": has_more,
+        "next_cursor": next_cursor,
     })
+}
+
+fn recent_threads_invalid_request(message: impl Into<String>) -> axum::response::Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "kind": "garyx_api_error",
+            "operation": RECENT_THREADS_LIST_OPERATION,
+            "code": "invalid_request",
+            "message": message.into(),
+        })),
+    )
+        .into_response()
 }
 
 async fn recent_thread_values(state: &Arc<AppState>, records: &[RecentThreadRecord]) -> Vec<Value> {
@@ -1753,30 +1831,33 @@ pub async fn list_threads(
 /// GET /api/recent-threads - list recently active threads for compact clients.
 pub async fn list_recent_threads(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<ListRecentThreadsParams>,
+    query: Result<Query<ListRecentThreadsParams>, axum::extract::rejection::QueryRejection>,
 ) -> impl IntoResponse {
-    let limit = params.limit.min(MAX_RECENT_THREAD_LIMIT);
-    let requested_offset = params.offset;
-    let filter = match parse_recent_thread_task_filter(params.tasks.as_deref()) {
-        Ok(filter) => filter,
-        Err(error) => return garyx_db_error_response(error).into_response(),
+    let (filter, limit, before_activity_seq) = match parse_recent_threads_params(query) {
+        Ok(params) => params,
+        Err(message) => return recent_threads_invalid_request(message),
     };
     let paged = state
         .ops
         .garyx_db
-        .run_blocking(move |db| db.list_recent_threads_page(filter, limit, requested_offset))
+        .run_blocking(move |db| {
+            let page = db.list_recent_threads_keyset_page(filter, limit, before_activity_seq)?;
+            let store_incarnation_id = db.store_incarnation_id()?;
+            Ok((page, store_incarnation_id))
+        })
         .await;
     match paged {
-        Ok(page) => (
+        Ok((page, store_incarnation_id)) => (
             StatusCode::OK,
             Json(
                 recent_threads_payload(
                     &state,
                     &page.records,
+                    filter,
                     limit,
-                    page.offset,
                     page.total,
                     page.has_more,
+                    &store_incarnation_id,
                 )
                 .await,
             ),

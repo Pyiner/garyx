@@ -3841,6 +3841,12 @@ async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows
         payload["recent"]["threads"][0]["thread_id"],
         "thread::snapshot-recent"
     );
+    assert!(
+        payload["recent"]["threads"][0]["activity_seq"]
+            .as_i64()
+            .is_some_and(|seq| seq > 0),
+        "snapshot recent rows carry the monotonic wire ordering key"
+    );
 }
 
 #[tokio::test]
@@ -4111,7 +4117,7 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
     let router = build_router(state.clone());
 
     let request = authed_request()
-        .uri("/api/recent-threads?limit=10&offset=0")
+        .uri("/api/recent-threads?limit=10")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -4122,38 +4128,51 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["count"], 3);
     assert_eq!(payload["total"], 3);
-    assert_eq!(payload["offset"], 0);
+    assert!(
+        payload.get("offset").is_none(),
+        "HTTP pagination is cursor-only"
+    );
     assert_eq!(payload["has_more"], false);
-    assert_eq!(payload["threads"][0]["thread_id"], "thread::recent-running");
-    assert_eq!(payload["threads"][0]["title"], "Recent Running");
-    assert_eq!(payload["threads"][0]["workspace_dir"], "/work/test-running");
-    assert_eq!(payload["threads"][0]["provider_type"], "codex");
-    assert_eq!(payload["threads"][0]["agent_id"], "agent::running");
-    assert_eq!(payload["threads"][0]["message_count"], 4);
+    assert_eq!(payload["next_cursor"], Value::Null);
+    assert!(uuid::Uuid::parse_str(payload["store_incarnation_id"].as_str().unwrap()).is_ok());
+    assert!(uuid::Uuid::parse_str(payload["server_boot_id"].as_str().unwrap()).is_ok());
     assert_eq!(
-        payload["threads"][0]["last_message_preview"],
-        "running assistant preview"
-    );
-    assert_eq!(payload["threads"][0]["active_run_id"], "run::active");
-    assert_eq!(payload["threads"][0]["run_state"], "running");
-    assert_eq!(payload["threads"][1]["thread_id"], "thread::recent-older");
-    assert_eq!(payload["threads"][1]["provider_type"], "claude");
-    assert_eq!(payload["threads"][1]["agent_id"], "agent::test");
-    assert_eq!(payload["threads"][1]["message_count"], 3);
-    assert_eq!(
-        payload["threads"][1]["last_message_preview"],
-        "older user preview"
-    );
-    assert_eq!(payload["threads"][1]["recent_run_id"], "run::older");
-    assert_eq!(payload["threads"][1]["run_state"], "completed");
-    assert_eq!(
-        payload["threads"][2]["thread_id"],
+        payload["threads"][0]["thread_id"],
         "thread::recent-no-timestamp"
     );
     assert_eq!(
-        payload["threads"][2]["last_active_at"],
+        payload["threads"][0]["last_active_at"],
         "1970-01-01T00:00:00.000Z"
     );
+    assert_eq!(payload["threads"][1]["thread_id"], "thread::recent-running");
+    assert_eq!(payload["threads"][1]["title"], "Recent Running");
+    assert_eq!(payload["threads"][1]["workspace_dir"], "/work/test-running");
+    assert_eq!(payload["threads"][1]["provider_type"], "codex");
+    assert_eq!(payload["threads"][1]["agent_id"], "agent::running");
+    assert_eq!(payload["threads"][1]["message_count"], 4);
+    assert_eq!(
+        payload["threads"][1]["last_message_preview"],
+        "running assistant preview"
+    );
+    assert_eq!(payload["threads"][1]["active_run_id"], "run::active");
+    assert_eq!(payload["threads"][1]["run_state"], "running");
+    assert_eq!(payload["threads"][2]["thread_id"], "thread::recent-older");
+    assert_eq!(payload["threads"][2]["provider_type"], "claude");
+    assert_eq!(payload["threads"][2]["agent_id"], "agent::test");
+    assert_eq!(payload["threads"][2]["message_count"], 3);
+    assert_eq!(
+        payload["threads"][2]["last_message_preview"],
+        "older user preview"
+    );
+    assert_eq!(payload["threads"][2]["recent_run_id"], "run::older");
+    assert_eq!(payload["threads"][2]["run_state"], "completed");
+    let sequences = payload["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|thread| thread["activity_seq"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert!(sequences.windows(2).all(|pair| pair[0] > pair[1]));
 
     let persisted = state
         .ops
@@ -4166,9 +4185,9 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
             .map(|thread| thread.thread_id.as_str())
             .collect::<Vec<_>>(),
         vec![
+            "thread::recent-no-timestamp",
             "thread::recent-running",
             "thread::recent-older",
-            "thread::recent-no-timestamp"
         ],
     );
 }
@@ -4265,9 +4284,12 @@ async fn recent_threads_route_defaults_to_thirty_threads() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["count"], 30);
     assert_eq!(payload["limit"], 30);
-    assert_eq!(payload["offset"], 0);
+    assert!(payload.get("offset").is_none());
     assert_eq!(payload["total"], 35);
     assert_eq!(payload["has_more"], true);
+    assert!(payload["next_cursor"].as_str().is_some());
+    assert!(uuid::Uuid::parse_str(payload["store_incarnation_id"].as_str().unwrap()).is_ok());
+    assert!(uuid::Uuid::parse_str(payload["server_boot_id"].as_str().unwrap()).is_ok());
     assert_eq!(payload["threads"].as_array().unwrap().len(), 30);
 }
 
@@ -4275,10 +4297,10 @@ async fn recent_threads_route_defaults_to_thirty_threads() {
 async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
     let state = AppStateBuilder::new(test_config()).build();
     for (thread_id, thread_type, timestamp) in [
-        ("thread::route-task-newest", "task", "2026-05-23T14:00:00Z"),
-        ("thread::route-chat-newer", "chat", "2026-05-23T13:00:00Z"),
-        ("thread::route-task-middle", "task", "2026-05-23T12:00:00Z"),
         ("thread::route-chat-older", "chat", "2026-05-23T11:00:00Z"),
+        ("thread::route-task-middle", "task", "2026-05-23T12:00:00Z"),
+        ("thread::route-chat-newer", "chat", "2026-05-23T13:00:00Z"),
+        ("thread::route-task-newest", "task", "2026-05-23T14:00:00Z"),
     ] {
         state
             .ops
@@ -4306,7 +4328,7 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
         .clone()
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=10&offset=0")
+                .uri("/api/recent-threads?limit=10")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -4321,7 +4343,7 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
         .clone()
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=10&offset=0&tasks=include")
+                .uri("/api/recent-threads?limit=10&tasks=include")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -4349,7 +4371,7 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
         .clone()
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=1&offset=0&tasks=exclude")
+                .uri("/api/recent-threads?limit=1&tasks=exclude")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -4367,46 +4389,90 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
         excluded["threads"][0]["thread_id"],
         "thread::route-chat-newer"
     );
+    let exclude_cursor = excluded["next_cursor"].as_str().unwrap();
 
-    let only_response = router
+    let only_first_response = router
         .clone()
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=10&offset=1&tasks=only")
+                .uri("/api/recent-threads?limit=1&tasks=only")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(only_response.status(), StatusCode::OK);
-    let only_body = axum::body::to_bytes(only_response.into_body(), 1024 * 1024)
+    assert_eq!(only_first_response.status(), StatusCode::OK);
+    let only_first_body = axum::body::to_bytes(only_first_response.into_body(), 1024 * 1024)
         .await
         .unwrap();
-    let only: Value = serde_json::from_slice(&only_body).unwrap();
-    assert_eq!(only["total"], 2);
-    assert_eq!(only["offset"], 1);
-    assert_eq!(only["has_more"], false);
-    assert_eq!(only["threads"][0]["thread_id"], "thread::route-task-middle");
+    let only_first: Value = serde_json::from_slice(&only_first_body).unwrap();
+    assert_eq!(only_first["total"], 2);
+    assert_eq!(only_first["has_more"], true);
+    assert_eq!(
+        only_first["threads"][0]["thread_id"],
+        "thread::route-task-newest"
+    );
+    let only_cursor = only_first["next_cursor"].as_str().unwrap();
 
-    let clamped_response = router
+    let only_second_response = router
         .clone()
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=10&offset=99&tasks=only")
+                .uri(format!(
+                    "/api/recent-threads?limit=1&tasks=only&cursor={only_cursor}"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(clamped_response.status(), StatusCode::OK);
-    let clamped_body = axum::body::to_bytes(clamped_response.into_body(), 1024 * 1024)
+    assert_eq!(only_second_response.status(), StatusCode::OK);
+    let only_second_body = axum::body::to_bytes(only_second_response.into_body(), 1024 * 1024)
         .await
         .unwrap();
-    let clamped: Value = serde_json::from_slice(&clamped_body).unwrap();
-    assert_eq!(clamped["offset"], 2);
-    assert_eq!(clamped["total"], 2);
-    assert_eq!(clamped["count"], 0);
-    assert_eq!(clamped["threads"], json!([]));
+    let only_second: Value = serde_json::from_slice(&only_second_body).unwrap();
+    assert_eq!(only_second["total"], 2);
+    assert_eq!(only_second["has_more"], false);
+    assert_eq!(only_second["next_cursor"], Value::Null);
+    assert_eq!(
+        only_second["threads"][0]["thread_id"],
+        "thread::route-task-middle"
+    );
+
+    for (uri, expected_message) in [
+        (
+            format!("/api/recent-threads?limit=1&tasks=only&cursor={exclude_cursor}"),
+            "requested tasks filter",
+        ),
+        (
+            "/api/recent-threads?tasks=only&cursor=not-a-cursor".to_owned(),
+            "opaque recent-threads cursor",
+        ),
+        ("/api/recent-threads?limit=0".to_owned(), "1 through 200"),
+        ("/api/recent-threads?limit=201".to_owned(), "1 through 200"),
+        ("/api/recent-threads?offset=1".to_owned(), "unknown field"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(authed_request().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["kind"], "garyx_api_error");
+        assert_eq!(payload["operation"], "recent_threads_list");
+        assert_eq!(payload["code"], "invalid_request");
+        assert!(
+            payload["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(expected_message),
+            "unexpected invalid-request body for {uri}: {payload}"
+        );
+    }
 
     let invalid_response = router
         .oneshot(
@@ -4422,12 +4488,87 @@ async fn recent_threads_route_filters_tasks_and_preserves_default_response() {
         .await
         .unwrap();
     let invalid: Value = serde_json::from_slice(&invalid_body).unwrap();
-    assert_eq!(invalid["error"], "BadRequest");
+    assert_eq!(invalid["kind"], "garyx_api_error");
+    assert_eq!(invalid["operation"], "recent_threads_list");
+    assert_eq!(invalid["code"], "invalid_request");
     assert!(
         invalid["message"]
             .as_str()
             .unwrap_or_default()
             .contains("include, exclude, only")
+    );
+}
+
+#[tokio::test]
+async fn recent_threads_route_keyset_does_not_skip_when_returned_row_is_deleted() {
+    let state = AppStateBuilder::new(test_config()).build();
+    for (index, thread_id) in [
+        "thread::cursor-old",
+        "thread::cursor-mid",
+        "thread::cursor-new",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": thread_id,
+                    "updated_at": format!("2026-07-16T00:0{index}:00Z")
+                }),
+            )
+            .await
+            .unwrap();
+    }
+    let router = build_router(state.clone());
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .uri("/api/recent-threads?limit=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first["threads"][0]["thread_id"], "thread::cursor-new");
+    let cursor = first["next_cursor"].as_str().unwrap();
+
+    state
+        .ops
+        .garyx_db
+        .remove_recent_thread("thread::cursor-new")
+        .unwrap();
+    let response = router
+        .oneshot(
+            authed_request()
+                .uri(format!("/api/recent-threads?limit=1&cursor={cursor}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let second: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        second["threads"][0]["thread_id"], "thread::cursor-mid",
+        "keyset pagination cannot skip after a row above the cursor disappears"
     );
 }
 
@@ -4481,7 +4622,7 @@ async fn recent_threads_tasks_exclude_never_scans_thread_store() {
     let response = router
         .oneshot(
             authed_request()
-                .uri("/api/recent-threads?limit=10&offset=0&tasks=exclude")
+                .uri("/api/recent-threads?limit=10&tasks=exclude")
                 .body(Body::empty())
                 .unwrap(),
         )
