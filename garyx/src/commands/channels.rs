@@ -1023,6 +1023,13 @@ pub(super) fn prompt_channel_choice() -> Result<String, Box<dyn std::error::Erro
 struct AgentReferenceOption {
     id: Option<String>,
     label: String,
+    recommended: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CliAgentCatalog {
+    profiles: Vec<CustomAgentProfile>,
+    effective_default_agent_id: Option<String>,
 }
 
 fn provider_type_label(provider_type: &ProviderType) -> &'static str {
@@ -1051,20 +1058,37 @@ fn selectable_cli_agent_profiles(
     profiles
 }
 
-fn parse_cli_agent_profiles(
-    content: &str,
-) -> Result<Vec<CustomAgentProfile>, garyx_models::AgentStoreDocumentError> {
-    parse_agent_store_document(content)
-        .map(|document| selectable_cli_agent_profiles(document.agents))
+fn cli_agent_catalog(
+    profiles: Vec<CustomAgentProfile>,
+    default_agent_id: Option<String>,
+) -> CliAgentCatalog {
+    let snapshot = AgentAvailabilitySnapshot {
+        agents: profiles,
+        default_agent_id,
+        agent_state_revision: 0,
+    };
+    let effective_default_agent_id =
+        resolve_effective_default(&snapshot).map(|binding| binding.agent_id);
+    CliAgentCatalog {
+        profiles: selectable_cli_agent_profiles(snapshot.agents),
+        effective_default_agent_id,
+    }
 }
 
-fn load_cli_agent_profiles() -> Vec<CustomAgentProfile> {
+fn parse_cli_agent_catalog(
+    content: &str,
+) -> Result<CliAgentCatalog, garyx_models::AgentStoreDocumentError> {
+    parse_agent_store_document(content)
+        .map(|document| cli_agent_catalog(document.agents, document.default_agent_id))
+}
+
+fn load_cli_agent_catalog() -> CliAgentCatalog {
     let path = default_custom_agents_state_path();
     fs::read_to_string(&path)
         .ok()
         .filter(|content| !content.trim().is_empty())
-        .and_then(|content| parse_cli_agent_profiles(&content).ok())
-        .unwrap_or_else(|| selectable_cli_agent_profiles(builtin_provider_agent_profiles()))
+        .and_then(|content| parse_cli_agent_catalog(&content).ok())
+        .unwrap_or_else(|| cli_agent_catalog(builtin_provider_agent_profiles(), None))
 }
 
 fn format_cli_agent_label(agent: &CustomAgentProfile) -> String {
@@ -1084,19 +1108,44 @@ fn format_cli_agent_label(agent: &CustomAgentProfile) -> String {
     )
 }
 
-fn available_agent_reference_options() -> Vec<AgentReferenceOption> {
+fn agent_reference_options(catalog: CliAgentCatalog) -> Vec<AgentReferenceOption> {
+    let effective_label = catalog
+        .effective_default_agent_id
+        .as_deref()
+        .and_then(|effective_id| {
+            catalog
+                .profiles
+                .iter()
+                .find(|profile| profile.agent_id == effective_id)
+        })
+        .map(|profile| {
+            if profile.display_name.trim() == profile.agent_id.trim() {
+                profile.agent_id.clone()
+            } else {
+                format!("{} ({})", profile.display_name, profile.agent_id)
+            }
+        })
+        .unwrap_or_else(|| "无可用 Agent".to_owned());
+    let effective_default_agent_id = catalog.effective_default_agent_id;
     std::iter::once(AgentReferenceOption {
         id: None,
-        label: "跟随全局默认 Agent".to_owned(),
+        label: format!("跟随全局默认 Agent（当前 {effective_label}）"),
+        recommended: effective_default_agent_id.is_none(),
     })
-    .chain(load_cli_agent_profiles().into_iter().map(|agent| {
+    .chain(catalog.profiles.into_iter().map(|agent| {
         let label = format_cli_agent_label(&agent);
+        let recommended = effective_default_agent_id.as_deref() == Some(agent.agent_id.as_str());
         AgentReferenceOption {
             id: Some(agent.agent_id),
             label,
+            recommended,
         }
     }))
     .collect()
+}
+
+fn available_agent_reference_options() -> Vec<AgentReferenceOption> {
+    agent_reference_options(load_cli_agent_catalog())
 }
 
 fn prompt_agent_reference_choice(
@@ -1110,6 +1159,7 @@ fn prompt_agent_reference_choice(
         .collect::<Vec<_>>();
     let default_index = default_id
         .and_then(|id| items.iter().position(|item| item.id.as_deref() == Some(id)))
+        .or_else(|| items.iter().position(|item| item.recommended))
         .or_else(|| items.iter().position(|item| item.id.is_none()))
         .unwrap_or(0);
     let selection = Select::with_theme(&ColorfulTheme::default())
@@ -2278,10 +2328,87 @@ type = "string"
         let encoded =
             garyx_models::serialize_agent_store_document(&agents, Some("reviewer")).unwrap();
 
-        let parsed = parse_cli_agent_profiles(&encoded).unwrap();
-        assert!(!parsed.iter().any(|agent| agent.agent_id == "claude"));
-        assert!(parsed.iter().any(|agent| agent.agent_id == "reviewer"));
-        assert!(parsed.iter().any(|agent| agent.agent_id == "codex"));
+        let parsed = parse_cli_agent_catalog(&encoded).unwrap();
+        assert!(
+            !parsed
+                .profiles
+                .iter()
+                .any(|agent| agent.agent_id == "claude")
+        );
+        assert!(
+            parsed
+                .profiles
+                .iter()
+                .any(|agent| agent.agent_id == "reviewer")
+        );
+        assert!(
+            parsed
+                .profiles
+                .iter()
+                .any(|agent| agent.agent_id == "codex")
+        );
+        assert_eq!(
+            parsed.effective_default_agent_id.as_deref(),
+            Some("reviewer")
+        );
+
+        let options = agent_reference_options(parsed);
+        assert_eq!(options[0].id, None);
+        assert_eq!(
+            options[0].label,
+            "跟随全局默认 Agent（当前 Reviewer (reviewer)）"
+        );
+        assert!(
+            options
+                .iter()
+                .any(|option| { option.id.as_deref() == Some("reviewer") && option.recommended })
+        );
+    }
+
+    #[test]
+    fn cli_picker_uses_acting_default_and_all_disabled_keeps_follow_global() {
+        let mut agents = builtin_provider_agent_profiles();
+        for agent in &mut agents {
+            agent.enabled = agent.agent_id == "codex";
+        }
+        let mut disabled_raw = agents[1].clone();
+        disabled_raw.agent_id = "reviewer".to_owned();
+        disabled_raw.display_name = "Reviewer".to_owned();
+        disabled_raw.built_in = false;
+        disabled_raw.enabled = false;
+        agents.push(disabled_raw);
+        let encoded =
+            garyx_models::serialize_agent_store_document(&agents, Some("reviewer")).unwrap();
+
+        let parsed = parse_cli_agent_catalog(&encoded).unwrap();
+        assert_eq!(parsed.effective_default_agent_id.as_deref(), Some("codex"));
+        assert!(
+            parsed
+                .profiles
+                .iter()
+                .all(|profile| profile.agent_id == "codex")
+        );
+        let options = agent_reference_options(parsed);
+        assert!(options[0].label.contains("当前 Codex (codex)"));
+        assert!(
+            options
+                .iter()
+                .any(|option| { option.id.as_deref() == Some("codex") && option.recommended })
+        );
+
+        let mut all_disabled = builtin_provider_agent_profiles();
+        for agent in &mut all_disabled {
+            agent.enabled = false;
+        }
+        let encoded = garyx_models::serialize_agent_store_document(&all_disabled, None).unwrap();
+        let parsed = parse_cli_agent_catalog(&encoded).unwrap();
+        assert_eq!(parsed.effective_default_agent_id, None);
+        assert!(parsed.profiles.is_empty());
+        let options = agent_reference_options(parsed);
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].id, None);
+        assert!(options[0].recommended);
+        assert_eq!(options[0].label, "跟随全局默认 Agent（当前 无可用 Agent）");
     }
 
     #[test]

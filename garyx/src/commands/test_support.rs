@@ -153,3 +153,59 @@ pub(super) async fn spawn_thread_task_http_test_server(
     });
     (format!("http://{addr}"), handle)
 }
+
+pub(super) async fn spawn_disabled_agent_rejection_server(
+    requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+) -> (String, JoinHandle<()>) {
+    let thread_requests = requests.clone();
+    let task_requests = requests;
+    let app = Router::new()
+        .route(
+            "/api/threads",
+            post(move |Json(payload): Json<Value>| {
+                let requests = thread_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "POST".to_owned(),
+                            path: "/api/threads".to_owned(),
+                            body: payload,
+                        });
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "agent is disabled: codex"})),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/api/tasks",
+            post(move |Json(payload): Json<Value>| {
+                let requests = task_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "POST".to_owned(),
+                            path: "/api/tasks".to_owned(),
+                            body: payload,
+                        });
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": "agent is disabled: codex"})),
+                    )
+                }
+            }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test router");
+    });
+    (format!("http://{addr}"), handle)
+}

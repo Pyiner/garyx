@@ -430,4 +430,36 @@ mod tests {
         assert_eq!(records[0].body["agentId"], "claude");
         assert_eq!(records[0].body["workspaceMode"], "worktree");
     }
+
+    #[tokio::test]
+    async fn cmd_thread_create_preserves_disabled_agent_gateway_error() {
+        let requests = StdArc::new(Mutex::new(Vec::new()));
+        let (base_url, handle) = spawn_disabled_agent_rejection_server(requests.clone()).await;
+        let dir = tempdir().expect("tempdir");
+        let config_path = write_test_gateway_config(&dir, &base_url);
+
+        let error = cmd_thread_create(
+            config_path.to_str().expect("config path"),
+            Some("Rejected thread".to_owned()),
+            None,
+            Some("codex".to_owned()),
+            false,
+            true,
+        )
+        .await
+        .expect_err("disabled explicit agent must be rejected");
+
+        handle.abort();
+        let gateway_error = error
+            .downcast_ref::<GatewayCliError>()
+            .expect("gateway rejection must remain typed");
+        assert_eq!(gateway_error.kind, GatewayErrorKind::Rejected);
+        assert_eq!(
+            gateway_error.message,
+            "gateway request failed: 400 Bad Request: agent is disabled: codex"
+        );
+        let records = requests.lock().expect("request lock");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].body["agentId"], "codex");
+    }
 }

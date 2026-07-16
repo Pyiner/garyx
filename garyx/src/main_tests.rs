@@ -1029,6 +1029,53 @@ fn parse_task_stop_and_delete() {
 }
 
 #[test]
+fn parse_agent_availability_commands() {
+    let cli = Cli::parse_from(["garyx", "agent", "enable", "codex", "--json"]);
+    match cli.command {
+        Some(Commands::Agent {
+            action: AgentAction::Enable { agent_id, json },
+        }) => {
+            assert_eq!(agent_id, "codex");
+            assert!(json);
+        }
+        _ => panic!("expected Agent::Enable"),
+    }
+
+    let cli = Cli::parse_from(["garyx", "agent", "disable", "reviewer"]);
+    match cli.command {
+        Some(Commands::Agent {
+            action: AgentAction::Disable { agent_id, json },
+        }) => {
+            assert_eq!(agent_id, "reviewer");
+            assert!(!json);
+        }
+        _ => panic!("expected Agent::Disable"),
+    }
+
+    let cli = Cli::parse_from(["garyx", "agent", "default"]);
+    match cli.command {
+        Some(Commands::Agent {
+            action: AgentAction::Default { agent_id, json },
+        }) => {
+            assert_eq!(agent_id, None);
+            assert!(!json);
+        }
+        _ => panic!("expected Agent::Default query"),
+    }
+
+    let cli = Cli::parse_from(["garyx", "agent", "default", "codex", "--json"]);
+    match cli.command {
+        Some(Commands::Agent {
+            action: AgentAction::Default { agent_id, json },
+        }) => {
+            assert_eq!(agent_id.as_deref(), Some("codex"));
+            assert!(json);
+        }
+        _ => panic!("expected Agent::Default mutation"),
+    }
+}
+
+#[test]
 fn parse_agent_create() {
     let cli = Cli::parse_from([
         "garyx",

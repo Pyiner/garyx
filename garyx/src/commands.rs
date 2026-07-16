@@ -52,7 +52,8 @@ use garyx_models::provider::{
     AgentRunRequest, ProviderMessage, StreamEvent, default_claude_cli_mode,
 };
 use garyx_models::{
-    CustomAgentProfile, ProviderType, builtin_provider_agent_profiles, parse_agent_store_document,
+    AgentAvailabilitySnapshot, CustomAgentProfile, ProviderType, builtin_provider_agent_profiles,
+    parse_agent_store_document, resolve_effective_default,
 };
 use garyx_router::{command_catalog_for_config, is_thread_key, reserved_command_names};
 use serde::{Deserialize, Serialize};
