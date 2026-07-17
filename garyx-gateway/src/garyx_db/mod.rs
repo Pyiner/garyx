@@ -22,6 +22,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::thread_record_normalization::strip_retired_recent_exclusion_fields;
+
 mod meetings;
 mod task_forest;
 
@@ -48,6 +50,8 @@ pub(crate) const RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME: &str = "recent_threa
 const RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION: i64 = 1;
 pub(crate) const RECENT_MEMBERSHIP_MIGRATION_NAME: &str = "recent_membership_v2";
 const RECENT_MEMBERSHIP_MIGRATION_VERSION: i64 = 2;
+pub(crate) const CANONICAL_EXCLUSION_STRIP_MIGRATION_NAME: &str = "canonical_exclusion_strip_v3";
+const CANONICAL_EXCLUSION_STRIP_MIGRATION_VERSION: i64 = 3;
 const LEGACY_IMPORT_GENERATION_NAME: &str = "legacy_import_generation";
 const LEGACY_IMPORT_GENERATION_VERSION: i64 = 1;
 pub(crate) const MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE: i64 = 9_007_199_254_740_991;
@@ -2984,6 +2988,7 @@ impl GaryxDbService {
         self.migrate_thread_meta_summary_v1()?;
         self.migrate_recent_thread_activity_seq_v1()?;
         self.migrate_recent_membership_v2()?;
+        self.migrate_canonical_exclusion_strip_v3()?;
         self.migrate_thread_meta_schema_v2()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         Ok(())
@@ -3210,8 +3215,9 @@ impl GaryxDbService {
              DROP INDEX IF EXISTS idx_recent_threads_non_task_activity_seq;",
         )?;
 
-        // b. Normalize every live canonical side chat and rederive every
-        // thread_meta row even when the body is byte-identical. Do not touch
+        // b. Normalize every live canonical record: hide side chats and strip
+        // all four retired recent-exclusion paths. Rederive every thread_meta
+        // row even when the body is byte-identical. Do not touch
         // recent_threads in this phase.
         let canonical_rows = {
             let mut stmt = tx.prepare(
@@ -3240,7 +3246,7 @@ impl GaryxDbService {
                     "recent membership cutover could not decode {thread_id}: {error}"
                 ))
             })?;
-            let canonical_changed = normalize_side_chat_canonical_record(&mut data);
+            let canonical_changed = normalize_recent_membership_canonical_record(&mut data);
             if canonical_changed {
                 let normalized_body = serde_json::to_string(&data).map_err(|error| {
                     GaryxDbError::Configuration(format!(
@@ -3419,6 +3425,137 @@ impl GaryxDbService {
                 .saturating_add(new_drafts.len())
                 .saturating_add(removed_recent_count)
                 .saturating_add(final_order.len()),
+            already_completed: false,
+        })
+    }
+
+    /// Repair canonical records whose generation already committed the
+    /// historical recent_membership_v2 marker after its strip step was
+    /// accidentally removed. The independent generation-aware marker is
+    /// required because rewriting a committed v2 marker would strand every
+    /// database that already skipped it.
+    pub(crate) fn migrate_canonical_exclusion_strip_v3(
+        &self,
+    ) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let (import_generation, completed_source_count) = self.import_generation_cutover_gate(
+            &tx,
+            CANONICAL_EXCLUSION_STRIP_MIGRATION_NAME,
+            CANONICAL_EXCLUSION_STRIP_MIGRATION_VERSION,
+        )?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        let membership_prerequisite: bool = tx
+            .query_row(
+                "SELECT 1
+                   FROM projection_states
+                  WHERE projection_name = ?1
+                    AND projection_version = ?2
+                    AND COALESCE(based_on_import_generation, 1) = ?3",
+                params![
+                    RECENT_MEMBERSHIP_MIGRATION_NAME,
+                    RECENT_MEMBERSHIP_MIGRATION_VERSION,
+                    import_generation,
+                ],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !membership_prerequisite {
+            return Err(GaryxDbError::Configuration(
+                "canonical_exclusion_strip_v3 must run after recent_membership_v2".to_owned(),
+            ));
+        }
+
+        let canonical_rows = {
+            let mut stmt = tx.prepare(
+                "SELECT record.key, record.body
+                   FROM thread_records AS record
+                  WHERE substr(record.key, 1, 8) = 'thread::'
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM archived_threads AS archived
+                         WHERE archived.thread_id = record.key
+                    )
+                  ORDER BY record.key ASC",
+            )?;
+            stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        let source_row_count = i64::try_from(canonical_rows.len()).unwrap_or(i64::MAX);
+        let mut updated_row_count = 0usize;
+        for (thread_id, body) in canonical_rows {
+            let mut data: Value = serde_json::from_str(&body).map_err(|error| {
+                GaryxDbError::Configuration(format!(
+                    "canonical exclusion strip could not decode {thread_id}: {error}"
+                ))
+            })?;
+            if !strip_retired_recent_exclusion_fields(&mut data) {
+                continue;
+            }
+            let normalized_body = serde_json::to_string(&data).map_err(|error| {
+                GaryxDbError::Configuration(format!(
+                    "canonical exclusion strip could not encode {thread_id}: {error}"
+                ))
+            })?;
+            let updated = tx.execute(
+                "UPDATE thread_records SET body = ?1 WHERE key = ?2",
+                params![normalized_body, thread_id],
+            )?;
+            if updated != 1 {
+                return Err(GaryxDbError::Configuration(format!(
+                    "canonical exclusion strip lost target row {thread_id}"
+                )));
+            }
+            updated_row_count = updated_row_count.saturating_add(updated);
+        }
+
+        let residual_count: i64 = tx.query_row(
+            "SELECT COUNT(*)
+               FROM thread_records AS record
+              WHERE substr(record.key, 1, 8) = 'thread::'
+                AND NOT EXISTS (
+                    SELECT 1
+                      FROM archived_threads AS archived
+                     WHERE archived.thread_id = record.key
+                )
+                AND (
+                    json_type(record.body, '$.exclude_from_recent') IS NOT NULL
+                    OR json_type(record.body, '$.excludeFromRecent') IS NOT NULL
+                    OR json_type(record.body, '$.metadata.exclude_from_recent') IS NOT NULL
+                    OR json_type(record.body, '$.metadata.excludeFromRecent') IS NOT NULL
+                )",
+            [],
+            |row| row.get(0),
+        )?;
+        if residual_count != 0 {
+            return Err(GaryxDbError::Configuration(format!(
+                "canonical exclusion strip left {residual_count} live records with retired fields"
+            )));
+        }
+
+        record_projection_state_tx(
+            &tx,
+            CANONICAL_EXCLUSION_STRIP_MIGRATION_NAME,
+            CANONICAL_EXCLUSION_STRIP_MIGRATION_VERSION,
+            source_row_count,
+            Some(import_generation),
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count,
             already_completed: false,
         })
     }
@@ -5695,10 +5832,11 @@ struct FrozenRecentMembershipRow {
     last_active_at: String,
 }
 
-/// Side-chat identity is intentionally narrow: only a top-level or metadata
-/// `source == "side_chat"` hides the record. Parent markers alone never
-/// classify a side chat.
-fn normalize_side_chat_canonical_record(data: &mut Value) -> bool {
+/// S5 canonical normalization. Side-chat identity is intentionally narrow:
+/// only a top-level or metadata `source == "side_chat"` hides the record.
+/// Parent markers and exclusion flags alone never classify a side chat, but
+/// every retired exclusion spelling is stripped from object-shaped records.
+fn normalize_recent_membership_canonical_record(data: &mut Value) -> bool {
     let side_chat = data.get("source").and_then(Value::as_str) == Some("side_chat")
         || data
             .get("metadata")
@@ -5706,15 +5844,16 @@ fn normalize_side_chat_canonical_record(data: &mut Value) -> bool {
             .and_then(|metadata| metadata.get("source"))
             .and_then(Value::as_str)
             == Some("side_chat");
+    let mut changed = strip_retired_recent_exclusion_fields(data);
     let Some(object) = data.as_object_mut() else {
-        return false;
+        return changed;
     };
 
     if side_chat && object.get("hidden") != Some(&Value::Bool(true)) {
         object.insert("hidden".to_owned(), Value::Bool(true));
-        return true;
+        changed = true;
     }
-    false
+    changed
 }
 
 fn recent_membership_timestamp(value: &str) -> (i64, u32) {
@@ -7848,7 +7987,16 @@ mod tests {
         for (thread_id, body) in [
             (
                 "thread::retained-z",
-                json!({"thread_id": "thread::retained-z", "label": "Retained Z"}),
+                json!({
+                    "thread_id": "thread::retained-z",
+                    "label": "Retained Z",
+                    "exclude_from_recent": true,
+                    "excludeFromRecent": true,
+                    "metadata": {
+                        "exclude_from_recent": true,
+                        "excludeFromRecent": true
+                    }
+                }),
             ),
             (
                 "thread::retained-a",
@@ -8018,6 +8166,16 @@ mod tests {
             serde_json::from_str::<Value>(&side_chat_body).unwrap()["hidden"],
             true
         );
+        let normalized_body: String = conn
+            .query_row(
+                "SELECT body FROM thread_records WHERE key = 'thread::retained-z'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_retired_recent_exclusion_paths_absent(
+            &serde_json::from_str::<Value>(&normalized_body).unwrap(),
+        );
         drop(conn);
         let mut parity_conn = db.conn().unwrap();
         let parity_tx = parity_conn.transaction().unwrap();
@@ -8100,6 +8258,207 @@ mod tests {
     }
 
     #[test]
+    fn canonical_exclusion_strip_v3_repairs_completed_v2_without_disturbing_state() {
+        let db = GaryxDbService::memory().expect("memory db");
+        db.record_projection_state(
+            crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME,
+            crate::legacy_boot_import::THREAD_RECORDS_IMPORT_VERSION,
+            2,
+        )
+        .expect("seed completed import");
+        for (thread_id, body) in [
+            (
+                "thread::v3-flagged",
+                json!({
+                    "thread_id": "thread::v3-flagged",
+                    "label": "Flagged"
+                }),
+            ),
+            (
+                "thread::v3-plain",
+                json!({
+                    "thread_id": "thread::v3-plain",
+                    "label": "Plain"
+                }),
+            ),
+        ] {
+            seed_recent_membership_canonical(&db, thread_id, body);
+        }
+        prepare_recent_membership_prerequisites(&db);
+        db.migrate_recent_membership_v2()
+            .expect("seed completed v2");
+        db.migrate_thread_meta_schema_v2()
+            .expect("seed completed schema migration");
+
+        let historical_body = json!({
+            "thread_id": "thread::v3-flagged",
+            "label": "Flagged",
+            "exclude_from_recent": true,
+            "excludeFromRecent": true,
+            "metadata": {
+                "safe": "preserved",
+                "exclude_from_recent": "yes",
+                "excludeFromRecent": false
+            }
+        });
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE thread_records SET body = ?1 WHERE key = 'thread::v3-flagged'",
+                params![historical_body.to_string()],
+            )
+            .expect("recreate body left by the buggy historical v2");
+
+        let marker_rows_before =
+            projection_state_rows_except(&db, CANONICAL_EXCLUSION_STRIP_MIGRATION_NAME);
+        let recent_before = recent_membership_rows_ascending(&db);
+        let meta_before = db.list_thread_meta().expect("meta before repair");
+        {
+            let mut conn = db.conn().unwrap();
+            let tx = conn.transaction().unwrap();
+            assert_recent_membership_parity_tx(&tx).unwrap();
+            tx.commit().unwrap();
+        }
+
+        let first = db
+            .migrate_canonical_exclusion_strip_v3()
+            .expect("repair completed v2");
+        assert_eq!(first.source_row_count, 2);
+        assert_eq!(first.updated_row_count, 1);
+        assert!(!first.already_completed);
+        let repaired: Value = serde_json::from_str(
+            &db.get_thread_record_body("thread::v3-flagged")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_retired_recent_exclusion_paths_absent(&repaired);
+        assert_eq!(repaired["metadata"]["safe"], "preserved");
+        assert_eq!(recent_membership_rows_ascending(&db), recent_before);
+        assert_eq!(db.list_thread_meta().unwrap(), meta_before);
+        assert_eq!(
+            projection_state_rows_except(&db, CANONICAL_EXCLUSION_STRIP_MIGRATION_NAME),
+            marker_rows_before,
+            "v3 must not rewrite any historical marker tuple"
+        );
+        {
+            let mut conn = db.conn().unwrap();
+            let tx = conn.transaction().unwrap();
+            assert_recent_membership_parity_tx(&tx).unwrap();
+            tx.commit().unwrap();
+        }
+        let marker: (i64, i64, i64) = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT projection_version, source_row_count,
+                        based_on_import_generation
+                   FROM projection_states
+                  WHERE projection_name = ?1",
+                params![CANONICAL_EXCLUSION_STRIP_MIGRATION_NAME],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(marker, (CANONICAL_EXCLUSION_STRIP_MIGRATION_VERSION, 2, 1));
+        assert!(
+            db.migrate_canonical_exclusion_strip_v3()
+                .unwrap()
+                .already_completed
+        );
+
+        db.record_legacy_archive_retirement().unwrap();
+        db.clear_projection_state(crate::legacy_boot_import::THREAD_RECORDS_IMPORT_NAME)
+            .unwrap();
+        assert_eq!(db.commit_legacy_import(2, true).unwrap(), 2);
+        assert!(
+            !db.migrate_thread_meta_summary_v1()
+                .unwrap()
+                .already_completed
+        );
+        assert!(!db.migrate_recent_membership_v2().unwrap().already_completed);
+        let generation_two = db.migrate_canonical_exclusion_strip_v3().unwrap();
+        assert!(!generation_two.already_completed);
+        assert_eq!(generation_two.updated_row_count, 0);
+        let based_on_generation: i64 = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT based_on_import_generation
+                   FROM projection_states
+                  WHERE projection_name = ?1",
+                params![CANONICAL_EXCLUSION_STRIP_MIGRATION_NAME],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(based_on_generation, 2);
+    }
+
+    #[test]
+    fn canonical_exclusion_strip_v3_rolls_back_body_updates_and_marker_on_decode_failure() {
+        let db = GaryxDbService::memory().expect("memory db");
+        prepare_recent_membership_prerequisites(&db);
+        seed_recent_membership_canonical(
+            &db,
+            "thread::v3-valid",
+            json!({"thread_id": "thread::v3-valid"}),
+        );
+        db.migrate_recent_membership_v2()
+            .expect("seed completed v2");
+        let flagged_body = json!({
+            "thread_id": "thread::v3-valid",
+            "exclude_from_recent": true,
+            "metadata": {"excludeFromRecent": true}
+        });
+        let conn = db.conn().unwrap();
+        conn.execute(
+            "UPDATE thread_records SET body = ?1 WHERE key = 'thread::v3-valid'",
+            params![flagged_body.to_string()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO thread_records (key, body, updated_at, recorded_at)
+             VALUES ('thread::v3-z-malformed', '{', NULL, '2026-07-17T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        assert!(db.migrate_canonical_exclusion_strip_v3().is_err());
+        let after_failure: Value = serde_json::from_str(
+            &db.get_thread_record_body("thread::v3-valid")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(after_failure["exclude_from_recent"], true);
+        assert!(
+            !db.projection_state_exists(
+                CANONICAL_EXCLUSION_STRIP_MIGRATION_NAME,
+                CANONICAL_EXCLUSION_STRIP_MIGRATION_VERSION,
+            )
+            .unwrap(),
+            "failed repair must not leave a marker"
+        );
+
+        db.conn()
+            .unwrap()
+            .execute(
+                "DELETE FROM thread_records WHERE key = 'thread::v3-z-malformed'",
+                [],
+            )
+            .unwrap();
+        let retry = db.migrate_canonical_exclusion_strip_v3().unwrap();
+        assert_eq!(retry.updated_row_count, 1);
+        let repaired: Value = serde_json::from_str(
+            &db.get_thread_record_body("thread::v3-valid")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_retired_recent_exclusion_paths_absent(&repaired);
+    }
+
+    #[test]
     fn recent_membership_cutover_high_water_uses_larger_existing_row_sequence() {
         let db = GaryxDbService::memory().expect("memory db");
         prepare_recent_membership_prerequisites(&db);
@@ -8159,7 +8518,9 @@ mod tests {
             "thread::rollback-side-chat",
             json!({
                 "thread_id": "thread::rollback-side-chat",
-                "source": "side_chat"
+                "source": "side_chat",
+                "exclude_from_recent": true,
+                "metadata": {"excludeFromRecent": true}
             }),
         );
         db.conn()
@@ -8179,6 +8540,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
+        assert!(
+            serde_json::from_str::<Value>(&side_chat_body).unwrap()["exclude_from_recent"] == true,
+            "failed cutover must roll back canonical exclusion stripping"
+        );
         assert!(
             serde_json::from_str::<Value>(&side_chat_body)
                 .unwrap()
@@ -8228,16 +8593,30 @@ mod tests {
             serde_json::from_str::<Value>(&normalized_body).unwrap()["hidden"],
             true
         );
+        assert_retired_recent_exclusion_paths_absent(
+            &serde_json::from_str::<Value>(&normalized_body).unwrap(),
+        );
     }
 
     #[test]
     fn recent_membership_cutover_registration_requires_summary_then_activity() {
         let db = GaryxDbService::memory().expect("memory db");
         assert!(db.migrate_recent_membership_v2().is_err());
+        assert!(db.migrate_canonical_exclusion_strip_v3().is_err());
         db.migrate_thread_meta_summary_v1().unwrap();
         assert!(db.migrate_recent_membership_v2().is_err());
         db.migrate_recent_thread_activity_seq_v1().unwrap();
         assert!(!db.migrate_recent_membership_v2().unwrap().already_completed);
+        assert!(
+            !db.migrate_canonical_exclusion_strip_v3()
+                .unwrap()
+                .already_completed
+        );
+        assert!(
+            db.migrate_canonical_exclusion_strip_v3()
+                .unwrap()
+                .already_completed
+        );
 
         let source = include_str!("mod.rs");
         let registrations = source
@@ -8254,12 +8633,20 @@ mod tests {
             .find("migrate_recent_thread_activity_seq_v1")
             .unwrap();
         let membership = registrations.find("migrate_recent_membership_v2").unwrap();
+        let exclusion = registrations
+            .find("migrate_canonical_exclusion_strip_v3")
+            .unwrap();
         let schema = registrations.find("migrate_thread_meta_schema_v2").unwrap();
-        assert!(summary < activity && activity < membership && membership < schema);
+        assert!(
+            summary < activity
+                && activity < membership
+                && membership < exclusion
+                && exclusion < schema
+        );
     }
 
     #[test]
-    fn recent_membership_side_chat_selector_is_exact() {
+    fn recent_membership_canonical_normalizer_strips_all_exclusion_paths() {
         let mut cases = [
             ("top source", json!({"source": "side_chat"}), true),
             (
@@ -8283,18 +8670,31 @@ mod tests {
                 false,
             ),
             (
+                "exclusion only",
+                json!({
+                    "exclude_from_recent": true,
+                    "excludeFromRecent": true,
+                    "metadata": {
+                        "exclude_from_recent": true,
+                        "excludeFromRecent": true
+                    }
+                }),
+                false,
+            ),
+            (
                 "malformed payload",
                 json!({"source": 42, "metadata": ["side_chat"]}),
                 false,
             ),
         ];
         for (label, data, expected_hidden) in &mut cases {
-            normalize_side_chat_canonical_record(data);
+            normalize_recent_membership_canonical_record(data);
             assert_eq!(
                 data.get("hidden").and_then(Value::as_bool),
                 (*expected_hidden).then_some(true),
                 "{label}"
             );
+            assert_retired_recent_exclusion_paths_absent(data);
         }
     }
 
@@ -8305,6 +8705,44 @@ mod tests {
         service
             .migrate_recent_thread_activity_seq_v1()
             .expect("activity prerequisite");
+    }
+
+    fn assert_retired_recent_exclusion_paths_absent(data: &Value) {
+        let object = data.as_object().expect("canonical object");
+        assert!(object.get("exclude_from_recent").is_none());
+        assert!(object.get("excludeFromRecent").is_none());
+        if let Some(metadata) = object.get("metadata").and_then(Value::as_object) {
+            assert!(metadata.get("exclude_from_recent").is_none());
+            assert!(metadata.get("excludeFromRecent").is_none());
+        }
+    }
+
+    fn projection_state_rows_except(
+        service: &GaryxDbService,
+        excluded_name: &str,
+    ) -> Vec<(String, i64, i64, String, Option<i64>)> {
+        let conn = service.conn().expect("projection state connection");
+        let mut stmt = conn
+            .prepare(
+                "SELECT projection_name, projection_version, source_row_count,
+                        projected_at, based_on_import_generation
+                   FROM projection_states
+                  WHERE projection_name != ?1
+                  ORDER BY projection_name",
+            )
+            .expect("projection state query");
+        stmt.query_map(params![excluded_name], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .expect("projection state rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect projection states")
     }
 
     fn seed_recent_membership_canonical(service: &GaryxDbService, thread_id: &str, body: Value) {

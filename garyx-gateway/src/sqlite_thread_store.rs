@@ -26,14 +26,17 @@ use crate::recent_thread_projection::{
 };
 use crate::task_projection::task_projection_draft_from_thread_data;
 use crate::thread_meta_projection::thread_meta_projection_from_thread_data_with_active_run;
+use crate::thread_record_normalization::strip_retired_recent_exclusion_fields;
 use garyx_router::is_hidden_thread_value;
 
-/// Remove the retired `messages` snapshot before a record reaches the truth
-/// table (#TASK-1864 batch 1).
-pub(crate) fn strip_retired_messages_snapshot(data: &mut Value) {
+/// Remove fields that must never reach the truth table. This is the common
+/// set/update/atomic-merge choke point, so legacy clients cannot recreate
+/// retired canonical state through a different write path.
+pub(crate) fn strip_retired_record_fields(data: &mut Value) {
     if let Some(object) = data.as_object_mut() {
         object.remove("messages");
     }
+    strip_retired_recent_exclusion_fields(data);
 }
 
 pub(crate) struct SqliteThreadStore {
@@ -111,11 +114,9 @@ impl SqliteThreadStore {
     }
 
     async fn write_record(&self, key: &str, mut data: Value) -> Result<(), ThreadStoreError> {
-        // Structural invariant of the truth table: bodies never carry the
-        // retired `messages` snapshot (#TASK-1864). This strip guards every
-        // set/update merge, including legacy values arriving through the
-        // boot-import path.
-        strip_retired_messages_snapshot(&mut data);
+        // Structural invariant of the truth table: retired fields cannot
+        // survive any set/update merge, including legacy imported values.
+        strip_retired_record_fields(&mut data);
         let body =
             serde_json::to_string(&data).map_err(|error| ThreadStoreError::Serialization {
                 thread_id: key.to_owned(),
@@ -320,7 +321,7 @@ impl ThreadStore for SqliteThreadStore {
                     target.insert(field.clone(), value.clone());
                 }
             }
-            strip_retired_messages_snapshot(&mut data);
+            strip_retired_record_fields(&mut data);
             let body =
                 serde_json::to_string(&data).map_err(|error| ThreadStoreError::Serialization {
                     thread_id: key.clone(),
@@ -604,5 +605,90 @@ mod contract_tests {
             None,
             "the rejected write must not recreate the archived record"
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_strips_all_retired_recent_exclusion_paths_on_every_write_shape() {
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let store = sqlite_store(Arc::clone(&garyx_db));
+        let thread_id = "thread::retired-exclusion-input";
+
+        store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "automation_thread_mode": "generated_thread",
+                    "exclude_from_recent": true,
+                    "excludeFromRecent": true,
+                    "metadata": {
+                        "automation_thread_mode": "generated_thread",
+                        "exclude_from_recent": "yes",
+                        "excludeFromRecent": true
+                    }
+                }),
+            )
+            .await
+            .expect("legacy create payload");
+        let created = store.get(thread_id).await.unwrap().unwrap();
+        assert_retired_recent_exclusion_paths_absent(&created);
+
+        store
+            .update(
+                thread_id,
+                json!({
+                    "exclude_from_recent": true,
+                    "excludeFromRecent": true,
+                    "metadata": {
+                        "source": "legacy-client",
+                        "exclude_from_recent": true,
+                        "excludeFromRecent": true
+                    }
+                }),
+            )
+            .await
+            .expect("legacy update payload");
+        let updated = store.get(thread_id).await.unwrap().unwrap();
+        assert_retired_recent_exclusion_paths_absent(&updated);
+        assert_eq!(updated["metadata"]["source"], "legacy-client");
+
+        store
+            .update_many_atomic(vec![garyx_router::AtomicRecordMerge {
+                thread_id: thread_id.to_owned(),
+                fields: json!({
+                    "exclude_from_recent": true,
+                    "excludeFromRecent": true,
+                    "metadata": {
+                        "source": "legacy-atomic-client",
+                        "exclude_from_recent": true,
+                        "excludeFromRecent": true
+                    }
+                }),
+                create_if_missing: false,
+            }])
+            .await
+            .expect("legacy atomic merge payload");
+        let atomically_updated = store.get(thread_id).await.unwrap().unwrap();
+        assert_retired_recent_exclusion_paths_absent(&atomically_updated);
+        assert_eq!(
+            atomically_updated["metadata"]["source"],
+            "legacy-atomic-client"
+        );
+        assert!(
+            garyx_db
+                .list_recent_threads(10, 0)
+                .unwrap()
+                .iter()
+                .any(|row| row.thread_id == thread_id),
+            "generated automation mode remains ordinary recent membership"
+        );
+    }
+
+    fn assert_retired_recent_exclusion_paths_absent(data: &Value) {
+        assert!(data.get("exclude_from_recent").is_none());
+        assert!(data.get("excludeFromRecent").is_none());
+        let metadata = data.get("metadata").and_then(Value::as_object).unwrap();
+        assert!(metadata.get("exclude_from_recent").is_none());
+        assert!(metadata.get("excludeFromRecent").is_none());
     }
 }

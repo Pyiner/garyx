@@ -53,6 +53,7 @@ pub mod tasks;
 mod thread_lifecycle;
 pub mod thread_logs;
 mod thread_meta_projection;
+mod thread_record_normalization;
 mod thread_runtime;
 mod thread_type;
 mod tool_image;

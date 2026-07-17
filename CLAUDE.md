@@ -72,6 +72,9 @@ for personal data and remove it.
 - Configured bot account `config` is ordinary application state; do not add
   token-specific merge, redaction, or preservation paths beyond keeping real
   secrets out of committed fixtures.
+- A committed migration marker makes that migration's normalization contract
+  durable protocol, not dead code. Never weaken it when retiring runtime
+  fields; repair already-marked databases with a new versioned migration.
 - `/api/threads/history` preserves message string segments and text/content
   summaries without size truncation; larger history responses are accepted.
   Do not reintroduce caps for user, assistant, or nested tool text.
