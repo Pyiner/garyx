@@ -17,8 +17,8 @@ use garyx_models::{
     ThreadTask, builtin_provider_agent_profiles,
 };
 use garyx_router::{
-    AdmittedRun, AgentDispatcher, ArchiveReservationError, InMemoryThreadStore,
-    ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
+    AdmittedRun, AgentDispatcher, ArchiveBarrier, InMemoryThreadStore, ThreadHistoryRepository,
+    ThreadStore, ThreadTranscriptStore,
 };
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, mpsc};
@@ -5242,16 +5242,12 @@ async fn admitted_started_run_holds_active_lease_until_provider_terminal() {
         .await
         .unwrap();
     assert!(store.run_coordinator().has_active_lease(thread_id));
-    let side_effect = Arc::new(AtomicBool::new(false));
-    let effect = side_effect.clone();
     let archive = store
         .run_coordinator()
-        .start_archive(thread_id.to_owned(), async move {
-            effect.store(true, Ordering::Release);
-            Ok::<_, ()>(())
-        });
-    assert!(matches!(archive, Err(ArchiveReservationError::ActiveLease)));
-    assert!(!side_effect.load(Ordering::Acquire));
+        .reserve_archive(store.as_ref(), thread_id)
+        .await
+        .unwrap();
+    assert!(matches!(archive, ArchiveBarrier::ActiveLease(_)));
 
     provider.release_run();
     wait_for_lease_count(&store, thread_id, 0).await;
@@ -5295,16 +5291,12 @@ async fn failed_initial_persistence_keeps_lease_until_provider_terminal_and_bloc
     );
     assert!(store.run_coordinator().has_active_lease(thread_id));
 
-    let side_effect = Arc::new(AtomicBool::new(false));
-    let effect = side_effect.clone();
     let archive = store
         .run_coordinator()
-        .start_archive(thread_id.to_owned(), async move {
-            effect.store(true, Ordering::Release);
-            Ok::<_, ()>(())
-        });
-    assert!(matches!(archive, Err(ArchiveReservationError::ActiveLease)));
-    assert!(!side_effect.load(Ordering::Acquire));
+        .reserve_archive(store.as_ref(), thread_id)
+        .await
+        .unwrap();
+    assert!(matches!(archive, ArchiveBarrier::ActiveLease(_)));
 
     provider.release_run();
     wait_for_lease_count(&store, thread_id, 0).await;

@@ -1775,7 +1775,7 @@ async fn test_thread_history_projection_preserves_control_kind_without_visible_t
 }
 
 #[tokio::test]
-async fn test_thread_history_detail_repairs_orphaned_pending_user_inputs() {
+async fn test_thread_history_detail_filters_orphans_without_writing() {
     let state = test_state();
     seed_transcript_backed_thread(
         &state,
@@ -1797,6 +1797,12 @@ async fn test_thread_history_detail_repairs_orphaned_pending_user_inputs() {
         }),
     )
     .await;
+    let before = state
+        .ops
+        .garyx_db
+        .get_thread_record_body("thread::pending-u3")
+        .unwrap()
+        .expect("raw thread body before GET");
 
     let router = api_router(state.clone());
 
@@ -1817,19 +1823,15 @@ async fn test_thread_history_detail_repairs_orphaned_pending_user_inputs() {
     assert_eq!(json["message_stats"]["pending_user_input_count"], 0);
     assert_eq!(json["message_stats"]["active_pending_user_input_count"], 0);
 
-    let repaired = state
-        .threads
-        .thread_store
-        .get("thread::pending-u3")
-        .await
+    let after = state
+        .ops
+        .garyx_db
+        .get_thread_record_body("thread::pending-u3")
         .unwrap()
-        .expect("thread should still exist");
+        .expect("raw thread body after GET");
     assert_eq!(
-        repaired["pending_user_inputs"]
-            .as_array()
-            .expect("pending_user_inputs should stay as an array")
-            .len(),
-        0
+        after, before,
+        "history GET must leave the canonical record byte-for-byte unchanged"
     );
 }
 

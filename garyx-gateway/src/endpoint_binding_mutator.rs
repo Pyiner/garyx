@@ -1,6 +1,9 @@
-use std::sync::Arc;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
+use garyx_models::config::GaryxConfig;
 use garyx_router::{
     AtomicRecordMerge, ChannelBinding, EndpointBindResult, EndpointBindingMutationError,
     EndpointBindingMutator, EndpointBindingOwner, EndpointDetachResult,
@@ -16,6 +19,38 @@ pub(crate) struct SqlEndpointBindingMutator {
     thread_store: Arc<dyn ThreadStore>,
     garyx_db: Arc<GaryxDbService>,
     mutation_lock: Mutex<()>,
+    binding_freezes: Arc<StdMutex<HashMap<String, u64>>>,
+    next_freeze_token: AtomicU64,
+}
+
+pub(crate) enum DeleteBindingPreflight {
+    InProgress,
+    RejectedEnabledBinding,
+    Frozen {
+        guard: ThreadBindingFreezeGuard,
+        enabled_channel_accounts: BTreeSet<(String, String)>,
+    },
+}
+
+/// Owned fence installed in the endpoint mutator's serialization domain.
+/// Drop conditionally removes only this generation, so a stale guard can
+/// never thaw a replacement delete.
+pub(crate) struct ThreadBindingFreezeGuard {
+    freezes: Arc<StdMutex<HashMap<String, u64>>>,
+    thread_id: String,
+    token: u64,
+}
+
+impl Drop for ThreadBindingFreezeGuard {
+    fn drop(&mut self) {
+        let mut freezes = self
+            .freezes
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if freezes.get(&self.thread_id) == Some(&self.token) {
+            freezes.remove(&self.thread_id);
+        }
+    }
 }
 
 impl SqlEndpointBindingMutator {
@@ -24,7 +59,90 @@ impl SqlEndpointBindingMutator {
             thread_store,
             garyx_db,
             mutation_lock: Mutex::new(()),
+            binding_freezes: Arc::new(StdMutex::new(HashMap::new())),
+            next_freeze_token: AtomicU64::new(0),
         }
+    }
+
+    fn thread_is_frozen(&self, thread_id: &str) -> bool {
+        self.binding_freezes
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .contains_key(thread_id)
+    }
+
+    /// Atomically classify authoritative bindings and, when deletion is
+    /// allowed, install a thread-owned freeze before releasing the same lock
+    /// used by bind/detach mutations. The enabled-account set is the caller's
+    /// immutable config snapshot and is reused by the final SQLite belt.
+    pub(crate) async fn preflight_and_freeze<F>(
+        &self,
+        thread_id: &str,
+        config_snapshot: F,
+    ) -> Result<DeleteBindingPreflight, EndpointBindingMutationError>
+    where
+        F: FnOnce() -> Arc<GaryxConfig>,
+    {
+        let _guard = self.mutation_lock.lock().await;
+        let thread_id = thread_id.trim();
+
+        // Existing freeze wins before record/config classification. A second
+        // operation is ambiguous and must retry, never persist a new verdict.
+        if self.thread_is_frozen(thread_id) {
+            return Ok(DeleteBindingPreflight::InProgress);
+        }
+
+        // Config is captured only after the endpoint mutation lock is held.
+        // This is the delete operation's enabled-ness linearization point.
+        let config = config_snapshot();
+        let enabled_channel_accounts = config
+            .channels
+            .plugins
+            .iter()
+            .flat_map(|(channel, plugin)| {
+                plugin.accounts.iter().filter_map(|(account_id, account)| {
+                    account
+                        .enabled
+                        .then(|| (channel.clone(), account_id.clone()))
+                })
+            })
+            .collect::<BTreeSet<_>>();
+
+        let record = self.thread_store.get(thread_id).await.map_err(|error| {
+            EndpointBindingMutationError::WriteFailed {
+                thread_id: thread_id.to_owned(),
+                message: error.to_string(),
+            }
+        })?;
+        let has_enabled_binding = record.as_ref().is_some_and(|record| {
+            bindings_from_value(record).iter().any(|binding| {
+                enabled_channel_accounts
+                    .contains(&(binding.channel.clone(), binding.account_id.clone()))
+            })
+        });
+        if has_enabled_binding {
+            return Ok(DeleteBindingPreflight::RejectedEnabledBinding);
+        }
+
+        let token = self
+            .next_freeze_token
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            })
+            .expect("endpoint binding freeze token exhausted")
+            + 1;
+        self.binding_freezes
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(thread_id.to_owned(), token);
+        Ok(DeleteBindingPreflight::Frozen {
+            guard: ThreadBindingFreezeGuard {
+                freezes: Arc::clone(&self.binding_freezes),
+                thread_id: thread_id.to_owned(),
+                token,
+            },
+            enabled_channel_accounts,
+        })
     }
 
     /// Current owner of one endpoint, resolved through the STORE'S OWN
@@ -156,6 +274,11 @@ impl EndpointBindingMutator for SqlEndpointBindingMutator {
     ) -> Result<EndpointBindResult, EndpointBindingMutationError> {
         let _guard = self.mutation_lock.lock().await;
         let target_thread_id = target_thread_id.trim();
+        if self.thread_is_frozen(target_thread_id) {
+            return Err(EndpointBindingMutationError::ThreadLifecycleInProgress(
+                target_thread_id.to_owned(),
+            ));
+        }
         let endpoint_key = requested_binding.endpoint_key();
         let owner = self.projected_owner(&endpoint_key).await?;
         let binding = if let Some(owner) = owner.as_ref() {
@@ -318,7 +441,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use garyx_models::config::GaryxConfig;
+    use garyx_models::config::{TelegramAccount, telegram_account_to_plugin_entry};
     use garyx_router::{MessageRouter, ThreadStoreError, ThreadTranscriptStore};
     use serde_json::json;
 
@@ -862,5 +985,89 @@ mod tests {
         }
         assert_eq!(holders, vec![projected.as_str()]);
         assert_eq!(store.list_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn delete_freeze_is_checked_before_config_and_blocks_then_releases_bind() {
+        let (_db, store, mutator) = fixture();
+        let thread_id = "thread::freeze-target";
+        seed_thread(&store, thread_id).await;
+
+        let preflight = mutator
+            .preflight_and_freeze(thread_id, || Arc::new(GaryxConfig::default()))
+            .await
+            .expect("first preflight");
+        let DeleteBindingPreflight::Frozen {
+            guard,
+            enabled_channel_accounts,
+        } = preflight
+        else {
+            panic!("first preflight must freeze");
+        };
+        assert!(enabled_channel_accounts.is_empty());
+
+        let config_was_read = Arc::new(AtomicUsize::new(0));
+        let reads = Arc::clone(&config_was_read);
+        let second = mutator
+            .preflight_and_freeze(thread_id, move || {
+                reads.fetch_add(1, Ordering::SeqCst);
+                Arc::new(GaryxConfig::default())
+            })
+            .await
+            .expect("second preflight");
+        assert!(matches!(second, DeleteBindingPreflight::InProgress));
+        assert_eq!(config_was_read.load(Ordering::SeqCst), 0);
+
+        let blocked = mutator
+            .bind_endpoint(thread_id, binding())
+            .await
+            .expect_err("freeze must block a new target bind");
+        assert!(matches!(
+            blocked,
+            EndpointBindingMutationError::ThreadLifecycleInProgress(ref id) if id == thread_id
+        ));
+
+        drop(guard);
+        mutator
+            .bind_endpoint(thread_id, binding())
+            .await
+            .expect("bind resumes after freeze release");
+    }
+
+    #[tokio::test]
+    async fn bind_committed_before_preflight_is_classified_with_locked_config_snapshot() {
+        let (_db, store, mutator) = fixture();
+        let thread_id = "thread::preflight-sees-bind";
+        seed_thread(&store, thread_id).await;
+        mutator
+            .bind_endpoint(thread_id, binding())
+            .await
+            .expect("bind commits first");
+
+        let mut config = GaryxConfig::default();
+        config
+            .channels
+            .plugin_channel_mut("telegram")
+            .accounts
+            .insert(
+                "main".to_owned(),
+                telegram_account_to_plugin_entry(&TelegramAccount {
+                    token: "${TOKEN}".to_owned(),
+                    enabled: true,
+                    name: None,
+                    agent_id: None,
+                    workspace_dir: None,
+                    owner_target: None,
+                    groups: HashMap::new(),
+                }),
+            );
+        let preflight = mutator
+            .preflight_and_freeze(thread_id, || Arc::new(config))
+            .await
+            .expect("preflight");
+        assert!(matches!(
+            preflight,
+            DeleteBindingPreflight::RejectedEnabledBinding
+        ));
     }
 }

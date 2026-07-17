@@ -329,10 +329,11 @@ impl AppStateBuilder {
         router.set_recent_thread_page_reader(Arc::new(SqlRecentThreadPageReader::new(
             self.garyx_db.clone(),
         )));
-        router.set_endpoint_binding_mutator(Arc::new(SqlEndpointBindingMutator::new(
+        let endpoint_binding_mutator = Arc::new(SqlEndpointBindingMutator::new(
             thread_store.clone(),
             self.garyx_db.clone(),
-        )));
+        ));
+        router.set_endpoint_binding_mutator(endpoint_binding_mutator.clone());
         let thread_creator: Arc<dyn ThreadCreator> = Arc::new(GatewayThreadCreator::new(
             self.bridge.clone(),
             self.custom_agents.clone(),
@@ -440,6 +441,7 @@ impl AppStateBuilder {
                 meetings,
                 provider_auth_sessions: Arc::new(ClaudeAuthSessionStore::default()),
                 channel_endpoint_snapshot: Mutex::new(None),
+                endpoint_binding_mutator,
                 lifecycle: lifecycle.clone(),
             },
             integration: IntegrationState {

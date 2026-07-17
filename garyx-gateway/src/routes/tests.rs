@@ -22,9 +22,10 @@ use garyx_models::provider::{
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink};
 use garyx_models::{RenderDelta, apply_render_delta, render_rows_digest};
 use garyx_router::{
-    AdmittedRun, AgentDispatcher, ChannelBinding, InMemoryThreadStore, MessageRouter,
-    RunAdmissionError, RunTranscriptRecordDraft, ThreadHistoryRepository, ThreadStore,
-    ThreadStoreError, ThreadTranscriptStore,
+    AdmittedRun, AgentDispatcher, ChannelBinding, EndpointBindingMutationError,
+    EndpointBindingMutator, InMemoryThreadStore, MessageRouter, RunAdmissionError,
+    RunTranscriptRecordDraft, ThreadHistoryRepository, ThreadStore, ThreadStoreError,
+    ThreadTranscriptStore,
 };
 use std::path::Path;
 use std::process::Command;
@@ -43,6 +44,54 @@ fn test_config() -> GaryxConfig {
 
 fn authed_request() -> axum::http::request::Builder {
     crate::test_support::authed_request()
+}
+
+fn lifecycle_request_json(state: &Arc<AppState>, endpoint_keys: &[&str]) -> Value {
+    json!({
+        "operationId": uuid::Uuid::new_v4().to_string(),
+        "expectedStoreIncarnation": state.ops.garyx_db.store_incarnation_id().unwrap(),
+        "endpointKeys": endpoint_keys,
+    })
+}
+
+fn lifecycle_request_body(state: &Arc<AppState>, endpoint_keys: &[&str]) -> Body {
+    Body::from(lifecycle_request_json(state, endpoint_keys).to_string())
+}
+
+async fn drain_lifecycle_outbox(state: &Arc<AppState>) {
+    while state
+        .ops
+        .lifecycle
+        .process_one_ready_job()
+        .await
+        .expect("drain lifecycle outbox")
+    {}
+}
+
+async fn lifecycle_http_json(
+    router: &axum::Router,
+    method: &str,
+    uri: &str,
+    payload: &Value,
+) -> (StatusCode, Value) {
+    let response = router
+        .clone()
+        .oneshot(
+            authed_request()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .expect("lifecycle request"),
+        )
+        .await
+        .expect("lifecycle response");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("lifecycle response body");
+    let payload = serde_json::from_slice(&body).expect("lifecycle JSON response");
+    (status, payload)
 }
 
 async fn authed_get_json(router: &axum::Router, uri: &str) -> (StatusCode, Value) {
@@ -4810,7 +4859,8 @@ async fn delete_thread_removes_pin_and_favorite_with_unconditional_favorite_bump
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -5568,7 +5618,8 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -5651,22 +5702,25 @@ async fn thread_store_backend_failure_answers_500_not_404() {
         .build();
     let router = build_router(state.clone());
 
-    for (method, uri) in [
-        ("GET", "/api/threads/thread::storage-failure"),
-        ("DELETE", "/api/threads/thread::storage-failure"),
-    ] {
-        let request = authed_request()
-            .method(method)
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap();
-        let response = router.clone().oneshot(request).await.unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "{method} {uri} must surface the backend failure as 500"
-        );
-    }
+    let request = authed_request()
+        .uri("/api/threads/thread::storage-failure")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // Lifecycle IO failures are deliberately ambiguous rather than durable
+    // business decisions. They use the tagged 503 contract so a client can
+    // retry the same operation id.
+    let (status, body) = lifecycle_http_json(
+        &router,
+        "DELETE",
+        "/api/threads/thread::storage-failure",
+        &lifecycle_request_json(&state, &[]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["code"], "unavailable");
 
     // Status endpoints propagate count failures the same way.
     let request = authed_request()
@@ -5904,7 +5958,8 @@ async fn delete_thread_without_record_is_plain_not_found() {
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -7499,14 +7554,16 @@ async fn delete_thread_removes_thread_log_file() {
     let log_path = logger.thread_log_path(&thread_id);
     assert!(log_path.exists());
 
-    let router = build_router(state);
+    let router = build_router(state.clone());
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    drain_lifecycle_outbox(&state).await;
     assert!(!log_path.exists());
 }
 
@@ -7554,21 +7611,46 @@ async fn delete_thread_rejects_enabled_channel_binding() {
         .await
         .unwrap();
 
-    let router = build_router(state.clone());
-    let request = authed_request()
-        .method("DELETE")
-        .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
-        .unwrap();
-    let response = router.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let admitted = AdmittedRun::thread_bound(
+        state.threads.thread_store.clone(),
+        garyx_models::provider::AgentRunRequest::new(
+            thread_id,
+            "binding preflight must not drain this run",
+            "run::delete-enabled-binding",
+            "api",
+            "main",
+            HashMap::new(),
+        ),
+    )
+    .await
+    .unwrap();
+    let (_request, mut lease) = admitted.into_dispatch_parts();
+    lease.as_mut().unwrap().promote_to_active().unwrap();
+
+    let request_payload = lifecycle_request_json(&state, &[]);
+    let (status, payload) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "DELETE",
+        &format!("/api/threads/{thread_id}"),
+        &request_payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{payload}");
     assert_eq!(
         payload["error"],
         "cannot delete thread with active channel bindings"
+    );
+    assert_eq!(payload["reason_code"], "active_channel_binding");
+    assert!(
+        lease.as_ref().unwrap().ensure_valid().is_ok(),
+        "binding rejection must happen before token invalidation and drain"
+    );
+    assert!(
+        !state
+            .threads
+            .thread_store
+            .run_coordinator()
+            .mutation_in_progress(thread_id)
     );
     assert!(
         state
@@ -7579,11 +7661,23 @@ async fn delete_thread_rejects_enabled_channel_binding() {
             .unwrap()
             .is_some()
     );
+
+    drop(lease);
+    let replay = lifecycle_http_json(
+        &build_router(state.clone()),
+        "DELETE",
+        &format!("/api/threads/{thread_id}"),
+        &request_payload,
+    )
+    .await;
+    assert_eq!(replay, (StatusCode::CONFLICT, payload));
 }
 
 #[test]
 fn archive_thread_body_accepts_snake_case_endpoint_keys_alias() {
     let body: ArchiveThreadBody = serde_json::from_value(json!({
+        "operation_id": "00000000-0000-4000-8000-000000000001",
+        "expected_store_incarnation": "00000000-0000-4000-8000-000000000002",
         "endpoint_keys": ["api::main::loop"]
     }))
     .unwrap();
@@ -7676,12 +7770,7 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
         .method("POST")
         .uri(format!("/api/threads/{thread_id}/archive"))
         .header("content-type", "application/json")
-        .body(Body::from(
-            json!({
-                "endpointKeys": ["api::main::loop"]
-            })
-            .to_string(),
-        ))
+        .body(lifecycle_request_body(&state, &["api::main::loop"]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -7693,6 +7782,7 @@ async fn archive_thread_detaches_live_channel_binding_and_prevents_recent_reviva
         payload["detached_endpoint_keys"],
         json!(["api::main::loop", "telegram::main::1000000001"])
     );
+    drain_lifecycle_outbox(&state).await;
 
     assert!(
         state
@@ -7804,16 +7894,22 @@ async fn archive_thread_rejects_active_run_without_deleting() {
     let (_request, mut lease) = admitted.into_dispatch_parts();
     lease.as_mut().unwrap().promote_to_active().unwrap();
 
-    let router = build_router(state.clone());
-    let request = authed_request()
-        .method("POST")
-        .uri(format!("/api/threads/{thread_id}/archive"))
-        .header("content-type", "application/json")
-        .body(Body::from("{}"))
-        .unwrap();
-    let response = router.oneshot(request).await.unwrap();
+    let payload = lifecycle_request_json(&state, &[]);
+    let (status, first_body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        &format!("/api/threads/{thread_id}/archive"),
+        &payload,
+    )
+    .await;
 
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(status, StatusCode::CONFLICT, "{first_body}");
+    assert_eq!(first_body["outcome"], "rejected_conflict");
+    assert_eq!(first_body["reason_code"], "active_run");
+    assert!(
+        lease.as_ref().unwrap().ensure_valid().is_ok(),
+        "archive conflict must not invalidate or abort the active run"
+    );
     assert!(
         state
             .threads
@@ -7842,6 +7938,28 @@ async fn archive_thread_rejects_active_run_without_deleting() {
             .is_thread_archived(thread_id)
             .expect("archive tombstone check")
     );
+
+    // The decision is durable. Losing the first response and ending the run
+    // cannot turn a retry with the same operation id into a successful archive.
+    drop(lease);
+    let (status, replay_body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        &format!("/api/threads/{thread_id}/archive"),
+        &payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{replay_body}");
+    assert_eq!(replay_body, first_body);
+    assert!(
+        state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -7867,12 +7985,13 @@ async fn archive_http_cancellation_does_not_release_started_db_mutation() {
         .garyx_db
         .block_test_db_mutation(TestDbMutationPoint::ArchiveThreadRecord);
 
+    let payload = lifecycle_request_json(&state, &[]);
     let router = build_router(state.clone());
     let request = authed_request()
         .method("POST")
         .uri(format!("/api/threads/{thread_id}/archive"))
         .header("content-type", "application/json")
-        .body(Body::from("{}"))
+        .body(Body::from(payload.to_string()))
         .unwrap();
     let handler = tokio::spawn(async move { router.oneshot(request).await });
     tokio::time::timeout(
@@ -7896,6 +8015,11 @@ async fn archive_http_cancellation_does_not_release_started_db_mutation() {
             .run_coordinator()
             .mutation_in_progress(thread_id),
         "dropping the HTTP future must not release archiving"
+    );
+    assert_eq!(
+        state.ops.garyx_db.thread_terminal_state(thread_id).unwrap(),
+        None,
+        "coordinator reservation must not publish a terminal before SQLite commit"
     );
     let rejected = AdmittedRun::thread_bound(
         state.threads.thread_store.clone(),
@@ -7946,6 +8070,15 @@ async fn archive_http_cancellation_does_not_release_started_db_mutation() {
             .unwrap()
             .is_none()
     );
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        &format!("/api/threads/{thread_id}/archive"),
+        &payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["outcome"], "applied_changed");
 }
 
 #[tokio::test]
@@ -7997,7 +8130,7 @@ async fn archive_thread_rejects_automation_thread_id_without_deleting() {
         .method("POST")
         .uri(format!("/api/threads/{thread_id}/archive"))
         .header("content-type", "application/json")
-        .body(Body::from("{}"))
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
 
@@ -8069,7 +8202,7 @@ async fn archive_thread_rejects_automation_target_reference_without_deleting() {
         .method("POST")
         .uri(format!("/api/threads/{thread_id}/archive"))
         .header("content-type", "application/json")
-        .body(Body::from("{}"))
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
 
@@ -8217,7 +8350,8 @@ async fn delete_thread_allows_disabled_channel_binding() {
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -8262,7 +8396,8 @@ async fn delete_thread_allows_orphan_channel_binding() {
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -8298,18 +8433,35 @@ async fn delete_storage_failure_restores_live_admission_and_allows_retry() {
         .garyx_db
         .fail_test_db_call(TestDbFaultPoint::DeleteThreadRecord, 1);
 
+    let request_payload = lifecycle_request_json(&state, &[]);
+    let operation_id = request_payload["operationId"].as_str().unwrap().to_owned();
+    let incarnation = request_payload["expectedStoreIncarnation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let request_body = request_payload.to_string();
     let request = || {
         authed_request()
             .method("DELETE")
             .uri(format!("/api/threads/{thread_id}"))
-            .body(Body::empty())
+            .header("content-type", "application/json")
+            .body(Body::from(request_body.clone()))
             .unwrap()
     };
     let response = build_router(state.clone())
         .oneshot(request())
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .lifecycle_operation(&incarnation, &operation_id)
+            .unwrap()
+            .is_none(),
+        "a transient storage failure must not be persisted as a decision"
+    );
     assert!(
         state
             .threads
@@ -8432,13 +8584,15 @@ async fn delete_thread_aborts_active_run_and_prevents_recreation() {
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = tokio::time::timeout(std::time::Duration::from_secs(2), router.oneshot(request))
         .await
         .expect("DELETE must abort and drain instead of waiting for provider completion")
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    drain_lifecycle_outbox(&state).await;
 
     assert!(!bridge.is_run_active("run-delete-session").await);
     assert!(
@@ -8485,7 +8639,8 @@ async fn delete_http_cancellation_does_not_release_started_db_mutation() {
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let handler = tokio::spawn(async move { router.oneshot(request).await });
     tokio::time::timeout(
@@ -8531,18 +8686,13 @@ async fn delete_http_cancellation_does_not_release_started_db_mutation() {
             .thread_store
             .run_coordinator()
             .mutation_in_progress(thread_id)
-            || state
-                .integration
-                .bridge
-                .thread_affinity_for(thread_id)
-                .await
-                .is_some()
         {
             tokio::task::yield_now().await;
         }
     })
     .await
     .expect("coordinator-owned delete must reach a terminal state");
+    drain_lifecycle_outbox(&state).await;
     assert!(
         state
             .threads
@@ -8564,7 +8714,7 @@ async fn delete_http_cancellation_does_not_release_started_db_mutation() {
 }
 
 #[tokio::test]
-async fn delete_thread_drops_local_state_even_when_provider_clear_fails() {
+async fn delete_thread_retains_local_state_and_pending_job_when_provider_clear_fails() {
     let mut config = test_config();
     config.channels.api.accounts.insert(
         "main".to_owned(),
@@ -8633,10 +8783,12 @@ async fn delete_thread_drops_local_state_even_when_provider_clear_fails() {
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    drain_lifecycle_outbox(&state).await;
 
     assert!(
         state
@@ -8649,16 +8801,18 @@ async fn delete_thread_drops_local_state_even_when_provider_clear_fails() {
     );
     assert_eq!(failing_provider.cleared_sessions(), vec![thread_id.clone()]);
     assert_eq!(
-        bridge
-            .resolve_provider_for_thread(&thread_id, "api", "main")
-            .await,
-        Some("api-default-provider".to_owned())
+        bridge.thread_affinity_for(&thread_id).await,
+        Some("api-test-provider".to_owned())
     );
     assert!(
-        !bridge
+        bridge
             .thread_workspace_bindings_snapshot()
             .await
             .contains_key(&thread_id)
+    );
+    assert_eq!(
+        state.ops.garyx_db.pending_cleanup_outbox_count().unwrap(),
+        3
     );
 }
 
@@ -8701,10 +8855,12 @@ async fn delete_thread_clears_in_memory_last_delivery() {
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    drain_lifecycle_outbox(&state).await;
 
     let router = state.threads.router.lock().await;
     assert!(router.get_last_delivery(thread_id).is_none());
@@ -8808,15 +8964,909 @@ async fn delete_thread_clears_switched_thread_references() {
     let request = authed_request()
         .method("DELETE")
         .uri(format!("/api/threads/{thread_id}"))
-        .body(Body::empty())
+        .header("content-type", "application/json")
+        .body(lifecycle_request_body(&state, &[]))
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    drain_lifecycle_outbox(&state).await;
 
     let router = state.threads.router.lock().await;
     assert_eq!(
         router.get_current_thread_id_for_account("telegram", "main", "u1", false, None),
         None
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LifecycleHttpSeed {
+    Active,
+    Missing,
+    Archived,
+    Deleted,
+}
+
+#[tokio::test]
+async fn lifecycle_http_matrix_is_identical_immediately_and_after_restart() {
+    let mut assertions = 0usize;
+    for restarted in [false, true] {
+        for kind in ["archive", "delete"] {
+            for seed in [
+                LifecycleHttpSeed::Active,
+                LifecycleHttpSeed::Missing,
+                LifecycleHttpSeed::Archived,
+                LifecycleHttpSeed::Deleted,
+            ] {
+                let db = Arc::new(
+                    crate::garyx_db::GaryxDbService::memory().expect("open matrix database"),
+                );
+                let mut state = AppStateBuilder::new(test_config())
+                    .with_garyx_db(db.clone())
+                    .build();
+                let thread_id = format!(
+                    "thread::http-matrix-{kind}-{}-{restarted}",
+                    match seed {
+                        LifecycleHttpSeed::Active => "active",
+                        LifecycleHttpSeed::Missing => "missing",
+                        LifecycleHttpSeed::Archived => "archived",
+                        LifecycleHttpSeed::Deleted => "deleted",
+                    }
+                );
+
+                if !matches!(seed, LifecycleHttpSeed::Missing) {
+                    state
+                        .threads
+                        .thread_store
+                        .set(
+                            &thread_id,
+                            json!({
+                                "thread_id": thread_id,
+                                "label": "Lifecycle HTTP matrix"
+                            }),
+                        )
+                        .await
+                        .expect("seed matrix record");
+                }
+                if matches!(
+                    seed,
+                    LifecycleHttpSeed::Archived | LifecycleHttpSeed::Deleted
+                ) {
+                    let setup_kind = if matches!(seed, LifecycleHttpSeed::Archived) {
+                        "archive"
+                    } else {
+                        "delete"
+                    };
+                    let setup_method = if setup_kind == "archive" {
+                        "POST"
+                    } else {
+                        "DELETE"
+                    };
+                    let setup_uri = if setup_kind == "archive" {
+                        format!("/api/threads/{thread_id}/archive")
+                    } else {
+                        format!("/api/threads/{thread_id}")
+                    };
+                    let setup_payload = lifecycle_request_json(&state, &[]);
+                    let (status, body) = lifecycle_http_json(
+                        &build_router(state.clone()),
+                        setup_method,
+                        &setup_uri,
+                        &setup_payload,
+                    )
+                    .await;
+                    assert_eq!(status, StatusCode::OK, "terminal setup failed: {body}");
+                }
+
+                let expected_incarnation = db.store_incarnation_id().unwrap();
+                if restarted {
+                    drop(state);
+                    state = AppStateBuilder::new(test_config())
+                        .with_garyx_db(db.clone())
+                        .build();
+                    assert_eq!(
+                        db.store_incarnation_id().unwrap(),
+                        expected_incarnation,
+                        "process restart must preserve store identity"
+                    );
+                }
+
+                let (expected_status, expected_outcome, expected_terminal) = match (kind, seed) {
+                    ("archive", LifecycleHttpSeed::Active) => (
+                        StatusCode::OK,
+                        "applied_changed",
+                        Some(garyx_router::ThreadTerminalState::Archived),
+                    ),
+                    ("archive", LifecycleHttpSeed::Missing)
+                    | ("archive", LifecycleHttpSeed::Archived) => (
+                        StatusCode::OK,
+                        "applied_noop",
+                        Some(garyx_router::ThreadTerminalState::Archived),
+                    ),
+                    ("archive", LifecycleHttpSeed::Deleted) => (
+                        StatusCode::NOT_FOUND,
+                        "rejected_not_found",
+                        Some(garyx_router::ThreadTerminalState::Deleted),
+                    ),
+                    ("delete", LifecycleHttpSeed::Active)
+                    | ("delete", LifecycleHttpSeed::Archived) => (
+                        StatusCode::OK,
+                        "applied_changed",
+                        Some(garyx_router::ThreadTerminalState::Deleted),
+                    ),
+                    ("delete", LifecycleHttpSeed::Missing) => {
+                        (StatusCode::NOT_FOUND, "rejected_not_found", None)
+                    }
+                    ("delete", LifecycleHttpSeed::Deleted) => (
+                        StatusCode::OK,
+                        "applied_noop",
+                        Some(garyx_router::ThreadTerminalState::Deleted),
+                    ),
+                    _ => unreachable!(),
+                };
+                let method = if kind == "archive" { "POST" } else { "DELETE" };
+                let uri = if kind == "archive" {
+                    format!("/api/threads/{thread_id}/archive")
+                } else {
+                    format!("/api/threads/{thread_id}")
+                };
+                let payload = lifecycle_request_json(&state, &[]);
+                let (status, body) =
+                    lifecycle_http_json(&build_router(state.clone()), method, &uri, &payload).await;
+                assert_eq!(
+                    status, expected_status,
+                    "wrong status for {kind}/{seed:?}/restarted={restarted}: {body}"
+                );
+                assert_eq!(
+                    body["outcome"], expected_outcome,
+                    "wrong outcome for {kind}/{seed:?}/restarted={restarted}: {body}"
+                );
+                assert_eq!(
+                    db.thread_terminal_state(&thread_id).unwrap(),
+                    expected_terminal,
+                    "wrong terminal for {kind}/{seed:?}/restarted={restarted}"
+                );
+                assertions += 1;
+            }
+        }
+    }
+    assert_eq!(assertions, 16);
+}
+
+#[tokio::test]
+async fn lifecycle_owner_doublecheck_closes_lookup_to_registration_window() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::owner-doublecheck";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({"thread_id": thread_id, "label": "Doublecheck"}),
+        )
+        .await
+        .unwrap();
+    let payload = lifecycle_request_json(&state, &["api::main::loop"]);
+    let pause = state.ops.lifecycle.pause_after_initial_lookup_once();
+
+    // B observes an empty ledger and pauses before registry insertion.
+    let b = {
+        let router = build_router(state.clone());
+        let payload = payload.clone();
+        tokio::spawn(async move {
+            lifecycle_http_json(
+                &router,
+                "POST",
+                "/api/threads/thread::owner-doublecheck/archive",
+                &payload,
+            )
+            .await
+        })
+    };
+    pause.wait_until_started().await;
+
+    // A commits and removes its operation cell while B is still paused.
+    let a = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::owner-doublecheck/archive",
+        &payload,
+    )
+    .await;
+    assert_eq!(a.0, StatusCode::OK, "owner A failed: {}", a.1);
+
+    // B now becomes a nominal owner. Its mandatory second point lookup must
+    // publish A's durable row instead of entering the terminal coordinator.
+    pause.release();
+    let b = b.await.unwrap();
+    assert_eq!(b, a);
+    assert_eq!(b.1["detached_endpoint_keys"], json!(["api::main::loop"]));
+}
+
+#[tokio::test]
+async fn lifecycle_owner_panic_releases_cell_and_same_operation_can_retry() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::owner-panic-retry";
+    state
+        .threads
+        .thread_store
+        .set(thread_id, json!({"thread_id": thread_id}))
+        .await
+        .unwrap();
+    let payload = lifecycle_request_json(&state, &[]);
+    let operation_id = payload["operationId"].as_str().unwrap().to_owned();
+    let incarnation = payload["expectedStoreIncarnation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    state.ops.lifecycle.panic_owner_once();
+
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::owner-panic-retry/archive",
+        &payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["code"], "unavailable");
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .lifecycle_operation(&incarnation, &operation_id)
+            .unwrap()
+            .is_none(),
+        "a panic before durable work must not leave a ledger row"
+    );
+
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::owner-panic-retry/archive",
+        &payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "retry failed: {body}");
+    assert_eq!(body["outcome"], "applied_changed");
+}
+
+#[tokio::test]
+async fn lifecycle_inflight_joins_match_rejects_mismatch_and_blocks_other_operation() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::inflight-join";
+    state
+        .threads
+        .thread_store
+        .set(thread_id, json!({"thread_id": thread_id}))
+        .await
+        .unwrap();
+    let payload = lifecycle_request_json(&state, &["api::main::loop"]);
+    let barrier = state
+        .ops
+        .garyx_db
+        .block_test_db_mutation(TestDbMutationPoint::ArchiveThreadRecord);
+
+    let first = {
+        let router = build_router(state.clone());
+        let payload = payload.clone();
+        tokio::spawn(async move {
+            lifecycle_http_json(
+                &router,
+                "POST",
+                "/api/threads/thread::inflight-join/archive",
+                &payload,
+            )
+            .await
+        })
+    };
+    barrier.wait_until_started().await;
+    let joiner = {
+        let router = build_router(state.clone());
+        let payload = payload.clone();
+        tokio::spawn(async move {
+            lifecycle_http_json(
+                &router,
+                "POST",
+                "/api/threads/thread::inflight-join/archive",
+                &payload,
+            )
+            .await
+        })
+    };
+
+    let mut mismatch = payload.clone();
+    mismatch["endpointKeys"] = json!(["api::main::different"]);
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::inflight-join/archive",
+        &mismatch,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "operation_id_conflict");
+
+    let different_operation = lifecycle_request_json(&state, &[]);
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::inflight-join/archive",
+        &different_operation,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "operation_in_progress");
+
+    barrier.release();
+    let first = first.await.unwrap();
+    let joiner = joiner.await.unwrap();
+    assert_eq!(first.0, StatusCode::OK, "{}", first.1);
+    assert_eq!(
+        joiner, first,
+        "joiner must receive the owner's exact result"
+    );
+    assert_eq!(
+        first.1["detached_endpoint_keys"],
+        json!(["api::main::loop"])
+    );
+
+    // Both a normal replay and a post-completion fingerprint mismatch are
+    // decided by the durable row, with no second side effect.
+    let replay = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::inflight-join/archive",
+        &payload,
+    )
+    .await;
+    assert_eq!(replay, first);
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::inflight-join/archive",
+        &mismatch,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "operation_id_conflict");
+}
+
+#[tokio::test]
+async fn lifecycle_join_waits_real_six_second_window_then_replay_converges() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::join-timeout";
+    state
+        .threads
+        .thread_store
+        .set(thread_id, json!({"thread_id": thread_id}))
+        .await
+        .unwrap();
+    let payload = lifecycle_request_json(&state, &[]);
+    let incarnation = payload["expectedStoreIncarnation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let operation_id = payload["operationId"].as_str().unwrap().to_owned();
+    let barrier = state
+        .ops
+        .garyx_db
+        .block_test_db_mutation(TestDbMutationPoint::ArchiveThreadRecord);
+    let first = {
+        let router = build_router(state.clone());
+        let payload = payload.clone();
+        tokio::spawn(async move {
+            lifecycle_http_json(
+                &router,
+                "POST",
+                "/api/threads/thread::join-timeout/archive",
+                &payload,
+            )
+            .await
+        })
+    };
+    barrier.wait_until_started().await;
+
+    let started = tokio::time::Instant::now();
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::join-timeout/archive",
+        &payload,
+    )
+    .await;
+    let elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "operation_in_progress");
+    assert!(
+        elapsed >= std::time::Duration::from_millis(5_800)
+            && elapsed < std::time::Duration::from_secs(8),
+        "join window was {elapsed:?}, expected a real six-second wait"
+    );
+
+    barrier.release();
+    let first = first.await.unwrap();
+    assert_eq!(first.0, StatusCode::CONFLICT, "{}", first.1);
+    assert_eq!(first.1["code"], "operation_in_progress");
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if state
+                .ops
+                .garyx_db
+                .lifecycle_operation(&incarnation, &operation_id)
+                .unwrap()
+                .is_some()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("detached owner must commit after timeout");
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::join-timeout/archive",
+        &payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["outcome"], "applied_changed");
+}
+
+#[tokio::test]
+async fn lifecycle_identity_precedes_old_incarnation_ledger_lookup() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::identity-first";
+    state
+        .threads
+        .thread_store
+        .set(thread_id, json!({"thread_id": thread_id}))
+        .await
+        .unwrap();
+    let old_payload = lifecycle_request_json(&state, &[]);
+    let operation_id = old_payload["operationId"].as_str().unwrap().to_owned();
+    let old_incarnation = old_payload["expectedStoreIncarnation"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let first = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::identity-first/archive",
+        &old_payload,
+    )
+    .await;
+    assert_eq!(first.0, StatusCode::OK, "{}", first.1);
+    let new_incarnation = state
+        .ops
+        .garyx_db
+        .rotate_store_incarnation()
+        .unwrap()
+        .store_incarnation_id;
+
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::identity-first/archive",
+        &old_payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "wrong_incarnation");
+    assert_eq!(body["current_store_incarnation"], new_incarnation);
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .lifecycle_operation(&old_incarnation, &operation_id)
+            .unwrap()
+            .is_some(),
+        "the old row still exists, proving identity won before lookup"
+    );
+
+    let mut fresh_payload = old_payload.clone();
+    fresh_payload["expectedStoreIncarnation"] = json!(new_incarnation);
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::identity-first/archive",
+        &fresh_payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["outcome"], "applied_noop");
+}
+
+fn lifecycle_test_binding(binding_key: &str) -> ChannelBinding {
+    ChannelBinding {
+        channel: "telegram".to_owned(),
+        account_id: "main".to_owned(),
+        binding_key: binding_key.to_owned(),
+        chat_id: binding_key.to_owned(),
+        delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+        delivery_target_id: binding_key.to_owned(),
+        display_label: "Lifecycle Test Endpoint".to_owned(),
+        last_inbound_at: None,
+        last_delivery_at: None,
+    }
+}
+
+#[tokio::test]
+async fn delete_freeze_blocks_bind_until_transient_failure_then_same_operation_retries() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delete-freeze-io";
+    state
+        .threads
+        .thread_store
+        .set(thread_id, json!({"thread_id": thread_id}))
+        .await
+        .unwrap();
+    state
+        .ops
+        .garyx_db
+        .fail_test_db_call(TestDbFaultPoint::DeleteThreadRecord, 1);
+    let barrier = state
+        .ops
+        .garyx_db
+        .block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
+    let payload = lifecycle_request_json(&state, &[]);
+    let first = {
+        let router = build_router(state.clone());
+        let payload = payload.clone();
+        tokio::spawn(async move {
+            lifecycle_http_json(
+                &router,
+                "DELETE",
+                "/api/threads/thread::delete-freeze-io",
+                &payload,
+            )
+            .await
+        })
+    };
+    barrier.wait_until_started().await;
+
+    let blocked = state
+        .ops
+        .endpoint_binding_mutator
+        .bind_endpoint(thread_id, lifecycle_test_binding("blocked"))
+        .await
+        .expect_err("delete freeze must reject a racing bind");
+    assert!(matches!(
+        blocked,
+        EndpointBindingMutationError::ThreadLifecycleInProgress(ref id) if id == thread_id
+    ));
+
+    barrier.release();
+    let (status, body) = first.await.unwrap();
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .thread_terminal_state(thread_id)
+            .unwrap()
+            .is_none()
+    );
+    state
+        .ops
+        .endpoint_binding_mutator
+        .bind_endpoint(thread_id, lifecycle_test_binding("after-release"))
+        .await
+        .expect("transient failure must release the owned freeze");
+
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "DELETE",
+        "/api/threads/thread::delete-freeze-io",
+        &payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["outcome"], "applied_changed");
+    assert_eq!(
+        body["detached_endpoint_keys"],
+        json!(["telegram::main::after-release"])
+    );
+}
+
+#[tokio::test]
+async fn delete_freeze_uses_one_config_snapshot_and_second_delete_sees_freeze_first() {
+    let mut disabled = test_config();
+    disabled
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::telegram_account_to_plugin_entry(&TelegramAccount {
+                token: "${TOKEN}".to_owned(),
+                enabled: false,
+                name: None,
+                agent_id: None,
+                workspace_dir: None,
+                owner_target: None,
+                groups: HashMap::new(),
+            }),
+        );
+    let state = AppStateBuilder::new(disabled.clone()).build();
+    let thread_id = "thread::delete-config-snapshot";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "binding_key": "u1",
+                    "chat_id": "u1",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "u1",
+                    "display_label": "Test User"
+                }]
+            }),
+        )
+        .await
+        .unwrap();
+    let barrier = state
+        .ops
+        .garyx_db
+        .block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
+    let payload = lifecycle_request_json(&state, &[]);
+    let first = {
+        let router = build_router(state.clone());
+        let payload = payload.clone();
+        tokio::spawn(async move {
+            lifecycle_http_json(
+                &router,
+                "DELETE",
+                "/api/threads/thread::delete-config-snapshot",
+                &payload,
+            )
+            .await
+        })
+    };
+    barrier.wait_until_started().await;
+
+    // Enabled-ness linearizes at freeze installation. A later config change
+    // cannot reclassify this owner in its final transaction belt.
+    let mut enabled = disabled;
+    enabled
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .get_mut("main")
+        .unwrap()
+        .enabled = true;
+    state.replace_config(enabled);
+
+    // Existing freeze is checked before the now-enabled config, so another
+    // operation remains ambiguous and must not persist a conflict decision.
+    let second_payload = lifecycle_request_json(&state, &[]);
+    let second_operation_id = second_payload["operationId"].as_str().unwrap();
+    let incarnation = second_payload["expectedStoreIncarnation"].as_str().unwrap();
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "DELETE",
+        "/api/threads/thread::delete-config-snapshot",
+        &second_payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "operation_in_progress");
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .lifecycle_operation(incarnation, second_operation_id)
+            .unwrap()
+            .is_none(),
+        "an in-progress classification is never a durable decision"
+    );
+
+    barrier.release();
+    let (status, body) = first.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["outcome"], "applied_changed");
+    assert_eq!(
+        body["detached_endpoint_keys"],
+        json!(["telegram::main::u1"])
+    );
+    assert_eq!(
+        state.ops.garyx_db.thread_terminal_state(thread_id).unwrap(),
+        Some(garyx_router::ThreadTerminalState::Deleted)
+    );
+}
+
+#[tokio::test]
+async fn delayed_endpoint_outbox_invalidation_preserves_rebound_owner() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let old_thread = "thread::endpoint-old-owner";
+    let new_thread = "thread::endpoint-new-owner";
+    for thread_id in [old_thread, new_thread] {
+        state
+            .threads
+            .thread_store
+            .set(thread_id, json!({"thread_id": thread_id}))
+            .await
+            .unwrap();
+    }
+    {
+        let mut router = state.threads.router.lock().await;
+        router
+            .bind_endpoint_runtime(old_thread, lifecycle_test_binding("u1"))
+            .await
+            .unwrap();
+    }
+
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::endpoint-old-owner/archive",
+        &lifecycle_request_json(&state, &[]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["detached_endpoint_keys"],
+        json!(["telegram::main::u1"])
+    );
+
+    // Persistent detach committed with the archive, so the endpoint can be
+    // legitimately rebound before the delayed volatile invalidation runs.
+    {
+        let mut router = state.threads.router.lock().await;
+        router
+            .bind_endpoint_runtime(new_thread, lifecycle_test_binding("u1"))
+            .await
+            .unwrap();
+        router.switch_to_thread("telegram::main::u1", new_thread);
+        assert_eq!(
+            router.get_current_thread_id_for_binding("telegram", "main", "u1"),
+            Some(new_thread)
+        );
+    }
+    assert!(state.ops.lifecycle.process_one_ready_job().await.unwrap());
+
+    let router = state.threads.router.lock().await;
+    assert_eq!(
+        router.get_current_thread_id_for_binding("telegram", "main", "u1"),
+        Some(new_thread),
+        "old-owner outbox replay must not erase a replacement owner"
+    );
+    drop(router);
+    assert_eq!(
+        state
+            .ops
+            .garyx_db
+            .get_thread_channel_endpoint("telegram::main::u1")
+            .unwrap()
+            .unwrap()
+            .thread_id
+            .as_deref(),
+        Some(new_thread)
+    );
+}
+
+#[tokio::test]
+async fn deleted_to_archive_rejection_preserves_deleted_coordinator_state() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::deleted-then-archive";
+    state
+        .threads
+        .thread_store
+        .set(thread_id, json!({"thread_id": thread_id}))
+        .await
+        .unwrap();
+    let delete_payload = lifecycle_request_json(&state, &[]);
+    let deleted = lifecycle_http_json(
+        &build_router(state.clone()),
+        "DELETE",
+        "/api/threads/thread::deleted-then-archive",
+        &delete_payload,
+    )
+    .await;
+    assert_eq!(deleted.0, StatusCode::OK, "{}", deleted.1);
+
+    let archive_payload = lifecycle_request_json(&state, &[]);
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::deleted-then-archive/archive",
+        &archive_payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["outcome"], "rejected_not_found");
+    assert_eq!(body["detail"]["terminal_kind"], "deleted");
+    assert_eq!(
+        state.ops.garyx_db.thread_terminal_state(thread_id).unwrap(),
+        Some(garyx_router::ThreadTerminalState::Deleted)
+    );
+    assert!(matches!(
+        AdmittedRun::thread_bound(
+            state.threads.thread_store.clone(),
+            garyx_models::provider::AgentRunRequest::new(
+                thread_id,
+                "must remain terminal",
+                "run::deleted-then-archive",
+                "api",
+                "main",
+                HashMap::new(),
+            ),
+        )
+        .await,
+        Err(RunAdmissionError::Archived(id)) if id == thread_id
+    ));
+}
+
+#[tokio::test]
+async fn archived_to_delete_transient_failure_restores_archived_then_retry_upgrades() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::archived-delete-transient";
+    state
+        .threads
+        .thread_store
+        .set(thread_id, json!({"thread_id": thread_id}))
+        .await
+        .unwrap();
+    let archived = lifecycle_http_json(
+        &build_router(state.clone()),
+        "POST",
+        "/api/threads/thread::archived-delete-transient/archive",
+        &lifecycle_request_json(&state, &[]),
+    )
+    .await;
+    assert_eq!(archived.0, StatusCode::OK, "{}", archived.1);
+    state
+        .ops
+        .garyx_db
+        .fail_test_db_call(TestDbFaultPoint::DeleteThreadRecord, 1);
+    let delete_payload = lifecycle_request_json(&state, &[]);
+
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "DELETE",
+        "/api/threads/thread::archived-delete-transient",
+        &delete_payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(
+        state.ops.garyx_db.thread_terminal_state(thread_id).unwrap(),
+        Some(garyx_router::ThreadTerminalState::Archived)
+    );
+    assert!(matches!(
+        AdmittedRun::thread_bound(
+            state.threads.thread_store.clone(),
+            garyx_models::provider::AgentRunRequest::new(
+                thread_id,
+                "must remain archived",
+                "run::archived-delete-transient",
+                "api",
+                "main",
+                HashMap::new(),
+            ),
+        )
+        .await,
+        Err(RunAdmissionError::Archived(id)) if id == thread_id
+    ));
+
+    let (status, body) = lifecycle_http_json(
+        &build_router(state.clone()),
+        "DELETE",
+        "/api/threads/thread::archived-delete-transient",
+        &delete_payload,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["outcome"], "applied_changed");
+    assert_eq!(
+        state.ops.garyx_db.thread_terminal_state(thread_id).unwrap(),
+        Some(garyx_router::ThreadTerminalState::Deleted)
     );
 }
 

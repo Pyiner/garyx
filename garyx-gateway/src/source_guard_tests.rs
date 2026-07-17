@@ -48,14 +48,12 @@ fn raw_destructive_database_methods_are_crate_private_and_call_site_guarded() {
     assert!(!db.contains("pub fn archive_thread_record("));
     assert!(!db.contains("pub fn delete_thread_record_with_projections("));
 
-    assert_eq!(
-        production_calls(&source, ".archive_thread_record("),
-        vec![
-            "routes.rs:.run_blocking(move |db| db.archive_thread_record(&raw_archive_id).map(|_| ()))"
-        ]
-    );
+    assert!(production_calls(&source, ".archive_thread_record(").is_empty());
     let routes = fs::read_to_string(source.join("routes.rs")).expect("read routes source");
-    assert!(routes.contains(".start_archive(thread_id.clone(), operation)"));
+    assert!(!routes.contains(".start_archive("));
+    assert!(routes.contains("db.execute_lifecycle_mutation(input)"));
+    assert!(routes.contains("db.execute_lifecycle_decision(input)"));
+    assert!(routes.contains(".preflight_and_freeze(&request.thread_id"));
 
     let store = fs::read_to_string(source.join("sqlite_thread_store.rs"))
         .expect("read sqlite thread store source");

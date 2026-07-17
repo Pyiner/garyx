@@ -22,6 +22,40 @@ pub(crate) const LIFECYCLE_JOIN_WINDOW: Duration = Duration::from_secs(6);
 const OUTBOX_IDLE_POLL: Duration = Duration::from_secs(1);
 const OUTBOX_WARNING_ATTEMPT: u32 = 10;
 
+#[cfg(any(test, feature = "test-seams"))]
+struct LifecyclePauseState {
+    started: AtomicBool,
+    started_notify: Notify,
+    released: AtomicBool,
+    release_notify: Notify,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+pub(crate) struct TestLifecyclePause {
+    state: Arc<LifecyclePauseState>,
+}
+
+#[cfg(any(test, feature = "test-seams"))]
+impl TestLifecyclePause {
+    pub async fn wait_until_started(&self) {
+        loop {
+            if self.state.started.load(Ordering::Acquire) {
+                return;
+            }
+            let notified = self.state.started_notify.notified();
+            if self.state.started.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    pub fn release(&self) {
+        self.state.released.store(true, Ordering::Release);
+        self.state.release_notify.notify_waiters();
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct OperationKey {
     pub store_incarnation: String,
@@ -31,6 +65,9 @@ pub(crate) struct OperationKey {
 #[derive(Debug, Clone)]
 pub(crate) enum OperationCellResult {
     Completed(LifecycleOperationRecord),
+    OperationIdConflict,
+    WrongIncarnation { current_store_incarnation: String },
+    InProgress,
     TransientFailure,
 }
 
@@ -170,6 +207,12 @@ pub(crate) struct OperationOwnerGuard {
 }
 
 impl OperationOwnerGuard {
+    pub fn join_handle(&self) -> OperationJoinHandle {
+        OperationJoinHandle {
+            cell: Arc::clone(&self.cell),
+        }
+    }
+
     pub fn publish(mut self, result: OperationCellResult) {
         self.cell.publish(result);
         self.remove_if_current();
@@ -334,6 +377,10 @@ pub(crate) struct LifecycleService {
     wake: Notify,
     worker_started: AtomicBool,
     #[cfg(any(test, feature = "test-seams"))]
+    pause_after_initial_lookup: Mutex<Option<Arc<LifecyclePauseState>>>,
+    #[cfg(any(test, feature = "test-seams"))]
+    panic_owner_once: AtomicBool,
+    #[cfg(any(test, feature = "test-seams"))]
     fail_after_provider_clear_once: AtomicBool,
 }
 
@@ -345,6 +392,10 @@ impl LifecycleService {
             state: OnceLock::new(),
             wake: Notify::new(),
             worker_started: AtomicBool::new(false),
+            #[cfg(any(test, feature = "test-seams"))]
+            pause_after_initial_lookup: Mutex::new(None),
+            #[cfg(any(test, feature = "test-seams"))]
+            panic_owner_once: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-seams"))]
             fail_after_provider_clear_once: AtomicBool::new(false),
         })
@@ -370,6 +421,55 @@ impl LifecycleService {
         tokio::spawn(async move {
             service.run_worker().await;
         });
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    pub fn pause_after_initial_lookup_once(&self) -> TestLifecyclePause {
+        let state = Arc::new(LifecyclePauseState {
+            started: AtomicBool::new(false),
+            started_notify: Notify::new(),
+            released: AtomicBool::new(false),
+            release_notify: Notify::new(),
+        });
+        *self
+            .pause_after_initial_lookup
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(Arc::clone(&state));
+        TestLifecyclePause { state }
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    pub async fn pause_after_initial_lookup_if_configured(&self) {
+        let pause = self
+            .pause_after_initial_lookup
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .take();
+        let Some(pause) = pause else {
+            return;
+        };
+        pause.started.store(true, Ordering::Release);
+        pause.started_notify.notify_waiters();
+        loop {
+            if pause.released.load(Ordering::Acquire) {
+                return;
+            }
+            let notified = pause.release_notify.notified();
+            if pause.released.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    pub fn panic_owner_once(&self) {
+        self.panic_owner_once.store(true, Ordering::Release);
+    }
+
+    #[cfg(any(test, feature = "test-seams"))]
+    pub fn take_owner_panic(&self) -> bool {
+        self.panic_owner_once.swap(false, Ordering::AcqRel)
     }
 
     async fn run_worker(self: Arc<Self>) {
@@ -549,6 +649,7 @@ fn cleanup_backoff(attempt: u32) -> Duration {
 mod tests {
     use super::*;
     use crate::app_bootstrap::AppStateBuilder;
+    use crate::endpoint_binding_mutator::{DeleteBindingPreflight, SqlEndpointBindingMutator};
     use crate::garyx_db::{LifecycleMutationInput, LifecycleTransactionResult};
     use async_trait::async_trait;
     use garyx_bridge::provider_trait::StreamCallback;
@@ -557,7 +658,10 @@ mod tests {
     use garyx_models::provider::{
         AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType,
     };
-    use garyx_router::{AdmittedRun, InMemoryThreadStore, RunAdmissionError, ThreadStore};
+    use garyx_router::{
+        AdmittedRun, ChannelBinding, EndpointBindingMutationError, EndpointBindingMutator,
+        InMemoryThreadStore, RunAdmissionError, ThreadStore,
+    };
     use std::collections::BTreeSet;
     use std::sync::atomic::AtomicUsize;
 
@@ -635,6 +739,123 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn aborted_supervisor_keeps_operation_cell_and_binding_freeze_until_child_quiesces() {
+        let thread_id = "thread::supervisor-real-guards";
+        let db = Arc::new(GaryxDbService::memory().unwrap());
+        let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        store
+            .set(thread_id, serde_json::json!({"thread_id": thread_id}))
+            .await
+            .unwrap();
+        let mutator = Arc::new(SqlEndpointBindingMutator::new(store, db));
+        let DeleteBindingPreflight::Frozen { guard: freeze, .. } = mutator
+            .preflight_and_freeze(thread_id, || Arc::new(GaryxConfig::default()))
+            .await
+            .unwrap()
+        else {
+            panic!("test preflight must install a freeze");
+        };
+        let registry = LifecycleOperationRegistry::default();
+        let OperationRegistration::Owner(operation_owner) =
+            registry.register(key(), "fingerprint-a").unwrap()
+        else {
+            panic!("test operation must own its cell");
+        };
+
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let started_in_task = Arc::clone(&started);
+        let release_in_task = Arc::clone(&release);
+        let owner_task = tokio::spawn(async move {
+            let mut supervisor = MutationSupervisor::<()>::new();
+            supervisor.insert_guard(operation_owner);
+            supervisor.insert_guard(freeze);
+            supervisor.spawn_child(async move {
+                started_in_task.notify_one();
+                release_in_task.notified().await;
+            });
+            supervisor.join_child().await.unwrap();
+        });
+        started.notified().await;
+        owner_task.abort();
+        assert!(owner_task.await.unwrap_err().is_cancelled());
+
+        let blocked_bind = mutator
+            .bind_endpoint(
+                thread_id,
+                ChannelBinding {
+                    channel: "telegram".to_owned(),
+                    account_id: "main".to_owned(),
+                    binding_key: "u1".to_owned(),
+                    chat_id: "u1".to_owned(),
+                    delivery_target_type: "chat_id".to_owned(),
+                    delivery_target_id: "u1".to_owned(),
+                    display_label: "Test User".to_owned(),
+                    last_inbound_at: None,
+                    last_delivery_at: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            blocked_bind,
+            EndpointBindingMutationError::ThreadLifecycleInProgress(ref id) if id == thread_id
+        ));
+        let OperationRegistration::Join(joiner) =
+            registry.register(key(), "fingerprint-a").unwrap()
+        else {
+            panic!("old child must keep the operation cell occupied");
+        };
+        assert!(matches!(
+            joiner.wait(Duration::from_millis(20)).await,
+            Err(OperationWaitError::InProgress)
+        ));
+
+        release.notify_one();
+        assert!(matches!(
+            joiner.wait(Duration::from_secs(1)).await.as_deref(),
+            Ok(OperationCellResult::TransientFailure)
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match registry.register(key(), "fingerprint-a").unwrap() {
+                    OperationRegistration::Owner(owner) => {
+                        drop(owner);
+                        break;
+                    }
+                    OperationRegistration::Join(_) => tokio::task::yield_now().await,
+                }
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let binding = ChannelBinding {
+                    channel: "telegram".to_owned(),
+                    account_id: "main".to_owned(),
+                    binding_key: "u2".to_owned(),
+                    chat_id: "u2".to_owned(),
+                    delivery_target_type: "chat_id".to_owned(),
+                    delivery_target_id: "u2".to_owned(),
+                    display_label: "Test User".to_owned(),
+                    last_inbound_at: None,
+                    last_delivery_at: None,
+                };
+                match mutator.bind_endpoint(thread_id, binding).await {
+                    Ok(_) => break,
+                    Err(EndpointBindingMutationError::ThreadLifecycleInProgress(_)) => {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(error) => panic!("unexpected bind error after reaper: {error}"),
+                }
+            }
+        })
+        .await
+        .expect("freeze must release only after child quiescence");
     }
 
     #[tokio::test]
@@ -868,5 +1089,47 @@ mod tests {
                 .is_none()
         );
         assert_eq!(db.pending_cleanup_outbox_count().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn pending_outbox_survives_state_restart_and_boot_worker_drains_it() {
+        let original_provider = Arc::new(CleanupProvider::new(false));
+        let (original_state, db, thread_id) = state_with_runtime_cleanup(original_provider).await;
+        assert_eq!(db.pending_cleanup_outbox_count().unwrap(), 3);
+        drop(original_state);
+
+        // A fresh lifecycle service/bridge represents the next gateway boot;
+        // only the SQLite outbox crosses this boundary.
+        let restarted_provider = Arc::new(CleanupProvider::new(false));
+        let restarted_bridge = Arc::new(garyx_bridge::MultiProviderBridge::new());
+        restarted_bridge
+            .register_provider("provider-one", restarted_provider.clone())
+            .await;
+        restarted_bridge
+            .set_thread_affinity(&thread_id, "provider-one")
+            .await;
+        restarted_bridge
+            .set_thread_workspace_binding(&thread_id, Some("/tmp/stale-workspace".to_owned()))
+            .await;
+        let restarted = AppStateBuilder::new(GaryxConfig::default())
+            .with_garyx_db(db.clone())
+            .with_bridge(restarted_bridge.clone())
+            .build();
+        restarted.ops.lifecycle.start_outbox_worker();
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while db.pending_cleanup_outbox_count().unwrap() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("boot worker must drain every persisted pending job");
+        assert_eq!(restarted_provider.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            restarted_bridge
+                .thread_affinity_for(&thread_id)
+                .await
+                .is_none()
+        );
     }
 }

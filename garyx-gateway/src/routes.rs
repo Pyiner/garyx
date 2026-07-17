@@ -25,10 +25,10 @@ use garyx_models::provider::{
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::ThreadStoreExt;
 use garyx_router::{
-    ChannelBinding, KnownChannelEndpoint, THREAD_TRANSCRIPT_REPLAY_CAP, ThreadCreationError,
-    ThreadEnsureOptions, ThreadTranscriptRecord, WorkspaceMode, bindings_from_value,
-    history_message_count, is_thread_key, update_thread_record, workspace_dir_from_value,
-    workspace_git_status as router_workspace_git_status,
+    ArchiveBarrier, ChannelBinding, CoordinationError, KnownChannelEndpoint,
+    THREAD_TRANSCRIPT_REPLAY_CAP, ThreadCreationError, ThreadEnsureOptions, ThreadTranscriptRecord,
+    WorkspaceMode, bindings_from_value, history_message_count, is_thread_key, update_thread_record,
+    workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -42,16 +42,25 @@ use tokio_stream;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::agent_identity::create_thread_for_agent_reference;
+use crate::endpoint_binding_mutator::DeleteBindingPreflight;
 use crate::garyx_db::{
-    FavoriteThreadResult, GaryxDbError, MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE,
-    RecentThreadRecord, RecentThreadTaskFilter, ReorderThreadPinsResult, ThreadFavoritesPage,
-    ThreadMetaRecord, ThreadPinsPage, ThreadSummaryTaskFilter,
+    FavoriteThreadResult, GaryxDbError, GaryxDbResult, LifecycleDecisionInput,
+    LifecycleMutationInput, LifecycleOperationKind, LifecycleOperationLookup,
+    LifecycleOperationOutcome, LifecycleOperationRecord, LifecycleTransactionResult,
+    MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE, RecentThreadRecord, RecentThreadTaskFilter,
+    ReorderThreadPinsResult, ThreadFavoritesPage, ThreadMetaRecord, ThreadPinsPage,
+    ThreadSummaryTaskFilter,
 };
 use crate::provider_session_locator::{
     list_recent_local_provider_sessions, recover_local_provider_session,
 };
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
+use crate::thread_lifecycle::{
+    LIFECYCLE_JOIN_WINDOW, MutationSupervisor, OperationCellResult, OperationJoinHandle,
+    OperationKey, OperationOwnerGuard, OperationRegistration, OperationRegistrationError,
+    OperationWaitError, canonical_lifecycle_fingerprint,
+};
 use crate::thread_meta_projection::normalize_for_search;
 use crate::thread_runtime::{
     AgentCatalogSnapshot, build_thread_runtime_summary, build_thread_runtime_summary_from_meta,
@@ -1299,11 +1308,24 @@ pub struct DetachChannelEndpointBody {
     pub endpoint_key: String,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchiveThreadBody {
+    #[serde(alias = "operation_id")]
+    pub operation_id: String,
+    #[serde(alias = "expected_store_incarnation")]
+    pub expected_store_incarnation: String,
     #[serde(default, alias = "endpoint_keys")]
     pub endpoint_keys: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteThreadBody {
+    #[serde(alias = "operation_id")]
+    pub operation_id: String,
+    #[serde(alias = "expected_store_incarnation")]
+    pub expected_store_incarnation: String,
 }
 
 #[derive(Deserialize)]
@@ -1359,80 +1381,6 @@ async fn ensure_existing_thread_id(
             Json(json!({ "error": error.to_string() })),
         )),
     }
-}
-
-/// Incrementally clear router index entries for one deleted/archived thread.
-///
-/// The router's endpoint map is a lazy per-endpoint cache over the SQL
-/// endpoint projection; deletes only need that thread's own references
-/// cleared. There is no full rebuild anywhere — startup reconciliation is
-/// retired (#TASK-2099).
-async fn purge_thread_from_indexes(state: &Arc<AppState>, thread_id: &str) {
-    let mut router = state.threads.router.lock().await;
-    router.purge_thread_from_indexes(thread_id);
-}
-
-async fn hard_delete_thread_record(
-    state: &Arc<AppState>,
-    thread_id: &str,
-    thread_data: &Value,
-) -> Result<(), (StatusCode, Json<Value>)> {
-    let provider_key = thread_data
-        .get("provider_key")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-
-    // `ThreadStore::delete` owns deleting admission, token invalidation,
-    // bridge abort-and-drain, and the final storage mutation.
-    match state.threads.thread_store.delete(thread_id).await {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(json!({"deleted": false, "error": format!("thread not found: {thread_id}") })),
-            ));
-        }
-        Err(error) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"deleted": false, "error": error.to_string() })),
-            ));
-        }
-    }
-
-    // Projection rows, pin, and favorite were removed in the same transaction as
-    // the record delete (delete_thread_record_with_projections).
-    clear_deleted_thread_runtime_state(state, thread_id, provider_key.as_deref()).await;
-    purge_thread_from_indexes(state, thread_id).await;
-    state.invalidate_gateway_sync_caches().await;
-    Ok(())
-}
-
-async fn clear_deleted_thread_runtime_state(
-    state: &Arc<AppState>,
-    thread_id: &str,
-    provider_key: Option<&str>,
-) {
-    state
-        .integration
-        .bridge
-        .clear_thread_state(thread_id, provider_key)
-        .await;
-    state.integration.bridge.drop_thread_state(thread_id).await;
-    state
-        .threads
-        .router
-        .lock()
-        .await
-        .clear_thread_references(thread_id);
-    {
-        let mut router = state.threads.router.lock().await;
-        router.clear_last_delivery(thread_id);
-    }
-    let _ = state.threads.history.delete_thread_history(thread_id).await;
-    let _ = state.ops.thread_logs.delete_thread(thread_id).await;
 }
 
 fn binding_from_known_endpoint(endpoint: &KnownChannelEndpoint) -> ChannelBinding {
@@ -1536,6 +1484,7 @@ fn endpoint_mutation_error_response(
     let status = match &error {
         MutationError::TargetNotFound(_) => StatusCode::NOT_FOUND,
         MutationError::TargetArchived(_) => StatusCode::GONE,
+        MutationError::ThreadLifecycleInProgress(_) => StatusCode::CONFLICT,
         MutationError::Incompatible(_) => StatusCode::BAD_REQUEST,
         MutationError::Unavailable
         | MutationError::Projection(_)
@@ -3669,21 +3618,6 @@ pub async fn update_thread(
     }
 }
 
-fn active_run_conflict_response(
-    thread_id: &str,
-    active_run_id: Option<String>,
-) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::CONFLICT,
-        Json(json!({
-            "archived": false,
-            "thread_id": thread_id,
-            "active_run_id": active_run_id,
-            "error": "cannot archive thread with active run",
-        })),
-    )
-}
-
 fn cron_target_thread_id(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -3722,259 +3656,706 @@ async fn automation_job_for_archive_conflict(
         .map(|job| job.id)
 }
 
-fn automation_conflict_response(
-    thread_id: &str,
-    automation_id: String,
-) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::CONFLICT,
-        Json(json!({
-            "archived": false,
-            "thread_id": thread_id,
-            "automation_id": automation_id,
-            "error": "cannot archive thread targeted by automation",
-        })),
-    )
+#[derive(Clone)]
+struct LifecycleRequest {
+    kind: LifecycleOperationKind,
+    thread_id: String,
+    operation_id: String,
+    expected_store_incarnation: String,
+    fingerprint: String,
+    endpoint_keys: Vec<String>,
 }
 
-async fn endpoint_keys_for_archive(
+enum LifecycleChildResult {
+    Drain(Result<(), CoordinationError>),
+    Transaction(GaryxDbResult<LifecycleTransactionResult>),
+}
+
+type LifecycleMutationSupervisor = MutationSupervisor<LifecycleChildResult>;
+
+fn lifecycle_operation_name(kind: LifecycleOperationKind) -> &'static str {
+    match kind {
+        LifecycleOperationKind::Archive => "thread_archive",
+        LifecycleOperationKind::Delete => "thread_delete",
+    }
+}
+
+fn lifecycle_tagged_error(
+    status: StatusCode,
+    kind: LifecycleOperationKind,
+    code: &'static str,
+    message: impl Into<String>,
+    fields: Value,
+) -> axum::response::Response {
+    let mut payload = json!({
+        "kind": "garyx_api_error",
+        "operation": lifecycle_operation_name(kind),
+        "code": code,
+        "message": message.into(),
+    });
+    extend_json_object(&mut payload, fields);
+    (status, Json(payload)).into_response()
+}
+
+fn parse_lifecycle_request(
+    kind: LifecycleOperationKind,
+    key: &str,
+    operation_id: &str,
+    expected_store_incarnation: &str,
+    endpoint_keys: Vec<String>,
+) -> Result<LifecycleRequest, axum::response::Response> {
+    let thread_id = key.trim();
+    if !is_thread_key(thread_id) {
+        return Err(lifecycle_tagged_error(
+            StatusCode::BAD_REQUEST,
+            kind,
+            "invalid_request",
+            "thread key must use the thread:: prefix",
+            json!({}),
+        ));
+    }
+    let operation_id = uuid::Uuid::parse_str(operation_id.trim())
+        .map(|value| value.to_string())
+        .map_err(|_| {
+            lifecycle_tagged_error(
+                StatusCode::BAD_REQUEST,
+                kind,
+                "invalid_request",
+                "operation_id must be a UUID",
+                json!({ "thread_id": thread_id }),
+            )
+        })?;
+    let expected_store_incarnation = uuid::Uuid::parse_str(expected_store_incarnation.trim())
+        .map(|value| value.to_string())
+        .map_err(|_| {
+            lifecycle_tagged_error(
+                StatusCode::BAD_REQUEST,
+                kind,
+                "invalid_request",
+                "expected_store_incarnation must be a UUID",
+                json!({
+                    "thread_id": thread_id,
+                    "operation_id": operation_id,
+                }),
+            )
+        })?;
+    let endpoint_keys = endpoint_keys
+        .into_iter()
+        .map(|key| normalize_endpoint_lookup_key(&key))
+        .filter(|key| !key.is_empty())
+        .collect::<Vec<_>>();
+    let fingerprint =
+        canonical_lifecycle_fingerprint(kind, thread_id, endpoint_keys).map_err(|error| {
+            lifecycle_tagged_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                kind,
+                "unavailable",
+                format!("failed to canonicalize lifecycle request: {error}"),
+                json!({
+                    "thread_id": thread_id,
+                    "operation_id": operation_id.clone(),
+                }),
+            )
+        })?;
+    Ok(LifecycleRequest {
+        kind,
+        thread_id: thread_id.to_owned(),
+        operation_id,
+        expected_store_incarnation,
+        fingerprint: fingerprint.canonical,
+        endpoint_keys: fingerprint.endpoint_keys,
+    })
+}
+
+fn operation_matches_request(
+    operation: &LifecycleOperationRecord,
+    request: &LifecycleRequest,
+) -> bool {
+    operation.kind == request.kind
+        && operation.thread_id == request.thread_id
+        && operation.fingerprint == request.fingerprint
+}
+
+fn completed_lifecycle_response(operation: &LifecycleOperationRecord) -> axum::response::Response {
+    match operation.outcome {
+        LifecycleOperationOutcome::AppliedChanged | LifecycleOperationOutcome::AppliedNoop => {
+            let detached_endpoint_keys = operation
+                .result_payload
+                .as_ref()
+                .and_then(|payload| payload.get("detached_endpoint_keys"))
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new()));
+            let mut payload = json!({
+                "operation_id": operation.operation_id,
+                "outcome": operation.outcome,
+                "thread_id": operation.thread_id,
+                "changed": operation.outcome == LifecycleOperationOutcome::AppliedChanged,
+                "detached_endpoint_keys": detached_endpoint_keys,
+            });
+            match operation.kind {
+                LifecycleOperationKind::Archive => {
+                    extend_json_object(&mut payload, json!({ "archived": true, "deleted": true }));
+                }
+                LifecycleOperationKind::Delete => {
+                    extend_json_object(&mut payload, json!({ "deleted": true }));
+                }
+            }
+            (StatusCode::OK, Json(payload)).into_response()
+        }
+        LifecycleOperationOutcome::RejectedConflict
+        | LifecycleOperationOutcome::RejectedNotFound => {
+            let status = if operation.outcome == LifecycleOperationOutcome::RejectedConflict {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::NOT_FOUND
+            };
+            let message = operation
+                .detail
+                .as_ref()
+                .and_then(|detail| detail.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("thread lifecycle request was rejected");
+            let reason_code = operation
+                .detail
+                .as_ref()
+                .and_then(|detail| detail.get("code"))
+                .cloned();
+            let mut fields = json!({
+                "operation_id": operation.operation_id,
+                "outcome": operation.outcome,
+                "thread_id": operation.thread_id,
+                "error": message,
+                "detail": operation.detail,
+                "reason_code": reason_code,
+            });
+            match operation.kind {
+                LifecycleOperationKind::Archive => {
+                    extend_json_object(&mut fields, json!({ "archived": false }));
+                }
+                LifecycleOperationKind::Delete => {
+                    extend_json_object(&mut fields, json!({ "deleted": false }));
+                }
+            }
+            if let Some(detail) = operation.detail.as_ref().and_then(Value::as_object) {
+                for (key, value) in detail {
+                    if key != "code" && key != "message" {
+                        fields[key] = value.clone();
+                    }
+                }
+            }
+            lifecycle_tagged_error(
+                status,
+                operation.kind,
+                match operation.outcome {
+                    LifecycleOperationOutcome::RejectedConflict => "rejected_conflict",
+                    LifecycleOperationOutcome::RejectedNotFound => "rejected_not_found",
+                    _ => unreachable!(),
+                },
+                message,
+                fields,
+            )
+        }
+    }
+}
+
+fn lifecycle_cell_response(
+    request: &LifecycleRequest,
+    result: &OperationCellResult,
+) -> axum::response::Response {
+    match result {
+        OperationCellResult::Completed(operation) => {
+            if operation_matches_request(operation, request) {
+                completed_lifecycle_response(operation)
+            } else {
+                lifecycle_tagged_error(
+                    StatusCode::CONFLICT,
+                    request.kind,
+                    "operation_id_conflict",
+                    "operation_id was reused with a different lifecycle request",
+                    json!({
+                        "thread_id": request.thread_id,
+                        "operation_id": request.operation_id,
+                    }),
+                )
+            }
+        }
+        OperationCellResult::OperationIdConflict => lifecycle_tagged_error(
+            StatusCode::CONFLICT,
+            request.kind,
+            "operation_id_conflict",
+            "operation_id was reused with a different lifecycle request",
+            json!({
+                "thread_id": request.thread_id,
+                "operation_id": request.operation_id,
+            }),
+        ),
+        OperationCellResult::WrongIncarnation {
+            current_store_incarnation,
+        } => lifecycle_tagged_error(
+            StatusCode::CONFLICT,
+            request.kind,
+            "wrong_incarnation",
+            "store incarnation does not match",
+            json!({
+                "thread_id": request.thread_id,
+                "operation_id": request.operation_id,
+                "expected_store_incarnation": request.expected_store_incarnation,
+                "current_store_incarnation": current_store_incarnation,
+            }),
+        ),
+        OperationCellResult::InProgress => lifecycle_tagged_error(
+            StatusCode::CONFLICT,
+            request.kind,
+            "operation_in_progress",
+            "thread lifecycle operation is still in progress",
+            json!({
+                "thread_id": request.thread_id,
+                "operation_id": request.operation_id,
+            }),
+        ),
+        OperationCellResult::TransientFailure => lifecycle_tagged_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            request.kind,
+            "unavailable",
+            "thread lifecycle result is temporarily unavailable",
+            json!({
+                "thread_id": request.thread_id,
+                "operation_id": request.operation_id,
+            }),
+        ),
+    }
+}
+
+async fn wait_for_lifecycle_result(
+    request: &LifecycleRequest,
+    waiter: OperationJoinHandle,
+) -> axum::response::Response {
+    match waiter.wait(LIFECYCLE_JOIN_WINDOW).await {
+        Ok(result) => lifecycle_cell_response(request, &result),
+        Err(OperationWaitError::InProgress) => {
+            lifecycle_cell_response(request, &OperationCellResult::InProgress)
+        }
+        Err(OperationWaitError::TransientFailure) => {
+            lifecycle_cell_response(request, &OperationCellResult::TransientFailure)
+        }
+    }
+}
+
+fn coordination_failure(error: CoordinationError) -> OperationCellResult {
+    match error {
+        CoordinationError::Unavailable => OperationCellResult::InProgress,
+        CoordinationError::Store(_) | CoordinationError::Abort(_) => {
+            OperationCellResult::TransientFailure
+        }
+    }
+}
+
+enum LifecycleDbCommand {
+    Mutation(LifecycleMutationInput),
+    Decision(LifecycleDecisionInput),
+}
+
+async fn execute_lifecycle_db_command(
     state: &Arc<AppState>,
-    thread_id: &str,
-    thread_data: &Value,
-    client_endpoint_keys: Vec<String>,
-) -> Result<Vec<String>, garyx_router::ThreadStoreError> {
-    let mut endpoint_keys = BTreeSet::new();
-    for binding in bindings_from_value(thread_data) {
-        endpoint_keys.insert(binding.endpoint_key());
-    }
-    for endpoint in state.cached_channel_endpoints().await? {
-        if endpoint.thread_id.as_deref() == Some(thread_id) {
-            endpoint_keys.insert(endpoint.endpoint_key);
+    request: &LifecycleRequest,
+    supervisor: &mut LifecycleMutationSupervisor,
+    reservation: garyx_router::LifecycleReservation,
+    command: LifecycleDbCommand,
+) -> OperationCellResult {
+    let witness = reservation.commit_witness();
+    supervisor.insert_guard(reservation);
+    let db = state.ops.garyx_db.clone();
+    supervisor.spawn_blocking_child(move || {
+        let result = match command {
+            LifecycleDbCommand::Mutation(input) => db.execute_lifecycle_mutation(input),
+            LifecycleDbCommand::Decision(input) => db.execute_lifecycle_decision(input),
+        };
+        if let Ok(
+            LifecycleTransactionResult::Completed {
+                durable_terminal, ..
+            }
+            | LifecycleTransactionResult::Existing {
+                durable_terminal, ..
+            },
+        ) = &result
+        {
+            witness.mark_committed(*durable_terminal);
+        }
+        LifecycleChildResult::Transaction(result)
+    });
+    let joined = supervisor.join_child().await;
+    let mut reservation = supervisor
+        .take_guard::<garyx_router::LifecycleReservation>()
+        .expect("lifecycle supervisor lost its reservation");
+    match joined {
+        Ok(LifecycleChildResult::Transaction(Ok(
+            LifecycleTransactionResult::Completed {
+                operation,
+                durable_terminal,
+            }
+            | LifecycleTransactionResult::Existing {
+                operation,
+                durable_terminal,
+            },
+        ))) => {
+            if matches!(
+                operation.outcome,
+                LifecycleOperationOutcome::AppliedChanged | LifecycleOperationOutcome::AppliedNoop
+            ) {
+                reservation.settle_committed(durable_terminal);
+            } else {
+                reservation.settle_decision(durable_terminal);
+            }
+            state.ops.lifecycle.wake_outbox();
+            if operation_matches_request(&operation, request) {
+                OperationCellResult::Completed(operation)
+            } else {
+                OperationCellResult::OperationIdConflict
+            }
+        }
+        Ok(LifecycleChildResult::Transaction(Ok(
+            LifecycleTransactionResult::WrongIncarnation {
+                current_store_incarnation,
+            },
+        ))) => {
+            let prior = reservation.prior_terminal();
+            reservation.settle_transient(prior);
+            OperationCellResult::WrongIncarnation {
+                current_store_incarnation,
+            }
+        }
+        Ok(LifecycleChildResult::Transaction(Err(_))) | Err(_) => {
+            let prior = reservation.prior_terminal();
+            reservation.settle_transient(prior);
+            OperationCellResult::TransientFailure
+        }
+        Ok(LifecycleChildResult::Drain(_)) => {
+            unreachable!("transaction child returned a drain result")
         }
     }
-    for endpoint_key in client_endpoint_keys {
-        let normalized = normalize_endpoint_lookup_key(&endpoint_key);
-        if !normalized.is_empty() {
-            endpoint_keys.insert(normalized);
+}
+
+async fn run_lifecycle_owner_inner(
+    state: &Arc<AppState>,
+    request: &LifecycleRequest,
+    supervisor: &mut LifecycleMutationSupervisor,
+) -> OperationCellResult {
+    // Owner double-check closes completed-lookup → registration races. The
+    // DB helper repeats identity first under the same read transaction.
+    let db = state.ops.garyx_db.clone();
+    let expected = request.expected_store_incarnation.clone();
+    let operation_id = request.operation_id.clone();
+    let lookup = db
+        .run_blocking(move |db| db.lookup_lifecycle_operation(&expected, &operation_id))
+        .await;
+    match lookup {
+        Ok(LifecycleOperationLookup::WrongIncarnation {
+            current_store_incarnation,
+        }) => {
+            return OperationCellResult::WrongIncarnation {
+                current_store_incarnation,
+            };
+        }
+        Ok(LifecycleOperationLookup::Current(Some(operation))) => {
+            return if operation_matches_request(&operation, request) {
+                OperationCellResult::Completed(operation)
+            } else {
+                OperationCellResult::OperationIdConflict
+            };
+        }
+        Ok(LifecycleOperationLookup::Current(None)) => {}
+        Err(_) => return OperationCellResult::TransientFailure,
+    }
+
+    let coordinator = state.threads.thread_store.run_coordinator();
+    if request.kind == LifecycleOperationKind::Archive {
+        let thread_exists = match state.threads.thread_store.get(&request.thread_id).await {
+            Ok(record) => record.is_some(),
+            Err(_) => return OperationCellResult::TransientFailure,
+        };
+        if thread_exists
+            && let Some(automation_id) =
+                automation_job_for_archive_conflict(state, &request.thread_id).await
+        {
+            let reservation = match coordinator
+                .reserve_decision(state.threads.thread_store.as_ref(), &request.thread_id)
+                .await
+            {
+                Ok(reservation) => reservation,
+                Err(error) => return coordination_failure(error),
+            };
+            return execute_lifecycle_db_command(
+                state,
+                request,
+                supervisor,
+                reservation,
+                LifecycleDbCommand::Decision(LifecycleDecisionInput {
+                    expected_store_incarnation: request.expected_store_incarnation.clone(),
+                    operation_id: request.operation_id.clone(),
+                    kind: request.kind,
+                    thread_id: request.thread_id.clone(),
+                    fingerprint: request.fingerprint.clone(),
+                    outcome: LifecycleOperationOutcome::RejectedConflict,
+                    detail: json!({
+                        "code": "automation_target",
+                        "message": "cannot archive thread targeted by automation",
+                        "automation_id": automation_id,
+                    }),
+                }),
+            )
+            .await;
+        }
+
+        let (reservation, command) = match coordinator
+            .reserve_archive(state.threads.thread_store.as_ref(), &request.thread_id)
+            .await
+        {
+            Ok(ArchiveBarrier::Ready(reservation)) => (
+                reservation,
+                LifecycleDbCommand::Mutation(LifecycleMutationInput {
+                    expected_store_incarnation: request.expected_store_incarnation.clone(),
+                    operation_id: request.operation_id.clone(),
+                    kind: request.kind,
+                    thread_id: request.thread_id.clone(),
+                    fingerprint: request.fingerprint.clone(),
+                    endpoint_keys: request.endpoint_keys.clone(),
+                    enabled_channel_accounts: BTreeSet::new(),
+                }),
+            ),
+            Ok(ArchiveBarrier::ActiveLease(reservation)) => (
+                reservation,
+                LifecycleDbCommand::Decision(LifecycleDecisionInput {
+                    expected_store_incarnation: request.expected_store_incarnation.clone(),
+                    operation_id: request.operation_id.clone(),
+                    kind: request.kind,
+                    thread_id: request.thread_id.clone(),
+                    fingerprint: request.fingerprint.clone(),
+                    outcome: LifecycleOperationOutcome::RejectedConflict,
+                    detail: json!({
+                        "code": "active_run",
+                        "message": "cannot archive thread with active run",
+                        "active_run_id": Value::Null,
+                    }),
+                }),
+            ),
+            Err(error) => return coordination_failure(error),
+        };
+        return execute_lifecycle_db_command(state, request, supervisor, reservation, command)
+            .await;
+    }
+
+    let preflight = state
+        .ops
+        .endpoint_binding_mutator
+        .preflight_and_freeze(&request.thread_id, || state.config_snapshot())
+        .await;
+    match preflight {
+        Ok(DeleteBindingPreflight::InProgress) => OperationCellResult::InProgress,
+        Ok(DeleteBindingPreflight::RejectedEnabledBinding) => {
+            let reservation = match coordinator
+                .reserve_decision(state.threads.thread_store.as_ref(), &request.thread_id)
+                .await
+            {
+                Ok(reservation) => reservation,
+                Err(error) => return coordination_failure(error),
+            };
+            execute_lifecycle_db_command(
+                state,
+                request,
+                supervisor,
+                reservation,
+                LifecycleDbCommand::Decision(LifecycleDecisionInput {
+                    expected_store_incarnation: request.expected_store_incarnation.clone(),
+                    operation_id: request.operation_id.clone(),
+                    kind: request.kind,
+                    thread_id: request.thread_id.clone(),
+                    fingerprint: request.fingerprint.clone(),
+                    outcome: LifecycleOperationOutcome::RejectedConflict,
+                    detail: json!({
+                        "code": "active_channel_binding",
+                        "message": "cannot delete thread with active channel bindings",
+                    }),
+                }),
+            )
+            .await
+        }
+        Ok(DeleteBindingPreflight::Frozen {
+            guard,
+            enabled_channel_accounts,
+        }) => {
+            supervisor.insert_guard(guard);
+            let reservation = match coordinator
+                .reserve_delete(state.threads.thread_store.as_ref(), &request.thread_id)
+                .await
+            {
+                Ok(reservation) => reservation,
+                Err(error) => return coordination_failure(error),
+            };
+            let drain = reservation.abort_and_drain_future();
+            supervisor.insert_guard(reservation);
+            supervisor.spawn_child(async move { LifecycleChildResult::Drain(drain.await) });
+            let drain_result = supervisor.join_child().await;
+            match drain_result {
+                Ok(LifecycleChildResult::Drain(Ok(()))) => {}
+                Ok(LifecycleChildResult::Drain(Err(error))) => {
+                    let mut reservation = supervisor
+                        .take_guard::<garyx_router::LifecycleReservation>()
+                        .expect("lifecycle supervisor lost its reservation");
+                    let prior = reservation.prior_terminal();
+                    reservation.settle_transient(prior);
+                    return coordination_failure(error);
+                }
+                Err(_) => {
+                    let mut reservation = supervisor
+                        .take_guard::<garyx_router::LifecycleReservation>()
+                        .expect("lifecycle supervisor lost its reservation");
+                    let prior = reservation.prior_terminal();
+                    reservation.settle_transient(prior);
+                    return OperationCellResult::TransientFailure;
+                }
+                Ok(LifecycleChildResult::Transaction(_)) => {
+                    unreachable!("drain child returned a transaction result")
+                }
+            }
+            let reservation = supervisor
+                .take_guard::<garyx_router::LifecycleReservation>()
+                .expect("lifecycle supervisor lost its reservation after drain");
+            execute_lifecycle_db_command(
+                state,
+                request,
+                supervisor,
+                reservation,
+                LifecycleDbCommand::Mutation(LifecycleMutationInput {
+                    expected_store_incarnation: request.expected_store_incarnation.clone(),
+                    operation_id: request.operation_id.clone(),
+                    kind: request.kind,
+                    thread_id: request.thread_id.clone(),
+                    fingerprint: request.fingerprint.clone(),
+                    endpoint_keys: Vec::new(),
+                    enabled_channel_accounts,
+                }),
+            )
+            .await
+        }
+        Err(_) => OperationCellResult::TransientFailure,
+    }
+}
+
+async fn run_lifecycle_owner(
+    state: Arc<AppState>,
+    request: LifecycleRequest,
+    owner: OperationOwnerGuard,
+) {
+    let mut supervisor = LifecycleMutationSupervisor::new();
+    supervisor.insert_guard(owner);
+    #[cfg(any(test, feature = "test-seams"))]
+    if state.ops.lifecycle.take_owner_panic() {
+        panic!("injected lifecycle owner panic");
+    }
+    let result = run_lifecycle_owner_inner(&state, &request, &mut supervisor).await;
+    let owner = supervisor
+        .take_guard::<OperationOwnerGuard>()
+        .expect("lifecycle supervisor lost its operation owner");
+    owner.publish(result);
+}
+
+async fn handle_lifecycle_request(
+    state: Arc<AppState>,
+    request: LifecycleRequest,
+) -> axum::response::Response {
+    let db = state.ops.garyx_db.clone();
+    let expected = request.expected_store_incarnation.clone();
+    let operation_id = request.operation_id.clone();
+    let lookup = db
+        .run_blocking(move |db| db.lookup_lifecycle_operation(&expected, &operation_id))
+        .await;
+    match lookup {
+        Ok(LifecycleOperationLookup::WrongIncarnation {
+            current_store_incarnation,
+        }) => {
+            return lifecycle_cell_response(
+                &request,
+                &OperationCellResult::WrongIncarnation {
+                    current_store_incarnation,
+                },
+            );
+        }
+        Ok(LifecycleOperationLookup::Current(Some(operation))) => {
+            return lifecycle_cell_response(&request, &OperationCellResult::Completed(operation));
+        }
+        Ok(LifecycleOperationLookup::Current(None)) => {}
+        Err(_) => {
+            return lifecycle_cell_response(&request, &OperationCellResult::TransientFailure);
         }
     }
-    Ok(endpoint_keys.into_iter().collect())
+
+    #[cfg(any(test, feature = "test-seams"))]
+    state
+        .ops
+        .lifecycle
+        .pause_after_initial_lookup_if_configured()
+        .await;
+
+    let key = OperationKey {
+        store_incarnation: request.expected_store_incarnation.clone(),
+        operation_id: request.operation_id.clone(),
+    };
+    match state
+        .ops
+        .lifecycle
+        .registry
+        .register(key, &request.fingerprint)
+    {
+        Ok(OperationRegistration::Join(waiter)) => {
+            wait_for_lifecycle_result(&request, waiter).await
+        }
+        Ok(OperationRegistration::Owner(owner)) => {
+            let waiter = owner.join_handle();
+            tokio::spawn(run_lifecycle_owner(state, request.clone(), owner));
+            wait_for_lifecycle_result(&request, waiter).await
+        }
+        Err(OperationRegistrationError::FingerprintConflict) => {
+            lifecycle_cell_response(&request, &OperationCellResult::OperationIdConflict)
+        }
+    }
 }
 
-fn archive_internal_error(error: impl std::fmt::Display) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({
-            "archived": false,
-            "error": error.to_string(),
-        })),
-    )
-}
-
-/// POST /api/threads/:key/archive - product archive semantics: hard delete and tombstone.
+/// POST /api/threads/:key/archive - idempotent product archive.
 pub async fn archive_thread(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
     Json(body): Json<ArchiveThreadBody>,
-) -> impl IntoResponse {
-    let trimmed = key.trim();
-    if trimmed.is_empty() || !is_thread_key(trimmed) {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({"archived": false, "error": "thread not found"})),
-        );
-    }
-    let thread_data = match state.threads.thread_store.get(trimmed).await {
-        Ok(value) => value,
-        Err(error) => return archive_internal_error(error),
+) -> axum::response::Response {
+    let request = match parse_lifecycle_request(
+        LifecycleOperationKind::Archive,
+        &key,
+        &body.operation_id,
+        &body.expected_store_incarnation,
+        body.endpoint_keys,
+    ) {
+        Ok(request) => request,
+        Err(response) => return response,
     };
-
-    if thread_data.is_some()
-        && let Some(automation_id) = automation_job_for_archive_conflict(&state, trimmed).await
-    {
-        return automation_conflict_response(trimmed, automation_id);
-    }
-
-    let endpoint_keys = match thread_data.as_ref() {
-        Some(thread_data) => {
-            match endpoint_keys_for_archive(&state, trimmed, thread_data, body.endpoint_keys).await
-            {
-                Ok(endpoint_keys) => endpoint_keys,
-                Err(error) => return archive_internal_error(error),
-            }
-        }
-        None => Vec::new(),
-    };
-    let provider_key = thread_data.as_ref().and_then(|thread_data| {
-        thread_data
-            .get("provider_key")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    });
-    let thread_id = trimmed.to_owned();
-    let mutation_state = state.clone();
-    let archive_id = thread_id.clone();
-    let operation = async move {
-        let mut detached_endpoint_keys = Vec::new();
-        for endpoint_key in endpoint_keys {
-            match detach_channel_endpoint_key(&mutation_state, &endpoint_key).await {
-                Ok(result) => detached_endpoint_keys.push(result.endpoint_key),
-                Err(error) => {
-                    return Err((
-                        error.status,
-                        Json(json!({
-                            "archived": false,
-                            "thread_id": archive_id,
-                            "error": error.message,
-                        })),
-                    ));
-                }
-            }
-        }
-
-        // This blocking transaction is owned by the coordinator task. If the
-        // HTTP future is dropped, `archiving` remains until the transaction is
-        // known to have committed or failed.
-        let db = mutation_state.ops.garyx_db.clone();
-        let raw_archive_id = archive_id.clone();
-        if let Err(error) = db
-            .run_blocking(move |db| db.archive_thread_record(&raw_archive_id).map(|_| ()))
-            .await
-        {
-            return Err(archive_internal_error(error));
-        }
-        clear_deleted_thread_runtime_state(&mutation_state, &archive_id, provider_key.as_deref())
-            .await;
-        purge_thread_from_indexes(&mutation_state, &archive_id).await;
-        mutation_state.invalidate_gateway_sync_caches().await;
-        Ok(detached_endpoint_keys)
-    };
-
-    let handle = match state
-        .threads
-        .thread_store
-        .run_coordinator()
-        .start_archive(thread_id.clone(), operation)
-    {
-        Ok(handle) => handle,
-        Err(garyx_router::ArchiveReservationError::ActiveLease) => {
-            return active_run_conflict_response(&thread_id, None);
-        }
-        Err(garyx_router::ArchiveReservationError::Unavailable) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "archived": false,
-                    "thread_id": thread_id,
-                    "error": "thread is already being archived or deleted",
-                })),
-            );
-        }
-    };
-
-    match handle.await {
-        Ok(Ok(detached_endpoint_keys)) => (
-            StatusCode::OK,
-            Json(json!({
-                "archived": true,
-                "deleted": true,
-                "thread_id": thread_id,
-                "detached_endpoint_keys": detached_endpoint_keys,
-            })),
-        ),
-        Ok(Err(response)) => response,
-        Err(error) => archive_internal_error(format!("archive coordinator task failed: {error}")),
-    }
+    handle_lifecycle_request(state, request).await
 }
 
-/// DELETE /api/threads/:key - delete thread
+/// DELETE /api/threads/:key - idempotent destructive delete.
 pub async fn delete_thread(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
-) -> impl IntoResponse {
-    let thread_id = match ensure_existing_thread_id(&state, &key).await {
-        Ok(Some(thread_id)) => thread_id,
-        // Projections derive and delete in the same transaction as the
-        // record, so a missing record has no projection rows left to
-        // repair — this is a plain not-found.
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"deleted": false, "error": "thread not found"})),
-            );
-        }
+    Json(body): Json<DeleteThreadBody>,
+) -> axum::response::Response {
+    let request = match parse_lifecycle_request(
+        LifecycleOperationKind::Delete,
+        &key,
+        &body.operation_id,
+        &body.expected_store_incarnation,
+        Vec::new(),
+    ) {
+        Ok(request) => request,
         Err(response) => return response,
     };
-    let thread_data = match state.threads.thread_store.get(&thread_id).await {
-        Ok(Some(thread_data)) => thread_data,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"deleted": false, "error": "thread not found"})),
-            );
-        }
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"deleted": false, "error": error.to_string()})),
-            );
-        }
-    };
-    // Block deletion only while at least one binding still points at a bot
-    // account that is still enabled. Orphan bindings (left behind when a bot
-    // is removed from channels config) and disabled bots must not keep the
-    // thread alive — there is no other way to clean up their transcripts.
-    let bindings = bindings_from_value(&thread_data);
-    if !bindings.is_empty() {
-        let config = state.config_snapshot();
-        let has_live_binding = bindings.iter().any(|binding| {
-            config
-                .channels
-                .plugins
-                .get(&binding.channel)
-                .and_then(|cfg| cfg.accounts.get(&binding.account_id))
-                .map(|entry| entry.enabled)
-                .unwrap_or(false)
-        });
-        if has_live_binding {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "deleted": false,
-                    "error": "cannot delete thread with active channel bindings",
-                })),
-            );
-        }
-    }
-
-    // Keep the complete delete lifecycle (coordinator-owned storage mutation
-    // plus provider/session/index cleanup) independent of the HTTP future.
-    // Dropping a disconnected request must not strand stale runtime state
-    // after the coordinator finishes the non-cancellable SQLite closure.
-    let delete_state = state.clone();
-    let delete_thread_id = thread_id.clone();
-    let deletion = tokio::spawn(async move {
-        hard_delete_thread_record(&delete_state, &delete_thread_id, &thread_data).await
-    });
-    match deletion.await {
-        Ok(Ok(())) => {}
-        Ok(Err(response)) => return response,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "deleted": false,
-                    "error": format!("delete coordinator task failed: {error}"),
-                })),
-            );
-        }
-    }
-    (
-        StatusCode::OK,
-        Json(json!({"deleted": true, "thread_id": thread_id})),
-    )
+    handle_lifecycle_request(state, request).await
 }
 
 /// GET /api/channel-endpoints - list known channel endpoints

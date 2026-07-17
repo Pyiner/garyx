@@ -31,6 +31,8 @@ pub enum EndpointBindingMutationError {
     TargetNotFound(String),
     #[error("thread is archived: {0}")]
     TargetArchived(String),
+    #[error("thread lifecycle mutation is in progress: {0}")]
+    ThreadLifecycleInProgress(String),
     #[error("projected endpoint owner is unavailable: {0}")]
     PreviousOwnerUnavailable(String),
     #[error("{0}")]

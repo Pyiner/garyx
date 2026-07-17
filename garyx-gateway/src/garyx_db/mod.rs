@@ -314,6 +314,12 @@ pub struct LifecycleOperationRecord {
     pub completed_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LifecycleOperationLookup {
+    Current(Option<LifecycleOperationRecord>),
+    WrongIncarnation { current_store_incarnation: String },
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CleanupOutboxStep {
@@ -385,7 +391,10 @@ pub(crate) enum LifecycleTransactionResult {
         operation: LifecycleOperationRecord,
         durable_terminal: Option<ThreadTerminalState>,
     },
-    Existing(LifecycleOperationRecord),
+    Existing {
+        operation: LifecycleOperationRecord,
+        durable_terminal: Option<ThreadTerminalState>,
+    },
     WrongIncarnation {
         current_store_incarnation: String,
     },
@@ -1942,6 +1951,27 @@ impl GaryxDbService {
         read_lifecycle_operation(&conn, store_incarnation, operation_id)
     }
 
+    /// Identity-first completed lookup under one SQLite read transaction.
+    /// A store rotation can therefore never slip between the incarnation
+    /// check and the ledger point read.
+    pub(crate) fn lookup_lifecycle_operation(
+        &self,
+        expected_store_incarnation: &str,
+        operation_id: &str,
+    ) -> GaryxDbResult<LifecycleOperationLookup> {
+        let mut conn = self.read_conn()?;
+        let tx = conn.transaction()?;
+        let current_store_incarnation = read_store_incarnation_id(&tx)?;
+        if current_store_incarnation != expected_store_incarnation {
+            return Ok(LifecycleOperationLookup::WrongIncarnation {
+                current_store_incarnation,
+            });
+        }
+        let operation = read_lifecycle_operation(&tx, &current_store_incarnation, operation_id)?;
+        tx.commit()?;
+        Ok(LifecycleOperationLookup::Current(operation))
+    }
+
     pub(crate) fn execute_lifecycle_mutation(
         &self,
         input: LifecycleMutationInput,
@@ -1991,6 +2021,16 @@ impl GaryxDbService {
         let operation_id = normalize_required("operation_id", &operation_id)?;
         let thread_id = normalize_thread_id(&thread_id)?;
         let fingerprint = normalize_required("fingerprint", &fingerprint)?;
+        #[cfg(any(test, feature = "test-seams"))]
+        match kind {
+            LifecycleOperationKind::Archive => {
+                self.maybe_block_test_db_mutation(TestDbMutationPoint::ArchiveThreadRecord);
+            }
+            LifecycleOperationKind::Delete => {
+                self.maybe_block_test_db_mutation(TestDbMutationPoint::DeleteThreadRecord);
+                self.maybe_fail_test_db_call(TestDbFaultPoint::DeleteThreadRecord)?;
+            }
+        }
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
         let current_store_incarnation = read_store_incarnation_id(&tx)?;
@@ -2002,7 +2042,11 @@ impl GaryxDbService {
         if let Some(existing) =
             read_lifecycle_operation(&tx, &expected_store_incarnation, &operation_id)?
         {
-            return Ok(LifecycleTransactionResult::Existing(existing));
+            let durable_terminal = read_thread_terminal_state(&tx, &thread_id)?;
+            return Ok(LifecycleTransactionResult::Existing {
+                operation: existing,
+                durable_terminal,
+            });
         }
 
         let record_body = tx
@@ -2129,18 +2173,11 @@ impl GaryxDbService {
                 if endpoint_key.is_empty() {
                     continue;
                 }
-                let owned = tx
-                    .query_row(
-                        "SELECT 1 FROM thread_channel_endpoints
-                         WHERE endpoint_key = ?1 AND thread_id = ?2",
-                        params![endpoint_key, thread_id],
-                        |_| Ok(()),
-                    )
-                    .optional()?
-                    .is_some();
-                if owned {
-                    detached_endpoint_keys.insert(endpoint_key.to_owned());
-                }
+                // Client-carried endpoint keys remain part of the canonical
+                // result payload even when their persistent row is already
+                // absent. The volatile invalidation is conditional on this
+                // thread id, so replay cannot detach a replacement owner.
+                detached_endpoint_keys.insert(endpoint_key.to_owned());
             }
 
             tx.execute(
@@ -11954,7 +11991,11 @@ mod tests {
                 enabled_channel_accounts: BTreeSet::new(),
             })
             .unwrap();
-        let LifecycleTransactionResult::Existing(existing) = replay else {
+        let LifecycleTransactionResult::Existing {
+            operation: existing,
+            ..
+        } = replay
+        else {
             panic!("ledger belt did not return existing row");
         };
         assert_eq!(existing.fingerprint, "fingerprint-one");
@@ -11997,6 +12038,62 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn lifecycle_ttl_prune_makes_same_id_a_fresh_matrix_request_and_prunes_done_jobs() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let thread_id = "thread::ttl-matrix";
+        seed_lifecycle_state(&db, thread_id, LifecycleSeedState::Active);
+        let incarnation = db.store_incarnation_id().unwrap();
+        let operation_id = "operation-ttl";
+        let input = LifecycleMutationInput {
+            expected_store_incarnation: incarnation.clone(),
+            operation_id: operation_id.to_owned(),
+            kind: LifecycleOperationKind::Archive,
+            thread_id: thread_id.to_owned(),
+            fingerprint: "fingerprint-ttl".to_owned(),
+            endpoint_keys: Vec::new(),
+            enabled_channel_accounts: BTreeSet::new(),
+        };
+        let first = db.execute_lifecycle_mutation(input.clone()).unwrap();
+        assert!(matches!(
+            first,
+            LifecycleTransactionResult::Completed {
+                operation: LifecycleOperationRecord {
+                    outcome: LifecycleOperationOutcome::AppliedChanged,
+                    ..
+                },
+                ..
+            }
+        ));
+
+        let future = "2999-01-01T00:00:00.000Z";
+        let mut settled_jobs = 0usize;
+        while let Some(job) = db.next_cleanup_outbox_job(future).unwrap() {
+            assert!(db.mark_cleanup_outbox_done(job.job_id).unwrap());
+            settled_jobs += 1;
+        }
+        assert_eq!(settled_jobs, 3);
+        let (operations, jobs) = db.prune_lifecycle_history(future).unwrap();
+        assert_eq!((operations, jobs), (1, 3));
+        assert!(
+            db.lifecycle_operation(&incarnation, operation_id)
+                .unwrap()
+                .is_none()
+        );
+
+        let after_ttl = db.execute_lifecycle_mutation(input).unwrap();
+        assert!(matches!(
+            after_ttl,
+            LifecycleTransactionResult::Completed {
+                operation: LifecycleOperationRecord {
+                    outcome: LifecycleOperationOutcome::AppliedNoop,
+                    ..
+                },
+                durable_terminal: Some(ThreadTerminalState::Archived),
+            }
+        ));
     }
 
     #[test]

@@ -21,6 +21,7 @@ use tracing::{debug, warn};
 use crate::api::RestartTracker;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
+use crate::endpoint_binding_mutator::SqlEndpointBindingMutator;
 use crate::event_stream_hub::EventStreamHub;
 use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
@@ -62,6 +63,7 @@ pub struct OpsState {
     pub meetings: Arc<MeetingService>,
     pub provider_auth_sessions: Arc<ClaudeAuthSessionStore>,
     pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
+    pub(crate) endpoint_binding_mutator: Arc<SqlEndpointBindingMutator>,
     pub(crate) lifecycle: Arc<LifecycleService>,
 }
 
@@ -407,6 +409,7 @@ impl AppState {
                 meetings: self.ops.meetings.clone(),
                 provider_auth_sessions: self.ops.provider_auth_sessions.clone(),
                 channel_endpoint_snapshot: Mutex::new(None),
+                endpoint_binding_mutator: self.ops.endpoint_binding_mutator.clone(),
                 lifecycle: self.ops.lifecycle.clone(),
             },
             integration: IntegrationState {

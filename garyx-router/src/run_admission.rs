@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use garyx_models::provider::{AgentRunRequest, ProviderType};
 use garyx_models::strip_server_owned_agent_metadata;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 
 use crate::{ThreadStore, ThreadTerminalState, is_thread_key};
 
@@ -431,9 +430,14 @@ impl ThreadRunCoordinator {
         &self,
         reservation: &LifecycleReservation,
     ) -> Result<(), CoordinationError> {
-        if reservation.token.expected_state != OwnedStateKind::Deleting
-            || !self.reservation_is_current(&reservation.token)
-        {
+        self.abort_and_drain_token(&reservation.token).await
+    }
+
+    async fn abort_and_drain_token(
+        &self,
+        token: &ReservationToken,
+    ) -> Result<(), CoordinationError> {
+        if token.expected_state != OwnedStateKind::Deleting || !self.reservation_is_current(token) {
             return Err(CoordinationError::Unavailable);
         }
         let aborter = self
@@ -444,11 +448,11 @@ impl ThreadRunCoordinator {
             .cloned();
         if let Some(aborter) = aborter {
             aborter
-                .abort_and_drain_thread(&reservation.token.thread_id)
+                .abort_and_drain_thread(&token.thread_id)
                 .await
                 .map_err(CoordinationError::Abort)?;
         }
-        self.wait_for_no_leases(&reservation.token).await
+        self.wait_for_no_leases(token).await
     }
 
     async fn wait_for_no_leases(&self, token: &ReservationToken) -> Result<(), CoordinationError> {
@@ -537,114 +541,6 @@ impl ThreadRunCoordinator {
     /// it intentionally performs no terminal-cache mutation.
     pub fn record_written(&self, _thread_id: &str) {}
 
-    // Temporary step-1 adapters for the old routes. Step 2 migrates the last
-    // call sites to the calibrated reservation API and removes these methods.
-    pub fn start_archive<F, T, E>(
-        self: &Arc<Self>,
-        thread_id: String,
-        operation: F,
-    ) -> Result<JoinHandle<Result<T, E>>, ArchiveReservationError>
-    where
-        F: Future<Output = Result<T, E>> + Send + 'static,
-        T: Send + 'static,
-        E: Send + 'static,
-    {
-        let reservation =
-            self.legacy_reserve(&thread_id, OwnedStateKind::Archiving, true, false)?;
-        Ok(tokio::spawn(async move {
-            let mut reservation = reservation;
-            match operation.await {
-                Ok(value) => {
-                    reservation.settle_committed(Some(ThreadTerminalState::Archived));
-                    Ok(value)
-                }
-                Err(error) => Err(error),
-            }
-        }))
-    }
-
-    pub fn start_delete<F, T, E>(
-        self: &Arc<Self>,
-        thread_id: String,
-        operation: F,
-    ) -> JoinHandle<Result<T, CoordinatedDeleteError<E>>>
-    where
-        F: Future<Output = Result<T, E>> + Send + 'static,
-        T: Send + 'static,
-        E: Send + 'static,
-    {
-        let reservation =
-            match self.legacy_reserve(&thread_id, OwnedStateKind::Deleting, false, true) {
-                Ok(reservation) => reservation,
-                Err(_) => {
-                    return tokio::spawn(async { Err(CoordinatedDeleteError::Unavailable) });
-                }
-            };
-        self.changed.notify_waiters();
-        let coordinator = Arc::clone(self);
-        tokio::spawn(async move {
-            let mut reservation = reservation;
-            let aborter = coordinator
-                .aborter
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .as_ref()
-                .cloned();
-            if let Some(aborter) = aborter {
-                aborter
-                    .abort_and_drain_thread(&thread_id)
-                    .await
-                    .map_err(CoordinatedDeleteError::Abort)?;
-            }
-            coordinator
-                .wait_for_no_leases(&reservation.token)
-                .await
-                .map_err(|_| CoordinatedDeleteError::Unavailable)?;
-            match operation.await {
-                Ok(value) => {
-                    reservation.settle_committed(Some(ThreadTerminalState::Deleted));
-                    Ok(value)
-                }
-                Err(error) => Err(CoordinatedDeleteError::Operation(error)),
-            }
-        })
-    }
-
-    fn legacy_reserve(
-        self: &Arc<Self>,
-        thread_id: &str,
-        kind: OwnedStateKind,
-        reject_any_lease: bool,
-        invalidate_leases: bool,
-    ) -> Result<LifecycleReservation, ArchiveReservationError> {
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        let initial_epoch = self.nonce();
-        let entry =
-            entries
-                .entry(thread_id.to_owned())
-                .or_insert_with(|| ThreadCoordinationEntry {
-                    epoch: initial_epoch,
-                    state: ThreadCoordinationState::Live,
-                    leases: HashMap::new(),
-                    pending_tokens: HashSet::new(),
-                });
-        let Some(prior) = entry.state.stable() else {
-            return Err(ArchiveReservationError::Unavailable);
-        };
-        if reject_any_lease && !entry.leases.is_empty() {
-            return Err(ArchiveReservationError::ActiveLease);
-        }
-        if invalidate_leases {
-            for lease in entry.leases.values() {
-                lease.valid.store(false, Ordering::Release);
-            }
-        }
-        Ok(self.install_reservation(thread_id, entry, prior, kind))
-    }
-
     #[cfg(test)]
     fn force_evict_for_test(&self, thread_id: &str) {
         self.entries
@@ -686,24 +582,6 @@ impl CoordinationError {
 pub enum ArchiveBarrier {
     Ready(LifecycleReservation),
     ActiveLease(LifecycleReservation),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum ArchiveReservationError {
-    #[error("thread has an admitted or active run")]
-    ActiveLease,
-    #[error("thread is already being archived or deleted")]
-    Unavailable,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum CoordinatedDeleteError<E> {
-    #[error("thread is already being archived or deleted")]
-    Unavailable,
-    #[error("failed to abort and drain thread runs: {0}")]
-    Abort(String),
-    #[error("thread delete failed: {0}")]
-    Operation(E),
 }
 
 #[derive(Debug, Clone)]
@@ -776,6 +654,18 @@ impl LifecycleReservation {
 
     pub fn commit_witness(&self) -> LifecycleCommitWitness {
         self.commit_witness.clone()
+    }
+
+    /// Owned drain future for a mutation supervisor. The reservation remains
+    /// guard-owned while the independently spawned future carries only its
+    /// immutable full-tuple token, so cancellation cannot release the fence
+    /// ahead of an abort/drain descendant.
+    pub fn abort_and_drain_future(
+        &self,
+    ) -> impl Future<Output = Result<(), CoordinationError>> + Send + 'static {
+        let coordinator = Arc::clone(&self.coordinator);
+        let token = self.token.clone();
+        async move { coordinator.abort_and_drain_token(&token).await }
     }
 
     pub fn mark_committed(&mut self, durable_terminal: Option<ThreadTerminalState>) {

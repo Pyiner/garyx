@@ -985,7 +985,7 @@ pub(crate) async fn thread_history_for_key(
     } else {
         Value::Null
     };
-    let mut data_raw = snapshot.thread_data;
+    let data_raw = snapshot.thread_data;
 
     let pending_raw = data_raw
         .get("pending_user_inputs")
@@ -993,12 +993,9 @@ pub(crate) async fn thread_history_for_key(
         .cloned()
         .unwrap_or_default();
     let mut pending_user_inputs = Vec::new();
-    let mut persisted_pending_user_inputs = Vec::new();
     let mut active_pending_user_input_count = 0_u64;
-    let mut pending_inputs_repaired = false;
     for record in pending_raw {
         let Some(obj) = record.as_object() else {
-            pending_inputs_repaired = true;
             continue;
         };
         let run_id = obj
@@ -1018,7 +1015,6 @@ pub(crate) async fn thread_history_for_key(
             .map(str::trim)
             .unwrap_or("queued");
         if stored_status.eq_ignore_ascii_case("abandoned") || !run_active {
-            pending_inputs_repaired = true;
             continue;
         }
 
@@ -1032,7 +1028,6 @@ pub(crate) async fn thread_history_for_key(
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| stringify_message_content(&content));
         let raw_content_type = raw_content_type_name(&content);
-        persisted_pending_user_inputs.push(record);
         pending_user_inputs.push(json!({
             "id": id,
             "run_id": run_id,
@@ -1043,17 +1038,6 @@ pub(crate) async fn thread_history_for_key(
             "content": content,
             "raw_content_type": raw_content_type,
         }));
-    }
-    if pending_inputs_repaired && let Some(obj) = data_raw.as_object_mut() {
-        obj.insert(
-            "pending_user_inputs".to_owned(),
-            Value::Array(persisted_pending_user_inputs),
-        );
-        state
-            .threads
-            .thread_store
-            .set_logged(key, data_raw.clone())
-            .await;
     }
     let thread = summarize_thread(key, &data_raw, &messages);
     json!({
