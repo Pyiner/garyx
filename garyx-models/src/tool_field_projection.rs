@@ -130,7 +130,7 @@ impl RenderToolFieldProjection {
         } else {
             projection.call = call_selector(message, kind);
         }
-        projection.summary = call_summary_selector(message, kind)
+        projection.summary = call_summary_selector(message, kind, projection.call.as_ref())
             .filter(|summary| projection.call.as_ref() != Some(summary));
         projection.absorb_metadata(message);
 
@@ -349,24 +349,42 @@ fn tool_visibility(tool_name: Option<&str>) -> RenderToolVisibility {
 }
 
 const CALL_SUMMARY_KEYS: &[&str] = &["label", "description", "toolSummary", "toolAction"];
-const TASK_CALL_SUMMARY_KEYS: &[&str] = &["label"];
+const LABEL_CALL_SUMMARY_KEYS: &[&str] = &["label"];
 
-fn call_summary_keys(kind: RenderToolKind) -> &'static [&'static str] {
-    match kind {
-        // Task subjects are already concise row labels and historically rank
-        // ahead of the long description body. Only an explicit label may
-        // override the subject in the collapsed row.
-        RenderToolKind::Task => TASK_CALL_SUMMARY_KEYS,
-        _ => CALL_SUMMARY_KEYS,
+fn call_summary_keys(
+    kind: RenderToolKind,
+    call: Option<&RenderToolFieldSelector>,
+) -> &'static [&'static str] {
+    if kind == RenderToolKind::Task
+        && call
+            .and_then(|selector| selector.path.last())
+            .is_some_and(|key| key == "subject")
+    {
+        // Preserve the legacy Task order: label, subject, description,
+        // toolSummary, toolAction, then prompt/ids. Once subject wins the
+        // substantive selector, only the earlier label may override it in the
+        // collapsed row. Without a subject, later descriptors remain eligible
+        // so command_status does not fall through to its raw CommandId.
+        LABEL_CALL_SUMMARY_KEYS
+    } else {
+        CALL_SUMMARY_KEYS
     }
 }
 
 fn call_summary_selector(
     message: &Map<String, Value>,
     kind: RenderToolKind,
+    call: Option<&RenderToolFieldSelector>,
 ) -> Option<RenderToolFieldSelector> {
     let (root, prefix, input) = call_input_object(message)?;
-    select_object_field(root, &prefix, input, call_summary_keys(kind), kind, false)
+    select_object_field(
+        root,
+        &prefix,
+        input,
+        call_summary_keys(kind, call),
+        kind,
+        false,
+    )
 }
 
 fn call_selector(
@@ -901,6 +919,37 @@ mod tests {
         assert_eq!(projection.kind, RenderToolKind::Task);
         assert_eq!(projection.call.as_ref().unwrap().path, ["input", "subject"]);
         assert_eq!(projection.summary, None);
+    }
+
+    #[test]
+    fn command_status_keeps_tool_summary_ahead_of_raw_command_id() {
+        // Sanitized real Antigravity command_status shape.
+        let call = object(json!({
+            "role": "tool_use",
+            "tool_name": "command_status",
+            "content": {
+                "name": "command_status",
+                "args": {
+                    "CommandId": "synthetic/task-8",
+                    "OutputCharacterCount": 128,
+                    "WaitDurationSeconds": 5,
+                    "toolAction": "Wait for package metadata",
+                    "toolSummary": "Check status"
+                }
+            }
+        }));
+
+        let projection = RenderToolFieldProjection::from_message(&call, false).unwrap();
+
+        assert_eq!(projection.kind, RenderToolKind::Task);
+        assert_eq!(
+            projection.call.as_ref().unwrap().path,
+            ["args", "CommandId"]
+        );
+        assert_eq!(
+            projection.summary.as_ref().unwrap().path,
+            ["args", "toolSummary"]
+        );
     }
 
     #[test]
