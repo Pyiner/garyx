@@ -34,7 +34,10 @@ pub(crate) fn migrate_meetings_pull_era_schema(conn: &Connection) -> GaryxDbResu
         // New shape, temporary name; column set matches MEETINGS_DDL exactly.
         tx.execute_batch(
             &MEETINGS_DDL
-                .replace("CREATE TABLE IF NOT EXISTS meetings (", "CREATE TABLE meetings_new (")
+                .replace(
+                    "CREATE TABLE IF NOT EXISTS meetings (",
+                    "CREATE TABLE meetings_new (",
+                )
                 .split("CREATE TABLE IF NOT EXISTS meeting_invite_keys")
                 .next()
                 .expect("meetings table section"),
@@ -61,26 +64,29 @@ pub(crate) fn migrate_meetings_pull_era_schema(conn: &Connection) -> GaryxDbResu
              DROP TABLE meetings;
              ALTER TABLE meetings_new RENAME TO meetings;",
         )?;
+        // Verify referential integrity BEFORE committing so a broken rebuild
+        // rolls back instead of persisting (review #TASK-2371).
+        let check: Vec<(String, String)> = {
+            let mut stmt = tx.prepare("PRAGMA foreign_key_check")?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(2)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        if !check.is_empty() {
+            return Err(GaryxDbError::Configuration(format!(
+                "meetings pull-era migration broke foreign keys: {check:?}"
+            )));
+        }
         tx.commit()?;
         Ok(())
     })();
     // Indexes were dropped with the old table; MEETINGS_DDL (run right after
     // this migration) recreates them via IF NOT EXISTS.
-    let check: Vec<(String, String)> = {
-        let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
-        let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(2)?)))?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows
-    };
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-    result?;
-    if !check.is_empty() {
-        return Err(GaryxDbError::Configuration(format!(
-            "meetings pull-era migration broke foreign keys: {check:?}"
-        )));
-    }
-    Ok(())
+    result
 }
 
 pub(crate) const MEETINGS_DDL: &str = r#"
@@ -1797,7 +1803,8 @@ CREATE TABLE meeting_invite_keys (
         assert!(err.is_err(), "old schema must reject participant_left");
 
         super::migrate_meetings_pull_era_schema(&conn).expect("migrate");
-        conn.execute_batch(super::MEETINGS_DDL).expect("post-migration ddl");
+        conn.execute_batch(super::MEETINGS_DDL)
+            .expect("post-migration ddl");
 
         // New CHECK accepts it; retired columns are gone; data survived.
         conn.execute(
@@ -1806,7 +1813,9 @@ CREATE TABLE meeting_invite_keys (
         )
         .expect("participant_left writable after migration");
         let mapped: String = conn
-            .query_row("SELECT end_source FROM meetings WHERE id = 'm2'", [], |r| r.get(0))
+            .query_row("SELECT end_source FROM meetings WHERE id = 'm2'", [], |r| {
+                r.get(0)
+            })
             .expect("m2 survives");
         assert_eq!(mapped, "push", "legacy poll_ended maps to push");
         let has_poll_cursor: i64 = conn
@@ -1818,7 +1827,11 @@ CREATE TABLE meeting_invite_keys (
             .expect("column check");
         assert_eq!(has_poll_cursor, 0, "retired columns dropped");
         let fk_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM meeting_invite_keys WHERE meeting_id = 'm1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM meeting_invite_keys WHERE meeting_id = 'm1'",
+                [],
+                |r| r.get(0),
+            )
             .expect("fk rows");
         assert_eq!(fk_count, 1, "invite keys survive with FK intact");
         // Second run is a no-op.

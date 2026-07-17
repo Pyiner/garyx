@@ -1077,6 +1077,56 @@ async fn run_live(
         )
         .await;
     }
+    // A Nudge on a live entity verifies membership by re-joining (idempotent
+    // on the platform). This is the durable recovery for entities stuck live
+    // after their end signal was consumed pre-crash (2026-07-17 incident:
+    // kick -> CHECK-blocked finalize -> restart -> re-invite folded into the
+    // active entity with no join). Registry registration after boot and
+    // distinct re-invites both arrive here as Nudge.
+    if commands
+        .iter()
+        .any(|command| matches!(command, CoordinatorCommand::Nudge))
+        && let Some(registered) = service.ingestion.current_client(&record.account_id)
+    {
+        let timeout = service.ingestion.timing().platform_timeout;
+        let join = tokio::time::timeout(timeout, registered.client.join(&record.meeting_no, None));
+        match join.await {
+            Ok(Ok(joined)) => {
+                info!(
+                    meeting_id = %record.id,
+                    feishu_meeting_id = %joined.feishu_meeting_id,
+                    "live nudge re-join verified membership"
+                );
+                let _ = service.db.mark_meeting_live(
+                    &record.id,
+                    &joined.feishu_meeting_id,
+                    &record.topic,
+                );
+            }
+            Ok(Err(error)) => {
+                if let Some(meeting_id) = error.meeting_id() {
+                    info!(
+                        meeting_id = %record.id,
+                        feishu_meeting_id = meeting_id,
+                        "live nudge re-join carried identity; treated as verified"
+                    );
+                } else if matches!(error, MeetingApiError::NotInMeeting) {
+                    return begin_abort(
+                        service,
+                        record,
+                        "re-join verify: platform reports meeting unavailable",
+                        service.ingestion.current_client(&record.account_id),
+                    )
+                    .await;
+                } else {
+                    warn!(meeting_id = %record.id, error = %error, "live nudge re-join verify failed; will retry on next nudge");
+                }
+            }
+            Err(_) => {
+                warn!(meeting_id = %record.id, "live nudge re-join verify timed out; will retry on next nudge");
+            }
+        }
+    }
     for command in commands {
         if let CoordinatorCommand::ActivityBatch {
             event_id,
@@ -1187,6 +1237,7 @@ async fn begin_finalizing(
             .unwrap_or_else(|_| chrono::Duration::minutes(4));
     let ended_at = timestamp(now);
     let grace_deadline_at = timestamp(deadline);
+    let mut attempt: u32 = 0;
     loop {
         match service.db.begin_meeting_finalizing(
             &record.id,
@@ -1219,12 +1270,26 @@ async fn begin_finalizing(
                 }
             },
             Err(error) => {
-                warn!(meeting_id = %record.id, error = %error, "failed to persist finalizing intent; retrying");
+                if attempt >= 10 {
+                    // A write that fails this persistently is almost certainly
+                    // permanent (e.g. a schema-shape mismatch — the 2026-07-17
+                    // CHECK incident retried every second forever). Keep
+                    // retrying (the durable intent must eventually land, e.g.
+                    // after a migration+restart), but loudly and slowly.
+                    error!(meeting_id = %record.id, attempt, error = %error, "finalizing intent persistently failing; likely permanent (schema/constraint) — backing off");
+                } else {
+                    warn!(meeting_id = %record.id, attempt, error = %error, "failed to persist finalizing intent; retrying");
+                }
             }
         }
+        attempt = attempt.saturating_add(1);
+        let base = service.ingestion.timing().barrier_retry;
+        let backoff = base
+            .saturating_mul(1u32 << attempt.min(6))
+            .min(Duration::from_secs(60));
         tokio::select! {
             _ = service.ingestion.shutdown.cancelled() => return FinalizeIntentOutcome::Shutdown,
-            _ = tokio::time::sleep(service.ingestion.timing().barrier_retry) => {}
+            _ = tokio::time::sleep(backoff) => {}
         }
     }
 }

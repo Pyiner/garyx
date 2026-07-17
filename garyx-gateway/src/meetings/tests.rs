@@ -2694,3 +2694,111 @@ fn activity_normalization_rejects_f64_ids_and_timestamps() {
     .expect_err("floating point identifiers and timestamps must be rejected");
     assert!(error.to_string().contains("sentence_id") || error.to_string().contains("integer"));
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn distinct_reinvite_on_live_entity_triggers_rejoin_verify() {
+    // Regression for the 2026-07-17 incident: an entity stuck live (its end
+    // signal consumed pre-crash) must recover when the user re-invites the
+    // bot — the folded invite's Nudge re-joins idempotently instead of
+    // silently doing nothing.
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(60));
+    let account_id = "reinvite-rejoin-account";
+    let client = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993301",
+        "ou_bot_reinvite",
+    ));
+    fixture.service.register_client(account_id, client.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-reinvite-1"));
+    let live = wait_for_record(&fixture.db, |record| record.status == "live").await;
+    let joins_after_admission = client.join_calls.load(Ordering::Acquire);
+    assert!(joins_after_admission >= 1);
+
+    // Distinct event id, same meeting: admission folds into the active
+    // entity and nudges — which must now verify membership by re-joining.
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-reinvite-2"));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if client.join_calls.load(Ordering::Acquire) > joins_after_admission {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "re-invite nudge never re-joined"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let record = fixture.db.get_meeting(&live.id).expect("get").expect("row");
+    assert_eq!(record.status, "live", "successful verify keeps entity live");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reinvite_rejoin_reporting_meeting_gone_converges_to_aborted() {
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(60));
+    let account_id = "reinvite-gone-account";
+    let client = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993302",
+        "ou_bot_reinvite_gone",
+    ));
+    fixture.service.register_client(account_id, client.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-gone-1"));
+    let live = wait_for_record(&fixture.db, |record| record.status == "live").await;
+
+    // Next join reports the meeting is unavailable: the stuck entity must
+    // converge to aborted instead of staying live forever.
+    client
+        .joins
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push_back(Err(MeetingApiError::NotInMeeting));
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-gone-2"));
+    let aborted = wait_for_record(&fixture.db, |record| record.status == "aborted").await;
+    assert_eq!(aborted.id, live.id);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn client_reregistration_nudge_verifies_live_membership() {
+    // Restart analogue: after boot, register_client nudges every
+    // non-terminal entity; a live entity must verify membership.
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(60));
+    let account_id = "reregister-verify-account";
+    let client = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993303",
+        "ou_bot_reregister",
+    ));
+    fixture.service.register_client(account_id, client.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-rereg-1"));
+    let _live = wait_for_record(&fixture.db, |record| record.status == "live").await;
+    let joins_before = client.join_calls.load(Ordering::Acquire);
+
+    let replacement = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993303",
+        "ou_bot_reregister",
+    ));
+    fixture
+        .service
+        .register_client(account_id, replacement.clone());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if replacement.join_calls.load(Ordering::Acquire) >= 1 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "re-registration nudge never verified membership (old client joins stayed at {joins_before})"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
