@@ -16,6 +16,7 @@ use axum::{
 use chrono::Utc;
 use garyx_models::config::AutomationScheduleView;
 use garyx_models::config::{CronAction, CronJobConfig, CronJobKind, CronSchedule, GaryxConfig};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[test]
@@ -619,7 +620,6 @@ async fn automation_threads_endpoint_returns_generated_run_associations() {
                 "agent_id": "codex",
                 "automation_id": "automation::daily",
                 "automation_thread_mode": "generated_thread",
-                "exclude_from_recent": true,
                 "messages": [{"role": "user", "content": "Summarize."}]
             }),
         )
@@ -664,11 +664,33 @@ async fn automation_threads_endpoint_returns_generated_run_associations() {
         payload["items"][0]["thread"]["automationThreadMode"],
         "generated_thread"
     );
-    assert!(
+    assert_eq!(
         payload["items"][0]["thread"]
-            .get("excludeFromRecent")
-            .is_none(),
-        "automation drilldown no longer replays retired membership state"
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "activeRunId",
+            "agentId",
+            "automationId",
+            "automationThreadMode",
+            "createdAt",
+            "id",
+            "label",
+            "lastAssistantMessage",
+            "lastUserMessage",
+            "messageCount",
+            "providerType",
+            "recentRunId",
+            "threadId",
+            "threadType",
+            "title",
+            "updatedAt",
+            "workspaceDir",
+        ]),
+        "automation drilldown summary has one exact wire shape"
     );
 }
 

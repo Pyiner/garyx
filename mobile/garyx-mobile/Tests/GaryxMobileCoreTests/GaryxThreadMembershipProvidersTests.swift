@@ -404,7 +404,7 @@ final class GaryxThreadMembershipProvidersTests: XCTestCase {
     ) throws -> GaryxThreadSummariesPage {
         let rows = ids.map { id in
             """
-            {"thread_id":"\(id)","title":"\(id)","workspace_dir":"/workspace/project","thread_type":"chat","provider_type":null,"agent_id":null,"created_at":null,"updated_at":null,"message_count":0,"last_user_message":null,"last_assistant_message":null,"last_message_preview":"","recent_run_id":null,"active_run_id":null,"worktree":null,"excluded_from_recent":false}
+            {"thread_id":"\(id)","title":"\(id)","workspace_dir":"/workspace/project","thread_type":"chat","provider_type":null,"agent_id":null,"created_at":null,"updated_at":null,"message_count":0,"last_user_message":null,"last_assistant_message":null,"last_message_preview":"","recent_run_id":null,"active_run_id":null,"worktree":null}
             """
         }.joined(separator: ",")
         return try JSONDecoder().decode(

@@ -1,14 +1,5 @@
 import Foundation
 
-public struct GaryxThreadsPage: Decodable, Equatable, Sendable {
-    public var threads: [GaryxThreadSummary]
-    public var count: Int
-    public var total: Int
-    public var limit: Int
-    public var offset: Int
-}
-
-
 public struct GaryxRecentThreadsPage: Decodable, Equatable, Sendable {
     public var storeIncarnationId: String
     public var serverBootId: String
@@ -397,7 +388,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var worktreePath: String?
     public var automationId: String?
     public var automationThreadMode: String?
-    public var excludeFromRecent: Bool
     public var threadRuntime: GaryxThreadRuntimeSummary?
 
     public init(
@@ -417,7 +407,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         worktreePath: String?,
         automationId: String? = nil,
         automationThreadMode: String? = nil,
-        excludeFromRecent: Bool = false,
         threadRuntime: GaryxThreadRuntimeSummary? = nil
     ) {
         self.id = id
@@ -436,7 +425,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         self.worktreePath = worktreePath
         self.automationId = automationId
         self.automationThreadMode = automationThreadMode
-        self.excludeFromRecent = excludeFromRecent
         self.threadRuntime = threadRuntime
     }
 
@@ -446,7 +434,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         case threadIdCamel = "threadId"
         case threadKey = "thread_key"
         case title
-        case label
         case createdAt = "created_at"
         case createdAtCamel = "createdAt"
         case updatedAt = "updated_at"
@@ -480,8 +467,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         case automationIdCamel = "automationId"
         case automationThreadMode = "automation_thread_mode"
         case automationThreadModeCamel = "automationThreadMode"
-        case excludeFromRecent = "exclude_from_recent"
-        case excludeFromRecentCamel = "excludeFromRecent"
         case threadRuntime = "thread_runtime"
     }
 
@@ -489,7 +474,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let resolvedId = try container.garyxDecodeFirstString(.id, .threadId, .threadIdCamel, .threadKey)
         id = resolvedId ?? ""
-        title = try container.garyxDecodeFirstString(.title, .label) ?? "New Thread"
+        title = try container.garyxDecodeFirstString(.title) ?? "New Thread"
         createdAt = try container.garyxDecodeFirstString(.createdAt, .createdAtCamel)
         updatedAt = try container.garyxDecodeFirstString(.updatedAt, .updatedAtCamel, .lastActiveAt, .lastActiveAtCamel)
         lastMessagePreview = try container.garyxDecodeFirstString(
@@ -522,9 +507,6 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
             .visiblePath
         automationId = try container.garyxDecodeFirstString(.automationId, .automationIdCamel)
         automationThreadMode = try container.garyxDecodeFirstString(.automationThreadMode, .automationThreadModeCamel)
-        excludeFromRecent = try container.decodeIfPresent(Bool.self, forKey: .excludeFromRecentCamel)
-            ?? container.decodeIfPresent(Bool.self, forKey: .excludeFromRecent)
-            ?? false
         threadRuntime = try container.decodeIfPresent(GaryxThreadRuntimeSummary.self, forKey: .threadRuntime)
     }
 }

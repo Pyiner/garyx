@@ -37,7 +37,6 @@ extension GaryxMobileModel {
         GaryxThreadRowCapabilityDeriver.capabilities(
             for: thread,
             context: GaryxThreadRowCapabilityContext(
-                isFavorite: threadFavoritesState.isPresented(threadId: thread.id),
                 automationTargetThreadIds: Set(automations.compactMap { automation in
                     (automation.targetThreadId ?? "").garyxTrimmedNilIfEmpty
                 }),
@@ -122,9 +121,7 @@ extension GaryxMobileModel {
         case .remove(let threadId):
             recentThreadFeeds.removeThread(threadId)
         case .upsertAtHead(let threadId):
-            if authority.summary?.excludeFromRecent != true {
-                recentThreadFeeds.upsertChat(threadId: threadId)
-            }
+            recentThreadFeeds.upsertChat(threadId: threadId)
         case .replace:
             // A hub replacement is committed into each provider below; the
             // two permanent Recent feeds retain their own pager barriers.

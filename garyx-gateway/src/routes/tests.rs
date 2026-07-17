@@ -62,6 +62,26 @@ async fn authed_get_json(router: &axum::Router, uri: &str) -> (StatusCode, Value
     (status, payload)
 }
 
+fn thread_summary_wire_keys() -> BTreeSet<&'static str> {
+    BTreeSet::from([
+        "active_run_id",
+        "agent_id",
+        "created_at",
+        "last_assistant_message",
+        "last_message_preview",
+        "last_user_message",
+        "message_count",
+        "provider_type",
+        "recent_run_id",
+        "thread_id",
+        "thread_type",
+        "title",
+        "updated_at",
+        "workspace_dir",
+        "worktree",
+    ])
+}
+
 #[tokio::test]
 async fn store_identity_endpoint_returns_persistent_incarnation_and_process_boot_uuid() {
     let db = Arc::new(crate::garyx_db::GaryxDbService::memory().expect("memory database"));
@@ -3781,15 +3801,12 @@ async fn thread_favorite_routes_enforce_dual_cas_and_return_tagged_atomic_pages(
 async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows() {
     let state = AppStateBuilder::new(test_config()).build();
     for thread_id in ["thread::snapshot-recent", "thread::snapshot-without-recent"] {
-        let mut record = json!({
+        let record = json!({
             "thread_id": thread_id,
             "label": thread_id,
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z"
         });
-        if thread_id == "thread::snapshot-without-recent" {
-            record["exclude_from_recent"] = json!(true);
-        }
         state
             .threads
             .thread_store
@@ -3911,7 +3928,16 @@ async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows
         .iter()
         .find(|row| row["thread_id"] == "thread::snapshot-without-recent")
         .expect("orphaned favorite summary");
-    assert_eq!(orphaned_favorite["excluded_from_recent"], false);
+    assert_eq!(
+        orphaned_favorite
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        thread_summary_wire_keys(),
+        "enhanced favorites summaries use the canonical summary envelope"
+    );
 }
 
 #[tokio::test]
@@ -3942,17 +3968,6 @@ async fn mode_only_generated_thread_flows_through_both_summary_envelopes_as_ordi
         .garyx_db
         .clear_projection_state(crate::garyx_db::RECENT_MEMBERSHIP_MIGRATION_NAME)
         .unwrap();
-    let mut stale_projection =
-        crate::thread_meta_projection::thread_meta_projection_from_thread_data_with_active_run(
-            thread_id, &canonical, None,
-        )
-        .unwrap();
-    stale_projection.thread_meta.excluded_from_recent = true;
-    state
-        .ops
-        .garyx_db
-        .replace_thread_meta_projection(stale_projection)
-        .unwrap();
     assert!(state.ops.garyx_db.remove_recent_thread(thread_id).unwrap());
     assert!(
         !state
@@ -3982,7 +3997,15 @@ async fn mode_only_generated_thread_flows_through_both_summary_envelopes_as_ordi
         .iter()
         .find(|row| row["thread_id"] == thread_id)
         .expect("mode-only row in thread summaries");
-    assert_eq!(summary["excluded_from_recent"], false);
+    assert_eq!(
+        summary
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        thread_summary_wire_keys()
+    );
 
     let (status, favorites) = authed_get_json(
         &router,
@@ -3996,7 +4019,15 @@ async fn mode_only_generated_thread_flows_through_both_summary_envelopes_as_ordi
         .iter()
         .find(|row| row["thread_id"] == thread_id)
         .expect("mode-only row in favorite summaries");
-    assert_eq!(favorite_summary["excluded_from_recent"], false);
+    assert_eq!(
+        favorite_summary
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        thread_summary_wire_keys()
+    );
     assert!(
         favorites["recent"]["threads"]
             .as_array()
@@ -4008,8 +4039,6 @@ async fn mode_only_generated_thread_flows_through_both_summary_envelopes_as_ordi
     let (status, point) = authed_get_json(&router, &format!("/api/threads/{thread_id}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(point["automation_thread_mode"], "generated_thread");
-    assert!(point.get("exclude_from_recent").is_none());
-    assert!(point.get("excludeFromRecent").is_none());
 }
 
 #[tokio::test]
@@ -4126,27 +4155,7 @@ async fn thread_summaries_route_scopes_filters_fields_and_paginates_normalized_t
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    assert_eq!(
-        keys,
-        BTreeSet::from([
-            "active_run_id",
-            "agent_id",
-            "created_at",
-            "excluded_from_recent",
-            "last_assistant_message",
-            "last_message_preview",
-            "last_user_message",
-            "message_count",
-            "provider_type",
-            "recent_run_id",
-            "thread_id",
-            "thread_type",
-            "title",
-            "updated_at",
-            "workspace_dir",
-            "worktree",
-        ])
-    );
+    assert_eq!(keys, thread_summary_wire_keys());
     assert_eq!(first["threads"][0]["title"], "Task summary");
     assert_eq!(first["threads"][0]["last_user_message"], "question");
     assert_eq!(first["threads"][0]["last_assistant_message"], "answer");
@@ -4643,7 +4652,6 @@ async fn summary_slice_preserves_existing_threads_recent_point_and_pins_envelope
     assert_eq!(status, StatusCode::OK);
     assert_eq!(point["label"], "Legacy envelope");
     assert!(point.get("title").is_none());
-    assert!(point.get("excluded_from_recent").is_none());
 }
 
 #[tokio::test]
@@ -6365,67 +6373,6 @@ async fn create_thread_writes_model_cell_not_override() {
             .get("model_reasoning_effort_override")
             .is_none(),
         "thread creation must not write the legacy effort override key"
-    );
-}
-
-#[tokio::test]
-async fn create_thread_endpoint_strips_both_retired_exclusion_spellings_at_both_levels() {
-    let (state, _logger, _dir) = test_state().await;
-    let workspace = tempdir().unwrap();
-    let router = build_router(state.clone());
-    let response = router
-        .oneshot(
-            authed_request()
-                .method("POST")
-                .uri("/api/threads")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "agentId": "claude",
-                        "workspaceDir": workspace.path().to_string_lossy(),
-                        "exclude_from_recent": true,
-                        "excludeFromRecent": true,
-                        "metadata": {
-                            "source": "legacy-client",
-                            "exclude_from_recent": true,
-                            "excludeFromRecent": true
-                        }
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
-    let payload: Value = serde_json::from_slice(
-        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    let thread_id = payload["thread_id"].as_str().unwrap();
-    let stored = state
-        .threads
-        .thread_store
-        .get(thread_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(stored.get("exclude_from_recent").is_none());
-    assert!(stored.get("excludeFromRecent").is_none());
-    let metadata = stored["metadata"].as_object().unwrap();
-    assert_eq!(metadata.get("source"), Some(&json!("legacy-client")));
-    assert!(metadata.get("exclude_from_recent").is_none());
-    assert!(metadata.get("excludeFromRecent").is_none());
-    assert!(
-        state
-            .ops
-            .garyx_db
-            .list_recent_threads(100, 0)
-            .unwrap()
-            .iter()
-            .any(|row| row.thread_id == thread_id)
     );
 }
 

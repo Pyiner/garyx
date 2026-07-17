@@ -528,7 +528,7 @@ extension GaryxMobileModel {
         [
           {
             "thread_id": "thread-history",
-            "label": "Thread History",
+            "title": "Thread History",
             "updated_at": "2026-05-19T08:30:00Z",
             "last_user_message": "Review markdown, tool folding, and sidebar hierarchy",
             "workspace_dir": "/workspace/garyx",
@@ -537,7 +537,7 @@ extension GaryxMobileModel {
           },
           {
             "thread_id": "thread-task-board",
-            "label": "Tasks",
+            "title": "Tasks",
             "updated_at": "2026-05-19T07:15:00Z",
             "last_assistant_message": "Task fields now match the desktop surface.",
             "workspace_dir": "/workspace/garyx",
@@ -546,7 +546,7 @@ extension GaryxMobileModel {
           },
           {
             "thread_id": "thread-automations",
-            "label": "Gateway automation smoke",
+            "title": "Gateway automation smoke",
             "updated_at": "2026-05-18T21:40:00Z",
             "last_assistant_message": "The synthetic run completed successfully.",
             "workspace_dir": "/workspace/garyx-gateway",
@@ -555,7 +555,7 @@ extension GaryxMobileModel {
           },
           {
             "thread_id": "thread-root-chat",
-            "label": "Quick root chat",
+            "title": "Quick root chat",
             "updated_at": "2026-05-18T19:10:00Z",
             "last_user_message": "Draft a compact release note",
             "message_count": 7,

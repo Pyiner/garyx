@@ -250,7 +250,6 @@ extension GaryxMobileModel {
                 worktreePath: thread.worktreePath,
                 automationId: thread.automationId,
                 automationThreadMode: thread.automationThreadMode,
-                excludeFromRecent: thread.excludeFromRecent,
                 threadRuntime: thread.threadRuntime
             )
         }

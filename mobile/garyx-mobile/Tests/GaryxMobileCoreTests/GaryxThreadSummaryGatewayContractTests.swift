@@ -119,10 +119,9 @@ final class GaryxThreadSummaryGatewayContractTests: XCTestCase {
     }
 
     func testModeOnlyServerRowFromBothSummaryEnvelopesHasFullFavoriteCapability() throws {
-        // The gateway route test seeds a canonical generated-mode-only row and
-        // pins these two exact wire fields to false. This Core half proves both
-        // envelopes reach the shared capability derivation without reviving
-        // the retired gate.
+        // The gateway route test seeds a canonical generated-mode-only row.
+        // This Core half proves both envelopes reach the shared capability
+        // derivation as ordinary rows.
         let decoder = JSONDecoder()
         let page = try decoder.decode(
             GaryxThreadSummariesPage.self,
@@ -144,7 +143,6 @@ final class GaryxThreadSummaryGatewayContractTests: XCTestCase {
             XCTUnwrap(favorites.summaries?.first),
         ]
         for row in rows {
-            XCTAssertFalse(row.excludeFromRecent)
             XCTAssertEqual(
                 GaryxThreadRowCapabilityDeriver.capabilities(
                     for: row,
@@ -174,7 +172,7 @@ final class GaryxThreadSummaryGatewayContractTests: XCTestCase {
 
 private func summaryRowJSON(_ id: String) -> String {
     """
-    {"thread_id":"\(id)","title":"\(id)","workspace_dir":"/workspace/project","thread_type":"chat","provider_type":null,"agent_id":null,"created_at":null,"updated_at":null,"message_count":0,"last_user_message":null,"last_assistant_message":null,"last_message_preview":"","recent_run_id":null,"active_run_id":null,"worktree":null,"excluded_from_recent":false}
+    {"thread_id":"\(id)","title":"\(id)","workspace_dir":"/workspace/project","thread_type":"chat","provider_type":null,"agent_id":null,"created_at":null,"updated_at":null,"message_count":0,"last_user_message":null,"last_assistant_message":null,"last_message_preview":"","recent_run_id":null,"active_run_id":null,"worktree":null}
     """
 }
 

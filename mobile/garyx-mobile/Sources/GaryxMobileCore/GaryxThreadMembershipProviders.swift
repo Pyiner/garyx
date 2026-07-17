@@ -1198,7 +1198,6 @@ public final class GaryxThreadListStore: ObservableObject {
                 for: row,
                 context: GaryxThreadRowCapabilityContext(
                     openable: bot?.openable ?? true,
-                    isFavorite: favoriteThreadIds.contains(row.id),
                     automationTargetThreadIds: automationTargetThreadIds,
                     hasActiveRun: activeRunThreadIds.contains(row.id),
                     botEndpointRow: bot != nil,

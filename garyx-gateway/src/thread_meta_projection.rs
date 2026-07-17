@@ -89,7 +89,6 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
             .map(|(context_json, _)| context_json.clone()),
         last_delivery_updated_at: last_delivery.and_then(|(_, updated_at)| updated_at),
         default_list_hidden: is_default_thread_list_hidden(data),
-        excluded_from_recent: false,
         sort_updated_at_us,
         search_text,
     };
@@ -243,30 +242,6 @@ mod tests {
         assert_eq!(normalize_for_search("Σςσ"), "σσσ");
         assert_eq!(normalize_for_search("％＿＼"), "%_\\");
         assert_eq!(normalize_for_search("left\0RIGHT"), "left\0right");
-    }
-
-    #[test]
-    fn summary_projection_neutralizes_retired_recent_exclusion_inputs() {
-        let cases = [
-            json!({}),
-            json!({"exclude_from_recent": true}),
-            json!({"exclude_from_recent": " YES "}),
-            json!({"excludeFromRecent": true}),
-            json!({"metadata": {"exclude_from_recent": "1"}}),
-            json!({"metadata": {"excludeFromRecent": true}}),
-            json!({"automation_thread_mode": "generated_thread"}),
-            json!({"metadata": {"automation_thread_mode": "GENERATED_THREAD"}}),
-        ];
-        for (index, data) in cases.into_iter().enumerate() {
-            let thread_id = format!("thread::exclusion-{index}");
-            let projected =
-                thread_meta_projection_from_thread_data_with_active_run(&thread_id, &data, None)
-                    .expect("summary projection");
-            assert!(
-                !projected.thread_meta.excluded_from_recent,
-                "payload {data}"
-            );
-        }
     }
 
     #[test]

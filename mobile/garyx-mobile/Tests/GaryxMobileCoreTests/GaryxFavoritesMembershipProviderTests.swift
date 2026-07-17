@@ -104,7 +104,7 @@ final class GaryxFavoritesMembershipProviderTests: XCTestCase {
         let cancellable = owner.$snapshot.dropFirst().sink { emissions.append($0) }
 
         let a = thread("thread::a", activitySeq: 20)
-        let b = thread("thread::b", excluded: true, activitySeq: 10)
+        let b = thread("thread::b", activitySeq: 10)
         let c = thread("thread::c")
         let decision = owner.completeSnapshot(
             ticket: ticket,
@@ -129,9 +129,9 @@ final class GaryxFavoritesMembershipProviderTests: XCTestCase {
 
         let capabilities = GaryxThreadRowCapabilityDeriver.capabilities(
             for: cache.summary(for: "thread::b"),
-            context: .init(isFavorite: true)
+            context: .init()
         )
-        XCTAssertEqual(capabilities.favorite, .removeOnly)
+        XCTAssertEqual(capabilities.favorite, .addAndRemove)
         withExtendedLifetime(cancellable) {}
     }
 
@@ -142,7 +142,7 @@ final class GaryxFavoritesMembershipProviderTests: XCTestCase {
         let ticket = try snapshotTicket(
             owner.requestSnapshot(for: resolution(.supported, generation: 3)).effects
         )
-        let visible = thread("thread::visible", excluded: true)
+        let visible = thread("thread::visible")
 
         let decision = owner.completeSnapshot(
             ticket: ticket,
@@ -370,7 +370,6 @@ final class GaryxFavoritesMembershipProviderTests: XCTestCase {
     private func thread(
         _ id: String,
         title: String? = nil,
-        excluded: Bool = false,
         activitySeq: Int64? = nil
     ) -> GaryxThreadSummary {
         GaryxThreadSummary(
@@ -387,8 +386,7 @@ final class GaryxFavoritesMembershipProviderTests: XCTestCase {
             activeRunId: nil,
             runState: nil,
             activitySeq: activitySeq,
-            worktreePath: nil,
-            excludeFromRecent: excluded
+            worktreePath: nil
         )
     }
 }

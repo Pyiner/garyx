@@ -423,7 +423,7 @@ final class GaryxGatewayClientTests: XCTestCase {
             """
             {
               "thread_id": "thread::test",
-              "label": "Mobile thread",
+              "title": "Mobile thread",
               "workspace_dir": "/path/to/repo",
               "message_count": 3,
               "last_user_message": "ship it",
@@ -2240,7 +2240,6 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(page.automationId, "automation::daily")
         XCTAssertEqual(page.items.first?.thread?.id, "thread::generated")
         XCTAssertEqual(page.items.first?.thread?.automationThreadMode, "generated_thread")
-        XCTAssertEqual(page.items.first?.thread?.excludeFromRecent, false)
     }
 
     func testMacParityAgentAndChannelPayloadsDecodeGatewayShapes() throws {

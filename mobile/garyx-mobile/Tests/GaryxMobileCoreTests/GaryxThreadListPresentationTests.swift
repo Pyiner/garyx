@@ -28,17 +28,17 @@ final class GaryxThreadListPresentationTests: XCTestCase {
         )
     }
 
-    func testActionPlannerKeepsExcludedFavoriteRemovableAndAutomationArchiveAbsent() {
-        let excludedFavorite = GaryxThreadRowCapabilities(
+    func testActionPlannerOmitsArchiveWhenCapabilityDoes() {
+        let automationManaged = GaryxThreadRowCapabilities(
             canOpen: true,
             canPin: true,
             canArchive: false,
-            favorite: .removeOnly,
+            favorite: .addAndRemove,
             archiveStrategy: .none
         )
         XCTAssertEqual(
             GaryxThreadRowActionPlanner.actions(
-                capabilities: excludedFavorite,
+                capabilities: automationManaged,
                 isPinned: false,
                 isFavorite: true
             ),
@@ -46,11 +46,11 @@ final class GaryxThreadListPresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             GaryxThreadRowActionPlanner.actions(
-                capabilities: excludedFavorite,
+                capabilities: automationManaged,
                 isPinned: false,
                 isFavorite: false
             ),
-            [.pin]
+            [.pin, .favorite]
         )
     }
 

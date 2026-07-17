@@ -411,10 +411,9 @@ mod tests {
                 last_delivery_context_json: draft.last_delivery_context_json,
                 last_delivery_updated_at: draft.last_delivery_updated_at,
                 default_list_hidden: draft.default_list_hidden,
-                excluded_from_recent: draft.excluded_from_recent,
                 sort_updated_at_us: draft.sort_updated_at_us,
                 search_text: draft.search_text,
-                projection_version: 5,
+                projection_version: 6,
                 projected_at: "2026-01-01T00:00:00Z".to_owned(),
             };
             let projected = build_thread_runtime_summary_from_meta(&state, &record, &catalog);

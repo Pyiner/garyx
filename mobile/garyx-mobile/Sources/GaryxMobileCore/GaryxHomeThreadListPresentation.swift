@@ -769,7 +769,6 @@ enum GaryxHomeThreadSectionsBuilder {
         let capabilities = GaryxThreadRowCapabilityDeriver.capabilities(
             for: thread,
             context: GaryxThreadRowCapabilityContext(
-                isFavorite: isFavorite,
                 automationTargetThreadIds: automationThreadIds,
                 hasActiveRun: false
             )

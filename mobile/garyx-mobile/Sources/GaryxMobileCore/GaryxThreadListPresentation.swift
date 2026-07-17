@@ -29,8 +29,6 @@ public enum GaryxThreadRowActionPlanner {
         switch capabilities.favorite {
         case .addAndRemove:
             actions.append(isFavorite ? .unfavorite : .favorite)
-        case .removeOnly:
-            if isFavorite { actions.append(.unfavorite) }
         case .none:
             break
         }

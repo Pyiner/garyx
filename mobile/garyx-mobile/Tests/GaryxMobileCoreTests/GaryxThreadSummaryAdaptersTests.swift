@@ -3,9 +3,7 @@ import XCTest
 
 final class GaryxThreadSummaryAdaptersTests: XCTestCase {
     func testCapturedNewSummaryRoutePayloadUsesStrictSnakeCaseAdapter() throws {
-        let row = try decode(
-            GaryxThreadSummaryRowDTO.self,
-            #"""
+        let json = #"""
             {
               "thread_id":"thread::summary",
               "title":"Summary",
@@ -21,18 +19,28 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
               "last_message_preview":"preview",
               "recent_run_id":"run-old",
               "active_run_id":null,
-              "worktree":{"worktree_dir":"/workspace/project/.worktrees/review"},
-              "excluded_from_recent":true
+              "worktree":{"worktree_dir":"/workspace/project/.worktrees/review"}
             }
             """#
-        )
+        let row = try decode(GaryxThreadSummaryRowDTO.self, json)
         let summary = GaryxThreadSummaryAdapter.summary(row)
         XCTAssertEqual(summary.id, "thread::summary")
         XCTAssertEqual(summary.title, "Summary")
         XCTAssertEqual(summary.workspacePath, "/workspace/project")
         XCTAssertEqual(summary.lastMessagePreview, "preview")
         XCTAssertEqual(summary.worktreePath, "/workspace/project/.worktrees/review")
-        XCTAssertTrue(summary.excludeFromRecent)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        )
+        XCTAssertEqual(
+            Set(object.keys),
+            [
+                "thread_id", "title", "workspace_dir", "thread_type", "provider_type",
+                "agent_id", "created_at", "updated_at", "message_count",
+                "last_user_message", "last_assistant_message", "last_message_preview",
+                "recent_run_id", "active_run_id", "worktree",
+            ]
+        )
     }
 
     func testCapturedLegacyPointReadPreservesLabelAndNestedRuntime() throws {
@@ -43,7 +51,6 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
               "thread_id":"thread::legacy",
               "label":"Legacy label",
               "workspace_dir":"/workspace/legacy",
-              "metadata":{"exclude_from_recent":" YES "},
               "history":{"recent_committed_run_ids":["run-1","run-2"],"messages":[{},{}]},
               "thread_runtime":{"agent_id":"codex","provider_type":"openai"}
             }
@@ -55,7 +62,6 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
         XCTAssertEqual(summary.messageCount, 2)
         XCTAssertEqual(summary.recentRunId, "run-2")
         XCTAssertEqual(summary.threadRuntime?.agentId, "codex")
-        XCTAssertFalse(summary.excludeFromRecent)
     }
 
     func testCapturedAutomationCamelPayloadUsesIndependentAdapter() throws {
@@ -82,43 +88,14 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
         XCTAssertEqual(summary.lastMessagePreview, "done")
         XCTAssertEqual(summary.automationId, "automation::daily")
         XCTAssertEqual(summary.automationThreadMode, "generated_thread")
-        XCTAssertFalse(summary.excludeFromRecent)
     }
 
-    func testLegacyExclusionFixtureMatrixIsSemanticallyNeutralized() throws {
-        let fixtures: [(String, Bool)] = [
-            (#"{}"#, false),
-            (#"{"exclude_from_recent":true}"#, false),
-            (#"{"exclude_from_recent":" YES "}"#, false),
-            (#"{"exclude_from_recent":"1"}"#, false),
-            (#"{"exclude_from_recent":"false"}"#, false),
-            (#"{"exclude_from_recent":1}"#, false),
-            (#"{"excludeFromRecent":true}"#, false),
-            (#"{"metadata":{"exclude_from_recent":"true"}}"#, false),
-            (#"{"metadata":{"excludeFromRecent":true}}"#, false),
-            (#"{"automation_thread_mode":"generated_thread"}"#, false),
-            (#"{"automation_thread_mode":" GENERATED_THREAD "}"#, false),
-            (#"{"automationThreadMode":"generated_thread"}"#, false),
-            (#"{"metadata":{"automation_thread_mode":"GENERATED_THREAD"}}"#, false),
-            (#"{"metadata":{"automationThreadMode":"generated_thread"}}"#, false),
-            (#"{"metadata":"not-an-object","exclude_from_recent":false}"#, false),
-            (#"{"exclude_from_recent":false,"metadata":{"exclude_from_recent":"yes"}}"#, false),
-            (#"{"automation_thread_mode":"ordinary","metadata":{"automation_thread_mode":"generated_thread"}}"#, false),
-        ]
-
-        for (index, fixture) in fixtures.enumerated() {
-            let record = try decode(GaryxLegacyThreadRecordDTO.self, fixture.0)
-            XCTAssertEqual(
-                GaryxThreadSummaryAdapter.legacyRecordIsExcluded(record.payload),
-                fixture.1,
-                "fixture \(index): \(fixture.0)"
-            )
-            XCTAssertEqual(
-                GaryxThreadSummaryAdapter.summary(record).excludeFromRecent,
-                fixture.1,
-                "adapter fixture \(index): \(fixture.0)"
-            )
-        }
+    func testGenericSummaryDoesNotConsumePointReadLabelCompatibility() throws {
+        let summary = try decode(
+            GaryxThreadSummary.self,
+            #"{"thread_id":"thread::generic","label":"Point-only label"}"#
+        )
+        XCTAssertEqual(summary.title, "New Thread")
     }
 
     @MainActor
@@ -130,33 +107,22 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
               "thread_id":"thread::generated-point-read",
               "label":"Generated point read",
               "automation_id":"automation::daily",
-              "automation_thread_mode":"generated_thread",
-              "exclude_from_recent":true,
-              "metadata":{"exclude_from_recent":true}
+              "automation_thread_mode":"generated_thread"
             }
             """#
         )
         let pointReadSummary = GaryxThreadSummaryAdapter.summary(record)
-        XCTAssertFalse(pointReadSummary.excludeFromRecent)
         XCTAssertEqual(pointReadSummary.automationThreadMode, "generated_thread")
 
         let cache = GaryxThreadSummaryCache()
-        var staleSummary = pointReadSummary
-        staleSummary.excludeFromRecent = true
-        cache.writeThrough([staleSummary])
         cache.writeThrough([pointReadSummary])
         let summary = try XCTUnwrap(cache.summary(for: pointReadSummary.id))
-        XCTAssertFalse(summary.excludeFromRecent)
         let capabilities = GaryxThreadRowCapabilityDeriver.capabilities(
             for: summary,
             context: GaryxThreadRowCapabilityContext()
         )
         XCTAssertEqual(capabilities.favorite, .addAndRemove)
-        XCTAssertTrue(
-            GaryxLastOpenedThreadRestorationPolicy.shouldPersistLastOpenedThread(
-                excludedFromRecent: summary.excludeFromRecent
-            )
-        )
+        XCTAssertTrue(GaryxLastOpenedThreadRestorationPolicy.shouldPersistLastOpenedThread())
     }
 
     func testCapabilitiesFullRuleTable() {
@@ -167,9 +133,6 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
             var expected: GaryxThreadRowCapabilities
         }
         let ordinary = thread(id: "thread::ordinary")
-        var excluded = ordinary
-        excluded.id = "thread::excluded"
-        excluded.excludeFromRecent = true
         let none = GaryxThreadRowCapabilities(
             canOpen: false,
             canPin: false,
@@ -187,30 +150,6 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
                     canPin: true,
                     canArchive: true,
                     favorite: .addAndRemove,
-                    archiveStrategy: .thread
-                )
-            ),
-            Case(
-                name: "excluded-new",
-                summary: excluded,
-                context: .init(isFavorite: false),
-                expected: .init(
-                    canOpen: true,
-                    canPin: true,
-                    canArchive: true,
-                    favorite: .none,
-                    archiveStrategy: .thread
-                )
-            ),
-            Case(
-                name: "excluded-existing-favorite",
-                summary: excluded,
-                context: .init(isFavorite: true),
-                expected: .init(
-                    canOpen: true,
-                    canPin: true,
-                    canArchive: true,
-                    favorite: .removeOnly,
                     archiveStrategy: .thread
                 )
             ),

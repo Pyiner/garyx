@@ -191,11 +191,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_automation_threads_are_ordinary_projectable_recent_threads() {
+    fn generated_automation_threads_are_projectable_recent_threads() {
         let data = json!({
             "label": "Daily automation",
             "automation_thread_mode": "generated_thread",
-            "exclude_from_recent": true,
             "updated_at": "2026-01-01T00:00:01Z",
         });
 

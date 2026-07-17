@@ -31,9 +31,11 @@ pub use task_forest::{
     TaskProjectionDraft,
 };
 
-const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 5;
+const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 6;
 pub(crate) const THREAD_META_SUMMARY_MIGRATION_NAME: &str = "thread_meta_summary_v1";
 const THREAD_META_SUMMARY_MIGRATION_VERSION: i64 = 1;
+pub(crate) const THREAD_META_SCHEMA_MIGRATION_NAME: &str = "thread_meta_schema_v2";
+const THREAD_META_SCHEMA_MIGRATION_VERSION: i64 = 2;
 pub(crate) const RECENT_TASK_THREAD_KIND_MIGRATION_NAME: &str = "recent_task_thread_kind_v1";
 const RECENT_TASK_THREAD_KIND_MIGRATION_VERSION: i64 = 1;
 pub(crate) const ENDPOINT_HOLDER_DEDUP_MIGRATION_NAME: &str = "endpoint_holder_dedup_v1";
@@ -49,6 +51,35 @@ const RECENT_MEMBERSHIP_MIGRATION_VERSION: i64 = 2;
 const LEGACY_IMPORT_GENERATION_NAME: &str = "legacy_import_generation";
 const LEGACY_IMPORT_GENERATION_VERSION: i64 = 1;
 pub(crate) const MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE: i64 = 9_007_199_254_740_991;
+const THREAD_META_SCHEMA_V2_COLUMNS: &[&str] = &[
+    "thread_id",
+    "workspace_dir",
+    "thread_type",
+    "thread_label",
+    "agent_id",
+    "provider_type",
+    "created_at",
+    "updated_at",
+    "message_count",
+    "last_user_message",
+    "last_assistant_message",
+    "last_message_preview",
+    "recent_run_id",
+    "active_run_id",
+    "worktree_json",
+    "last_delivery_context_json",
+    "last_delivery_updated_at",
+    "default_list_hidden",
+    "sort_updated_at_us",
+    "search_text",
+    "provider_key",
+    "selected_model",
+    "selected_model_reasoning_effort",
+    "selected_model_service_tier",
+    "sdk_session_id",
+    "projection_version",
+    "projected_at",
+];
 
 #[cfg(any(test, feature = "test-seams"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -423,7 +454,6 @@ pub struct ThreadSummaryRow {
     pub recent_run_id: Option<String>,
     pub active_run_id: Option<String>,
     pub worktree: Option<Value>,
-    pub excluded_from_recent: bool,
     #[serde(skip)]
     pub(crate) sort_updated_at_us: i64,
 }
@@ -525,7 +555,7 @@ macro_rules! thread_summary_sql {
             "SELECT thread_id, thread_label, workspace_dir, thread_type, provider_type,\n",
             "       agent_id, created_at, updated_at, message_count, last_user_message,\n",
             "       last_assistant_message, last_message_preview, recent_run_id,\n",
-            "       active_run_id, worktree_json, excluded_from_recent, sort_updated_at_us\n",
+            "       active_run_id, worktree_json, sort_updated_at_us\n",
             "  FROM thread_meta INDEXED BY ",
             $index,
             "\n",
@@ -723,7 +753,6 @@ pub struct ThreadMetaRecord {
     pub last_delivery_context_json: Option<String>,
     pub last_delivery_updated_at: Option<String>,
     pub default_list_hidden: bool,
-    pub excluded_from_recent: bool,
     pub sort_updated_at_us: i64,
     pub search_text: String,
     pub projection_version: i64,
@@ -755,7 +784,6 @@ pub struct ThreadMetaDraft {
     pub last_delivery_context_json: Option<String>,
     pub last_delivery_updated_at: Option<String>,
     pub default_list_hidden: bool,
-    pub excluded_from_recent: bool,
     pub sort_updated_at_us: i64,
     pub search_text: String,
 }
@@ -1625,8 +1653,7 @@ impl GaryxDbService {
                         meta.created_at, meta.updated_at, meta.message_count,
                         meta.last_user_message, meta.last_assistant_message,
                         meta.last_message_preview, meta.recent_run_id,
-                        meta.active_run_id, meta.worktree_json,
-                        meta.excluded_from_recent, meta.sort_updated_at_us
+                        meta.active_run_id, meta.worktree_json, meta.sort_updated_at_us
                    FROM summary_window AS member
                    JOIN thread_meta AS meta ON meta.thread_id = member.thread_id
                   WHERE meta.default_list_hidden = 0
@@ -2285,6 +2312,7 @@ impl GaryxDbService {
         self.migrate_thread_meta_summary_v1()?;
         self.migrate_recent_thread_activity_seq_v1()?;
         self.migrate_recent_membership_v2()?;
+        self.migrate_thread_meta_schema_v2()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         Ok(())
     }
@@ -2510,9 +2538,9 @@ impl GaryxDbService {
              DROP INDEX IF EXISTS idx_recent_threads_non_task_activity_seq;",
         )?;
 
-        // b. Normalize every live canonical record, strip all four retired
-        // flag paths, and rederive every thread_meta row even when the body is
-        // byte-identical. Do not touch recent_threads in this phase.
+        // b. Normalize every live canonical side chat and rederive every
+        // thread_meta row even when the body is byte-identical. Do not touch
+        // recent_threads in this phase.
         let canonical_rows = {
             let mut stmt = tx.prepare(
                 "SELECT record.key, record.body
@@ -2540,7 +2568,7 @@ impl GaryxDbService {
                     "recent membership cutover could not decode {thread_id}: {error}"
                 ))
             })?;
-            let canonical_changed = normalize_recent_membership_canonical_record(&mut data);
+            let canonical_changed = normalize_side_chat_canonical_record(&mut data);
             if canonical_changed {
                 let normalized_body = serde_json::to_string(&data).map_err(|error| {
                     GaryxDbError::Configuration(format!(
@@ -2567,18 +2595,6 @@ impl GaryxDbService {
                 target_drafts.push(draft);
             }
         }
-        tx.execute("UPDATE thread_meta SET excluded_from_recent = 0", [])?;
-        let nonzero_excluded_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM thread_meta WHERE excluded_from_recent != 0",
-            [],
-            |row| row.get(0),
-        )?;
-        if nonzero_excluded_count != 0 {
-            return Err(GaryxDbError::Configuration(
-                "recent membership cutover left nonzero excluded_from_recent rows".to_owned(),
-            ));
-        }
-
         let target_ids = target_drafts
             .iter()
             .map(|draft| draft.thread_id.clone())
@@ -3232,7 +3248,7 @@ impl GaryxDbService {
         })
     }
 
-    /// Backfill the three list-summary columns from canonical thread records
+    /// Backfill the retained list-summary columns from canonical thread records
     /// exactly once per legacy-import generation. Normal writes derive the
     /// same fields before entering the record/projection transaction.
     pub(crate) fn migrate_thread_meta_summary_v1(&self) -> GaryxDbResult<OneShotMigrationSummary> {
@@ -3288,16 +3304,10 @@ impl GaryxDbService {
                 })?;
             updated_row_count += tx.execute(
                 "UPDATE thread_meta
-                    SET excluded_from_recent = ?1,
-                        sort_updated_at_us = ?2,
-                        search_text = ?3
-                  WHERE thread_id = ?4",
+                    SET sort_updated_at_us = ?1,
+                        search_text = ?2
+                  WHERE thread_id = ?3",
                 params![
-                    if projection.thread_meta.excluded_from_recent {
-                        1
-                    } else {
-                        0
-                    },
                     projection.thread_meta.sort_updated_at_us,
                     projection.thread_meta.search_text,
                     thread_id,
@@ -3310,6 +3320,148 @@ impl GaryxDbService {
             THREAD_META_SUMMARY_MIGRATION_VERSION,
             source_row_count,
             Some(import_generation),
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count,
+            already_completed: false,
+        })
+    }
+
+    /// Advance the physical thread-summary projection schema without
+    /// reusing the generation-aware v1 backfill marker. Depending on their
+    /// upgrade path, legacy databases have the retained columns in an older
+    /// order and may have one extra column. Rebuilding from the explicit v2
+    /// set canonicalizes both shapes while preserving every live value.
+    pub(crate) fn migrate_thread_meta_schema_v2(&self) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let completed_source_count = tx
+            .query_row(
+                "SELECT source_row_count
+                   FROM projection_states
+                  WHERE projection_name = ?1 AND projection_version = ?2",
+                params![
+                    THREAD_META_SCHEMA_MIGRATION_NAME,
+                    THREAD_META_SCHEMA_MIGRATION_VERSION
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        let actual_columns = thread_meta_column_names(&tx)?;
+        let expected_columns = THREAD_META_SCHEMA_V2_COLUMNS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>();
+        if actual_columns == expected_columns {
+            if let Some(source_row_count) = completed_source_count {
+                tx.commit()?;
+                return Ok(OneShotMigrationSummary {
+                    source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                    updated_row_count: 0,
+                    already_completed: true,
+                });
+            }
+        } else {
+            let actual = actual_columns.iter().collect::<BTreeSet<_>>();
+            let expected = expected_columns.iter().collect::<BTreeSet<_>>();
+            let missing = expected
+                .difference(&actual)
+                .copied()
+                .cloned()
+                .collect::<Vec<_>>();
+            let extra = actual
+                .difference(&expected)
+                .copied()
+                .cloned()
+                .collect::<Vec<_>>();
+            if !missing.is_empty() || extra.len() > 1 {
+                return Err(GaryxDbError::Configuration(format!(
+                    "thread_meta schema v2 found an unsupported legacy shape; missing={missing:?}, extra={extra:?}"
+                )));
+            }
+        }
+
+        let source_row_count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM thread_meta", [], |row| row.get(0))?;
+        let updated_row_count = if actual_columns == expected_columns {
+            tx.execute(
+                "UPDATE thread_meta
+                    SET projection_version = ?1
+                  WHERE projection_version != ?1",
+                params![CURRENT_THREAD_META_PROJECTION_VERSION],
+            )?
+        } else {
+            tx.execute_batch(
+                "DROP TABLE IF EXISTS thread_meta_schema_v2;
+                 CREATE TABLE thread_meta_schema_v2 (
+                    thread_id TEXT PRIMARY KEY,
+                    workspace_dir TEXT,
+                    thread_type TEXT NOT NULL DEFAULT 'chat',
+                    thread_label TEXT,
+                    agent_id TEXT,
+                    provider_type TEXT,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    message_count INTEGER NOT NULL DEFAULT 0,
+                    last_user_message TEXT,
+                    last_assistant_message TEXT,
+                    last_message_preview TEXT,
+                    recent_run_id TEXT,
+                    active_run_id TEXT,
+                    worktree_json TEXT,
+                    last_delivery_context_json TEXT,
+                    last_delivery_updated_at TEXT,
+                    default_list_hidden INTEGER NOT NULL DEFAULT 0,
+                    sort_updated_at_us INTEGER NOT NULL DEFAULT 0,
+                    search_text TEXT NOT NULL DEFAULT '',
+                    provider_key TEXT,
+                    selected_model TEXT,
+                    selected_model_reasoning_effort TEXT,
+                    selected_model_service_tier TEXT,
+                    sdk_session_id TEXT,
+                    projection_version INTEGER NOT NULL DEFAULT 6,
+                    projected_at TEXT NOT NULL
+                 ) STRICT;",
+            )?;
+            tx.execute(
+                "INSERT INTO thread_meta_schema_v2 (
+                    thread_id, workspace_dir, thread_type, thread_label, agent_id,
+                    provider_type, created_at, updated_at, message_count,
+                    last_user_message, last_assistant_message, last_message_preview,
+                    recent_run_id, active_run_id, worktree_json,
+                    last_delivery_context_json, last_delivery_updated_at,
+                    default_list_hidden, sort_updated_at_us, search_text,
+                    provider_key, selected_model, selected_model_reasoning_effort,
+                    selected_model_service_tier, sdk_session_id, projection_version,
+                    projected_at
+                 )
+                 SELECT thread_id, workspace_dir, thread_type, thread_label, agent_id,
+                        provider_type, created_at, updated_at, message_count,
+                        last_user_message, last_assistant_message, last_message_preview,
+                        recent_run_id, active_run_id, worktree_json,
+                        last_delivery_context_json, last_delivery_updated_at,
+                        default_list_hidden, sort_updated_at_us, search_text,
+                        provider_key, selected_model, selected_model_reasoning_effort,
+                        selected_model_service_tier, sdk_session_id, ?1, projected_at
+                   FROM thread_meta",
+                params![CURRENT_THREAD_META_PROJECTION_VERSION],
+            )?;
+            tx.execute_batch(
+                "DROP TABLE thread_meta;
+                 ALTER TABLE thread_meta_schema_v2 RENAME TO thread_meta;",
+            )?;
+            ensure_thread_meta_indexes(&tx)?;
+            usize::try_from(source_row_count).unwrap_or(usize::MAX)
+        };
+        record_projection_state_tx(
+            &tx,
+            THREAD_META_SCHEMA_MIGRATION_NAME,
+            THREAD_META_SCHEMA_MIGRATION_VERSION,
+            source_row_count,
+            None,
         )?;
         tx.commit()?;
 
@@ -3564,7 +3716,7 @@ impl GaryxDbService {
                           last_user_message, last_assistant_message, last_message_preview,
                           recent_run_id, active_run_id, worktree_json,
                           last_delivery_context_json, last_delivery_updated_at,
-                          default_list_hidden, excluded_from_recent, sort_updated_at_us,
+                          default_list_hidden, sort_updated_at_us,
                           search_text, provider_key, selected_model,
                           selected_model_reasoning_effort, selected_model_service_tier,
                           sdk_session_id, projection_version, projected_at
@@ -3621,7 +3773,7 @@ impl GaryxDbService {
                     last_user_message, last_assistant_message, last_message_preview,
                     recent_run_id, active_run_id, worktree_json,
                     last_delivery_context_json, last_delivery_updated_at,
-                    default_list_hidden, excluded_from_recent, sort_updated_at_us,
+                    default_list_hidden, sort_updated_at_us,
                     search_text, provider_key, selected_model,
                     selected_model_reasoning_effort, selected_model_service_tier,
                     sdk_session_id, projection_version, projected_at
@@ -4318,7 +4470,6 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             last_delivery_context_json TEXT,
             last_delivery_updated_at TEXT,
             default_list_hidden INTEGER NOT NULL DEFAULT 0,
-            excluded_from_recent INTEGER NOT NULL DEFAULT 0,
             sort_updated_at_us INTEGER NOT NULL DEFAULT 0,
             search_text TEXT NOT NULL DEFAULT '',
             provider_key TEXT,
@@ -4326,19 +4477,9 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             selected_model_reasoning_effort TEXT,
             selected_model_service_tier TEXT,
             sdk_session_id TEXT,
-            projection_version INTEGER NOT NULL DEFAULT 5,
+            projection_version INTEGER NOT NULL DEFAULT 6,
             projected_at TEXT NOT NULL
         ) STRICT;
-
-        CREATE INDEX IF NOT EXISTS idx_thread_meta_workspace
-            ON thread_meta(workspace_dir);
-
-        CREATE INDEX IF NOT EXISTS idx_thread_meta_type_updated
-            ON thread_meta(thread_type, updated_at DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_thread_meta_last_delivery
-            ON thread_meta(last_delivery_updated_at DESC)
-            WHERE last_delivery_context_json IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS thread_channel_endpoints (
             endpoint_key TEXT PRIMARY KEY,
@@ -4438,30 +4579,9 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
 
         CREATE INDEX IF NOT EXISTS idx_thread_channel_endpoints_channel_account
             ON thread_channel_endpoints(channel, account_id);
-
-        CREATE INDEX IF NOT EXISTS idx_thread_meta_visible_updated
-            ON thread_meta(default_list_hidden, updated_at DESC, projected_at DESC);
-
-        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_visible
-            ON thread_meta(sort_updated_at_us DESC, thread_id DESC)
-            WHERE default_list_hidden = 0;
-        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_task
-            ON thread_meta(sort_updated_at_us DESC, thread_id DESC)
-            WHERE default_list_hidden = 0 AND thread_type = 'task';
-        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_non_task
-            ON thread_meta(sort_updated_at_us DESC, thread_id DESC)
-            WHERE default_list_hidden = 0 AND thread_type <> 'task';
-        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_visible
-            ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
-            WHERE default_list_hidden = 0;
-        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_task
-            ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
-            WHERE default_list_hidden = 0 AND thread_type = 'task';
-        CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_non_task
-            ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
-            WHERE default_list_hidden = 0 AND thread_type <> 'task';
         "#,
     )?;
+    ensure_thread_meta_indexes(conn)?;
     ensure_workspaces_deleted_at_column(conn)?;
     conn.execute_batch(
         r#"
@@ -4616,11 +4736,10 @@ struct FrozenRecentMembershipRow {
     last_active_at: String,
 }
 
-/// S5 canonical normalization. Side-chat identity is intentionally narrow:
-/// only a top-level or metadata `source == "side_chat"` hides the record.
-/// Parent markers and retired exclusion flags alone never classify a side
-/// chat. The retired flags are still stripped from all object-shaped records.
-fn normalize_recent_membership_canonical_record(data: &mut Value) -> bool {
+/// Side-chat identity is intentionally narrow: only a top-level or metadata
+/// `source == "side_chat"` hides the record. Parent markers alone never
+/// classify a side chat.
+fn normalize_side_chat_canonical_record(data: &mut Value) -> bool {
     let side_chat = data.get("source").and_then(Value::as_str) == Some("side_chat")
         || data
             .get("metadata")
@@ -4632,20 +4751,11 @@ fn normalize_recent_membership_canonical_record(data: &mut Value) -> bool {
         return false;
     };
 
-    let mut changed = false;
     if side_chat && object.get("hidden") != Some(&Value::Bool(true)) {
         object.insert("hidden".to_owned(), Value::Bool(true));
-        changed = true;
+        return true;
     }
-    for key in ["exclude_from_recent", "excludeFromRecent"] {
-        changed |= object.remove(key).is_some();
-    }
-    if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
-        for key in ["exclude_from_recent", "excludeFromRecent"] {
-            changed |= metadata.remove(key).is_some();
-        }
-    }
-    changed
+    false
 }
 
 fn recent_membership_timestamp(value: &str) -> (i64, u32) {
@@ -5065,16 +5175,15 @@ fn thread_meta_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Thre
         last_delivery_context_json: row.get(15)?,
         last_delivery_updated_at: row.get(16)?,
         default_list_hidden: row.get::<_, i64>(17)? != 0,
-        excluded_from_recent: row.get::<_, i64>(18)? != 0,
-        sort_updated_at_us: row.get(19)?,
-        search_text: row.get(20)?,
-        provider_key: row.get(21)?,
-        selected_model: row.get(22)?,
-        selected_model_reasoning_effort: row.get(23)?,
-        selected_model_service_tier: row.get(24)?,
-        sdk_session_id: row.get(25)?,
-        projection_version: row.get(26)?,
-        projected_at: row.get(27)?,
+        sort_updated_at_us: row.get(18)?,
+        search_text: row.get(19)?,
+        provider_key: row.get(20)?,
+        selected_model: row.get(21)?,
+        selected_model_reasoning_effort: row.get(22)?,
+        selected_model_service_tier: row.get(23)?,
+        sdk_session_id: row.get(24)?,
+        projection_version: row.get(25)?,
+        projected_at: row.get(26)?,
     })
 }
 
@@ -5096,8 +5205,7 @@ fn thread_summary_row_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Thre
         recent_run_id: row.get(12)?,
         active_run_id: row.get(13)?,
         worktree: worktree_json.and_then(|value| serde_json::from_str(&value).ok()),
-        excluded_from_recent: row.get::<_, i64>(15)? != 0,
-        sort_updated_at_us: row.get(16)?,
+        sort_updated_at_us: row.get(15)?,
     })
 }
 
@@ -5364,7 +5472,6 @@ fn upsert_thread_meta(
     let last_delivery_context_json = normalize_optional(meta.last_delivery_context_json.as_deref());
     let last_delivery_updated_at = normalize_optional(meta.last_delivery_updated_at.as_deref());
     let default_list_hidden = if meta.default_list_hidden { 1 } else { 0 };
-    let excluded_from_recent = if meta.excluded_from_recent { 1 } else { 0 };
     let sort_updated_at_us = meta.sort_updated_at_us;
     let search_text = meta.search_text.clone();
     let provider_key = normalize_optional(meta.provider_key.as_deref());
@@ -5381,12 +5488,12 @@ fn upsert_thread_meta(
             created_at, updated_at, message_count, last_user_message, last_assistant_message,
             last_message_preview, recent_run_id, active_run_id, worktree_json,
             last_delivery_context_json, last_delivery_updated_at, default_list_hidden,
-            excluded_from_recent, sort_updated_at_us, search_text,
+            sort_updated_at_us, search_text,
             provider_key, selected_model, selected_model_reasoning_effort,
             selected_model_service_tier, sdk_session_id,
             projection_version, projected_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
          ON CONFLICT(thread_id) DO UPDATE SET
             workspace_dir = excluded.workspace_dir,
             thread_type = excluded.thread_type,
@@ -5410,7 +5517,6 @@ fn upsert_thread_meta(
             last_delivery_context_json = excluded.last_delivery_context_json,
             last_delivery_updated_at = excluded.last_delivery_updated_at,
             default_list_hidden = excluded.default_list_hidden,
-            excluded_from_recent = excluded.excluded_from_recent,
             sort_updated_at_us = excluded.sort_updated_at_us,
             search_text = excluded.search_text,
             projection_version = excluded.projection_version,
@@ -5434,7 +5540,6 @@ fn upsert_thread_meta(
             last_delivery_context_json,
             last_delivery_updated_at,
             default_list_hidden,
-            excluded_from_recent,
             sort_updated_at_us,
             search_text,
             provider_key,
@@ -5733,6 +5838,45 @@ fn ensure_projection_state_import_generation_column(conn: &Connection) -> GaryxD
     Ok(())
 }
 
+fn thread_meta_column_names(conn: &Connection) -> GaryxDbResult<Vec<String>> {
+    let mut stmt = conn.prepare("PRAGMA table_info(thread_meta)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+fn ensure_thread_meta_indexes(conn: &Connection) -> GaryxDbResult<()> {
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_thread_meta_workspace
+             ON thread_meta(workspace_dir);
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_type_updated
+             ON thread_meta(thread_type, updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_last_delivery
+             ON thread_meta(last_delivery_updated_at DESC)
+             WHERE last_delivery_context_json IS NOT NULL;
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_visible_updated
+             ON thread_meta(default_list_hidden, updated_at DESC, projected_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_visible
+             ON thread_meta(sort_updated_at_us DESC, thread_id DESC)
+             WHERE default_list_hidden = 0;
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_task
+             ON thread_meta(sort_updated_at_us DESC, thread_id DESC)
+             WHERE default_list_hidden = 0 AND thread_type = 'task';
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_non_task
+             ON thread_meta(sort_updated_at_us DESC, thread_id DESC)
+             WHERE default_list_hidden = 0 AND thread_type <> 'task';
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_visible
+             ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
+             WHERE default_list_hidden = 0;
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_task
+             ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
+             WHERE default_list_hidden = 0 AND thread_type = 'task';
+         CREATE INDEX IF NOT EXISTS idx_thread_meta_summary_workspace_non_task
+             ON thread_meta(workspace_dir, sort_updated_at_us DESC, thread_id DESC)
+             WHERE default_list_hidden = 0 AND thread_type <> 'task';",
+    )?;
+    Ok(())
+}
+
 fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()> {
     let mut stmt = conn.prepare("PRAGMA table_info(thread_meta)")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -5772,13 +5916,6 @@ fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()>
         conn.execute(
             "ALTER TABLE thread_meta
              ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0",
-            [],
-        )?;
-    }
-    if !columns.contains("excluded_from_recent") {
-        conn.execute(
-            "ALTER TABLE thread_meta
-             ADD COLUMN excluded_from_recent INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
     }
@@ -6733,13 +6870,7 @@ mod tests {
                 json!({
                     "thread_id": "thread::new-same",
                     "label": "Same timestamp",
-                    "updated_at": "2026-07-03T00:00:00Z",
-                    "exclude_from_recent": true,
-                    "excludeFromRecent": true,
-                    "metadata": {
-                        "exclude_from_recent": true,
-                        "excludeFromRecent": true
-                    }
+                    "updated_at": "2026-07-03T00:00:00Z"
                 }),
             ),
             (
@@ -6759,9 +6890,7 @@ mod tests {
                 json!({
                     "thread_id": "thread::side-chat",
                     "source": "side_chat",
-                    "side_chat_parent_thread_id": "thread::retained-z",
-                    "exclude_from_recent": true,
-                    "metadata": {"excludeFromRecent": true}
+                    "side_chat_parent_thread_id": "thread::retained-z"
                 }),
             ),
         ] {
@@ -6777,24 +6906,6 @@ mod tests {
             let conn = db.conn().unwrap();
             conn.execute(
                 "UPDATE recent_threads_meta SET activity_seq = 100 WHERE id = 1",
-                [],
-            )
-            .unwrap();
-            // Mode-only stale state proves every canonical live row is
-            // rederived even when its body needs no normalization.
-            conn.execute(
-                "INSERT INTO thread_meta (
-                    thread_id, excluded_from_recent, projected_at
-                 ) VALUES ('thread::new-between', 1, '2026-07-17T00:00:00Z')",
-                [],
-            )
-            .unwrap();
-            // The unconditional whole-table zeroing must include rows outside
-            // the canonical live universe without making them visible.
-            conn.execute(
-                "INSERT INTO thread_meta (
-                    thread_id, default_list_hidden, excluded_from_recent, projected_at
-                 ) VALUES ('thread::meta-only-hidden', 1, 1, '2026-07-17T00:00:00Z')",
                 [],
             )
             .unwrap();
@@ -6894,30 +7005,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(unique, 1);
-        for path in [
-            "$.exclude_from_recent",
-            "$.excludeFromRecent",
-            "$.metadata.exclude_from_recent",
-            "$.metadata.excludeFromRecent",
-        ] {
-            let residual: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM thread_records
-                      WHERE json_type(body, ?1) IS NOT NULL",
-                    params![path],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(residual, 0, "residual canonical path {path}");
-        }
-        let excluded_residual: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM thread_meta WHERE excluded_from_recent != 0",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(excluded_residual, 0);
         let side_chat_body: String = conn
             .query_row(
                 "SELECT body FROM thread_records WHERE key = 'thread::side-chat'",
@@ -6953,8 +7040,7 @@ mod tests {
             "thread::generation-zero",
             json!({
                 "thread_id": "thread::generation-zero",
-                "automation_thread_mode": "generated_thread",
-                "exclude_from_recent": true
+                "automation_thread_mode": "generated_thread"
             }),
         );
         assert!(!db.migrate_recent_membership_v2().unwrap().already_completed);
@@ -6965,16 +7051,15 @@ mod tests {
             "thread::generation-one",
             json!({
                 "thread_id": "thread::generation-one",
-                "automation_thread_mode": "generated_thread",
-                "metadata": {"excludeFromRecent": true}
+                "automation_thread_mode": "generated_thread"
             }),
         );
         db.conn()
             .unwrap()
             .execute(
                 "INSERT INTO thread_meta (
-                    thread_id, excluded_from_recent, projected_at
-                 ) VALUES ('thread::generation-one', 1, '2026-07-17T00:00:00Z')",
+                    thread_id, thread_label, projected_at
+                 ) VALUES ('thread::generation-one', 'stale', '2026-07-17T00:00:00Z')",
                 [],
             )
             .unwrap();
@@ -7065,9 +7150,14 @@ mod tests {
         seed_recent_membership_canonical(
             &db,
             "thread::at-sequence-limit",
+            json!({"thread_id": "thread::at-sequence-limit"}),
+        );
+        seed_recent_membership_canonical(
+            &db,
+            "thread::rollback-side-chat",
             json!({
-                "thread_id": "thread::at-sequence-limit",
-                "exclude_from_recent": true
+                "thread_id": "thread::rollback-side-chat",
+                "source": "side_chat"
             }),
         );
         db.conn()
@@ -7080,18 +7170,19 @@ mod tests {
 
         assert!(db.migrate_recent_membership_v2().is_err());
         let conn = db.conn().unwrap();
-        let body: String = conn
+        let side_chat_body: String = conn
             .query_row(
-                "SELECT body FROM thread_records WHERE key = 'thread::at-sequence-limit'",
+                "SELECT body FROM thread_records WHERE key = 'thread::rollback-side-chat'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
         assert!(
-            serde_json::from_str::<Value>(&body)
+            serde_json::from_str::<Value>(&side_chat_body)
                 .unwrap()
-                .get("exclude_from_recent")
-                .is_some()
+                .get("hidden")
+                .is_none(),
+            "failed cutover must roll back canonical side-chat normalization"
         );
         let marker_count: i64 = conn
             .query_row(
@@ -7122,6 +7213,19 @@ mod tests {
         .unwrap();
         drop(conn);
         assert!(!db.migrate_recent_membership_v2().unwrap().already_completed);
+        let normalized_body: String = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT body FROM thread_records WHERE key = 'thread::rollback-side-chat'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&normalized_body).unwrap()["hidden"],
+            true
+        );
     }
 
     #[test]
@@ -7148,11 +7252,12 @@ mod tests {
             .find("migrate_recent_thread_activity_seq_v1")
             .unwrap();
         let membership = registrations.find("migrate_recent_membership_v2").unwrap();
-        assert!(summary < activity && activity < membership);
+        let schema = registrations.find("migrate_thread_meta_schema_v2").unwrap();
+        assert!(summary < activity && activity < membership && membership < schema);
     }
 
     #[test]
-    fn recent_membership_side_chat_selector_is_exact_and_strips_flags() {
+    fn recent_membership_side_chat_selector_is_exact() {
         let mut cases = [
             ("top source", json!({"source": "side_chat"}), true),
             (
@@ -7171,15 +7276,8 @@ mod tests {
                 false,
             ),
             (
-                "exclusion only",
-                json!({
-                    "exclude_from_recent": true,
-                    "excludeFromRecent": true,
-                    "metadata": {
-                        "exclude_from_recent": true,
-                        "excludeFromRecent": true
-                    }
-                }),
+                "automation mode only",
+                json!({"automation_thread_mode": "generated_thread"}),
                 false,
             ),
             (
@@ -7189,20 +7287,12 @@ mod tests {
             ),
         ];
         for (label, data, expected_hidden) in &mut cases {
-            normalize_recent_membership_canonical_record(data);
+            normalize_side_chat_canonical_record(data);
             assert_eq!(
                 data.get("hidden").and_then(Value::as_bool),
                 (*expected_hidden).then_some(true),
                 "{label}"
             );
-            if let Some(object) = data.as_object() {
-                assert!(object.get("exclude_from_recent").is_none(), "{label}");
-                assert!(object.get("excludeFromRecent").is_none(), "{label}");
-                if let Some(metadata) = object.get("metadata").and_then(Value::as_object) {
-                    assert!(metadata.get("exclude_from_recent").is_none(), "{label}");
-                    assert!(metadata.get("excludeFromRecent").is_none(), "{label}");
-                }
-            }
         }
     }
 
@@ -7281,7 +7371,6 @@ mod tests {
         thread_id: &str,
         favorited_at: &str,
         hidden: bool,
-        excluded_from_recent: bool,
     ) {
         tx.execute(
             "INSERT INTO thread_favorites (thread_id, favorited_at) VALUES (?1, ?2)",
@@ -7290,14 +7379,13 @@ mod tests {
         .expect("seed favorite membership");
         tx.execute(
             "INSERT INTO thread_meta (
-                thread_id, thread_label, default_list_hidden, excluded_from_recent,
+                thread_id, thread_label, default_list_hidden,
                 sort_updated_at_us, search_text, projected_at
-             ) VALUES (?1, ?2, ?3, ?4, 0, '', '2026-07-17T00:00:00Z')",
+             ) VALUES (?1, ?2, ?3, 0, '', '2026-07-17T00:00:00Z')",
             params![
                 thread_id,
                 format!("Title for {thread_id}"),
                 if hidden { 1 } else { 0 },
-                if excluded_from_recent { 1 } else { 0 },
             ],
         )
         .expect("seed favorite summary");
@@ -8615,6 +8703,22 @@ mod tests {
         assert_eq!(rows[0].message_count, 0);
         assert_eq!(rows[0].last_message_preview, None);
         assert_eq!(rows[0].projection_version, 2);
+
+        let migration = db
+            .migrate_thread_meta_schema_v2()
+            .expect("canonicalize legacy column order");
+        assert_eq!(migration.updated_row_count, 1);
+        assert_eq!(
+            thread_meta_column_names(&db.conn().unwrap()).unwrap(),
+            THREAD_META_SCHEMA_V2_COLUMNS
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            db.list_thread_meta().unwrap()[0].projection_version,
+            CURRENT_THREAD_META_PROJECTION_VERSION
+        );
     }
 
     #[test]
@@ -9166,19 +9270,12 @@ mod tests {
         {
             let mut conn = db.conn().expect("writer");
             let tx = conn.transaction().expect("seed transaction");
-            seed_summary_favorite_tx(
-                &tx,
-                "thread::enhanced-first",
-                "2026-07-17T00:00:00Z",
-                false,
-                true,
-            );
+            seed_summary_favorite_tx(&tx, "thread::enhanced-first", "2026-07-17T00:00:00Z", false);
             seed_summary_favorite_tx(
                 &tx,
                 "thread::enhanced-second",
                 "2026-07-17T00:00:01Z",
                 false,
-                true,
             );
             tx.execute(
                 "DELETE FROM thread_favorites WHERE thread_id = 'thread::enhanced-second'",
@@ -9340,14 +9437,14 @@ mod tests {
     }
 
     #[test]
-    fn favorites_summary_window_caps_501_all_excluded_members() {
+    fn favorites_summary_window_caps_501_all_raw_members() {
         let db = GaryxDbService::memory().expect("database");
         {
             let mut conn = db.conn().expect("writer");
             let tx = conn.transaction().expect("seed transaction");
             for index in 0..=500 {
-                let thread_id = format!("thread::excluded-{index:03}");
-                seed_summary_favorite_tx(&tx, &thread_id, &format!("{index:03}"), false, true);
+                let thread_id = format!("thread::raw-{index:03}");
+                seed_summary_favorite_tx(&tx, &thread_id, &format!("{index:03}"), false);
             }
             tx.commit().expect("seed commit");
         }
@@ -9362,13 +9459,13 @@ mod tests {
         assert_eq!(enhanced.summaries.len(), 500);
         assert_eq!(
             enhanced.summaries.first().unwrap().thread_id,
-            "thread::excluded-500"
+            "thread::raw-500"
         );
         assert!(
             enhanced
                 .summaries
                 .iter()
-                .all(|row| row.thread_id != "thread::excluded-000")
+                .all(|row| row.thread_id != "thread::raw-000")
         );
     }
 
@@ -9380,23 +9477,11 @@ mod tests {
             let tx = conn.transaction().expect("seed transaction");
             for index in 0..499 {
                 let thread_id = format!("thread::recent-{index:03}");
-                seed_summary_favorite_tx(&tx, &thread_id, "recent", false, false);
+                seed_summary_favorite_tx(&tx, &thread_id, "recent", false);
                 seed_summary_recent_tx(&tx, &thread_id, i64::from(index) + 1);
             }
-            seed_summary_favorite_tx(
-                &tx,
-                "thread::raw-newer",
-                "2026-07-17T00:00:01.000Z",
-                false,
-                true,
-            );
-            seed_summary_favorite_tx(
-                &tx,
-                "thread::raw-older",
-                "2026-07-17T00:00:00.000Z",
-                false,
-                true,
-            );
+            seed_summary_favorite_tx(&tx, "thread::raw-newer", "2026-07-17T00:00:01.000Z", false);
+            seed_summary_favorite_tx(&tx, "thread::raw-older", "2026-07-17T00:00:00.000Z", false);
             tx.commit().expect("seed commit");
         }
 
@@ -9426,13 +9511,7 @@ mod tests {
             let tx = conn.transaction().expect("seed transaction");
             for index in 0..=500 {
                 let thread_id = format!("thread::hidden-window-{index:03}");
-                seed_summary_favorite_tx(
-                    &tx,
-                    &thread_id,
-                    &format!("{index:03}"),
-                    index == 500,
-                    true,
-                );
+                seed_summary_favorite_tx(&tx, &thread_id, &format!("{index:03}"), index == 500);
             }
             tx.commit().expect("seed commit");
         }
@@ -9469,25 +9548,13 @@ mod tests {
             let tx = conn.transaction().expect("seed transaction");
             for index in 0..499 {
                 let thread_id = format!("thread::tie-recent-{index:03}");
-                seed_summary_favorite_tx(&tx, &thread_id, "recent", false, false);
+                seed_summary_favorite_tx(&tx, &thread_id, "recent", false);
                 seed_summary_recent_tx(&tx, &thread_id, i64::from(index) + 1);
             }
             // Reverse insertion is deliberate: ordering must come from the
             // raw fallback contract, not rowid/insertion order.
-            seed_summary_favorite_tx(
-                &tx,
-                "thread::raw-z",
-                "2026-07-17T00:00:00.123Z",
-                false,
-                true,
-            );
-            seed_summary_favorite_tx(
-                &tx,
-                "thread::raw-a",
-                "2026-07-17T00:00:00.123Z",
-                false,
-                true,
-            );
+            seed_summary_favorite_tx(&tx, "thread::raw-z", "2026-07-17T00:00:00.123Z", false);
+            seed_summary_favorite_tx(&tx, "thread::raw-a", "2026-07-17T00:00:00.123Z", false);
             tx.commit().expect("seed commit");
         }
 
@@ -10449,8 +10516,7 @@ mod tests {
                     "agent_id": "Σς",
                     "updated_at": "2026-07-17T01:02:03.500+00:00",
                     "created_at": "2020-01-01T00:00:00Z",
-                    "last_assistant_preview": "％＿＼",
-                    "exclude_from_recent": "yes"
+                    "last_assistant_preview": "％＿＼"
                 }),
             ),
             (
@@ -10477,9 +10543,9 @@ mod tests {
                 .expect("seed canonical record");
                 conn.execute(
                     "INSERT INTO thread_meta (
-                        thread_id, thread_label, excluded_from_recent,
-                        sort_updated_at_us, search_text, projected_at
-                     ) VALUES (?1, 'stale', 0, -1, 'stale', '2026-07-17T00:00:00Z')",
+                        thread_id, thread_label, sort_updated_at_us, search_text,
+                        projected_at
+                     ) VALUES (?1, 'stale', -1, 'stale', '2026-07-17T00:00:00Z')",
                     params![thread_id],
                 )
                 .expect("seed stale projection");
@@ -10497,7 +10563,6 @@ mod tests {
             .iter()
             .find(|row| row.thread_id == "thread::summary-cutover-updated")
             .unwrap();
-        assert!(!updated.excluded_from_recent);
         assert_eq!(
             updated.sort_updated_at_us,
             DateTime::parse_from_rfc3339("2026-07-17T01:02:03.500Z")
@@ -10525,7 +10590,6 @@ mod tests {
             .find(|row| row.thread_id == "thread::summary-cutover-null")
             .unwrap();
         assert_eq!(missing.sort_updated_at_us, 0);
-        assert!(!missing.excluded_from_recent);
 
         let second = db
             .migrate_thread_meta_summary_v1()
@@ -10534,6 +10598,103 @@ mod tests {
         assert_eq!(second.updated_row_count, 0);
         assert!(second.already_completed);
         assert_eq!(db.list_thread_meta().unwrap(), rows);
+    }
+
+    #[test]
+    fn thread_meta_schema_v2_rebuilds_legacy_shape_without_reusing_cutover_markers() {
+        let db = GaryxDbService::memory().expect("db opens");
+        {
+            let conn = db.conn().expect("writer");
+            conn.execute(
+                "ALTER TABLE thread_meta
+                 ADD COLUMN legacy_summary_flag INTEGER NOT NULL DEFAULT 0",
+                [],
+            )
+            .expect("seed legacy-only column");
+            conn.execute(
+                "INSERT INTO thread_meta (
+                    thread_id, workspace_dir, thread_label, sort_updated_at_us,
+                    search_text, projection_version, projected_at,
+                    legacy_summary_flag
+                 ) VALUES (
+                    'thread::schema-v2', '/workspace/schema-v2', 'Schema v2',
+                    42, 'schema v2', 5, '2026-07-17T00:00:00Z', 1
+                 )",
+                [],
+            )
+            .expect("seed legacy projection row");
+            conn.execute(
+                "INSERT INTO projection_states (
+                    projection_name, projection_version, source_row_count,
+                    projected_at, based_on_import_generation
+                 ) VALUES (?1, ?2, 7, '2026-07-17T00:00:00Z', 3),
+                          (?3, ?4, 8, '2026-07-17T00:00:00Z', 3)",
+                params![
+                    THREAD_META_SUMMARY_MIGRATION_NAME,
+                    THREAD_META_SUMMARY_MIGRATION_VERSION,
+                    RECENT_MEMBERSHIP_MIGRATION_NAME,
+                    RECENT_MEMBERSHIP_MIGRATION_VERSION,
+                ],
+            )
+            .expect("seed historical cutover markers");
+        }
+
+        let first = db
+            .migrate_thread_meta_schema_v2()
+            .expect("schema v2 migration");
+        assert_eq!(first.source_row_count, 1);
+        assert_eq!(first.updated_row_count, 1);
+        assert!(!first.already_completed);
+        assert_eq!(
+            thread_meta_column_names(&db.conn().unwrap()).unwrap(),
+            THREAD_META_SCHEMA_V2_COLUMNS
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>()
+        );
+        let row = db.list_thread_meta().unwrap().pop().unwrap();
+        assert_eq!(row.thread_id, "thread::schema-v2");
+        assert_eq!(row.workspace_dir.as_deref(), Some("/workspace/schema-v2"));
+        assert_eq!(row.thread_label.as_deref(), Some("Schema v2"));
+        assert_eq!(row.sort_updated_at_us, 42);
+        assert_eq!(
+            row.projection_version,
+            CURRENT_THREAD_META_PROJECTION_VERSION
+        );
+
+        let conn = db.conn().unwrap();
+        let historical = [
+            (
+                THREAD_META_SUMMARY_MIGRATION_NAME,
+                THREAD_META_SUMMARY_MIGRATION_VERSION,
+                7,
+            ),
+            (
+                RECENT_MEMBERSHIP_MIGRATION_NAME,
+                RECENT_MEMBERSHIP_MIGRATION_VERSION,
+                8,
+            ),
+        ];
+        for (name, version, source_count) in historical {
+            let marker: (i64, i64, i64) = conn
+                .query_row(
+                    "SELECT projection_version, source_row_count,
+                            based_on_import_generation
+                       FROM projection_states
+                      WHERE projection_name = ?1",
+                    params![name],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(marker, (version, source_count, 3), "{name}");
+        }
+        drop(conn);
+
+        let second = db
+            .migrate_thread_meta_schema_v2()
+            .expect("idempotent schema v2 migration");
+        assert!(second.already_completed);
+        assert_eq!(second.updated_row_count, 0);
     }
 
     #[test]
@@ -10566,7 +10727,6 @@ mod tests {
                 last_delivery_context_json: Some(delivery_json.clone()),
                 last_delivery_updated_at: Some("2026-06-03T08:00:01.000Z".to_owned()),
                 default_list_hidden: false,
-                excluded_from_recent: false,
                 sort_updated_at_us: 1_780_473_600_000_000,
                 search_text: "project thread\n/work/project\ncodex\ndone".to_owned(),
             },

@@ -20,7 +20,6 @@ public struct GaryxThreadSummaryRowDTO: Decodable, Equatable, Sendable {
     public var recentRunId: String?
     public var activeRunId: String?
     public var worktree: GaryxThreadSummaryWorktreeDTO?
-    public var excludedFromRecent: Bool
 
     enum CodingKeys: String, CodingKey {
         case threadId = "thread_id"
@@ -38,7 +37,6 @@ public struct GaryxThreadSummaryRowDTO: Decodable, Equatable, Sendable {
         case recentRunId = "recent_run_id"
         case activeRunId = "active_run_id"
         case worktree
-        case excludedFromRecent = "excluded_from_recent"
     }
 }
 
@@ -61,9 +59,9 @@ public struct GaryxThreadSummaryWorktreeDTO: Decodable, Equatable, Sendable {
     }
 }
 
-/// Raw canonical record returned by legacy `GET /api/threads/:id`.
-/// The raw payload skeleton remains until S4, but S5 neutralizes its retired
-/// recent-exclusion semantics before the row enters the shared cache.
+/// Raw canonical record returned by `GET /api/threads/:id`. This point-read
+/// route still returns canonical records whose display title is stored under
+/// `label`; keep that compatibility inside this adapter only.
 public struct GaryxLegacyThreadRecordDTO: Decodable, Equatable, Sendable {
     public var payload: [String: GaryxJSONValue]
 
@@ -96,7 +94,6 @@ public struct GaryxAutomationThreadSummaryDTO: Decodable, Equatable, Sendable {
     public var activeRunId: String?
     public var automationId: String?
     public var automationThreadMode: String?
-    public var excludeFromRecent: Bool
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -116,7 +113,6 @@ public struct GaryxAutomationThreadSummaryDTO: Decodable, Equatable, Sendable {
         case activeRunId
         case automationId
         case automationThreadMode
-        case excludeFromRecent
     }
 
     public init(from decoder: Decoder) throws {
@@ -136,7 +132,6 @@ public struct GaryxAutomationThreadSummaryDTO: Decodable, Equatable, Sendable {
         activeRunId = try container.garyxDecodeFirstString(.activeRunId)
         automationId = try container.garyxDecodeFirstString(.automationId)
         automationThreadMode = try container.garyxDecodeFirstString(.automationThreadMode)
-        excludeFromRecent = try container.decodeIfPresent(Bool.self, forKey: .excludeFromRecent) ?? false
     }
 }
 
@@ -158,8 +153,7 @@ public enum GaryxThreadSummaryAdapter {
             recentRunId: row.recentRunId,
             activeRunId: row.activeRunId,
             runState: runState(activeRunId: row.activeRunId, recentRunId: row.recentRunId),
-            worktreePath: row.worktree?.visiblePath,
-            excludeFromRecent: row.excludedFromRecent
+            worktreePath: row.worktree?.visiblePath
         )
     }
 
@@ -189,7 +183,6 @@ public enum GaryxThreadSummaryAdapter {
             worktreePath: legacyWorktreePath(payload),
             automationId: string(payload, keys: ["automation_id"]),
             automationThreadMode: string(payload, keys: ["automation_thread_mode"]),
-            excludeFromRecent: legacyRecordIsExcluded(payload),
             threadRuntime: decode(GaryxThreadRuntimeSummary.self, from: payload["thread_runtime"])
         )
     }
@@ -212,37 +205,8 @@ public enum GaryxThreadSummaryAdapter {
             runState: runState(activeRunId: row.activeRunId, recentRunId: row.recentRunId),
             worktreePath: nil,
             automationId: row.automationId,
-            automationThreadMode: row.automationThreadMode,
-            excludeFromRecent: row.excludeFromRecent
+            automationThreadMode: row.automationThreadMode
         )
-    }
-
-    /// S5 compatibility seam: legacy point reads may still contain retired
-    /// flags or generated automation mode, but neither affects membership or
-    /// row capabilities. The function/type skeleton remains for S4 removal.
-    public static func legacyRecordIsExcluded(_ payload: [String: GaryxJSONValue]) -> Bool {
-        _ = payload
-        return false
-    }
-
-    private static func truthyBool(_ value: GaryxJSONValue?) -> Bool {
-        switch value {
-        case .bool(true):
-            return true
-        case .string(let value):
-            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "true", "yes", "1": return true
-            default: return false
-            }
-        case .none, .bool(false), .number, .object, .array, .null:
-            return false
-        }
-    }
-
-    private static func generatedMode(_ value: GaryxJSONValue?) -> Bool {
-        guard case .string(let value)? = value else { return false }
-        return value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            == "generated_thread"
     }
 
     private static func legacyPreview(_ payload: [String: GaryxJSONValue]) -> String {
@@ -310,7 +274,6 @@ private extension Dictionary where Key == String, Value == GaryxJSONValue {
 
 public enum GaryxThreadFavoriteCapability: Equatable, Sendable {
     case addAndRemove
-    case removeOnly
     case none
 }
 
@@ -344,7 +307,6 @@ public struct GaryxThreadRowCapabilities: Equatable, Sendable {
 
 public struct GaryxThreadRowCapabilityContext: Equatable, Sendable {
     public var openable: Bool
-    public var isFavorite: Bool
     public var automationTargetThreadIds: Set<String>
     public var hasActiveRun: Bool
     public var botEndpointRow: Bool
@@ -352,14 +314,12 @@ public struct GaryxThreadRowCapabilityContext: Equatable, Sendable {
 
     public init(
         openable: Bool = true,
-        isFavorite: Bool = false,
         automationTargetThreadIds: Set<String> = [],
         hasActiveRun: Bool = false,
         botEndpointRow: Bool = false,
         botEndpointCanArchive: Bool = true
     ) {
         self.openable = openable
-        self.isFavorite = isFavorite
         self.automationTargetThreadIds = automationTargetThreadIds
         self.hasActiveRun = hasActiveRun
         self.botEndpointRow = botEndpointRow
@@ -391,12 +351,6 @@ public enum GaryxThreadRowCapabilityDeriver {
         // patches the capability alongside the running dot without rebuilding
         // static section identity.
         let activeRun = context.hasActiveRun
-        let favorite: GaryxThreadFavoriteCapability
-        if summary.excludeFromRecent {
-            favorite = context.isFavorite ? .removeOnly : .none
-        } else {
-            favorite = .addAndRemove
-        }
         let canArchive = !isAutomationTarget
             && !activeRun
             && (!context.botEndpointRow || context.botEndpointCanArchive)
@@ -410,7 +364,7 @@ public enum GaryxThreadRowCapabilityDeriver {
             canOpen: true,
             canPin: true,
             canArchive: canArchive,
-            favorite: favorite,
+            favorite: .addAndRemove,
             archiveStrategy: strategy
         )
     }

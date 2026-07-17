@@ -350,16 +350,6 @@ public final class GaryxGatewayClient {
         try await put("/api/settings?merge=\(merge ? "true" : "false")", body: config)
     }
 
-    public func listThreads(limit: Int = 100, offset: Int = 0) async throws -> GaryxThreadsPage {
-        try await get(
-            "/api/threads",
-            queryItems: [
-                URLQueryItem(name: "limit", value: String(limit)),
-                URLQueryItem(name: "offset", value: String(offset)),
-            ]
-        )
-    }
-
     public func listRecentThreads(
         filter: GaryxRecentThreadFilter = .all,
         limit: Int = 30,

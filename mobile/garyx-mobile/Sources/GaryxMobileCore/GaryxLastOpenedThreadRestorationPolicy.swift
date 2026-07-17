@@ -1,8 +1,8 @@
 import Foundation
 
 enum GaryxLastOpenedThreadRestorationPolicy {
-    static func shouldPersistLastOpenedThread(excludedFromRecent: Bool) -> Bool {
-        !excludedFromRecent
+    static func shouldPersistLastOpenedThread() -> Bool {
+        true
     }
 
     static func isCurrentSessionRestorable(
