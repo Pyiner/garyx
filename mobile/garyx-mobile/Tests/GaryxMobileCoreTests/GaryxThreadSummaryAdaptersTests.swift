@@ -55,7 +55,7 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
         XCTAssertEqual(summary.messageCount, 2)
         XCTAssertEqual(summary.recentRunId, "run-2")
         XCTAssertEqual(summary.threadRuntime?.agentId, "codex")
-        XCTAssertTrue(summary.excludeFromRecent)
+        XCTAssertFalse(summary.excludeFromRecent)
     }
 
     func testCapturedAutomationCamelPayloadUsesIndependentAdapter() throws {
@@ -73,8 +73,7 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
               "messageCount":4,
               "lastAssistantMessage":"done",
               "automationId":"automation::daily",
-              "automationThreadMode":"generated_thread",
-              "excludeFromRecent":true
+              "automationThreadMode":"generated_thread"
             }
             """#
         )
@@ -83,28 +82,28 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
         XCTAssertEqual(summary.lastMessagePreview, "done")
         XCTAssertEqual(summary.automationId, "automation::daily")
         XCTAssertEqual(summary.automationThreadMode, "generated_thread")
-        XCTAssertTrue(summary.excludeFromRecent)
+        XCTAssertFalse(summary.excludeFromRecent)
     }
 
-    func testLegacyExclusionFixtureMatrixMatchesRustHelperContract() throws {
+    func testLegacyExclusionFixtureMatrixIsSemanticallyNeutralized() throws {
         let fixtures: [(String, Bool)] = [
             (#"{}"#, false),
-            (#"{"exclude_from_recent":true}"#, true),
-            (#"{"exclude_from_recent":" YES "}"#, true),
-            (#"{"exclude_from_recent":"1"}"#, true),
+            (#"{"exclude_from_recent":true}"#, false),
+            (#"{"exclude_from_recent":" YES "}"#, false),
+            (#"{"exclude_from_recent":"1"}"#, false),
             (#"{"exclude_from_recent":"false"}"#, false),
             (#"{"exclude_from_recent":1}"#, false),
             (#"{"excludeFromRecent":true}"#, false),
-            (#"{"metadata":{"exclude_from_recent":"true"}}"#, true),
+            (#"{"metadata":{"exclude_from_recent":"true"}}"#, false),
             (#"{"metadata":{"excludeFromRecent":true}}"#, false),
-            (#"{"automation_thread_mode":"generated_thread"}"#, true),
-            (#"{"automation_thread_mode":" GENERATED_THREAD "}"#, true),
+            (#"{"automation_thread_mode":"generated_thread"}"#, false),
+            (#"{"automation_thread_mode":" GENERATED_THREAD "}"#, false),
             (#"{"automationThreadMode":"generated_thread"}"#, false),
-            (#"{"metadata":{"automation_thread_mode":"GENERATED_THREAD"}}"#, true),
+            (#"{"metadata":{"automation_thread_mode":"GENERATED_THREAD"}}"#, false),
             (#"{"metadata":{"automationThreadMode":"generated_thread"}}"#, false),
             (#"{"metadata":"not-an-object","exclude_from_recent":false}"#, false),
-            (#"{"exclude_from_recent":false,"metadata":{"exclude_from_recent":"yes"}}"#, true),
-            (#"{"automation_thread_mode":"ordinary","metadata":{"automation_thread_mode":"generated_thread"}}"#, true),
+            (#"{"exclude_from_recent":false,"metadata":{"exclude_from_recent":"yes"}}"#, false),
+            (#"{"automation_thread_mode":"ordinary","metadata":{"automation_thread_mode":"generated_thread"}}"#, false),
         ]
 
         for (index, fixture) in fixtures.enumerated() {
@@ -120,6 +119,44 @@ final class GaryxThreadSummaryAdaptersTests: XCTestCase {
                 "adapter fixture \(index): \(fixture.0)"
             )
         }
+    }
+
+    @MainActor
+    func testGeneratedLegacyPointReadCacheReplacementAllowsFavoriteAndLastOpen() throws {
+        let record = try decode(
+            GaryxLegacyThreadRecordDTO.self,
+            #"""
+            {
+              "thread_id":"thread::generated-point-read",
+              "label":"Generated point read",
+              "automation_id":"automation::daily",
+              "automation_thread_mode":"generated_thread",
+              "exclude_from_recent":true,
+              "metadata":{"exclude_from_recent":true}
+            }
+            """#
+        )
+        let pointReadSummary = GaryxThreadSummaryAdapter.summary(record)
+        XCTAssertFalse(pointReadSummary.excludeFromRecent)
+        XCTAssertEqual(pointReadSummary.automationThreadMode, "generated_thread")
+
+        let cache = GaryxThreadSummaryCache()
+        var staleSummary = pointReadSummary
+        staleSummary.excludeFromRecent = true
+        cache.writeThrough([staleSummary])
+        cache.writeThrough([pointReadSummary])
+        let summary = try XCTUnwrap(cache.summary(for: pointReadSummary.id))
+        XCTAssertFalse(summary.excludeFromRecent)
+        let capabilities = GaryxThreadRowCapabilityDeriver.capabilities(
+            for: summary,
+            context: GaryxThreadRowCapabilityContext()
+        )
+        XCTAssertEqual(capabilities.favorite, .addAndRemove)
+        XCTAssertTrue(
+            GaryxLastOpenedThreadRestorationPolicy.shouldPersistLastOpenedThread(
+                excludedFromRecent: summary.excludeFromRecent
+            )
+        )
     }
 
     func testCapabilitiesFullRuleTable() {

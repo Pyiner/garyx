@@ -77,7 +77,7 @@ fn direct_recent_thread_updates_are_prebind_only_and_call_site_guarded() {
     assert_eq!(
         production.matches("\"UPDATE recent_threads\n").count()
             + production.matches("\"UPDATE recent_threads SET").count(),
-        3,
+        4,
         "new direct recent_threads UPDATE paths must either allocate activity_seq or be added as an explicitly reviewed pre-bind-only exception"
     );
     assert!(
@@ -95,4 +95,22 @@ fn direct_recent_thread_updates_are_prebind_only_and_call_site_guarded() {
     assert!(production.contains(
         "Pre-bind one-shot migration: this direct UPDATE is the sole\n            // backfill allow-list entry"
     ));
+    let recent_membership = production
+        .split_once("pub(crate) fn migrate_recent_membership_v2")
+        .expect("recent membership cutover")
+        .1
+        .split_once("pub(crate) fn drop_thread_message_routes_v1")
+        .expect("next migration method")
+        .0;
+    assert_eq!(
+        recent_membership
+            .matches("\"UPDATE recent_threads SET activity_seq = ?1 WHERE thread_id = ?2\"")
+            .count(),
+        1,
+        "S5 has exactly one direct recent sequence rewrite"
+    );
+    assert!(
+        recent_membership.contains("Existing members retain their exact frozen relative order")
+    );
+    assert!(recent_membership.contains("Data and generation-aware marker commit atomically"));
 }

@@ -90,7 +90,6 @@ export async function ensureSideChatThread(
           metadata: {
             source: "side_chat",
             hidden: true,
-            exclude_from_recent: true,
             side_chat_parent_thread_id: sourceThreadId,
           },
         }),

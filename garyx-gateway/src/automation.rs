@@ -1292,7 +1292,6 @@ fn automation_thread_summary(
         "updatedAt": data.get("updated_at").and_then(Value::as_str),
         "automationId": data.get("automation_id").and_then(Value::as_str),
         "automationThreadMode": data.get("automation_thread_mode").and_then(Value::as_str),
-        "excludeFromRecent": data.get("exclude_from_recent").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 

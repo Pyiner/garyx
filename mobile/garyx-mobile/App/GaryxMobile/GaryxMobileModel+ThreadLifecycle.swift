@@ -67,7 +67,9 @@ extension GaryxMobileModel {
             resetSelectedThreadHistoryPagination()
         }
         selectedThread = thread
-        if !thread.excludeFromRecent {
+        if GaryxLastOpenedThreadRestorationPolicy.shouldPersistLastOpenedThread(
+            excludedFromRecent: thread.excludeFromRecent
+        ) {
             persistLastOpenedThreadId(thread.id)
         }
         clearPendingNewThreadAgentTarget()

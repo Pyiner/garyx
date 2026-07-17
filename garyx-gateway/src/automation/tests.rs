@@ -664,7 +664,12 @@ async fn automation_threads_endpoint_returns_generated_run_associations() {
         payload["items"][0]["thread"]["automationThreadMode"],
         "generated_thread"
     );
-    assert_eq!(payload["items"][0]["thread"]["excludeFromRecent"], true);
+    assert!(
+        payload["items"][0]["thread"]
+            .get("excludeFromRecent")
+            .is_none(),
+        "automation drilldown no longer replays retired membership state"
+    );
 }
 
 fn target_automation_config(id: &str, thread_id: &str) -> CronJobConfig {

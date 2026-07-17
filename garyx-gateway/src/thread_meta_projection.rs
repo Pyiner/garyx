@@ -12,7 +12,6 @@ use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::garyx_db::{ThreadMetaDraft, ThreadMetaProjectionDraft};
-use crate::recent_thread_projection::is_recent_thread_excluded;
 use crate::thread_runtime::selected_model_cells_from_thread_value;
 use crate::thread_type::thread_summary_type_from_record;
 
@@ -37,7 +36,6 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
         .clone()
         .or_else(|| last_user_message.clone());
     let agent_id = agent_id_from_value(data);
-    let excluded_from_recent = is_recent_thread_excluded(data);
     let sort_updated_at_us =
         summary_sort_updated_at_us(thread_updated_at.as_deref(), created_at.as_deref());
     let search_text = summary_search_text(
@@ -91,7 +89,7 @@ pub(crate) fn thread_meta_projection_from_thread_data_with_active_run(
             .map(|(context_json, _)| context_json.clone()),
         last_delivery_updated_at: last_delivery.and_then(|(_, updated_at)| updated_at),
         default_list_hidden: is_default_thread_list_hidden(data),
-        excluded_from_recent,
+        excluded_from_recent: false,
         sort_updated_at_us,
         search_text,
     };
@@ -248,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_projection_reuses_recent_exclusion_helper_for_every_payload_shape() {
+    fn summary_projection_neutralizes_retired_recent_exclusion_inputs() {
         let cases = [
             json!({}),
             json!({"exclude_from_recent": true}),
@@ -264,9 +262,8 @@ mod tests {
             let projected =
                 thread_meta_projection_from_thread_data_with_active_run(&thread_id, &data, None)
                     .expect("summary projection");
-            assert_eq!(
-                projected.thread_meta.excluded_from_recent,
-                is_recent_thread_excluded(&data),
+            assert!(
+                !projected.thread_meta.excluded_from_recent,
                 "payload {data}"
             );
         }

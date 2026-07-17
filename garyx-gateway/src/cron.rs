@@ -1318,10 +1318,6 @@ impl CronService {
             "automation_thread_mode".to_owned(),
             serde_json::Value::String("generated_thread".to_owned()),
         );
-        metadata.insert(
-            "exclude_from_recent".to_owned(),
-            serde_json::Value::Bool(true),
-        );
         ThreadEnsureOptions {
             label: Some(label.to_owned()),
             workspace_dir: Some(workspace_dir.to_owned()),

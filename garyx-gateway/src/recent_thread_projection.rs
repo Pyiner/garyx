@@ -83,8 +83,7 @@ pub(crate) fn recent_thread_draft_from_thread_data_with_active_run(
     active_run_id: Option<String>,
 ) -> Option<RecentThreadDraft> {
     let thread_id = thread_id.trim();
-    if !is_thread_key(thread_id) || is_hidden_thread_value(data) || is_recent_thread_excluded(data)
-    {
+    if !is_thread_key(thread_id) || is_hidden_thread_value(data) {
         return None;
     }
     let title = data
@@ -153,41 +152,6 @@ pub(crate) fn recent_thread_draft_from_thread_data_with_active_run(
     })
 }
 
-pub(crate) fn is_recent_thread_excluded(data: &Value) -> bool {
-    if bool_field(data, "exclude_from_recent") {
-        return true;
-    }
-    if string_field(data, "automation_thread_mode").is_some_and(|value| value == "generated_thread")
-    {
-        return true;
-    }
-    let Some(metadata) = data.get("metadata") else {
-        return false;
-    };
-    bool_field(metadata, "exclude_from_recent")
-        || string_field(metadata, "automation_thread_mode")
-            .is_some_and(|value| value == "generated_thread")
-}
-
-fn bool_field(data: &Value, key: &str) -> bool {
-    match data.get(key) {
-        Some(Value::Bool(true)) => true,
-        Some(Value::String(value)) => matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "true" | "yes" | "1"
-        ),
-        _ => false,
-    }
-}
-
-fn string_field(data: &Value, key: &str) -> Option<String> {
-    data.get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase())
-}
-
 fn recent_thread_run_state(active_run_id: Option<&str>, recent_run_id: Option<&str>) -> String {
     if active_run_id
         .map(str::trim)
@@ -227,7 +191,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_automation_threads_are_not_projectable_recent_threads() {
+    fn generated_automation_threads_are_ordinary_projectable_recent_threads() {
         let data = json!({
             "label": "Daily automation",
             "automation_thread_mode": "generated_thread",
@@ -235,10 +199,9 @@ mod tests {
             "updated_at": "2026-01-01T00:00:01Z",
         });
 
-        assert!(is_recent_thread_excluded(&data));
         assert!(
             recent_thread_draft_from_thread_data_with_active_run("thread::automation", &data, None)
-                .is_none()
+                .is_some()
         );
     }
 }

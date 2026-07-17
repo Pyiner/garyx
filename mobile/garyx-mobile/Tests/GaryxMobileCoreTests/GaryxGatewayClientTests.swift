@@ -2223,7 +2223,6 @@ final class GaryxGatewayClientTests: XCTestCase {
                         "agentId": "codex",
                         "automationId": "automation::daily",
                         "automationThreadMode": "generated_thread",
-                        "excludeFromRecent": true,
                         "messageCount": 2
                       }
                     }
@@ -2241,7 +2240,7 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(page.automationId, "automation::daily")
         XCTAssertEqual(page.items.first?.thread?.id, "thread::generated")
         XCTAssertEqual(page.items.first?.thread?.automationThreadMode, "generated_thread")
-        XCTAssertEqual(page.items.first?.thread?.excludeFromRecent, true)
+        XCTAssertEqual(page.items.first?.thread?.excludeFromRecent, false)
     }
 
     func testMacParityAgentAndChannelPayloadsDecodeGatewayShapes() throws {

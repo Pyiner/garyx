@@ -62,8 +62,8 @@ public struct GaryxThreadSummaryWorktreeDTO: Decodable, Equatable, Sendable {
 }
 
 /// Raw canonical record returned by legacy `GET /api/threads/:id`.
-/// Exclusion is intentionally derived from the untouched JSON object so the
-/// Swift predicate can mirror the gateway helper byte-for-byte.
+/// The raw payload skeleton remains until S4, but S5 neutralizes its retired
+/// recent-exclusion semantics before the row enters the shared cache.
 public struct GaryxLegacyThreadRecordDTO: Decodable, Equatable, Sendable {
     public var payload: [String: GaryxJSONValue]
 
@@ -217,15 +217,12 @@ public enum GaryxThreadSummaryAdapter {
         )
     }
 
-    /// Exact client mirror of `recent_thread_projection::is_recent_thread_excluded`.
-    /// Only snake_case keys participate. Camel-case keys belong solely to the
-    /// automation DTO above and must not alter canonical-record capability.
+    /// S5 compatibility seam: legacy point reads may still contain retired
+    /// flags or generated automation mode, but neither affects membership or
+    /// row capabilities. The function/type skeleton remains for S4 removal.
     public static func legacyRecordIsExcluded(_ payload: [String: GaryxJSONValue]) -> Bool {
-        if truthyBool(payload["exclude_from_recent"]) { return true }
-        if generatedMode(payload["automation_thread_mode"]) { return true }
-        guard let metadata = payload["metadata"]?.garyxGatewayObjectValue else { return false }
-        return truthyBool(metadata["exclude_from_recent"])
-            || generatedMode(metadata["automation_thread_mode"])
+        _ = payload
+        return false
     }
 
     private static func truthyBool(_ value: GaryxJSONValue?) -> Bool {

@@ -1,6 +1,10 @@
 import Foundation
 
 enum GaryxLastOpenedThreadRestorationPolicy {
+    static func shouldPersistLastOpenedThread(excludedFromRecent: Bool) -> Bool {
+        !excludedFromRecent
+    }
+
     static func isCurrentSessionRestorable(
         navigationState: GaryxMobileNavigationState,
         selectedThreadId: String?

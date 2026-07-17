@@ -425,7 +425,7 @@ final class GaryxThreadMembershipProvidersTests: XCTestCase {
     ) throws -> GaryxAutomationThreadsPage {
         let items = ids.enumerated().map { index, id in
             """
-            {"automationId":"\(automationId)","runId":"run-\(offset + index)","threadId":"\(id)","status":"success","startedAt":"2026-07-17T00:00:00Z","thread":{"id":"\(id)","threadId":"\(id)","title":"\(id)","messageCount":0,"excludeFromRecent":true}}
+            {"automationId":"\(automationId)","runId":"run-\(offset + index)","threadId":"\(id)","status":"success","startedAt":"2026-07-17T00:00:00Z","thread":{"id":"\(id)","threadId":"\(id)","title":"\(id)","messageCount":0}}
             """
         }.joined(separator: ",")
         return try JSONDecoder().decode(

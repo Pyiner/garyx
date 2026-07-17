@@ -434,11 +434,7 @@ pub fn upsert_thread_fields(value: &mut Value, thread_id: &str, options: &Thread
                 metadata_obj.insert(trimmed_key.to_owned(), entry_value.clone());
                 if matches!(
                     trimmed_key,
-                    "source"
-                        | "hidden"
-                        | "automation_id"
-                        | "automation_thread_mode"
-                        | "exclude_from_recent"
+                    "source" | "hidden" | "automation_id" | "automation_thread_mode"
                 ) {
                     mirrored_top_level_fields.push((trimmed_key.to_owned(), entry_value.clone()));
                 }

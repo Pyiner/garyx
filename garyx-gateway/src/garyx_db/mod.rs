@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::cmp::Ordering as CmpOrdering;
 #[cfg(any(test, feature = "test-seams"))]
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 #[cfg(unix)]
@@ -11,7 +12,7 @@ use std::sync::{Condvar, atomic::AtomicBool, atomic::Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use garyx_router::{KnownChannelEndpoint, is_thread_key};
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter,
@@ -43,6 +44,8 @@ pub(crate) const DROP_THREAD_MESSAGE_ROUTES_MIGRATION_NAME: &str = "drop_thread_
 const DROP_THREAD_MESSAGE_ROUTES_MIGRATION_VERSION: i64 = 1;
 pub(crate) const RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME: &str = "recent_thread_activity_seq_v1";
 const RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION: i64 = 1;
+pub(crate) const RECENT_MEMBERSHIP_MIGRATION_NAME: &str = "recent_membership_v2";
+const RECENT_MEMBERSHIP_MIGRATION_VERSION: i64 = 2;
 const LEGACY_IMPORT_GENERATION_NAME: &str = "legacy_import_generation";
 const LEGACY_IMPORT_GENERATION_VERSION: i64 = 1;
 pub(crate) const MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE: i64 = 9_007_199_254_740_991;
@@ -2281,6 +2284,7 @@ impl GaryxDbService {
         self.migrate_recent_task_thread_kind_v1()?;
         self.migrate_thread_meta_summary_v1()?;
         self.migrate_recent_thread_activity_seq_v1()?;
+        self.migrate_recent_membership_v2()?;
         self.migrate_endpoint_holder_dedup_v1()?;
         Ok(())
     }
@@ -2402,6 +2406,331 @@ impl GaryxDbService {
         Ok(OneShotMigrationSummary {
             source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
             updated_row_count: thread_ids.len(),
+            already_completed: false,
+        })
+    }
+
+    /// Make hidden the sole recent-membership predicate exactly once per
+    /// legacy-import generation. The cutover deliberately bypasses the normal
+    /// recent allocator: it freezes the old order, repairs canonical/meta
+    /// state, rebuilds the exact visible-live member set, and assigns one new
+    /// contiguous sequence range in the same transaction as its marker.
+    pub(crate) fn migrate_recent_membership_v2(&self) -> GaryxDbResult<OneShotMigrationSummary> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let (import_generation, completed_source_count) = self.import_generation_cutover_gate(
+            &tx,
+            RECENT_MEMBERSHIP_MIGRATION_NAME,
+            RECENT_MEMBERSHIP_MIGRATION_VERSION,
+        )?;
+        if let Some(source_row_count) = completed_source_count {
+            tx.commit()?;
+            return Ok(OneShotMigrationSummary {
+                source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+                updated_row_count: 0,
+                already_completed: true,
+            });
+        }
+
+        // Registration contract: summary derivation and the first monotonic
+        // activity sequence must both precede this membership rewrite. The
+        // summary marker is generation-aware, so recovery cannot run S5 over
+        // a stale generation's thread_meta rows.
+        let summary_prerequisite: bool = tx
+            .query_row(
+                "SELECT 1
+                   FROM projection_states
+                  WHERE projection_name = ?1
+                    AND projection_version = ?2
+                    AND COALESCE(based_on_import_generation, 1) = ?3",
+                params![
+                    THREAD_META_SUMMARY_MIGRATION_NAME,
+                    THREAD_META_SUMMARY_MIGRATION_VERSION,
+                    import_generation,
+                ],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        let activity_prerequisite: bool = tx
+            .query_row(
+                "SELECT 1
+                   FROM projection_states
+                  WHERE projection_name = ?1 AND projection_version = ?2",
+                params![
+                    RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_NAME,
+                    RECENT_THREAD_ACTIVITY_SEQ_MIGRATION_VERSION,
+                ],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !summary_prerequisite || !activity_prerequisite {
+            return Err(GaryxDbError::Configuration(
+                "recent_membership_v2 must run after thread_meta_summary_v1 and recent_thread_activity_seq_v1"
+                    .to_owned(),
+            ));
+        }
+
+        // a. Freeze the pre-cutover membership, its exact ascending sequence
+        // order, and H before any insertion. Indexes go immediately because
+        // step c intentionally gives every new member the same placeholder.
+        let frozen_recent = {
+            let mut stmt = tx.prepare(
+                "SELECT thread_id, last_active_at
+                   FROM recent_threads
+                  ORDER BY activity_seq ASC, thread_id ASC",
+            )?;
+            stmt.query_map([], |row| {
+                Ok(FrozenRecentMembershipRow {
+                    thread_id: row.get(0)?,
+                    last_active_at: row.get(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        let pre_cutover_recent_ids = frozen_recent
+            .iter()
+            .map(|row| row.thread_id.clone())
+            .collect::<HashSet<_>>();
+        let meta_high_water: i64 = tx.query_row(
+            "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        let row_high_water: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(activity_seq), 0) FROM recent_threads",
+            [],
+            |row| row.get(0),
+        )?;
+        let frozen_high_water = meta_high_water.max(row_high_water);
+        tx.execute_batch(
+            "DROP INDEX IF EXISTS idx_recent_threads_activity_seq;
+             DROP INDEX IF EXISTS idx_recent_threads_task_activity_seq;
+             DROP INDEX IF EXISTS idx_recent_threads_non_task_activity_seq;",
+        )?;
+
+        // b. Normalize every live canonical record, strip all four retired
+        // flag paths, and rederive every thread_meta row even when the body is
+        // byte-identical. Do not touch recent_threads in this phase.
+        let canonical_rows = {
+            let mut stmt = tx.prepare(
+                "SELECT record.key, record.body
+                   FROM thread_records AS record
+                  WHERE substr(record.key, 1, 8) = 'thread::'
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM archived_threads AS archived
+                         WHERE archived.thread_id = record.key
+                    )
+                  ORDER BY record.key ASC",
+            )?;
+            stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        let source_row_count = i64::try_from(canonical_rows.len()).unwrap_or(i64::MAX);
+        let projected_at = now_string();
+        let mut canonical_updated_count = 0usize;
+        let mut target_drafts = Vec::with_capacity(canonical_rows.len());
+        for (thread_id, body) in canonical_rows {
+            let mut data: Value = serde_json::from_str(&body).map_err(|error| {
+                GaryxDbError::Configuration(format!(
+                    "recent membership cutover could not decode {thread_id}: {error}"
+                ))
+            })?;
+            let canonical_changed = normalize_recent_membership_canonical_record(&mut data);
+            if canonical_changed {
+                let normalized_body = serde_json::to_string(&data).map_err(|error| {
+                    GaryxDbError::Configuration(format!(
+                        "recent membership cutover could not encode {thread_id}: {error}"
+                    ))
+                })?;
+                canonical_updated_count += tx.execute(
+                    "UPDATE thread_records SET body = ?1 WHERE key = ?2",
+                    params![normalized_body, thread_id],
+                )?;
+            }
+
+            let projection = crate::thread_meta_projection::
+                thread_meta_projection_from_thread_data_with_active_run(&thread_id, &data, None)
+                .ok_or_else(|| {
+                    GaryxDbError::Configuration(format!(
+                        "recent membership cutover rejected canonical id {thread_id}"
+                    ))
+                })?;
+            upsert_thread_meta(&tx, &projection.thread_meta, &projected_at)?;
+            if let Some(draft) = crate::recent_thread_projection::
+                recent_thread_draft_from_thread_data_with_active_run(&thread_id, &data, None)
+            {
+                target_drafts.push(draft);
+            }
+        }
+        tx.execute("UPDATE thread_meta SET excluded_from_recent = 0", [])?;
+        let nonzero_excluded_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM thread_meta WHERE excluded_from_recent != 0",
+            [],
+            |row| row.get(0),
+        )?;
+        if nonzero_excluded_count != 0 {
+            return Err(GaryxDbError::Configuration(
+                "recent membership cutover left nonzero excluded_from_recent rows".to_owned(),
+            ));
+        }
+
+        let target_ids = target_drafts
+            .iter()
+            .map(|draft| draft.thread_id.clone())
+            .collect::<HashSet<_>>();
+        let target_count = i64::try_from(target_drafts.len()).unwrap_or(i64::MAX);
+        let final_high_water = frozen_high_water
+            .checked_add(target_count)
+            .filter(|value| *value < MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE)
+            .ok_or_else(|| {
+                GaryxDbError::Configuration(
+                    "recent thread activity sequence space is exhausted".to_owned(),
+                )
+            })?;
+
+        // c. Exact target membership: add target-pre with a shared placeholder
+        // and remove every pre-target orphan/hidden row. The indexes were
+        // already dropped in step a, so multiple placeholder zeroes are valid.
+        let mut new_drafts = target_drafts
+            .iter()
+            .filter(|draft| !pre_cutover_recent_ids.contains(&draft.thread_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for draft in &new_drafts {
+            insert_recent_membership_placeholder_tx(&tx, draft, &projected_at)?;
+        }
+        let mut removed_recent_count = 0usize;
+        for row in &frozen_recent {
+            if !target_ids.contains(&row.thread_id) {
+                removed_recent_count += tx.execute(
+                    "DELETE FROM recent_threads WHERE thread_id = ?1",
+                    params![row.thread_id],
+                )?;
+            }
+        }
+
+        // d. Existing members retain their exact frozen relative order.
+        // New members are bucketed by the count of retained rows whose
+        // timestamp/id key is smaller; the retained rows are never sorted by
+        // timestamp, which avoids cycles when old timestamps are inverted.
+        let retained_existing_order = frozen_recent
+            .iter()
+            .filter(|row| target_ids.contains(&row.thread_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        new_drafts.sort_by(|left, right| {
+            compare_recent_membership_order(
+                &left.last_active_at,
+                &left.thread_id,
+                &right.last_active_at,
+                &right.thread_id,
+            )
+        });
+        let mut insertion_buckets = vec![Vec::<String>::new(); retained_existing_order.len() + 1];
+        for draft in &new_drafts {
+            let insertion_index = retained_existing_order
+                .iter()
+                .filter(|existing| {
+                    compare_recent_membership_order(
+                        &existing.last_active_at,
+                        &existing.thread_id,
+                        &draft.last_active_at,
+                        &draft.thread_id,
+                    ) == CmpOrdering::Less
+                })
+                .count();
+            insertion_buckets[insertion_index].push(draft.thread_id.clone());
+        }
+        let mut final_order = Vec::with_capacity(target_drafts.len());
+        for index in 0..=retained_existing_order.len() {
+            final_order.append(&mut insertion_buckets[index]);
+            if let Some(existing) = retained_existing_order.get(index) {
+                final_order.push(existing.thread_id.clone());
+            }
+        }
+        if final_order.len() != target_drafts.len() {
+            return Err(GaryxDbError::Configuration(
+                "recent membership cutover produced an incomplete order".to_owned(),
+            ));
+        }
+        for (offset, thread_id) in final_order.iter().enumerate() {
+            let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+            let activity_seq = frozen_high_water
+                .checked_add(offset)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| {
+                    GaryxDbError::Configuration(
+                        "recent thread activity sequence space is exhausted".to_owned(),
+                    )
+                })?;
+            let updated = tx.execute(
+                "UPDATE recent_threads SET activity_seq = ?1 WHERE thread_id = ?2",
+                params![activity_seq, thread_id],
+            )?;
+            if updated != 1 {
+                return Err(GaryxDbError::Configuration(format!(
+                    "recent membership cutover lost target row {thread_id}"
+                )));
+            }
+        }
+
+        // e. Publish the new high-water mark, recreate all three ordering
+        // indexes, and verify the row/max invariants before the marker lands.
+        let updated_meta = tx.execute(
+            "UPDATE recent_threads_meta SET activity_seq = ?1 WHERE id = 1",
+            params![final_high_water],
+        )?;
+        if updated_meta != 1 {
+            return Err(GaryxDbError::Configuration(
+                "recent_threads_meta singleton is missing".to_owned(),
+            ));
+        }
+        tx.execute_batch(
+            "CREATE UNIQUE INDEX idx_recent_threads_activity_seq
+                 ON recent_threads(activity_seq DESC);
+             CREATE INDEX idx_recent_threads_task_activity_seq
+                 ON recent_threads(activity_seq DESC)
+                 WHERE thread_type = 'task';
+             CREATE INDEX idx_recent_threads_non_task_activity_seq
+                 ON recent_threads(activity_seq DESC)
+                 WHERE thread_type <> 'task';",
+        )?;
+        let (actual_count, actual_max): (i64, i64) = tx.query_row(
+            "SELECT COUNT(*), COALESCE(MAX(activity_seq), 0) FROM recent_threads",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if actual_count != target_count
+            || (actual_count > 0 && actual_max != final_high_water)
+            || (actual_count == 0 && final_high_water != frozen_high_water)
+        {
+            return Err(GaryxDbError::Configuration(
+                "recent membership cutover high-water/member count mismatch".to_owned(),
+            ));
+        }
+        assert_recent_membership_parity_tx(&tx)?;
+
+        // f. Data and generation-aware marker commit atomically.
+        record_projection_state_tx(
+            &tx,
+            RECENT_MEMBERSHIP_MIGRATION_NAME,
+            RECENT_MEMBERSHIP_MIGRATION_VERSION,
+            source_row_count,
+            Some(import_generation),
+        )?;
+        tx.commit()?;
+
+        Ok(OneShotMigrationSummary {
+            source_row_count: usize::try_from(source_row_count).unwrap_or(usize::MAX),
+            updated_row_count: canonical_updated_count
+                .saturating_add(new_drafts.len())
+                .saturating_add(removed_recent_count)
+                .saturating_add(final_order.len()),
             already_completed: false,
         })
     }
@@ -4279,6 +4608,201 @@ fn insert_thread_id(thread_ids: &mut BTreeSet<String>, value: &str) {
     if is_thread_key(value) {
         thread_ids.insert(value.to_owned());
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FrozenRecentMembershipRow {
+    thread_id: String,
+    last_active_at: String,
+}
+
+/// S5 canonical normalization. Side-chat identity is intentionally narrow:
+/// only a top-level or metadata `source == "side_chat"` hides the record.
+/// Parent markers and retired exclusion flags alone never classify a side
+/// chat. The retired flags are still stripped from all object-shaped records.
+fn normalize_recent_membership_canonical_record(data: &mut Value) -> bool {
+    let side_chat = data.get("source").and_then(Value::as_str) == Some("side_chat")
+        || data
+            .get("metadata")
+            .and_then(Value::as_object)
+            .and_then(|metadata| metadata.get("source"))
+            .and_then(Value::as_str)
+            == Some("side_chat");
+    let Some(object) = data.as_object_mut() else {
+        return false;
+    };
+
+    let mut changed = false;
+    if side_chat && object.get("hidden") != Some(&Value::Bool(true)) {
+        object.insert("hidden".to_owned(), Value::Bool(true));
+        changed = true;
+    }
+    for key in ["exclude_from_recent", "excludeFromRecent"] {
+        changed |= object.remove(key).is_some();
+    }
+    if let Some(metadata) = object.get_mut("metadata").and_then(Value::as_object_mut) {
+        for key in ["exclude_from_recent", "excludeFromRecent"] {
+            changed |= metadata.remove(key).is_some();
+        }
+    }
+    changed
+}
+
+fn recent_membership_timestamp(value: &str) -> (i64, u32) {
+    DateTime::parse_from_rfc3339(value.trim())
+        .map(|timestamp| (timestamp.timestamp(), timestamp.timestamp_subsec_nanos()))
+        .unwrap_or((0, 0))
+}
+
+fn compare_recent_membership_order(
+    left_timestamp: &str,
+    left_thread_id: &str,
+    right_timestamp: &str,
+    right_thread_id: &str,
+) -> CmpOrdering {
+    recent_membership_timestamp(left_timestamp)
+        .cmp(&recent_membership_timestamp(right_timestamp))
+        .then_with(|| left_thread_id.as_bytes().cmp(right_thread_id.as_bytes()))
+}
+
+/// Cutover-only insert. Unlike the runtime upsert, this never allocates a
+/// sequence: all new members intentionally share zero until step d assigns the
+/// frozen H-based contiguous range with the activity indexes absent.
+fn insert_recent_membership_placeholder_tx(
+    tx: &Transaction<'_>,
+    draft: &RecentThreadDraft,
+    recorded_at: &str,
+) -> GaryxDbResult<()> {
+    let thread_id = normalize_thread_id(&draft.thread_id)?;
+    let thread_type = normalize_required("thread_type", &draft.thread_type)?;
+    let run_state = normalize_required("run_state", &draft.run_state)?;
+    let last_active_at = normalize_required("last_active_at", &draft.last_active_at)?;
+    let title = draft.title.trim().to_owned();
+    let workspace_dir = normalize_optional(draft.workspace_dir.as_deref());
+    let provider_type = normalize_optional(draft.provider_type.as_deref());
+    let agent_id = normalize_optional(draft.agent_id.as_deref());
+    let last_message_preview = draft.last_message_preview.trim().to_owned();
+    let recent_run_id = normalize_optional(draft.recent_run_id.as_deref());
+    let active_run_id = normalize_optional(draft.active_run_id.as_deref());
+    let updated_at = normalize_optional(draft.updated_at.as_deref());
+    let inserted = tx.execute(
+        "INSERT INTO recent_threads (
+            thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+            message_count, last_message_preview, recent_run_id, active_run_id, run_state,
+            updated_at, last_active_at, activity_seq, recorded_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, ?14)",
+        params![
+            thread_id,
+            title,
+            workspace_dir,
+            thread_type,
+            provider_type,
+            agent_id,
+            draft.message_count,
+            last_message_preview,
+            recent_run_id,
+            active_run_id,
+            run_state,
+            updated_at,
+            last_active_at,
+            recorded_at,
+        ],
+    )?;
+    if inserted != 1 {
+        return Err(GaryxDbError::Configuration(
+            "recent membership cutover could not insert a target row".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Enforce all six directions of canonical-visible/thread-meta/recent parity
+/// before the durable marker commits. These are SQL EXCEPT checks rather than
+/// counts, so equal-sized but different member sets cannot pass.
+fn assert_recent_membership_parity_tx(tx: &Transaction<'_>) -> GaryxDbResult<()> {
+    let checks = [
+        (
+            "canonical visible minus thread_meta visible",
+            "SELECT record.key
+               FROM thread_records AS record
+              WHERE substr(record.key, 1, 8) = 'thread::'
+                AND NOT EXISTS (
+                    SELECT 1 FROM archived_threads AS archived
+                     WHERE archived.thread_id = record.key
+                )
+                AND COALESCE(json_type(record.body, '$.hidden'), '') <> 'true'
+             EXCEPT
+             SELECT thread_id FROM thread_meta WHERE default_list_hidden = 0
+             LIMIT 1",
+        ),
+        (
+            "thread_meta visible minus canonical visible",
+            "SELECT thread_id FROM thread_meta WHERE default_list_hidden = 0
+             EXCEPT
+             SELECT record.key
+               FROM thread_records AS record
+              WHERE substr(record.key, 1, 8) = 'thread::'
+                AND NOT EXISTS (
+                    SELECT 1 FROM archived_threads AS archived
+                     WHERE archived.thread_id = record.key
+                )
+                AND COALESCE(json_type(record.body, '$.hidden'), '') <> 'true'
+             LIMIT 1",
+        ),
+        (
+            "canonical visible minus recent",
+            "SELECT record.key
+               FROM thread_records AS record
+              WHERE substr(record.key, 1, 8) = 'thread::'
+                AND NOT EXISTS (
+                    SELECT 1 FROM archived_threads AS archived
+                     WHERE archived.thread_id = record.key
+                )
+                AND COALESCE(json_type(record.body, '$.hidden'), '') <> 'true'
+             EXCEPT
+             SELECT thread_id FROM recent_threads
+             LIMIT 1",
+        ),
+        (
+            "recent minus canonical visible",
+            "SELECT thread_id FROM recent_threads
+             EXCEPT
+             SELECT record.key
+               FROM thread_records AS record
+              WHERE substr(record.key, 1, 8) = 'thread::'
+                AND NOT EXISTS (
+                    SELECT 1 FROM archived_threads AS archived
+                     WHERE archived.thread_id = record.key
+                )
+                AND COALESCE(json_type(record.body, '$.hidden'), '') <> 'true'
+             LIMIT 1",
+        ),
+        (
+            "thread_meta visible minus recent",
+            "SELECT thread_id FROM thread_meta WHERE default_list_hidden = 0
+             EXCEPT
+             SELECT thread_id FROM recent_threads
+             LIMIT 1",
+        ),
+        (
+            "recent minus thread_meta visible",
+            "SELECT thread_id FROM recent_threads
+             EXCEPT
+             SELECT thread_id FROM thread_meta WHERE default_list_hidden = 0
+             LIMIT 1",
+        ),
+    ];
+    for (label, sql) in checks {
+        if let Some(thread_id) = tx
+            .query_row(sql, [], |row| row.get::<_, String>(0))
+            .optional()?
+        {
+            return Err(GaryxDbError::Configuration(format!(
+                "recent membership parity failed ({label}): {thread_id}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn is_retired_workflow_executor_json(raw: &str) -> bool {
@@ -6175,6 +6699,565 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("thread::before-recovery-older", 1)]
         );
+    }
+
+    #[test]
+    fn recent_membership_cutover_rebuilds_exact_membership_and_preserves_retained_order() {
+        let db = GaryxDbService::memory().expect("memory db");
+        prepare_recent_membership_prerequisites(&db);
+
+        for (thread_id, body) in [
+            (
+                "thread::retained-z",
+                json!({"thread_id": "thread::retained-z", "label": "Retained Z"}),
+            ),
+            (
+                "thread::retained-a",
+                json!({"thread_id": "thread::retained-a", "label": "Retained A"}),
+            ),
+            (
+                "thread::new-missing",
+                json!({"thread_id": "thread::new-missing", "label": "No time"}),
+            ),
+            (
+                "thread::new-between",
+                json!({
+                    "thread_id": "thread::new-between",
+                    "label": "Between",
+                    "updated_at": "2026-07-02T00:00:00Z",
+                    "automation_thread_mode": "generated_thread"
+                }),
+            ),
+            (
+                "thread::new-same",
+                json!({
+                    "thread_id": "thread::new-same",
+                    "label": "Same timestamp",
+                    "updated_at": "2026-07-03T00:00:00Z",
+                    "exclude_from_recent": true,
+                    "excludeFromRecent": true,
+                    "metadata": {
+                        "exclude_from_recent": true,
+                        "excludeFromRecent": true
+                    }
+                }),
+            ),
+            (
+                "thread::new-latest",
+                json!({
+                    "thread_id": "thread::new-latest",
+                    "label": "Latest",
+                    "updated_at": "2026-07-04T00:00:00Z"
+                }),
+            ),
+            (
+                "thread::hidden",
+                json!({"thread_id": "thread::hidden", "hidden": true}),
+            ),
+            (
+                "thread::side-chat",
+                json!({
+                    "thread_id": "thread::side-chat",
+                    "source": "side_chat",
+                    "side_chat_parent_thread_id": "thread::retained-z",
+                    "exclude_from_recent": true,
+                    "metadata": {"excludeFromRecent": true}
+                }),
+            ),
+        ] {
+            seed_recent_membership_canonical(&db, thread_id, body);
+        }
+        seed_recent_membership_row(&db, "thread::retained-z", "2026-07-03T00:00:00Z", 10);
+        seed_recent_membership_row(&db, "thread::retained-a", "2026-07-01T00:00:00Z", 20);
+        // If this orphan were included in the insertion count, new-between
+        // would move from bucket 1 to bucket 2 (after retained-a).
+        seed_recent_membership_row(&db, "thread::orphan-slot", "2026-07-01T12:00:00Z", 30);
+        seed_recent_membership_row(&db, "thread::hidden", "2026-07-05T00:00:00Z", 40);
+        {
+            let conn = db.conn().unwrap();
+            conn.execute(
+                "UPDATE recent_threads_meta SET activity_seq = 100 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+            // Mode-only stale state proves every canonical live row is
+            // rederived even when its body needs no normalization.
+            conn.execute(
+                "INSERT INTO thread_meta (
+                    thread_id, excluded_from_recent, projected_at
+                 ) VALUES ('thread::new-between', 1, '2026-07-17T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            // The unconditional whole-table zeroing must include rows outside
+            // the canonical live universe without making them visible.
+            conn.execute(
+                "INSERT INTO thread_meta (
+                    thread_id, default_list_hidden, excluded_from_recent, projected_at
+                 ) VALUES ('thread::meta-only-hidden', 1, 1, '2026-07-17T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let incarnation = db.store_incarnation_id().unwrap();
+        assert!(matches!(
+            db.set_thread_favorite("thread::retained-z", true, 0, &incarnation)
+                .unwrap(),
+            FavoriteThreadResult::Updated { .. }
+        ));
+        assert!(matches!(
+            db.set_thread_favorite("thread::retained-a", true, 1, &incarnation)
+                .unwrap(),
+            FavoriteThreadResult::Updated { .. }
+        ));
+        assert_eq!(
+            db.thread_favorites_snapshot()
+                .unwrap()
+                .recent_threads
+                .iter()
+                .map(|row| row.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::retained-a", "thread::retained-z"]
+        );
+
+        let first = db
+            .migrate_recent_membership_v2()
+            .expect("membership cutover");
+        assert_eq!(first.source_row_count, 8);
+        assert!(!first.already_completed);
+        assert_eq!(
+            db.store_incarnation_id().unwrap(),
+            incarnation,
+            "sequence-only cutover must not rotate favorites CAS identity"
+        );
+        let ascending = recent_membership_rows_ascending(&db);
+        assert_eq!(
+            ascending,
+            vec![
+                ("thread::new-missing".to_owned(), 101),
+                ("thread::retained-z".to_owned(), 102),
+                ("thread::new-between".to_owned(), 103),
+                ("thread::new-same".to_owned(), 104),
+                ("thread::retained-a".to_owned(), 105),
+                ("thread::new-latest".to_owned(), 106),
+            ],
+            "retained order, count insertion, missing-time bottom, and same-time id tie"
+        );
+        assert_eq!(
+            db.thread_favorites_snapshot()
+                .unwrap()
+                .recent_threads
+                .iter()
+                .map(|row| row.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::retained-a", "thread::retained-z"],
+            "favorites retain their pre-cutover relative display order"
+        );
+
+        let conn = db.conn().unwrap();
+        let (meta_high_water, row_high_water): (i64, i64) = conn
+            .query_row(
+                "SELECT
+                    (SELECT activity_seq FROM recent_threads_meta WHERE id = 1),
+                    (SELECT MAX(activity_seq) FROM recent_threads)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((meta_high_water, row_high_water), (106, 106));
+        let index_rows = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT name FROM sqlite_master
+                      WHERE type = 'index'
+                        AND name IN (
+                            'idx_recent_threads_activity_seq',
+                            'idx_recent_threads_task_activity_seq',
+                            'idx_recent_threads_non_task_activity_seq'
+                        )
+                      ORDER BY name",
+                )
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(index_rows.len(), 3);
+        let unique: i64 = conn
+            .query_row(
+                "SELECT [unique] FROM pragma_index_list('recent_threads')
+                  WHERE name = 'idx_recent_threads_activity_seq'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unique, 1);
+        for path in [
+            "$.exclude_from_recent",
+            "$.excludeFromRecent",
+            "$.metadata.exclude_from_recent",
+            "$.metadata.excludeFromRecent",
+        ] {
+            let residual: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM thread_records
+                      WHERE json_type(body, ?1) IS NOT NULL",
+                    params![path],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(residual, 0, "residual canonical path {path}");
+        }
+        let excluded_residual: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM thread_meta WHERE excluded_from_recent != 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(excluded_residual, 0);
+        let side_chat_body: String = conn
+            .query_row(
+                "SELECT body FROM thread_records WHERE key = 'thread::side-chat'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&side_chat_body).unwrap()["hidden"],
+            true
+        );
+        drop(conn);
+        let mut parity_conn = db.conn().unwrap();
+        let parity_tx = parity_conn.transaction().unwrap();
+        assert_recent_membership_parity_tx(&parity_tx).unwrap();
+        parity_tx.commit().unwrap();
+        drop(parity_conn);
+
+        let second = db
+            .migrate_recent_membership_v2()
+            .expect("idempotent cutover");
+        assert!(second.already_completed);
+        assert_eq!(second.updated_row_count, 0);
+        assert_eq!(recent_membership_rows_ascending(&db), ascending);
+    }
+
+    #[test]
+    fn recent_membership_cutover_reruns_once_per_import_generation() {
+        let db = GaryxDbService::memory().expect("memory db");
+        prepare_recent_membership_prerequisites(&db);
+        seed_recent_membership_canonical(
+            &db,
+            "thread::generation-zero",
+            json!({
+                "thread_id": "thread::generation-zero",
+                "automation_thread_mode": "generated_thread",
+                "exclude_from_recent": true
+            }),
+        );
+        assert!(!db.migrate_recent_membership_v2().unwrap().already_completed);
+        assert!(db.migrate_recent_membership_v2().unwrap().already_completed);
+
+        seed_recent_membership_canonical(
+            &db,
+            "thread::generation-one",
+            json!({
+                "thread_id": "thread::generation-one",
+                "automation_thread_mode": "generated_thread",
+                "metadata": {"excludeFromRecent": true}
+            }),
+        );
+        db.conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO thread_meta (
+                    thread_id, excluded_from_recent, projected_at
+                 ) VALUES ('thread::generation-one', 1, '2026-07-17T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(db.commit_legacy_import(2, false).unwrap(), 1);
+        assert!(
+            !db.migrate_thread_meta_summary_v1()
+                .unwrap()
+                .already_completed
+        );
+        let generation_one = db.migrate_recent_membership_v2().unwrap();
+        assert!(!generation_one.already_completed);
+        assert!(db.migrate_recent_membership_v2().unwrap().already_completed);
+
+        let conn = db.conn().unwrap();
+        let based_on: i64 = conn
+            .query_row(
+                "SELECT based_on_import_generation
+                   FROM projection_states
+                  WHERE projection_name = ?1",
+                params![RECENT_MEMBERSHIP_MIGRATION_NAME],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(based_on, 1);
+        drop(conn);
+        assert_eq!(
+            recent_membership_rows_ascending(&db)
+                .into_iter()
+                .map(|(thread_id, _)| thread_id)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "thread::generation-zero".to_owned(),
+                "thread::generation-one".to_owned(),
+            ])
+        );
+    }
+
+    #[test]
+    fn recent_membership_cutover_high_water_uses_larger_existing_row_sequence() {
+        let db = GaryxDbService::memory().expect("memory db");
+        prepare_recent_membership_prerequisites(&db);
+        seed_recent_membership_canonical(
+            &db,
+            "thread::row-high-retained",
+            json!({"thread_id": "thread::row-high-retained"}),
+        );
+        seed_recent_membership_canonical(
+            &db,
+            "thread::row-high-new",
+            json!({
+                "thread_id": "thread::row-high-new",
+                "updated_at": "2026-07-18T00:00:00Z"
+            }),
+        );
+        seed_recent_membership_row(&db, "thread::row-high-retained", "2026-07-17T00:00:00Z", 50);
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE recent_threads_meta SET activity_seq = 10 WHERE id = 1",
+                [],
+            )
+            .unwrap();
+
+        db.migrate_recent_membership_v2().unwrap();
+        assert_eq!(
+            recent_membership_rows_ascending(&db),
+            vec![
+                ("thread::row-high-retained".to_owned(), 51),
+                ("thread::row-high-new".to_owned(), 52),
+            ]
+        );
+        let meta: i64 = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT activity_seq FROM recent_threads_meta WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(meta, 52);
+    }
+
+    #[test]
+    fn recent_membership_cutover_safe_integer_failure_rolls_back_and_retries() {
+        let db = GaryxDbService::memory().expect("memory db");
+        prepare_recent_membership_prerequisites(&db);
+        seed_recent_membership_canonical(
+            &db,
+            "thread::at-sequence-limit",
+            json!({
+                "thread_id": "thread::at-sequence-limit",
+                "exclude_from_recent": true
+            }),
+        );
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE recent_threads_meta SET activity_seq = ?1 WHERE id = 1",
+                params![MAX_RECENT_THREAD_ACTIVITY_SEQ_EXCLUSIVE - 1],
+            )
+            .unwrap();
+
+        assert!(db.migrate_recent_membership_v2().is_err());
+        let conn = db.conn().unwrap();
+        let body: String = conn
+            .query_row(
+                "SELECT body FROM thread_records WHERE key = 'thread::at-sequence-limit'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            serde_json::from_str::<Value>(&body)
+                .unwrap()
+                .get("exclude_from_recent")
+                .is_some()
+        );
+        let marker_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM projection_states WHERE projection_name = ?1",
+                params![RECENT_MEMBERSHIP_MIGRATION_NAME],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(marker_count, 0);
+        let index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                  WHERE type = 'index'
+                    AND name IN (
+                        'idx_recent_threads_activity_seq',
+                        'idx_recent_threads_task_activity_seq',
+                        'idx_recent_threads_non_task_activity_seq'
+                    )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_count, 3, "failed cutover restores dropped indexes");
+        conn.execute(
+            "UPDATE recent_threads_meta SET activity_seq = 0 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        assert!(!db.migrate_recent_membership_v2().unwrap().already_completed);
+    }
+
+    #[test]
+    fn recent_membership_cutover_registration_requires_summary_then_activity() {
+        let db = GaryxDbService::memory().expect("memory db");
+        assert!(db.migrate_recent_membership_v2().is_err());
+        db.migrate_thread_meta_summary_v1().unwrap();
+        assert!(db.migrate_recent_membership_v2().is_err());
+        db.migrate_recent_thread_activity_seq_v1().unwrap();
+        assert!(!db.migrate_recent_membership_v2().unwrap().already_completed);
+
+        let source = include_str!("mod.rs");
+        let registrations = source
+            .split_once("pub(crate) fn run_thread_data_startup_migrations")
+            .unwrap()
+            .1
+            .split_once("pub(crate) fn migrate_recent_thread_activity_seq_v1")
+            .unwrap()
+            .0;
+        let summary = registrations
+            .find("migrate_thread_meta_summary_v1")
+            .unwrap();
+        let activity = registrations
+            .find("migrate_recent_thread_activity_seq_v1")
+            .unwrap();
+        let membership = registrations.find("migrate_recent_membership_v2").unwrap();
+        assert!(summary < activity && activity < membership);
+    }
+
+    #[test]
+    fn recent_membership_side_chat_selector_is_exact_and_strips_flags() {
+        let mut cases = [
+            ("top source", json!({"source": "side_chat"}), true),
+            (
+                "metadata source",
+                json!({"metadata": {"source": "side_chat"}}),
+                true,
+            ),
+            (
+                "both sources",
+                json!({"source": "side_chat", "metadata": {"source": "side_chat"}}),
+                true,
+            ),
+            (
+                "parent only",
+                json!({"side_chat_parent_thread_id": "thread::parent"}),
+                false,
+            ),
+            (
+                "exclusion only",
+                json!({
+                    "exclude_from_recent": true,
+                    "excludeFromRecent": true,
+                    "metadata": {
+                        "exclude_from_recent": true,
+                        "excludeFromRecent": true
+                    }
+                }),
+                false,
+            ),
+            (
+                "malformed payload",
+                json!({"source": 42, "metadata": ["side_chat"]}),
+                false,
+            ),
+        ];
+        for (label, data, expected_hidden) in &mut cases {
+            normalize_recent_membership_canonical_record(data);
+            assert_eq!(
+                data.get("hidden").and_then(Value::as_bool),
+                (*expected_hidden).then_some(true),
+                "{label}"
+            );
+            if let Some(object) = data.as_object() {
+                assert!(object.get("exclude_from_recent").is_none(), "{label}");
+                assert!(object.get("excludeFromRecent").is_none(), "{label}");
+                if let Some(metadata) = object.get("metadata").and_then(Value::as_object) {
+                    assert!(metadata.get("exclude_from_recent").is_none(), "{label}");
+                    assert!(metadata.get("excludeFromRecent").is_none(), "{label}");
+                }
+            }
+        }
+    }
+
+    fn prepare_recent_membership_prerequisites(service: &GaryxDbService) {
+        service
+            .migrate_thread_meta_summary_v1()
+            .expect("summary prerequisite");
+        service
+            .migrate_recent_thread_activity_seq_v1()
+            .expect("activity prerequisite");
+    }
+
+    fn seed_recent_membership_canonical(service: &GaryxDbService, thread_id: &str, body: Value) {
+        service
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO thread_records (key, body, updated_at, recorded_at)
+                 VALUES (?1, ?2, NULL, '2026-07-17T00:00:00Z')",
+                params![thread_id, body.to_string()],
+            )
+            .unwrap();
+    }
+
+    fn seed_recent_membership_row(
+        service: &GaryxDbService,
+        thread_id: &str,
+        last_active_at: &str,
+        activity_seq: i64,
+    ) {
+        service
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO recent_threads (
+                    thread_id, title, thread_type, last_active_at, activity_seq, recorded_at
+                 ) VALUES (?1, ?1, 'chat', ?2, ?3, '2026-07-17T00:00:00Z')",
+                params![thread_id, last_active_at, activity_seq],
+            )
+            .unwrap();
+    }
+
+    fn recent_membership_rows_ascending(service: &GaryxDbService) -> Vec<(String, i64)> {
+        let conn = service.conn().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT thread_id, activity_seq
+                   FROM recent_threads
+                  ORDER BY activity_seq ASC",
+            )
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     }
 
     fn seed_favorite_thread(service: &GaryxDbService, thread_id: &str, recent: bool) {
@@ -9414,7 +10497,7 @@ mod tests {
             .iter()
             .find(|row| row.thread_id == "thread::summary-cutover-updated")
             .unwrap();
-        assert!(updated.excluded_from_recent);
+        assert!(!updated.excluded_from_recent);
         assert_eq!(
             updated.sort_updated_at_us,
             DateTime::parse_from_rfc3339("2026-07-17T01:02:03.500Z")

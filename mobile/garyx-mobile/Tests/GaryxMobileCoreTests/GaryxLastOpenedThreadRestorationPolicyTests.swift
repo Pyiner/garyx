@@ -2,6 +2,19 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxLastOpenedThreadRestorationPolicyTests: XCTestCase {
+    func testPersistenceDecisionRemainsInCoreUntilRetiredGateIsDeleted() {
+        XCTAssertTrue(
+            GaryxLastOpenedThreadRestorationPolicy.shouldPersistLastOpenedThread(
+                excludedFromRecent: false
+            )
+        )
+        XCTAssertFalse(
+            GaryxLastOpenedThreadRestorationPolicy.shouldPersistLastOpenedThread(
+                excludedFromRecent: true
+            )
+        )
+    }
+
     func testRestoresPersistedThreadWhenNavigationIsUnclaimed() {
         XCTAssertEqual(
             GaryxLastOpenedThreadRestorationPolicy.restoreThreadId(

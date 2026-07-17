@@ -3905,13 +3905,111 @@ async fn thread_favorites_snapshot_route_returns_identity_and_joined_recent_rows
     .unwrap();
     assert_eq!(enhanced["summaries_truncated"], false);
     assert_eq!(enhanced["summaries"].as_array().unwrap().len(), 2);
-    let excluded = enhanced["summaries"]
+    let orphaned_favorite = enhanced["summaries"]
         .as_array()
         .unwrap()
         .iter()
         .find(|row| row["thread_id"] == "thread::snapshot-without-recent")
-        .expect("excluded favorite summary");
-    assert_eq!(excluded["excluded_from_recent"], true);
+        .expect("orphaned favorite summary");
+    assert_eq!(orphaned_favorite["excluded_from_recent"], false);
+}
+
+#[tokio::test]
+async fn mode_only_generated_thread_flows_through_both_summary_envelopes_as_ordinary() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::mode-only-generated";
+    state.ops.garyx_db.migrate_thread_meta_summary_v1().unwrap();
+    state
+        .ops
+        .garyx_db
+        .migrate_recent_thread_activity_seq_v1()
+        .unwrap();
+    let canonical = json!({
+        "thread_id": thread_id,
+        "label": "Generated mode only",
+        "automation_id": "automation::daily",
+        "automation_thread_mode": "generated_thread",
+        "updated_at": "2026-07-17T03:00:00Z"
+    });
+    state
+        .threads
+        .thread_store
+        .set(thread_id, canonical.clone())
+        .await
+        .unwrap();
+    state
+        .ops
+        .garyx_db
+        .clear_projection_state(crate::garyx_db::RECENT_MEMBERSHIP_MIGRATION_NAME)
+        .unwrap();
+    let mut stale_projection =
+        crate::thread_meta_projection::thread_meta_projection_from_thread_data_with_active_run(
+            thread_id, &canonical, None,
+        )
+        .unwrap();
+    stale_projection.thread_meta.excluded_from_recent = true;
+    state
+        .ops
+        .garyx_db
+        .replace_thread_meta_projection(stale_projection)
+        .unwrap();
+    assert!(state.ops.garyx_db.remove_recent_thread(thread_id).unwrap());
+    assert!(
+        !state
+            .ops
+            .garyx_db
+            .migrate_recent_membership_v2()
+            .unwrap()
+            .already_completed,
+        "mode-only legacy row must traverse the generation cutover"
+    );
+    let incarnation = state.ops.garyx_db.store_incarnation_id().unwrap();
+    assert!(matches!(
+        state
+            .ops
+            .garyx_db
+            .set_thread_favorite(thread_id, true, 0, &incarnation)
+            .unwrap(),
+        crate::garyx_db::FavoriteThreadResult::Updated { .. }
+    ));
+    let router = build_router(state.clone());
+
+    let (status, summaries) = authed_get_json(&router, "/api/thread-summaries?limit=100").await;
+    assert_eq!(status, StatusCode::OK);
+    let summary = summaries["threads"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["thread_id"] == thread_id)
+        .expect("mode-only row in thread summaries");
+    assert_eq!(summary["excluded_from_recent"], false);
+
+    let (status, favorites) = authed_get_json(
+        &router,
+        "/api/thread-favorites/snapshot?include_summaries=true",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let favorite_summary = favorites["summaries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["thread_id"] == thread_id)
+        .expect("mode-only row in favorite summaries");
+    assert_eq!(favorite_summary["excluded_from_recent"], false);
+    assert!(
+        favorites["recent"]["threads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["thread_id"] == thread_id)
+    );
+
+    let (status, point) = authed_get_json(&router, &format!("/api/threads/{thread_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(point["automation_thread_mode"], "generated_thread");
+    assert!(point.get("exclude_from_recent").is_none());
+    assert!(point.get("excludeFromRecent").is_none());
 }
 
 #[tokio::test]
@@ -6267,6 +6365,67 @@ async fn create_thread_writes_model_cell_not_override() {
             .get("model_reasoning_effort_override")
             .is_none(),
         "thread creation must not write the legacy effort override key"
+    );
+}
+
+#[tokio::test]
+async fn create_thread_endpoint_strips_both_retired_exclusion_spellings_at_both_levels() {
+    let (state, _logger, _dir) = test_state().await;
+    let workspace = tempdir().unwrap();
+    let router = build_router(state.clone());
+    let response = router
+        .oneshot(
+            authed_request()
+                .method("POST")
+                .uri("/api/threads")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "agentId": "claude",
+                        "workspaceDir": workspace.path().to_string_lossy(),
+                        "exclude_from_recent": true,
+                        "excludeFromRecent": true,
+                        "metadata": {
+                            "source": "legacy-client",
+                            "exclude_from_recent": true,
+                            "excludeFromRecent": true
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let payload: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let thread_id = payload["thread_id"].as_str().unwrap();
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.get("exclude_from_recent").is_none());
+    assert!(stored.get("excludeFromRecent").is_none());
+    let metadata = stored["metadata"].as_object().unwrap();
+    assert_eq!(metadata.get("source"), Some(&json!("legacy-client")));
+    assert!(metadata.get("exclude_from_recent").is_none());
+    assert!(metadata.get("excludeFromRecent").is_none());
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_recent_threads(100, 0)
+            .unwrap()
+            .iter()
+            .any(|row| row.thread_id == thread_id)
     );
 }
 

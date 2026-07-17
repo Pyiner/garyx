@@ -118,6 +118,43 @@ final class GaryxThreadSummaryGatewayContractTests: XCTestCase {
         ))
     }
 
+    func testModeOnlyServerRowFromBothSummaryEnvelopesHasFullFavoriteCapability() throws {
+        // The gateway route test seeds a canonical generated-mode-only row and
+        // pins these two exact wire fields to false. This Core half proves both
+        // envelopes reach the shared capability derivation without reviving
+        // the retired gate.
+        let decoder = JSONDecoder()
+        let page = try decoder.decode(
+            GaryxThreadSummariesPage.self,
+            from: Data(summaryPageJSON(ids: ["thread::mode-only"]).utf8)
+        )
+        let favorites = try decoder.decode(
+            GaryxThreadFavoritesSnapshot.self,
+            from: Data(
+                favoritesJSON(
+                    enhanced: true,
+                    favoriteId: "thread::mode-only",
+                    summaryId: "thread::mode-only"
+                )
+                .utf8
+            )
+        )
+        let rows = try [
+            XCTUnwrap(page.threads.first),
+            XCTUnwrap(favorites.summaries?.first),
+        ]
+        for row in rows {
+            XCTAssertFalse(row.excludeFromRecent)
+            XCTAssertEqual(
+                GaryxThreadRowCapabilityDeriver.capabilities(
+                    for: row,
+                    context: GaryxThreadRowCapabilityContext()
+                ).favorite,
+                .addAndRemove
+            )
+        }
+    }
+
     private func makeClient() -> (GaryxGatewayClient, URLSession) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ThreadSummaryURLProtocolStub.self]
@@ -151,6 +188,7 @@ private func summaryPageJSON(ids: [String]) -> String {
 private func favoritesJSON(
     enhanced: Bool,
     omitTruncated: Bool = false,
+    favoriteId: String = "thread::favorite",
     summaryId: String = "thread::favorite"
 ) -> String {
     let enhancedFields: String
@@ -161,7 +199,7 @@ private func favoritesJSON(
         enhancedFields = ""
     }
     return """
-    {"store_incarnation_id":"incarnation","server_boot_id":"boot","revision":1,"thread_ids":["thread::favorite"],"favorites":[{"thread_id":"thread::favorite","favorited_at":"2026-07-17T00:00:00Z"}],"recent":{"threads":[],"total":0,"truncated":false}\(enhancedFields)}
+    {"store_incarnation_id":"incarnation","server_boot_id":"boot","revision":1,"thread_ids":["\(favoriteId)"],"favorites":[{"thread_id":"\(favoriteId)","favorited_at":"2026-07-17T00:00:00Z"}],"recent":{"threads":[],"total":0,"truncated":false}\(enhancedFields)}
     """
 }
 
