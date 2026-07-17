@@ -1233,11 +1233,16 @@ fn classify_meeting_api_error(
     message: String,
     meeting_id: Option<String>,
 ) -> MeetingApiError {
-    if matches!(code, 10005 | 121005) {
-        // 10005: bot is not in the meeting. 121005: "meeting not exist" —
-        // live-verified 2026-07-17: joining a dead meeting_no during the
-        // live-nudge re-join verify returned 121005, which must converge the
-        // entity instead of retrying forever as an unclassified error.
+    if code == 10005 {
+        MeetingApiError::NotInMeeting
+    } else if code == 121005 && message.to_ascii_lowercase().contains("not exist") {
+        // 121005 is polysemous on VC endpoints: joining a dead meeting_no
+        // returns 121005 "meeting not exist" (live-verified 2026-07-17 via
+        // the live-nudge re-join verify), while `bots/leave` uses the same
+        // code for "no permission" (a permission error, per the official
+        // Lark CLI error table). Only the explicit not-exist form may
+        // converge the entity as NotInMeeting; every other 121005 stays
+        // unclassified so callers keep their retry/best-effort behavior.
         MeetingApiError::NotInMeeting
     } else if matches!(
         code,
