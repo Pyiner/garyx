@@ -1090,40 +1090,76 @@ async fn run_live(
     {
         let timeout = service.ingestion.timing().platform_timeout;
         let join = tokio::time::timeout(timeout, registered.client.join(&record.meeting_no, None));
-        match join.await {
-            Ok(Ok(joined)) => {
-                info!(
-                    meeting_id = %record.id,
-                    feishu_meeting_id = %joined.feishu_meeting_id,
-                    "live nudge re-join verified membership"
-                );
-                let _ = service.db.mark_meeting_live(
-                    &record.id,
-                    &joined.feishu_meeting_id,
-                    &record.topic,
-                );
-            }
-            Ok(Err(error)) => {
-                if let Some(meeting_id) = error.meeting_id() {
-                    info!(
-                        meeting_id = %record.id,
-                        feishu_meeting_id = meeting_id,
-                        "live nudge re-join carried identity; treated as verified"
-                    );
-                } else if matches!(error, MeetingApiError::NotInMeeting) {
-                    return begin_abort(
-                        service,
-                        record,
-                        "re-join verify: platform reports meeting unavailable",
-                        service.ingestion.current_client(&record.account_id),
-                    )
-                    .await;
-                } else {
-                    warn!(meeting_id = %record.id, error = %error, "live nudge re-join verify failed; will retry on next nudge");
+        let result = join.await;
+        // Generation fence (review #TASK-2371): if the registry was replaced
+        // while this verify was in flight, the stale client's result must be
+        // discarded — the replacement registration already queued its own
+        // Nudge, which will re-verify with the current client.
+        let current_generation = service
+            .ingestion
+            .current_client(&record.account_id)
+            .map(|current| current.generation);
+        if current_generation != Some(registered.generation) {
+            debug!(meeting_id = %record.id, "discarding stale-generation re-join verify result");
+        } else {
+            match result {
+                Ok(Ok(joined)) => {
+                    match service.db.confirm_live_membership(
+                        &record.id,
+                        &joined.feishu_meeting_id,
+                        &record.topic,
+                    ) {
+                        Ok(Some(_)) => info!(
+                            meeting_id = %record.id,
+                            feishu_meeting_id = %joined.feishu_meeting_id,
+                            "live nudge re-join verified membership"
+                        ),
+                        Ok(None) => debug!(
+                            meeting_id = %record.id,
+                            "re-join verify raced a lifecycle transition; identity not applied"
+                        ),
+                        Err(error) => warn!(
+                            meeting_id = %record.id, error = %error,
+                            "re-join verify could not persist membership identity"
+                        ),
+                    }
                 }
-            }
-            Err(_) => {
-                warn!(meeting_id = %record.id, "live nudge re-join verify timed out; will retry on next nudge");
+                Ok(Err(error)) => {
+                    if let Some(meeting_id) = error.meeting_id() {
+                        match service.db.confirm_live_membership(
+                            &record.id,
+                            meeting_id,
+                            &record.topic,
+                        ) {
+                            Ok(Some(_)) => info!(
+                                meeting_id = %record.id,
+                                feishu_meeting_id = meeting_id,
+                                "live nudge re-join carried identity; treated as verified"
+                            ),
+                            Ok(None) => debug!(
+                                meeting_id = %record.id,
+                                "identity-carrying verify raced a lifecycle transition"
+                            ),
+                            Err(persist_error) => warn!(
+                                meeting_id = %record.id, error = %persist_error,
+                                "identity-carrying verify could not persist membership"
+                            ),
+                        }
+                    } else if matches!(error, MeetingApiError::NotInMeeting) {
+                        return begin_abort(
+                            service,
+                            record,
+                            "re-join verify: platform reports meeting unavailable",
+                            service.ingestion.current_client(&record.account_id),
+                        )
+                        .await;
+                    } else {
+                        warn!(meeting_id = %record.id, error = %error, "live nudge re-join verify failed; will retry on next nudge");
+                    }
+                }
+                Err(_) => {
+                    warn!(meeting_id = %record.id, "live nudge re-join verify timed out; will retry on next nudge");
+                }
             }
         }
     }
@@ -1282,11 +1318,11 @@ async fn begin_finalizing(
                 }
             }
         }
-        attempt = attempt.saturating_add(1);
         let base = service.ingestion.timing().barrier_retry;
         let backoff = base
             .saturating_mul(1u32 << attempt.min(6))
             .min(Duration::from_secs(60));
+        attempt = attempt.saturating_add(1);
         tokio::select! {
             _ = service.ingestion.shutdown.cancelled() => return FinalizeIntentOutcome::Shutdown,
             _ = tokio::time::sleep(backoff) => {}

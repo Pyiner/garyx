@@ -109,6 +109,11 @@ struct FakeMeetingClient {
     leave_calls: Arc<AtomicUsize>,
     hang_join: Arc<AtomicBool>,
     hang_leave: Arc<AtomicBool>,
+    /// When set, `join` blocks on `join_gate` (releasable, unlike
+    /// `hang_join`) before yielding its queued result — lets a test hold a
+    /// join in flight across a registry replacement.
+    gate_join: Arc<AtomicBool>,
+    join_gate: Arc<tokio::sync::Notify>,
     leave_result: Result<(), MeetingApiError>,
     bot_open_id: String,
 }
@@ -124,6 +129,8 @@ impl FakeMeetingClient {
             leave_calls: Arc::new(AtomicUsize::new(0)),
             hang_join: Arc::new(AtomicBool::new(false)),
             hang_leave: Arc::new(AtomicBool::new(false)),
+            gate_join: Arc::new(AtomicBool::new(false)),
+            join_gate: Arc::new(tokio::sync::Notify::new()),
             leave_result: Ok(()),
             bot_open_id: bot_open_id.to_owned(),
         }
@@ -137,6 +144,8 @@ impl FakeMeetingClient {
             leave_calls: Arc::new(AtomicUsize::new(0)),
             hang_join: Arc::new(AtomicBool::new(false)),
             hang_leave: Arc::new(AtomicBool::new(false)),
+            gate_join: Arc::new(AtomicBool::new(false)),
+            join_gate: Arc::new(tokio::sync::Notify::new()),
             leave_result: Ok(()),
             bot_open_id: bot_open_id.to_owned(),
         }
@@ -153,6 +162,9 @@ impl MeetingPlatformClient for FakeMeetingClient {
         self.join_calls.fetch_add(1, Ordering::AcqRel);
         if self.hang_join.load(Ordering::Acquire) {
             return std::future::pending().await;
+        }
+        if self.gate_join.load(Ordering::Acquire) {
+            self.join_gate.notified().await;
         }
         self.joins
             .lock()
@@ -2763,6 +2775,133 @@ async fn reinvite_rejoin_reporting_meeting_gone_converges_to_aborted() {
         .on_meeting_invited(synthetic_invite(account_id, "evt-gone-2"));
     let aborted = wait_for_record(&fixture.db, |record| record.status == "aborted").await;
     assert_eq!(aborted.id, live.id);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn live_rejoin_verify_persists_new_meeting_identity() {
+    // Review #TASK-2371 counterexample: while an entity is stuck live the
+    // platform can start a NEW meeting under the same meeting_no, so the
+    // re-join verify reports a different feishu meeting id. That identity
+    // must persist (confirm_live_membership) or activity pushed under the
+    // new id is dropped as unknown.
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(60));
+    let account_id = "reinvite-identity-account";
+    let client = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993304",
+        "ou_bot_identity",
+    ));
+    fixture.service.register_client(account_id, client.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-identity-1"));
+    let live = wait_for_record(&fixture.db, |record| record.status == "live").await;
+    assert_eq!(live.feishu_meeting_id, "9007199254740993304");
+
+    client
+        .joins
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push_back(Ok(JoinedMeeting {
+            feishu_meeting_id: "9007199254740993305".to_owned(),
+        }));
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-identity-2"));
+    let synced = wait_for_record(&fixture.db, |record| {
+        record.id == live.id && record.feishu_meeting_id == "9007199254740993305"
+    })
+    .await;
+    assert_eq!(synced.status, "live");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stale_generation_rejoin_result_is_discarded() {
+    // Review #TASK-2371 counterexample: client A's re-join verify is still
+    // in flight when the registry is replaced. A's late NotInMeeting must
+    // be discarded by the generation fence instead of aborting the live
+    // entity; the replacement registration's own queued Nudge re-verifies
+    // with the current client.
+    let fixture = Fixture::new(65_536);
+    start_test_ingestion(&fixture.service, Duration::from_millis(60));
+    // Generous platform timeout so the gated join resolves through the gate
+    // release, never the timeout fallback (which would skip the fence path).
+    fixture.service.set_test_ingestion_timing(
+        Duration::from_millis(20),
+        Duration::from_secs(5),
+        Duration::from_millis(60),
+        Duration::from_millis(20),
+    );
+    let account_id = "stale-generation-account";
+    let stale = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993306",
+        "ou_bot_stale",
+    ));
+    fixture.service.register_client(account_id, stale.clone());
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-stale-1"));
+    let live = wait_for_record(&fixture.db, |record| record.status == "live").await;
+    let joins_after_admission = stale.join_calls.load(Ordering::Acquire);
+
+    // Arm the stale client: the next join blocks on the gate, then reports
+    // NotInMeeting.
+    stale.gate_join.store(true, Ordering::Release);
+    stale
+        .joins
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push_back(Err(MeetingApiError::NotInMeeting));
+    fixture
+        .service
+        .on_meeting_invited(synthetic_invite(account_id, "evt-stale-2"));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if stale.join_calls.load(Ordering::Acquire) > joins_after_admission {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "re-invite nudge never started the verify join"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Replace the registration while the verify is in flight, then release
+    // the stale join so its NotInMeeting arrives under the new generation.
+    let replacement = Arc::new(FakeMeetingClient::successful(
+        "9007199254740993306",
+        "ou_bot_stale",
+    ));
+    fixture
+        .service
+        .register_client(account_id, replacement.clone());
+    stale.join_gate.notify_one();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if replacement.join_calls.load(Ordering::Acquire) >= 1 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "replacement registration nudge never re-verified membership"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        stale
+            .joins
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty(),
+        "gated NotInMeeting was never consumed; the fence path went untested"
+    );
+    let record = fixture.db.get_meeting(&live.id).expect("get").expect("row");
+    assert_eq!(
+        record.status, "live",
+        "stale-generation NotInMeeting must not abort a live entity"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

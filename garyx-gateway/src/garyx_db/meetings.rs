@@ -654,6 +654,36 @@ impl GaryxDbService {
         meeting_by_id_conn(&conn, &id)
     }
 
+    /// Confirm membership of an already-live meeting after an idempotent
+    /// re-join verify (review #TASK-2371): synchronizes the platform meeting
+    /// identity/topic and clears the failure pair. CAS on `status = 'live'`
+    /// only — `mark_meeting_live` intentionally covers `joining` rows alone.
+    pub fn confirm_live_membership(
+        &self,
+        id: &str,
+        feishu_meeting_id: &str,
+        topic: &str,
+    ) -> GaryxDbResult<Option<MeetingRecord>> {
+        let id = normalize_meeting_id(id)?;
+        let feishu_meeting_id = normalize_required("feishu_meeting_id", feishu_meeting_id)?;
+        let topic = truncate_utf8(topic.trim(), 256);
+        let conn = self.conn()?;
+        let updated = conn.execute(
+            "UPDATE meetings
+                SET feishu_meeting_id = ?2,
+                    topic = CASE WHEN ?3 = '' THEN topic ELSE ?3 END,
+                    failure_kind = '',
+                    failure_since = NULL,
+                    updated_at = ?4
+              WHERE id = ?1 AND status = 'live'",
+            params![id, feishu_meeting_id, topic, now_string()],
+        )?;
+        if updated == 0 {
+            return Ok(None);
+        }
+        meeting_by_id_conn(&conn, &id)
+    }
+
     pub fn mark_meeting_live(
         &self,
         id: &str,
