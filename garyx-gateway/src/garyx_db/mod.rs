@@ -4085,6 +4085,7 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
 
         "#,
     )?;
+    meetings::migrate_meetings_pull_era_schema(conn)?;
     conn.execute_batch(meetings::MEETINGS_DDL)?;
     ensure_recent_threads_activity_seq_column(conn)?;
     ensure_recent_threads_meta_row(conn)?;

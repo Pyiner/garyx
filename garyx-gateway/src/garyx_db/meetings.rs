@@ -1,11 +1,87 @@
 use std::str::FromStr;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{GaryxDbError, GaryxDbResult, GaryxDbService, now_string};
+
+/// One-shot rebuild for databases created by the pull-era slice-1 schema
+/// (rev20): their baked-in CHECK still allows `poll_ended`/`grace_expired`
+/// but not `participant_left`, and they carry retired `call_id` /
+/// `poll_cursor` columns. `CREATE TABLE IF NOT EXISTS` cannot evolve CHECK
+/// constraints, so a stuck `finalizing` intent retried forever
+/// (live incident, 2026-07-17). SQLite cannot ALTER a CHECK either, so this
+/// is the standard rebuild: new table, mapped copy, drop, rename.
+pub(crate) fn migrate_meetings_pull_era_schema(conn: &Connection) -> GaryxDbResult<()> {
+    let Some(existing_sql) = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'meetings'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    else {
+        return Ok(()); // fresh database; MEETINGS_DDL will create the new shape
+    };
+    if !existing_sql.contains("'poll_ended'") {
+        return Ok(()); // already the push-era shape
+    }
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+    let result = (|| -> GaryxDbResult<()> {
+        let tx = conn.unchecked_transaction()?;
+        // New shape, temporary name; column set matches MEETINGS_DDL exactly.
+        tx.execute_batch(
+            &MEETINGS_DDL
+                .replace("CREATE TABLE IF NOT EXISTS meetings (", "CREATE TABLE meetings_new (")
+                .split("CREATE TABLE IF NOT EXISTS meeting_invite_keys")
+                .next()
+                .expect("meetings table section"),
+        )?;
+        tx.execute_batch(
+            "INSERT INTO meetings_new (
+                id, account_id, meeting_no, feishu_meeting_id, invite_event_id,
+                topic, invited_by, status, status_detail, content_state,
+                content_lost_at, failure_kind, failure_since, log_epoch,
+                cache_generation, end_source, join_deadline_at, grace_deadline_at,
+                closed_segment_count, byte_size, started_at, ended_at,
+                finalized_at, created_at, updated_at)
+             SELECT
+                id, account_id, meeting_no, feishu_meeting_id, invite_event_id,
+                topic, invited_by, status, status_detail, content_state,
+                content_lost_at, failure_kind, failure_since, log_epoch,
+                cache_generation,
+                CASE WHEN end_source IN ('poll_ended','grace_expired')
+                     THEN 'push' ELSE end_source END,
+                join_deadline_at, grace_deadline_at,
+                closed_segment_count, byte_size, started_at, ended_at,
+                finalized_at, created_at, updated_at
+             FROM meetings;
+             DROP TABLE meetings;
+             ALTER TABLE meetings_new RENAME TO meetings;",
+        )?;
+        tx.commit()?;
+        Ok(())
+    })();
+    // Indexes were dropped with the old table; MEETINGS_DDL (run right after
+    // this migration) recreates them via IF NOT EXISTS.
+    let check: Vec<(String, String)> = {
+        let mut stmt = conn.prepare("PRAGMA foreign_key_check")?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    result?;
+    if !check.is_empty() {
+        return Err(GaryxDbError::Configuration(format!(
+            "meetings pull-era migration broke foreign keys: {check:?}"
+        )));
+    }
+    Ok(())
+}
 
 pub(crate) const MEETINGS_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS meetings (
@@ -1649,5 +1725,103 @@ mod tests {
             .admit_meeting_invite(admission("invite-admission-one"))
             .expect("same delivery after delete");
         assert!(matches!(reset, MeetingAdmissionOutcome::Created(_)));
+    }
+}
+
+#[cfg(test)]
+mod pull_era_migration_tests {
+    use rusqlite::Connection;
+
+    const PULL_ERA_DDL: &str = r#"
+CREATE TABLE meetings (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  meeting_no TEXT NOT NULL,
+  feishu_meeting_id TEXT NOT NULL DEFAULT '',
+  invite_event_id TEXT NOT NULL,
+  call_id TEXT NOT NULL DEFAULT '',
+  topic TEXT NOT NULL DEFAULT '',
+  invited_by TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK (status IN
+    ('joining','live','finalizing','aborting','finalized','aborted')),
+  status_detail TEXT NOT NULL DEFAULT '',
+  content_state TEXT NOT NULL DEFAULT 'ok' CHECK (content_state IN ('ok','lost')),
+  content_lost_at TEXT,
+  failure_kind TEXT NOT NULL DEFAULT '' CHECK (failure_kind IN ('','auth','transport')),
+  failure_since TEXT,
+  log_epoch INTEGER NOT NULL DEFAULT 0 CHECK (log_epoch >= 0),
+  cache_generation INTEGER NOT NULL DEFAULT 0 CHECK (cache_generation >= 0),
+  end_source TEXT NOT NULL DEFAULT '' CHECK (end_source IN
+    ('','push','poll_ended','grace_expired')),
+  join_deadline_at TEXT NOT NULL,
+  grace_deadline_at TEXT,
+  poll_cursor TEXT NOT NULL DEFAULT '',
+  closed_segment_count INTEGER NOT NULL DEFAULT 0 CHECK (closed_segment_count >= 0),
+  byte_size INTEGER NOT NULL DEFAULT 0 CHECK (byte_size >= 0),
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  finalized_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK ((failure_kind = '') = (failure_since IS NULL)),
+  CHECK ((content_state = 'lost') = (content_lost_at IS NOT NULL))
+) STRICT;
+CREATE TABLE meeting_invite_keys (
+  invite_event_id TEXT NOT NULL PRIMARY KEY,
+  meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  observed_at TEXT NOT NULL
+) STRICT;
+"#;
+
+    #[test]
+    fn pull_era_schema_is_rebuilt_and_participant_left_becomes_writable() {
+        let conn = Connection::open_in_memory().expect("db");
+        conn.execute_batch(PULL_ERA_DDL).expect("old schema");
+        conn.execute_batch(
+            "INSERT INTO meetings (id, account_id, meeting_no, invite_event_id, status,
+                end_source, join_deadline_at, started_at, created_at, updated_at, poll_cursor)
+             VALUES ('m1', 'acc', '123456789', 'evt-1', 'live', '',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'pt_x'),
+                ('m2', 'acc', '987654321', 'evt-2', 'finalized', 'poll_ended',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '');
+             INSERT INTO meeting_invite_keys VALUES ('evt-1', 'm1', '2026-01-01T00:00:00Z');",
+        )
+        .expect("seed rows");
+        // Old CHECK rejects the push-era value — the live incident.
+        let err = conn.execute(
+            "UPDATE meetings SET end_source = 'participant_left' WHERE id = 'm1'",
+            [],
+        );
+        assert!(err.is_err(), "old schema must reject participant_left");
+
+        super::migrate_meetings_pull_era_schema(&conn).expect("migrate");
+        conn.execute_batch(super::MEETINGS_DDL).expect("post-migration ddl");
+
+        // New CHECK accepts it; retired columns are gone; data survived.
+        conn.execute(
+            "UPDATE meetings SET end_source = 'participant_left' WHERE id = 'm1'",
+            [],
+        )
+        .expect("participant_left writable after migration");
+        let mapped: String = conn
+            .query_row("SELECT end_source FROM meetings WHERE id = 'm2'", [], |r| r.get(0))
+            .expect("m2 survives");
+        assert_eq!(mapped, "push", "legacy poll_ended maps to push");
+        let has_poll_cursor: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('meetings') WHERE name IN ('poll_cursor','call_id')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("column check");
+        assert_eq!(has_poll_cursor, 0, "retired columns dropped");
+        let fk_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM meeting_invite_keys WHERE meeting_id = 'm1'", [], |r| r.get(0))
+            .expect("fk rows");
+        assert_eq!(fk_count, 1, "invite keys survive with FK intact");
+        // Second run is a no-op.
+        super::migrate_meetings_pull_era_schema(&conn).expect("idempotent");
     }
 }
