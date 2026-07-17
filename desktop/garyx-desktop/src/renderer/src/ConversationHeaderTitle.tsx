@@ -225,8 +225,9 @@ export function ConversationHeaderTitle({
               >
                 <DialogContent
                   className="thread-rename-dialog"
+                  overlayClassName="thread-rename-overlay"
                   showCloseButton={false}
-                  size="narrow"
+                  size="compact"
                 >
                   <form className="thread-rename-form" onSubmit={handleRenameSubmit}>
                     <button
@@ -235,7 +236,7 @@ export function ConversationHeaderTitle({
                       onClick={onCancelEdit}
                       type="button"
                     >
-                      <X aria-hidden size={18} strokeWidth={2} />
+                      <X aria-hidden size={16} strokeWidth={2} />
                     </button>
                     <div className="thread-rename-copy">
                       <DialogTitle className="thread-rename-title">
@@ -253,6 +254,7 @@ export function ConversationHeaderTitle({
                       onChange={(event) => {
                         onTitleDraftChange(event.target.value);
                       }}
+                      placeholder={t('Add title…')}
                       value={titleDraft}
                     />
                     <div className="thread-rename-actions">

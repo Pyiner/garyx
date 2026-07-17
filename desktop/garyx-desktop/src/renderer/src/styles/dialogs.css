@@ -728,40 +728,50 @@ button.new-thread-mode-trigger[data-state="open"] {
   overflow: auto;
 }
 
+.app-dialog-overlay.thread-rename-overlay {
+  background: rgba(0, 0, 0, 0.133) !important;
+}
+
+/* Measured from the live Codex Mac rename dialog via CDP on 2026-07-17. */
 .thread-rename-dialog[data-slot="dialog-content"] {
-  --app-dialog-card-width: min(460px, var(--app-dialog-available-width));
+  --app-dialog-card-width: min(420px, var(--app-dialog-available-width));
   gap: 0;
   overflow: hidden;
   padding: 0;
-  border: 1px solid rgba(26, 28, 31, 0.065);
-  border-radius: 20px;
-  background: var(--color-token-bg-primary);
-  box-shadow:
-    0 20px 56px rgba(0, 0, 0, 0.16),
-    0 5px 18px rgba(0, 0, 0, 0.08);
+  border: 0;
+  border-radius: 25px;
+  background: rgba(255, 255, 255, 0.9);
+  color: rgb(13, 13, 13);
+  font: 445 16px/24px -apple-system, "system-ui", "Segoe UI", sans-serif;
+  box-shadow: 0 0 0 0.5px rgba(13, 13, 13, 0.08), 0 4px 8px -2px rgba(0, 0, 0, 0.1);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
 }
 
 .thread-rename-form {
   position: relative;
-  display: grid;
-  gap: 14px;
-  padding: 24px 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 20px;
+  color: rgb(13, 13, 13);
+  font: 445 14px/21px -apple-system, "system-ui", "Segoe UI", sans-serif;
 }
 
 .thread-rename-close {
   position: absolute;
-  top: 18px;
-  right: 18px;
+  top: 16px;
+  right: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
   border: 0;
-  border-radius: 50%;
+  border-radius: 4px;
   background: transparent;
-  color: color-mix(in srgb, var(--color-token-text-primary) 62%, transparent);
+  color: rgba(13, 13, 13, 0.8);
   cursor: pointer;
   transition:
     background-color var(--duration-fast) var(--ease-standard),
@@ -769,76 +779,84 @@ button.new-thread-mode-trigger[data-state="open"] {
 }
 
 .thread-rename-close:hover {
-  background: color-mix(in srgb, var(--color-token-text-primary) 6%, transparent);
-  color: var(--color-token-text-primary);
+  background: rgba(13, 13, 13, 0.055);
+}
+
+.thread-rename-close:focus-visible {
+  box-shadow: 0 0 0 1px rgb(1, 105, 204);
+}
+
+.thread-rename-close svg {
+  width: 16px;
+  height: 16px;
 }
 
 .thread-rename-copy {
   display: grid;
   gap: 4px;
-  padding-right: 34px;
+  padding: 0;
 }
 
 .thread-rename-title[data-slot="dialog-title"] {
   margin: 0;
-  color: var(--color-token-text-primary);
+  color: rgb(13, 13, 13);
   font-size: 20px;
-  font-weight: var(--font-weight-semibold);
-  line-height: 1.15;
+  font-weight: 600;
+  line-height: 28px;
 }
 
 .thread-rename-description[data-slot="dialog-description"] {
-  color: color-mix(in srgb, var(--color-token-text-primary) 47%, transparent);
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-normal);
-  line-height: 1.35;
+  color: rgba(13, 13, 13, 0.495);
+  font-size: 14px;
+  font-weight: 445;
+  line-height: 21px;
 }
 
 .thread-rename-input {
   width: 100%;
-  height: 42px;
-  padding: 0 12px;
-  border: 1px solid rgba(26, 28, 31, 0.12);
-  border-radius: 11px;
-  background: var(--color-token-bg-primary);
-  color: var(--color-token-text-primary);
-  font-size: 15px;
-  font-weight: var(--font-weight-medium);
-  line-height: 1.2;
-  box-shadow:
-    inset 0 1px 1px rgba(0, 0, 0, 0.03),
-    0 1px 2px rgba(0, 0, 0, 0.02);
+  height: 39px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid rgba(13, 13, 13, 0.08);
+  border-radius: 15px;
+  background: transparent;
+  color: rgb(13, 13, 13);
+  font: 445 14px/21px -apple-system, "system-ui", "Segoe UI", sans-serif;
+  box-shadow: 0 1px 2px -1px rgba(0, 0, 0, 0.08);
 }
 
 .thread-rename-input:focus {
-  border-color: rgba(26, 28, 31, 0.18);
-  box-shadow:
-    inset 0 1px 1px rgba(0, 0, 0, 0.03),
-    0 0 0 3px rgba(26, 28, 31, 0.045);
+  border-color: rgba(13, 13, 13, 0.08);
+  box-shadow: 0 1px 2px -1px rgba(0, 0, 0, 0.08);
 }
 
 .thread-rename-input:disabled {
-  opacity: 0.62;
+  opacity: 0.4;
+}
+
+.thread-rename-input::placeholder {
+  color: rgba(13, 13, 13, 0.495);
 }
 
 .thread-rename-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 12px;
+  height: 32px;
+  margin-top: 12px;
 }
 
 .thread-rename-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 76px;
-  height: 36px;
-  padding: 0 16px;
-  border-radius: 10px;
+  height: 32px;
+  padding: 6px 16px;
+  border: 1px solid rgba(13, 13, 13, 0.08);
+  border-radius: 12.5px;
   cursor: pointer;
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-semibold);
-  line-height: 1;
+  font: 445 14px/18px -apple-system, "system-ui", "Segoe UI", sans-serif;
   transition:
     background-color var(--duration-fast) var(--ease-standard),
     border-color var(--duration-fast) var(--ease-standard),
@@ -847,31 +865,26 @@ button.new-thread-mode-trigger[data-state="open"] {
 }
 
 .thread-rename-button:disabled {
-  cursor: default;
-  opacity: 0.6;
+  cursor: not-allowed;
+  opacity: 0.4;
 }
 
 .thread-rename-button-secondary {
-  border: 1px solid rgba(26, 28, 31, 0.09);
-  background: var(--color-token-bg-primary);
-  color: var(--color-token-text-primary);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  background: rgba(255, 255, 255, 0.96);
+  color: rgb(13, 13, 13);
 }
 
 .thread-rename-button-secondary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-token-text-primary) 3%, white);
-  border-color: rgba(26, 28, 31, 0.13);
+  background: rgba(13, 13, 13, 0.055);
 }
 
 .thread-rename-button-primary {
-  border: 1px solid #111111;
-  background: #111111;
-  color: #ffffff;
+  background: rgb(13, 13, 13);
+  color: rgb(255, 255, 255);
 }
 
 .thread-rename-button-primary:hover:not(:disabled) {
-  background: #242424;
-  border-color: #242424;
+  background: rgba(13, 13, 13, 0.8);
 }
 
 .toast-viewport {

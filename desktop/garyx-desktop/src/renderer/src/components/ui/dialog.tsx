@@ -59,12 +59,14 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
+  overlayClassName,
   scope = "window",
   scroll = "auto",
   showCloseButton = true,
   size = "form",
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  overlayClassName?: string
   scope?: DialogScope
   scroll?: DialogScroll
   showCloseButton?: boolean
@@ -73,7 +75,7 @@ function DialogContent({
   const { t } = useI18n()
   return (
     <DialogPortal data-slot="dialog-portal">
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         data-scope={scope}
