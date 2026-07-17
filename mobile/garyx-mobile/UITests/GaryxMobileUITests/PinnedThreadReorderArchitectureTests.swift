@@ -38,10 +38,10 @@ final class PinnedThreadReorderArchitectureTests: XCTestCase {
         let source = pinnedRow(0, in: app)
         XCTAssertTrue(source.waitForExistence(timeout: 10))
         let baseline = pinnedOrder(in: app)
-        let start = source.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
+        let start = rowInteractionCoordinate(source)
         let outsideList = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
 
-        start.press(forDuration: 0.65, thenDragTo: outsideList)
+        drag(start, to: outsideList)
 
         let lifecycle = try waitForValue(
             of: app.staticTexts["pinned-reorder-lifecycle"],
@@ -61,12 +61,9 @@ final class PinnedThreadReorderArchitectureTests: XCTestCase {
         let pinnedTail = pinnedRow(5, in: app)
         XCTAssertTrue(source.waitForExistence(timeout: 10))
         XCTAssertTrue(pinnedTail.waitForExistence(timeout: 10))
-
-        source.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5)).press(
-            forDuration: 0.65,
-            thenDragTo: pinnedTail.coordinate(
-                withNormalizedOffset: CGVector(dx: 0.55, dy: 0.95)
-            )
+        drag(
+            rowInteractionCoordinate(source),
+            to: rowInteractionCoordinate(pinnedTail, y: 0.95)
         )
 
         _ = try waitForValue(
@@ -84,7 +81,7 @@ final class PinnedThreadReorderArchitectureTests: XCTestCase {
         var source = pinnedRow(0, in: app)
         XCTAssertTrue(source.waitForExistence(timeout: 10))
 
-        source.press(forDuration: 0.55)
+        rowInteractionCoordinate(source).press(forDuration: 0.55)
         let stationaryLifecycle = value(of: app.staticTexts["pinned-reorder-lifecycle"])
         print("SPIKE stationary lifecycle=\(stationaryLifecycle)")
         XCTAssertTrue(
@@ -151,7 +148,22 @@ final class PinnedThreadReorderArchitectureTests: XCTestCase {
     }
 
     private func pinnedRow(_ index: Int, in app: XCUIApplication) -> XCUIElement {
-        app.staticTexts["Synthetic thread \(index)"].firstMatch
+        // The unified row exposes an outer accessibility Button around the
+        // title, pin control, and timestamp. Drive that stable row surface;
+        // title StaticText coordinates can land beside the nested Unpin button
+        // and intermittently fail to enter the native List drag recognizer.
+        app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Synthetic thread \(index),")
+        ).firstMatch
+    }
+
+    private func rowInteractionCoordinate(
+        _ row: XCUIElement,
+        y: CGFloat = 0.5
+    ) -> XCUICoordinate {
+        // 82% is the row's trailing empty hit region: outside the title and
+        // nested pin control, but still inside the native List cell.
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.82, dy: y))
     }
 
     private func drag(
@@ -159,9 +171,30 @@ final class PinnedThreadReorderArchitectureTests: XCTestCase {
         to destination: XCUIElement,
         holdDuration: TimeInterval = 0.65
     ) {
-        source.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5)).press(
+        drag(
+            rowInteractionCoordinate(source),
+            to: rowInteractionCoordinate(destination),
+            holdDuration: holdDuration
+        )
+    }
+
+    private func drag(
+        _ source: XCUICoordinate,
+        to destination: XCUICoordinate,
+        holdDuration: TimeInterval = 0.65
+    ) {
+        // Native List reordering needs movement samples after the lift and a
+        // settled destination before release. The convenience overload uses
+        // the default 500 pt/s path with no destination hold; on iOS 26.5 it
+        // intermittently collapses to a stationary long press and emits zero
+        // drag callbacks. A slow interpolated path plus a short terminal hold
+        // keeps this an end-to-end native gesture while making its event
+        // sequence deterministic.
+        source.press(
             forDuration: holdDuration,
-            thenDragTo: destination.coordinate(withNormalizedOffset: CGVector(dx: 0.55, dy: 0.5))
+            thenDragTo: destination,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.35
         )
     }
 
