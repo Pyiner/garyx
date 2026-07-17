@@ -349,13 +349,24 @@ fn tool_visibility(tool_name: Option<&str>) -> RenderToolVisibility {
 }
 
 const CALL_SUMMARY_KEYS: &[&str] = &["label", "description", "toolSummary", "toolAction"];
+const TASK_CALL_SUMMARY_KEYS: &[&str] = &["label"];
+
+fn call_summary_keys(kind: RenderToolKind) -> &'static [&'static str] {
+    match kind {
+        // Task subjects are already concise row labels and historically rank
+        // ahead of the long description body. Only an explicit label may
+        // override the subject in the collapsed row.
+        RenderToolKind::Task => TASK_CALL_SUMMARY_KEYS,
+        _ => CALL_SUMMARY_KEYS,
+    }
+}
 
 fn call_summary_selector(
     message: &Map<String, Value>,
     kind: RenderToolKind,
 ) -> Option<RenderToolFieldSelector> {
     let (root, prefix, input) = call_input_object(message)?;
-    select_object_field(root, &prefix, input, CALL_SUMMARY_KEYS, kind, false)
+    select_object_field(root, &prefix, input, call_summary_keys(kind), kind, false)
 }
 
 fn call_selector(
@@ -869,6 +880,27 @@ mod tests {
             RenderToolFieldLabel::Output
         );
         assert_eq!(projection.status.as_deref(), Some("DONE"));
+    }
+
+    #[test]
+    fn task_create_keeps_subject_ahead_of_long_description() {
+        let call = object(json!({
+            "role": "tool_use",
+            "tool_name": "TaskCreate",
+            "content": {
+                "tool": "TaskCreate",
+                "input": {
+                    "subject": "Verify projection behavior",
+                    "description": "Run the full cross-platform validation and write a detailed review."
+                }
+            }
+        }));
+
+        let projection = RenderToolFieldProjection::from_message(&call, false).unwrap();
+
+        assert_eq!(projection.kind, RenderToolKind::Task);
+        assert_eq!(projection.call.as_ref().unwrap().path, ["input", "subject"]);
+        assert_eq!(projection.summary, None);
     }
 
     #[test]
