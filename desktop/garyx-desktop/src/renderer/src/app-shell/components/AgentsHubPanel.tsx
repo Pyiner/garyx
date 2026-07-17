@@ -675,7 +675,9 @@ export function AgentsHubPanel({
                         onCheckedChange={(enabled) => {
                           void handleToggleAgent(agent, enabled);
                         }}
-                        onClick={stopEvent}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                        }}
                       />
                     </TableCell>
                     <TableCell className="text-right">
