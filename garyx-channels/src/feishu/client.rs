@@ -1233,7 +1233,11 @@ fn classify_meeting_api_error(
     message: String,
     meeting_id: Option<String>,
 ) -> MeetingApiError {
-    if code == 10005 {
+    if matches!(code, 10005 | 121005) {
+        // 10005: bot is not in the meeting. 121005: "meeting not exist" —
+        // live-verified 2026-07-17: joining a dead meeting_no during the
+        // live-nudge re-join verify returned 121005, which must converge the
+        // entity instead of retrying forever as an unclassified error.
         MeetingApiError::NotInMeeting
     } else if matches!(
         code,

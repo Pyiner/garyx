@@ -253,6 +253,38 @@ async fn meeting_api_join_leave_use_pinned_body_and_preserve_integer_identity() 
 }
 
 #[tokio::test]
+async fn meeting_api_maps_meeting_not_exist_to_not_in_meeting() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/vc/v1/bots/join"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "code": 121005,
+            "msg": "meeting not exist"
+        })))
+        .mount(&server)
+        .await;
+    let client = FeishuClient {
+        app_id: "test_app".to_owned(),
+        app_secret: "test_secret".to_owned(),
+        domain: FeishuDomain::Feishu,
+        http: HttpClient::new(),
+        token_state: Arc::new(RwLock::new(Some((
+            "synthetic-token".to_owned(),
+            Instant::now() + Duration::from_secs(3600),
+        )))),
+        refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+        api_base_override: Some(server.uri()),
+    };
+    assert_eq!(
+        client.bots_join("123456789", None).await,
+        Err(crate::meeting_sink::MeetingApiError::NotInMeeting)
+    );
+}
+
+#[tokio::test]
 async fn meeting_api_maps_not_in_meeting_without_float_fallback() {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
