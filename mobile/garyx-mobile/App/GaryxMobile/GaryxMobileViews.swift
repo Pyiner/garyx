@@ -51,8 +51,8 @@ struct GaryxRootView: View {
                     onStartNewChat: {
                         model.openNewThreadDraft()
                     },
-                    onOpenThread: { thread in
-                        Task { await model.openThread(thread, source: .replace) }
+                    onOpenThread: { thread, source in
+                        Task { await model.openThread(thread, source: source) }
                     },
                     onTogglePinnedThread: { threadId in
                         model.togglePinnedThread(threadId)
@@ -507,7 +507,7 @@ struct GaryxShellView: View, Equatable {
     let onRetryLoadMoreThreads: () async -> Void
     let onSelectRecentFilter: (GaryxRecentThreadFilter) -> Void
     let onStartNewChat: () -> Void
-    let onOpenThread: (GaryxThreadSummary) -> Void
+    let onOpenThread: (GaryxThreadSummary, GaryxMobilePanelOpenSource) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onToggleFavoriteThread: (String) -> Void
     let onUnpinThread: (String) -> Void

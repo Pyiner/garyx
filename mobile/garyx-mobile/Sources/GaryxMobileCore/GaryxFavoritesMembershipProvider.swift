@@ -135,7 +135,25 @@ public final class GaryxFavoritesMembershipProvider: ObservableObject,
     public func failSnapshot(
         ticket: GaryxFavoritesSnapshotTicket
     ) -> [GaryxFavoritesEffect] {
-        state.failSnapshot(ticket: ticket)
+        let effects = state.failSnapshot(ticket: ticket)
+        rebuildFromReducerState()
+        return effects
+    }
+
+    @discardableResult
+    public func observeStoreIdentity(
+        stamp: GaryxStoreResponseStamp,
+        responseStoreIncarnationId: String
+    ) -> (decision: GaryxStoreIdentityDecision, effects: [GaryxFavoritesEffect]) {
+        let result = state.observeStoreIdentity(
+            stamp: stamp,
+            responseStoreIncarnationId: responseStoreIncarnationId
+        )
+        if result.decision == .scopeClear {
+            instanceId &+= 1
+        }
+        rebuildFromReducerState()
+        return result
     }
 
     @discardableResult
@@ -151,6 +169,13 @@ public final class GaryxFavoritesMembershipProvider: ObservableObject,
         settlement: GaryxFavoriteMutationSettlement
     ) -> [GaryxFavoritesEffect] {
         let effects = state.settle(ticket: ticket, settlement: settlement)
+        rebuildFromReducerState()
+        return effects
+    }
+
+    @discardableResult
+    public func fireBackoff(_ stamp: GaryxFavoriteBackoffStamp) -> [GaryxFavoritesEffect] {
+        let effects = state.fireBackoff(stamp)
         rebuildFromReducerState()
         return effects
     }

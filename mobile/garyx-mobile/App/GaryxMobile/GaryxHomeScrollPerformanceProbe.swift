@@ -102,7 +102,7 @@ final class GaryxHomeScrollPerformanceProbe: NSObject, ObservableObject {
 
     func markRowBody() {
         rowBodyCount += 1
-        os_signpost(.event, log: log, name: "GaryxHomeThreadButton.body")
+        os_signpost(.event, log: log, name: "GaryxThreadListRowButton.body")
     }
 
     func markModelObjectWillChange() {

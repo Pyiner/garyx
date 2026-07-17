@@ -27,7 +27,7 @@ extension GaryxMobileModel {
             agentTargetsLoadPhase = .loaded
         }
         if didUpdateTargets {
-            if !threads.isEmpty {
+            if !residentRecentThreadSummaries.isEmpty {
                 persistRecentThreadsWidgetSnapshot()
             }
         }
@@ -60,14 +60,16 @@ extension GaryxMobileModel {
         let missingThreads = await fetchMissingThreadSummaries(
             using: gatewayClient,
             requiredThreadIds: requiredThreadIds,
-            existingThreadIds: Set(threads.map(\.id))
+            existingThreadIds: Set(
+                requiredThreadIds.filter { threadSummaryCache.summary(for: $0) != nil }
+            )
         )
         guard observedGeneration == gatewayRuntimeGeneration,
               isCurrentRemoteStateScopedRequest(remoteStateRefreshRequestId) else {
             return
         }
         if !missingThreads.isEmpty {
-            threads = Self.mergedThreadSummaries(threads + missingThreads)
+            cacheThreadSummaries(missingThreads)
         }
     }
 

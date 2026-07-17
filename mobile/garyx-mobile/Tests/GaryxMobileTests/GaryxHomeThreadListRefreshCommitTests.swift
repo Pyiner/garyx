@@ -39,7 +39,7 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
         let model = makeModel(session: session)
         model.gatewayURL = "http://gateway-a.example.test"
         let sharedThread = makeThread(id: "shared-thread", title: "Shared thread ID")
-        model.threads = [sharedThread]
+        model.seedThreadSummariesForTesting([sharedThread])
         model.selectedThread = sharedThread
         let queuedInputTask = Task { @MainActor in
             await model.queueRemoteInput("Queue on Gateway A", attachments: [], in: sharedThread)
@@ -48,7 +48,7 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
 
         model.resetGatewayRuntimeState()
         model.gatewayURL = "http://gateway-b.example.test"
-        model.threads = [sharedThread]
+        model.seedThreadSummariesForTesting([sharedThread])
         model.selectedThread = sharedThread
         streamInputGate.signal()
         await queuedInputTask.value
@@ -174,7 +174,7 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
             "a same-URL credential change must invalidate the old create request"
         )
         XCTAssertNil(model.selectedThread)
-        XCTAssertTrue(model.threads.isEmpty)
+        XCTAssertEqual(model.threadSummaryCache.count, 0)
 
         replacementConnectGate.signal()
         await connectTask.value
@@ -206,7 +206,7 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
         let model = makeModel(session: session)
         model.gatewayURL = "http://gateway-a.example.test"
         let thread = makeThread(id: "thread-on-a", title: "Gateway A thread")
-        model.threads = [thread]
+        model.seedThreadSummariesForTesting([thread])
         model.selectedThread = thread
         let sendTask = Task { @MainActor in
             await model.send("Hello on Gateway A")
@@ -220,7 +220,7 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
 
         XCTAssertTrue(model.runTracker.busyThreadIds.isEmpty)
         XCTAssertNil(model.selectedThread)
-        XCTAssertTrue(model.threads.isEmpty)
+        XCTAssertEqual(model.threadSummaryCache.count, 0)
         XCTAssertNil(model.lastError)
     }
 
@@ -274,7 +274,7 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
             "a thread created by Gateway A must never be sent to Gateway B"
         )
         XCTAssertNil(model.selectedThread)
-        XCTAssertTrue(model.threads.isEmpty)
+        XCTAssertEqual(model.threadSummaryCache.count, 0)
         XCTAssertNil(model.lastError)
     }
 
@@ -314,7 +314,55 @@ final class GaryxGatewayRuntimeGenerationTests: XCTestCase {
         await createTask.value
 
         XCTAssertNil(model.selectedThread)
-        XCTAssertTrue(model.threads.isEmpty)
+        XCTAssertEqual(model.threadSummaryCache.count, 0)
+        XCTAssertNil(model.lastError)
+    }
+
+    func testOptimisticTitleResponseDoesNotCrossGatewayRuntime() async throws {
+        let updateStarted = expectation(description: "Gateway A title update started")
+        let updateGate = DispatchSemaphore(value: 0)
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            guard url.host == "gateway-a.example.test",
+                  url.path == "/api/threads/shared-thread",
+                  request.httpMethod == "PATCH" else {
+                return try garyxStubResponse(request, statusCode: 400, data: Data())
+            }
+            updateStarted.fulfill()
+            guard updateGate.wait(timeout: .now() + 5) == .success else {
+                throw GaryxRefreshStubError.timedOut
+            }
+            return try garyxStubResponse(
+                request,
+                data: Data(#"{"thread_id":"shared-thread","title":"Gateway A title"}"#.utf8)
+            )
+        }
+        defer {
+            updateGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        model.gatewayURL = "http://gateway-a.example.test"
+        let original = makeThread(id: "shared-thread", title: "Original")
+        model.seedThreadSummariesForTesting([original])
+        model.selectedThread = original
+        let updateTask = Task { @MainActor in
+            await model.renameSelectedThread(to: "Optimistic A title")
+        }
+        await fulfillment(of: [updateStarted], timeout: 2)
+
+        model.resetGatewayRuntimeState()
+        model.gatewayURL = "http://gateway-b.example.test"
+        let replacement = makeThread(id: "shared-thread", title: "Gateway B title")
+        model.seedThreadSummariesForTesting([replacement])
+        model.selectedThread = replacement
+        updateGate.signal()
+        await updateTask.value
+
+        XCTAssertEqual(model.cachedThreadSummary(for: replacement.id)?.title, replacement.title)
+        XCTAssertEqual(model.selectedThread?.title, replacement.title)
         XCTAssertNil(model.lastError)
     }
 
@@ -377,7 +425,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let pinned = makeThread(id: "thread-pinned", title: "Pinned build")
         let recent = makeThread(id: "thread-recent", title: "Recent chat")
         let incoming = makeThread(id: "thread-new", title: "New arrival")
-        model.threads = [pinned, recent]
+        model.seedThreadSummariesForTesting([pinned, recent])
         model.applyPinnedThreadIds([pinned.id])
         primeRecentFeed(model, ids: [pinned.id, recent.id], filter: .all)
 
@@ -418,11 +466,11 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
             "a pre-await page snapshot must not resurrect an archived thread"
         )
         XCTAssertFalse(
-            model.threads.contains { $0.id == pinned.id },
+            model.residentRecentThreadSummaries.contains { $0.id == pinned.id },
             "pre-await fetched summaries must not resurrect an archived thread"
         )
         XCTAssertEqual(model.allRecentThreadIds, [recent.id])
-        XCTAssertFalse(model.threads.contains { $0.id == incoming.id })
+        XCTAssertNil(model.cachedThreadSummary(for: incoming.id))
     }
 
     func testCommitAppliesPinsPageAndThreadsWithoutPendingArchives() throws {
@@ -455,7 +503,10 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
 
         XCTAssertEqual(model.pinnedThreadIds, [pinned.id])
         XCTAssertEqual(model.allRecentThreadIds, [pinned.id, recent.id])
-        XCTAssertEqual(model.threads.map(\.id).sorted(), [pinned.id, recent.id].sorted())
+        XCTAssertEqual(
+            model.residentRecentThreadSummaries.map(\.id).sorted(),
+            [pinned.id, recent.id].sorted()
+        )
     }
 
     /// The archive-resolved interleaving (review #TASK-1804 round 3) is
@@ -464,7 +515,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
     func testLocalListSurgeryMarksThePagerMutationSequence() {
         let model = makeModel()
         let thread = makeThread(id: "thread-surgery", title: "Doomed")
-        model.threads = [thread]
+        model.seedThreadSummariesForTesting([thread])
         model.applyPinnedThreadIds([thread.id])
         primeRecentFeed(model, ids: [thread.id], filter: .all)
         primeRecentFeed(model, ids: [thread.id], filter: .nonTask)
@@ -502,7 +553,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let model = makeModel()
         let task = makeThread(id: "thread-task", title: "Task backing thread")
         let chat = makeThread(id: "thread-chat", title: "Chat thread")
-        model.threads = [task, chat]
+        model.seedThreadSummariesForTesting([task, chat])
         primeRecentFeed(model, ids: [task.id, chat.id], filter: .all)
         primeRecentFeed(model, ids: [chat.id], filter: .nonTask)
         model.recentThreadFeeds.select(.nonTask)
@@ -516,14 +567,14 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let model = makeModel()
         let task = makeThread(id: "thread-task", title: "Old task title")
         let chat = makeThread(id: "thread-chat", title: "Chat thread")
-        model.threads = [task, chat]
+        model.seedThreadSummariesForTesting([task, chat])
         primeRecentFeed(model, ids: [task.id, chat.id], filter: .all)
         primeRecentFeed(model, ids: [chat.id], filter: .nonTask)
 
         XCTAssertTrue(model.applyThreadTitleUpdate(threadId: task.id, title: "New task title"))
         XCTAssertEqual(model.allRecentThreadIds, [task.id, chat.id])
         XCTAssertEqual(model.recentThreadFeeds.nonTaskFeed.orderedThreadIds, [chat.id])
-        XCTAssertEqual(model.threads.first(where: { $0.id == task.id })?.title, "New task title")
+        XCTAssertEqual(model.cachedThreadSummary(for: task.id)?.title, "New task title")
     }
 
     func testChatsRefreshStartsOneAuxiliaryAllRequestWithoutExtendingSelectedRefresh() async throws {
@@ -914,6 +965,48 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertEqual(requests.value, 2)
     }
 
+    func testAwaitableFavoritesSnapshotWaitsForNetworkSettlement() async throws {
+        let snapshotStarted = expectation(description: "favorites snapshot started")
+        let snapshotGate = DispatchSemaphore(value: 0)
+        let settled = GaryxLockedCounter()
+        let session = makeStubSession { request in
+            let url = try XCTUnwrap(request.url)
+            if request.httpMethod == "GET", url.path == "/api/thread-summaries" {
+                return try garyxStubResponse(request, statusCode: 404, data: Data())
+            }
+            if request.httpMethod == "GET", url.path == "/api/thread-favorites/snapshot" {
+                snapshotStarted.fulfill()
+                guard snapshotGate.wait(timeout: .now() + 5) == .success else {
+                    throw GaryxRefreshStubError.timedOut
+                }
+                return try garyxStubResponse(
+                    request,
+                    data: try garyxFavoritesSnapshotData(ids: ["thread-favorite"])
+                )
+            }
+            return try garyxStubResponse(request, statusCode: 400, data: Data())
+        }
+        defer {
+            snapshotGate.signal()
+            GaryxRecentThreadsURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        let model = makeModel(session: session)
+        let refresh = Task { @MainActor in
+            await model.refreshThreadFavoritesSnapshotAndWait()
+            settled.increment()
+        }
+        await fulfillment(of: [snapshotStarted], timeout: 2)
+
+        XCTAssertEqual(settled.value, 0)
+        snapshotGate.signal()
+        await refresh.value
+
+        XCTAssertEqual(settled.value, 1)
+        XCTAssertEqual(model.threadFavoritesState.rawThreadIds, ["thread-favorite"])
+    }
+
     func testFavoritesIncarnationChangeResetsAnInFlightRecentLane() async throws {
         let firstIncarnation = "11111111-1111-4111-8111-111111111111"
         let secondIncarnation = "33333333-3333-4333-8333-333333333333"
@@ -1010,7 +1103,9 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
 
         XCTAssertTrue(model.favoriteThreads.isEmpty)
         XCTAssertFalse(model.visibleRecentThreadIds.contains(archivedId))
-        XCTAssertFalse(model.threads.contains { $0.id == archivedId })
+        XCTAssertFalse(
+            model.residentRecentThreadSummaries.contains { $0.id == archivedId }
+        )
     }
 
     func testGlobalSelectionPersistsAcrossModelAndGatewayReset() throws {
@@ -1100,7 +1195,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let model = makeModel(session: session)
         let archived = makeThread(id: "thread-archived", title: "Archived thread")
         let survivor = makeThread(id: "thread-survivor", title: "Surviving thread")
-        model.threads = [archived, survivor]
+        model.seedThreadSummariesForTesting([archived, survivor])
         model.applyPinnedThreadIds([archived.id])
         primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .all)
         primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .nonTask)
@@ -1139,7 +1234,10 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertTrue(model.pendingThreadArchives.isRequestInFlight(threadId: archived.id))
         XCTAssertEqual(model.pinnedThreadIds, [archived.id])
         XCTAssertEqual(model.allRecentThreadIds, [archived.id, survivor.id])
-        XCTAssertEqual(model.threads, [archived, survivor])
+        XCTAssertEqual(
+            model.threadSummaryCache.summaries(for: [archived.id, survivor.id]),
+            [archived, survivor]
+        )
         XCTAssertEqual(
             model.homeThreadListStore.snapshot,
             initialSnapshot,
@@ -1159,7 +1257,10 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertFalse(model.pendingThreadArchives.contains(threadId: archived.id))
         XCTAssertEqual(model.pinnedThreadIds, [archived.id])
         XCTAssertEqual(model.allRecentThreadIds, [archived.id, survivor.id])
-        XCTAssertEqual(model.threads, [archived, survivor])
+        XCTAssertEqual(
+            model.threadSummaryCache.summaries(for: [archived.id, survivor.id]),
+            [archived, survivor]
+        )
         XCTAssertEqual(model.homeThreadListStore.snapshot.sections, initialSnapshot.sections)
         XCTAssertTrue(
             model.recentThreadFeeds.allFeed.headFailure,
@@ -1228,7 +1329,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let model = makeModel(session: session)
         let deleted = makeThread(id: visibleIds[0], title: "Delete candidate")
         let survivor = makeThread(id: visibleIds[1], title: "Survivor")
-        model.threads = [deleted, survivor]
+        model.seedThreadSummariesForTesting([deleted, survivor])
         model.selectedThread = deleted
         primeRecentFeed(model, ids: visibleIds, filter: .all)
         primeRecentFeed(model, ids: visibleIds, filter: .nonTask)
@@ -1246,7 +1347,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         XCTAssertEqual(allRequests.value, 2, "primary + head verification")
         XCTAssertEqual(chatsRequests.value, 2, "primary + head verification")
         XCTAssertEqual(model.selectedThread?.id, deleted.id)
-        XCTAssertTrue(model.threads.contains { $0.id == deleted.id })
+        XCTAssertNotNil(model.cachedThreadSummary(for: deleted.id))
         XCTAssertEqual(model.allRecentThreadIds, visibleIds)
         XCTAssertEqual(model.recentThreadFeeds.nonTaskFeed.orderedThreadIds, visibleIds)
         XCTAssertFalse(model.recentThreadFeeds.allFeed.forceReplacementPending)
@@ -1285,7 +1386,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let model = makeModel(session: session)
         let archived = makeThread(id: "thread-archived", title: "Archived thread")
         let survivor = makeThread(id: "thread-survivor", title: "Surviving thread")
-        model.threads = [archived, survivor]
+        model.seedThreadSummariesForTesting([archived, survivor])
         primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .all)
         primeRecentFeed(model, ids: [archived.id, survivor.id], filter: .nonTask)
         let allMutationSequence = model.recentThreadFeeds.allFeed.pager.localMutationSequence
@@ -1327,7 +1428,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         )
         XCTAssertEqual(completion, .abandonedLocalMutation)
         XCTAssertEqual(model.allRecentThreadIds, [survivor.id])
-        XCTAssertFalse(model.threads.contains { $0.id == archived.id })
+        XCTAssertNil(model.cachedThreadSummary(for: archived.id))
 
         await archiveTask.value
         await model.homeProjectionGateway.waitForIdleForTesting()
@@ -1366,7 +1467,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let first = makeThread(id: "thread-first", title: "First thread")
         let moved = makeThread(id: "thread-moved", title: "Moved thread")
         let last = makeThread(id: "thread-last", title: "Last thread")
-        model.threads = [first, moved, last]
+        model.seedThreadSummariesForTesting([first, moved, last])
         primeRecentFeed(model, ids: [first.id, moved.id, last.id], filter: .all)
         await model.homeProjectionGateway.waitForIdleForTesting()
         XCTAssertTrue(model.homeThreadListStore.snapshot.sections.pinned.isEmpty)
@@ -1421,7 +1522,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let two = makeThread(id: "thread-two", title: "Pinned two")
         let recentA = makeThread(id: "thread-recent-a", title: "Recent A")
         let recentB = makeThread(id: "thread-recent-b", title: "Recent B")
-        model.threads = [zero, one, two, recentA, recentB]
+        model.seedThreadSummariesForTesting([zero, one, two, recentA, recentB])
         model.applyPinnedThreadIds([zero.id, one.id, two.id])
         primeRecentFeed(
             model,
@@ -1499,7 +1600,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let model = makeModel(session: session)
         let first = makeThread(id: "thread-first", title: "First pin")
         let second = makeThread(id: "thread-second", title: "Second pin")
-        model.threads = [first, second]
+        model.seedThreadSummariesForTesting([first, second])
         primeRecentFeed(model, ids: [first.id, second.id], filter: .all)
         await model.homeProjectionGateway.waitForIdleForTesting()
 
@@ -1571,7 +1672,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let one = makeThread(id: "thread-one", title: "Pinned one")
         let two = makeThread(id: "thread-two", title: "Pinned two")
         let new = makeThread(id: "thread-new", title: "New pin")
-        model.threads = [zero, one, two, new]
+        model.seedThreadSummariesForTesting([zero, one, two, new])
         model.applyPinnedThreadIds([zero.id, one.id, two.id])
         primeRecentFeed(model, ids: [zero.id, one.id, two.id, new.id], filter: .all)
         await model.homeProjectionGateway.waitForIdleForTesting()
@@ -1634,7 +1735,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         let model = makeModel(session: session)
         let pinned = makeThread(id: "thread-pinned", title: "Pinned task")
         let chat = makeThread(id: "thread-chat", title: "Visible chat")
-        model.threads = [pinned, chat]
+        model.seedThreadSummariesForTesting([pinned, chat])
         model.applyPinnedThreadIds([pinned.id])
         primeRecentFeed(model, ids: [pinned.id, chat.id], filter: .all)
         primeRecentFeed(model, ids: [chat.id], filter: .nonTask)
@@ -2274,7 +2375,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
 
         let model = makeModel(session: session)
         let ids = ["thread-a", "thread-b", "thread-c"]
-        model.threads = ids.map { makeThread(id: $0, title: $0) }
+        model.seedThreadSummariesForTesting(ids.map { makeThread(id: $0, title: $0) })
         model.applyPinnedThreadIds(["thread-a", "thread-b"], revision: 10)
         primeRecentFeed(model, ids: ids, filter: .all)
         await model.homeProjectionGateway.waitForIdleForTesting()
@@ -2447,7 +2548,7 @@ final class GaryxHomeThreadListRefreshCommitTests: XCTestCase {
         ids: [String],
         revision: Int64
     ) {
-        model.threads = ids.map { makeThread(id: $0, title: $0) }
+        model.seedThreadSummariesForTesting(ids.map { makeThread(id: $0, title: $0) })
         model.applyPinnedThreadIds(ids, revision: revision)
         primeRecentFeed(model, ids: ids, filter: .all)
     }

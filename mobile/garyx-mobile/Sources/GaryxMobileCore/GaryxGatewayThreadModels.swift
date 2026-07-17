@@ -90,6 +90,20 @@ public struct GaryxThreadSummariesPage: Decodable, Equatable, Sendable {
         case nextCursor = "next_cursor"
     }
 
+    public init(
+        storeIncarnationId: String,
+        serverBootId: String,
+        threads: [GaryxThreadSummary],
+        hasMore: Bool,
+        nextCursor: String?
+    ) {
+        self.storeIncarnationId = storeIncarnationId
+        self.serverBootId = serverBootId
+        self.threads = threads
+        self.hasMore = hasMore
+        self.nextCursor = nextCursor
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         storeIncarnationId = try container.decode(String.self, forKey: .storeIncarnationId)

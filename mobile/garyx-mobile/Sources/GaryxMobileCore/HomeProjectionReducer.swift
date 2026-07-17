@@ -355,7 +355,11 @@ enum HomeProjectionReducer {
     }
 
     private static func row(_ row: GaryxHomeThreadRow, isRunning: Bool) -> GaryxHomeThreadRow {
-        guard row.presentation.isRunning != isRunning else { return row }
+        var capabilities = row.capabilities
+        capabilities.canArchive = row.canArchive && !isRunning
+        capabilities.archiveStrategy = capabilities.canArchive ? .thread : .none
+        guard row.presentation.isRunning != isRunning
+                || row.capabilities != capabilities else { return row }
         return GaryxHomeThreadRow(
             id: row.id,
             thread: row.thread,
@@ -363,6 +367,7 @@ enum HomeProjectionReducer {
             avatar: row.avatar,
             timestampValue: row.timestampValue,
             canArchive: row.canArchive,
+            capabilities: capabilities,
             showsDivider: row.showsDivider
         )
     }

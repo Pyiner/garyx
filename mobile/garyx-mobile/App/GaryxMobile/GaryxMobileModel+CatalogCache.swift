@@ -65,7 +65,7 @@ extension GaryxMobileModel {
             agentTargetsLoadPhase = .loaded
         }
         ensureSelectedWorkspace()
-        if !threads.isEmpty {
+        if !residentRecentThreadSummaries.isEmpty {
             persistRecentThreadsWidgetSnapshot()
         }
     }

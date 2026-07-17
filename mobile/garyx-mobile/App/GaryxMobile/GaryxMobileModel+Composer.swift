@@ -291,6 +291,11 @@ extension GaryxMobileModel {
             clientIntentId: clientIntentId
         )
         pendingQueuedInputsByIntentId[clientIntentId] = queued
+        threadSummaryLeaseOwner.replaceComposerReferences(
+            ownerId: clientIntentId,
+            threadIds: [thread.id],
+            summaries: cachedThreadSummary(for: thread.id).map { [$0] } ?? []
+        )
         runTracker.beginQueuedSteer(threadId: thread.id, intentId: clientIntentId, text: visibleUserText)
         await submitQueuedInputViaGateway(queued)
     }
@@ -298,6 +303,11 @@ extension GaryxMobileModel {
     func submitQueuedInputViaGateway(_ queued: GaryxPendingQueuedInput) async {
         let runtimeGeneration = gatewayRuntimeGeneration
         pendingQueuedInputsByIntentId[queued.clientIntentId] = queued
+        threadSummaryLeaseOwner.replaceComposerReferences(
+            ownerId: queued.clientIntentId,
+            threadIds: [queued.threadId],
+            summaries: cachedThreadSummary(for: queued.threadId).map { [$0] } ?? []
+        )
         do {
             let result = try await client().streamInput(
                 GaryxStreamInputRequest(
@@ -326,6 +336,7 @@ extension GaryxMobileModel {
                 }
             } else {
                 pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId)
+                threadSummaryLeaseOwner.settleComposer(ownerId: queued.clientIntentId)
                 let failureMessage = result.status.isEmpty ? "Input was not queued" : result.status
                 runTracker.failQueuedSteer(
                     threadId: queued.threadId,
@@ -345,6 +356,7 @@ extension GaryxMobileModel {
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             if pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId) != nil {
+                threadSummaryLeaseOwner.cancelComposer(ownerId: queued.clientIntentId)
                 let message = displayMessage(for: error)
                 runTracker.failQueuedSteer(
                     threadId: queued.threadId,
@@ -366,9 +378,12 @@ extension GaryxMobileModel {
         _ queued: GaryxPendingQueuedInput,
         runtimeGeneration: UUID
     ) async {
+        defer {
+            threadSummaryLeaseOwner.settleComposer(ownerId: queued.clientIntentId)
+        }
         guard runtimeGeneration == gatewayRuntimeGeneration else { return }
         let fallbackSelectedThread = selectedThread?.id == queued.threadId ? selectedThread : nil
-        guard let thread = threads.first(where: { $0.id == queued.threadId }) ?? fallbackSelectedThread else {
+        guard let thread = cachedThreadSummary(for: queued.threadId) ?? fallbackSelectedThread else {
             markLocalInputFailed(
                 threadId: queued.threadId,
                 clientIntentId: queued.clientIntentId,
@@ -605,8 +620,25 @@ extension GaryxMobileModel {
         guard runtimeGeneration == gatewayRuntimeGeneration else {
             throw CancellationError()
         }
-        threads.insert(thread, at: 0)
-        recentThreadFeeds.upsertChat(threadId: thread.id)
+        let mutationId = nextThreadMutationId(kind: "insert", threadId: thread.id)
+        let affectedStoreIds = threadMutationHubStore.value
+            .residentStoreIdsAffectedByInsert(workspacePath: thread.workspacePath)
+        _ = threadMutationHubStore.value.began(
+            mutationId: mutationId,
+            kind: .insert(threadId: thread.id),
+            gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
+            affectedStoreIds: affectedStoreIds
+        )
+        let authority = GaryxThreadMutationAuthority(
+            membership: .upsertAtHead(threadId: thread.id),
+            summary: thread
+        )
+        _ = threadMutationHubStore.value.committed(
+            mutationId: mutationId,
+            gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
+            authority: authority
+        )
+        applyThreadMutationAuthorityToResidentProviders(authority)
         threadHistoryLoadedIds.insert(thread.id)
         let canAdoptSelection = !adoptIfDraftStillCurrent
             || (selectedThread == nil && selectedThreadDraftGeneration == draftGeneration)

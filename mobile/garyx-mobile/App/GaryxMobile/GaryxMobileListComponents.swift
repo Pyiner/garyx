@@ -279,7 +279,11 @@ struct GaryxSwipeActionRow<Content: View>: View {
             content
         } else {
             ZStack(alignment: .trailing) {
-                actionButtons
+                if currentOffset < 0 {
+                    actionButtons
+                        .allowsHitTesting(isOpen)
+                        .zIndex(isOpen ? 1 : 0)
+                }
 
                 content
                     .background(GaryxTheme.surface)

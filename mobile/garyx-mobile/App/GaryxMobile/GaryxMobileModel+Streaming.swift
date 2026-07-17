@@ -160,6 +160,7 @@ extension GaryxMobileModel {
         guard !normalizedClientIntentId.isEmpty || !normalizedPendingInputId.isEmpty else { return }
         if !normalizedClientIntentId.isEmpty {
             pendingQueuedInputsByIntentId.removeValue(forKey: normalizedClientIntentId)
+            threadSummaryLeaseOwner.settleComposer(ownerId: normalizedClientIntentId)
         }
         mutateMessages(for: threadId) { messages in
             guard let index = messages.indices.last(where: { index in

@@ -65,7 +65,7 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         let model = makeModel()
         let thread = makeThread(id: "thread-actor-home")
 
-        model.threads = [thread]
+        model.seedThreadSummariesForTesting([thread])
         primeRecentFeed(model, ids: [thread.id])
         await model.homeProjectionGateway.waitForIdleForTesting()
 
@@ -87,7 +87,7 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         let model = makeModel()
         let thread = makeThread(id: "thread-committed-delta")
 
-        model.threads = [thread]
+        model.seedThreadSummariesForTesting([thread])
         primeRecentFeed(model, ids: [thread.id])
         await model.homeProjectionGateway.waitForIdleForTesting()
         let baselineEmitCount = model.homeProjectionGateway.snapshotEmitCount
@@ -103,6 +103,74 @@ final class GaryxHomeObservationBridgeTests: XCTestCase {
         XCTAssertTrue(row.presentation.isRunning)
         XCTAssertEqual(model.homeThreadListStore.acceptedInputCount, 0)
         XCTAssertEqual(model.homeThreadListStore.sectionDerivationCount, 0)
+    }
+
+    func testDebugSnapshotSeedsScopedWorkspaceMembership() {
+        let model = makeModel()
+
+        model.loadDebugSnapshot(recentFilter: .all)
+
+        let store = model.workspaceThreadListStore(path: "/workspace/garyx")
+        XCTAssertTrue(store.snapshot.isPrimed)
+        XCTAssertEqual(store.snapshot.rows.map(\.id), ["thread-history", "thread-task-board"])
+    }
+
+    func testModelRegistersRecentResidentsAndProjectsHubMotionIntoWorkspaceStore() {
+        let model = makeModel()
+        model.loadDebugSnapshot(recentFilter: .all)
+        let store = model.workspaceThreadListStore(path: "/workspace/garyx")
+
+        XCTAssertEqual(
+            model.threadMutationHubStore.value.residents["recent:all"]?.orderedThreadIds,
+            model.recentThreadFeeds.allFeed.orderedThreadIds
+        )
+        XCTAssertNotNil(model.threadMutationHubStore.value.residents["recent:non_task"])
+
+        let mutationId: GaryxThreadMutationID = "test-workspace-archive"
+        XCTAssertTrue(model.threadMutationHubStore.value.began(
+            mutationId: mutationId,
+            kind: .archive(threadId: "thread-history"),
+            gatewayRuntimeEpoch: model.threadMutationHubStore.value.gatewayRuntimeEpoch
+        ))
+        model.refreshResidentThreadListStores()
+        XCTAssertEqual(store.snapshot.motionById["thread-history"], .archiving)
+
+        XCTAssertTrue(model.threadMutationHubStore.value.rolledBack(
+            mutationId: mutationId,
+            gatewayRuntimeEpoch: model.threadMutationHubStore.value.gatewayRuntimeEpoch
+        ))
+        model.refreshResidentThreadListStores()
+        XCTAssertTrue(store.snapshot.motionById.isEmpty)
+        XCTAssertEqual(store.snapshot.rows.map(\.id), ["thread-history", "thread-task-board"])
+    }
+
+    func testWorkspaceStoreTracksSelectionAndAutomationTargetCapabilities() throws {
+        let model = makeModel()
+        model.loadDebugSnapshot(recentFilter: .all)
+        let store = model.workspaceThreadListStore(path: "/workspace/garyx")
+        let thread = try XCTUnwrap(store.snapshot.rows.first { $0.id == "thread-task-board" })
+
+        XCTAssertEqual(store.snapshot.selectedThreadId, "thread-history")
+        XCTAssertEqual(store.snapshot.capabilitiesById[thread.id]?.canArchive, true)
+
+        model.selectedThread = thread
+        XCTAssertEqual(store.snapshot.selectedThreadId, thread.id)
+
+        model.automations = [
+            GaryxAutomationSummary(
+                id: "automation-target",
+                label: "Targeted automation",
+                prompt: "Test",
+                agentId: nil,
+                workspacePath: "/workspace/garyx",
+                targetThreadId: thread.id
+            )
+        ]
+        XCTAssertEqual(store.snapshot.capabilitiesById[thread.id]?.canArchive, false)
+        XCTAssertEqual(
+            store.snapshot.capabilitiesById[thread.id]?.archiveStrategy,
+            GaryxThreadArchiveStrategy.none
+        )
     }
 
     private func makeModel() -> GaryxMobileModel {

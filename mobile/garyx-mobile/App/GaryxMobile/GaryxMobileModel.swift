@@ -34,6 +34,11 @@ struct GaryxGatewayRuntimeIdentity: Equatable {
     var headers: String
 }
 
+struct GaryxThreadRuntimeRollbackSnapshot {
+    var selectedRuntime: GaryxThreadRuntimeSummary?
+    var listRuntime: GaryxThreadRuntimeSummary?
+}
+
 struct GaryxGatewayConnectTimeoutError: LocalizedError {
     var errorDescription: String? {
         "Gateway did not respond within 5 seconds."
@@ -102,14 +107,10 @@ final class GaryxMobileModel: ObservableObject {
             refreshHomeObservationConnectionSnapshot()
         }
     }
-    @Published var threads: [GaryxThreadSummary] = [] {
-        didSet {
-            emitHomeProjectionSnapshot()
-            refreshNavigationDrawerSnapshot()
-        }
-    }
     @Published var selectedThread: GaryxThreadSummary? {
         didSet {
+            let selectionChanged = oldValue?.id != selectedThread?.id
+            threadSummaryLeaseOwner.swapSelectedThread(selectedThread)
             applySelectedThreadStreamPolicy(previousThreadId: oldValue?.id, selectedThreadId: selectedThread?.id)
             // Conversation identity: every real selection change resets the
             // scroll-container token, EXCEPT the draft-promotion write (the
@@ -123,6 +124,9 @@ final class GaryxMobileModel: ObservableObject {
                 conversationSessionToken = UUID().uuidString
             }
             emitHomeProjectionSnapshot()
+            if selectionChanged {
+                refreshResidentThreadListStores()
+            }
         }
     }
     @Published var messages: [GaryxMobileMessage] = [] {
@@ -153,15 +157,7 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
     }
-    private var hasCompletedModelInitialization = false
-    @Published var threadFavoritesState = GaryxFavoritesState() {
-        didSet {
-            if hasCompletedModelInitialization, oldValue != threadFavoritesState {
-                refreshHomeObservationPaginationSnapshot()
-                emitHomeProjectionSnapshot()
-            }
-        }
-    }
+    var threadFavoritesState: GaryxFavoritesState { threadFavoritesProvider.state }
     var isLoadingThreads: Bool {
         selectedRecentFeedPresentation.showsInitialSkeleton
     }
@@ -180,7 +176,12 @@ final class GaryxMobileModel: ObservableObject {
     /// `pendingChatStartThreadIds` / `terminatedActiveRunIdsByThread` flags;
     /// see docs/agents/conversation-state.md.
     @Published var runTracker = GaryxConversationRunTracker() {
-        didSet { emitHomeProjectionSnapshot() }
+        didSet {
+            emitHomeProjectionSnapshot()
+            if oldValue.busyThreadIds != runTracker.busyThreadIds {
+                refreshResidentThreadListStores()
+            }
+        }
     }
     /// Server run-state rebuilt from committed transcript control records.
     @Published var runStateByThread: [String: GaryxTranscriptRunState] = [:]
@@ -231,7 +232,11 @@ final class GaryxMobileModel: ObservableObject {
         didSet { refreshShellChromeSnapshot() }
     }
     @Published var pinnedThreadIds: [String] = [] {
-        didSet { emitHomeProjectionSnapshot() }
+        didSet {
+            refreshRecentThreadLeases()
+            emitHomeProjectionSnapshot()
+            refreshResidentThreadListStores()
+        }
     }
     var allRecentThreadIds: [String] { recentThreadFeeds.allRecentThreadIds }
     var visibleRecentThreadIds: [String] {
@@ -305,7 +310,18 @@ final class GaryxMobileModel: ObservableObject {
     /// Insertion order of `taskTreeSnapshotsByOrigin` keys for FIFO eviction.
     var taskTreeSnapshotOriginOrder: [String] = []
     @Published var automations: [GaryxAutomationSummary] = [] {
-        didSet { emitHomeProjectionSnapshot() }
+        didSet {
+            emitHomeProjectionSnapshot()
+            let oldTargets = Set(oldValue.compactMap { automation in
+                (automation.targetThreadId ?? "").garyxTrimmedNilIfEmpty
+            })
+            let newTargets = Set(automations.compactMap { automation in
+                (automation.targetThreadId ?? "").garyxTrimmedNilIfEmpty
+            })
+            if oldTargets != newTargets {
+                refreshResidentThreadListStores()
+            }
+        }
     }
     @Published var remoteStateLoadPhase: GaryxMobileLoadPhase = .idle
     @Published var agentTargetsLoadPhase: GaryxMobileLoadPhase = .idle
@@ -480,7 +496,29 @@ final class GaryxMobileModel: ObservableObject {
     let rootNavigationPathStore = GaryxRootNavigationPathStore()
     let routeNotFoundStore = GaryxRouteNotFoundStore()
     let homeObservationStore = GaryxHomeObservationStore()
-    let homeThreadListStore = GaryxHomeThreadListStore()
+    let threadSummaryCache: GaryxThreadSummaryCache
+    let threadSummaryLeaseOwner: GaryxThreadSummaryLeaseOwner
+    let threadMutationHubStore: GaryxThreadMutationHubStore
+    let threadFavoritesProvider: GaryxFavoritesMembershipProvider
+    let homeThreadListStore: GaryxHomeThreadListStore
+    var threadFeedRegistry = GaryxThreadFeedRegistry()
+    var workspaceThreadProviders: [String: GaryxThreadSummaryMembershipProvider] = [:]
+    var workspaceThreadStores: [String: GaryxThreadListStore] = [:]
+    var automationThreadProviders: [String: GaryxAutomationThreadMembershipProvider] = [:]
+    var automationThreadStores: [String: GaryxThreadListStore] = [:]
+    var botThreadProviders: [String: GaryxBotConversationMembershipProvider] = [:]
+    var botThreadStores: [String: GaryxThreadListStore] = [:]
+    var botThreadHydrationTasks: [String: [String: Task<Void, Never>]] = [:]
+    var threadFavoritesSnapshotTask: Task<Void, Never>?
+    var threadFavoritesSnapshotTaskToken: UUID?
+    var threadSummaryRuntimeEpoch: UInt64 = 0
+    var nextThreadMutationSequence: UInt64 = 1
+    lazy var threadSummaryCapabilityStateMachine = GaryxThreadSummaryCapabilityStateMachine(
+        runtimeEpoch: threadSummaryRuntimeEpoch
+    ) { [weak self] in
+        guard let self else { return .failed }
+        return await self.probeThreadSummaryCapability()
+    }
     let pinnedOrderOutboxStore: GaryxPinnedOrderUserDefaultsStore
     let homeProjectionGateway = HomeProjectionGateway()
     let shellChromeStore = GaryxShellChromeStore()
@@ -505,7 +543,10 @@ final class GaryxMobileModel: ObservableObject {
     var pendingNewThreadAgentTargetGeneration: UUID?
     var selectedThreadDraftGeneration = UUID()
     var threadOpenState = GaryxMobileThreadOpenState()
-    var threadRuntimeMutationIds: [String: UUID] = [:]
+    var threadRenameMutationIds: [String: GaryxThreadMutationID] = [:]
+    var threadRenameRollbackSummaries: [String: GaryxThreadSummary] = [:]
+    var threadRuntimeMutationIds: [String: GaryxThreadMutationID] = [:]
+    var threadRuntimeRollbackSnapshots: [String: GaryxThreadRuntimeRollbackSnapshot] = [:]
     var claudeCodeAuthPollTask: Task<Void, Never>?
     var claudeCodeAuthPollGeneration: UUID?
     #if DEBUG
@@ -517,6 +558,20 @@ final class GaryxMobileModel: ObservableObject {
         keychain: GaryxMobileKeychain = .shared,
         gatewayClientFactory: ((GaryxGatewayConfiguration) -> GaryxGatewayClient)? = nil
     ) {
+        let threadSummaryCache = GaryxThreadSummaryCache()
+        let threadSummaryLeaseOwner = GaryxThreadSummaryLeaseOwner(cache: threadSummaryCache)
+        let threadMutationHubStore = GaryxThreadMutationHubStore()
+        self.threadSummaryCache = threadSummaryCache
+        self.threadSummaryLeaseOwner = threadSummaryLeaseOwner
+        self.threadMutationHubStore = threadMutationHubStore
+        self.threadFavoritesProvider = GaryxFavoritesMembershipProvider(
+            gatewayScope: "",
+            cache: threadSummaryCache,
+            leaseOwner: threadSummaryLeaseOwner
+        )
+        self.homeThreadListStore = GaryxHomeThreadListStore(
+            mutationHubStore: threadMutationHubStore
+        )
         let restoredRecentThreadFilter = GaryxRecentThreadFilterStorage.load(
             defaults: defaults,
             key: GaryxMobileSettingsKeys.recentThreadFilter
@@ -575,7 +630,6 @@ final class GaryxMobileModel: ObservableObject {
         homeProjectionGateway.setResultHandler { [weak self] result in
             self?.applyHomeProjectionResult(result)
         }
-        hasCompletedModelInitialization = true
         refreshHomeObservationSnapshot()
         refreshShellChromeSnapshot()
         refreshNavigationDrawerSnapshot()

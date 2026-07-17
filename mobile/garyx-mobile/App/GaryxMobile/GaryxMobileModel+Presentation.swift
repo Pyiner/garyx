@@ -140,7 +140,7 @@ extension GaryxMobileModel {
 
     var homeProjectionCapture: HomeProjectionCapture {
         HomeProjectionCapture(
-            threads: threads,
+            threads: homeThreadSummaries,
             recentThreadIds: visibleRecentThreadIds,
             agents: agents,
             automations: automations,
@@ -168,7 +168,7 @@ extension GaryxMobileModel {
     var homeThreadListInput: GaryxHomeThreadListInput {
         GaryxHomeThreadListInput(
             sectionsInput: GaryxHomeThreadSectionsInput(
-                threads: threads,
+                threads: homeThreadSummaries,
                 agents: agents,
                 automations: automations,
                 pinnedThreadIds: pinnedThreadIds,
@@ -185,7 +185,7 @@ extension GaryxMobileModel {
     }
 
     var homeThreadRunningThreadIds: Set<String> {
-        Set(threads.compactMap { thread in
+        Set(homeThreadSummaries.compactMap { thread in
             let threadId = thread.id.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !threadId.isEmpty, isThreadSummaryRunning(thread) else { return nil }
             return threadId
@@ -421,7 +421,7 @@ extension GaryxMobileModel {
                 updatedAt: formatter.string(from: now)
             )
         }
-        threads = (0..<50).map { index in
+        let fixtureThreads = (0..<50).map { index in
             GaryxThreadSummary(
                 id: "thread-\(index)",
                 title: "Synthetic thread \(index)",
@@ -442,6 +442,7 @@ extension GaryxMobileModel {
         for threadId in (0..<50).reversed().map({ "thread-\($0)" }) {
             recentThreadFeeds.upsertChat(threadId: threadId)
         }
+        seedThreadSummariesForTesting(fixtureThreads)
         connectionState = .ready(version: "debug-home-scroll-probe")
         emitHomeProjectionSnapshot()
     }
@@ -453,13 +454,7 @@ extension GaryxMobileModel {
         if selectedThread?.id == normalizedId {
             return selectedThread
         }
-        if let thread = threads.first(where: { $0.id == normalizedId }) {
-            return thread
-        }
-        if let thread = pinnedThreads.first(where: { $0.id == normalizedId }) {
-            return thread
-        }
-        return nil
+        return threadSummaryCache.summary(for: normalizedId)
     }
 
     var agentTargets: [GaryxMobileAgentTarget] {
@@ -583,8 +578,8 @@ extension GaryxMobileModel {
 
     var workspacePathSuggestions: [String] {
         GaryxMobileWorkspacePresentation.workspacePathSuggestions(
-            threadWorkspacePaths: threads.map(\.workspacePath),
-            threadWorktreePaths: threads.map(\.worktreePath),
+            threadWorkspacePaths: residentRecentThreadSummaries.map(\.workspacePath),
+            threadWorktreePaths: residentRecentThreadSummaries.map(\.worktreePath),
             automationWorkspacePaths: automations.map(\.workspacePath),
             savedWorkspacePaths: userWorkspacePaths,
             additionalPaths: [newThreadWorkspace, selectedWorkspacePath]
@@ -592,26 +587,14 @@ extension GaryxMobileModel {
     }
 
     var pinnedThreads: [GaryxThreadSummary] {
-        var byId: [String: GaryxThreadSummary] = [:]
-        for thread in threads {
-            byId[thread.id] = thread
-        }
-        return pinnedThreadIds.compactMap { byId[$0] }
+        threadSummaryCache.summaries(for: pinnedThreadIds)
     }
 
     var allRecentThreads: [GaryxThreadSummary] {
-        var byId: [String: GaryxThreadSummary] = [:]
-        for thread in threads {
-            byId[thread.id] = thread
-        }
-        return allRecentThreadIds.compactMap { byId[$0] }
+        threadSummaryCache.summaries(for: allRecentThreadIds)
     }
 
     var visibleRecentThreads: [GaryxThreadSummary] {
-        var byId: [String: GaryxThreadSummary] = [:]
-        for thread in threads {
-            byId[thread.id] = thread
-        }
-        return visibleRecentThreadIds.compactMap { byId[$0] }
+        threadSummaryCache.summaries(for: visibleRecentThreadIds)
     }
 }

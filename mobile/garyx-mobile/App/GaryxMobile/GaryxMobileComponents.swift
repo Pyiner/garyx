@@ -406,6 +406,94 @@ extension GaryxPanelScaffold where Actions == EmptyView {
     }
 }
 
+/// Native-list sibling for thread drilldowns. Keeping this separate avoids a
+/// List nested inside the non-list panel's ScrollView.
+struct GaryxListPanelScaffold<Rows: View, Actions: View>: View {
+    @Environment(\.garyxOpenSidebar) private var openSidebar
+
+    let title: String
+    let onRefresh: (() async -> Void)?
+    let leadingActionLabel: String?
+    let leadingAction: (() -> Void)?
+    let rows: Rows
+    let actions: Actions
+
+    init(
+        title: String,
+        onRefresh: (() async -> Void)? = nil,
+        leadingActionLabel: String? = nil,
+        leadingAction: (() -> Void)? = nil,
+        @ViewBuilder rows: () -> Rows,
+        @ViewBuilder actions: () -> Actions
+    ) {
+        self.title = title
+        self.onRefresh = onRefresh
+        self.leadingActionLabel = leadingActionLabel
+        self.leadingAction = leadingAction
+        self.rows = rows()
+        self.actions = actions()
+    }
+
+    var body: some View {
+        List {
+            rows
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+        }
+        .listStyle(.plain)
+        .environment(\.defaultMinListRowHeight, 0)
+        .scrollContentBackground(.hidden)
+        .background(GaryxTheme.background)
+        .refreshable {
+            if let onRefresh { await onRefresh() }
+        }
+        .garyxThreadActionMenuHost()
+        .garyxAdaptiveTopBar {
+            GaryxAdaptiveGlassContainer(spacing: 10) {
+                HStack(spacing: 12) {
+                    if let leadingAction {
+                        Button(action: leadingAction) {
+                            GaryxToolbarIcon(systemName: "chevron.left")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(leadingActionLabel ?? "Back")
+                    } else {
+                        GaryxSidebarMenuButton(action: openSidebar)
+                    }
+
+                    GaryxPanelHeaderTitle(title: title)
+                        .layoutPriority(1)
+                    Spacer(minLength: 0)
+                    actions
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+        }
+    }
+}
+
+extension GaryxListPanelScaffold where Actions == EmptyView {
+    init(
+        title: String,
+        onRefresh: (() async -> Void)? = nil,
+        leadingActionLabel: String? = nil,
+        leadingAction: (() -> Void)? = nil,
+        @ViewBuilder rows: () -> Rows
+    ) {
+        self.init(
+            title: title,
+            onRefresh: onRefresh,
+            leadingActionLabel: leadingActionLabel,
+            leadingAction: leadingAction,
+            rows: rows,
+            actions: { EmptyView() }
+        )
+    }
+}
+
 struct GaryxAddToolbarButton: View {
     let label: String
     let action: () -> Void

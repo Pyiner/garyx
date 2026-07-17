@@ -235,10 +235,26 @@ final class HomeProjectionReducerTests: XCTestCase {
         state = reduce(state, .selectedThreadChanged(threadId: "thread-0")).state
         state = reduce(state, .homeVisibilityChanged(isVisible: true)).state
 
+        let runningRow = try row(in: state, id: "thread-0")
         XCTAssertTrue(
-            try row(in: state, id: "thread-0").presentation.isRunning,
+            runningRow.presentation.isRunning,
             "B2 stops the selected-thread stream on home, so the home dot must remain supplied by recent_threads."
         )
+        XCTAssertFalse(runningRow.capabilities.canArchive)
+        XCTAssertEqual(runningRow.capabilities.archiveStrategy, .none)
+
+        state = reduce(
+            state,
+            .runStateDelta(
+                source: .recentThreadSummary,
+                threadId: "thread-0",
+                status: .idle,
+                basedOnSeq: 10
+            )
+        ).state
+        let idleRow = try row(in: state, id: "thread-0")
+        XCTAssertTrue(idleRow.capabilities.canArchive)
+        XCTAssertEqual(idleRow.capabilities.archiveStrategy, .thread)
     }
 
     func testSameSourceStaleFramesAreIgnored() throws {
@@ -468,6 +484,22 @@ final class HomeProjectionReducerTests: XCTestCase {
         XCTAssertFalse(store.mutationHubResidentState?.orderedThreadIds.contains("thread-0") == true)
         XCTAssertTrue(store.mutationHubResidentState?.pending.isEmpty == true)
         XCTAssertNil(store.mutationHubResidentState?.barrier)
+    }
+
+    func testExplicitGatewayEpochResetKeepsHomeResidentRegistered() {
+        let hubStore = GaryxThreadMutationHubStore(gatewayRuntimeEpoch: 7)
+        let store = GaryxHomeThreadListStore(mutationHubStore: hubStore)
+        hubStore.value.registerStore(
+            storeId: "workspace:/old",
+            instanceId: 2,
+            orderedThreadIds: ["thread-old"]
+        )
+
+        store.resetTransitions(gatewayRuntimeEpoch: 8)
+
+        XCTAssertEqual(hubStore.value.gatewayRuntimeEpoch, 8)
+        XCTAssertNotNil(hubStore.value.residents["home"])
+        XCTAssertNil(hubStore.value.residents["workspace:/old"])
     }
 
     func testPinFailureMovesBackImmediatelyWithoutWaitingForCanonicalRollback() {

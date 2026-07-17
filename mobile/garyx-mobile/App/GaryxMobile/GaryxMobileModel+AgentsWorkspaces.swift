@@ -96,7 +96,7 @@ extension GaryxMobileModel {
         source: GaryxMobilePanelOpenSource = .replace
     ) async {
         let resolvedThread = summaryWithCommittedRunState(thread)
-        threads = Self.mergedThreadSummaries(threads + [resolvedThread])
+        cacheThreadSummaries([resolvedThread])
         await selectThread(
             resolvedThread,
             invalidatesPendingThreadOpen: true,
@@ -116,14 +116,14 @@ extension GaryxMobileModel {
         let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !threadId.isEmpty, canContinueLastOpenedThreadRestore(threadId: threadId) else { return }
 
-        if let thread = threads.first(where: { $0.id == threadId }),
+        if let thread = cachedThreadSummary(for: threadId),
            await restoreLastOpenedThread(thread, requestedThreadId: threadId) {
             return
         }
 
         await refreshThreads(source: .userAction)
         guard canContinueLastOpenedThreadRestore(threadId: threadId) else { return }
-        if let thread = threads.first(where: { $0.id == threadId }),
+        if let thread = cachedThreadSummary(for: threadId),
            await restoreLastOpenedThread(thread, requestedThreadId: threadId) {
             return
         }
@@ -166,7 +166,7 @@ extension GaryxMobileModel {
         let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !threadId.isEmpty else { return }
 
-        if let thread = threads.first(where: { $0.id == threadId }) {
+        if let thread = cachedThreadSummary(for: threadId) {
             await selectThread(
                 thread,
                 invalidatesPendingThreadOpen: false,
@@ -180,7 +180,7 @@ extension GaryxMobileModel {
 
         await refreshThreads(source: .userAction)
         guard isCurrentPendingThreadOpen(requestId) else { return }
-        if let thread = threads.first(where: { $0.id == threadId }) {
+        if let thread = cachedThreadSummary(for: threadId) {
             await selectThread(
                 thread,
                 invalidatesPendingThreadOpen: false,
@@ -191,6 +191,7 @@ extension GaryxMobileModel {
         do {
             let thread = try await client().getThread(threadId: threadId)
             guard isCurrentPendingThreadOpen(requestId) else { return }
+            cacheThreadSummaries([thread])
             await selectThread(
                 thread,
                 invalidatesPendingThreadOpen: false,
@@ -254,7 +255,7 @@ extension GaryxMobileModel {
             )
         }
         let resolvedThread = summaryWithCommittedRunState(restoredThread)
-        threads = Self.mergedThreadSummaries(threads + [resolvedThread])
+        cacheThreadSummaries([resolvedThread])
         await selectThread(
             resolvedThread,
             invalidatesPendingThreadOpen: false,
@@ -269,7 +270,7 @@ extension GaryxMobileModel {
         source: GaryxMobilePanelOpenSource
     ) {
         guard threadOpenState.markShown(threadId: threadId, requestId: requestId) else { return }
-        let thread = threads.first(where: { $0.id == threadId })
+        let thread = cachedThreadSummary(for: threadId)
             ?? (selectedThread?.id == threadId ? selectedThread : nil)
             ?? Self.placeholderThreadSummary(id: threadId)
         showSelectedThread(thread, invalidatesPendingThreadOpen: false, source: source)
@@ -1141,7 +1142,7 @@ extension GaryxMobileModel {
         if next != agents {
             agents = next
         }
-        if !threads.isEmpty {
+        if !residentRecentThreadSummaries.isEmpty {
             persistRecentThreadsWidgetSnapshot()
         }
         persistCatalogCacheSnapshot()

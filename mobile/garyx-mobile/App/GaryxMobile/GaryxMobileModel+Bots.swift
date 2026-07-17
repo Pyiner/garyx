@@ -253,6 +253,7 @@ extension GaryxMobileModel {
             pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
             return
         }
+        refreshResidentThreadListStores()
 
         let endpointKeys = GaryxThreadArchiveRequestBuilder.endpointKeys(
             threadId: normalizedThreadId,
@@ -274,6 +275,7 @@ extension GaryxMobileModel {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
             homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+            refreshResidentThreadListStores()
             lastError = displayMessage(for: error)
             return
         }
@@ -310,16 +312,23 @@ extension GaryxMobileModel {
         case .definitiveEndpointResponse(let response):
             pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
             homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+            refreshResidentThreadListStores()
             lastError = response.error.message ?? response.error.code
         case .notSent(let message):
             pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
             homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+            refreshResidentThreadListStores()
             lastError = message
         case .ambiguous(let response):
             pendingThreadArchives.cancelArchive(threadId: normalizedThreadId)
-            homeThreadListStore.cancelArchiveTransition(threadId: normalizedThreadId)
+            let tickets = homeThreadListStore.markArchiveTransitionAmbiguous(
+                threadId: normalizedThreadId
+            )
+            refreshResidentThreadListStores()
             lastError = response.message
-            await forceReplaceThreadFeedsAfterAmbiguousLifecycle()
+            await forceReplaceThreadFeedsAfterAmbiguousLifecycle(
+                reconstructionTickets: tickets
+            )
         }
     }
 }

@@ -21,6 +21,9 @@ extension GaryxMobileModel {
             return
         }
         runStateByThread[threadId] = state
+        if previous.busy != state.busy {
+            refreshResidentThreadListStores()
+        }
         emitCommittedRunStateProjectionDelta(threadId: threadId, state: state)
         applyThreadRunStateSummary(threadId: threadId, state: state)
 
@@ -57,7 +60,11 @@ extension GaryxMobileModel {
 
     func replaceRunStateByThread(_ next: [String: GaryxTranscriptRunState]) {
         guard runStateByThread != next else { return }
+        let previousBusy = remoteBusyThreadIds
         runStateByThread = next
+        if previousBusy != remoteBusyThreadIds {
+            refreshResidentThreadListStores()
+        }
         emitHomeProjectionSnapshot()
     }
 
@@ -92,7 +99,11 @@ extension GaryxMobileModel {
         }
     }
 
-    func applyThreadRuntimeSummary(_ runtime: GaryxThreadRuntimeSummary, threadId: String) {
+    func applyThreadRuntimeSummary(
+        _ runtime: GaryxThreadRuntimeSummary,
+        threadId: String,
+        mutationId existingMutationId: GaryxThreadMutationID? = nil
+    ) {
         let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedThreadId.isEmpty else { return }
 
@@ -112,12 +123,26 @@ extension GaryxMobileModel {
             return updated
         }
 
-        if let index = threads.firstIndex(where: { $0.id == normalizedThreadId }) {
-            let nextThread = mergedRuntimeSummary(threads[index])
-            if threads[index] != nextThread {
-                var nextThreads = threads
-                nextThreads[index] = nextThread
-                threads = nextThreads
+        if let cached = threadSummaryCache.summary(for: normalizedThreadId) {
+            let nextThread = mergedRuntimeSummary(cached)
+            if cached != nextThread {
+                let mutationId = existingMutationId
+                    ?? nextThreadMutationId(kind: "runtime", threadId: normalizedThreadId)
+                if existingMutationId == nil {
+                    _ = threadMutationHubStore.value.began(
+                        mutationId: mutationId,
+                        kind: .runtime(threadId: normalizedThreadId),
+                        gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch
+                    )
+                }
+                cacheThreadSummaries([nextThread])
+                if existingMutationId == nil {
+                    _ = threadMutationHubStore.value.committed(
+                        mutationId: mutationId,
+                        gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
+                        authority: GaryxThreadMutationAuthority(summary: nextThread)
+                    )
+                }
             }
         }
         if selectedThread?.id == normalizedThreadId,

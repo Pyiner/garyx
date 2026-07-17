@@ -1,6 +1,12 @@
 import Foundation
 import WidgetKit
 
+enum GaryxRecentThreadsWidgetPersistenceOutcome: Sendable {
+    case finished
+    case cancelled
+    case skipped
+}
+
 actor GaryxRecentThreadsWidgetPersistenceQueue {
     private let planner = GaryxRecentThreadsWidgetPersistencePlanner()
     private var latestGeneration: UInt64 = 0
@@ -10,9 +16,9 @@ actor GaryxRecentThreadsWidgetPersistenceQueue {
         generation: UInt64,
         avatarStore: any GaryxAvatarStore,
         validator: any GaryxAvatarImageValidating
-    ) async {
+    ) async -> GaryxRecentThreadsWidgetPersistenceOutcome {
         latestGeneration = max(latestGeneration, generation)
-        guard generation == latestGeneration else { return }
+        guard !Task.isCancelled, generation == latestGeneration else { return .cancelled }
         let upserts = GaryxAvatarWriteThroughPlan.candidates(
             scope: input.gatewayScopeId,
             agents: input.agents
@@ -20,21 +26,22 @@ actor GaryxRecentThreadsWidgetPersistenceQueue {
         if !upserts.isEmpty {
             await avatarStore.upsert(upserts, validator: validator, now: Date())
         }
-        guard generation == latestGeneration else { return }
+        guard !Task.isCancelled, generation == latestGeneration else { return .cancelled }
         let avatarIdentities = GaryxRecentThreadsWidgetSnapshotProjector.avatarIdentities(from: input)
         let avatarFallback = await avatarStore.avatarFingerprints(for: avatarIdentities, now: Date())
-        guard generation == latestGeneration else { return }
+        guard !Task.isCancelled, generation == latestGeneration else { return .cancelled }
         let widgetThreads = GaryxRecentThreadsWidgetSnapshotProjector.widgetThreads(
             from: input,
             avatarFallback: avatarFallback
         )
-        guard generation == latestGeneration else { return }
+        guard !Task.isCancelled, generation == latestGeneration else { return .cancelled }
         switch planner.nextWrite(for: widgetThreads) {
         case .skipUnchanged:
-            return
+            return .skipped
         case .write(let threads):
             GaryxMobileWidgetStore.saveRecentThreads(threads)
             WidgetCenter.shared.reloadTimelines(ofKind: GaryxRecentThreadsWidgetConstants.kind)
+            return .finished
         }
     }
 }
@@ -86,6 +93,7 @@ extension GaryxMobileModel {
                 threadId: normalizedId,
                 basePinnedIds: previousIds
             )
+            refreshResidentThreadListStores()
             return
         }
 
@@ -144,6 +152,7 @@ extension GaryxMobileModel {
                 threadId: normalizedId,
                 pinned: homeThreadListStore.pinnedOrderState.presentedOrder.contains(normalizedId)
             )
+            refreshResidentThreadListStores()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             failPinnedOrderMembershipChange(membershipRequest)
@@ -151,6 +160,7 @@ extension GaryxMobileModel {
                 threadId: normalizedId,
                 basePinnedIds: pinnedThreadIds
             )
+            refreshResidentThreadListStores()
             lastError = displayMessage(for: error)
         }
     }
@@ -167,8 +177,11 @@ extension GaryxMobileModel {
         let transactionId = homeProjectionGateway.beginTransaction(label: "archive-local-remove")
         defer { homeProjectionGateway.endTransaction(transactionId) }
         pinnedThreadIds.removeAll { $0 == normalizedId }
-        recentThreadFeeds.removeThread(normalizedId)
-        threads.removeAll { $0.id == normalizedId }
+        applyThreadMutationAuthorityToResidentProviders(
+            GaryxThreadMutationAuthority(
+                membership: .remove(threadId: normalizedId)
+            )
+        )
         // Any in-flight refresh captured this thread before the removal;
         // invalidate its commit so stale snapshots cannot resurrect the row
         // alongside the committed archive tombstone (review #TASK-1804).

@@ -98,6 +98,21 @@ final class HomeChromeInteractionTests: XCTestCase {
         XCTAssertEqual(pinAction.frame.height, 44, accuracy: 2)
     }
 
+    func testThreadSwipeRevealsCapabilityActionsWithoutOpeningThread() throws {
+        let app = launchHome(useScrollFixture: true)
+        let row = app.staticTexts["Synthetic thread 7"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "swipeable unpinned thread row")
+
+        row.swipeLeft()
+
+        let pinAction = app.buttons["Pin thread"]
+        XCTAssertTrue(pinAction.waitForExistence(timeout: 5))
+        XCTAssertTrue(pinAction.isHittable)
+        XCTAssertTrue(app.buttons["Favorite thread"].isHittable)
+        XCTAssertTrue(app.buttons["Archive thread"].isHittable)
+        XCTAssertFalse(app.buttons["Back"].exists)
+    }
+
     func testThresholdLongPressPresentsMenuWithoutOpeningThread() throws {
         let app = launchHome(useScrollFixture: true)
         let row = app.staticTexts["Synthetic thread 7"].firstMatch

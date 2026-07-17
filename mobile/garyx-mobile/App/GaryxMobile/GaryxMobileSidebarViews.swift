@@ -22,7 +22,7 @@ struct GaryxRootNavigationView: View, Equatable {
     let onRetryLoadMoreThreads: () async -> Void
     let onSelectRecentFilter: (GaryxRecentThreadFilter) -> Void
     let onStartNewChat: () -> Void
-    let onOpenThread: (GaryxThreadSummary) -> Void
+    let onOpenThread: (GaryxThreadSummary, GaryxMobilePanelOpenSource) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onToggleFavoriteThread: (String) -> Void
     let onUnpinThread: (String) -> Void
@@ -139,7 +139,7 @@ private struct GaryxRouteNotFoundCard: View {
     }
 }
 
-private enum GaryxSidebarMetrics {
+enum GaryxSidebarMetrics {
     static let outerHorizontalPadding: CGFloat = 16
     static let sectionHorizontalPadding: CGFloat = 24
     static let rowOuterPadding: CGFloat = 18
@@ -176,7 +176,7 @@ struct GaryxHomeThreadListView: View, Equatable {
     let onRetryLoadMoreThreads: () async -> Void
     let onSelectRecentFilter: (GaryxRecentThreadFilter) -> Void
     let onStartNewChat: () -> Void
-    let onOpenThread: (GaryxThreadSummary) -> Void
+    let onOpenThread: (GaryxThreadSummary, GaryxMobilePanelOpenSource) -> Void
     let onTogglePinnedThread: (String) -> Void
     let onToggleFavoriteThread: (String) -> Void
     let onUnpinThread: (String) -> Void
@@ -300,16 +300,33 @@ struct GaryxHomeThreadListView: View, Equatable {
                         .padding(.bottom, 4)
 
                 case let .thread(row, region):
-                    GaryxHomeThreadButton(
-                        row: row,
-                        motion: homeListStore.rowMotion(threadId: row.id),
-                        menuDismissToken: pinnedMenuDismissToken(for: region),
-                        menuMovementSuppression: pinnedMenuMovementSuppression(for: region),
+                    GaryxThreadListRowButton(
+                        input: GaryxThreadListRowInput(
+                            thread: row.thread,
+                            presentation: row.presentation,
+                            avatar: row.avatar,
+                            timestampValue: row.timestampValue,
+                            capabilities: row.capabilities,
+                            motion: homeListStore.rowMotion(threadId: row.id),
+                            showsDivider: row.showsDivider,
+                            menuDismissToken: pinnedMenuDismissToken(for: region),
+                            menuMovementSuppression: pinnedMenuMovementSuppression(for: region),
+                            openSource: .replace
+                        ),
                         onOpenThread: onOpenThread,
-                        onTogglePinnedThread: onTogglePinnedThread,
-                        onToggleFavoriteThread: onToggleFavoriteThread,
-                        onUnpinThread: onUnpinThread,
-                        onArchiveThread: onArchiveThread
+                        onSetPinned: { threadId, desired in
+                            if desired {
+                                onTogglePinnedThread(threadId)
+                            } else {
+                                onUnpinThread(threadId)
+                            }
+                        },
+                        onSetFavorite: { threadId, _ in
+                            onToggleFavoriteThread(threadId)
+                        },
+                        onArchive: { thread, _ in
+                            Task { await onArchiveThread(thread) }
+                        }
                     )
                     .equatable()
                     .onAppear {
@@ -702,132 +719,6 @@ struct GaryxHomeThreadListView: View, Equatable {
 
 }
 
-private struct GaryxHomeThreadButton: View, Equatable {
-    let row: GaryxHomeThreadRow
-    let motion: GaryxHomeThreadRowMotion
-    let menuDismissToken: Int
-    let menuMovementSuppression: Bool
-    let onOpenThread: (GaryxThreadSummary) -> Void
-    let onTogglePinnedThread: (String) -> Void
-    let onToggleFavoriteThread: (String) -> Void
-    let onUnpinThread: (String) -> Void
-    let onArchiveThread: (GaryxThreadSummary) async -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var suppressNextPrimaryTap = false
-
-    static func == (lhs: GaryxHomeThreadButton, rhs: GaryxHomeThreadButton) -> Bool {
-        lhs.row == rhs.row
-            && lhs.motion == rhs.motion
-            && lhs.menuDismissToken == rhs.menuDismissToken
-            && lhs.menuMovementSuppression == rhs.menuMovementSuppression
-    }
-
-    var body: some View {
-        #if DEBUG
-        let _ = GaryxHomeScrollPerformanceProbe.shared.markRowBody()
-        #endif
-        // Divider folded into the row so one thread == one List cell. The
-        // timestamp is rendered live (self-refreshing) from the raw value rather
-        // than baked here, so the body stays equatable for cell reuse.
-        VStack(spacing: 0) {
-            if row.showsDivider {
-                GaryxSidebarRowDivider()
-            }
-            GaryxSidebarThreadRowView(
-                presentation: row.presentation,
-                avatar: row.avatar,
-                liveTimestampValue: row.timestampValue,
-                usesExternalSelectionGesture: true,
-                onSelect: {
-                    onOpenThread(row.thread)
-                },
-                onUnpin: {
-                    guard motion != .pinning else { return }
-                    suppressNextPrimaryTap = true
-                    onUnpinThread(row.id)
-                    // The ancestor's simultaneous exclusive gesture also sees
-                    // this release. Keep suppression alive through its deferred
-                    // primary action, then clear it if recognition ever changes
-                    // and the ancestor does not complete.
-                    DispatchQueue.main.async {
-                        DispatchQueue.main.async {
-                            suppressNextPrimaryTap = false
-                        }
-                    }
-                }
-            )
-            .garyxThreadActionMenu(
-                dismissToken: menuDismissToken,
-                movementSuppressesMenu: menuMovementSuppression,
-                primaryAction: {
-                // Defer one run-loop turn so a nested direct Unpin button can
-                // mark the same touch as consumed before the row opens.
-                DispatchQueue.main.async {
-                    guard !suppressNextPrimaryTap else {
-                        suppressNextPrimaryTap = false
-                        return
-                    }
-                    onOpenThread(row.thread)
-                }
-                }
-            ) {
-                var items = [
-                    GaryxThreadActionMenuItem(
-                        title: row.presentation.isPinned ? "Unpin thread" : "Pin thread",
-                        systemImage: row.presentation.isPinned ? "pin.slash" : "pin",
-                        isEnabled: motion != .pinning
-                    ) {
-                        guard motion != .pinning else { return }
-                        onTogglePinnedThread(row.id)
-                    }
-                ]
-                items.append(
-                    GaryxThreadActionMenuItem(
-                        title: row.presentation.isFavorite
-                            ? "Unfavorite thread"
-                            : "Favorite thread",
-                        systemImage: row.presentation.isFavorite ? "star.slash" : "star",
-                        isEnabled: motion != .pinning
-                    ) {
-                        guard motion != .pinning else { return }
-                        onToggleFavoriteThread(row.id)
-                    }
-                )
-                if row.canArchive {
-                    items.append(
-                        GaryxThreadActionMenuItem(
-                            title: "Archive thread",
-                            systemImage: "archivebox",
-                            role: .destructive,
-                            isEnabled: motion != .pinning
-                        ) {
-                            guard motion != .pinning else { return }
-                            Task { await onArchiveThread(row.thread) }
-                        }
-                    )
-                }
-                return items
-            }
-        }
-        .frame(height: isExiting ? 0 : nil, alignment: .top)
-        .opacity(isExiting ? 0 : 1)
-        .scaleEffect(isExiting ? 0.98 : 1, anchor: .trailing)
-        .offset(x: isExiting ? 18 : 0)
-        .clipped()
-        .allowsHitTesting(!isExiting)
-        .accessibilityHidden(isExiting)
-        .animation(archiveAnimation, value: isExiting)
-    }
-
-    private var archiveAnimation: Animation? {
-        reduceMotion ? nil : .timingCurve(0.22, 1, 0.36, 1, duration: 0.2)
-    }
-
-    private var isExiting: Bool {
-        motion == .archiving || motion == .leavingFilteredList
-    }
-}
-
 struct GaryxHomeHeaderView: View {
     let selectedRecentFilter: GaryxRecentThreadFilter
     let onOpenDrawer: () -> Void
@@ -1073,19 +964,15 @@ struct GaryxSidebarNavigationRow: View {
     }
 }
 
-private struct GaryxSidebarWorkspaceThreadGroup: Identifiable {
+struct GaryxSidebarWorkspaceThreadGroup: Identifiable {
     let path: String
     let name: String
-    let threads: [GaryxThreadSummary]
 
     var id: String { path }
 }
 
-private extension GaryxMobileModel {
+extension GaryxMobileModel {
     var sidebarWorkspaceThreadGroups: [GaryxSidebarWorkspaceThreadGroup] {
-        let grouped = Dictionary(grouping: threads) { thread in
-            thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        }
         let paths = userWorkspacePaths
         let duplicateNames = Dictionary(grouping: paths, by: { $0.garyxLastPathComponent })
             .filter { !$0.key.isEmpty && $0.value.count > 1 }
@@ -1094,29 +981,15 @@ private extension GaryxMobileModel {
                 let name = path.garyxLastPathComponent.isEmpty ? path : path.garyxLastPathComponent
                 return GaryxSidebarWorkspaceThreadGroup(
                     path: path,
-                    name: duplicateNames[name] == nil ? name : path.garyxDisambiguatedWorkspaceName,
-                    threads: (grouped[path] ?? []).sorted(by: garyxThreadSort)
+                    name: duplicateNames[name] == nil ? name : path.garyxDisambiguatedWorkspaceName
                 )
             }
     }
-
-    var sidebarVisibleThreadIds: Set<String> {
-        Set(threads.map(\.id))
-    }
-}
-
-private func garyxThreadSort(_ lhs: GaryxThreadSummary, _ rhs: GaryxThreadSummary) -> Bool {
-    let left = garyxThreadDate(from: lhs.updatedAt ?? lhs.createdAt ?? "") ?? .distantPast
-    let right = garyxThreadDate(from: rhs.updatedAt ?? rhs.createdAt ?? "") ?? .distantPast
-    if left != right {
-        return left > right
-    }
-    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
 }
 
 /// Hairline between thread rows, inset to the text column so it reads like a
 /// native chat list separator.
-private struct GaryxSidebarRowDivider: View {
+struct GaryxSidebarRowDivider: View {
     var body: some View {
         Rectangle()
             .fill(Color.primary.opacity(0.06))
@@ -1278,481 +1151,7 @@ private struct GaryxSidebarThreadAutoLoadFooter: View {
     }
 }
 
-private struct GaryxSidebarBotsSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    @Binding var activeDrilldown: GaryxWorkspaceBotsDrilldown?
-
-    private var groups: [GaryxMobileBotGroup] {
-        model.mobileBotGroups
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if case let .bot(id) = activeDrilldown {
-                if let selectedGroup {
-                    GaryxBotThreadDetailSection(
-                        group: selectedGroup
-                    )
-                } else {
-                    GaryxWorkspaceBotsMissingDrilldownState(
-                        title: "Bot Not Found",
-                        message: "Garyx could not find bot \(id)."
-                    )
-                }
-            } else {
-                if !groups.isEmpty {
-                    GaryxSidebarSectionHeader(title: "Bots", systemImage: "bubble.left.and.bubble.right")
-                        .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                        .padding(.bottom, 4)
-
-                    ForEach(groups) { group in
-                        let childEntries = group.sidebarChildConversationEntries()
-                        GaryxSidebarBotRow(
-                            group: group,
-                            canDrillDown: !group.rootCanOpen || childEntries.count > 1,
-                            onSelect: {
-                                withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                                    activeDrilldown = .bot(group.id)
-                                }
-                            },
-                            onOpenRoot: {
-                                Task { await model.openBotGroup(group) }
-                            }
-                        )
-                    }
-                }
-            }
-        }
-        .padding(.bottom, 10)
-    }
-
-    private var selectedGroup: GaryxMobileBotGroup? {
-        guard case let .bot(id) = activeDrilldown else { return nil }
-        return groups.first { $0.id == id }
-    }
-}
-
-private struct GaryxSidebarAutomationsSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    @Binding var activeDrilldown: GaryxWorkspaceBotsDrilldown?
-
-    private var generatedAutomations: [GaryxAutomationSummary] {
-        model.automations
-            .filter(\.isGeneratedThreadMode)
-            .sorted { lhs, rhs in
-                lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
-            }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if case let .automationThreads(id) = activeDrilldown {
-                GaryxAutomationThreadsDetailSection(
-                    automationId: id,
-                    automation: generatedAutomations.first { $0.id == id }
-                )
-            } else if !generatedAutomations.isEmpty {
-                GaryxSidebarSectionHeader(title: "Scheduled automations", systemImage: "clock.arrow.circlepath")
-                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                    .padding(.bottom, 4)
-
-                ForEach(generatedAutomations) { automation in
-                    GaryxDisclosureListRow(
-                        title: automation.label,
-                        subtitle: automation.workspacePath.isEmpty
-                            ? nil
-                            : URL(fileURLWithPath: automation.workspacePath).lastPathComponent,
-                        systemImage: "clock.arrow.circlepath",
-                        iconFrame: GaryxSidebarMetrics.iconFrame,
-                        horizontalPadding: GaryxSidebarMetrics.rowInnerHorizontalPadding,
-                        verticalPadding: 0,
-                        minHeight: GaryxSidebarMetrics.rowHeight,
-                        titleWeight: .medium,
-                        action: {
-                            withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                                activeDrilldown = .automationThreads(automation.id)
-                            }
-                        }
-                    )
-                    .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
-                }
-            }
-        }
-        .padding(.bottom, 10)
-    }
-}
-
-private struct GaryxAutomationThreadsDetailSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    let automationId: String
-    let automation: GaryxAutomationSummary?
-
-    @State private var page: GaryxAutomationThreadsPage?
-    @State private var isLoading = false
-    @State private var failureMessage: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarSectionHeader(title: "Threads", systemImage: "bubble.left.and.text.bubble.right.fill")
-                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                .padding(.bottom, 4)
-
-            if isLoading && page == nil {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.72)
-                    Text("Loading threads")
-                        .font(GaryxFont.caption(weight: .medium))
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                .padding(.vertical, 10)
-            } else if let failureMessage {
-                Text(failureMessage)
-                    .font(GaryxFont.footnote())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                    .padding(.vertical, 8)
-            } else if entries.isEmpty {
-                Text("No triggered threads yet")
-                    .font(GaryxFont.footnote())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                    .padding(.vertical, 8)
-            } else {
-                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                    if index > 0 {
-                        GaryxSidebarRowDivider()
-                    }
-                    if let thread = threadSummary(for: entry) {
-                        GaryxSidebarThreadButton(
-                            model: model,
-                            thread: thread,
-                            isSelected: model.selectedThread?.id == thread.id,
-                            isPinned: model.isThreadPinned(thread.id),
-                            trailingTimestamp: garyxFormattedTaskTimestamp(entry.finishedAt ?? entry.startedAt),
-                            openSource: .current
-                        )
-                    } else {
-                        GaryxAutomationThreadUnavailableRow(entry: entry)
-                    }
-                }
-            }
-        }
-        .transition(.opacity)
-        .task(id: automationId) {
-            await load()
-        }
-    }
-
-    private var entries: [GaryxAutomationThreadEntry] {
-        page?.items ?? []
-    }
-
-    private func threadSummary(for entry: GaryxAutomationThreadEntry) -> GaryxThreadSummary? {
-        entry.thread ?? model.sidebarThreadSummary(for: entry.threadId)
-    }
-
-    @MainActor
-    private func load() async {
-        guard !isLoading else { return }
-        isLoading = true
-        failureMessage = nil
-        do {
-            let client = try model.client()
-            page = try await client.automationThreads(id: automationId)
-        } catch {
-            failureMessage = "Could not load triggered threads."
-        }
-        isLoading = false
-    }
-}
-
-private struct GaryxAutomationThreadUnavailableRow: View {
-    let entry: GaryxAutomationThreadEntry
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(GaryxFont.system(size: 15, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: GaryxSidebarMetrics.iconFrame, height: GaryxSidebarMetrics.iconFrame)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Thread unavailable")
-                    .font(GaryxFont.subheadline(weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-
-                Text(entry.threadId)
-                    .font(GaryxFont.caption())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
-        .frame(minHeight: GaryxSidebarMetrics.rowHeight)
-        .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
-    }
-}
-
-private struct GaryxSidebarBotRow: View {
-    let group: GaryxMobileBotGroup
-    let canDrillDown: Bool
-    let onSelect: () -> Void
-    let onOpenRoot: () -> Void
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Button {
-                if group.rootCanOpen {
-                    onOpenRoot()
-                } else if canDrillDown {
-                    onSelect()
-                }
-            } label: {
-                HStack(spacing: 10) {
-                    GaryxChannelLogoView(
-                        channel: group.channel,
-                        label: group.title,
-                        iconDataUrl: group.iconDataUrl,
-                        diameter: 22
-                    )
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(group.title)
-                            .font(GaryxFont.subheadline(weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-
-                        if !group.compactDetailLine.isEmpty {
-                            Text(group.compactDetailLine)
-                                .font(GaryxFont.caption())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if canDrillDown {
-                Button(action: onSelect) {
-                    Image(systemName: "chevron.right")
-                        .font(GaryxFont.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 32, height: 32)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
-        .frame(height: GaryxSidebarMetrics.rowHeight)
-        .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
-    }
-}
-
-private struct GaryxBotThreadDetailSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    let group: GaryxMobileBotGroup
-
-    private var entries: [GaryxBotSidebarConversationEntry] {
-        group.sidebarChildConversationEntries()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarSectionHeader(title: "Threads", systemImage: "bubble.left.and.text.bubble.right.fill")
-                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                .padding(.bottom, 4)
-
-            if entries.isEmpty {
-                Text("No threads yet")
-                    .font(GaryxFont.footnote())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                    .padding(.vertical, 8)
-            } else {
-                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                    let timestamp = garyxFormattedTaskTimestamp(entry.latestActivity)
-                    if index > 0 {
-                        GaryxSidebarRowDivider()
-                    }
-                    if let thread = threadSummary(for: entry) {
-                        GaryxSidebarThreadButton(
-                            model: model,
-                            thread: thread,
-                            isSelected: model.selectedThread?.id == thread.id,
-                            isPinned: model.isThreadPinned(thread.id),
-                            trailingTimestamp: timestamp,
-                            canArchive: canArchive(entry),
-                            onSelect: {
-                                guard entry.openable else { return }
-                                Task { await model.openThread(thread, source: .current) }
-                            },
-                            onArchive: {
-                                Task { await model.archiveBotConversationEndpoint(entry.endpoint) }
-                            }
-                        )
-                    }
-                }
-            }
-        }
-        .transition(.opacity)
-    }
-
-    private func threadSummary(for entry: GaryxBotSidebarConversationEntry) -> GaryxThreadSummary? {
-        guard let threadId = entry.threadId?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !threadId.isEmpty else {
-            return nil
-        }
-        return model.sidebarThreadSummary(for: threadId)
-            ?? entry.fallbackThreadSummary(workspacePath: group.workspaceDir)
-    }
-
-    private func canArchive(_ entry: GaryxBotSidebarConversationEntry) -> Bool {
-        guard let threadId = entry.threadId,
-              !threadId.isEmpty else {
-            return false
-        }
-        return model.canArchiveThreadId(threadId)
-    }
-}
-
-private struct GaryxWorkspaceThreadGroupsSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    @Binding var activeDrilldown: GaryxWorkspaceBotsDrilldown?
-
-    var body: some View {
-        let groups = model.sidebarWorkspaceThreadGroups
-        if !groups.isEmpty || isWorkspaceDrilldownActive {
-            VStack(alignment: .leading, spacing: 0) {
-                if case let .workspace(path) = activeDrilldown {
-                    if let selectedGroup {
-                        GaryxWorkspaceThreadDetailSection(
-                            group: selectedGroup
-                        )
-                    } else {
-                        GaryxWorkspaceBotsMissingDrilldownState(
-                            title: "Workspace Not Found",
-                            message: "Garyx could not find workspace \(path)."
-                        )
-                    }
-                } else {
-                    GaryxSidebarSectionHeader(title: "Workspaces", systemImage: "folder.fill")
-                        .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                        .padding(.bottom, 4)
-
-                    ForEach(groups) { group in
-                        GaryxWorkspaceThreadGroupView(
-                            group: group,
-                            isSelected: false,
-                            onSelect: {
-                                withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                                    activeDrilldown = .workspace(group.path)
-                                }
-                            }
-                        )
-                    }
-                }
-            }
-            .padding(.bottom, 10)
-        }
-    }
-
-    private var selectedGroup: GaryxSidebarWorkspaceThreadGroup? {
-        guard case let .workspace(path) = activeDrilldown else { return nil }
-        return model.sidebarWorkspaceThreadGroups.first { $0.path == path }
-    }
-
-    private var isWorkspaceDrilldownActive: Bool {
-        if case .workspace = activeDrilldown {
-            return true
-        }
-        return false
-    }
-}
-
-private struct GaryxWorkspaceBotsMissingDrilldownState: View {
-    let title: String
-    let message: String
-
-    var body: some View {
-        GaryxEmptyPanelView(
-            icon: "magnifyingglass",
-            title: title,
-            text: message
-        )
-        .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-        .padding(.vertical, 12)
-    }
-}
-
-private struct GaryxWorkspaceThreadGroupView: View {
-    let group: GaryxSidebarWorkspaceThreadGroup
-    let isSelected: Bool
-    let onSelect: () -> Void
-
-    var body: some View {
-        GaryxDisclosureListRow(
-            title: group.name,
-            systemImage: "folder",
-            selectedSystemImage: "folder.fill",
-            isSelected: isSelected,
-            iconFrame: GaryxSidebarMetrics.iconFrame,
-            horizontalPadding: GaryxSidebarMetrics.rowInnerHorizontalPadding,
-            verticalPadding: 0,
-            minHeight: GaryxSidebarMetrics.rowHeight,
-            titleWeight: .medium,
-            action: onSelect
-        )
-        .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
-    }
-}
-
-private struct GaryxWorkspaceThreadDetailSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    let group: GaryxSidebarWorkspaceThreadGroup
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarSectionHeader(title: "Threads", systemImage: "bubble.left.and.text.bubble.right.fill")
-                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                .padding(.bottom, 4)
-
-            if group.threads.isEmpty {
-                Text("No threads yet")
-                    .font(GaryxFont.footnote())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                    .padding(.vertical, 8)
-            } else {
-                ForEach(Array(group.threads.enumerated()), id: \.element.id) { index, thread in
-                    if index > 0 {
-                        GaryxSidebarRowDivider()
-                    }
-                    GaryxSidebarThreadButton(
-                        model: model,
-                        thread: thread,
-                        isSelected: model.selectedThread?.id == thread.id,
-                        isPinned: model.isThreadPinned(thread.id),
-                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt),
-                        openSource: .current
-                    )
-                }
-            }
-        }
-        .transition(.opacity)
-    }
-}
-
-private struct GaryxSidebarSectionHeader: View {
+struct GaryxSidebarSectionHeader: View {
     let title: String
     let systemImage: String
     var statusLabel: String? = nil
@@ -1777,103 +1176,6 @@ private struct GaryxSidebarSectionHeader: View {
             }
         }
         .accessibilityElement(children: .combine)
-    }
-}
-
-private struct GaryxSidebarThreadButton: View {
-    // Plain reference on purpose: rows call model actions but must not each
-    // subscribe to the whole observable model, which re-rendered every
-    // materialized row on any model publish. Render state (`isSelected`,
-    // `isPinned`) comes in as values from the observing parent section.
-    let model: GaryxMobileModel
-    let thread: GaryxThreadSummary
-    var indent: CGFloat = 0
-    var isSelected = false
-    var isPinned = false
-    var trailingTimestamp: String?
-    var isFullBleed = false
-    var canArchive: Bool?
-    var openSource: GaryxMobilePanelOpenSource = .replace
-    var onSelect: (() -> Void)?
-    var onArchive: (() -> Void)?
-    @State private var showsArchiveConfirmation = false
-
-    var body: some View {
-        GaryxSwipeActionRow(id: "thread:\(thread.id)", actions: threadSwipeActions) {
-            GaryxSidebarThreadRowView(
-                presentation: GaryxSidebarThreadRowPresentation(
-                    thread: thread,
-                    isSelected: isSelected,
-                    isPinned: isPinned,
-                    trailingTimestamp: trailingTimestamp
-                ),
-                avatar: rowAvatar,
-                isFullBleed: isFullBleed,
-                onSelect: {
-                    if let onSelect {
-                        onSelect()
-                    } else {
-                        Task { await model.openThread(thread, source: openSource) }
-                    }
-                },
-                onUnpin: {
-                    model.unpinThread(thread.id)
-                }
-            )
-        }
-        .onLongPressGesture {
-            guard archiveAvailable else { return }
-            showsArchiveConfirmation = true
-        }
-        .confirmationDialog("Archive thread", isPresented: $showsArchiveConfirmation, titleVisibility: .visible) {
-            Button("Archive", role: .destructive) {
-                archive()
-            }
-        }
-        .padding(.leading, indent)
-    }
-
-    private var threadSwipeActions: [GaryxRowAction] {
-        [
-            GaryxRowAction(
-                title: isPinned ? "Unpin thread" : "Pin thread",
-                systemImage: isPinned ? "pin.slash" : "pin",
-                tone: .neutral
-            ) {
-                model.togglePinnedThread(thread.id)
-            },
-            GaryxRowAction(
-                title: "Archive thread",
-                systemImage: "archivebox",
-                tone: .destructive
-            ) {
-                archive()
-            },
-        ]
-    }
-
-    private var archiveAvailable: Bool {
-        canArchive ?? model.canArchiveThread(thread)
-    }
-
-    // Same identity resolution as the recent-threads widget.
-    private var rowAvatar: GaryxSidebarThreadRowAvatar {
-        let identity = model.widgetAgentIdentity(for: thread)
-        return GaryxSidebarThreadRowAvatar(
-            agentId: identity.id ?? "",
-            avatarDataUrl: identity.avatarDataUrl ?? "",
-            label: identity.name ?? thread.title,
-            providerType: identity.providerType ?? "",
-            builtIn: identity.builtIn
-        )
-    }
-
-    private func archive() {
-        if let onArchive {
-            onArchive()
-        } else {
-            Task { await model.archiveThread(thread) }
-        }
     }
 }
 
@@ -2253,35 +1555,61 @@ struct GaryxWorkspaceBotsView: View {
     @State private var showsAddWorkspace = false
     @State private var addWorkspacePath = ""
 
+    @ViewBuilder
     var body: some View {
+        Group {
+            switch activeDrilldown {
+            case .workspace(let path):
+                GaryxWorkspaceThreadListDrilldown(
+                    model: model,
+                    path: path,
+                    store: model.workspaceThreadListStore(path: path)
+                )
+            case .bot(let id):
+                if let group = model.mobileBotGroups.first(where: { $0.id == id }) {
+                    GaryxBotThreadListDrilldown(
+                        model: model,
+                        group: group,
+                        store: model.botThreadListStore(group: group)
+                    )
+                } else {
+                    missingDrilldown(
+                        title: "Bot Not Found",
+                        message: "Garyx could not find bot \(id)."
+                    )
+                }
+            case .automationThreads(let id):
+                if let automation = generatedAutomations.first(where: { $0.id == id }) {
+                    GaryxAutomationThreadListDrilldown(
+                        model: model,
+                        automation: automation,
+                        store: model.automationThreadListStore(automationId: id)
+                    )
+                } else {
+                    missingDrilldown(
+                        title: "Automation Not Found",
+                        message: "Garyx could not find automation \(id)."
+                    )
+                }
+            case nil:
+                rootWorkspacePanel
+            }
+        }
+        .onDisappear { model.workspaceBotsDrilldown = nil }
+    }
+
+    private var rootWorkspacePanel: some View {
         GaryxPanelScaffold(
-            title: title,
+            title: "Workspaces",
             subtitle: "",
-            onRefresh: { await refresh() },
+            onRefresh: { await model.refreshRemoteState() },
             leadingActionLabel: nil,
             leadingAction: nil,
-            // Thread and drilldown rows here are the home pinned+recent row
-            // components; they own their horizontal geometry, so the page
-            // must not add the default content inset on top of it.
             contentHorizontalPadding: 0
         ) {
-            VStack(alignment: .leading, spacing: 0) {
-                switch activeDrilldown {
-                case .automationThreads:
-                    GaryxSidebarAutomationsSection(activeDrilldown: activeDrilldownBinding)
-                case .bot:
-                    GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
-                case .workspace, nil:
-                    // Root lists workspaces only; bots have their own page
-                    // and automation threads open from the Automation page.
-                    GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
-                    if activeDrilldown == nil, model.sidebarWorkspaceThreadGroups.isEmpty {
-                        GaryxEmptyPanelView(
-                            icon: "folder",
-                            title: "No workspaces yet",
-                            text: ""
-                        )
-                    }
+            GaryxWorkspaceRootSection(groups: model.sidebarWorkspaceThreadGroups) { path in
+                withAnimation(GaryxMobileMotion.sidebarDrilldown) {
+                    model.workspaceBotsDrilldown = .workspace(path)
                 }
             }
         } actions: {
@@ -2297,10 +1625,7 @@ struct GaryxWorkspaceBotsView: View {
             }
         }
         .task {
-            await refresh()
-        }
-        .onDisappear {
-            model.workspaceBotsDrilldown = nil
+            await model.refreshRemoteState()
         }
         .sheet(isPresented: $showsAddWorkspace) {
             GaryxWorkspacePathPickerSheet(
@@ -2319,39 +1644,24 @@ struct GaryxWorkspaceBotsView: View {
         model.workspaceBotsDrilldown
     }
 
-    private var activeDrilldownBinding: Binding<GaryxWorkspaceBotsDrilldown?> {
-        Binding(
-            get: { model.workspaceBotsDrilldown },
-            set: { model.workspaceBotsDrilldown = $0 }
-        )
-    }
-
-    private var title: String {
-        switch activeDrilldown {
-        case let .bot(id):
-            model.mobileBotGroups.first { $0.id == id }?.title ?? "Bot"
-        case let .workspace(path):
-            model.sidebarWorkspaceThreadGroups.first { $0.path == path }?.name ?? "Workspace"
-        case let .automationThreads(id):
-            generatedAutomations.first { $0.id == id }?.label ?? "Automation Threads"
-        case nil:
-            "Workspaces"
-        }
-    }
-
     private var generatedAutomations: [GaryxAutomationSummary] {
         model.automations.filter(\.isGeneratedThreadMode)
-    }
-
-    private func refresh() async {
-        await model.refreshRemoteState()
-        await model.refreshWorkspaceAndBotThreads()
     }
 
     private func addWorkspace(_ path: String) async {
         guard let addedPath = await model.addUserWorkspacePath(path) else { return }
         await model.selectWorkspace(addedPath)
-        await model.refreshWorkspaceAndBotThreads()
         model.workspaceBotsDrilldown = .workspace(addedPath)
+    }
+
+    private func missingDrilldown(title: String, message: String) -> some View {
+        GaryxListPanelScaffold(
+            title: title,
+            leadingActionLabel: "Back",
+            leadingAction: { model.performMainPanelLeadingEdgeAction() }
+        ) {
+            GaryxEmptyPanelView(icon: "magnifyingglass", title: title, text: message)
+                .padding(.horizontal, 16)
+        }
     }
 }

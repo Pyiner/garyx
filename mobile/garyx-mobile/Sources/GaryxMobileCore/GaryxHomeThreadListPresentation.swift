@@ -372,15 +372,24 @@ struct GaryxHomeThreadRow: Identifiable, Equatable, Sendable {
     let avatar: GaryxSidebarThreadRowAvatar
     let timestampValue: String?
     let canArchive: Bool
+    var capabilities: GaryxThreadRowCapabilities = GaryxThreadRowCapabilities(
+        canOpen: true,
+        canPin: true,
+        canArchive: true,
+        favorite: .addAndRemove,
+        archiveStrategy: .thread
+    )
     let showsDivider: Bool
 }
 
-enum GaryxHomeThreadRowMotion: Equatable, Sendable {
+public enum GaryxThreadRowMotion: Equatable, Sendable {
     case stable
     case archiving
     case pinning
     case leavingFilteredList
 }
+
+typealias GaryxHomeThreadRowMotion = GaryxThreadRowMotion
 
 /// Ephemeral presentation state layered over the canonical Home snapshot.
 /// It keeps archive rows physically present until the remote commit, while pin
@@ -631,6 +640,7 @@ struct GaryxHomeThreadTransitionState: Equatable, Sendable {
                 avatar: row.avatar,
                 timestampValue: row.timestampValue,
                 canArchive: row.canArchive,
+                capabilities: row.capabilities,
                 showsDivider: index > 0
             )
         }
@@ -784,6 +794,7 @@ enum GaryxHomeThreadSectionsBuilder {
             ),
             timestampValue: thread.updatedAt ?? thread.createdAt,
             canArchive: capabilities.canArchive,
+            capabilities: capabilities,
             showsDivider: showsDivider
         )
     }
@@ -850,7 +861,7 @@ final class GaryxHomeThreadListStore: ObservableObject {
     private var previousInput: GaryxHomeThreadListInput?
     private let sectionsCache = GaryxHomeThreadSectionsCache()
     private var transitionState = GaryxHomeThreadTransitionState()
-    private var mutationHub = GaryxThreadMutationHub()
+    private let mutationHubStore: GaryxThreadMutationHubStore
     private var nextMutationSequence: UInt64 = 1
     private var archiveMutationByThreadId: [String: GaryxThreadMutationID] = [:]
     private var pinMutationByThreadId: [String: GaryxThreadMutationID] = [:]
@@ -860,13 +871,17 @@ final class GaryxHomeThreadListStore: ObservableObject {
     private(set) var acceptedActorSnapshotCount = 0
     private(set) var publishCount = 0
 
-    init(snapshot: GaryxHomeThreadListSnapshot = .empty) {
+    init(
+        snapshot: GaryxHomeThreadListSnapshot = .empty,
+        mutationHubStore: GaryxThreadMutationHubStore = GaryxThreadMutationHubStore()
+    ) {
         self.snapshot = snapshot
+        self.mutationHubStore = mutationHubStore
         pinnedOrderState = GaryxPinnedOrderState(
             gatewayIdentity: "",
             initialOrder: snapshot.sections.pinned.map(\.id)
         )
-        mutationHub.registerStore(
+        mutationHubStore.value.registerStore(
             storeId: "home",
             instanceId: 1,
             orderedThreadIds: snapshot.sections.allRows.map(\.id)
@@ -927,11 +942,10 @@ final class GaryxHomeThreadListStore: ObservableObject {
         guard began else { return false }
         let mutationId = nextMutationId(kind: "archive", threadId: threadId)
         archiveMutationByThreadId[threadId] = mutationId
-        _ = mutationHub.began(
+        _ = mutationHubStore.value.began(
             mutationId: mutationId,
             kind: .archive(threadId: threadId),
-            gatewayRuntimeEpoch: mutationHub.gatewayRuntimeEpoch,
-            affectedStoreIds: ["home"]
+            gatewayRuntimeEpoch: mutationHubStore.value.gatewayRuntimeEpoch
         )
         return true
     }
@@ -943,9 +957,9 @@ final class GaryxHomeThreadListStore: ObservableObject {
             return state != before
         }
         if let mutationId = archiveMutationByThreadId.removeValue(forKey: threadId) {
-            _ = mutationHub.committed(
+            _ = mutationHubStore.value.committed(
                 mutationId: mutationId,
-                gatewayRuntimeEpoch: mutationHub.gatewayRuntimeEpoch,
+                gatewayRuntimeEpoch: mutationHubStore.value.gatewayRuntimeEpoch,
                 authority: GaryxThreadMutationAuthority(
                     membership: .remove(threadId: threadId)
                 )
@@ -960,9 +974,9 @@ final class GaryxHomeThreadListStore: ObservableObject {
             return state != before
         }
         if let mutationId = archiveMutationByThreadId.removeValue(forKey: threadId) {
-            _ = mutationHub.rolledBack(
+            _ = mutationHubStore.value.rolledBack(
                 mutationId: mutationId,
-                gatewayRuntimeEpoch: mutationHub.gatewayRuntimeEpoch
+                gatewayRuntimeEpoch: mutationHubStore.value.gatewayRuntimeEpoch
             )
         }
     }
@@ -980,9 +994,9 @@ final class GaryxHomeThreadListStore: ObservableObject {
         guard let mutationId = archiveMutationByThreadId.removeValue(forKey: threadId) else {
             return []
         }
-        return mutationHub.ambiguous(
+        return mutationHubStore.value.ambiguous(
             mutationId: mutationId,
-            gatewayRuntimeEpoch: mutationHub.gatewayRuntimeEpoch
+            gatewayRuntimeEpoch: mutationHubStore.value.gatewayRuntimeEpoch
         )
     }
 
@@ -1013,11 +1027,10 @@ final class GaryxHomeThreadListStore: ObservableObject {
         guard began else { return false }
         let mutationId = nextMutationId(kind: "pin", threadId: threadId)
         pinMutationByThreadId[threadId] = mutationId
-        _ = mutationHub.began(
+        _ = mutationHubStore.value.began(
             mutationId: mutationId,
             kind: .pin(threadId: threadId, pinned: pinned),
-            gatewayRuntimeEpoch: mutationHub.gatewayRuntimeEpoch,
-            affectedStoreIds: ["home"]
+            gatewayRuntimeEpoch: mutationHubStore.value.gatewayRuntimeEpoch
         )
         return true
     }
@@ -1030,9 +1043,9 @@ final class GaryxHomeThreadListStore: ObservableObject {
             return state != before
         }
         if let mutationId = pinMutationByThreadId.removeValue(forKey: threadId) {
-            _ = mutationHub.committed(
+            _ = mutationHubStore.value.committed(
                 mutationId: mutationId,
-                gatewayRuntimeEpoch: mutationHub.gatewayRuntimeEpoch
+                gatewayRuntimeEpoch: mutationHubStore.value.gatewayRuntimeEpoch
             )
         }
     }
@@ -1054,22 +1067,25 @@ final class GaryxHomeThreadListStore: ObservableObject {
             transitionState = next
         }
         if let mutationId = pinMutationByThreadId.removeValue(forKey: threadId) {
-            _ = mutationHub.rolledBack(
+            _ = mutationHubStore.value.rolledBack(
                 mutationId: mutationId,
-                gatewayRuntimeEpoch: mutationHub.gatewayRuntimeEpoch
+                gatewayRuntimeEpoch: mutationHubStore.value.gatewayRuntimeEpoch
             )
         }
         return presentedIds
     }
 
-    func resetTransitions() {
+    func resetTransitions(gatewayRuntimeEpoch: UInt64? = nil) {
         updateTransitionState { state in
             guard !state.isEmpty else { return false }
             state.reset()
             return true
         }
-        mutationHub.resetGatewayScope(runtimeEpoch: mutationHub.gatewayRuntimeEpoch &+ 1)
-        mutationHub.registerStore(
+        mutationHubStore.value.resetGatewayScope(
+            runtimeEpoch: gatewayRuntimeEpoch
+                ?? mutationHubStore.value.gatewayRuntimeEpoch &+ 1
+        )
+        mutationHubStore.value.registerStore(
             storeId: "home",
             instanceId: 1,
             orderedThreadIds: snapshot.sections.allRows.map(\.id)
@@ -1079,7 +1095,7 @@ final class GaryxHomeThreadListStore: ObservableObject {
     }
 
     var mutationHubResidentState: GaryxThreadMutationResidentState? {
-        mutationHub.residents["home"]
+        mutationHubStore.value.residents["home"]
     }
 
     @discardableResult
@@ -1087,11 +1103,11 @@ final class GaryxHomeThreadListStore: ObservableObject {
         _ ticket: GaryxThreadReconstructionTicket,
         outcome: GaryxThreadReconstructionOutcome
     ) -> GaryxThreadReconstructionCompletion {
-        mutationHub.completeReconstruction(ticket, outcome: outcome)
+        mutationHubStore.value.completeReconstruction(ticket, outcome: outcome)
     }
 
     func retryHomeReconstruction() -> GaryxThreadReconstructionTicket? {
-        mutationHub.retryReconstruction(storeId: "home")
+        mutationHubStore.value.retryReconstruction(storeId: "home")
     }
 
     var sectionDerivationCount: Int {
@@ -1114,7 +1130,7 @@ final class GaryxHomeThreadListStore: ObservableObject {
             selectedRecentFilter: input.selectedRecentFilter,
             recentFeedPresentation: input.recentFeedPresentation
         )
-        mutationHub.registerStore(
+        mutationHubStore.value.registerStore(
             storeId: "home",
             instanceId: 1,
             orderedThreadIds: next.sections.allRows.map(\.id)
@@ -1145,7 +1161,7 @@ final class GaryxHomeThreadListStore: ObservableObject {
             selectedRecentFilter: actorSnapshot.selectedRecentFilter,
             recentFeedPresentation: actorSnapshot.recentFeedPresentation
         )
-        mutationHub.registerStore(
+        mutationHubStore.value.registerStore(
             storeId: "home",
             instanceId: 1,
             orderedThreadIds: next.sections.allRows.map(\.id)
@@ -1207,7 +1223,11 @@ final class GaryxHomeThreadListStore: ObservableObject {
     ) -> GaryxHomeThreadRow {
         let normalizedId = row.id.trimmingCharacters(in: .whitespacesAndNewlines)
         let isRunning = !normalizedId.isEmpty && runningThreadIds.contains(normalizedId)
-        guard row.presentation.isRunning != isRunning else {
+        var capabilities = row.capabilities
+        capabilities.canArchive = row.canArchive && !isRunning
+        capabilities.archiveStrategy = capabilities.canArchive ? .thread : .none
+        guard row.presentation.isRunning != isRunning
+                || row.capabilities != capabilities else {
             return row
         }
         return GaryxHomeThreadRow(
@@ -1217,6 +1237,7 @@ final class GaryxHomeThreadListStore: ObservableObject {
             avatar: row.avatar,
             timestampValue: row.timestampValue,
             canArchive: row.canArchive,
+            capabilities: capabilities,
             showsDivider: row.showsDivider
         )
     }

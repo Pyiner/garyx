@@ -44,10 +44,11 @@ extension GaryxMobileModel {
     func loadGatewayScopedUserState(fallbackToLegacy: Bool) {
         activeGatewayScopeId = currentGatewayScopeId
         activeGatewayRuntimeIdentity = currentGatewayRuntimeIdentity
-        _ = threadFavoritesState.replaceGatewayScope(
-            normalizedGatewayURL(gatewayURL),
-            requestSnapshot: false
-        )
+        let favoritesScope = normalizedGatewayURL(gatewayURL)
+        if threadFavoritesState.gatewayScope != favoritesScope {
+            cancelThreadFavoritesSnapshotTransport()
+        }
+        _ = threadFavoritesProvider.replaceGatewayScope(favoritesScope)
         catalogSnapshotRestored = false
         let workspaceKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
         let workspaceModeKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
@@ -122,6 +123,10 @@ extension GaryxMobileModel {
         resetClaudeCodeAuthFlow()
         selectedThreadActivitySignatures = [:]
         clearActiveRunState()
+        threadRenameMutationIds = [:]
+        threadRenameRollbackSummaries = [:]
+        threadRuntimeMutationIds = [:]
+        threadRuntimeRollbackSnapshots = [:]
         connectRefreshRequestId = nil
         remoteStateRefreshRequestId = nil
         agentTargetsRefreshRequestId = nil
@@ -129,8 +134,7 @@ extension GaryxMobileModel {
         workspaceRefreshRequestId = nil
         agentTargetsLoadPhase = .idle
         connectionState = .disconnected
-        homeThreadListStore.resetTransitions()
-        threads = []
+        resetThreadSummaryOwnership()
         pinnedThreadIds = []
         pendingThreadArchives = GaryxPendingThreadArchiveState()
         GaryxMobileWidgetStore.clear()

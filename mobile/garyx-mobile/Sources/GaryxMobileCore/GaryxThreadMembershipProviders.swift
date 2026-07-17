@@ -278,6 +278,19 @@ public struct GaryxThreadSummaryMembershipProvider: GaryxThreadListMembershipPro
         )
     }
 
+    public mutating func retryLoadMore() -> GaryxThreadSummaryLoadMoreTicket? {
+        guard !pager.isRefreshingHead,
+              let nextCursor,
+              let ticket = pager.retryLoadMore() else { return nil }
+        return GaryxThreadSummaryLoadMoreTicket(
+            instanceId: instanceId,
+            pagerTicket: ticket,
+            workspacePath: scope.workspacePath,
+            query: scope.originalTrimmedQuery,
+            cursor: nextCursor
+        )
+    }
+
     public mutating func completeRefresh(
         _ ticket: GaryxThreadSummaryRefreshTicket,
         page: GaryxThreadSummariesPage
@@ -363,6 +376,34 @@ public struct GaryxThreadSummaryMembershipProvider: GaryxThreadListMembershipPro
         coldReset(advanceInstance: true)
     }
 
+    public mutating func apply(
+        _ authority: GaryxThreadMutationMembershipAuthority,
+        summary: GaryxThreadSummary? = nil
+    ) {
+        switch authority {
+        case .unchanged:
+            break
+        case .remove(let rawThreadId):
+            let threadId = rawThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !threadId.isEmpty else { return }
+            pager.noteLocalMutation()
+            orderedThreadIds.removeAll { $0 == threadId }
+        case .upsertAtHead(let rawThreadId):
+            let threadId = rawThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !threadId.isEmpty else { return }
+            if case .workspace(let path) = scope,
+               summary?.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines) != path {
+                return
+            }
+            pager.noteLocalMutation()
+            orderedThreadIds.removeAll { $0 == threadId }
+            orderedThreadIds.insert(threadId, at: 0)
+        case .replace(let ids, _):
+            pager.noteLocalMutation()
+            orderedThreadIds = Self.uniqueIds(ids)
+        }
+    }
+
     private func owns(_ ticket: GaryxThreadSummaryRefreshTicket) -> Bool {
         ticket.instanceId == instanceId
             && ticket.workspacePath == scope.workspacePath
@@ -389,6 +430,11 @@ public struct GaryxThreadSummaryMembershipProvider: GaryxThreadListMembershipPro
         serverBootId = nil
         isPrimed = false
         headFailure = false
+    }
+
+    public mutating func failLoadMore(_ ticket: GaryxThreadSummaryLoadMoreTicket) {
+        guard owns(ticket) else { return }
+        pager.failLoadMore(ticket.pagerTicket)
     }
 
     private static func normalized(
@@ -420,6 +466,7 @@ public struct GaryxThreadSummaryMembershipProvider: GaryxThreadListMembershipPro
 @MainActor
 public final class GaryxThreadPickerMembershipOwner: ObservableObject {
     @Published public private(set) var snapshot: GaryxThreadListMembershipSnapshot
+    @Published public private(set) var availability: GaryxThreadListAvailability = .ready
     public private(set) var provider: GaryxThreadSummaryMembershipProvider
     public private(set) var publishCount = 0
 
@@ -454,6 +501,10 @@ public final class GaryxThreadPickerMembershipOwner: ObservableObject {
         provider.requestLoadMore(trigger: trigger)
     }
 
+    public func retryLoadMore() -> GaryxThreadSummaryLoadMoreTicket? {
+        provider.retryLoadMore()
+    }
+
     @discardableResult
     public func completeRefresh(
         _ ticket: GaryxThreadSummaryRefreshTicket,
@@ -483,6 +534,37 @@ public final class GaryxThreadPickerMembershipOwner: ObservableObject {
         publish(provider.snapshot)
     }
 
+    public func failLoadMore(_ ticket: GaryxThreadSummaryLoadMoreTicket) {
+        provider.failLoadMore(ticket)
+        publish(provider.snapshot)
+    }
+
+    public func setAvailability(_ availability: GaryxThreadListAvailability) {
+        self.availability = availability
+    }
+
+    /// Old-gateway-only bounded fallback. The provider identity remains the
+    /// current query instance so any late server page is still fenced.
+    public func presentUnsupportedFallback(_ summaries: [GaryxThreadSummary]) {
+        let rows = GaryxLegacyThreadPickerFallback.rows(
+            recentRows: summaries,
+            rawQuery: identity.query
+        )
+        leaseOwner.replacePickerQuery(
+            instanceId: identity.instanceId,
+            threadIds: rows.map(\.id),
+            summaries: rows
+        )
+        publish(
+            GaryxThreadListMembershipSnapshot(
+                identity: identity,
+                orderedThreadIds: rows.map(\.id),
+                isPrimed: true
+            )
+        )
+        availability = .unsupportedGateway
+    }
+
     @discardableResult
     public func replaceQuery(_ rawQuery: String?) -> Bool {
         let previousInstanceId = provider.instanceId
@@ -494,6 +576,7 @@ public final class GaryxThreadPickerMembershipOwner: ObservableObject {
             summaries: []
         )
         publish(provider.snapshot)
+        availability = .ready
         return true
     }
 
@@ -507,6 +590,7 @@ public final class GaryxThreadPickerMembershipOwner: ObservableObject {
         onCancelInstance?(previousInstanceId)
         leaseOwner.closePicker()
         publish(provider.snapshot)
+        availability = .ready
     }
 
     private func commit(
@@ -521,6 +605,7 @@ public final class GaryxThreadPickerMembershipOwner: ObservableObject {
                 summaries: commit.summaryWrites
             )
             publish(commit.snapshot)
+            availability = .ready
         case .replacementRequired:
             onCancelInstance?(previousInstanceId)
             leaseOwner.replacePickerQuery(
@@ -644,6 +729,21 @@ public struct GaryxBotConversationMembershipProvider: GaryxThreadListMembershipP
             GaryxThreadListMembershipCommit(snapshot: snapshot, summaryWrites: [summary])
         )
     }
+
+    public mutating func apply(_ authority: GaryxThreadMutationMembershipAuthority) {
+        switch authority {
+        case .unchanged:
+            break
+        case .remove(let rawThreadId):
+            let threadId = rawThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+            entries.removeAll { $0.threadId == threadId }
+        case .upsertAtHead, .replace:
+            // Bot membership is endpoint-owned and is replaced from the
+            // configured console/endpoints projection, never inferred from a
+            // generic thread insertion.
+            break
+        }
+    }
 }
 
 // MARK: - Automation triggered threads
@@ -723,6 +823,16 @@ public struct GaryxAutomationThreadMembershipProvider: GaryxThreadListMembership
         )
     }
 
+    public mutating func retryLoadMore() -> GaryxAutomationThreadLoadMoreTicket? {
+        guard !pager.isRefreshingHead,
+              let ticket = pager.retryLoadMore() else { return nil }
+        return GaryxAutomationThreadLoadMoreTicket(
+            automationId: automationId,
+            instanceId: instanceId,
+            pagerTicket: ticket
+        )
+    }
+
     public mutating func completeRefresh(
         _ ticket: GaryxAutomationThreadRefreshTicket,
         page: GaryxAutomationThreadsPage
@@ -783,6 +893,32 @@ public struct GaryxAutomationThreadMembershipProvider: GaryxThreadListMembership
         headFailure = false
     }
 
+    public mutating func failRefresh(_ ticket: GaryxAutomationThreadRefreshTicket) {
+        guard owns(ticket) else { return }
+        pager.failRefresh(ticket.pagerTicket)
+        headFailure = true
+    }
+
+    public mutating func failLoadMore(_ ticket: GaryxAutomationThreadLoadMoreTicket) {
+        guard owns(ticket) else { return }
+        pager.failLoadMore(ticket.pagerTicket)
+    }
+
+    public mutating func apply(_ authority: GaryxThreadMutationMembershipAuthority) {
+        switch authority {
+        case .unchanged, .upsertAtHead:
+            break
+        case .remove(let rawThreadId):
+            let threadId = rawThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !threadId.isEmpty else { return }
+            pager.noteLocalMutation()
+            orderedThreadIds.removeAll { $0 == threadId }
+        case .replace(let ids, _):
+            pager.noteLocalMutation()
+            orderedThreadIds = Self.uniqueIds(ids)
+        }
+    }
+
     private func owns(_ ticket: GaryxAutomationThreadRefreshTicket) -> Bool {
         ticket.automationId == automationId && ticket.instanceId == instanceId
     }
@@ -804,6 +940,15 @@ public struct GaryxAutomationThreadMembershipProvider: GaryxThreadListMembership
         var seen = Set<String>()
         return page.items.compactMap { item in
             let id = item.threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, seen.insert(id).inserted else { return nil }
+            return id
+        }
+    }
+
+    private static func uniqueIds(_ rawIds: [String]) -> [String] {
+        var seen = Set<String>()
+        return rawIds.compactMap { rawId in
+            let id = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !id.isEmpty, seen.insert(id).inserted else { return nil }
             return id
         }
@@ -965,6 +1110,12 @@ public struct GaryxThreadListPresentationSnapshot: Equatable, Sendable {
     public var isRefreshing: Bool
     public var headFailure: Bool
     public var footerState: GaryxHomeLoadMoreFooterState
+    public var availability: GaryxThreadListAvailability
+    public var selectedThreadId: String?
+    public var pinnedStateThreadIds: Set<String>
+    public var favoriteThreadIds: Set<String>
+    public var activeRunThreadIds: Set<String>
+    public var motionById: [String: GaryxThreadRowMotion]
 
     public static let empty = GaryxThreadListPresentationSnapshot(
         identity: nil,
@@ -975,7 +1126,13 @@ public struct GaryxThreadListPresentationSnapshot: Equatable, Sendable {
         isPrimed: false,
         isRefreshing: false,
         headFailure: false,
-        footerState: .hidden
+        footerState: .hidden,
+        availability: .ready,
+        selectedThreadId: nil,
+        pinnedStateThreadIds: [],
+        favoriteThreadIds: [],
+        activeRunThreadIds: [],
+        motionById: [:]
     )
 }
 
@@ -1010,8 +1167,11 @@ public final class GaryxThreadListStore: ObservableObject {
     public func commit(
         _ commit: GaryxThreadListMembershipCommit,
         favoriteThreadIds: Set<String> = [],
+        pinnedStateThreadIds: Set<String> = [],
+        selectedThreadId: String? = nil,
         automationTargetThreadIds: Set<String> = [],
         activeRunThreadIds: Set<String> = [],
+        pendingMutations: [GaryxThreadMutationID: GaryxThreadMutationPendingState] = [:],
         botEntries: [String: GaryxBotConversationMembershipEntry] = [:]
     ) -> Bool {
         let isRecentAll: Bool = {
@@ -1037,6 +1197,7 @@ public final class GaryxThreadListStore: ObservableObject {
             capabilities[row.id] = GaryxThreadRowCapabilityDeriver.capabilities(
                 for: row,
                 context: GaryxThreadRowCapabilityContext(
+                    openable: bot?.openable ?? true,
                     isFavorite: favoriteThreadIds.contains(row.id),
                     automationTargetThreadIds: automationTargetThreadIds,
                     hasActiveRun: activeRunThreadIds.contains(row.id),
@@ -1044,6 +1205,20 @@ public final class GaryxThreadListStore: ObservableObject {
                     botEndpointCanArchive: bot?.canArchiveEndpoint ?? true
                 )
             )
+        }
+        var motionById: [String: GaryxThreadRowMotion] = [:]
+        for pending in pendingMutations.values where pending.showsMotion {
+            let threadId = pending.kind.threadId
+            switch pending.kind {
+            case .archive:
+                motionById[threadId] = .archiving
+            case .pin:
+                if motionById[threadId] != .archiving {
+                    motionById[threadId] = .pinning
+                }
+            case .insert, .rename, .runtime, .favoriteDownstream:
+                break
+            }
         }
         let next = GaryxThreadListPresentationSnapshot(
             identity: commit.snapshot.identity,
@@ -1054,7 +1229,13 @@ public final class GaryxThreadListStore: ObservableObject {
             isPrimed: commit.snapshot.isPrimed,
             isRefreshing: commit.snapshot.isRefreshing,
             headFailure: commit.snapshot.headFailure,
-            footerState: commit.snapshot.footerState
+            footerState: commit.snapshot.footerState,
+            availability: snapshot.availability,
+            selectedThreadId: selectedThreadId,
+            pinnedStateThreadIds: pinnedStateThreadIds,
+            favoriteThreadIds: favoriteThreadIds,
+            activeRunThreadIds: activeRunThreadIds,
+            motionById: motionById
         )
         guard next != snapshot else { return false }
         snapshot = next
@@ -1064,6 +1245,12 @@ public final class GaryxThreadListStore: ObservableObject {
 
     public func replacePinnedOrder(_ ids: [String]) {
         pinnedThreadIds = Self.uniqueIds(ids)
+    }
+
+    public func setAvailability(_ availability: GaryxThreadListAvailability) {
+        guard snapshot.availability != availability else { return }
+        snapshot.availability = availability
+        publishCount += 1
     }
 
     public func resetGatewayScope() {

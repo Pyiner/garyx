@@ -194,4 +194,53 @@ final class GaryxThreadMutationHubTests: XCTestCase {
         XCTAssertTrue(hub.residents["recent:all"]?.pending.isEmpty == true)
         XCTAssertNil(hub.residents["recent:all"]?.barrier)
     }
+
+    func testInsertAffectsOnlyRecentAndMatchingResidentWorkspace() {
+        var hub = GaryxThreadMutationHub(gatewayRuntimeEpoch: 4)
+        hub.registerStore(storeId: "home", instanceId: 1, orderedThreadIds: ["recent"])
+        hub.registerStore(storeId: "recent:all", instanceId: 2, orderedThreadIds: ["recent"])
+        hub.registerStore(
+            storeId: "workspace:/workspace",
+            instanceId: 3,
+            orderedThreadIds: ["workspace-old"]
+        )
+        hub.registerStore(
+            storeId: "workspace:/other",
+            instanceId: 4,
+            orderedThreadIds: ["other-old"]
+        )
+        hub.registerStore(storeId: "bot:bot-1", instanceId: 5, orderedThreadIds: ["bot-old"])
+        hub.registerStore(
+            storeId: "automation:auto-1",
+            instanceId: 6,
+            orderedThreadIds: ["automation-old"]
+        )
+
+        let affected = hub.residentStoreIdsAffectedByInsert(workspacePath: " /workspace ")
+        XCTAssertEqual(affected, ["home", "recent:all", "workspace:/workspace"])
+        XCTAssertTrue(hub.began(
+            mutationId: "insert",
+            kind: .insert(threadId: "new"),
+            gatewayRuntimeEpoch: 4,
+            affectedStoreIds: affected
+        ))
+        XCTAssertTrue(hub.committed(
+            mutationId: "insert",
+            gatewayRuntimeEpoch: 4,
+            authority: .init(membership: .upsertAtHead(threadId: "new"))
+        ))
+
+        XCTAssertEqual(hub.residents["home"]?.orderedThreadIds, ["new", "recent"])
+        XCTAssertEqual(hub.residents["recent:all"]?.orderedThreadIds, ["new", "recent"])
+        XCTAssertEqual(
+            hub.residents["workspace:/workspace"]?.orderedThreadIds,
+            ["new", "workspace-old"]
+        )
+        XCTAssertEqual(hub.residents["workspace:/other"]?.orderedThreadIds, ["other-old"])
+        XCTAssertEqual(hub.residents["bot:bot-1"]?.orderedThreadIds, ["bot-old"])
+        XCTAssertEqual(
+            hub.residents["automation:auto-1"]?.orderedThreadIds,
+            ["automation-old"]
+        )
+    }
 }

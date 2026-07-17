@@ -88,7 +88,7 @@ final class PinnedThreadReorderArchitectureTests: XCTestCase {
         let stationaryLifecycle = value(of: app.staticTexts["pinned-reorder-lifecycle"])
         print("SPIKE stationary lifecycle=\(stationaryLifecycle)")
         XCTAssertTrue(
-            app.buttons["Archive thread"].waitForExistence(timeout: 3),
+            app.buttons["Favorite thread"].waitForExistence(timeout: 3),
             "a stationary hold must keep the existing action menu"
         )
 
@@ -104,7 +104,7 @@ final class PinnedThreadReorderArchitectureTests: XCTestCase {
             containing: "accepted=1"
         )
         XCTAssertFalse(
-            app.buttons["Archive thread"].exists,
+            app.buttons["Favorite thread"].exists,
             "detected movement must dismiss the row action menu and hand off to reorder"
         )
     }

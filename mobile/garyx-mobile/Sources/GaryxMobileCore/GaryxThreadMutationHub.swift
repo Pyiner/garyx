@@ -17,14 +17,27 @@ public enum GaryxThreadMutationKind: Equatable, Sendable {
     case pin(threadId: String, pinned: Bool)
     case insert(threadId: String)
     case rename(threadId: String)
+    case runtime(threadId: String)
     case favoriteDownstream(threadId: String, favorited: Bool)
 
     public var threadId: String {
         switch self {
         case .archive(let threadId), .pin(let threadId, _), .insert(let threadId),
-             .rename(let threadId), .favoriteDownstream(let threadId, _):
+             .rename(let threadId), .runtime(let threadId),
+             .favoriteDownstream(let threadId, _):
             return threadId
         }
+    }
+}
+
+/// Reference owner used by the App and the Home compatibility store so every
+/// resident list participates in one mutation domain instead of private hub
+/// copies.
+public final class GaryxThreadMutationHubStore {
+    public var value: GaryxThreadMutationHub
+
+    public init(gatewayRuntimeEpoch: UInt64 = 0) {
+        value = GaryxThreadMutationHub(gatewayRuntimeEpoch: gatewayRuntimeEpoch)
     }
 }
 
@@ -170,6 +183,24 @@ public struct GaryxThreadMutationHub: Equatable, Sendable {
         // Eviction itself completes this resident's barrier: re-entry must
         // cold-load authoritative membership under a fresh instance.
         residents[storeId] = nil
+    }
+
+    /// A newly created thread belongs to the Recent domain and, when present,
+    /// the resident workspace feed matching its canonical workspace path. Bot
+    /// and automation membership remain endpoint-owned and must never inherit
+    /// a generic insert merely because they are resident in the same hub.
+    public func residentStoreIdsAffectedByInsert(
+        workspacePath rawWorkspacePath: String?
+    ) -> Set<String> {
+        let workspacePath = rawWorkspacePath?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Set(residents.keys.filter { storeId in
+            if storeId == "home" || storeId.hasPrefix("recent:") {
+                return true
+            }
+            guard let workspacePath, !workspacePath.isEmpty else { return false }
+            return storeId == "workspace:\(workspacePath)"
+        })
     }
 
     @discardableResult

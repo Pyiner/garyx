@@ -524,7 +524,7 @@ extension GaryxMobileModel {
         activeAssistantMessageIdsByThread = [:]
         pendingDirectFollowUpsByThread = [:]
 
-        threads = Self.decodeDebugFixture([GaryxThreadSummary].self, from: """
+        let fixtureThreads = Self.decodeDebugFixture([GaryxThreadSummary].self, from: """
         [
           {
             "thread_id": "thread-history",
@@ -563,7 +563,11 @@ extension GaryxMobileModel {
           }
         ]
         """) ?? []
-        selectedThread = threads.first
+        seedThreadSummariesForTesting(
+            fixtureThreads,
+            recentThreadIds: fixtureThreads.map(\.id)
+        )
+        selectedThread = fixtureThreads.first
         draftThreadTitle = selectedThread?.title ?? ""
         pinnedThreadIds = ["thread-task-board"]
         selectedAgentTargetId = nil
@@ -572,6 +576,10 @@ extension GaryxMobileModel {
         newThreadWorkspace = "/workspace/garyx"
         newThreadWorkspaceMode = "local"
         replaceWorkspaceCatalogPaths(["/workspace/garyx"])
+        seedWorkspaceThreadListForTesting(
+            path: "/workspace/garyx",
+            summaries: fixtureThreads
+        )
         selectedWorkspacePath = "/workspace/garyx"
         selectedWorkspaceDirectory = ""
         draftWorkspacePath = ""

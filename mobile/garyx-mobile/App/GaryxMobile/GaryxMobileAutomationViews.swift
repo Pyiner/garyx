@@ -3,10 +3,11 @@ import SwiftUI
 
 private func garyxAutomationThreadOptions(
     recentThreads: [GaryxThreadSummary],
-    cachedThreads: [GaryxThreadSummary]
+    selectedThread: GaryxThreadSummary? = nil
 ) -> [GaryxThreadSummary] {
     var seen = Set<String>()
-    return (recentThreads + cachedThreads).filter { seen.insert($0.id).inserted }
+    return ((selectedThread.map { [$0] } ?? []) + recentThreads)
+        .filter { seen.insert($0.id).inserted }
 }
 
 struct GaryxAutomationsView: View {
@@ -371,6 +372,7 @@ struct GaryxCreateAutomationSheet: View {
         }
         .sheet(isPresented: $showsThreadPicker) {
             GaryxAutomationThreadPickerSheet(
+                model: model,
                 selectedThreadId: effectiveThreadId,
                 onSelect: selectThread
             )
@@ -382,7 +384,10 @@ struct GaryxCreateAutomationSheet: View {
     }
 
     private var threadOptions: [GaryxThreadSummary] {
-        garyxAutomationThreadOptions(recentThreads: model.allRecentThreads, cachedThreads: model.threads)
+        garyxAutomationThreadOptions(
+            recentThreads: model.allRecentThreads,
+            selectedThread: model.cachedThreadSummary(for: draft.trimmedTargetThreadId)
+        )
     }
 
     private var effectiveWorkspacePath: String {
@@ -493,6 +498,7 @@ struct GaryxEditAutomationSheet: View {
         }
         .sheet(isPresented: $showsThreadPicker) {
             GaryxAutomationThreadPickerSheet(
+                model: model,
                 selectedThreadId: draft.effectiveThreadId(threadOptions: editThreadOptions),
                 onSelect: selectThread
             )
@@ -516,7 +522,10 @@ struct GaryxEditAutomationSheet: View {
     }
 
     private var editThreadOptions: [GaryxThreadSummary] {
-        garyxAutomationThreadOptions(recentThreads: model.allRecentThreads, cachedThreads: model.threads)
+        garyxAutomationThreadOptions(
+            recentThreads: model.allRecentThreads,
+            selectedThread: model.cachedThreadSummary(for: draft.trimmedTargetThreadId)
+        )
     }
 
     private var targetAgentLabel: String {
@@ -892,12 +901,31 @@ private struct GaryxAutomationIntervalStepper: View {
 
 struct GaryxAutomationThreadPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var model: GaryxMobileModel
+    let model: GaryxMobileModel
     let selectedThreadId: String
     let onSelect: (GaryxThreadSummary) -> Void
+    @StateObject private var owner: GaryxThreadPickerMembershipOwner
+    @StateObject private var transportStore: GaryxThreadPickerTransportStore
     @State private var searchText = ""
-    @State private var isRefreshing = false
+    @State private var selectedTarget: GaryxThreadSummary?
     @State private var openSwipeActionRowId: String?
+
+    init(
+        model: GaryxMobileModel,
+        selectedThreadId: String,
+        onSelect: @escaping (GaryxThreadSummary) -> Void
+    ) {
+        self.model = model
+        self.selectedThreadId = selectedThreadId
+        self.onSelect = onSelect
+        _owner = StateObject(
+            wrappedValue: GaryxThreadPickerMembershipOwner(
+                cache: model.threadSummaryCache,
+                leaseOwner: model.threadSummaryLeaseOwner
+            )
+        )
+        _transportStore = StateObject(wrappedValue: GaryxThreadPickerTransportStore())
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -922,22 +950,56 @@ struct GaryxAutomationThreadPickerSheet: View {
                 .padding(.horizontal, 22)
                 .padding(.bottom, 14)
 
+            pickerNotice
+
             ScrollView {
                 GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
                     VStack(spacing: 0) {
-                        if indexedFilteredThreads.isEmpty {
-                            GaryxAutomationThreadPickerEmptyState(isLoading: isRefreshing)
+                        if let selectedTarget {
+                            pickerSectionLabel("Selected")
+                            GaryxAutomationThreadPickerRow(
+                                model: model,
+                                favoritesProvider: model.threadFavoritesProvider,
+                                thread: selectedTarget,
+                                isSelected: true,
+                                showsSeparator: !indexedThreads.isEmpty
+                            ) {
+                                selectAndClose(selectedTarget)
+                            }
+                        }
+
+                        if indexedThreads.isEmpty {
+                            GaryxAutomationThreadPickerEmptyState(
+                                isLoading: owner.snapshot.isRefreshing && !owner.snapshot.isPrimed
+                            )
                         } else {
-                            ForEach(indexedFilteredThreads) { item in
+                            if selectedTarget != nil {
+                                pickerSectionLabel("Results")
+                            }
+                            ForEach(indexedThreads) { item in
                                 GaryxAutomationThreadPickerRow(
+                                    model: model,
+                                    favoritesProvider: model.threadFavoritesProvider,
                                     thread: item.thread,
-                                    isSelected: item.thread.id == selectedThreadId,
-                                    showsSeparator: item.index < indexedFilteredThreads.count - 1
+                                    isSelected: false,
+                                    showsSeparator: item.index < indexedThreads.count - 1
                                 ) {
                                     selectAndClose(item.thread)
                                 }
+                                .onAppear {
+                                    if item.thread.id == prefetchThreadId {
+                                        transportStore.startLoadMore {
+                                            await model.loadMoreThreadPicker(
+                                                owner,
+                                                trigger: .nearTail
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
+
+                        pickerFooter
                     }
                 }
                 .padding(.horizontal, 22)
@@ -945,7 +1007,7 @@ struct GaryxAutomationThreadPickerSheet: View {
                 .garyxVerticalScrollContentWidth()
             }
             .refreshable {
-                await refreshThreadOptions()
+                await model.refreshThreadPicker(owner)
             }
             .scrollIndicators(.hidden)
         }
@@ -970,41 +1032,115 @@ struct GaryxAutomationThreadPickerSheet: View {
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(38)
         .environment(\.garyxOpenSwipeActionRowId, $openSwipeActionRowId)
-        .task {
-            await refreshThreadOptions()
+        .task(id: searchText) {
+            if !searchText.isEmpty {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard !Task.isCancelled else { return }
+            let changed = owner.replaceQuery(searchText)
+            guard changed || !owner.snapshot.isPrimed else { return }
+            await model.refreshThreadPicker(owner)
+        }
+        .task(id: selectedThreadId) {
+            selectedTarget = await model.hydrateThreadPickerSelectedTarget(
+                owner,
+                threadId: selectedThreadId
+            )
+        }
+        .onAppear {
+            owner.onCancelInstance = { [weak transportStore] _ in
+                transportStore?.cancelLoadMore()
+            }
+        }
+        .onDisappear {
+            transportStore.cancelLoadMore()
+            owner.onCancelInstance = nil
+            owner.close()
         }
     }
 
-    private var indexedFilteredThreads: [GaryxAutomationIndexedThread] {
-        Array(filteredThreads.enumerated()).map {
+    private var indexedThreads: [GaryxAutomationIndexedThread] {
+        Array(resultThreads.enumerated()).map {
             GaryxAutomationIndexedThread(index: $0.offset, thread: $0.element)
         }
     }
 
-    private var filteredThreads: [GaryxThreadSummary] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let threads = recentThreadOptions
-        guard !query.isEmpty else { return threads }
-        return threads.filter { thread in
-            [
-                thread.title,
-                thread.workspacePath ?? "",
-                thread.agentId ?? "",
-                thread.lastMessagePreview,
-            ]
-            .contains { $0.lowercased().contains(query) }
+    private var resultThreads: [GaryxThreadSummary] {
+        owner.cache.summaries(for: owner.snapshot.orderedThreadIds)
+            .filter { $0.id != selectedTarget?.id }
+    }
+
+    private var prefetchThreadId: String? {
+        GaryxThreadListPageMerge.prefetchTriggerRowId(
+            recentIds: resultThreads.map(\.id)
+        )
+    }
+
+    @ViewBuilder
+    private var pickerNotice: some View {
+        switch owner.availability {
+        case .unsupportedGateway:
+            Label("网关版本过旧，请升级", systemImage: "exclamationmark.triangle")
+                .font(GaryxFont.caption(weight: .medium))
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 10)
+        case .failed(let message):
+            Button {
+                Task { await model.refreshThreadPicker(owner) }
+            } label: {
+                Label(message.isEmpty ? "Could not load threads" : message, systemImage: "arrow.clockwise")
+                    .font(GaryxFont.caption(weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 10)
+            }
+            .buttonStyle(.plain)
+        case .ready:
+            EmptyView()
         }
     }
 
-    private var recentThreadOptions: [GaryxThreadSummary] {
-        var result = garyxAutomationThreadOptions(recentThreads: model.allRecentThreads, cachedThreads: model.threads)
-        let seen = Set(result.map(\.id))
-        if !selectedThreadId.isEmpty,
-           !seen.contains(selectedThreadId),
-           let selected = model.threads.first(where: { $0.id == selectedThreadId }) {
-            result.insert(selected, at: 0)
+    @ViewBuilder
+    private var pickerFooter: some View {
+        switch owner.snapshot.footerState {
+        case .hidden:
+            EmptyView()
+        case .idle:
+            Color.clear
+                .frame(height: 44)
+                .onAppear {
+                    transportStore.startLoadMore {
+                        await model.loadMoreThreadPicker(owner, trigger: .footer)
+                    }
+                }
+        case .loading:
+            ProgressView()
+                .scaleEffect(0.72)
+                .frame(maxWidth: .infinity, minHeight: 44)
+        case .failed:
+            Button("Couldn't load more · Tap to retry") {
+                transportStore.startLoadMore {
+                    await model.retryLoadMoreThreadPicker(owner)
+                }
+            }
+            .font(GaryxFont.caption(weight: .medium))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .buttonStyle(.plain)
         }
-        return result
+    }
+
+    private func pickerSectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(GaryxFont.caption(weight: .semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 6)
     }
 
     private func selectAndClose(_ thread: GaryxThreadSummary) {
@@ -1012,11 +1148,29 @@ struct GaryxAutomationThreadPickerSheet: View {
         dismiss()
     }
 
-    private func refreshThreadOptions() async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        await model.refreshThreads(source: .userAction)
-        isRefreshing = false
+}
+
+@MainActor
+private final class GaryxThreadPickerTransportStore: ObservableObject {
+    private var loadMoreTask: Task<Void, Never>?
+    private var loadMoreToken: UUID?
+
+    func startLoadMore(_ operation: @escaping @MainActor () async -> Void) {
+        guard loadMoreTask == nil else { return }
+        let token = UUID()
+        loadMoreToken = token
+        loadMoreTask = Task { [weak self] in
+            await operation()
+            guard let self, loadMoreToken == token else { return }
+            loadMoreTask = nil
+            loadMoreToken = nil
+        }
+    }
+
+    func cancelLoadMore() {
+        loadMoreTask?.cancel()
+        loadMoreTask = nil
+        loadMoreToken = nil
     }
 }
 
@@ -1028,7 +1182,8 @@ private struct GaryxAutomationIndexedThread: Identifiable {
 }
 
 struct GaryxAutomationThreadPickerRow: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+    @ObservedObject var model: GaryxMobileModel
+    @ObservedObject var favoritesProvider: GaryxFavoritesMembershipProvider
     let thread: GaryxThreadSummary
     let isSelected: Bool
     let showsSeparator: Bool
@@ -1036,24 +1191,43 @@ struct GaryxAutomationThreadPickerRow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            GaryxSwipeActionRow(id: "thread:\(thread.id)", actions: threadSwipeActions) {
-                GaryxSidebarThreadRowView(
+            GaryxThreadListRowButton(
+                input: GaryxThreadListRowInput(
+                    thread: thread,
                     presentation: GaryxSidebarThreadRowPresentation(
                         thread: thread,
                         isSelected: isSelected,
                         isPinned: isPinned,
-                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt),
+                        isFavorite: favoritesProvider.state.isPresented(threadId: thread.id),
+                        trailingTimestamp: nil,
                         showsRunningState: false
                     ),
+                    avatar: rowAvatar,
+                    timestampValue: thread.updatedAt ?? thread.createdAt,
+                    capabilities: model.liveThreadRowCapabilities(for: thread),
                     isFullBleed: true,
                     density: .compact,
                     selectionDisplay: .checkmark,
-                    onSelect: onSelect,
-                    onUnpin: {
-                        model.unpinThread(thread.id)
+                    swipeStyle: .custom,
+                    openSource: .current
+                ),
+                onOpenThread: { _, _ in onSelect() },
+                onSetPinned: { threadId, desired in
+                    if desired {
+                        guard !model.isThreadPinned(threadId) else { return }
+                        model.togglePinnedThread(threadId)
+                    } else {
+                        model.unpinThread(threadId)
                     }
-                )
-            }
+                },
+                onSetFavorite: { threadId, desired in
+                    model.setThreadFavorite(threadId, desired: desired)
+                },
+                onArchive: { thread, _ in
+                    Task { await model.archiveThread(thread) }
+                }
+            )
+            .equatable()
 
             if showsSeparator {
                 Divider()
@@ -1066,23 +1240,15 @@ struct GaryxAutomationThreadPickerRow: View {
         model.isThreadPinned(thread.id)
     }
 
-    private var threadSwipeActions: [GaryxRowAction] {
-        [
-            GaryxRowAction(
-                title: isPinned ? "Unpin thread" : "Pin thread",
-                systemImage: isPinned ? "pin.slash" : "pin",
-                tone: .neutral
-            ) {
-                model.togglePinnedThread(thread.id)
-            },
-            GaryxRowAction(
-                title: "Archive thread",
-                systemImage: "archivebox",
-                tone: .destructive
-            ) {
-                Task { await model.archiveThread(thread) }
-            },
-        ]
+    private var rowAvatar: GaryxSidebarThreadRowAvatar {
+        let identity = model.widgetAgentIdentity(for: thread)
+        return GaryxSidebarThreadRowAvatar(
+            agentId: identity.id ?? "",
+            avatarDataUrl: identity.avatarDataUrl ?? "",
+            label: identity.name ?? thread.title,
+            providerType: identity.providerType ?? "",
+            builtIn: identity.builtIn
+        )
     }
 }
 
@@ -1091,7 +1257,7 @@ struct GaryxAutomationThreadPickerEmptyState: View {
 
     var body: some View {
         GaryxInlineStateView(
-            title: isLoading ? "Loading recent threads" : "No matching recent threads",
+            title: isLoading ? "Loading threads" : "No matching threads",
             icon: "bubble.left.and.text.bubble.right",
             isLoading: isLoading
         )

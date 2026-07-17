@@ -50,7 +50,9 @@ extension GaryxMobileModel {
         if ticket.filter == .nonTask {
             startAuxiliaryAllRecentThreadsRefresh(source: source)
         }
-        let previousThreadSummaries = Self.mergedThreadSummaries(threads + [selectedThread].compactMap { $0 })
+        let previousThreadSummaries = Self.mergedThreadSummaries(
+            residentRecentThreadSummaries + [selectedThread].compactMap { $0 }
+        )
         let previouslyRemoteBusyThreadIds = remoteBusyThreadIds
         let transactionId = homeProjectionGateway.beginTransaction(label: "refreshThreads")
         defer { homeProjectionGateway.endTransaction(transactionId) }
@@ -193,10 +195,7 @@ extension GaryxMobileModel {
                 bundle: fetched.bundle
             ) {
             case .applied:
-                threads = Self.mergedThreadSummaries(
-                    pendingThreadArchives.visibleThreads(threads)
-                        + pageThreads.map(summaryWithCommittedRunState)
-                )
+                cacheThreadSummaries(pageThreads)
                 persistRecentThreadsWidgetSnapshot()
             case .abandonedLocalMutation:
                 // The replacement ticket belongs to the runtime that exists
@@ -240,7 +239,9 @@ extension GaryxMobileModel {
             let missingThreads = await fetchMissingThreadSummaries(
                 using: gatewayClient,
                 requiredThreadIds: requiredThreadIds,
-                existingThreadIds: Set(threads.map(\.id))
+                existingThreadIds: Set(
+                    requiredThreadIds.filter { threadSummaryCache.summary(for: $0) != nil }
+                )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             let transactionId = homeProjectionGateway.beginTransaction(
@@ -253,11 +254,10 @@ extension GaryxMobileModel {
                 stamp: requestStamp
             )
             if !missingThreads.isEmpty {
-                threads = Self.mergedThreadSummaries(
-                    pendingThreadArchives.visibleThreads(threads)
-                        + pendingThreadArchives.visibleThreads(missingThreads)
-                            .map(summaryWithCommittedRunState)
-                )
+                cacheThreadSummaries(missingThreads)
+            } else {
+                refreshRecentThreadLeases()
+                publishThreadSummaryState()
             }
             persistRecentThreadsWidgetSnapshot()
         } catch {
@@ -370,21 +370,128 @@ extension GaryxMobileModel {
     /// this reconstruction path. A commit before either replacement snapshot
     /// disappears now; a later commit is picked up by the next M=30/foreground
     /// replacement cycle.
-    func forceReplaceThreadFeedsAfterAmbiguousLifecycle() async {
+    func forceReplaceThreadFeedsAfterAmbiguousLifecycle(
+        reconstructionTickets: [GaryxThreadReconstructionTicket] = []
+    ) async {
         recentThreadFeeds.forceReplacement()
         // refreshThreads owns the favorites snapshot trigger as part of every
         // head replacement. Do not enqueue a duplicate trailing snapshot for
         // the same lifecycle reconstruction.
         let selected = recentThreadFeeds.selectedFilter
         if selected == .favorites {
-            refreshThreadFavoritesSnapshot()
+            await refreshThreadFavoritesSnapshotAndWait()
             await performAuxiliaryRecentReplacement(filter: .all)
             await performAuxiliaryRecentReplacement(filter: .nonTask)
-            return
+        } else {
+            await refreshThreads(source: .userAction, forceReplacement: true)
+            let other: GaryxRecentThreadFilter = selected == .all ? .nonTask : .all
+            await performAuxiliaryRecentReplacement(filter: other)
         }
-        await refreshThreads(source: .userAction, forceReplacement: true)
-        let other: GaryxRecentThreadFilter = selected == .all ? .nonTask : .all
-        await performAuxiliaryRecentReplacement(filter: other)
+        await reconstructResidentThreadLists(reconstructionTickets)
+    }
+
+    private func reconstructResidentThreadLists(
+        _ tickets: [GaryxThreadReconstructionTicket]
+    ) async {
+        guard !tickets.isEmpty else { return }
+        for ticket in tickets {
+            let outcome: GaryxThreadReconstructionOutcome
+            if ticket.storeId == "home" {
+                let selectedReady: Bool
+                switch recentThreadFeeds.selectedFilter {
+                case .favorites:
+                    selectedReady = threadFavoritesProvider.snapshot.isPrimed
+                        && !threadFavoritesProvider.snapshot.headFailure
+                        && threadFavoritesProvider.state.activeSnapshotTicket == nil
+                case .all:
+                    selectedReady = recentThreadFeeds.allFeed.isPrimed
+                        && !recentThreadFeeds.allFeed.headFailure
+                case .nonTask:
+                    selectedReady = recentThreadFeeds.nonTaskFeed.isPrimed
+                        && !recentThreadFeeds.nonTaskFeed.headFailure
+                }
+                if selectedReady {
+                    outcome = .authoritative(
+                        orderedThreadIds: normalizedThreadIds(
+                            pinnedThreadIds.map(Optional.some)
+                                + visibleRecentThreadIds.map(Optional.some)
+                        )
+                    )
+                } else {
+                    outcome = .failed(message: "Thread reconstruction did not complete.")
+                }
+            } else if ticket.storeId == "recent:all" {
+                outcome = recentReconstructionOutcome(recentThreadFeeds.allFeed)
+            } else if ticket.storeId == "recent:non_task" {
+                outcome = recentReconstructionOutcome(recentThreadFeeds.nonTaskFeed)
+            } else if ticket.storeId.hasPrefix("workspace:") {
+                let path = String(ticket.storeId.dropFirst("workspace:".count))
+                await refreshWorkspaceThreadList(path: path)
+                outcome = reconstructionOutcome(
+                    snapshot: workspaceThreadStores[path]?.snapshot
+                )
+            } else if ticket.storeId.hasPrefix("automation:") {
+                let automationId = String(ticket.storeId.dropFirst("automation:".count))
+                await refreshAutomationThreadList(automationId: automationId)
+                outcome = reconstructionOutcome(
+                    snapshot: automationThreadStores[automationId]?.snapshot
+                )
+            } else if ticket.storeId.hasPrefix("bot:") {
+                let groupId = String(ticket.storeId.dropFirst("bot:".count))
+                await refreshRemoteState()
+                if let group = mobileBotGroups.first(where: { $0.id == groupId }) {
+                    refreshBotThreadList(group: group)
+                    let hydrationTasks = botThreadHydrationTasks[groupId]
+                        .map { Array($0.values) } ?? []
+                    for task in hydrationTasks {
+                        await task.value
+                    }
+                    outcome = reconstructionOutcome(
+                        snapshot: botThreadStores[groupId]?.snapshot
+                    )
+                } else {
+                    outcome = .authoritative(orderedThreadIds: [])
+                }
+            } else {
+                outcome = .failed(message: "Unknown thread-list owner.")
+            }
+            _ = threadMutationHubStore.value.completeReconstruction(
+                ticket,
+                outcome: outcome
+            )
+        }
+        // Provider commits happen before the hub accepts each authoritative
+        // replacement. Re-project once so generic stores drop any pending
+        // motion cleared by successful reconstruction (or retain sticky
+        // motion when a replacement failed).
+        refreshResidentThreadListStores()
+    }
+
+    private func recentReconstructionOutcome(
+        _ feed: GaryxRecentThreadFeedState
+    ) -> GaryxThreadReconstructionOutcome {
+        guard feed.isPrimed,
+              !feed.pager.isRefreshingHead,
+              !feed.headFailure,
+              !feed.forceReplacementPending else {
+            return .failed(message: "Thread reconstruction did not complete.")
+        }
+        return .authoritative(orderedThreadIds: feed.orderedThreadIds)
+    }
+
+    private func reconstructionOutcome(
+        snapshot: GaryxThreadListPresentationSnapshot?
+    ) -> GaryxThreadReconstructionOutcome {
+        guard let snapshot,
+              snapshot.isPrimed,
+              !snapshot.isRefreshing,
+              !snapshot.headFailure,
+              snapshot.availability == .ready else {
+            return .failed(message: "Thread reconstruction did not complete.")
+        }
+        return .authoritative(
+            orderedThreadIds: snapshot.pinnedThreadIds + snapshot.orderedThreadIds
+        )
     }
 
     private func performAuxiliaryRecentReplacement(
@@ -409,11 +516,7 @@ extension GaryxMobileModel {
             }
             switch recentThreadFeeds.completeRefresh(ticket, bundle: fetched.bundle) {
             case .applied:
-                threads = Self.mergedThreadSummaries(
-                    pendingThreadArchives.visibleThreads(threads)
-                        + pendingThreadArchives.visibleThreads(fetched.threads)
-                            .map(summaryWithCommittedRunState)
-                )
+                cacheThreadSummaries(fetched.threads)
                 persistRecentThreadsWidgetSnapshot()
             case .forceReplacement:
                 // Keep the pending bit; the next periodic/foreground cycle
@@ -452,9 +555,6 @@ extension GaryxMobileModel {
             stamp: pinsRequestStamp
         )
         let visibleFetchedThreads = pendingThreadArchives.visibleThreads(fetchedThreads)
-        // Loaded tail summaries always survive a head refresh; which
-        // rows are visible is the selected Recent feed's concern.
-        let existingThreads = pendingThreadArchives.visibleThreads(threads)
         let previousRuntimeByThreadId = Dictionary(
             uniqueKeysWithValues: previousThreadSummaries.compactMap { thread -> (String, GaryxThreadRuntimeSummary)? in
                 guard let runtime = thread.threadRuntime else { return nil }
@@ -469,10 +569,7 @@ extension GaryxMobileModel {
             return next
         }
         let refreshedThreads = refreshedGatewayThreads.map(summaryWithCommittedRunState)
-        let mergedThreads = Self.mergedThreadSummaries(existingThreads + refreshedThreads)
-        if threads != mergedThreads {
-            threads = mergedThreads
-        }
+        cacheThreadSummaries(refreshedThreads)
         persistRecentThreadsWidgetSnapshot()
         hydrateCompletedRecentThreadHistories(
             previousThreads: previousThreadSummaries,
@@ -483,7 +580,7 @@ extension GaryxMobileModel {
         let currentSelectedId = selectedThread?.id
         if let selectionIdForThisRefresh,
            currentSelectedId == selectionIdForThisRefresh,
-           let updatedSelection = threads.first(where: { $0.id == selectionIdForThisRefresh }) {
+           let updatedSelection = threadSummaryCache.summary(for: selectionIdForThisRefresh) {
             var nextSelection = updatedSelection
             if nextSelection.threadRuntime == nil {
                 nextSelection.threadRuntime = selectedThread?.threadRuntime
@@ -535,22 +632,38 @@ extension GaryxMobileModel {
     func persistRecentThreadsWidgetSnapshot() {
         recentThreadsWidgetPersistenceGeneration &+= 1
         let generation = recentThreadsWidgetPersistenceGeneration
+        let token = "widget-\(generation)"
+        let summaries = residentRecentThreadSummaries
         let input = GaryxRecentThreadsWidgetSnapshotInput(
-            threads: threads,
+            threads: summaries,
             agents: agents,
             pinnedThreadIds: pinnedThreadIds,
             recentThreadIds: allRecentThreadIds,
             gatewayScopeId: currentGatewayScopeId
         )
+        threadSummaryLeaseOwner.beginWidgetWrite(
+            token: token,
+            threadIds: summaries.map(\.id),
+            summaries: summaries
+        )
         let queue = recentThreadsWidgetPersistenceQueue
         let store = avatarStore
-        Task.detached(priority: .utility) {
-            await queue.persist(
+        Task(priority: .utility) { [weak self] in
+            let outcome = await queue.persist(
                 input: input,
                 generation: generation,
                 avatarStore: store,
                 validator: GaryxAvatarCGImageValidator()
             )
+            guard let self else { return }
+            switch outcome {
+            case .finished:
+                threadSummaryLeaseOwner.finishWidgetWrite(token: token)
+            case .cancelled:
+                threadSummaryLeaseOwner.cancelWidgetWrite(token: token)
+            case .skipped:
+                threadSummaryLeaseOwner.skipWidgetWrite(token: token)
+            }
         }
     }
 
@@ -575,14 +688,22 @@ extension GaryxMobileModel {
         guard !normalizedThreadId.isEmpty, !nextTitle.isEmpty else { return false }
 
         var changed = false
-        threads = threads.map { thread in
-            guard thread.id == normalizedThreadId, thread.title != nextTitle else {
-                return thread
-            }
-            var updated = thread
-            updated.title = nextTitle
+        if var cached = threadSummaryCache.summary(for: normalizedThreadId),
+           cached.title != nextTitle {
+            let mutationId = nextThreadMutationId(kind: "rename", threadId: normalizedThreadId)
+            _ = threadMutationHubStore.value.began(
+                mutationId: mutationId,
+                kind: .rename(threadId: normalizedThreadId),
+                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch
+            )
+            cached.title = nextTitle
+            cacheThreadSummaries([cached])
+            _ = threadMutationHubStore.value.committed(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
+                authority: GaryxThreadMutationAuthority(summary: cached)
+            )
             changed = true
-            return updated
         }
 
         if selectedThread?.id == normalizedThreadId,
@@ -671,7 +792,7 @@ extension GaryxMobileModel {
                 await forceReplaceThreadFeedsAfterAmbiguousLifecycle()
                 return
             case .applied:
-                threads = Self.mergedThreadSummaries(threads + pageThreads.map(summaryWithCommittedRunState))
+                cacheThreadSummaries(pageThreads)
                 persistRecentThreadsWidgetSnapshot()
             }
         } catch is GaryxRecentIdentityInterrupted {
@@ -702,40 +823,6 @@ extension GaryxMobileModel {
                 return
             }
             await performLoadMoreThreads(ticket: ticket)
-        }
-    }
-
-    func refreshWorkspaceAndBotThreads() async {
-        guard hasGatewaySettings else { return }
-        let runtimeGeneration = gatewayRuntimeGeneration
-        do {
-            let gatewayClient = try client()
-            var offset = 0
-            var allThreads: [GaryxThreadSummary] = []
-            while true {
-                let page = try await gatewayClient.listThreads(limit: 1000, offset: offset)
-                allThreads += page.threads
-                let nextOffset = page.offset + page.count
-                if nextOffset >= page.total || page.count == 0 {
-                    break
-                }
-                offset = nextOffset
-            }
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            let visibleThreads = pendingThreadArchives.visibleThreads(threads)
-            let visibleAllThreads = pendingThreadArchives.visibleThreads(allThreads)
-            threads = Self.mergedThreadSummaries(
-                visibleThreads + visibleAllThreads.map(summaryWithCommittedRunState)
-            )
-            await mergeMissingSidebarRequiredThreads(
-                using: gatewayClient,
-                extraThreadIds: [selectedThread?.id],
-                runtimeGeneration: runtimeGeneration
-            )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-        } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            lastError = displayMessage(for: error)
         }
     }
 
@@ -893,7 +980,7 @@ extension GaryxMobileModel {
         GaryxBackgroundCommittedRunReconcilePlanner.candidateThreadIds(
             locallyTrackedThreadIds: runTracker.locallyTrackedThreadIds,
             runStateByThread: runStateByThread,
-            threads: threads,
+            threads: residentRecentThreadSummaries,
             selectedThreadId: selectedThread?.id
         )
     }

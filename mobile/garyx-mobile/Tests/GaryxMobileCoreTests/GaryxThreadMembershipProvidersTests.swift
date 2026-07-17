@@ -144,6 +144,32 @@ final class GaryxThreadMembershipProvidersTests: XCTestCase {
         XCTAssertEqual(commit.snapshot.orderedThreadIds, ["thread::a", "thread::b", "thread::c"])
     }
 
+    func testScopedProvidersExposeExplicitFailedFooterRetry() throws {
+        var workspace = GaryxThreadSummaryMembershipProvider(
+            scope: .workspace(path: "/workspace/project")
+        )
+        let workspaceHead = try XCTUnwrap(workspace.requestRefresh())
+        guard case .accepted = workspace.completeRefresh(
+            workspaceHead,
+            page: try summaryPage(ids: ["thread::a"], hasMore: true)
+        ) else { return XCTFail("workspace head") }
+        let workspaceLoad = try XCTUnwrap(workspace.requestLoadMore(trigger: .footer))
+        workspace.failLoadMore(workspaceLoad)
+        XCTAssertNil(workspace.requestLoadMore(trigger: .footer))
+        XCTAssertNotNil(workspace.retryLoadMore())
+
+        var automation = GaryxAutomationThreadMembershipProvider(automationId: "automation::daily")
+        let automationHead = try XCTUnwrap(automation.requestRefresh())
+        guard case .accepted = automation.completeRefresh(
+            automationHead,
+            page: try automationPage(ids: ["thread::a"], offset: 0, total: 2)
+        ) else { return XCTFail("automation head") }
+        let automationLoad = try XCTUnwrap(automation.requestLoadMore(trigger: .footer))
+        automation.failLoadMore(automationLoad)
+        XCTAssertNil(automation.requestLoadMore(trigger: .footer))
+        XCTAssertNotNil(automation.retryLoadMore())
+    }
+
     func testWorkspaceIdentityChangeColdResetsAndFencesEveryOldTicket() throws {
         var provider = GaryxThreadSummaryMembershipProvider(
             scope: .workspace(path: "/workspace/project")

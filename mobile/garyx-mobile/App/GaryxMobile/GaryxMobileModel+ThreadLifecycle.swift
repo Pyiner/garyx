@@ -241,8 +241,25 @@ extension GaryxMobileModel {
             )
             try Task.checkCancellation()
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            threads.insert(thread, at: 0)
-            recentThreadFeeds.upsertChat(threadId: thread.id)
+            let mutationId = nextThreadMutationId(kind: "insert", threadId: thread.id)
+            let affectedStoreIds = threadMutationHubStore.value
+                .residentStoreIdsAffectedByInsert(workspacePath: thread.workspacePath)
+            _ = threadMutationHubStore.value.began(
+                mutationId: mutationId,
+                kind: .insert(threadId: thread.id),
+                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
+                affectedStoreIds: affectedStoreIds
+            )
+            let authority = GaryxThreadMutationAuthority(
+                membership: .upsertAtHead(threadId: thread.id),
+                summary: thread
+            )
+            _ = threadMutationHubStore.value.committed(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
+                authority: authority
+            )
+            applyThreadMutationAuthorityToResidentProviders(authority)
             threadHistoryLoadedIds.insert(thread.id)
             selectedThread = thread
             clearPendingNewThreadAgentTarget()
@@ -328,11 +345,17 @@ extension GaryxMobileModel {
             lastError = displayMessage(for: error)
             return
         }
+        let mutationId = nextThreadMutationId(kind: "delete", threadId: thread.id)
+        _ = threadMutationHubStore.value.began(
+            mutationId: mutationId,
+            kind: .archive(threadId: thread.id),
+            gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch
+        )
+        refreshResidentThreadListStores()
         let result = await gatewayClient.deleteThread(threadId: thread.id)
         guard runtimeGeneration == gatewayRuntimeGeneration else { return }
         switch result {
         case .ok:
-            removeArchivedThreadLocally(thread.id)
             if selectedThread?.id == thread.id {
                 self.selectedThread = nil
                 draftThreadTitle = ""
@@ -341,6 +364,14 @@ extension GaryxMobileModel {
                 cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
             }
+            _ = threadMutationHubStore.value.committed(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
+                authority: GaryxThreadMutationAuthority(
+                    membership: .remove(threadId: thread.id)
+                )
+            )
+            removeArchivedThreadLocally(thread.id)
             messagesByThread[thread.id] = nil
             messageSignaturesByThread[thread.id] = nil
             activeAssistantMessageIdsByThread[thread.id] = nil
@@ -348,27 +379,93 @@ extension GaryxMobileModel {
             clearTranscriptCache(for: thread.id)
             await refreshThreads(source: .userAction)
         case .definitiveEndpointResponse(let response):
+            _ = threadMutationHubStore.value.rolledBack(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
+                message: response.error.message ?? response.error.code
+            )
+            refreshResidentThreadListStores()
             lastError = response.error.message ?? response.error.code
         case .notSent(let message):
+            _ = threadMutationHubStore.value.rolledBack(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch,
+                message: message
+            )
+            refreshResidentThreadListStores()
             lastError = message
         case .ambiguous(let response):
+            let tickets = threadMutationHubStore.value.ambiguous(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: threadMutationHubStore.value.gatewayRuntimeEpoch
+            )
+            refreshResidentThreadListStores()
             lastError = response.message
-            await forceReplaceThreadFeedsAfterAmbiguousLifecycle()
+            await forceReplaceThreadFeedsAfterAmbiguousLifecycle(
+                reconstructionTickets: tickets
+            )
         }
     }
 
     func renameSelectedThread(to proposedTitle: String? = nil) async {
         guard let selectedThread else { return }
+        let threadId = selectedThread.id
         let title = (proposedTitle ?? draftThreadTitle).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title != selectedThread.title else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        let mutationEpoch = threadMutationHubStore.value.gatewayRuntimeEpoch
+        let rollbackSummary = threadRenameRollbackSummaries[threadId] ?? selectedThread
+        threadRenameRollbackSummaries[threadId] = rollbackSummary
+        let mutationId = nextThreadMutationId(kind: "rename", threadId: threadId)
+        if let superseded = threadRenameMutationIds[threadId] {
+            _ = threadMutationHubStore.value.rolledBack(
+                mutationId: superseded,
+                gatewayRuntimeEpoch: mutationEpoch,
+                message: "Superseded by a newer title update."
+            )
+        }
+        threadRenameMutationIds[threadId] = mutationId
+        _ = threadMutationHubStore.value.began(
+            mutationId: mutationId,
+            kind: .rename(threadId: threadId),
+            gatewayRuntimeEpoch: mutationEpoch
+        )
+        var optimistic = selectedThread
+        optimistic.title = title
+        self.selectedThread = optimistic
+        draftThreadTitle = title
+        cacheThreadSummaries([optimistic])
         do {
-            let updated = try await client().updateThread(threadId: selectedThread.id, label: title)
-            self.selectedThread = updated
-            draftThreadTitle = updated.title
-            if let index = threads.firstIndex(where: { $0.id == updated.id }) {
-                threads[index] = updated
+            let updated = try await client().updateThread(threadId: threadId, label: title)
+            guard runtimeGeneration == gatewayRuntimeGeneration,
+                  threadRenameMutationIds[threadId] == mutationId else { return }
+            threadRenameMutationIds[threadId] = nil
+            threadRenameRollbackSummaries[threadId] = nil
+            if self.selectedThread?.id == threadId {
+                self.selectedThread = updated
+                draftThreadTitle = updated.title
             }
+            cacheThreadSummaries([updated])
+            _ = threadMutationHubStore.value.committed(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: mutationEpoch,
+                authority: GaryxThreadMutationAuthority(summary: updated)
+            )
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration,
+                  threadRenameMutationIds[threadId] == mutationId else { return }
+            threadRenameMutationIds[threadId] = nil
+            threadRenameRollbackSummaries[threadId] = nil
+            if self.selectedThread?.id == threadId {
+                self.selectedThread = rollbackSummary
+                draftThreadTitle = rollbackSummary.title
+            }
+            cacheThreadSummaries([rollbackSummary])
+            _ = threadMutationHubStore.value.rolledBack(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: mutationEpoch,
+                message: displayMessage(for: error)
+            )
             lastError = displayMessage(for: error)
         }
     }
@@ -380,15 +477,34 @@ extension GaryxMobileModel {
     ) async {
         guard let selectedThread else { return }
         let threadId = selectedThread.id
-        let mutationId = UUID()
-        let previousSelectedRuntime = selectedThread.threadRuntime
-        let previousListRuntime = threads.first(where: { $0.id == threadId })?.threadRuntime
+        let runtimeGeneration = gatewayRuntimeGeneration
+        let mutationEpoch = threadMutationHubStore.value.gatewayRuntimeEpoch
+        let mutationId = nextThreadMutationId(kind: "runtime", threadId: threadId)
+        let rollbackSnapshot = threadRuntimeRollbackSnapshots[threadId]
+            ?? GaryxThreadRuntimeRollbackSnapshot(
+                selectedRuntime: selectedThread.threadRuntime,
+                listRuntime: threadSummaryCache.summary(for: threadId)?.threadRuntime
+            )
+        threadRuntimeRollbackSnapshots[threadId] = rollbackSnapshot
+        if let superseded = threadRuntimeMutationIds[threadId] {
+            _ = threadMutationHubStore.value.rolledBack(
+                mutationId: superseded,
+                gatewayRuntimeEpoch: mutationEpoch,
+                message: "Superseded by newer runtime settings."
+            )
+        }
         threadRuntimeMutationIds[threadId] = mutationId
+        _ = threadMutationHubStore.value.began(
+            mutationId: mutationId,
+            kind: .runtime(threadId: threadId),
+            gatewayRuntimeEpoch: mutationEpoch
+        )
         applyOptimisticThreadRuntimeSettings(
             threadId: threadId,
             model: model,
             reasoningEffort: reasoningEffort,
-            serviceTier: serviceTier
+            serviceTier: serviceTier,
+            mutationId: mutationId
         )
         do {
             let updated = try await client().updateThread(
@@ -397,27 +513,40 @@ extension GaryxMobileModel {
                 modelReasoningEffort: reasoningEffort,
                 modelServiceTier: serviceTier
             )
-            guard threadRuntimeMutationIds[threadId] == mutationId else { return }
+            guard runtimeGeneration == gatewayRuntimeGeneration,
+                  threadRuntimeMutationIds[threadId] == mutationId else { return }
             threadRuntimeMutationIds[threadId] = nil
+            threadRuntimeRollbackSnapshots[threadId] = nil
             if self.selectedThread?.id == threadId {
                 var next = updated
                 next.threadRuntime = updated.threadRuntime ?? self.selectedThread?.threadRuntime
                 self.selectedThread = next
                 draftThreadTitle = next.title
             }
-            if let index = threads.firstIndex(where: { $0.id == threadId }) {
-                var next = updated
-                next.threadRuntime = updated.threadRuntime ?? threads[index].threadRuntime
-                threads[index] = next
-            }
+            var next = updated
+            next.threadRuntime = updated.threadRuntime
+                ?? threadSummaryCache.summary(for: threadId)?.threadRuntime
+            cacheThreadSummaries([next])
+            _ = threadMutationHubStore.value.committed(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: mutationEpoch,
+                authority: GaryxThreadMutationAuthority(summary: next)
+            )
             await loadSelectedThreadHistory()
         } catch {
-            guard threadRuntimeMutationIds[threadId] == mutationId else { return }
+            guard runtimeGeneration == gatewayRuntimeGeneration,
+                  threadRuntimeMutationIds[threadId] == mutationId else { return }
             threadRuntimeMutationIds[threadId] = nil
+            threadRuntimeRollbackSnapshots[threadId] = nil
             restoreThreadRuntimeSettings(
                 threadId: threadId,
-                selectedRuntime: previousSelectedRuntime,
-                listRuntime: previousListRuntime
+                selectedRuntime: rollbackSnapshot.selectedRuntime,
+                listRuntime: rollbackSnapshot.listRuntime
+            )
+            _ = threadMutationHubStore.value.rolledBack(
+                mutationId: mutationId,
+                gatewayRuntimeEpoch: mutationEpoch,
+                message: displayMessage(for: error)
             )
             lastError = displayMessage(for: error)
         }
@@ -427,13 +556,14 @@ extension GaryxMobileModel {
         threadId: String,
         model: String?,
         reasoningEffort: String?,
-        serviceTier: String? = nil
+        serviceTier: String? = nil,
+        mutationId: GaryxThreadMutationID
     ) {
         let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedThreadId.isEmpty else { return }
         guard let base = selectedThread?.id == normalizedThreadId
             ? selectedThread
-            : threads.first(where: { $0.id == normalizedThreadId }) else {
+            : threadSummaryCache.summary(for: normalizedThreadId) else {
             return
         }
         var runtime = base.threadRuntime ?? GaryxThreadRuntimeSummary(
@@ -455,7 +585,11 @@ extension GaryxMobileModel {
             runtime.modelServiceTierOverride = value
             runtime.modelServiceTier = value
         }
-        applyThreadRuntimeSummary(runtime, threadId: normalizedThreadId)
+        applyThreadRuntimeSummary(
+            runtime,
+            threadId: normalizedThreadId,
+            mutationId: mutationId
+        )
     }
 
     private func restoreThreadRuntimeSettings(
@@ -470,8 +604,9 @@ extension GaryxMobileModel {
             selectedThread.threadRuntime = selectedRuntime
             self.selectedThread = selectedThread
         }
-        if let index = threads.firstIndex(where: { $0.id == normalizedThreadId }) {
-            threads[index].threadRuntime = listRuntime
+        if var cached = threadSummaryCache.summary(for: normalizedThreadId) {
+            cached.threadRuntime = listRuntime
+            cacheThreadSummaries([cached])
         }
     }
 }

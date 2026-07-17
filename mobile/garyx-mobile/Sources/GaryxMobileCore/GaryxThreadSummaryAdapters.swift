@@ -390,8 +390,9 @@ public enum GaryxThreadRowCapabilityDeriver {
 
         let isAutomationTarget = context.automationTargetThreadIds.contains(summary.id)
         // Active run is a runtime overlay input, not cached summary content.
-        // Home's cached section builder passes false and the live action layer
-        // supplies the current value without busting section identity.
+        // Home's cached section builder passes false; its run-state projection
+        // patches the capability alongside the running dot without rebuilding
+        // static section identity.
         let activeRun = context.hasActiveRun
         let favorite: GaryxThreadFavoriteCapability
         if summary.excludeFromRecent {
